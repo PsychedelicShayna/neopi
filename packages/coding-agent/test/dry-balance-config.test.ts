@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai/auth-storage";
@@ -9,17 +10,21 @@ test("omp dry-balance routes by account policies from a --config overlay", async
 	const agentDir = TempDir.createSync("@omp-dry-balance-config-");
 	try {
 		await Bun.write(
-			path.join(agentDir.path(), "models.yml"),
-			[
-				"providers:",
-				"  acme:",
-				"    baseUrl: https://acme.example.test/v1",
-				"    api: openai-completions",
-				"    auth: oauth",
-				"    models:",
-				"      - id: balance-model",
-				"",
-			].join("\n"),
+			path.join(agentDir.path(), "models.toml"),
+			stringifySettingsToml({
+				providers: {
+					acme: {
+						baseUrl: "https://acme.example.test/v1",
+						api: "openai-completions",
+						auth: "oauth",
+						models: [
+							{
+								id: "balance-model",
+							},
+						],
+					},
+				},
+			}),
 		);
 		const authStorage = await AuthStorage.create(path.join(agentDir.path(), "agent.db"));
 		const account = (name: string) => ({

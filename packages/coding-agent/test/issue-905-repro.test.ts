@@ -12,6 +12,7 @@
  * extension-registered providers/models appear in the output.
  */
 
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -252,26 +253,38 @@ test("omp models explicit-only mode resolves a package and excludes settings pro
 	}
 });
 
-test("omp models prints invalid models.yml schema errors before listing output", async () => {
-	const modelsPath = tmp.join("invalid-models.yml");
+test("omp models prints invalid models.toml schema errors before listing output", async () => {
+	const modelsPath = tmp.join("invalid-models.toml");
 	await fs.writeFile(
 		modelsPath,
-		`providers:
-  myprovider:
-    baseUrl: http://localhost:8000/v1
-    api: openai-completions
-    auth: none
-    compat:
-      thinkingFormat: deepseek
-    models:
-      - id: my-model
-        name: My Model
-        reasoning: false
-        input: [text]
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-        contextWindow: 8192
-        maxTokens: 4096
-`,
+		stringifySettingsToml({
+			providers: {
+				myprovider: {
+					baseUrl: "http://localhost:8000/v1",
+					api: "openai-completions",
+					auth: "none",
+					compat: {
+						thinkingFormat: "deepseek",
+					},
+					models: [
+						{
+							id: "my-model",
+							name: "My Model",
+							reasoning: false,
+							input: ["text"],
+							cost: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+							},
+							contextWindow: 8192,
+							maxTokens: 4096,
+						},
+					],
+				},
+			},
+		}),
 	);
 
 	const authStorage = await AuthStorage.create(":memory:");
@@ -298,7 +311,7 @@ test("omp models prints invalid models.yml schema errors before listing output",
 		}
 
 		const output = captured.join("");
-		expect(output).toContain("Warning: models.yml validation failed — custom providers disabled");
+		expect(output).toContain("Warning: models.toml validation failed — custom providers disabled");
 		expect(output).toContain("providers.myprovider.compat.thinkingFormat");
 		expect(output).toContain("deepseek");
 	} finally {

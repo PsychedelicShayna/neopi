@@ -62,7 +62,7 @@ beforeAll(async () => {
 	sharedAuthStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
 	sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 	sharedAuthStorage.keys.setRuntime("openai-codex", "test-key");
-	sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir, "models.yml"));
+	sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir, "models.toml"));
 });
 
 afterAll(() => {

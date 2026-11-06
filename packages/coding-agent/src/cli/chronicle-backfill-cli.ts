@@ -327,7 +327,7 @@ export function createChronicleBackfillDeps(): ChronicleBackfillDeps & { close()
 			initializeWithSettings(settings);
 			const authStorage = await discoverAuthStorage(agentDir, { settings, cwd: settings.getCwd() });
 			closeAuth = () => authStorage.close();
-			const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), {
+			const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.toml"), {
 				settings,
 				cacheDbPath: getModelDbPath(agentDir),
 			});

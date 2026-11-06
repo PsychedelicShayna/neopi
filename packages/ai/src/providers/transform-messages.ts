@@ -939,7 +939,7 @@ export function transformMessages<TApi extends Api>(
 			// latest turn; every prior turn fell through to the cross-API
 			// text-demotion path whenever the conversation crossed a model id,
 			// silently dropping the reasoning chain on continuation for custom
-			// anthropic-messages providers configured via `models.yaml` and
+			// anthropic-messages providers configured via `models.toml` and
 			// session-level model swaps (#2257).
 			const isAnthropicReplay = isAnthropicTarget && assistantMsg.api === "anthropic-messages";
 			const sameAnthropicDeployment =
@@ -959,13 +959,13 @@ export function transformMessages<TApi extends Api>(
 			//     they share the source deployment. Foreign signatures can trigger
 			//     `400 Invalid signature in thinking block` (#4297).
 			// 3p ↔ 3p replays preserve signatures because compatible providers
-			// (Z.AI, DeepSeek, custom `models.yaml` providers) treat them as
+			// (Z.AI, DeepSeek, custom `models.toml` providers) treat them as
 			// opaque continuation hints rather than verified material; stripping
 			// degrades the reasoning chain into unsigned/text on the next turn
 			// (#2265). Source-side official detection uses the canonical catalog
 			// provider id `"anthropic"` because assistant messages carry no
 			// `baseUrl` — a user who manually points `provider: "anthropic"` at
-			// a custom proxy via `models.yaml` will see signatures stripped, the
+			// a custom proxy via `models.toml` will see signatures stripped, the
 			// conservative direction (degraded reasoning, not broken requests).
 			const isOfficialAnthropicSource = isAnthropicReplay && assistantMsg.provider === "anthropic";
 			const isSigningAnthropicTarget = isAnthropicTarget && model.compat.signingEndpoint;

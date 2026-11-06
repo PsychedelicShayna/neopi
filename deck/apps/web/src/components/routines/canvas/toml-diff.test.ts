@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { diffIsClean, lineDiff } from "./yaml-diff";
+import { diffIsClean, lineDiff } from "./toml-diff";
 
 describe("lineDiff", () => {
 	it("returns empty for two empty strings", () => {

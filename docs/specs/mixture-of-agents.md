@@ -81,7 +81,7 @@ flowchart LR
 ### 1.1 Storage (decided: TOML, per scope)
 
 Definitions live in **`MIXTURES.toml`**, one document per scope, discovered on
-the same search path as `CHAINS.yml` and `WATCHDOG.yml`:
+the same search path as `CHAINS.toml` and `WATCHDOG.toml`:
 
 - user scope: `<agentDir>/MIXTURES.toml` (`getAgentDir()`, normally
   `~/.omp/agent`);

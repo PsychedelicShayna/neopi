@@ -75,7 +75,7 @@ describe("#4297 anthropic-messages replay-unsigned-thinking hint", () => {
 		const surfaced = maybeAddReplayUnsignedThinkingHint(model, SIGNATURE_400);
 		expect(surfaced).not.toBe(SIGNATURE_400);
 		expect(surfaced).toContain('Provider "cf-anthropic"');
-		expect(surfaced).toContain("compat.replayUnsignedThinking: false");
+		expect(surfaced).toContain("compat.replayUnsignedThinking = false");
 		expect(surfaced).toContain("providers.cf-anthropic");
 		expect(surfaced).toContain(SIGNATURE_400);
 	});

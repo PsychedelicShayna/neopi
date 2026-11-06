@@ -30,7 +30,7 @@ async function createContextSession(
 		cfgAdvisorEnabled.set(settings, true);
 		settings.setModelRole("advisor", `${model.provider}/${model.id}`);
 	}
-	const modelRegistry = new ModelRegistry(authStorage, `${cwd}/models.json`);
+	const modelRegistry = new ModelRegistry(authStorage, `${cwd}/models.toml`);
 	const sessionManager = SessionManager.inMemory(cwd);
 	const { session } = await createAgentSession({
 		cwd,

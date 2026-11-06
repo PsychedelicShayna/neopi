@@ -3,6 +3,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -379,8 +380,8 @@ describe("structured subagent primitive", () => {
 		const agentDir = path.join(root, "agent");
 		await fs.mkdir(projectDir, { recursive: true });
 		await Bun.write(
-			path.join(agentDir, "config.yml"),
-			"task:\n  enableEffort: true\nretry:\n  modelFallback: true\n",
+			path.join(agentDir, "config.toml"),
+			stringifySettingsToml({ task: { enableEffort: true }, retry: { modelFallback: true } }),
 		);
 		const liveSettings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
 		const liveSession = {
@@ -391,8 +392,11 @@ describe("structured subagent primitive", () => {
 
 		try {
 			await Bun.write(
-				path.join(projectDir, ".omp", "config.yml"),
-				"task:\n  agentModelOverrides:\n    hot-worker: xai-oauth/grok-4.6:medium\n  enableEffort: false\nretry:\n  modelFallback: false\n",
+				path.join(projectDir, ".omp", "config.toml"),
+				stringifySettingsToml({
+					task: { agentModelOverrides: { "hot-worker": "xai-oauth/grok-4.6:medium" }, enableEffort: false },
+					retry: { modelFallback: false },
+				}),
 			);
 			await Bun.write(
 				path.join(projectDir, ".omp", "agents", "hot-worker.md"),
@@ -450,14 +454,17 @@ describe("structured subagent primitive", () => {
 		const liveSettings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
 		const liveSession = session({ cwd: projectDir, settings: liveSettings });
 		mockDiscovery({ ...AGENT, name: "scout" });
-		const configPath = path.join(agentDir, "config.yml");
+		const configPath = path.join(agentDir, "config.toml");
 
 		try {
-			await Bun.write(configPath, "task:\n  agentServiceTierOverrides:\n    scout: priority\n");
+			await Bun.write(
+				configPath,
+				stringifySettingsToml({ task: { agentServiceTierOverrides: { scout: "priority" } } }),
+			);
 			const first = await resolveEffectiveSubagentPolicy(request({ session: liveSession, agent: "scout" }));
 			expect(first.serviceTierOverride).toBe("priority");
 
-			await Bun.write(configPath, "task:\n  agentServiceTierOverrides:\n    scout: none\n");
+			await Bun.write(configPath, stringifySettingsToml({ task: { agentServiceTierOverrides: { scout: "none" } } }));
 			const second = await resolveEffectiveSubagentPolicy(request({ session: liveSession, agent: "scout" }));
 			expect(second.serviceTierOverride).toBe("none");
 		} finally {

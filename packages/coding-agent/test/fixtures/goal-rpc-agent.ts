@@ -21,7 +21,7 @@ import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const settings = await Settings.init({ inMemory: true, cwd });
 cfgAsyncEnabled.set(settings, false);
 cfgGoalContinuationModes.set(settings, Bun.env.GOAL_RPC_CONTINUATION === "1" ? ["rpc"] : ["interactive"]);

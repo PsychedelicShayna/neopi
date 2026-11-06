@@ -1,9 +1,9 @@
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { YAML } from "bun";
 import {
 	advisorConfigFilePath,
 	type AdvisorSyncBacklog,
@@ -26,7 +26,7 @@ describe("discoverAdvisorConfigs", () => {
 	beforeEach(async () => {
 		tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-config-"));
 		await fsp.mkdir(path.join(tmp, ".git"));
-		// Empty agent dir so the user-level search path can't pick up a real ~/.omp/WATCHDOG.yml.
+		// Empty agent dir so the user-level search path can't pick up a real ~/.omp/WATCHDOG.toml.
 		agentDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-agentdir-"));
 	});
 
@@ -38,14 +38,17 @@ describe("discoverAdvisorConfigs", () => {
 
 	it("reports winning source files without hiding user, ancestor, native, or disabled advisors", async () => {
 		const cwd = path.join(tmp, "nested", "leaf");
-		const userFile = path.join(agentDir, "WATCHDOG.yaml");
-		const rootFile = path.join(tmp, "WATCHDOG.yml");
-		const nativeFile = path.join(tmp, ".omp", "WATCHDOG.yml");
-		const leafFile = path.join(cwd, "WATCHDOG.yaml");
-		await Bun.write(userFile, "advisors:\n  - name: User\n    enabled: false\n  - name: Shared\n");
-		await Bun.write(rootFile, "advisors:\n  - name: Ancestor\n  - name: Shared\n");
-		await Bun.write(nativeFile, "advisors:\n  - name: Native\n");
-		await Bun.write(leafFile, "advisors:\n  - name: Shared\n    enabled: false\n");
+		const userFile = path.join(agentDir, "WATCHDOG.toml");
+		const rootFile = path.join(tmp, "WATCHDOG.toml");
+		const nativeFile = path.join(tmp, ".omp", "WATCHDOG.toml");
+		const leafFile = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(
+			userFile,
+			stringifySettingsToml({ advisors: [{ name: "User", enabled: false }, { name: "Shared" }] }),
+		);
+		await Bun.write(rootFile, stringifySettingsToml({ advisors: [{ name: "Ancestor" }, { name: "Shared" }] }));
+		await Bun.write(nativeFile, stringifySettingsToml({ advisors: [{ name: "Native" }] }));
+		await Bun.write(leafFile, stringifySettingsToml({ advisors: [{ name: "Shared", enabled: false }] }));
 
 		const result = await discoverAdvisorConfigs(cwd, agentDir);
 		expect(result.advisors.map(advisor => advisor.name)).toEqual(["User", "Shared", "Native", "Ancestor"]);
@@ -63,8 +66,8 @@ describe("discoverAdvisorConfigs", () => {
 		vi.spyOn(os, "homedir").mockReturnValue(tmp);
 		const cwd = path.join(tmp, "nested");
 		await fsp.mkdir(cwd);
-		const homeFile = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(homeFile, "advisors:\n  - name: Velvet\n");
+		const homeFile = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(homeFile, stringifySettingsToml({ advisors: [{ name: "Velvet" }] }));
 
 		const result = await discoverAdvisorConfigs(cwd, agentDir);
 		expect(result.advisors.map(advisor => advisor.name)).toEqual(["Velvet"]);
@@ -72,18 +75,20 @@ describe("discoverAdvisorConfigs", () => {
 	});
 
 	it("parses advisors, the model thinking suffix, cadence, tool filtering, and shared instructions", async () => {
-		const yaml = [
-			"instructions: Shared baseline for all advisors.",
-			"advisors:",
-			"  - name: Architecture",
-			"    model: x-ai/grok-code-fast:high",
-			"    reviewMode: agent-end",
-			"    reviewInterval: 3",
-			"    instructions: Watch module boundaries.",
-			"  - name: Security Reviewer",
-			"    tools: [read, definitely-not-a-tool]",
-		].join("\n");
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
+		const toml = stringifySettingsToml({
+			instructions: "Shared baseline for all advisors.",
+			advisors: [
+				{
+					name: "Architecture",
+					model: "x-ai/grok-code-fast:high",
+					reviewMode: "agent-end",
+					reviewInterval: 3,
+					instructions: "Watch module boundaries.",
+				},
+				{ name: "Security Reviewer", tools: ["read", "definitely-not-a-tool"] },
+			],
+		});
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), toml);
 
 		const { advisors, sharedInstructions } = await discoverAdvisorConfigs(tmp, agentDir);
 		expect(advisors).toHaveLength(2);
@@ -105,15 +110,14 @@ describe("discoverAdvisorConfigs", () => {
 	});
 
 	it("distinguishes omitted tools, explicit no-tools, and invalid-only lists", async () => {
-		const yaml = [
-			"advisors:",
-			"  - name: No Tools",
-			"    tools: []",
-			"  - name: Default Tools",
-			"  - name: Invalid Only",
-			"    tools: [reed]",
-		].join("\n");
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
+		const toml = stringifySettingsToml({
+			advisors: [
+				{ name: "No Tools", tools: [] },
+				{ name: "Default Tools" },
+				{ name: "Invalid Only", tools: ["reed"] },
+			],
+		});
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), toml);
 
 		const { advisors } = await discoverAdvisorConfigs(tmp, agentDir);
 		const noTools = advisors.find(a => a.name === "No Tools");
@@ -125,32 +129,32 @@ describe("discoverAdvisorConfigs", () => {
 		expect(invalidOnly?.tools).toBeUndefined();
 	});
 
-	it("ignores a malformed YAML file without throwing", async () => {
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), "advisors: [unclosed bracket");
+	it("ignores a malformed TOML file without throwing", async () => {
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), "advisors = [unclosed bracket");
 		const result = await discoverAdvisorConfigs(tmp, agentDir);
 		expect(result.advisors).toEqual([]);
 		expect(result.sharedInstructions).toBeUndefined();
 		expect(result.warnings).toHaveLength(1);
-		expect(result.warnings[0]).toContain("failed to parse YAML");
+		expect(result.warnings[0]).toContain("failed to parse TOML");
 		// Editor reports the same problem class instead of blanking silently.
-		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"));
+		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"));
 		expect(doc.advisors).toEqual([]);
 		expect(doc.warnings).toHaveLength(1);
-		expect(doc.warnings?.[0]).toContain("failed to parse YAML");
+		expect(doc.warnings?.[0]).toContain("failed to parse TOML");
 		doc.advisors.push({ name: "Repaired", enabled: false });
-		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), doc);
-		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"))).toEqual({
+		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"), doc);
+		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"))).toEqual({
 			advisors: [{ id: expect.any(String), name: "Repaired", enabled: false }],
 		});
 	});
 
 	it("skips a file whose shape fails the schema (advisors must be a list)", async () => {
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), "advisors: not-an-array");
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), stringifySettingsToml({ advisors: "not-an-array" }));
 		const result = await discoverAdvisorConfigs(tmp, agentDir);
 		expect(result.advisors).toEqual([]);
 		expect(result.warnings).toHaveLength(1);
 		expect(result.warnings[0]).toContain("advisors must be a list");
-		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"));
+		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"));
 		expect(doc.advisors).toEqual([]);
 		expect(doc.warnings).toHaveLength(1);
 		expect(doc.warnings?.[0]).toContain("advisors must be a list");
@@ -158,16 +162,14 @@ describe("discoverAdvisorConfigs", () => {
 
 	it("drops only the malformed entry and reports one warning per problem", async () => {
 		await Bun.write(
-			path.join(tmp, "WATCHDOG.yml"),
-			[
-				"advisors:",
-				"  - name: Good",
-				"    reviewMode: agent-end",
-				"  - name: Bad",
-				"    reviewMode: every-step",
-				"  - name: Also Bad",
-				"    reviewInterval: 0",
-			].join("\n"),
+			path.join(tmp, "WATCHDOG.toml"),
+			stringifySettingsToml({
+				advisors: [
+					{ name: "Good", reviewMode: "agent-end" },
+					{ name: "Bad", reviewMode: "every-step" },
+					{ name: "Also Bad", reviewInterval: 0 },
+				],
+			}),
 		);
 		const result = await discoverAdvisorConfigs(tmp, agentDir);
 		expect(result.advisors.map(a => a.name)).toEqual(["Good"]);
@@ -177,9 +179,9 @@ describe("discoverAdvisorConfigs", () => {
 	});
 
 	it("rejects malformed review intervals consistently during discovery and editing", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		for (const interval of ["0", "-1", "1.5", "'3'", ".nan", ".inf", "9007199254740992"]) {
-			await Bun.write(file, `advisors:\n  - name: Invalid\n    reviewInterval: ${interval}\n`);
+		const file = path.join(tmp, "WATCHDOG.toml");
+		for (const interval of ["0", "-1", "1.5", "'3'", "nan", "inf", "9007199254740992"]) {
+			await Bun.write(file, `[[advisors]]\nname = "Invalid"\nreviewInterval = ${interval}\n`);
 			const doc = await loadWatchdogConfigFile(file);
 			expect(doc.advisors).toEqual([]);
 			expect(doc.warnings).toHaveLength(1);
@@ -189,8 +191,11 @@ describe("discoverAdvisorConfigs", () => {
 	});
 
 	it("editor load drops only the malformed entry, like discovery", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Good\n  - name: Bad\n    reviewMode: bogus\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(
+			file,
+			stringifySettingsToml({ advisors: [{ name: "Good" }, { name: "Bad", reviewMode: "bogus" }] }),
+		);
 		const doc = await loadWatchdogConfigFile(file);
 		expect(doc.advisors.map(a => a.name)).toEqual(["Good"]);
 		expect(doc.warnings).toHaveLength(1);
@@ -298,7 +303,7 @@ describe("getOrCreateAdvisorProviderSessionId", () => {
 	});
 });
 
-describe("WATCHDOG.yml file round-trip", () => {
+describe("WATCHDOG.toml file round-trip", () => {
 	let tmp: string;
 	beforeEach(async () => {
 		tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-file-"));
@@ -324,15 +329,15 @@ describe("WATCHDOG.yml file round-trip", () => {
 	};
 
 	it("saves and reloads a doc byte-equivalently (incl. multiline and special chars)", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded).toEqual(doc);
 	});
 
 	it("assigns distinct IDs to identical legacy advisors on first save and preserves them on rename", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Review\n  - name: Review\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Review" }, { name: "Review" }] }));
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded.advisors.every(advisor => advisor.id === undefined)).toBe(true);
 		await saveWatchdogConfigFile(file, loaded);
@@ -351,7 +356,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("matches persisted IDs after a concurrent rename without dropping a disjoint edit", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, { advisors: [{ name: "Review" }] });
 		const winner = await loadWatchdogConfigFile(file);
 		const stale = await loadWatchdogConfigFile(file);
@@ -365,7 +370,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("repairs a copied ID on save instead of collapsing identical advisors", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		const copied: WatchdogConfigDoc = {
 			advisors: [
 				{ id: "copied", name: "Review" },
@@ -380,10 +385,15 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 	for (const secondName of ["Second", "First"]) {
 		it(`repairs on-disk duplicate IDs without redirecting edits with second name ${secondName}`, async () => {
-			const file = path.join(tmp, "WATCHDOG.yml");
+			const file = path.join(tmp, "WATCHDOG.toml");
 			await Bun.write(
 				file,
-				`advisors:\n  - id: dup\n    name: First\n    enabled: true\n    futureId: first\n  - id: dup\n    name: ${secondName}\n    enabled: false\n    futureId: second\n`,
+				stringifySettingsToml({
+					advisors: [
+						{ id: "dup", name: "First", enabled: true, futureId: "first" },
+						{ id: "dup", name: secondName, enabled: false, futureId: "second" },
+					],
+				}),
 			);
 			const discovered = await discoverAdvisorConfigs(tmp, tmp);
 			expect(discovered.advisors).toHaveLength(2);
@@ -406,7 +416,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 				{ id: loaded.advisors[0].id, name: "First", enabled: false },
 				{ id: loaded.advisors[1].id, name: secondName, enabled: false },
 			]);
-			expect(YAML.parse(await Bun.file(file).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(file).text())).toEqual({
 				advisors: [
 					{ ...reloaded.advisors[0], futureId: "first" },
 					{ ...reloaded.advisors[1], futureId: "second" },
@@ -416,8 +426,16 @@ describe("WATCHDOG.yml file round-trip", () => {
 	}
 
 	it("repairs duplicate IDs on indistinguishable rows by their unchanged occurrence order", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - id: dup\n    name: Review\n  - id: dup\n    name: Review\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(
+			file,
+			stringifySettingsToml({
+				advisors: [
+					{ id: "dup", name: "Review" },
+					{ id: "dup", name: "Review" },
+				],
+			}),
+		);
 		const loaded = await loadWatchdogConfigFile(file);
 		await saveWatchdogConfigFile(file, loaded);
 		expect((await loadWatchdogConfigFile(file)).advisors).toEqual(loaded.advisors);
@@ -474,7 +492,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 			overlay.handleInput("c");
 			expect(original.advisors[1].id).toBeTruthy();
 			expect(original.advisors[1].id).not.toBe(original.advisors[0].id);
-			await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), original);
+			await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"), original);
 			const discovered = await discoverAdvisorConfigs(tmp, tmp);
 			expect(discovered.advisors.map(advisor => advisor.name)).toEqual(["Review", "Review (copy) 2", "Review-copy"]);
 		} finally {
@@ -482,7 +500,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		}
 	});
 	it("persists each advisor's thinking preference through discovery and editor saves", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		const original: WatchdogConfigDoc = {
 			advisors: [
 				{ name: "Reasoning", includeThinking: true },
@@ -506,8 +524,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("keeps the previous complete WATCHDOG file visible until the replacement is published", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		const original = "instructions: Existing\n";
+		const file = path.join(tmp, "WATCHDOG.toml");
+		const original = stringifySettingsToml({ instructions: "Existing" });
 		await Bun.write(file, original);
 		const target = await fsp.realpath(file);
 		const staged = Promise.withResolvers<void>();
@@ -530,23 +548,23 @@ describe("WATCHDOG.yml file round-trip", () => {
 			publish.resolve();
 			await save;
 		}
-		expect(await Bun.file(file).text()).toContain("instructions: Replacement");
+		expect(await Bun.file(file).text()).toContain(stringifySettingsToml({ instructions: "Replacement" }));
 	});
 
 	it("creates an absent project configuration directory for a new WATCHDOG file", async () => {
-		const file = path.join(tmp, ".omp", "WATCHDOG.yml");
+		const file = path.join(tmp, ".omp", "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, { advisors: [{ name: "New" }] });
 		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([{ id: expect.any(String), name: "New" }]);
 	});
 
 	it("updates the target of a WATCHDOG symlink without replacing the link", async () => {
-		const target = path.join(tmp, "shared.yml");
-		const link = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(target, "instructions: Existing\n");
-		await fsp.symlink("shared.yml", link);
+		const target = path.join(tmp, "shared.toml");
+		const link = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(target, stringifySettingsToml({ instructions: "Existing" }));
+		await fsp.symlink("shared.toml", link);
 		await saveWatchdogConfigFile(link, { instructions: "Replacement", advisors: [] });
-		expect(await fsp.readlink(link)).toBe("shared.yml");
-		expect(await Bun.file(target).text()).toContain("instructions: Replacement");
+		expect(await fsp.readlink(link)).toBe("shared.toml");
+		expect(await Bun.file(target).text()).toContain(stringifySettingsToml({ instructions: "Replacement" }));
 	});
 
 	it("round-trips positive safe-integer interval boundaries through editing and discovery", async () => {
@@ -556,14 +574,14 @@ describe("WATCHDOG.yml file round-trip", () => {
 				{ name: "Maximum", reviewInterval: Number.MAX_SAFE_INTEGER },
 			],
 		};
-		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"), boundaryDoc);
-		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"))).toEqual(boundaryDoc);
+		await saveWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"), boundaryDoc);
+		expect(await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"))).toEqual(boundaryDoc);
 		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
 		expect(advisors.map(advisor => advisor.reviewInterval)).toEqual([1, Number.MAX_SAFE_INTEGER]);
 	});
 
 	it("rejects invalid intervals on save without replacing the existing roster", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 		for (const interval of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
 			await expect(
@@ -573,25 +591,20 @@ describe("WATCHDOG.yml file round-trip", () => {
 		}
 	});
 
-	it("serializes block-style YAML that the discovery path also parses", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("serializes native TOML that the discovery path also parses", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 		const text = await Bun.file(file).text();
-		// Block style (not the flow `{...}` form), so it stays hand-editable.
-		expect(text).toContain("advisors:");
+		expect(text).toContain("[[advisors]]");
 		expect(text).not.toMatch(/^\{/);
-		expect(text).toContain("reviewMode: agent-end");
-		expect(text).toContain("reviewInterval: 3");
-		expect(text).toContain('instructions: |2-\n  Shared baseline.\n  \n  Second line with: a colon and "quotes".');
-		expect(text).toContain("    instructions: |2-\n      Watch module boundaries.\n      Report coupling.");
-		expect(text).not.toContain("\\n");
+		expect(parseSettingsToml(text)).toEqual(doc);
 		const { advisors, sharedInstructions } = await discoverAdvisorConfigs(tmp, tmp);
 		expect(advisors.map(a => a.name)).toEqual(["Architecture", "Security"]);
-		expect(sharedInstructions).toContain("Shared baseline.");
+		expect(sharedInstructions).toBe(doc.instructions);
 	});
 
-	it("preserves significant leading whitespace and trailing newlines in block scalars", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("preserves significant leading whitespace and trailing newlines in multiline strings", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
 		const whitespaceDoc: WatchdogConfigDoc = {
 			instructions: "  indented first line\nplain second line\n\n",
 			advisors: [{ name: "Whitespace", instructions: "\n  indented after blank\nplain" }],
@@ -602,7 +615,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("round-trips an explicit empty tools list without collapsing it into the default", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		const explicitNoToolsDoc: WatchdogConfigDoc = {
 			advisors: [{ name: "No Tools", tools: [] }, { name: "Default Tools" }],
 		};
@@ -617,10 +630,16 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("round-trips primary reasoning visibility and preserves the omitted default across edits", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			"advisors:\n  - name: Legacy\n  - name: Private\n    includeThinking: false\n  - name: Explicit\n    includeThinking: true\n",
+			stringifySettingsToml({
+				advisors: [
+					{ name: "Legacy" },
+					{ name: "Private", includeThinking: false },
+					{ name: "Explicit", includeThinking: true },
+				],
+			}),
 		);
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded.advisors).toEqual([
@@ -636,8 +655,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 			true,
 		]);
 		expect(await loadWatchdogConfigFile(file)).toEqual(loaded);
-		expect(serializeWatchdogConfig(loaded)).toContain("    includeThinking: false");
-		expect(serializeWatchdogConfig(loaded)).toContain("    includeThinking: true");
+		expect(serializeWatchdogConfig(loaded)).toContain("includeThinking = false");
+		expect(serializeWatchdogConfig(loaded)).toContain("includeThinking = true");
 
 		loaded.advisors[1].includeThinking = true;
 		await saveWatchdogConfigFile(file, loaded);
@@ -649,7 +668,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("preserves custom and empty base prompts through save, discovery, and reset", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		const custom = '  Literal base: "quoted"\n\nDo not expand @missing.md\n\n';
 		const promptDoc: WatchdogConfigDoc = {
 			advisors: [
@@ -670,7 +689,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		delete loaded.advisors[0].systemPrompt;
 		delete loaded.advisors[1].systemPrompt;
 		await saveWatchdogConfigFile(file, loaded);
-		expect(await Bun.file(file).text()).not.toContain("systemPrompt:");
+		expect(await Bun.file(file).text()).not.toContain("systemPrompt =");
 		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
 			{ id: expect.any(String), name: "Custom", instructions: "Append specialization" },
 			{ id: expect.any(String), name: "Empty" },
@@ -684,23 +703,13 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("preserves comments and unknown fields when saving an edited document", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			[
-				"# roster owner: Captain",
-				"instructions: Keep the baseline. # shared note",
-				"futureTopLevel:",
-				"  policy: strict # future note",
-				"advisors:",
-				"  - name: Architecture # advisor identity",
-				"    model: x-ai/grok-code-fast:high",
-				"    futureAdvisorField: retain-me # advisor future note",
-				"",
-			].join("\n"),
+			'# roster owner: Captain\ninstructions = "Keep the baseline." # shared note\n[futureTopLevel]\npolicy = "strict" # future note\n[[advisors]]\nname = "Architecture" # advisor identity\nmodel = "x-ai/grok-code-fast:high"\nfutureAdvisorField = "retain-me" # advisor future note\n',
 		);
 		const loaded = await loadWatchdogConfigFile(file);
-		await Bun.write(file, `${await Bun.file(file).text()}externalAfterLoad: survive # external edit\n`);
+		await Bun.write(file, `externalAfterLoad = "survive" # external edit\n${await Bun.file(file).text()}`);
 		loaded.advisors[0].enabled = false;
 		await saveWatchdogConfigFile(file, loaded);
 
@@ -710,12 +719,12 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(saved).toContain("# future note");
 		expect(saved).toContain("# advisor identity");
 		expect(saved).toContain("# advisor future note");
-		expect(saved).toContain("futureTopLevel:");
-		expect(saved).toContain("futureAdvisorField: retain-me");
-		expect(saved).toContain("instructions: Keep the baseline. # shared note");
-		expect(saved).toContain("futureTopLevel:\n  policy: strict # future note");
-		expect(saved).toContain("externalAfterLoad: survive # external edit");
-		expect(YAML.parse(saved)).toMatchObject({
+		expect(saved).toContain("[futureTopLevel]");
+		expect(saved).toContain('futureAdvisorField = "retain-me"');
+		expect(saved).toContain('instructions = "Keep the baseline." # shared note');
+		expect(saved).toContain('[futureTopLevel]\npolicy = "strict" # future note');
+		expect(saved).toContain('externalAfterLoad = "survive" # external edit');
+		expect(parseSettingsToml(saved)).toMatchObject({
 			futureTopLevel: { policy: "strict" },
 			externalAfterLoad: "survive",
 			advisors: [{ name: "Architecture", enabled: false, futureAdvisorField: "retain-me" }],
@@ -723,17 +732,10 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("keeps the surviving duplicate advisor node when deleting the first duplicate", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			[
-				"advisors:",
-				"  - name: Reviewer",
-				"    futureId: first # first duplicate",
-				"  - name: Reviewer",
-				"    futureId: second # second duplicate",
-				"",
-			].join("\n"),
+			'[[advisors]]\nname = "Reviewer"\nfutureId = "first" # first duplicate\n[[advisors]]\nname = "Reviewer"\nfutureId = "second" # second duplicate\n',
 		);
 		const loaded = await loadWatchdogConfigFile(file);
 		loaded.advisors.splice(0, 1);
@@ -741,32 +743,33 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, loaded);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [{ id: expect.any(String), name: "Reviewer", futureId: "second", enabled: false }],
 		});
 		expect(saved).toContain("# second duplicate");
 		expect(saved).not.toContain("# first duplicate");
 	});
 
-	it("matches cloned loaded advisors back to their existing YAML nodes", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/old\n    futureId: keep # cloned\n");
+	it("matches cloned loaded advisors back to their existing TOML tables", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nmodel = "test/old"\nfutureId = "keep" # cloned\n');
 		const loaded = await loadWatchdogConfigFile(file);
 		loaded.advisors = loaded.advisors.map(advisor => structuredClone(advisor));
 		loaded.advisors[0].model = "test/new";
 		await saveWatchdogConfigFile(file, loaded);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 		expect(saved).toContain("# cloned");
 	});
 
-	it("materializes an aliased advisor row before applying edits", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("imports legacy YAML aliases without modifying the source: materializes an aliased advisor row before applying edits", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
+		const legacy = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(
-			file,
+			legacy,
 			[
 				"template: &reviewer",
 				"  name: Reviewer",
@@ -777,6 +780,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 				"",
 			].join("\n"),
 		);
+		const original = await Bun.file(legacy).text();
 		const loaded = await loadWatchdogConfigFile(file);
 		loaded.advisors[0].model = "test/new";
 		await saveWatchdogConfigFile(file, loaded);
@@ -784,16 +788,18 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const saved = await Bun.file(file).text();
 		expect(saved).toContain("# anchored template");
 		expect(saved).toContain("# aliased row");
-		expect(YAML.parse(saved)).toEqual({
+		expect(await Bun.file(legacy).text()).toBe(original);
+		expect(parseSettingsToml(saved)).toEqual({
 			template: { name: "Reviewer", model: "test/old", futureId: "keep" },
 			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 	});
 
-	it("keeps untouched scalar-alias advisors when saving another advisor's cadence", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("imports legacy YAML aliases without modifying the source: keeps untouched scalar-alias advisors when saving another advisor's cadence", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
+		const legacy = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(
-			file,
+			legacy,
 			[
 				"advisors:",
 				"  - name: Reviewer",
@@ -808,6 +814,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 				"",
 			].join("\n"),
 		);
+		const original = await Bun.file(legacy).text();
 		const loaded = await loadWatchdogConfigFile(file);
 		Object.assign(loaded.advisors[0], { reviewMode: "agent-end", reviewInterval: 4, syncBacklog: "5" });
 		await saveWatchdogConfigFile(file, loaded);
@@ -824,13 +831,15 @@ describe("WATCHDOG.yml file round-trip", () => {
 			},
 			{ id: expect.any(String), name: "Untouched", model: "test/shared", enabled: false },
 		]);
-		expect(await Bun.file(file).text()).toContain("*reviewModel");
+		expect(await Bun.file(legacy).text()).toContain("*reviewModel");
+		expect(await Bun.file(legacy).text()).toBe(original);
 	});
 
-	it("materializes an aliased advisor sequence before applying edits", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("imports legacy YAML aliases without modifying the source: materializes an aliased advisor sequence before applying edits", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
+		const legacy = path.join(tmp, "WATCHDOG.yml");
 		await Bun.write(
-			file,
+			legacy,
 			[
 				"sharedRoster: &sharedRoster",
 				"  - name: Reviewer",
@@ -840,6 +849,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 				"",
 			].join("\n"),
 		);
+		const original = await Bun.file(legacy).text();
 		const loaded = await loadWatchdogConfigFile(file);
 		loaded.advisors[0].model = "test/new";
 		await saveWatchdogConfigFile(file, loaded);
@@ -847,24 +857,18 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const saved = await Bun.file(file).text();
 		expect(saved).toContain("# shared roster");
 		expect(saved).toContain("# roster alias");
-		expect(YAML.parse(saved)).toEqual({
+		expect(await Bun.file(legacy).text()).toBe(original);
+		expect(parseSettingsToml(saved)).toEqual({
 			sharedRoster: [{ name: "Reviewer", model: "test/old", futureId: "keep" }],
 			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/new", futureId: "keep" }],
 		});
 	});
 
 	it("removes malformed advisor rows while preserving valid row comments and unknown fields", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			[
-				"advisors:",
-				"  - name: Valid",
-				"    futureId: keep # valid future field",
-				"  - name: Broken",
-				'    enabled: "sometimes" # malformed row',
-				"",
-			].join("\n"),
+			'[[advisors]]\nname = "Valid"\nfutureId = "keep" # valid future field\n[[advisors]]\nname = "Broken"\nenabled = "sometimes" # malformed row\n',
 		);
 		const loaded = await loadWatchdogConfigFile(file);
 		expect(loaded.advisors).toEqual([{ name: "Valid" }]);
@@ -875,7 +879,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const normalized = await Bun.file(file).text();
 		expect(normalized).toContain("# valid future field");
 		expect(normalized).not.toContain("Broken");
-		expect(YAML.parse(normalized)).toEqual({
+		expect(parseSettingsToml(normalized)).toEqual({
 			advisors: [{ id: expect.any(String), name: "Valid", futureId: "keep", enabled: false }],
 		});
 		expect((await loadWatchdogConfigFile(file)).warnings).toBeUndefined();
@@ -886,8 +890,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("merges later saves after repairing a malformed document", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors: [broken");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, "advisors = [broken");
 		const repaired = await loadWatchdogConfigFile(file);
 		repaired.advisors.push({ name: "Repaired" });
 		await saveWatchdogConfigFile(file, repaired);
@@ -898,7 +902,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		repaired.advisors[0].enabled = false;
 		await saveWatchdogConfigFile(file, repaired);
 
-		expect(YAML.parse(await Bun.file(file).text())).toEqual({
+		expect(parseSettingsToml(await Bun.file(file).text())).toEqual({
 			advisors: [
 				{ id: expect.any(String), name: "Repaired", enabled: false },
 				{ id: expect.any(String), name: "Concurrent", model: "test/external" },
@@ -907,25 +911,18 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("matches a stale edit to the original row after a duplicate is inserted ahead of it", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: original # original row\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nfutureId = "original" # original row\n');
 		const stale = await loadWatchdogConfigFile(file);
 		await Bun.write(
 			file,
-			[
-				"advisors:",
-				"  - name: Reviewer",
-				"    futureId: inserted # inserted row",
-				"  - name: Reviewer",
-				"    futureId: original # original row",
-				"",
-			].join("\n"),
+			'[[advisors]]\nname = "Reviewer"\nfutureId = "inserted" # inserted row\n[[advisors]]\nname = "Reviewer"\nfutureId = "original" # original row\n',
 		);
 		stale.advisors[0].enabled = false;
 		await saveWatchdogConfigFile(file, stale);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [
 				{ name: "Reviewer", futureId: "inserted" },
 				{ id: expect.any(String), name: "Reviewer", futureId: "original", enabled: false },
@@ -936,8 +933,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("keeps the newer value when two editors change the same advisor field", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/original # model owner\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nmodel = "test/original" # model owner\n');
 		const stale = await loadWatchdogConfigFile(file);
 		const winner = await loadWatchdogConfigFile(file);
 		winner.advisors[0].model = "test/winner";
@@ -947,17 +944,17 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, stale);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/winner", enabled: false }],
 		});
 		expect(saved).toContain("# model owner");
 	});
 
 	it("keeps newer shared fields when a stale editor changes the same fields", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			"instructions: original # shared owner\nmaxNotesPerUpdate: 3\nadvisors:\n  - name: Reviewer\n",
+			'instructions = "original" # shared owner\nmaxNotesPerUpdate = 3\n[[advisors]]\nname = "Reviewer"\n',
 		);
 		const stale = await loadWatchdogConfigFile(file);
 		const winner = await loadWatchdogConfigFile(file);
@@ -969,7 +966,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, stale);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			instructions: "winner",
 			maxNotesPerUpdate: 7,
 			advisors: [{ id: expect.any(String), name: "Reviewer" }],
@@ -978,8 +975,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	it("preserves a concurrently changed advisor when a stale editor removes it", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    model: test/original # row owner\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nmodel = "test/original" # row owner\n');
 		const stale = await loadWatchdogConfigFile(file);
 		const winner = await loadWatchdogConfigFile(file);
 		winner.advisors[0].model = "test/winner";
@@ -988,37 +985,37 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await saveWatchdogConfigFile(file, stale);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [{ id: expect.any(String), name: "Reviewer", model: "test/winner" }],
 		});
 		expect(saved).toContain("# row owner");
 	});
 
 	it("preserves a concurrently changed future field when a stale editor removes its advisor", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: original # future owner\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nfutureId = "original" # future owner\n');
 		const stale = await loadWatchdogConfigFile(file);
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n    futureId: concurrent # future owner\n");
+		await Bun.write(file, '[[advisors]]\nname = "Reviewer"\nfutureId = "concurrent" # future owner\n');
 		stale.advisors.splice(0, 1);
 		await saveWatchdogConfigFile(file, stale);
 
 		const saved = await Bun.file(file).text();
-		expect(YAML.parse(saved)).toEqual({
+		expect(parseSettingsToml(saved)).toEqual({
 			advisors: [{ name: "Reviewer", futureId: "concurrent" }],
 		});
 		expect(saved).toContain("# future owner");
 	});
 
 	it("does not resurrect an advisor renamed or deleted by a newer editor", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Original\n    futureId: keep\n");
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Original", futureId: "keep" }] }));
 		const renameWinner = await loadWatchdogConfigFile(file);
 		const staleAfterRename = await loadWatchdogConfigFile(file);
 		renameWinner.advisors[0].name = "Renamed";
 		await saveWatchdogConfigFile(file, renameWinner);
 		staleAfterRename.advisors[0].enabled = false;
 		await saveWatchdogConfigFile(file, staleAfterRename);
-		expect(YAML.parse(await Bun.file(file).text())).toEqual({
+		expect(parseSettingsToml(await Bun.file(file).text())).toEqual({
 			advisors: [{ id: expect.any(String), name: "Renamed", futureId: "keep" }],
 		});
 
@@ -1031,8 +1028,8 @@ describe("WATCHDOG.yml file round-trip", () => {
 		expect(await Bun.file(file).exists()).toBe(false);
 	});
 
-	it("removes the file when the doc is empty so legacy discovery resumes", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
+	it("removes an empty native file without comments", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 		await saveWatchdogConfigFile(file, { advisors: [] });
 		expect(await Bun.file(file).exists()).toBe(false);
@@ -1046,10 +1043,10 @@ describe("WATCHDOG.yml file round-trip", () => {
 
 	it("resolves project and user scope paths", () => {
 		expect(advisorConfigFilePath("project", { projectDir: "/repo", agentDir: "/home/.omp" })).toBe(
-			path.join("/repo", "WATCHDOG.yml"),
+			path.join("/repo", "WATCHDOG.toml"),
 		);
 		expect(advisorConfigFilePath("user", { projectDir: "/repo", agentDir: "/home/.omp" })).toBe(
-			path.join("/home/.omp", "WATCHDOG.yml"),
+			path.join("/home/.omp", "WATCHDOG.toml"),
 		);
 	});
 });
@@ -1065,19 +1062,19 @@ describe("resolveAdvisorConfigEditPath", () => {
 
 	const dirs = (d: string) => ({ projectDir: d, agentDir: d });
 
-	it("defaults to .yml when neither file exists", async () => {
-		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.yml"));
+	it("defaults to canonical TOML when no file exists", async () => {
+		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.toml"));
 	});
 
-	it("edits an existing .yaml in place when only it exists", async () => {
-		await Bun.write(path.join(tmp, "WATCHDOG.yaml"), "advisors: []\n");
-		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.yaml"));
+	it("resolves an existing native TOML file", async () => {
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), stringifySettingsToml({ advisors: [] }));
+		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.toml"));
 	});
 
-	it("prefers the canonical .yml when both exist", async () => {
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), "advisors: []\n");
+	it("prefers canonical TOML over a retained legacy file", async () => {
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), stringifySettingsToml({ advisors: [] }));
 		await Bun.write(path.join(tmp, "WATCHDOG.yaml"), "advisors: []\n");
-		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.yml"));
+		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.toml"));
 	});
 });
 
@@ -1093,7 +1090,7 @@ describe("per-advisor enabled field", () => {
 					{ name: "Default", model: "test/model-c" },
 				],
 			};
-			const file = path.join(tmp, "WATCHDOG.yml");
+			const file = path.join(tmp, "WATCHDOG.toml");
 			await saveWatchdogConfigFile(file, doc);
 
 			const loaded = await loadWatchdogConfigFile(file);
@@ -1114,25 +1111,22 @@ describe("per-advisor enabled field", () => {
 				{ name: "Default" },
 			],
 		});
-		expect(text).toContain("enabled: true");
-		expect(text).toContain("enabled: false");
-		expect(text.match(/enabled:/g)).toHaveLength(2);
+		expect(text).toContain(stringifySettingsToml({ enabled: true }));
+		expect(text).toContain(stringifySettingsToml({ enabled: false }));
+		expect(text.match(/enabled =/g)).toHaveLength(2);
 	});
 });
 
 describe("maxNotesPerUpdate configuration", () => {
-	it("discovers shared and per-advisor maxNotesPerUpdate from WATCHDOG.yml", async () => {
+	it("discovers shared and per-advisor maxNotesPerUpdate from WATCHDOG.toml", async () => {
 		const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-max-notes-"));
 		await fsp.mkdir(path.join(tmp, ".git"));
 		try {
-			const yaml = [
-				"maxNotesPerUpdate: 4",
-				"advisors:",
-				"  - name: High Throughput",
-				"    maxNotesPerUpdate: 5",
-				"  - name: Default Budget",
-			].join("\n");
-			await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
+			const toml = stringifySettingsToml({
+				maxNotesPerUpdate: 4,
+				advisors: [{ name: "High Throughput", maxNotesPerUpdate: 5 }, { name: "Default Budget" }],
+			});
+			await Bun.write(path.join(tmp, "WATCHDOG.toml"), toml);
 
 			const { advisors, sharedMaxNotesPerUpdate } = await discoverAdvisorConfigs(tmp, tmp);
 			expect(sharedMaxNotesPerUpdate).toBe(4);
@@ -1151,7 +1145,7 @@ describe("maxNotesPerUpdate configuration", () => {
 				maxNotesPerUpdate: 3,
 				advisors: [{ name: "High", maxNotesPerUpdate: 5 }, { name: "Default" }],
 			};
-			const file = path.join(tmp, "WATCHDOG.yml");
+			const file = path.join(tmp, "WATCHDOG.toml");
 			await saveWatchdogConfigFile(file, doc);
 
 			const loaded = await loadWatchdogConfigFile(file);
@@ -1175,19 +1169,15 @@ describe("per-advisor syncBacklog override", () => {
 	});
 
 	it("expresses turn-async and final-strict independently; omitted stays unset for inheritance", async () => {
-		const yaml = [
-			"advisors:",
-			"  - name: Turn Reviewer",
-			"    reviewMode: turn",
-			"    syncBacklog: off",
-			"  - name: Final Reviewer",
-			"    reviewMode: agent-end",
-			"    syncBacklog: strict",
-			"  - name: Numeric Threshold",
-			"    syncBacklog: 3",
-			"  - name: Inheriting",
-		].join("\n");
-		await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
+		const toml = stringifySettingsToml({
+			advisors: [
+				{ name: "Turn Reviewer", reviewMode: "turn", syncBacklog: "off" },
+				{ name: "Final Reviewer", reviewMode: "agent-end", syncBacklog: "strict" },
+				{ name: "Numeric Threshold", syncBacklog: 3 },
+				{ name: "Inheriting" },
+			],
+		});
+		await Bun.write(path.join(tmp, "WATCHDOG.toml"), toml);
 
 		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
 		expect(advisors).toHaveLength(4);
@@ -1201,23 +1191,21 @@ describe("per-advisor syncBacklog override", () => {
 		expect(turn?.syncBacklog).toBe("off");
 		expect(final?.reviewMode).toBe("agent-end");
 		expect(final?.syncBacklog).toBe("strict");
-		// Unquoted YAML thresholds parse as numbers and normalize to the string enum.
+		// Unquoted TOML thresholds parse as numbers and normalize to the string enum.
 		expect(numeric?.syncBacklog).toBe("3");
 		expect(inheriting?.syncBacklog).toBeUndefined();
 	});
 
 	it("drops entries with an out-of-set syncBacklog while healthy entries load", async () => {
 		await Bun.write(
-			path.join(tmp, "WATCHDOG.yml"),
-			[
-				"advisors:",
-				"  - name: Good",
-				"    syncBacklog: '3'",
-				"  - name: Bad Value",
-				"    syncBacklog: sometimes",
-				"  - name: Bad Threshold",
-				"    syncBacklog: 2",
-			].join("\n"),
+			path.join(tmp, "WATCHDOG.toml"),
+			stringifySettingsToml({
+				advisors: [
+					{ name: "Good", syncBacklog: "3" },
+					{ name: "Bad Value", syncBacklog: "sometimes" },
+					{ name: "Bad Threshold", syncBacklog: 2 },
+				],
+			}),
 		);
 
 		const result = await discoverAdvisorConfigs(tmp, tmp);
@@ -1227,7 +1215,7 @@ describe("per-advisor syncBacklog override", () => {
 		expect(result.warnings[0]).toContain('"Bad Value"');
 		expect(result.warnings[1]).toContain('"Bad Threshold"');
 
-		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.yml"));
+		const doc = await loadWatchdogConfigFile(path.join(tmp, "WATCHDOG.toml"));
 		expect(doc.advisors.map(a => a.name)).toEqual(["Good"]);
 		expect(doc.warnings).toHaveLength(2);
 	});
@@ -1240,13 +1228,13 @@ describe("per-advisor syncBacklog override", () => {
 				{ name: "Inherit" },
 			],
 		};
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 
 		const text = await Bun.file(file).text();
-		expect(text).toContain('syncBacklog: "off"');
-		expect(text).toContain("syncBacklog: strict");
-		expect(text.match(/syncBacklog:/g)).toHaveLength(2);
+		expect(text).toContain('syncBacklog = "off"');
+		expect(text).toContain('syncBacklog = "strict"');
+		expect(text.match(/syncBacklog =/g)).toHaveLength(2);
 
 		expect(await loadWatchdogConfigFile(file)).toEqual(doc);
 		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
@@ -1255,7 +1243,7 @@ describe("per-advisor syncBacklog override", () => {
 
 	it("rejects an invalid syncBacklog on save without replacing the existing roster", async () => {
 		const doc: WatchdogConfigDoc = { advisors: [{ name: "Healthy", syncBacklog: "1" }] };
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 		await expect(
 			saveWatchdogConfigFile(file, {
@@ -1265,19 +1253,19 @@ describe("per-advisor syncBacklog override", () => {
 		expect(await loadWatchdogConfigFile(file)).toEqual(doc);
 	});
 
-	it("reports a non-mapping document in the editor just like discovery does", async () => {
-		const file = path.join(tmp, "WATCHDOG.yml");
-		await Bun.write(file, "- just\n- a\n- list\n");
+	it("reports a non-document TOML value in the editor just like discovery does", async () => {
+		const file = path.join(tmp, "WATCHDOG.toml");
+		await Bun.write(file, "[just, a, list]\n");
 
 		const discovered = await discoverAdvisorConfigs(tmp, tmp);
 		expect(discovered.advisors).toEqual([]);
 		expect(discovered.warnings).toHaveLength(1);
-		expect(discovered.warnings[0]).toContain("expected a YAML mapping");
+		expect(discovered.warnings[0]).toContain("failed to parse TOML");
 
 		const doc = await loadWatchdogConfigFile(file);
 		expect(doc.advisors).toEqual([]);
 		expect(doc.warnings).toHaveLength(1);
-		expect(doc.warnings?.[0]).toContain("expected a YAML mapping");
+		expect(doc.warnings?.[0]).toContain("failed to parse TOML");
 	});
 
 	it("parses, validates, and round-trips scope and includeThinking", async () => {
@@ -1289,13 +1277,13 @@ describe("per-advisor syncBacklog override", () => {
 				{ name: "Default Scope" },
 			],
 		};
-		const file = path.join(tmp, "WATCHDOG.yml");
+		const file = path.join(tmp, "WATCHDOG.toml");
 		await saveWatchdogConfigFile(file, doc);
 
 		const text = await Bun.file(file).text();
-		expect(text).toContain("scope: main");
-		expect(text).toContain("scope: subagent");
-		expect(text).toContain("includeThinking: false");
+		expect(text).toContain('scope = "main"');
+		expect(text).toContain('scope = "subagent"');
+		expect(text).toContain("includeThinking = false");
 		expect(await loadWatchdogConfigFile(file)).toEqual(doc);
 
 		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
@@ -1321,16 +1309,13 @@ describe("per-advisor syncBacklog override", () => {
 		// Each invalid field drops only its own entry, in discovery and the editor.
 		await Bun.write(
 			file,
-			[
-				"advisors:",
-				"  - name: Valid",
-				"    scope: main",
-				"    includeThinking: false",
-				"  - name: Invalid Scope",
-				"    scope: worker-only",
-				"  - name: Invalid Thinking",
-				"    includeThinking: never",
-			].join("\n"),
+			stringifySettingsToml({
+				advisors: [
+					{ name: "Valid", scope: "main", includeThinking: false },
+					{ name: "Invalid Scope", scope: "worker-only" },
+					{ name: "Invalid Thinking", includeThinking: "never" },
+				],
+			}),
 		);
 		const partial = await discoverAdvisorConfigs(tmp, tmp);
 		expect(partial.advisors.map(a => a.name)).toEqual(["Valid"]);

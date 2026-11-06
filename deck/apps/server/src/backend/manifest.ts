@@ -190,7 +190,7 @@ export const MANIFEST = {
 			readRpcSubagentTranscript: op("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents", "readRpcSubagentTranscript"),
 		},
 	},
-	/** W11: WATCHDOG.yml editing, rediscovery and hot apply (`applyAdvisorConfigs` is a session method). */
+	/** W11: WATCHDOG.toml editing, rediscovery and hot apply (`applyAdvisorConfigs` is a session method). */
 	advisors: {
 		tier: "optional-feature",
 		consumers: ["W11"],
@@ -236,7 +236,7 @@ export const MANIFEST = {
 			withFileLock: op("@oh-my-pi/pi-utils", "withFileLock"),
 		},
 	},
-	/** #91: validate models.yml with NeoPi's own schema and provider checks before the deck writes it. */
+	/** #91: validate models.toml with NeoPi's own schema and provider checks before the deck writes it. */
 	"models-config": {
 		tier: "optional-feature",
 		consumers: ["routes-models-config.ts"],

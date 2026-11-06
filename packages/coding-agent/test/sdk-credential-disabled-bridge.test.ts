@@ -108,7 +108,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		// and non-isolated). Pointing it at the (absent) temp file keeps construction at ~2ms and
 		// avoids leaking host config into the test. Providing the registry also skips the
 		// fire-and-forget background model discovery, which is irrelevant to credential_disabled.
-		modelRegistry: new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.json")),
+		modelRegistry: new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.toml")),
 		settings: Settings.isolated(),
 		disableExtensionDiscovery: true,
 		extensions,
@@ -364,7 +364,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 				embedderEvents.push(event);
 			},
 		});
-		const modelRegistry = new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.json"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.toml"));
 		const ext = makeRecordingExtension();
 
 		const { session } = await createAgentSession({
@@ -441,7 +441,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 		// by one microtask so a sync onError() registration lands in time.
 		const dirs = makeDirs("error-routing");
 		const authStorage = await AuthStorage.create(path.join(dirs.agentDir, "agent.db"));
-		const modelRegistry = new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.json"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(dirs.agentDir, "models.toml"));
 		try {
 			const throwingExtension: Extension = {
 				path: "test://throwing-credential-disabled",

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type FetchImpl, streamSimple } from "@oh-my-pi/pi-ai";
 import { apiKeyAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
@@ -49,8 +50,8 @@ describe("NeoProxy multi-key aggregation", () => {
 	beforeEach(async () => {
 		previousProvider = getOAuthProvider("neoproxy");
 		tempDir = await TempDir.create("@neoproxy-multi-key-");
-		configPath = tempDir.join("models.yml");
-		await Bun.write(configPath, JSON.stringify({ providers: {} }));
+		configPath = tempDir.join("models.toml");
+		await Bun.write(configPath, stringifySettingsToml({ providers: {} }));
 		storage = await AuthStorage.create(tempDir.join("agent.db"));
 		await storage.credentials.reload();
 		revoked = new Set();

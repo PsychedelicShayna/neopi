@@ -23,7 +23,7 @@ const cached = buildModule.buildModel({
 writeModelCache("anthropic", Date.now(), [cached], true, "", path.join(tempDir.path(), "models.db"));
 const buildSpy = spyOn(buildModule, "buildModel");
 try {
-	new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+	new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	process.stdout.write(JSON.stringify({ buildCalls: buildSpy.mock.calls.length }));
 } finally {
 	buildSpy.mockRestore();

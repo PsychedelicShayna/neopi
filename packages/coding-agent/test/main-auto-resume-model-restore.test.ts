@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Terminal as VirtualTerminal } from "@oh-my-pi/pi-utils/vterm";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 type Scenario =
 	| "auto"
@@ -258,8 +259,8 @@ describe("implicit auto-resume model restoration", () => {
 				}),
 			);
 			await Bun.write(
-				path.join(agentDir, "models.yml"),
-				JSON.stringify({
+				path.join(agentDir, "models.toml"),
+				stringifySettingsToml({
 					providers: {
 						"warning-fixture": {
 							baseUrl: "http://127.0.0.1:1/v1",

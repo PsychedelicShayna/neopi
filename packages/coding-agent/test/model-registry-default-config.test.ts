@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, setAgentDir, stringifySettingsToml, TempDir } from "@oh-my-pi/pi-utils";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
 import type { SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { CacheWarmer, getPromptCacheTtlMs } from "../src/session/cache-warmer";
@@ -31,7 +31,7 @@ describe("ModelRegistry default custom models config", () => {
 		await tempDir.remove().catch(() => {});
 	});
 
-	test("loads custom provider models from default models.yaml when models.yml is absent", () => {
+	test("imports custom provider models from legacy models.yaml when native config is absent", () => {
 		writeModelsYaml("models.yaml", {
 			provider: "yaml-default-only",
 			modelId: "yaml-model",
@@ -49,7 +49,7 @@ describe("ModelRegistry default custom models config", () => {
 	});
 
 	test("retains STB decoder metadata on a renamed custom provider", () => {
-		writeModelsYaml("models.yml", {
+		writeModelsToml({
 			provider: "managed-primary",
 			modelId: "local-vision",
 			modelName: "Local vision",
@@ -88,6 +88,37 @@ describe("ModelRegistry default custom models config", () => {
 			supportsServerCompaction: true,
 		} as const;
 		expect(model?.compat).toEqual(expectedCompat);
+	});
+
+	test("prefers native models.toml over legacy YAML and JSON configs", () => {
+		writeModelsToml({
+			provider: "native-precedence",
+			modelId: "native-model",
+			modelName: "Native winner",
+			baseUrl: "https://native.example.com/v1",
+		});
+		writeModelsYaml("models.yml", {
+			provider: "native-precedence",
+			modelId: "legacy-yaml",
+			modelName: "Legacy YAML",
+			baseUrl: "https://legacy-yaml.example.com/v1",
+		});
+		writeModelsJson({
+			provider: "native-precedence",
+			modelId: "legacy-json",
+			modelName: "Legacy JSON",
+			baseUrl: "https://legacy-json.example.com/v1",
+		});
+
+		const [nativeModel, yamlModel, jsonModel] = loadDefaultRegistryModels(
+			{ provider: "native-precedence", modelId: "native-model" },
+			{ provider: "native-precedence", modelId: "legacy-yaml" },
+			{ provider: "native-precedence", modelId: "legacy-json" },
+		);
+
+		expect(nativeModel?.name).toBe("Native winner");
+		expect(yamlModel).toBeUndefined();
+		expect(jsonModel).toBeUndefined();
 	});
 
 	test("prefers default models.yml over models.yaml when both exist", () => {
@@ -147,15 +178,10 @@ describe("ModelRegistry default custom models config", () => {
 
 		test("an explicit empty model override prevents cache warming", () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-empty.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    modelOverrides:",
-					`      ${JSON.stringify(BEDROCK_OPUS_MODEL)}:`,
-					"        promptCache: {}",
-					"",
-				].join("\n"),
+				"prompt-cache-empty.toml",
+				`[providers.amazon-bedrock.modelOverrides."${BEDROCK_OPUS_MODEL}"]
+promptCache = {}
+`,
 			);
 			const model = requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL);
 			const options: SimpleStreamOptions = { cacheRetention: "short" };
@@ -173,18 +199,11 @@ describe("ModelRegistry default custom models config", () => {
 
 		test("a one-tier override schedules from its short lifetime without inheriting long", () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-short-only.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    modelOverrides:",
-					`      ${JSON.stringify(BEDROCK_OPUS_MODEL)}:`,
-					"        promptCache:",
-					"          short: 90",
-					"        compat:",
-					"          supportsLongPromptCacheRetention: true",
-					"",
-				].join("\n"),
+				"prompt-cache-short-only.toml",
+				`[providers.amazon-bedrock.modelOverrides."${BEDROCK_OPUS_MODEL}"]
+promptCache = { short = 90 }
+compat = { supportsLongPromptCacheRetention = true }
+`,
 			);
 			const model = requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL);
 			const shortOptions: SimpleStreamOptions = { cacheRetention: "short" };
@@ -206,7 +225,7 @@ describe("ModelRegistry default custom models config", () => {
 		});
 
 		test("a default Bedrock model retains its catalog short and long lifetimes", () => {
-			const registry = createPromptCacheRegistry("prompt-cache-default.yml", "providers: {}\n");
+			const registry = createPromptCacheRegistry("prompt-cache-default.toml", "[providers]\n");
 			const model = requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL);
 
 			expect(model.promptCache).toEqual({ short: 300, long: 3600 });
@@ -215,22 +234,16 @@ describe("ModelRegistry default custom models config", () => {
 
 		test("custom Bedrock lifetime survives an unrelated override and provider fields", async () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-provider-rebuild.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com",
-					"    api: bedrock-converse-stream",
-					"    apiKey: TEST_KEY",
-					"    requestMetadata:",
-					"      regression: configured-custom-lifetime",
-					"    modelOverrides:",
-					`      ${JSON.stringify(BEDROCK_OPUS_MODEL)}:`,
-					"        maxTokens: 4321",
-					"    models:",
-					bedrockModelDefinition({ short: 90 }),
-					"",
-				].join("\n"),
+				"prompt-cache-provider-rebuild.toml",
+				`[providers.amazon-bedrock]
+baseUrl = "https://bedrock-runtime.us-east-1.amazonaws.com"
+api = "bedrock-converse-stream"
+apiKey = "TEST_KEY"
+requestMetadata = { regression = "configured-custom-lifetime" }
+[providers.amazon-bedrock.modelOverrides."${BEDROCK_OPUS_MODEL}"]
+maxTokens = 4321
+${bedrockModelDefinition({ short: 90 })}
+`,
 			);
 			const options: SimpleStreamOptions = { cacheRetention: "short" };
 			const model = requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL);
@@ -266,19 +279,15 @@ describe("ModelRegistry default custom models config", () => {
 			}
 		});
 
-		test("runtime lifetime replacement outranks the matching YAML definition after offline rebuild", async () => {
+		test("runtime lifetime replacement outranks the matching TOML definition after offline rebuild", async () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-runtime-precedence.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com",
-					"    api: bedrock-converse-stream",
-					"    apiKey: TEST_KEY",
-					"    models:",
-					bedrockModelDefinition({ short: 90 }),
-					"",
-				].join("\n"),
+				"prompt-cache-runtime-precedence.toml",
+				`[providers.amazon-bedrock]
+baseUrl = "https://bedrock-runtime.us-east-1.amazonaws.com"
+api = "bedrock-converse-stream"
+apiKey = "TEST_KEY"
+${bedrockModelDefinition({ short: 90 })}
+`,
 			);
 			expect(requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL).promptCache).toEqual({
 				short: 90,
@@ -312,17 +321,13 @@ describe("ModelRegistry default custom models config", () => {
 
 		test("empty runtime lifetime opts out, while absent runtime lifetime uses catalog defaults", () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-runtime-opt-out.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com",
-					"    api: bedrock-converse-stream",
-					"    apiKey: TEST_KEY",
-					"    models:",
-					bedrockModelDefinition({ short: 90 }),
-					"",
-				].join("\n"),
+				"prompt-cache-runtime-opt-out.toml",
+				`[providers.amazon-bedrock]
+baseUrl = "https://bedrock-runtime.us-east-1.amazonaws.com"
+api = "bedrock-converse-stream"
+apiKey = "TEST_KEY"
+${bedrockModelDefinition({ short: 90 })}
+`,
 			);
 			registry.registerProvider("amazon-bedrock", runtimeBedrockProvider({}), "ext://runtime-cache-opt-out");
 
@@ -346,7 +351,7 @@ describe("ModelRegistry default custom models config", () => {
 		});
 
 		test("runtime API replacement drops a prior catalog lifetime when the new route has no cache policy", () => {
-			const registry = createPromptCacheRegistry("prompt-cache-runtime-route-replacement.yml", "providers: {}\n");
+			const registry = createPromptCacheRegistry("prompt-cache-runtime-route-replacement.toml", "[providers]\n");
 			const options: SimpleStreamOptions = { cacheRetention: "short" };
 			const catalogModel = requireRegistryModel(registry, "amazon-bedrock", BEDROCK_OPUS_MODEL);
 			expect(getPromptCacheTtlMs(catalogModel, options)).toBe(300_000);
@@ -368,23 +373,17 @@ describe("ModelRegistry default custom models config", () => {
 			}
 		});
 
-		test("model override lifetime remains highest priority over runtime and YAML definitions", () => {
+		test("model override lifetime remains highest priority over runtime and TOML definitions", () => {
 			const registry = createPromptCacheRegistry(
-				"prompt-cache-override-precedence.yml",
-				[
-					"providers:",
-					"  amazon-bedrock:",
-					"    baseUrl: https://bedrock-runtime.us-east-1.amazonaws.com",
-					"    api: bedrock-converse-stream",
-					"    apiKey: TEST_KEY",
-					"    modelOverrides:",
-					`      ${JSON.stringify(BEDROCK_OPUS_MODEL)}:`,
-					"        promptCache:",
-					"          short: 120",
-					"    models:",
-					bedrockModelDefinition({ short: 90, long: 3600 }),
-					"",
-				].join("\n"),
+				"prompt-cache-override-precedence.toml",
+				`[providers.amazon-bedrock]
+baseUrl = "https://bedrock-runtime.us-east-1.amazonaws.com"
+api = "bedrock-converse-stream"
+apiKey = "TEST_KEY"
+[providers.amazon-bedrock.modelOverrides."${BEDROCK_OPUS_MODEL}"]
+promptCache = { short = 120 }
+${bedrockModelDefinition({ short: 90, long: 3600 })}
+`,
 			);
 			registry.registerProvider(
 				"amazon-bedrock",
@@ -443,6 +442,33 @@ interface ModelSnapshot {
 	};
 }
 
+function writeModelsToml(fixture: ProviderFixture): void {
+	fs.writeFileSync(
+		path.join(tempDir.path(), "models.toml"),
+		stringifySettingsToml({
+			providers: {
+				[fixture.provider]: {
+					baseUrl: fixture.baseUrl,
+					apiKey: "TEST_KEY",
+					api: "anthropic-messages",
+					models: [
+						{
+							id: fixture.modelId,
+							name: fixture.modelName,
+							reasoning: false,
+							input: fixture.imageInputDecoder ? ["text", "image"] : ["text"],
+							...(fixture.imageInputDecoder ? { imageInputDecoder: fixture.imageInputDecoder } : {}),
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 100000,
+							maxTokens: 8000,
+						},
+					],
+				},
+			},
+		}),
+	);
+}
+
 function writeModelsYaml(file: "models.yml" | "models.yaml", fixture: ProviderFixture): void {
 	const decoderLine = fixture.imageInputDecoder
 		? `        imageInputDecoder: ${fixture.imageInputDecoder}`
@@ -475,19 +501,23 @@ function writeModelsYaml(file: "models.yml" | "models.yaml", fixture: ProviderFi
 
 function writeBedrockCacheOverride(): void {
 	fs.writeFileSync(
-		path.join(tempDir.path(), "models.yml"),
-		[
-			"providers:",
-			"  amazon-bedrock:",
-			"    modelOverrides:",
-			"      us.anthropic.claude-opus-4-8:",
-			"        compat:",
-			"          promptCacheMode: explicit",
-			"          supportsLongPromptCacheRetention: false",
-			"          promptCacheMinimumTokens: 1024",
-			"          promptCacheMaximumCheckpoints: 4",
-			"",
-		].join("\n"),
+		path.join(tempDir.path(), "models.toml"),
+		stringifySettingsToml({
+			providers: {
+				"amazon-bedrock": {
+					modelOverrides: {
+						[BEDROCK_OPUS_MODEL]: {
+							compat: {
+								promptCacheMode: "explicit",
+								supportsLongPromptCacheRetention: false,
+								promptCacheMinimumTokens: 1024,
+								promptCacheMaximumCheckpoints: 4,
+							},
+						},
+					},
+				},
+			},
+		}),
 	);
 }
 
@@ -532,9 +562,9 @@ function loadDefaultRegistryModels(...lookups: ModelLookup[]): Array<ModelSnapsh
 		};
 	});
 }
-function createPromptCacheRegistry(filename: string, yaml: string): ModelRegistry {
+function createPromptCacheRegistry(filename: string, toml: string): ModelRegistry {
 	const modelsPath = path.join(tempDir.path(), filename);
-	fs.writeFileSync(modelsPath, yaml);
+	fs.writeFileSync(modelsPath, toml);
 	return new ModelRegistry(authStorage, modelsPath, {
 		fetch: async () => {
 			throw new Error("network disabled in prompt-cache configuration test");
@@ -551,26 +581,18 @@ function requireRegistryModel(registry: ModelRegistry, provider: string, modelId
 }
 
 function bedrockModelDefinition(promptCache: { short: number; long?: number }): string {
-	return [
-		`      - id: ${BEDROCK_OPUS_MODEL}`,
-		"        name: Configured Claude Opus cache fixture",
-		"        api: bedrock-converse-stream",
-		"        reasoning: false",
-		"        input: [text]",
-		"        cost:",
-		"          input: 3",
-		"          output: 15",
-		"          cacheRead: 0.3",
-		"          cacheWrite: 3.75",
-		"        promptCache:",
-		`          short: ${promptCache.short}`,
-		...(promptCache.long === undefined ? [] : [`          long: ${promptCache.long}`]),
-		"        compat:",
-		"          promptCacheMode: explicit",
-		"          supportsLongPromptCacheRetention: true",
-		"        contextWindow: 200000",
-		"        maxTokens: 8000",
-	].join("\n");
+	return `[[providers.amazon-bedrock.models]]
+id = "${BEDROCK_OPUS_MODEL}"
+name = "Configured Claude Opus cache fixture"
+api = "bedrock-converse-stream"
+reasoning = false
+input = ["text"]
+cost = { input = 3, output = 15, cacheRead = 0.3, cacheWrite = 3.75 }
+promptCache = { short = ${promptCache.short}${promptCache.long === undefined ? "" : `, long = ${promptCache.long}`} }
+compat = { promptCacheMode = "explicit", supportsLongPromptCacheRetention = true }
+contextWindow = 200000
+maxTokens = 8000
+`;
 }
 
 function runtimeBedrockProvider(

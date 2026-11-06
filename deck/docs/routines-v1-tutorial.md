@@ -101,14 +101,17 @@ No routine receives KB content automatically. An agent step can opt in with
 `kb_inputs: [projects/neodeck/overview.md]`; only those notes are appended to
 its prompt. Alternatively, add a **read KB note** deck step:
 
-```yaml
-- id: knowledge
-  type: deck
-  action: kb_read
-  path: projects/neodeck/overview.md
-- id: use_knowledge
-  type: agent
-  prompt: "Use this requested section: {{ steps.knowledge.json.body }}"
+```toml
+[[steps]]
+id = "knowledge"
+type = "deck"
+action = "kb_read"
+path = "projects/neodeck/overview.md"
+
+[[steps]]
+id = "use_knowledge"
+type = "agent"
+prompt = "Use this requested section: {{ steps.knowledge.json.body }}"
 ```
 
 Wire the read step into its consumer on the canvas. KB outputs remain in the
@@ -159,14 +162,15 @@ as its native type, not coerced to a string.
 
 ## The `mcp` step
 
-```yaml
-- id: issues
-  type: mcp
-  server: github          # a server enabled for the routine's cwd
-  tool: search_issues     # a tool that server advertises
-  args:
-    query: "repo:me/app is:open label:{{ trigger.label }}"
-    per_page: "{{ state.page_size }}"   # a lone {{ }} keeps its type
+```toml
+[[steps]]
+id = "issues"
+type = "mcp"
+server = "github" # a server enabled for the routine's cwd
+tool = "search_issues" # a tool that server advertises
+[steps.args]
+query = "repo:me/app is:open label:{{ trigger.label }}"
+per_page = "{{ state.page_size }}" # a lone {{ }} keeps its type
 ```
 
 - The server is found the way a chat opened in the routine's cwd (its
@@ -196,19 +200,19 @@ as its native type, not coerced to a string.
 
 A routine can have multiple triggers, even of the same kind. Examples:
 
-```yaml
-trigger:
-  - cron: "0 7 * * *"          # 7am daily
-  - cron: "0 17 * * 1-5"       # 5pm weekdays
-  - webhook:
-      path: /hooks/refresh
-      secret_env: REFRESH_SECRET
-  - manual: {}
+```toml
+[[trigger]]
+cron = "0 7 * * *" # 7am daily
+[[trigger]]
+cron = "0 17 * * 1-5" # 5pm weekdays
+[[trigger]]
+webhook = { path = "/hooks/refresh", secret_env = "REFRESH_SECRET" }
+[[trigger]]
+manual = {}
 ```
 
 Cron expressions are 5-field standard (minute / hour / day / month / weekday).
-Set `timezone:` on the spec to evaluate against an IANA zone like
-`America/Chicago`.
+Set `timezone = "America/Chicago"` on the spec to evaluate against an IANA zone.
 
 For webhook triggers, click **Rotate secret** in the routine's Settings tab
 to mint a fresh secret. The plaintext is shown **once**; the deck keeps it
@@ -303,23 +307,27 @@ names of the request headers, never a header value.
 
 Persistent key-value store scoped per routine:
 
-```yaml
-state:
-  declared_keys: [last_seen_id]
-steps:
-  - id: should_run
-    type: transform
-    body: |
-      if (state.last_seen_id === run.id) return { ok: false };
-      return { ok: true };
-  - id: do_thing
-    type: run
-    when: steps.should_run.json.ok
-    command: ./script.sh
-  - id: persist
-    type: set_state
-    state:
-      last_seen_id: "{{ run.id }}"
+```toml
+[state]
+declared_keys = ["last_seen_id"]
+
+[[steps]]
+id = "should_run"
+type = "transform"
+body = """
+if (state.last_seen_id === run.id) return { ok: false };
+return { ok: true };
+"""
+[[steps]]
+id = "do_thing"
+type = "run"
+when = "steps.should_run.json.ok"
+command = "./script.sh"
+[[steps]]
+id = "persist"
+type = "set_state"
+[steps.state]
+last_seen_id = "{{ run.id }}"
 ```
 
 `declared_keys` is informational — the runtime can write any key via
@@ -339,27 +347,46 @@ steps:
 If you'd rather not click through the builder:
 
 ```bash
-# Author the spec as a YAML file
-cat > /tmp/my-routine.yaml <<'YAML'
-name: hello-world
-description: minimal one-step routine
-trigger:
-  - manual: {}
-concurrency: skip
-steps:
-  - id: greet
-    type: run
-    command: 'echo "hello from {{ run.id }}"'
-YAML
+# Author the direct RoutineSpec object as TOML (no spec wrapper)
+cat > /tmp/my-routine.toml <<'TOML'
+name = "hello-world"
+description = "minimal one-step routine"
+concurrency = "skip"
+[[trigger]]
+manual = {}
+[[steps]]
+id = "greet"
+type = "run"
+command = 'echo "hello from {{ run.id }}"'
+TOML
 
 curl -X POST http://127.0.0.1:1701/api/routines \
   -H "content-type: application/json" \
-  -d "$(jq -Rs '{ name: "hello-world", cron: "", actionKind: "bash", actionBody: "", specYaml: . }' < /tmp/my-routine.yaml)"
+  -d "$(jq -Rs '{ name: "hello-world", specToml: . }' < /tmp/my-routine.toml)"
 ```
 
-The server validates the YAML against the JSON Schemas in
-`packages/protocol/src/schemas/` and returns 400 with a list of schema
-errors if anything is off.
+The server parses native TOML and validates the direct spec object against the
+JSON Schemas in `packages/protocol/src/schemas/`, returning 400 with a list of
+schema errors if anything is off. Bundled templates use `.toml` as well.
+
+Existing V1 database specs are imported from read-only `spec_yaml` to the new
+`spec_toml` column at startup or first read. The original YAML is never rewritten
+or deleted, including when the imported routine is edited or converted to a graph.
+Successful imports are persisted once and logged using only the routine ID.
+User comment text is carried into the imported TOML preamble when source
+association cannot be retained; subsequent builder and source edits preserve it.
+YAML/YML-only user templates use the same import behavior, publish a
+same-permission TOML sibling atomically, and retain the original unchanged.
+When both formats exist, TOML wins with a warning.
+Invalid specs or values the shared codec cannot preserve losslessly remain
+untouched and produce an explicit error identifying the affected routine.
+Explicit JSON nulls use shared reserved TOML metadata, not a wrapper around the
+spec: `[__npi]` contains `version = 1` and `null_paths = ["/steps/0/state/cleared"]`.
+Pointers use JSON Pointer escaping. Null object properties are omitted from
+the ordinary TOML tables; null array entries use empty-string placeholders.
+The browser and server decode this metadata before validating or executing
+the direct `RoutineSpec` object, preserving null, empty string and omitted values.
+New API writes and all execution parsers use `specToml`; YAML is import-only.
 
 ## Limitations in V1
 

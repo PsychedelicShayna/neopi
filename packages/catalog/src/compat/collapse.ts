@@ -1382,7 +1382,7 @@ export function resolveBareVariantSelector(modelId: string): BareVariantAliasHit
 /**
  * Reverse alias lookup: the retired ids that resolve to `modelId` for
  * `provider` via reviewed-table or registered live aliases. Used to re-key config
- * keyed by raw member ids (models.yml `modelOverrides`, suppressed selectors)
+ * keyed by raw member ids (models.toml `modelOverrides`, suppressed selectors)
  * onto the collapsed model.
  */
 export function getVariantAliasSources(provider: Provider, modelId: string): readonly string[] {

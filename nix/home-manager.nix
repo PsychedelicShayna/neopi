@@ -7,8 +7,38 @@
 }:
 let
   cfg = config.programs.omomp;
-  yaml = pkgs.formats.yaml { };
-  configFile = yaml.generate "omp-config.yml" cfg.settings;
+  toml = pkgs.formats.toml { };
+  # Match NeoPi's reversible explicit-clear metadata instead of dropping nulls.
+  segment = name: builtins.replaceStrings [ "~" "/" ] [ "~0" "~1" ] name;
+  encode = pointer: value:
+    if value == null then { value = ""; nullPaths = [ pointer ]; }
+    else if builtins.isList value then
+      let entries = lib.imap0 (index: item: encode "${pointer}/${toString index}" item) value;
+      in {
+        value = map (entry: entry.value) entries;
+        nullPaths = lib.concatMap (entry: entry.nullPaths) entries;
+      }
+    else if builtins.isAttrs value then
+      let
+        entries = lib.mapAttrsToList (name: item: {
+          inherit name;
+          omitted = item == null;
+          result = encode "${pointer}/${segment name}" item;
+        }) value;
+      in {
+        value = builtins.listToAttrs (map (entry: {
+          inherit (entry) name;
+          value = entry.result.value;
+        }) (builtins.filter (entry: !entry.omitted) entries));
+        nullPaths = lib.concatMap (entry: entry.result.nullPaths) entries;
+      }
+    else { inherit value; nullPaths = [ ]; };
+  encoded = encode "" cfg.settings;
+  document = assert !(cfg.settings ? __npi);
+    encoded.value // lib.optionalAttrs (encoded.nullPaths != [ ]) {
+      __npi = { version = 1; null_paths = encoded.nullPaths; };
+    };
+  configFile = toml.generate "omp-config.toml" document;
 in
 {
   options.programs.omp = {
@@ -22,10 +52,10 @@ in
     };
 
     settings = lib.mkOption {
-      type = lib.types.nullOr yaml.type;
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
       default = null;
       description = ''
-        Settings written declaratively to {file}`~/.omp/agent/config.yml`.
+        Settings written declaratively to {file}`~/.omp/agent/config.toml`.
         On each `home-manager switch` the declared settings are copied into
         place as a writable regular file (not a read-only store symlink), so
         NeoPi can acquire its config lock and rewrite the file when persisting
@@ -55,7 +85,7 @@ in
       after = [ "writeBoundary" ];
       data = ''
         run mkdir -p "$HOME/.omp/agent"
-        run install -m 600 ${configFile} "$HOME/.omp/agent/config.yml"
+        run install -m 600 ${configFile} "$HOME/.omp/agent/config.toml"
       '';
     };
   };

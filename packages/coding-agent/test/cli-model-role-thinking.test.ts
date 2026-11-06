@@ -22,7 +22,7 @@ describe("--model role override thinking suffix", () => {
 		tempDir = path.join(os.tmpdir(), `pi-cli-role-thinking-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 	});
 
 	afterAll(() => {

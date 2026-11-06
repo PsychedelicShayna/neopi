@@ -1955,7 +1955,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		options.modelRegistry ??
 		new ModelRegistry(
 			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir, { settings, cwd })),
-			path.join(agentDir, "models.yml"),
+			path.join(agentDir, "models.toml"),
 			{
 				settings,
 				cacheDbPath: getModelDbPath(agentDir),
@@ -3266,7 +3266,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (!restoreSessionModel()) {
 				// The saved candidates weren't in the static+cached catalog. If any
 				// belongs to a discovery-backed provider that hasn't been fetched
-				// yet (models.yml `discovery:` or extension `fetchDynamicModels`),
+				// yet (models.toml `discovery:` or extension `fetchDynamicModels`),
 				// trigger a cache-aware, provider-scoped discovery pass and retry
 				// before resume silently downgrades to the default role. The
 				// registry coalesces this with any matching request already running
@@ -3710,7 +3710,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// factories register providers AFTER the early `defaultRoleSpec`
 			// resolution, and configured discovery providers may still be
 			// mid-discovery, so a role pointing at such a model (an openai-compat
-			// plugin's `posthog/claude-opus-4-8`, a models.yml `openai-models-list`
+			// plugin's `posthog/claude-opus-4-8`, a models.toml `openai-models-list`
 			// endpoint) returned `undefined` there. Without this retry the
 			// `pickDefaultAvailableModel` fallback below happily replaces the
 			// user's configured default with a bundled provider's default whenever
@@ -3823,7 +3823,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				);
 
 				// Cold-cache discovery race (issues #6114, #6162): a discovery
-				// provider (models.yml openai-models-list, LM Studio/Ollama/
+				// provider (models.toml openai-models-list, LM Studio/Ollama/
 				// llama.cpp, or an openai-compat proxy) ships no static models, so
 				// the static+cached catalog resolved nothing above. Background
 				// discovery in main.ts fires only AFTER createAgentSession returns,
@@ -5658,7 +5658,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						discovered.sharedMaxNotesPerUpdate,
 					);
 				};
-				stopWatching = watchAdvisorConfigs(currentCwd, agentDir, apply, () => sessionManager.getArtifactsDir() ?? undefined);
+				stopWatching = watchAdvisorConfigs(
+					currentCwd,
+					agentDir,
+					apply,
+					() => sessionManager.getArtifactsDir() ?? undefined,
+				);
 				if (reload)
 					void discoverAdvisorConfigs(currentCwd, agentDir, sessionManager.getArtifactsDir() ?? undefined)
 						.then(apply)
@@ -5666,7 +5671,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			};
 			bindAdvisorSources(false);
 			session.addDisposer(session.registerSessionChangeCallback(() => bindAdvisorSources(true)));
-			session.addDisposer(() => { rosterRevision++; stopWatching(); });
+			session.addDisposer(() => {
+				rosterRevision++;
+				stopWatching();
+			});
 		}
 		credentialNoticeSession = session;
 		session.attachMixtureHost(sessionMixtureHost);

@@ -23,7 +23,7 @@ let modelRegistry: ModelRegistry;
 beforeAll(async () => {
 	sharedDir = TempDir.createSync("@pi-agent-session-fresh-shared-");
 	authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
+	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.toml"));
 });
 
 afterAll(() => {

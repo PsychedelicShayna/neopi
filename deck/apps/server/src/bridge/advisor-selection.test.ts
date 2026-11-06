@@ -52,13 +52,13 @@ if (!fixtureRoot) {
 		const project = path.join(fixtureRoot, "project");
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(project, { recursive: true });
-		const watchdog = path.join(agentDir, "WATCHDOG.yml");
+		const watchdog = path.join(agentDir, "WATCHDOG.toml");
 		const model = "openrouter/openai/gpt-4o-mini";
-		const roster = `advisors:\n  - name: Velvet\n    model: ${model}\n  - name: Rook\n    model: ${model}\n    enabled: true\n  - name: Moth\n    model: ${model}\n    enabled: false\n`;
+		const roster = `[[advisors]]\nname = "Velvet"\nmodel = "${model}"\n[[advisors]]\nname = "Rook"\nmodel = "${model}"\nenabled = true\n[[advisors]]\nname = "Moth"\nmodel = "${model}"\nenabled = false\n`;
 		await writeFile(watchdog, roster);
 		// The user's global advisor switch is on: deck chats must still run only what they pick.
-		const configYml = path.join(agentDir, "config.yml");
-		await writeFile(configYml, "advisor:\n  enabled: true\n");
+		const configToml = path.join(agentDir, "config.toml");
+		await writeFile(configToml, "[advisor]\nenabled = true\n");
 		await loadBackend(resolveBackendSelection()!);
 		const bridge = new InProcessAgentBridge({ idleTimeoutMs: 0 });
 		try {
@@ -87,9 +87,9 @@ if (!fixtureRoot) {
 			// Flip the global switch off and on so the reload is an effective
 			// `advisor.enabled` change, the path that re-enables NeoPi advisors.
 			const reloadWithGlobalOn = async () => {
-				await writeFile(configYml, "advisor:\n  enabled: false\n");
+				await writeFile(configToml, "[advisor]\nenabled = false\n");
 				await bridge.reloadLiveSettings();
-				await writeFile(configYml, "advisor:\n  enabled: true\n");
+				await writeFile(configToml, "[advisor]\nenabled = true\n");
 				await bridge.reloadLiveSettings();
 			};
 

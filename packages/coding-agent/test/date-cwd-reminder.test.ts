@@ -679,7 +679,7 @@ describe("date-cwd reminder on the provider wire", () => {
 		} as ModelSpec<Api>) as Model<Api>;
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -785,7 +785,7 @@ describe("date-cwd reminder on the provider wire", () => {
 		} as ModelSpec<Api>) as Model<Api>;
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -873,7 +873,7 @@ describe("date-cwd reminder on the provider wire", () => {
 			} as ModelSpec<Api>) as Model<Api>;
 			const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 			authStorage.keys.setRuntime(model.provider, "test-key");
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const sessionManager = SessionManager.inMemory(tempDir.path());
 			const contextHook: ExtensionFactory = pi => {
 				pi.on("context", () => undefined);
@@ -982,7 +982,7 @@ describe("date-cwd reminder on the provider wire", () => {
 		} as ModelSpec<Api>) as Model<Api>;
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		// superpowers' pi extension: its bootstrap goes first, built afresh and stamped per request.
 		let stamp = 1_000_000;
 		const bootstrapHook: ExtensionFactory = pi => {

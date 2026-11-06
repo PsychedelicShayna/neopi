@@ -172,7 +172,7 @@ it("registers the human-selected name in the real Hub registry and retains it af
 	const f = await fixture(undefined, undefined, true);
 	const auth = createInMemoryAuthStorage();
 	auth.keys.setRuntime("openai", "test-key");
-	const registry = new ModelRegistry(auth, `${f.cwd}/models.json`, { settings: f.settings });
+	const registry = new ModelRegistry(auth, `${f.cwd}/models.toml`, { settings: f.settings });
 	f.toolSession.authStorage = auth;
 	f.toolSession.modelRegistry = registry;
 	const root = SessionManager.create(f.cwd, f.cwd);

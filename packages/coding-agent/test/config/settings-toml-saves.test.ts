@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../../src/config/settings";
 import { createSettingsHost } from "../../src/config/settings-ui";
-import { parseSettingsToml, patchSettingsToml } from "../../src/config/settings-toml";
+import { parseSettingsToml, patchSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { cfgCompactionEnabled } from "../../src/session/context-settings";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
@@ -35,22 +35,33 @@ for (const scope of ["global", "project"] as const) {
 				? createSettingsHost(settings).set("compaction.enabled", value)
 				: settings.writeProjectValue(cfgCompactionEnabled, value);
 		for (const filename of ["config.toml", "settings.toml", "config.yml"]) {
-			it(`saves through the UI persistence path to ${filename} and reloads`, async () => {
-				const target = path.join(directory(), filename);
+			it(`saves through the UI persistence path to canonical TOML from ${filename} and reloads`, async () => {
+				const target = path.join(directory(), "config.toml");
+				const source = path.join(directory(), filename);
 				const yaml = "compaction:\n  enabled: true\n  reserveTokens: 1234\n";
-				await Bun.write(path.join(directory(), "config.yml"), yaml);
-				if (filename.endsWith("toml"))
-					await Bun.write(target, "# owner notes\n[unrelated]\nanswer = 42 # keep this\n");
+				const toml =
+					"# owner notes\n[unrelated]\nanswer = 42 # keep this\n\n[compaction]\n# nested owner note\nenabled = true # toggle\nreserveTokens = 1234\n";
+				await Bun.write(source, filename.endsWith(".toml") ? toml : yaml);
+				if (filename === "config.toml")
+					await Bun.write(
+						path.join(directory(), "config.yml"),
+						"compaction:\n  enabled: false\n  reserveTokens: 9999\n",
+					);
 				const settings = await Settings.init({ agentDir, cwd });
 				expect((await settings.persistWithReceipt(() => write(settings, false))).status).toBe("applied");
 				await settings.reloadFromDisk();
 				expect(cfgCompactionEnabled.get(settings)).toBe(false);
 				const text = await Bun.file(target).text();
-				const persisted = filename.endsWith("toml") ? parseSettingsToml(text) : Bun.YAML.parse(text);
-				expect(persisted).toMatchObject({ compaction: { enabled: false, reserveTokens: 1234 } });
-				if (filename.endsWith("toml")) {
+				expect(parseSettingsToml(text)).toMatchObject({ compaction: { enabled: false, reserveTokens: 1234 } });
+				if (filename === "config.toml") {
 					expect(text).toContain("# owner notes\n[unrelated]\nanswer = 42 # keep this\n");
-					expect(await Bun.file(path.join(directory(), "config.yml")).text()).toBe(yaml);
+					expect(text).toContain("# nested owner note");
+					expect(text).toContain("# toggle");
+					expect(await Bun.file(path.join(directory(), "config.yml")).text()).toBe(
+						"compaction:\n  enabled: false\n  reserveTokens: 9999\n",
+					);
+				} else {
+					expect(await Bun.file(source).text()).toBe(filename === "config.yml" ? yaml : toml);
 				}
 			});
 		}
@@ -115,15 +126,14 @@ for (const scope of ["global", "project"] as const) {
 		for (const operation of ["create", "remove"] as const) {
 			it(`rejects source changes when another writer ${operation}s TOML`, async () => {
 				const target = path.join(directory(), "config.toml");
-				await Bun.write(path.join(directory(), "config.yml"), "compaction:\n  enabled: true\n");
 				if (operation === "remove") await Bun.write(target, "[compaction]\nenabled = true\n");
 				const settings = await Settings.loadIsolated({ agentDir, cwd });
 				if (operation === "create") await Bun.write(target, "[compaction]\nenabled = true\n");
 				else await fs.unlink(target);
 				expect((await settings.persistWithReceipt(() => write(settings, false))).status).toBe("conflict");
-				expect(Bun.YAML.parse(await Bun.file(path.join(directory(), "config.yml")).text())).toEqual({
-					compaction: { enabled: true },
-				});
+				if (operation === "create")
+					expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ compaction: { enabled: true } });
+				else expect(await Bun.file(target).exists()).toBe(false);
 			});
 		}
 		it("fails closed on invalid TOML without overwriting it", async () => {
@@ -137,18 +147,19 @@ for (const scope of ["global", "project"] as const) {
 	});
 }
 
-it("keeps a UI clear explicit over a YAML scalar after reload and another save", async () => {
-	await Bun.write(path.join(agentDir, "config.yml"), "temperature: 0.4\n");
-	await Bun.write(path.join(agentDir, "config.toml"), "# preferences\n");
+it("keeps a UI clear absent after reload and another save without reviving legacy YAML", async () => {
+	await Bun.write(path.join(agentDir, "config.yml"), "temperature: 0.9\n");
+	await Bun.write(path.join(agentDir, "config.toml"), "# preferences\ntemperature = 0.4\n");
 	const settings = await Settings.init({ agentDir, cwd });
 	await settings.persistWithReceipt(() => createSettingsHost(settings).unset("temperature"));
 	const target = path.join(agentDir, "config.toml");
-	expect(parseSettingsToml(await Bun.file(target).text()).temperature).toBeNull();
+	expect(parseSettingsToml(await Bun.file(target).text()).temperature).toBeUndefined();
 	await settings.reloadFromDisk();
 	expect(createSettingsHost(settings).get("temperature")).not.toBe(0.4);
 	await settings.persistWithReceipt(() => createSettingsHost(settings).set("compaction.enabled", false));
 	await settings.reloadFromDisk();
-	expect(parseSettingsToml(await Bun.file(target).text()).temperature).toBeNull();
+	expect(parseSettingsToml(await Bun.file(target).text()).temperature).toBeUndefined();
+	expect(await Bun.file(path.join(agentDir, "config.yml")).text()).toBe("temperature: 0.9\n");
 });
 
 it("preserves unrelated multiline strings, dotted keys, comments and table arrays", () => {

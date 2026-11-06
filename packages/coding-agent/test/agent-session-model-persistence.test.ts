@@ -35,7 +35,7 @@ describe("AgentSession model persistence", () => {
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 		sharedAuthStorage.keys.setRuntime("zai", "test-key");
-		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {
@@ -683,7 +683,7 @@ describe("AgentSession model persistence", () => {
 			for (const provider of ["anthropic", "openrouter", "amazon-bedrock"]) {
 				authStorage.keys.setRuntime(provider, "test-key");
 			}
-			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 			const result = await resumeArchivedSession(authStorage, modelRegistry);
 			session = result.session;
 			const summary = session.messages.find(message => message.role === "compactionSummary");
@@ -750,19 +750,18 @@ describe("AgentSession model persistence", () => {
 	] as const)(
 		"switching sessions from %s installs the archive at the resumed model's frame payload budget",
 		async (_, fromProvider, toProvider, frames) => {
-			const modelsPath = path.join(tempDir.path(), "models.yml");
+			const modelsPath = path.join(tempDir.path(), "models.toml");
 			await Bun.write(
 				modelsPath,
-				`providers:
-  anthropic-proxy:
-    api: anthropic-messages
-    baseUrl: https://anthropic-proxy.example.com
-    apiKey: test-key
-    models:
-      - id: claude-sonnet-4-5
-        input: [text, image]
-        contextWindow: 200000
-        maxTokens: 64000
+				`[providers.anthropic-proxy]
+api = "anthropic-messages"
+baseUrl = "https://anthropic-proxy.example.com"
+apiKey = "test-key"
+[[providers.anthropic-proxy.models]]
+id = "claude-sonnet-4-5"
+input = ["text", "image"]
+contextWindow = 200000
+maxTokens = 64000
 `,
 			);
 			const modelRegistry = new ModelRegistry(sharedAuthStorage, modelsPath);

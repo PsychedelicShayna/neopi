@@ -27,11 +27,11 @@ remain serve third-party model families (the live list is the registry in
 
 ## Configuration and dispatch
 
-Set these fields on a provider entry in `models.yml`:
+Set these fields on a provider entry in `models.toml`:
 
-```yaml
-transport: pi-native
-baseUrl: http://gateway.internal:4000
+```toml
+"transport" = "pi-native"
+"baseUrl" = "http://gateway.internal:4000"
 ```
 
 The provider's `transport` and gateway `baseUrl` apply to every model under
@@ -42,7 +42,7 @@ that provider, including custom models. The resolved model carries
 `baseUrl` fails with:
 
 ```text
-pi-native transport requires `baseUrl` on model MODEL_ID (set it on the provider config in models.yml)
+pi-native transport requires `baseUrl` on model MODEL_ID (set it on the provider config in models.toml)
 ```
 
 When `model.transport === "pi-native"`, `streamSimple` bypasses the normal

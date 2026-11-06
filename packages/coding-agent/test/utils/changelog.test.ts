@@ -15,6 +15,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeWithRetries, VERSION } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { lookup } from "../../src/config/registry";
 import { Settings } from "../../src/config/settings";
 import {
@@ -67,12 +68,12 @@ describe("startup changelog mode settings", () => {
 		expect(lookup("collapseChangelog")).toBeUndefined();
 
 		await withTempAgentDir(async agentDir => {
-			const configPath = path.join(agentDir, "config.yml");
+			const configPath = path.join(agentDir, "config.toml");
 			for (const [legacyValue, expectedMode] of [
 				[true, "summary"],
 				[false, "expanded"],
 			] as const) {
-				await Bun.write(configPath, `collapseChangelog: ${legacyValue}\n`);
+				await Bun.write(configPath, stringifySettingsToml({ collapseChangelog: legacyValue }));
 				const settings = await Settings.loadReadOnly({ cwd: agentDir, agentDir });
 				expect(cfgStartupChangelogMode.get(settings)).toBe(expectedMode);
 			}
@@ -82,8 +83,8 @@ describe("startup changelog mode settings", () => {
 	test("lets an explicit new mode win over the legacy raw config key", async () => {
 		await withTempAgentDir(async agentDir => {
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				"collapseChangelog: false\nstartup:\n  changelogMode: hidden\n",
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({ collapseChangelog: false, startup: { changelogMode: "hidden" } }),
 			);
 			const settings = await Settings.loadReadOnly({ cwd: agentDir, agentDir });
 			expect(cfgStartupChangelogMode.get(settings)).toBe("hidden");
@@ -404,8 +405,8 @@ describe.skipIf(!hasPtyHarness)("interactive startup changelog PTY smoke", () =>
 					// Setup already completed, so the interactive transcript (where the startup
 					// changelog renders) comes up instead of the animated setup wizard.
 					await Bun.write(
-						path.join(agentDir, "config.yml"),
-						`setupVersion: ${CURRENT_SETUP_VERSION}\ncollapseChangelog: false\n`,
+						path.join(agentDir, "config.toml"),
+						stringifySettingsToml({ setupVersion: CURRENT_SETUP_VERSION, collapseChangelog: false }),
 					);
 
 					const proc = Bun.spawn(["script", "-q", "-c", `bun ${JSON.stringify(cliEntry)}`, "/dev/null"], {

@@ -1,4 +1,4 @@
-import { parseDocument, stringify } from "yaml";
+import { parseSettingsToml, patchSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import type { TelegramMessage } from "./telegram.ts";
 import type { TelegramBridgeConfig } from "./config.ts";
 import type { SessionSummary } from "@npi-deck/protocol";
@@ -76,22 +76,22 @@ export function unsupportedAttachments(message: TelegramMessage): string[] {
 export interface IntakeCard { title: string; body: string; cwd?: string; stateId?: string }
 
 export function parseProperties(text: string): Record<string, unknown> {
-	const doc = parseDocument(text, { uniqueKeys: true });
-	if (doc.errors.length) throw new Error("Card properties must be valid YAML with unique keys.");
-	const value: unknown = doc.toJS({ maxAliasCount: 20 });
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Card properties must be a YAML mapping.");
-	return value as Record<string, unknown>;
+	try { return parseSettingsToml(text); }
+	catch { throw new Error("Card properties must be valid TOML with unique keys."); }
 }
 
 /** First-pass decomposition is deterministic: explicit list items become cards, prose stays one card. */
 export function decomposeTask(text: string, defaults: Record<string, unknown> = {}): IntakeCard[] {
 	let body = text.trim();
 	let properties = defaults;
-	if (body.startsWith("---\n")) {
-		const end = body.indexOf("\n---", 4);
-		if (end < 0 || !/^\n---(?:\n|$)/.test(body.slice(end))) throw new Error("Close card front matter with a --- line.");
-		properties = { ...defaults, ...parseProperties(body.slice(4, end)) };
-		body = body.slice(end + 4).trim();
+	let sourceHeader = "";
+	if (/^---\r?\n/.test(body)) throw new Error("Use +++ TOML front matter for card properties.");
+	if (/^\+\+\+\r?\n/.test(body)) {
+		const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(body);
+		if (!match) throw new Error("Close card front matter with a +++ line.");
+		sourceHeader = match[1]!;
+		properties = { ...defaults, ...parseProperties(sourceHeader) };
+		body = body.slice(match[0].length).trim();
 	}
 	if (!body) throw new Error("Send a task description after the card properties.");
 	if (properties["read-only"] !== undefined && typeof properties["read-only"] !== "boolean") throw new Error("read-only must be true or false.");
@@ -108,7 +108,7 @@ export function decomposeTask(text: string, defaults: Record<string, unknown> = 
 		body: [...lines.slice(0, list[0]!.index), item.text, ...lines.slice(item.index + 1, list[i + 1]?.index ?? lines.length)].join("\n").trim(),
 	})) : [{ title: body.split("\n")[0]!, body }];
 	const { cwd, stateId, ...metadata } = properties;
-	const header = Object.keys(metadata).length ? `---\n${stringify(metadata)}---\n\n` : "";
+	const header = Object.keys(metadata).length || sourceHeader ? `+++\n${patchSettingsToml(sourceHeader, metadata).trimEnd()}\n+++\n\n` : "";
 	return parts.map((part) => ({
 		title: part.title.slice(0, 200), body: `${header}${part.body}`,
 		...(typeof cwd === "string" ? { cwd } : {}),
@@ -121,7 +121,7 @@ Send a task, or a numbered/checklist list for multiple cards.
 /task <text> — file task cards
 /capture <text> — save an unprocessed inbox capture
 /inbox — show unprocessed inbox items
-/properties <YAML> — set this chat/topic's default card front matter; /properties clear removes defaults
+/properties <TOML> — set this chat/topic's default card front matter; /properties clear removes defaults
 /chat <text> — explicitly chat with the bound persistent NeoPi session (photos supported)
 /session or /status — show binding
 /sessions [search <query>] — list/search this conversation's retained sessions; /sessions <ID|title|number> resumes
@@ -133,4 +133,4 @@ Send a task, or a numbered/checklist list for multiple cards.
 /model <provider/model> — select session model; /model lists models
 /compact [focus] — compact session context
 /help or /commands — this help
-Use YAML front matter before a task to set read-only, worktree, model, role or any other card property. Execution is managed separately by the deck.`;
+Use +++ TOML front matter before a task to set read-only, worktree, model, role or any other card property. Execution is managed separately by the deck.`;

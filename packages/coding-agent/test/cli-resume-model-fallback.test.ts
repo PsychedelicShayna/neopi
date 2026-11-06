@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 const cliEntry = path.resolve(import.meta.dir, "../src/cli.ts");
 
@@ -21,8 +22,8 @@ describe("headless startup resume", () => {
 			try {
 				const agentDir = tempDir.join("home", ".omp", "agent");
 				await Bun.write(
-					path.join(agentDir, "models.yml"),
-					JSON.stringify({
+					path.join(agentDir, "models.toml"),
+					stringifySettingsToml({
 						providers: {
 							other: {
 								baseUrl: `${server.url.origin}/v1`,
@@ -184,8 +185,8 @@ describe("headless runtime session switch", () => {
 		});
 		const agentDir = path.join(cwd, "home", ".omp", "agent");
 		await Bun.write(
-			path.join(agentDir, "models.yml"),
-			JSON.stringify({
+			path.join(agentDir, "models.toml"),
+			stringifySettingsToml({
 				providers: {
 					local: {
 						baseUrl: `${server.url.origin}/local/v1`,

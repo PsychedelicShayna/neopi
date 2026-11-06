@@ -105,12 +105,12 @@ export function CustomModelsEditor() {
   try { const result = await settings.models.save(text, doc.revision); setDoc(result); setText(result.raw ?? ""); setValid(null); setNotice(result.registry.error ?? "Saved. The model catalogue has refreshed."); }
   catch (error) { setNotice(String(error)); } finally { setBusy(false); }
  }
- return <Card title="Custom model definitions" description="Advanced catalogue extensions in models.yml, separate from role assignments." actions={<NeoButton size="sm" variant="ghost" disabled={busy} onClick={() => void refresh()}>Reload</NeoButton>}>
+ return <Card title="Custom model definitions" description="Advanced catalogue extensions in models.toml, separate from role assignments." actions={<NeoButton size="sm" variant="ghost" disabled={busy} onClick={() => void refresh()}>Reload</NeoButton>}>
   <div className="neo-settings-stack">
    {notice && <Notice>{notice}</Notice>}
    <p className="neo-settings-description">Masked credentials, URLs and comments retain their stored values. The server validates the document and checks its revision before saving.</p>
    {doc?.error && <Notice tone="warn">{doc.error}</Notice>}
-   {doc?.raw === null ? <Notice tone="warn">{doc.rawUnavailable}</Notice> : <NeoTextarea mono aria-label="models.yml document" value={text} onChange={event => { setText(event.target.value); setValid(null); }} spellCheck={false} rows={12} disabled={!doc || busy} />}
+   {doc?.raw === null ? <Notice tone="warn">{doc.rawUnavailable}</Notice> : <NeoTextarea mono aria-label="models.toml document" value={text} onChange={event => { setText(event.target.value); setValid(null); }} spellCheck={false} rows={12} disabled={!doc || busy} />}
    <div className="neo-settings-actions"><NeoButton disabled={!doc || busy || doc.raw === null} onClick={() => void validate()}>Validate</NeoButton><NeoButton variant="primary" disabled={busy || !doc || valid !== text || text === doc.raw} onClick={() => void save()}>Save definitions</NeoButton></div>
    {doc && <span className="neo-settings-description neo-mono neo-settings-file-path">{doc.path}</span>}
   </div>

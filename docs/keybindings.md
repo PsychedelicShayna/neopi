@@ -6,22 +6,26 @@ Base editor, input, and selector actions use `tui.editor.*`, `tui.input.*`, and 
 
 ## Customize keybindings
 
-User remaps live in `~/.omp/agent/keybindings.yml`. The file is a YAML mapping whose keys are keybinding action IDs and whose values are either one chord string or an array of chord strings. It is not read from `~/.omp/agent/config.yml`, and there is no nested `keybindings` object.
+User remaps live in `~/.omp/agent/keybindings.toml`. Keys are quoted keybinding action IDs and values are either one chord string or an array of chord strings. They do not belong in `config.toml`, and there is no nested `keybindings` object.
 
-With a named profile, bindings from the default profile's agent directory are loaded first and the active profile's `keybindings.yml` overrides them action by action. The inherited file is read-only during that profile's startup.
+With a named profile, bindings from the default profile's agent directory are loaded first and the active profile's `keybindings.toml` overrides them action by action. The inherited file is read-only during that profile's startup.
 
-```yaml
-app.model.cycleForward: Ctrl+P
-app.model.selectTemporary: Alt+P
-app.plan.toggle: Alt+Shift+P
+If only `keybindings.yml`, `keybindings.yaml`, or `keybindings.json` exists, NeoPi imports it once into sibling `keybindings.toml` atomically with the source permissions. The legacy file is never changed or deleted. If both formats exist, TOML wins and a warning logs their paths only. Subsequent loads and saves use TOML; editor saves preserve comments.
+
+YAML comment text is retained in a labelled TOML preamble. Original YAML field associations cannot survive the format change; comments authored in native TOML retain their nested positions on editor saves.
+
+```toml
+"app.model.cycleForward" = "Ctrl+P"
+"app.model.selectTemporary" = "Alt+P"
+"app.plan.toggle" = "Alt+Shift+P"
 ```
 
 Chord names are case-insensitive and use the same notation shown in the UI, such as `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, and `Ctrl+Backspace`.
 
 Set an action to an empty array to disable it:
 
-```yaml
-app.history.search: []
+```toml
+"app.history.search" = []
 ```
 
 ## Common action IDs

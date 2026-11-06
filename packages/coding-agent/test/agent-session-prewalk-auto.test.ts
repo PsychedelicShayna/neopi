@@ -170,7 +170,7 @@ describe("AgentSession auto-prewalk", () => {
 		vi.spyOn(authStorage.keys, "source").mockImplementation((provider, sourceOptions) =>
 			credentialed.includes(provider) ? source(provider, sourceOptions) : undefined,
 		);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"prewalk.enabled": false,

@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { createAuthStorageSettingsSync } from "@oh-my-pi/pi-coding-agent/session/auth-broker-config";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 import { cfgAuthBrokerUrl } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 
@@ -65,8 +65,8 @@ describe("auth broker settings take effect live", () => {
 		brokers.push(brokerA, brokerB);
 		const agentDir = tempDir.join("agent");
 		await Bun.write(
-			path.join(agentDir, "config.yml"),
-			`auth:\n  broker:\n    url: ${brokerA.handle.url}\n    token: ${TOKEN}\n`,
+			path.join(agentDir, "config.toml"),
+			stringifySettingsToml({ auth: { broker: { url: brokerA.handle.url, token: TOKEN } } }),
 		);
 		const settings = await Settings.loadIsolated({ cwd: tempDir.path(), agentDir });
 		const authStorage = await discoverAuthStorage(agentDir, { settings });

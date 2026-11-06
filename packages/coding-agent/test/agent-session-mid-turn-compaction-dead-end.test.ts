@@ -59,7 +59,7 @@ describe("AgentSession mid-turn compaction dead-end", () => {
 		tempDir = TempDir.createSync("@pi-mid-turn-compaction-dead-end-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.keys.setRuntime("mock", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		const mock = createMockModel({
 			responses: options.responses,
 			contextWindow: options.contextWindow,

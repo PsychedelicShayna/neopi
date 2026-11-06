@@ -1,129 +1,246 @@
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { isEnoent } from "./fs-error";
-import { isRecord } from "./type-guards";
+import { isEexist, isEnoent } from "./fs-error";
+import { preserveLegacyYamlComments } from "./legacy-yaml-import";
+import * as logger from "./logger";
+import { createSettingsTomlCodec, plainSettingsTomlTable as plainTable } from "./settings-toml-codec";
+export * from "./settings-toml-codec";
+export const { parseSettingsToml, stringifySettingsToml, patchSettingsToml, stringifyTomlValue } =
+	createSettingsTomlCodec(content => Bun.TOML.parse(content));
 export const SETTINGS_TOML = "settings.toml";
 export const CONFIG_TOML = "config.toml";
 
-/** Read the canonical sibling, or the legacy overlay, but never combine both. */
-export async function settingsTomlSource(
-	directory: string,
-): Promise<{ filePath: string; content: string } | undefined> {
-	const sources: { filePath: string; content: string }[] = [];
-	for (const filename of [CONFIG_TOML, SETTINGS_TOML]) {
-		const filePath = path.join(directory, filename);
+export interface TomlConfigSource {
+	filePath: string;
+	content: string;
+	data: Record<string, unknown>;
+}
+
+export interface TomlConfigReadOptions {
+	legacyPaths?: readonly string[];
+	parseLegacy?: (content: string, filePath: string) => Record<string, unknown>;
+	/** Read inherited legacy configuration without modifying its directory. */
+	migrate?: boolean;
+}
+
+/** Legacy parsing is confined to the import seam; parser errors never disclose values. */
+export function importLegacyYamlValue(content: string, filePath?: string): unknown {
+	try {
+		return Bun.YAML.parse(content);
+	} catch {
+		throw new Error(`Invalid legacy YAML configuration${filePath ? `: ${filePath}` : ""}`);
+	}
+}
+
+export function importLegacyYaml(content: string, filePath?: string): Record<string, unknown> {
+	const value = importLegacyYamlValue(content, filePath) ?? {};
+	if (!plainTable(value))
+		throw new Error(`Legacy configuration must contain a mapping${filePath ? `: ${filePath}` : ""}`);
+	return value;
+}
+
+async function publishContent(filePath: string, content: string, mode: number, noReplace: boolean): Promise<void> {
+	const temporary = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+	try {
+		const handle = await fs.promises.open(temporary, "wx", mode);
 		try {
-			sources.push({ filePath, content: await fs.readFile(filePath, "utf8") });
+			await handle.writeFile(content, "utf8");
+			await handle.chmod(mode);
+			await handle.sync();
+		} finally {
+			await handle.close();
+		}
+		if (noReplace) await fs.promises.link(temporary, filePath);
+		else await fs.promises.rename(temporary, filePath);
+	} finally {
+		await fs.promises.rm(temporary, { force: true });
+	}
+}
+
+function publishContentSync(filePath: string, content: string, mode: number, noReplace: boolean): void {
+	const temporary = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	try {
+		const fd = fs.openSync(temporary, "wx", mode);
+		try {
+			fs.writeFileSync(fd, content, "utf8");
+			fs.fchmodSync(fd, mode);
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
+		}
+		if (noReplace) fs.linkSync(temporary, filePath);
+		else fs.renameSync(temporary, filePath);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
+}
+
+/** Publish a complete imported sibling without ever modifying the legacy file. */
+export async function publishTomlImport(filePath: string, content: string, legacyPath: string): Promise<void> {
+	try {
+		await publishContent(filePath, content, (await fs.promises.stat(legacyPath)).mode & 0o7777, true);
+		logger.info("Imported legacy configuration", { sourcePath: legacyPath, targetPath: filePath });
+	} catch (error) {
+		if (!isEexist(error)) throw error;
+		logger.warn("Ignoring legacy configuration in favor of TOML", { sourcePath: legacyPath, targetPath: filePath });
+	}
+}
+
+export function publishTomlImportSync(filePath: string, content: string, legacyPath: string): void {
+	try {
+		publishContentSync(filePath, content, fs.statSync(legacyPath).mode & 0o7777, true);
+		logger.info("Imported legacy configuration", { sourcePath: legacyPath, targetPath: filePath });
+	} catch (error) {
+		if (!isEexist(error)) throw error;
+		logger.warn("Ignoring legacy configuration in favor of TOML", { sourcePath: legacyPath, targetPath: filePath });
+	}
+}
+
+function parseLegacyConfig(content: string, filePath: string, options: TomlConfigReadOptions): Record<string, unknown> {
+	try {
+		const data = (options.parseLegacy ?? importLegacyYaml)(content, filePath);
+		if (!plainTable(data)) throw new Error("Expected a mapping");
+		return data;
+	} catch {
+		throw new Error(`Failed to import legacy configuration: ${filePath}`);
+	}
+}
+
+function encodeLegacyConfig(
+	content: string,
+	sourcePath: string,
+	targetPath: string,
+	data: object,
+	options: TomlConfigReadOptions,
+): string {
+	if (sourcePath.endsWith(".toml")) return patchSettingsToml(content, data);
+	const toml = stringifySettingsToml(data);
+	if (!/\.ya?ml$/i.test(sourcePath) && options.parseLegacy) return toml;
+	const retained = preserveLegacyYamlComments(content, toml);
+	if (retained !== toml) {
+		logger.warn("Imported YAML comments as a TOML preamble; original field associations are not retained", {
+			sourcePath,
+			targetPath,
+		});
+	}
+	return retained;
+}
+
+export async function readTomlConfig(
+	filePath: string,
+	options: TomlConfigReadOptions = {},
+): Promise<TomlConfigSource | undefined> {
+	let content: string | undefined;
+	try {
+		content = await fs.promises.readFile(filePath, "utf8");
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	for (const legacyPath of options.legacyPaths ?? []) {
+		if (legacyPath === filePath) continue;
+		if (content !== undefined) {
+			try {
+				await fs.promises.lstat(legacyPath);
+				logger.warn("Ignoring legacy configuration in favor of TOML", {
+					sourcePath: legacyPath,
+					targetPath: filePath,
+				});
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			continue;
+		}
+		let legacy: string;
+		try {
+			legacy = await fs.promises.readFile(legacyPath, "utf8");
 		} catch (error) {
-			if (!isEnoent(error)) throw new Error(`Failed to read settings config ${filePath}`, { cause: error });
+			if (!isEnoent(error)) throw error;
+			continue;
 		}
+		const data = parseLegacyConfig(legacy, legacyPath, options);
+		if (options.migrate === false) return { filePath: legacyPath, content: legacy, data };
+		await publishTomlImport(filePath, encodeLegacyConfig(legacy, legacyPath, filePath, data, options), legacyPath);
+		content = await fs.promises.readFile(filePath, "utf8");
 	}
-	if (sources.length > 1) {
-		throw new Error(
-			`Conflicting settings files: ${sources.map(source => source.filePath).join(" and ")}. Keep only one TOML sibling.`,
-		);
-	}
-	return sources[0];
+	return content === undefined ? undefined : { filePath, content, data: parseSettingsToml(content, filePath) };
 }
 
-/** Selected main-settings overlay path for file viewers and other read-side consumers. */
-export async function resolveSettingsTomlPath(directory: string): Promise<string | undefined> {
-	return (await settingsTomlSource(directory))?.filePath;
-}
-
-/** Missing and empty overlays leave the original layer untouched. This reader never writes settings. */
-export async function readSettingsToml(directory: string): Promise<Record<string, unknown>> {
-	const source = await settingsTomlSource(directory);
-	if (!source) return {};
+export function readTomlConfigSync(
+	filePath: string,
+	options: TomlConfigReadOptions = {},
+): TomlConfigSource | undefined {
+	let content: string | undefined;
 	try {
-		return parseSettingsToml(source.content);
+		content = fs.readFileSync(filePath, "utf8");
 	} catch (error) {
-		throw new Error(`Settings config is invalid: ${source.filePath}: ${String(error)}`);
+		if (!isEnoent(error)) throw error;
 	}
+	for (const legacyPath of options.legacyPaths ?? []) {
+		if (legacyPath === filePath) continue;
+		if (content !== undefined) {
+			try {
+				fs.lstatSync(legacyPath);
+				logger.warn("Ignoring legacy configuration in favor of TOML", {
+					sourcePath: legacyPath,
+					targetPath: filePath,
+				});
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			continue;
+		}
+		let legacy: string;
+		try {
+			legacy = fs.readFileSync(legacyPath, "utf8");
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			continue;
+		}
+		const data = parseLegacyConfig(legacy, legacyPath, options);
+		if (options.migrate === false) return { filePath: legacyPath, content: legacy, data };
+		publishTomlImportSync(filePath, encodeLegacyConfig(legacy, legacyPath, filePath, data, options), legacyPath);
+		content = fs.readFileSync(filePath, "utf8");
+	}
+	return content === undefined ? undefined : { filePath, content, data: parseSettingsToml(content, filePath) };
 }
 
-export function parseSettingsToml(content: string, filePath?: string): Record<string, unknown> {
+export async function writeTomlConfig(filePath: string, data: object, source?: string): Promise<void> {
+	const content = source === undefined ? stringifySettingsToml(data) : patchSettingsToml(source, data);
+	if (content === source) return;
+	const target = await fs.promises.realpath(filePath).catch(error => {
+		if (!isEnoent(error)) throw error;
+		return filePath;
+	});
+	const mode = await fs.promises
+		.stat(target)
+		.then(stat => stat.mode & 0o7777)
+		.catch(error => {
+			if (!isEnoent(error)) throw error;
+			return 0o600;
+		});
+	await publishContent(target, content, mode, false);
+}
+
+export function writeTomlConfigSync(filePath: string, data: object, source?: string): void {
+	const content = source === undefined ? stringifySettingsToml(data) : patchSettingsToml(source, data);
+	if (content === source) return;
+	let target = filePath;
+	let mode = 0o600;
 	try {
-		const parsed: unknown = Bun.TOML.parse(content);
-		if (!isRecord(parsed)) throw new Error("Expected a settings table");
-		return decodeSettingsToml(parsed);
+		target = fs.realpathSync(filePath);
+		mode = fs.statSync(target).mode & 0o7777;
 	} catch (error) {
-		if (filePath) throw new Error(`Settings config is invalid: ${filePath}: ${String(error)}`);
-		throw error;
+		if (!isEnoent(error)) throw error;
 	}
+	publishContentSync(target, content, mode, false);
 }
 
-/** Top-level keys, including tables and arrays, replace their YAML counterparts wholesale. */
-export function overlaySettingsToml(
-	base: Record<string, unknown>,
-	overlay: Record<string, unknown> = {},
-): Record<string, unknown> {
-	overlay = decodeSettingsToml(overlay);
-	if (Object.keys(overlay).length === 0) return base;
-	return Object.fromEntries([
-		...Object.entries(base),
-		...Object.entries(overlay).filter(([, value]) => value !== undefined),
-	]);
-}
-
-export function plainSettingsTomlTable(value: unknown): value is Record<string, unknown> {
-	return (
-		isRecord(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-	);
-}
-/** Restore versioned JSON Pointer clears before the YAML top-level overlay is applied. */
-export function decodeSettingsToml(input: Record<string, unknown>): Record<string, unknown> {
-	if (!Object.hasOwn(input, "__npi")) return input;
-	const metadata = input.__npi;
-	if (
-		!plainSettingsTomlTable(metadata) ||
-		metadata.version !== 1 ||
-		!Array.isArray(metadata.null_paths) ||
-		!metadata.null_paths.every(entry => typeof entry === "string") ||
-		Object.keys(metadata).some(key => key !== "version" && key !== "null_paths")
-	)
-		throw new Error("Invalid reserved __npi metadata. Expected version = 1 and null_paths = [JSON Pointers].");
-	const decoded = structuredClone(Object.fromEntries(Object.entries(input).filter(([key]) => key !== "__npi")));
-	const seen = new Set<string>();
-	for (const pointer of metadata.null_paths as string[]) {
-		if (!pointer.startsWith("/") || /~(?:[^01]|$)/.test(pointer) || seen.has(pointer)) {
-			throw new Error(`Invalid or duplicate null path: ${JSON.stringify(pointer)}`);
-		}
-		seen.add(pointer);
-		const segments = pointer
-			.slice(1)
-			.split("/")
-			.map(segment => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
-		if (segments[0] === "__npi") throw new Error("Null paths cannot target reserved __npi metadata");
-		let parent: unknown = decoded;
-		for (const [index, segment] of segments.entries()) {
-			const last = index === segments.length - 1;
-			if (Array.isArray(parent)) {
-				if (!/^(0|[1-9]\d*)$/.test(segment) || Number(segment) >= parent.length) {
-					throw new Error(`Null path has an invalid array index: ${JSON.stringify(pointer)}`);
-				}
-				if (last) {
-					if (parent[Number(segment)] !== "")
-						throw new Error(`Null array placeholder must be an empty string: ${JSON.stringify(pointer)}`);
-					parent[Number(segment)] = null;
-				} else parent = parent[Number(segment)];
-			} else if (plainSettingsTomlTable(parent)) {
-				if (last) {
-					if (Object.hasOwn(parent, segment))
-						throw new Error(`Null path conflicts with a value: ${JSON.stringify(pointer)}`);
-					Object.defineProperty(parent, segment, {
-						value: null,
-						enumerable: true,
-						writable: true,
-						configurable: true,
-					});
-				} else {
-					if (!Object.hasOwn(parent, segment))
-						throw new Error(`Null path has a missing parent: ${JSON.stringify(pointer)}`);
-					parent = parent[segment];
-				}
-			} else throw new Error(`Null path has a non-table parent: ${JSON.stringify(pointer)}`);
-		}
-	}
-	return decoded;
+export async function settingsTomlSource(directory: string): Promise<TomlConfigSource | undefined> {
+	return readTomlConfig(path.join(directory, CONFIG_TOML), {
+		legacyPaths: [SETTINGS_TOML, "config.yml", "config.yaml"].map(filename => path.join(directory, filename)),
+		parseLegacy: (content, filePath) =>
+			filePath.endsWith(".toml") ? parseSettingsToml(content, filePath) : importLegacyYaml(content, filePath),
+	});
 }

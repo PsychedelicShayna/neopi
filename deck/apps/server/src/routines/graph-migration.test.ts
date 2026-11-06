@@ -4,7 +4,7 @@ import { createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parse, stringify } from "yaml";
+import { parseSettingsToml as parse, stringifySettingsToml as stringify } from "@oh-my-pi/pi-utils/settings-toml";
 import type { RoutineGraph, RoutineSpec } from "@npi-deck/protocol";
 import { closeDb, getDb, openDb } from "../db/index.ts";
 import { createGraphRoutine, createRoutine, createV1Routine, getGraphRun, getRoutine, listRuns, startRun, updateGraphRoutine } from "../db/routines.ts";
@@ -52,7 +52,7 @@ function spec(steps: RoutineSpec["steps"] = [{ id: "value", type: "transform", b
 	return { name: "migration-fixture", trigger: [{ manual: {} }], steps };
 }
 function seed(source = spec(), raw = stringify(source)) {
-	return createV1Routine({ name: source.name, description: source.description, spec: source, specYaml: raw, enabled: false });
+	return createV1Routine({ name: source.name, description: source.description, spec: source, specToml: raw, enabled: false });
 }
 function migrate(id: string) { return migrateRoutines(runner.graphRegistry, { routineId: id, backupDirectory: path.join(home, "backups") }); }
 function row(id: string) { return getDb().query<Record<string, unknown>, [string]>("SELECT * FROM routines WHERE id = ?").get(id)!; }
@@ -60,7 +60,7 @@ function graph(id: string): RoutineGraph { return getRoutine(id)!.graph!; }
 function request(method = "POST", body?: unknown): RequestInit { return { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) }; }
 
 // Reproduces the current persisted shape before conversion, without running an original.
-test("saved YAML has no native definition until explicit conversion; migration never executes", () => {
+test("saved TOML has no native definition until explicit conversion; migration never executes", () => {
 	const source = spec([{ id: "write", type: "write", path: "must-not-exist.txt", content: "not during migration" }]);
 	const routine = seed(source, `# retain this exact original\n${stringify(source)}`);
 	const before = row(routine.id);
@@ -71,7 +71,7 @@ test("saved YAML has no native definition until explicit conversion; migration n
 	expect(converted.reports[0]?.status).toBe("migrated");
 	expect(fs.existsSync(path.join(home, "must-not-exist.txt"))).toBe(false);
 	expect(listRuns(routine.id)).toEqual([]);
-	expect(row(routine.id)).toEqual({ ...before, spec_version: 2, spec_yaml: null, graph_json: JSON.stringify(graph(routine.id)) });
+	expect(row(routine.id)).toEqual({ ...before, spec_version: 2, spec_toml: null, graph_json: JSON.stringify(graph(routine.id)) });
 	expect(fs.statSync(converted.backupPath!).mode & 0o777).toBe(0o600);
 	expect(fs.statSync(path.dirname(converted.backupPath!)).mode & 0o777).toBe(0o700);
 });
@@ -88,7 +88,7 @@ test("semantic export and reimport retain omitted/false/zero/null/empty/nested v
 	const first = seed(source);
 	const result = migrate(first.id);
 	expect(result.reports[0]?.status).toBe("migrated");
-	const exported = parse(exportRoutineMigration(first.id, result.reports[0]!.sourceDigest)) as RoutineSpec;
+	const exported = parse(exportRoutineMigration(first.id, result.reports[0]!.sourceDigest)) as unknown as RoutineSpec;
 	expect(exported).toEqual(source);
 	const second = seed(exported);
 	expect(migrate(second.id).reports[0]?.status).toBe("migrated");
@@ -211,8 +211,8 @@ test("native HTTP uses the real local transport with typed deep substitutions an
 
 test("bundled census now converts without executing; briefing stays blocked only by its agent", () => {
 	for (const slug of ["daily-briefing", "kb-orphan-census"]) {
-		const raw = fs.readFileSync(new URL(`../templates/${slug}.yaml`, import.meta.url), "utf8");
-		const source = parse(raw) as RoutineSpec;
+		const raw = fs.readFileSync(new URL(`../templates/${slug}.toml`, import.meta.url), "utf8");
+		const source = parse(raw) as unknown as RoutineSpec;
 		const routine = seed(source, raw);
 		const before = row(routine.id);
 		const result = migrate(routine.id);
@@ -240,7 +240,7 @@ test("agent actions, unknown keys, malformed budgets and duplicate ids are never
 	] as RoutineSpec["steps"];
 	const routines = cases.map(step => seed(spec([step])));
 	routines.push(seed(spec([{ id: "a", type: "wait", duration_secs: 0.1 }, { id: "a", type: "wait", duration_secs: 0.1 }])));
-	for (const raw of ["name: broken\nname: duplicate", "bad: [", "name: other\ntrigger: []\nsteps: []\nversion: 1"]) routines.push(seed(spec(), raw));
+	for (const raw of ["name = 'broken'\nname = 'duplicate'", "bad = [", "name = 'other'\ntrigger = []\nsteps = []\nversion = 1"]) routines.push(seed(spec(), raw));
 	const malformed = seed(); getDb().query("UPDATE routines SET budget_json = ? WHERE id = ?").run("not-json-test-secret", malformed.id); routines.push(malformed);
 	const mirrored = seed(); getDb().query("UPDATE routines SET concurrency = 'parallel' WHERE id = ?").run(mirrored.id); routines.push(mirrored);
 	routines.push(createRoutine({ name: "v0-prompt", cron: "0 1 * * *", actionKind: "prompt", actionBody: "NEVER EXECUTE", enabled: false }));
@@ -284,7 +284,7 @@ test("native edits prevent stale restoration/export and dry runs dispatch no act
 	expect(() => exportRoutineMigration(routine.id, result.reports[0]!.sourceDigest)).toThrow("changed");
 	const newlyAuthored = createGraphRoutine({ name: "new-native", graph: edited, enabled: false }, runner.graphRegistry);
 	expect(newlyAuthored.specVersion).toBe(2);
-	expect(newlyAuthored.specYaml).toBeUndefined();
+	expect(newlyAuthored.specToml).toBeUndefined();
 });
 
 test("failure aborts later actions while native diagnostics retain the actual failed handler result", async () => {
@@ -342,13 +342,13 @@ test("queued migrated runs initialize expression timestamps after admission and 
 
 function assertV1Lifecycle(routineId: string, source: RoutineSpec, digest: string) {
 	expect(parse(exportRoutineMigration(routineId, digest))).toEqual(source);
-	const copy = seed(parse(exportRoutineMigration(routineId, digest)) as RoutineSpec);
+	const copy = seed(parse(exportRoutineMigration(routineId, digest)) as unknown as RoutineSpec);
 	expect(migrate(copy.id).reports[0]?.status).toBe("migrated");
 	expect(graph(copy.id)).toEqual(graph(routineId));
 	expect(migrate(routineId).reports[0]?.status).toBe("native");
 	restoreRoutineDefinition(routineId, digest);
 	expect(getRoutine(routineId)?.specVersion).toBe(1);
-	expect(getRoutine(routineId)?.specYaml).toBe(stringify(source));
+	expect(getRoutine(routineId)?.specToml).toBe(stringify(source));
 }
 
 test("when skip and continued failure migrate exact context, native receipts and aggregate history", async () => {
@@ -495,7 +495,9 @@ test("V0 bash and script use exact original argv and aggregate receipts with rev
 		const before = row(routine.id), converted = migrate(routine.id).reports[0]!;
 		expect(converted.status).toBe("migrated");
 		expect(listRuns(routine.id)).toHaveLength(1);
-		const exported = parse(exportRoutineMigration(routine.id, converted.sourceDigest));
+		const exported = parse(exportRoutineMigration(routine.id, converted.sourceDigest)) as unknown as Parameters<typeof createRoutine>[0] & {
+			metadata: { concurrency: string; timezone: string | null; tags: string | null; budget_json: string | null };
+		};
 		const copy = createRoutine(exported);
 		getDb().query("UPDATE routines SET concurrency = ?, timezone = ?, tags = ?, budget_json = ? WHERE id = ?").run(exported.metadata.concurrency, exported.metadata.timezone, exported.metadata.tags, exported.metadata.budget_json, copy.id);
 		expect(migrate(copy.id).reports[0]?.status).toBe("migrated");

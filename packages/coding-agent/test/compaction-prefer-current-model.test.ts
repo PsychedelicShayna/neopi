@@ -65,7 +65,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		// reason a candidate is skipped — order alone must drive the choice.
 		authStorage.keys.setRuntime(currentModel.provider, "anthropic-token");
 		authStorage.keys.setRuntime(defaultRoleModel.provider, "openai-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		session = new AgentSession({
 			agent,
@@ -114,7 +114,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.keys.setRuntime(currentModel.provider, "test-key");
 		authStorage.keys.setRuntime(summaryModel.provider, "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model: currentModel, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(),
@@ -161,7 +161,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime(currentModel.provider, "bedrock-credentials");
 		authStorage.keys.setRuntime(fallbackModel.provider, "anthropic-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		session = new AgentSession({
 			agent,
@@ -233,7 +233,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime(currentModel.provider, "anthropic-token");
 		authStorage.keys.setRuntime(compactionModel.provider, "openai-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		session = new AgentSession({
 			agent,
@@ -304,7 +304,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime(currentModel.provider, "openai-token");
 		authStorage.keys.setRuntime(nonRemoteCompactionModel.provider, "anthropic-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		session = new AgentSession({
 			agent,

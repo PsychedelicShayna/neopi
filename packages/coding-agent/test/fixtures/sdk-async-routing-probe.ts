@@ -70,7 +70,7 @@ const model = createMockModel({
 		return { content: ["acknowledged"] };
 	},
 });
-const registry = new ModelRegistry(auth, path.join(root, "models.yml"));
+const registry = new ModelRegistry(auth, path.join(root, "models.toml"));
 const find = registry.find.bind(registry);
 registry.find = (provider, id) => (provider === "mock" && id === model.id ? model : find(provider, id));
 registry.getAvailable = () => [model];

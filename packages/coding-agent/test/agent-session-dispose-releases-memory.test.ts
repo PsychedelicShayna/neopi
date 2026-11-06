@@ -58,7 +58,7 @@ describe("AgentSession dispose releases retained memory", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings: Settings.isolated(),
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			agentId: "Main",
 		});
 		return session;
@@ -203,7 +203,7 @@ describe("AgentSession dispose releases retained memory", () => {
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		// Persistence proceeds independently, but dispose must still drain the
 		// notification handler before releasing the session state it can access.
@@ -289,7 +289,7 @@ describe("AgentSession dispose releases retained memory", () => {
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		// Dispose must resolve at the deadline without retaining completed messages,
 		// and late notification bookkeeping must not repopulate the session.
@@ -374,7 +374,7 @@ describe("AgentSession dispose releases retained memory", () => {
 		// manager immediately — while the timed-out handler is still parked in
 		// the extension hook holding the OLD manager.
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const runtime = new ExtensionRuntime();
@@ -554,7 +554,7 @@ describe("AgentSession dispose releases retained memory", () => {
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const notificationDone = Promise.withResolvers<void>();

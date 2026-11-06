@@ -2261,7 +2261,7 @@ export interface ProviderModelConfig {
 	api?: Api;
 	/**
 	 * Catalog kind; omitted means the api's kind (`image` for `openai-images`, …) or `chat`.
-	 * Must be a kind the api serves, as in `models.yml`.
+	 * Must be a kind the api serves, as in `models.toml`.
 	 */
 	kind?: Model["kind"];
 	/** Whether the model supports extended thinking at all. */

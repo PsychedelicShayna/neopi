@@ -53,7 +53,7 @@ describe("AgentSession.fork(entryId)", () => {
 			agent,
 			sessionManager: SessionManager.create(tempDir, path.join(tempDir, "sessions")),
 			settings: Settings.isolated({ "compaction.enabled": false }),
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 			extensionRunner,
 		});
 		const manager = session.sessionManager;

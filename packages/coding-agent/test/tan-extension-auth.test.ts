@@ -88,7 +88,7 @@ describe("/tan extension auth over a shared registry", () => {
 		await Bun.write(extPath, EXTENSION_SOURCE);
 
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const base = baseOptions(cwd);
 
 		try {
@@ -144,7 +144,7 @@ describe("/tan extension auth over a shared registry", () => {
 		await Bun.write(extPath, EXTENSION_SOURCE);
 
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const base = baseOptions(cwd);
 
 		try {

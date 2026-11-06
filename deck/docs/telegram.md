@@ -40,28 +40,28 @@ These use the deck's existing local API trust boundary. Pairing is not a guest s
 
 DM text and invoked group text initially default to tasks. The per-chat preference can instead select capture or chat. Task mode creates `ticket` inbox items, then promotes through the existing inbox API to kanban cards. This does not execute an agent or run a card. Plain prose produces one card. An explicit list with two or more top-level bullets, checklist items or numbered entries produces one card per item, retaining introductory context and continuation lines.
 
-Every resulting card retains leading YAML front matter:
+Every resulting card retains native TOML front matter between `+++` lines:
 
 ```text
 /task
----
-read-only: true
-worktree: /path/to/existing-worktree
-model: provider/model
-role: research
-priority: high
-custom-property:
-  owner: Captain
-cwd: /path/to/project
----
++++
+read-only = true
+worktree = "/path/to/existing-worktree"
+model = "provider/model"
+role = "research"
+priority = "high"
+cwd = "/path/to/project"
+[custom-property]
+owner = "Captain"
++++
 Investigate the routing:
 1. Trace inbox receipt
 2. Identify session ownership
 ```
 
-`read-only` must be a boolean. `worktree`, `model`, `role`, `cwd` and `stateId`, when supplied, must be nonempty strings. Unknown YAML mapping keys, nested objects and lists are retained. The same merged card front matter begins **each** decomposed card body; the inbox provenance footer is appended after it. `cwd` and `stateId` are routing fields, removed from that property block: `cwd` separately sets the task's project assignment via `PromoteInboxItemRequest.cwd`, while `stateId` selects an existing kanban column. Neither is inferred from `worktree` or the deck default directory. Without explicit `cwd`, promotion leaves the task's project unassigned. No worktree is created or deleted by this bridge.
+`read-only` must be a boolean. `worktree`, `model`, `role`, `cwd` and `stateId`, when supplied, must be nonempty strings. Unknown TOML keys, nested tables and arrays are retained. The same merged card front matter begins **each** decomposed card body; the shared TOML patcher preserves comments while applying defaults and removing routing fields. The inbox provenance footer is appended after it. `cwd` and `stateId` are routing fields, removed from that property block: `cwd` separately sets the task's project assignment via `PromoteInboxItemRequest.cwd`, while `stateId` selects an existing kanban column. Neither is inferred from `worktree` or the deck default directory. Without explicit `cwd`, promotion leaves the task's project unassigned. No worktree is created or deleted by this bridge.
 
-`/properties <YAML mapping>` persists defaults for this chat/topic; task front matter overrides defaults. `/properties` displays them and `/properties clear` clears them. Defaults survive bridge restarts and never bleed into another topic. `/capture <text>` saves an unprocessed capture only: it does not auto-file captures, ideas, decisions, investigations or email. `/inbox` lists the deck's unprocessed items.
+`/properties <TOML>` persists defaults for this chat/topic; task front matter overrides defaults. `/properties` displays native TOML and `/properties clear` clears them. For example, `/properties read-only = true` sets the boolean default. Defaults survive bridge restarts and never bleed into another topic. New Telegram tasks and `/properties` do not accept YAML; legacy card bodies are imported only at the server's persistent migration seam, retaining exact originals. `/capture <text>` saves an unprocessed capture only: it does not auto-file captures, ideas, decisions, investigations or email. `/inbox` lists the deck's unprocessed items.
 
 If a multi-card task fails midway, already filed cards and received inbox items remain visible; inspect the inbox/board before resending. Filing is per card, not an all-or-nothing batch. A Telegram reply failure cannot undo a stored card.
 
@@ -74,7 +74,7 @@ All commands work in DMs and allowed groups, with optional `/command@botname` su
 | `/start`, `/help`, `/commands` | Explain intake and list commands. |
 | `/task <text>` | Explicit inbox→kanban intake (same as ordinary DM task text). |
 | `/capture <text>`, `/inbox` | Save unprocessed capture; list unprocessed inbox items. |
-| `/properties [YAML or clear]` | Set/display/clear conversation-scoped card defaults. |
+| `/properties [TOML or clear]` | Set/display/clear conversation-scoped card defaults. |
 | `/chat <text>` | Explicitly prompt the bound NeoPi session. Native NeoPi commands can be sent as `/chat /command`. |
 | `/session`, `/status` | Show current binding, title and workspace. |
 | `/sessions [search <query>]` | List numbered retained sessions with titles. Search case-insensitively matches title/ID substrings, scoped to this conversation, without reading transcripts or starting sessions. `/sessions <ID\|title\|number>` also selects a session. |

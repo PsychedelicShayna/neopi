@@ -1,10 +1,10 @@
 # Providers
 
-Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
+Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.toml` providers, and providers registered by extensions.
 
 A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
 
-This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
+This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.toml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
 
 ## Factory Droid
 
@@ -33,7 +33,7 @@ Factory's native context limits hold even when extended context is disabled. Fac
 `neoproxy` connects NeoPi to a NeoProxy server with API keys its administrator assigned. It is always listed in `/login` and `npi login`; its models appear after the first key is stored.
 
 1. Run `/login neoproxy <url>` in a session, or `npi login neoproxy --url <url>` in a terminal. Without a URL, the login prompts for one and offers the configured server as the default. HTTPS is required except on loopback (`http://127.0.0.1:8318` works for a local proxy). For HTTPS servers, compare the server and CA fingerprints with your administrator before accepting them.
-2. Paste the key at the hidden prompt. NeoPi validates it with `GET /v1/models`, stores it in the normal credential store bound to that server's origin, and writes `providers.neoproxy` (`baseUrl`, `auth: apiKey`, `discovery: proxy`) to `models.yml`.
+2. Paste the key at the hidden prompt. NeoPi validates it with `GET /v1/models`, stores it in the normal credential store bound to that server's origin, and writes `providers.neoproxy` (`baseUrl`, `auth: apiKey`, `discovery: proxy`) to `models.toml`.
 3. Pick a model with `/model` or assign it to a role. NeoProxy advertises its names with its own `neoproxy/` prefix; NeoPi drops that prefix from the model id so the selector carries it once (`neoproxy/<name>`, or `neoproxy/<provider>/<model>` for direct models), and requests still send the advertised name.
 
 **Several keys.** The proxy decides which models each key may use. Log in again with another key for the same server and NeoPi adds it beside the stored keys (press Enter at the add/replace prompt; type `replace` to remove the others instead). Discovery fetches every key's model list and shows the union. Each request uses a key that grants the selected model; only when no granting key is stored does it fall back to another key. A revoked key (HTTP 401/403) contributes no models, and the other keys keep theirs. Re-entering a stored key only refreshes it. Remove one key with `/logout neoproxy`.
@@ -47,11 +47,11 @@ Factory's native context limits hold even when extended context is disabled. Fac
 The model registry composes these sources:
 
 1. The bundled model catalog.
-2. Custom provider and model entries from the active agent directory's `models.yml` (default: `~/.omp/agent/models.yml`).
+2. Custom provider and model entries from the active agent directory's `models.toml` (default: `~/.omp/agent/models.toml`).
 3. Cached and runtime-discovered models for local engines and discovery-enabled hosted providers.
 4. Providers and models registered by extensions, including extension-owned discovery.
 
-Startup loads configuration and cached discovery metadata without waiting for every endpoint. Online refresh fills discovery-backed catalogs afterward. Successful authoritative discovery can replace bundled provider rows; explicit custom models and overrides are reapplied to the discovered catalog. Broker-backed gateway mode ignores local `models.yml` routing, credentials, and custom models.
+Startup loads configuration and cached discovery metadata without waiting for every endpoint. Online refresh fills discovery-backed catalogs afterward. Successful authoritative discovery can replace bundled provider rows; explicit custom models and overrides are reapplied to the discovered catalog. Broker-backed gateway mode ignores local `models.toml` routing, credentials, and custom models.
 
 The registry can hold a model even when it is not currently selectable. A model becomes **available** only when both conditions hold:
 
@@ -60,7 +60,7 @@ The registry can hold a model even when it is not currently selectable. A model 
 
 Availability is a fast configuration check, not a credential validation request: it does not execute command-backed keys or refresh OAuth tokens. An invalid configured key can therefore appear available and fail at inference.
 
-`disabledProviders` is checked _before_ credentials. If a provider ID is disabled, no stored key, OAuth session, environment variable, `.env` entry, or `models.yml` `apiKey` will make it selectable — the provider's models are dropped from availability regardless of credentials. Removing the ID from the effective list restores them.
+`disabledProviders` is checked _before_ credentials. If a provider ID is disabled, no stored key, OAuth session, environment variable, `.env` entry, or `models.toml` `apiKey` will make it selectable — the provider's models are dropped from availability regardless of credentials. Removing the ID from the effective list restores them.
 
 Implicit `ollama` and `lm-studio` discovery is keyless by default; implicit `llama.cpp` is keyless when no authentication is configured. Apple Foundation Models is also keyless on supported Apple Silicon systems. See [Built-in local engines](#built-in-local-engines).
 
@@ -69,7 +69,7 @@ Implicit `ollama` and `lm-studio` discovery is keyless by default; implicit `lla
 When a provider needs an API key, `omp` resolves it in this order (first match wins):
 
 1. **Runtime override**: a key supplied for the current process, for example CLI `--api-key`. Never persisted.
-2. **`models.yml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl` or gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
+2. **`models.toml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl` or gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
 3. **Stored OAuth credential**: refreshed when needed; multiple accounts are ranked and rotated automatically. For Anthropic and ChatGPT (Codex), each organization or workspace counts as its own account: one email holding both a Team or Enterprise seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page), and rotation treats them as two accounts.
 4. **Login-sourced stored API key**: an API-key credential saved by a successful `/login`.
 5. **Extension config fallback**: an extension provider registered with both an `apiKey` reference and an OAuth/login flow ranks that reference below stored OAuth and login keys.
@@ -97,22 +97,26 @@ For ClinePass, set `CLINE_API_KEY` or run `/login cline-pass` to open the Cline 
 
 For Command Code, set `COMMAND_CODE_API_KEY` or run `/login commandcode`; login checks the key against Command Code's `/alpha/whoami` endpoint and rejects it only on a 401, as the Command Code CLI does, so a 403 or an unreachable check keeps the key. Claude models use the Anthropic Messages endpoint, the ten GPT models use the OpenAI Responses endpoint, and every other model uses Chat Completions, the same split the Command Code CLI uses. Thinking levels, image input, output limits, and prices follow the Command Code CLI's model registry; Claude Sonnet 5.5, which that registry does not list yet, takes them from Anthropic's catalog. The GPT models can run hosted web search, but not hosted image generation, which Command Code does not serve. TypeSafe's `typesafe/jev` decision model is available to the `judge` role. `omp usage`, `/usage`, and the status line show the credit balance, plus the five-hour and weekly windows on plans that have them. These figures come from the account endpoints the Command Code CLI uses; the Provider API docs do not document them.
 
-### Pinning a key in `models.yml`
+### Pinning a key in `models.toml`
 
 A custom provider's `apiKey` is resolved as **environment-variable-name-or-literal**: if the value names an exact-case environment variable with a non-empty value, that value is used; otherwise the string itself is the key. Prefixing the value with `!` runs it as a shell command and uses the trimmed stdout (see [Model and Provider Configuration](./models.md) for the full value syntax).
 
-```yaml
-# ~/.omp/agent/models.yml
-providers:
-   my-gateway:
-      baseUrl: https://gateway.example.com/v1
-      api: openai-completions
-      apiKey: MY_GATEWAY_API_KEY # reads this env var if set, else literal text
-      models:
-         - id: claude-sonnet
-           name: Claude Sonnet via Gateway
-           contextWindow: 200000
-           maxTokens: 8192
+```toml
+# ~/.omp/agent/models.toml
+# apiKey: MY_GATEWAY_API_KEY: reads this env var if set, else literal text
+
+[ "providers" ]
+
+[ "providers"."my-gateway" ]
+"baseUrl" = "https://gateway.example.com/v1"
+"api" = "openai-completions"
+"apiKey" = "MY_GATEWAY_API_KEY"
+
+[[ "providers"."my-gateway"."models" ]]
+"id" = "claude-sonnet"
+"name" = "Claude Sonnet via Gateway"
+"contextWindow" = 200000
+"maxTokens" = 8192
 ```
 
 If `authHeader: true` is set on a custom provider, the resolved key is injected as an `Authorization: Bearer <key>` header on every request to that provider.
@@ -216,7 +220,7 @@ Vertex ADC availability accepts project aliases `GOOGLE_CLOUD_PROJECT`, `GCP_PRO
 
 For `xai-oauth`, `XAI_API_KEY` is accepted for an explicit request but does not automatically make SuperGrok models available or preferred; automatic availability requires its dedicated `XAI_OAUTH_TOKEN` or stored/configured auth.
 
-`/login cloudflare-ai-gateway` prompts for the gateway token, Cloudflare account ID, and gateway ID, then stores all three together. To use environment variables, set all three values listed above. OMP selects the Anthropic, OpenAI, or Workers AI gateway route for each model; you do not need a `models.yml` base URL override.
+`/login cloudflare-ai-gateway` prompts for the gateway token, Cloudflare account ID, and gateway ID, then stores all three together. To use environment variables, set all three values listed above. OMP selects the Anthropic, OpenAI, or Workers AI gateway route for each model; you do not need a `models.toml` base URL override.
 
 `cloudflare-workers-ai` serves Cloudflare's Clef decision models (`cloudflare-workers-ai/@cf/cloudflare/clef` and `cloudflare-workers-ai/@cf/cloudflare/clef-flash`) as `judge` models; assign one to the `judge` role to use it. `/login cloudflare-workers-ai` prompts for a Cloudflare API token with Workers AI Read and Edit permissions (create one at `https://dash.cloudflare.com/profile/api-tokens`) and your account ID, then stores both together. To use environment variables, set `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_AUTH_TOKEN`) and `CLOUDFLARE_ACCOUNT_ID`.
 
@@ -262,7 +266,7 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 
 ## Built-in local engines
 
-Ollama, llama.cpp, and LM Studio are discovered automatically without needing a `models.yml` entry. Each uses a base URL that can be overridden by an environment variable:
+Ollama, llama.cpp, and LM Studio are discovered automatically without needing a `models.toml` entry. Each uses a base URL that can be overridden by an environment variable:
 
 | Provider ID | Base URL (env override → default)                                                 | Notes                                        |
 | ----------- | --------------------------------------------------------------------------------- | -------------------------------------------- |
@@ -274,7 +278,7 @@ Implicit Ollama and llama.cpp models use `openai-responses`; LM Studio uses `ope
 
 These implicit engines are **skipped** when:
 
-- a provider with the same ID is already configured in `models.yml` (your explicit config wins); or
+- a provider with the same ID is already configured in `models.toml` (your explicit config wins); or
 - the provider ID appears in the effective `disabledProviders` list.
 
 For installing and running these engines, see [Local models](./local-models.md).
@@ -297,7 +301,7 @@ Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API
 `disabledProviders` applies uniformly to:
 
 - bundled catalog providers;
-- custom `models.yml` providers;
+- custom `models.toml` providers;
 - runtime-discovered provider models;
 - extension-registered providers;
 - implicit local engines.
@@ -372,7 +376,7 @@ Path scopes are resolved **after** the settings merge. Because a higher-preceden
 
 `disabledProviders` uses a **single shared ID namespace** that gates two different subsystems:
 
-- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.yml` ID, …). Disabling one removes its models from selection.
+- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.toml` ID, …). Disabling one removes its models from selection.
 - **Discovery providers** — sources of context files, MCP servers, commands, skills, hooks, tools, prompts, and settings. Disabling one stops that source from contributing capability items.
 
 | Entry type            | Examples                                                                      | Effect                                                          |
@@ -384,23 +388,27 @@ Path scopes are resolved **after** the settings merge. Because a higher-preceden
 
 Watch the related names. The Google Gemini **API** models use the model provider ID `google`; `gemini` is a **discovery** provider ID (the source that reads `GEMINI.md`), not the Google model provider. Use discovery IDs only when you intend to disable an entire config source. See [Context files](./context-files.md) for the discovery-provider side.
 
-## Custom providers in `models.yml`
+## Custom providers in `models.toml`
 
-Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
+Custom providers live in `~/.omp/agent/models.toml` under `[providers]`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
 
 Minimal OpenAI-compatible provider:
 
-```yaml
-providers:
-   my-openai-compatible:
-      baseUrl: https://api.example.com/v1
-      api: openai-completions
-      apiKey: MY_OPENAI_COMPATIBLE_KEY # env-var-name or literal
-      models:
-         - id: fast-chat
-           name: Fast Chat
-           contextWindow: 128000
-           maxTokens: 8192
+```toml
+# apiKey: MY_OPENAI_COMPATIBLE_KEY: env-var-name or literal
+
+[ "providers" ]
+
+[ "providers"."my-openai-compatible" ]
+"baseUrl" = "https://api.example.com/v1"
+"api" = "openai-completions"
+"apiKey" = "MY_OPENAI_COMPATIBLE_KEY"
+
+[[ "providers"."my-openai-compatible"."models" ]]
+"id" = "fast-chat"
+"name" = "Fast Chat"
+"contextWindow" = 128000
+"maxTokens" = 8192
 ```
 
 ### Zhipu BigModel account-balance keys
@@ -409,45 +417,53 @@ providers:
 
 Use a custom provider for an API key issued from a standard BigModel account balance:
 
-```yaml
-providers:
-   bigmodel:
-      baseUrl: https://open.bigmodel.cn/api/paas/v4
-      api: openai-completions
-      apiKey: BIGMODEL_API_KEY
-      models:
-         - id: glm-4.6
-           name: GLM-4.6 (BigModel)
+```toml
+[ "providers" ]
+
+[ "providers"."bigmodel" ]
+"baseUrl" = "https://open.bigmodel.cn/api/paas/v4"
+"api" = "openai-completions"
+"apiKey" = "BIGMODEL_API_KEY"
+
+[[ "providers"."bigmodel"."models" ]]
+"id" = "glm-4.6"
+"name" = "GLM-4.6 (BigModel)"
 ```
 
 Set `BIGMODEL_API_KEY` to the `<id>.<secret>` key before starting `omp`, then select `bigmodel/glm-4.6`. The key does not use an `sk-` prefix.
 
 Keyless local provider (no credentials required):
 
-```yaml
-providers:
-   local-proxy:
-      baseUrl: http://127.0.0.1:4000/v1
-      api: openai-completions
-      auth: none
-      models:
-         - id: local-model
-           name: Local Model
-           contextWindow: 32768
-           maxTokens: 4096
+```toml
+[ "providers" ]
+
+[ "providers"."local-proxy" ]
+"baseUrl" = "http://127.0.0.1:4000/v1"
+"api" = "openai-completions"
+"auth" = "none"
+
+[[ "providers"."local-proxy"."models" ]]
+"id" = "local-model"
+"name" = "Local Model"
+"contextWindow" = 32768
+"maxTokens" = 4096
 ```
 
 Discovery-enabled provider (models fetched from the endpoint at runtime):
 
-```yaml
-providers:
-   team-proxy:
-      baseUrl: https://models.example.com/v1
-      apiKey: TEAM_PROXY_API_KEY
-      authHeader: true # send Authorization: Bearer <resolved key>
-      disableStrictTools: true
-      discovery:
-         type: proxy
+```toml
+# authHeader: true: send Authorization: Bearer <resolved key>
+
+[ "providers" ]
+
+[ "providers"."team-proxy" ]
+"baseUrl" = "https://models.example.com/v1"
+"apiKey" = "TEAM_PROXY_API_KEY"
+"authHeader" = true
+"disableStrictTools" = true
+
+[ "providers"."team-proxy"."discovery" ]
+"type" = "proxy"
 ```
 
 For the full schema, all allowed `api` values, discovery `type`s, model overrides, and equivalence settings, see [Model and Provider Configuration](./models.md).
@@ -462,12 +478,12 @@ disabledProviders:
 
 ## Troubleshooting
 
-**A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). A local engine must respond to populate discovery initially; cached catalog rows may remain visible later, but inference still needs the engine. Apple availability is checked through its in-process bridge.
+**A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.toml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). A local engine must respond to populate discovery initially; cached catalog rows may remain visible later, but inference still needs the engine. Apple availability is checked through its in-process bridge.
 
-**The wrong key is being used (a stale key from `.env`).** Resolution favors runtime `--api-key`, then a `models.yml` config key, stored OAuth, a key saved by `/login`, extension config fallbacks, environment or `.env`, and other stored API keys. A non-empty process environment variable also beats every `.env` file, and a non-empty `<project>/.env` value beats `~/.env`. If an unexpected key wins, check for an exported shell variable and the four `.env` files in precedence order, and clear the one that should not apply.
+**The wrong key is being used (a stale key from `.env`).** Resolution favors runtime `--api-key`, then a `models.toml` config key, stored OAuth, a key saved by `/login`, extension config fallbacks, environment or `.env`, and other stored API keys. A non-empty process environment variable also beats every `.env` file, and a non-empty `<project>/.env` value beats `~/.env`. If an unexpected key wins, check for an exported shell variable and the four `.env` files in precedence order, and clear the one that should not apply.
 
 **A provider still appears even though I disabled it.** `disabledProviders` arrays are replaced, not merged: a project `<project>/.omp/config.yml` array fully overrides the global one. Verify the _effective_ list for the directory you are in (path-scoped entries only apply at or under their configured path), and confirm the ID is spelled exactly. Use `omp config get disabledProviders` to inspect the merged value (see [Settings](./settings.md)).
 
 **A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
 
-**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none` or `auth: oauth`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `guardrailIdentifier`, `requestMetadata`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-in discovery for that ID. See [Model and Provider Configuration](./models.md).
+**A custom `models.toml` provider does not load.** A TOML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none` or `auth: oauth`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `guardrailIdentifier`, `requestMetadata`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-in discovery for that ID. See [Model and Provider Configuration](./models.md).

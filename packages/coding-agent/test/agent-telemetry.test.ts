@@ -327,7 +327,7 @@ describe("agent-visible runtime telemetry", () => {
 			"checkpoint.enabled": true,
 			"tools.xdev": true,
 		});
-		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(auth, path.join(temp.path(), "models.toml"));
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 		const { session } = await createAgentSession({
 			cwd: temp.path(),

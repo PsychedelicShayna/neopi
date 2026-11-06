@@ -95,7 +95,7 @@ export default function (api) {
 					const { session } = await createAgentSession({
 						cwd: fixture.cwd, agentDir: fixture.agentDir, settings,
 						agentRegistry: new AgentRegistry(),
-						modelRegistry: new ModelRegistry(ctx.modelRegistry.authStorage, fixture.agentDir + "/models.yml"),
+						modelRegistry: new ModelRegistry(ctx.modelRegistry.authStorage, fixture.agentDir + "/models.toml"),
 						sessionManager: SessionManager.inMemory(fixture.cwd),
 						// Merge mode lets runtime settings supply roots. Empty preloaded
 						// paths prevent this driver extension from loading recursively.

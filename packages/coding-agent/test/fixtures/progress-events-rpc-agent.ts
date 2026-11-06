@@ -18,7 +18,7 @@ if (!MODEL) throw new Error("bundled test model missing");
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const settings = Settings.isolated({ "compaction.keepRecentTokens": 1 });
 cfgAsyncEnabled.set(settings, false);
 

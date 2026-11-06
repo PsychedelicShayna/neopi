@@ -53,7 +53,7 @@ describe("restricted sessions sharing extension providers", () => {
 		fs.mkdirSync(testAgentDir, { recursive: true });
 		setAgentDir(testAgentDir);
 		authStorage = createInMemoryAuthStorage();
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		settings = Settings.isolated();
 		settings.setModelRole("default", `${providerName}/${modelId}`);
 		providerRequests = 0;

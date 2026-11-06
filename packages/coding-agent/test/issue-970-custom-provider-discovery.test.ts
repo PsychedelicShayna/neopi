@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -72,7 +73,7 @@ describe("issue #970 custom provider discovery", () => {
 	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-issue-970-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsPath = path.join(tempDir, "models.yml");
+		modelsPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 	});
 
@@ -86,21 +87,27 @@ describe("issue #970 custom provider discovery", () => {
 	test("discovers custom openai-compatible models and lets YAML models override discovered fields", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  vllm:",
-				"    baseUrl: http://192.168.5.3:8085/v1",
-				"    apiKey: sk-1234",
-				"    api: openai-completions",
-				"    auth: apiKey",
-				"    discovery:",
-				"      type: openai-models-list",
-				"    models:",
-				"      - id: qwen3.6",
-				"        name: Qwen3.6",
-				"        contextWindow: 128000",
-				"        maxTokens: 8192",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						apiKey: "sk-1234",
+						api: "openai-completions",
+						auth: "apiKey",
+						discovery: {
+							type: "openai-models-list",
+						},
+						models: [
+							{
+								id: "qwen3.6",
+								name: "Qwen3.6",
+								contextWindow: 128000,
+								maxTokens: 8192,
+							},
+						],
+					},
+				},
+			}),
 		);
 
 		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (
@@ -180,21 +187,26 @@ describe("issue #970 custom provider discovery", () => {
 	test("discovers multiple configurable vllm instances and preserves advertised context metadata", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  vllm-fast:",
-				"    baseUrl: http://192.168.5.3:8085/v1",
-				"    auth: none",
-				"    api: openai-completions",
-				"    discovery:",
-				"      type: openai-models-list",
-				"  vllm-long:",
-				"    baseUrl: http://192.168.5.4:8085/v1",
-				"    auth: none",
-				"    api: openai-completions",
-				"    discovery:",
-				"      type: openai-models-list",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"vllm-fast": {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						auth: "none",
+						api: "openai-completions",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+					"vllm-long": {
+						baseUrl: "http://192.168.5.4:8085/v1",
+						auth: "none",
+						api: "openai-completions",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: (input: string | URL | Request) => Promise<Response> = async input => {
@@ -230,15 +242,18 @@ describe("issue #970 custom provider discovery", () => {
 	test("ignores old configured openai-models-list cache namespaces after adding vllm context parsing", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  vllm-fast:",
-				"    baseUrl: http://192.168.5.3:8085/v1",
-				"    auth: none",
-				"    api: openai-completions",
-				"    discovery:",
-				"      type: openai-models-list",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"vllm-fast": {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						auth: "none",
+						api: "openai-completions",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 		writeModelCache(
 			"vllm-fast",
@@ -291,7 +306,14 @@ describe("issue #970 custom provider discovery", () => {
 	test("uses default vllm baseUrl override for built-in discovery", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			["providers:", "  vllm:", "    baseUrl: http://192.168.5.3:8085/v1", "    auth: none"].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						auth: "none",
+					},
+				},
+			}),
 		);
 
 		await authStorage.credentials.set("vllm", { type: "api_key", key: "vllm-local" });
@@ -323,7 +345,12 @@ describe("issue #970 custom provider discovery", () => {
 		expect(model?.provider).toBe("vllm");
 	});
 	test("does not probe built-in vllm unless it is explicitly configured", async () => {
-		fs.writeFileSync(modelsPath, ["providers: {}"].join("\n"));
+		fs.writeFileSync(
+			modelsPath,
+			stringifySettingsToml({
+				providers: {},
+			}),
+		);
 
 		const urls: string[] = [];
 		const fetchMock: (input: string | URL | Request) => Promise<Response> = async input => {
@@ -345,7 +372,16 @@ describe("issue #970 custom provider discovery", () => {
 	});
 
 	test("treats auth none only vllm config as explicit built-in discovery", async () => {
-		fs.writeFileSync(modelsPath, ["providers:", "  vllm:", "    auth: none"].join("\n"));
+		fs.writeFileSync(
+			modelsPath,
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						auth: "none",
+					},
+				},
+			}),
+		);
 
 		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (
 			input,
@@ -371,7 +407,14 @@ describe("issue #970 custom provider discovery", () => {
 	test("refetches built-in vllm discovery when the configured baseUrl changes", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			["providers:", "  vllm:", "    baseUrl: http://192.168.5.3:8085/v1", "    auth: none"].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						auth: "none",
+					},
+				},
+			}),
 		);
 
 		const calls: string[] = [];
@@ -400,7 +443,14 @@ describe("issue #970 custom provider discovery", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			["providers:", "  vllm:", "    baseUrl: http://192.168.5.4:8085/v1", "    auth: none"].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.4:8085/v1",
+						auth: "none",
+					},
+				},
+			}),
 		);
 		const secondRegistry = new ModelRegistryImpl(authStorage, modelsPath, { fetch: fetchMock });
 		await secondRegistry.refresh();
@@ -411,7 +461,14 @@ describe("issue #970 custom provider discovery", () => {
 	test("loads built-in vllm cache from the configured baseUrl namespace", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			["providers:", "  vllm:", "    baseUrl: http://192.168.5.3:8085/v1", "    auth: none"].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						auth: "none",
+					},
+				},
+			}),
 		);
 
 		const fetchMock: (input: string | URL | Request) => Promise<Response> = async input => {
@@ -440,15 +497,18 @@ describe("issue #970 custom provider discovery", () => {
 	test("does not send vllm-local placeholder as discovery bearer", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  vllm:",
-				"    baseUrl: http://192.168.5.3:8085/v1",
-				"    apiKey: vllm-local",
-				"    api: openai-completions",
-				"    discovery:",
-				"      type: openai-models-list",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					vllm: {
+						baseUrl: "http://192.168.5.3:8085/v1",
+						apiKey: "vllm-local",
+						api: "openai-completions",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (
@@ -477,15 +537,18 @@ describe("issue #970 custom provider discovery", () => {
 	test("does not send llama.cpp-local placeholder as discovery bearer", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  llama.cpp:",
-				"    baseUrl: http://127.0.0.1:8080",
-				"    apiKey: llama-cpp-local",
-				"    api: openai-responses",
-				"    discovery:",
-				"      type: llama.cpp",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"llama.cpp": {
+						baseUrl: "http://127.0.0.1:8080",
+						apiKey: "llama-cpp-local",
+						api: "openai-responses",
+						discovery: {
+							type: "llama.cpp",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = async (

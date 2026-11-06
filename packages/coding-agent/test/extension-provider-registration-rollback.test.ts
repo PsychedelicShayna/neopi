@@ -119,7 +119,7 @@ describe("extension provider registration rollback", () => {
 		const tempDir = TempDir.createSync("@provider-replacement-");
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		try {
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.json"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			modelRegistry.registerProvider("cliproxyapi", testProviderConfig, "pi-cliproxyapi-provider");
 
 			const runtime = new ExtensionRuntime();
@@ -225,7 +225,7 @@ describe("extension provider registration rollback", () => {
 		};
 
 		try {
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.json"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const runtime = new ExtensionRuntime();
 			const events = new EventBus();
 			await loadExtensionFromFactory(

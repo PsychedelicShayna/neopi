@@ -89,7 +89,7 @@ function stripUnquoted(text: string): string {
 
 /**
  * Whether DSML leak recovery applies to `model`: a DeepSeek-class model, or one
- * explicitly configured with the `dsml` stream healer (e.g. a `models.yml` entry
+ * explicitly configured with the `dsml` stream healer (e.g. a `models.toml` entry
  * whose id the classifier cannot place). Other models never write DeepSeek tool
  * calls, so such markup from them is prose and is left alone.
  */

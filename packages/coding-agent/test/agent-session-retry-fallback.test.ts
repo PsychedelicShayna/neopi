@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
@@ -312,7 +313,7 @@ describe("AgentSession retry fallback", () => {
 		authStorage.keys.setRuntime("openrouter", "openrouter-test-key");
 		authStorage.keys.setRuntime("devin", "devin-test-key");
 		authStorage.keys.setRuntime("openai-codex", "openai-codex-test-key");
-		sharedRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		sharedRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {
@@ -6815,10 +6816,10 @@ describe("AgentSession retry fallback", () => {
 		// small primary (4000-token window) fell back to a large-window model,
 		// accumulated context past 4000 while there, then the cooldown expired and
 		// a queued follow-up drained through the auto-continue path.
-		const modelsConfigPath = path.join(tempDir.path(), "revert-overflow-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "revert-overflow-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					openai: {
 						modelOverrides: {
@@ -6928,10 +6929,10 @@ describe("AgentSession retry fallback", () => {
 		// and immediately send a predictably oversized request. The fit gate must
 		// skip the undersized candidate and advance to the first configured
 		// candidate whose window can hold the accumulated context.
-		const modelsConfigPath = path.join(tempDir.path(), "fallback-overflow-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "fallback-overflow-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					anthropic: {
 						modelOverrides: {
@@ -7020,10 +7021,10 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("fits retry fallbacks after excluding the failed assistant turn", async () => {
-		const modelsConfigPath = path.join(tempDir.path(), "fallback-failed-turn-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "fallback-failed-turn-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					anthropic: {
 						modelOverrides: {
@@ -7105,10 +7106,10 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("includes a preserved transport-error turn when fitting retry fallback windows", async () => {
-		const modelsConfigPath = path.join(tempDir.path(), "preserved-failed-turn-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "preserved-failed-turn-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					anthropic: {
 						modelOverrides: {
@@ -7499,7 +7500,7 @@ describe("AgentSession retry fallback", () => {
 			maxTokens: 384_000,
 		});
 		writeModelCache("ollama-cloud", Date.now(), [cachedModel], true, "", path.join(tempDir.path(), "models.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
@@ -7531,10 +7532,10 @@ describe("AgentSession retry fallback", () => {
 		if (!primaryModel) {
 			throw new Error("Expected bundled OpenAI test model to exist");
 		}
-		const modelsConfigPath = path.join(tempDir.path(), "cold-discovery-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "cold-discovery-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					litellm: {
 						baseUrl: "https://litellm.example.net/v1",
@@ -7587,10 +7588,10 @@ describe("AgentSession retry fallback", () => {
 		if (!primaryModel) {
 			throw new Error("Expected bundled OpenAI test model to exist");
 		}
-		const modelsConfigPath = path.join(tempDir.path(), "cold-descriptor-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "cold-descriptor-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					litellm: {
 						baseUrl: "https://litellm.example.net/v1",
@@ -7672,7 +7673,7 @@ describe("AgentSession retry fallback", () => {
 		const cacheDbPath = path.join(dir.path(), "models.db");
 		const cacheProviderId = resolveModelCacheProviderId("github-copilot", { apiKey: "ghp_startup_validation_token" });
 		writeModelCache(cacheProviderId, Date.now(), cachedPair, true, "", cacheDbPath, [cachedPair[0]]);
-		const registry = new ModelRegistry(auth, path.join(dir.path(), "models.yml"));
+		const registry = new ModelRegistry(auth, path.join(dir.path(), "models.toml"));
 		await registry.hydrateCredentialScopedModelCaches();
 		return {
 			registry,
@@ -7814,10 +7815,10 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it("resolves awaitInitialBackgroundRefresh for a refresh started after the waiter is armed", async () => {
-		const modelsConfigPath = path.join(tempDir.path(), "late-refresh-models.json");
+		const modelsConfigPath = path.join(tempDir.path(), "late-refresh-models.toml");
 		await Bun.write(
 			modelsConfigPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					litellm: {
 						baseUrl: "https://litellm.example.net/v1",
@@ -7880,7 +7881,7 @@ describe("AgentSession retry fallback", () => {
 			"",
 			path.join(tempDir.path(), "models.db"),
 		);
-		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.json"));
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		// The startup-bound model is the pre-discovery snapshot for the SAME
 		// selector with the full long-context window — what buildSessionOptions

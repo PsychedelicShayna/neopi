@@ -63,7 +63,7 @@ The initial viewport centers the selection. Selection motions reveal it when nee
 
 - `j` / `k`, or `Down` / `Up`: move selection (wraps)
 - `Alt+Up` / `Alt+Down`: jump to previous/next user or assistant turn
-- `app.tree.previousBranch` / `app.tree.nextBranch` (unbound by default; bind them in [`keybindings.yml`](./keybindings.md), e.g. to `Shift+Left` / `Shift+Right`): jump to the previous/next visible branch in rendered order (wraps), across nested forks. A branch whose head is filtered out lands on its first visible descendant.
+- `app.tree.previousBranch` / `app.tree.nextBranch` (unbound by default; bind them in [`keybindings.toml`](./keybindings.md), e.g. to `Shift+Left` / `Shift+Right`): jump to the previous/next visible branch in rendered order (wraps), across nested forks. A branch whose head is filtered out lands on its first visible descendant.
 - `Ctrl+D` / `Ctrl+U`: move half a visible page; `Page Down` / `Page Up`: move a full page
 - `gg` / `G`, or `Home` / `End`: first/last visible item
 - `Ctrl+E` / `Ctrl+Y`: scroll the viewport one line without changing selection

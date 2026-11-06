@@ -15,8 +15,8 @@
  * - Wikilink resolution is stem-first with subpath fallback; code blocks
  *   are stripped before extraction so regex-literal noise (`[[:alpha:]]`)
  *   doesn't leak into the link table.
- * - YAML frontmatter parsing uses the `yaml` package — kb files have real
- *   arrays / nested objects and a header-grep approach is insufficient.
+ * - Owned metadata uses native TOML frontmatter. Legacy YAML is imported once
+ *   into a no-clobber sibling, leaving the exact Markdown original intact.
  *
  * The service is read-only at v1; T-36 introduces PUT/POST. The watcher
  * (T-34 bottom) fires `kb_changed` on any mutation so subsequent reads see
@@ -29,7 +29,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
 
-import YAML from "yaml";
+import { importLegacyYaml, parseSettingsToml, publishTomlImport } from "@oh-my-pi/pi-utils/settings-toml";
+import { importLegacyCardBody } from "./card-properties.ts";
 
 import type {
 	KbBacklink,
@@ -368,21 +369,17 @@ export class KbService {
 				continue;
 			}
 
-			if (!entry.isFile()) continue;
-			if (!entry.name.toLowerCase().endsWith(".md")) continue;
-			if (this.rules().ignoresEntry(relPath, false)) continue;
-			let st;
-			try {
-				st = await stat(abs);
-			} catch {
-				continue;
-			}
+			// Files come from the canonical index, not raw directory entries: a
+			// retained YAML original and its TOML sibling are one logical note.
+		}
+		for (const record of this.records) {
+			if (record.dir !== cleanRel) continue;
 			files.push({
-				name: entry.name,
-				path: relPath,
+				name: path.posix.basename(record.relPath),
+				path: record.relPath,
 				kind: "file",
-				size: st.size,
-				mtime: st.mtime.toISOString(),
+				size: record.size,
+				mtime: record.mtime.toISOString(),
 			});
 		}
 
@@ -404,7 +401,7 @@ export class KbService {
 		const cleanRel = normalizeRel(subpath);
 		if (!cleanRel) return undefined;
 		if (this.pathIsExcluded(cleanRel, false)) return undefined;
-		const abs = this.resolveAbs(cleanRel);
+		const abs = this.byRelPath.get(cleanRel)?.absPath ?? this.resolveAbs(cleanRel);
 		if (!abs) return undefined;
 		if (!(await this.safeExisting(abs))) return undefined;
 
@@ -418,7 +415,7 @@ export class KbService {
 			return undefined;
 		}
 
-		const { frontmatter, frontmatterError, body } = parseFrontmatter(raw);
+		const { frontmatter, frontmatterError, body } = parseFrontmatter(raw, abs);
 		const sourceDir = path.posix.dirname(cleanRel);
 		const outgoingLinks = this.extractWikilinks(body, sourceDir === "." ? "" : sourceDir);
 		const bodyForRender = this.rewriteBodyForRender(body, sourceDir === "." ? "" : sourceDir);
@@ -447,7 +444,7 @@ export class KbService {
 		} catch {
 			return { available: false, entries: [] };
 		}
-		const stdout = await historyGit(this.root, ["--literal-pathspecs", "log", "--follow", "-n", "40", "--format=%H%x00%aI%x00%an%x00%s%x00", "--", file.path]);
+		const stdout = await historyGit(this.root, ["--literal-pathspecs", "log", "--follow", "-n", "40", "--format=%H%x00%aI%x00%an%x00%s%x00", "--", path.relative(this.root, file.absolutePath)]);
 		const fields = stdout.split("\0");
 		const entries = [];
 		for (let i = 0; i + 3 < fields.length; i += 4) {
@@ -465,7 +462,7 @@ export class KbService {
 	 *    `{ kind: "conflict" }` otherwise. Creates parent dirs.
 	 *
 	 * Frontmatter is validated by re-running parseFrontmatter on the incoming
-	 * content. Invalid YAML returns `{ kind: "invalid-frontmatter", message }`
+	 * content. Invalid TOML returns `{ kind: "invalid-frontmatter", message }`
 	 * so the editor can surface the parser's complaint. A private complete temp
 	 * file is renamed for updates or hard-linked exclusively for creates.
 	 */
@@ -484,18 +481,24 @@ export class KbService {
 		const cleanRel = normalizeRel(subpath);
 		if (!cleanRel) return { kind: "invalid-path" };
 		if (this.pathIsExcluded(cleanRel, false)) return { kind: "invalid-path" };
-		const abs = this.resolveAbs(cleanRel);
+		let abs = this.byRelPath.get(cleanRel)?.absPath ?? this.resolveAbs(cleanRel);
 		if (!abs) return { kind: "invalid-path" };
 		if (!cleanRel.toLowerCase().endsWith(".md")) return { kind: "invalid-path" };
 
 		// Frontmatter validation: if the content claims a frontmatter block,
-		// it has to be parseable YAML before we'll write.
-		const { frontmatterError } = parseFrontmatter(content);
+		// it has to be native TOML before we'll write.
+		const { frontmatterError } = parseFrontmatter(content, cleanRel);
 		if (frontmatterError) return { kind: "invalid-frontmatter", message: frontmatterError };
 
 		const exists = existsSync(abs);
 		if (mode === "update" && !exists) return { kind: "not-found" };
 		if (mode === "create" && exists) return { kind: "conflict" };
+		let exclusive = mode === "create";
+		// An invalid/unimportable legacy original is still never an update target.
+		if (mode === "update" && !isExternalSkill(abs) && !/\.toml\.md$/i.test(abs) && /^---\r?\n/.test(await readFile(abs, "utf8"))) {
+			abs = abs.replace(/(\.md)$/i, ".toml$1");
+			exclusive = true;
+		}
 
 		// Ensure parent dir exists for create. Update is a no-op since the
 		// existence check above guarantees the dir.
@@ -515,10 +518,10 @@ export class KbService {
 		const tmp = path.join(dir, `.${path.basename(abs)}.${crypto.randomUUID()}.tmp`);
 		try {
 			await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
-			if (mode === "create") await link(tmp, abs);
+			if (exclusive) await link(tmp, abs);
 			else await rename(tmp, abs);
 		} catch (err) {
-			if (mode === "create" && (err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "conflict" };
+			if (exclusive && (err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "conflict" };
 			log.error(`atomic save failed at ${abs}`, err);
 			throw err;
 		} finally {
@@ -749,7 +752,7 @@ export class KbService {
 			for (const { r, raw } of reads) {
 				if (raw === undefined) continue;
 				bodyFilters.set(r.relPath, indexBody(raw.toLowerCase()));
-			const { frontmatter, body } = parseFrontmatter(raw);
+			const { frontmatter, body } = parseFrontmatter(raw, r.absPath);
 			const node = nodes.get(r.relPath);
 			if (!node) continue;
 			if (typeof frontmatter.name === "string" && (frontmatter.name as string).trim()) {
@@ -823,7 +826,7 @@ export class KbService {
 	async linksInContent(content: string, sourcePath: string): Promise<KbWikilink[]> {
 		await this.ensureIndex();
 		const dir = path.posix.dirname(normalizeRel(sourcePath));
-		return this.extractWikilinks(parseFrontmatter(content).body, dir === "." ? "" : dir);
+		return this.extractWikilinks(parseFrontmatter(content, sourcePath).body, dir === "." ? "" : dir);
 	}
 
 	/** Reads follow configured junctions; write authority is checked separately. */
@@ -892,6 +895,7 @@ export class KbService {
 			log.warn(`readdir failed: ${absDir}`, err);
 			return;
 		}
+		const names = new Set(entries.map(entry => entry.name));
 
 		for (const entry of entries) {
 			const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
@@ -912,16 +916,24 @@ export class KbService {
 
 			if (!entry.isFile()) continue;
 			if (!entry.name.toLowerCase().endsWith(".md")) continue;
-			if (this.rules().ignoresEntry(rel, false)) continue;
+			const candidateName = entry.name.replace(/\.toml(\.md)$/i, "$1");
+			const logicalName = isExternalSkill(candidateName) ? entry.name : candidateName;
+			const logicalRel = relDir ? `${relDir}/${logicalName}` : logicalName;
+			if (this.rules().ignoresEntry(rel, false) || this.pathIsExcluded(logicalRel, false)) continue;
+			if (!isExternalSkill(entry.name) && !/\.toml\.md$/i.test(entry.name) && names.has(entry.name.replace(/(\.md)$/i, ".toml$1"))) {
+				log.warn(`canonical TOML note wins: ${abs.replace(/(\.md)$/i, ".toml$1")}; legacy source: ${abs}`);
+				continue;
+			}
 
 			try {
-				const st = await stat(abs);
-				const stem = entry.name.slice(0, -3).toLowerCase();
-				const frontmatter = await readHeader(abs);
+				if (!(await this.safeExisting(abs))) continue;
+				const { frontmatter, absPath } = await readHeader(abs);
+				const st = await stat(absPath);
+				const stem = logicalName.slice(0, -3).toLowerCase();
 				const name = frontmatter.name ?? frontmatter.title;
 				records.push({
-					relPath: rel,
-					absPath: abs,
+					relPath: logicalRel,
+					absPath,
 					dir: relDir,
 					stem,
 					title: typeof name === "string" && name.trim() ? name.trim() : stem,
@@ -1177,74 +1189,70 @@ function joinRel(parent: string, child: string): string {
 	return `${parent}/${child}`;
 }
 
-/** Read only a note's leading YAML, never its body, while building entry metadata. */
-async function readHeader(abs: string): Promise<Record<string, unknown>> {
+/** Read only a native header. A legacy import reads the full original once. */
+async function readHeader(abs: string): Promise<{ frontmatter: Record<string, unknown>; absPath: string }> {
 	const stream = createReadStream(abs, { encoding: "utf8", highWaterMark: 4096 });
 	const lines = createInterface({ input: stream, crlfDelay: Infinity });
 	const header: string[] = [];
+	let fence: string | undefined;
 	try {
 		for await (const line of lines) {
-			if (header.length === 0 && line !== "---") return {};
-			header.push(line);
-			if (header.length > 1 && line.startsWith("---")) {
-				return parseFrontmatter(`${header.join("\n")}\n`).frontmatter;
+			if (!fence) {
+				if (line !== "+++" && line !== "---") return { frontmatter: {}, absPath: abs };
+				fence = line;
+			} else if (line === fence) {
+				if (fence === "---" && isExternalSkill(abs)) return { frontmatter: parseFrontmatter(`${header.join("\n")}\n---\n`, abs).frontmatter, absPath: abs };
+				if (/\.toml\.md$/i.test(abs) && fence === "---") return { frontmatter: {}, absPath: abs };
+				if (fence === "+++") return { frontmatter: parseFrontmatter(`${header.join("\n")}\n+++\n`).frontmatter, absPath: abs };
+				// Publish a complete same-mode sibling without ever replacing a winner.
+				const canonical = abs.replace(/(\.md)$/i, ".toml$1");
+				const raw = await readFile(abs, "utf8");
+				let imported: string;
+				try { imported = importLegacyCardBody(raw, abs); }
+				catch {
+					log.warn(`could not import legacy note metadata: ${abs}`);
+					return { frontmatter: {}, absPath: abs };
+				}
+				await publishTomlImport(canonical, imported, abs);
+				return readHeader(canonical);
 			}
+			header.push(line);
 		}
-		return {};
+		return { frontmatter: {}, absPath: abs };
 	} finally {
 		lines.close();
 		stream.destroy();
 	}
 }
 
-/**
- * Frontmatter parser: extracts the leading `---\n…\n---\n` block (if any),
- * runs it through `yaml`, and returns `{ frontmatter, frontmatterError,
- * body }`. Body is the file content with the block stripped (one trailing
- * newline consumed). When YAML parsing fails we return the raw block as a
- * string under `frontmatter._raw` with an error message, so the editor can
- * surface the problem instead of silently dropping the metadata.
- */
-function parseFrontmatter(text: string): {
+/** Skills are an external Markdown/YAML interchange format, not owned KB metadata. */
+function isExternalSkill(filePath: string): boolean {
+	return path.basename(filePath).toLowerCase() === "skill.md";
+}
+
+/** Owned metadata is TOML; external SKILL.md retains its interoperable YAML. */
+function parseFrontmatter(text: string, filePath?: string): {
 	frontmatter: Record<string, unknown>;
 	frontmatterError?: string;
 	body: string;
 } {
-	if (!text.startsWith("---")) return { frontmatter: {}, body: text };
-	// Find the closing `---` fence. Tolerate both LF and CRLF line endings; on
-	// Windows-saved kb files the closer is `\r\n---` so we search for that
-	// shape first and fall back to bare LF.
-	let openerEnd = 3;
-	if (text[3] === "\r") openerEnd = 4;
-	if (text[openerEnd] === "\n") openerEnd += 1;
-	else return { frontmatter: {}, body: text };
-
-	const closeLF = text.indexOf("\n---", openerEnd);
-	if (closeLF < 0) return { frontmatter: {}, body: text };
-	// Normalize the block to LF before handing to YAML — a trailing `\r`
-	// before the closing fence is what yanks the parser into
-	// "Unexpected scalar at node end" on CRLF files.
-	const rawBlock = text.slice(openerEnd, closeLF).replace(/\r\n/g, "\n").replace(/\r$/, "");
-	let cursor = closeLF + 4;
-	if (text[cursor] === "\r") cursor += 1;
-	if (text[cursor] === "\n") cursor += 1;
-	const body = text.slice(cursor);
-
-	let frontmatter: Record<string, unknown> = {};
-	let frontmatterError: string | undefined;
-	try {
-		const parsed = YAML.parse(rawBlock);
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			frontmatter = parsed as Record<string, unknown>;
-		} else if (parsed !== null) {
-			frontmatter = { _raw: rawBlock };
-			frontmatterError = "frontmatter was not a YAML mapping";
-		}
-	} catch (err) {
-		frontmatter = { _raw: rawBlock };
-		frontmatterError = (err as Error).message;
+	if (/^---\r?\n/.test(text)) {
+		if (!filePath || !isExternalSkill(filePath)) return { frontmatter: {}, frontmatterError: "Legacy YAML frontmatter must be imported to a TOML sibling before editing.", body: text };
+		const legacy = /^---\r?\n((?:[\s\S]*?\r?\n)?)---(?:\r?\n|$)/.exec(text);
+		if (!legacy) return { frontmatter: {}, frontmatterError: "Close external skill YAML frontmatter with a --- line.", body: text };
+		const body = text.slice(legacy[0].length);
+		try { return { frontmatter: importLegacyYaml(legacy[1]!, filePath), body }; }
+		catch (err) { return { frontmatter: { _raw: legacy[1]! }, frontmatterError: (err as Error).message, body }; }
 	}
-	return frontmatterError ? { frontmatter, frontmatterError, body } : { frontmatter, body };
+	if (!/^\+\+\+\r?\n/.test(text)) return { frontmatter: {}, body: text };
+	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(text);
+	if (!match) return { frontmatter: {}, frontmatterError: "Close TOML frontmatter with a +++ line.", body: text };
+	const body = text.slice(match[0].length);
+	try {
+		return { frontmatter: parseSettingsToml(match[1]!), body };
+	} catch (err) {
+		return { frontmatter: { _raw: match[1]! }, frontmatterError: (err as Error).message, body };
+	}
 }
 
 /**

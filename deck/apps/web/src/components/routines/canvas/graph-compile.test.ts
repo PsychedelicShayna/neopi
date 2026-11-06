@@ -23,7 +23,7 @@ import type { RoutineSpec, RoutineStep } from "@npi-deck/protocol";
 import { compileGraph } from "./graph-compile";
 import { applyAddNodeAtBottom } from "./graph-add";
 import { applyEdgeConnection } from "./legacy-graph-connect";
-import { scaffoldStep } from "../spec-yaml";
+import { scaffoldStep } from "../spec-toml";
 
 const baseTrigger: RoutineSpec["trigger"] = [{ manual: {} }];
 

@@ -11,7 +11,7 @@ async function main(): Promise<void> {
 	const settings = await core.Settings.loadIsolated({ cwd: input.cwd, agentDir: input.agentDir });
 	if (hasFeature("advisors")) feature("advisors").cfgAdvisorEnabled.override(settings, false);
 	const authStorage = await core.discoverAuthStorage(input.agentDir);
-	const modelRegistry = new core.ModelRegistry(authStorage, `${input.agentDir}/models.yml`);
+	const modelRegistry = new core.ModelRegistry(authStorage, `${input.agentDir}/models.toml`);
 	await modelRegistry.refresh("offline");
 	const kbTools = input.kbEndpoint && input.kbToken ? createKbAgentTools(input.kbEndpoint, input.kbToken) : [];
 	const customTools = input.readOnly ? [...cardReadTools(input.cwd), ...kbTools.filter(tool => tool.name === "kb_read")] : kbTools;

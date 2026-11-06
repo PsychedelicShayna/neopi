@@ -3,16 +3,16 @@ import { getDb, nowIso } from "./index.ts";
 import { redactCredentialField } from "./trigger-payload.ts";
 import { cardFrontmatter, withCardProperties } from "../card-properties.ts";
 
-/** Credential-key privacy also follows card properties serialized into leading YAML. */
+/** Credential-key privacy also follows card properties serialized into leading TOML. */
 export function redactGraphActionField(key: string, value: unknown): unknown {
 	const redacted = redactCredentialField(key, value);
-	if (key !== "body" || typeof redacted !== "string" || !redacted.startsWith("---")) return redacted;
+	if (key !== "body" || typeof redacted !== "string" || !redacted.startsWith("+++")) return redacted;
 	try {
 		const parsed = cardFrontmatter(redacted);
 		const original = JSON.stringify(parsed.properties);
 		const safe = JSON.stringify(parsed.properties, redactCredentialField);
 		return original === safe ? redacted : withCardProperties(parsed.content, JSON.parse(safe) as Record<string, unknown>);
-	} catch { return redacted; } // Invalid user YAML is not reinterpreted by the trace serializer.
+	} catch { return redacted; } // Invalid user TOML is not reinterpreted by the trace serializer.
 }
 
 export class GraphActionConflictError extends Error {

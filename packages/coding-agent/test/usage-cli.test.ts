@@ -11,7 +11,13 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, RemoteAuthCredentialStore, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { __resetDirsFromEnvForTests, setAgentDir, TempDir, withFileLock } from "@oh-my-pi/pi-utils";
+import {
+	__resetDirsFromEnvForTests,
+	setAgentDir,
+	TempDir,
+	withFileLock,
+	stringifySettingsToml,
+} from "@oh-my-pi/pi-utils";
 import {
 	buildRedactionMap,
 	annotateUsagePolicy,
@@ -1674,16 +1680,14 @@ describe("usage command configuration", () => {
 		const overlayPath = tempDir.join("overlay.yml");
 		await Promise.all([
 			Bun.write(
-				tempDir.join("config.yml"),
-				[
-					"auth:",
-					"  accountPolicies:",
-					"    - provider: openai-codex",
-					"      account:",
-					"        email: stale@example.test",
-					"      unsupported: true",
-					"",
-				].join("\n"),
+				tempDir.join("config.toml"),
+				stringifySettingsToml({
+					auth: {
+						accountPolicies: [
+							{ provider: "openai-codex", account: { email: "stale@example.test" }, unsupported: true },
+						],
+					},
+				}),
 			),
 			Bun.write(
 				overlayPath,

@@ -115,7 +115,7 @@ describe("RPC set_subagent_thinking_level", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage, path.join(root, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(root, "models.toml")),
 			thinkingLevel: ThinkingLevel.Low,
 			thinkingLevelCeiling: capEffort ? ThinkingLevel.Low : undefined,
 		});

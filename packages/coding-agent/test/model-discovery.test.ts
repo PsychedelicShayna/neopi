@@ -30,11 +30,11 @@ import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver
 import { ProviderDiscoverySchema } from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 describe("ModelRegistry runtime discovery", () => {
 	let tempDir: string;
-	let modelsJsonPath: string;
+	let modelsTomlPath: string;
 	let cacheDbPath: string;
 	let authStorage: AuthStorage;
 	let originalOllamaBaseUrl: string | undefined;
@@ -58,7 +58,7 @@ describe("ModelRegistry runtime discovery", () => {
 		delete Bun.env.LLAMA_CPP_BASE_URL;
 		tempDir = path.join(os.tmpdir(), `pi-test-model-registry-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsJsonPath = path.join(tempDir, "models.json");
+		modelsTomlPath = path.join(tempDir, "models.toml");
 		cacheDbPath = path.join(tempDir, "models.db");
 		// In-memory auth DB: tests need a fresh, isolated credential store per case but
 		// never reopen it from disk, so :memory: avoids the WAL/chmod disk-open cost
@@ -135,8 +135,8 @@ describe("ModelRegistry runtime discovery", () => {
 	}
 
 	/** Write raw providers config (for mixed override/replacement scenarios) */
-	function writeRawModelsJson(providers: Record<string, unknown>) {
-		fs.writeFileSync(modelsJsonPath, JSON.stringify({ providers }));
+	function writeRawModelsToml(providers: Record<string, unknown>) {
+		fs.writeFileSync(modelsTomlPath, stringifySettingsToml({ providers }));
 	}
 
 	function mockOllamaDiscovery(
@@ -235,7 +235,7 @@ describe("ModelRegistry runtime discovery", () => {
 	}
 
 	test("scoped discovery coalesces with an in-flight background refresh", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			gateway: {
 				baseUrl: "http://127.0.0.1:9992",
 				api: "openai-completions",
@@ -255,7 +255,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			return new Response("", { status: 404 });
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		registry.refreshInBackground();
 		await started.promise;
@@ -272,7 +272,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("does not coalesce or apply discovery across provider config changes", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			gateway: {
 				baseUrl: "http://127.0.0.1:9992",
 				api: "openai-completions",
@@ -295,13 +295,13 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			return new Response("", { status: 404 });
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		registry.refreshInBackground();
 		await oldStarted.promise;
 
-		const previousMtime = fs.statSync(modelsJsonPath).mtimeMs;
-		writeRawModelsJson({
+		const previousMtime = fs.statSync(modelsTomlPath).mtimeMs;
+		writeRawModelsToml({
 			gateway: {
 				baseUrl: "http://127.0.0.1:9991",
 				api: "openai-completions",
@@ -310,7 +310,7 @@ describe("ModelRegistry runtime discovery", () => {
 			},
 		});
 		const changedTime = new Date(previousMtime + 1_000);
-		fs.utimesSync(modelsJsonPath, changedTime, changedTime);
+		fs.utimesSync(modelsTomlPath, changedTime, changedTime);
 		const refreshed = registry.refresh("online-if-uncached");
 		oldResponse.resolve(Response.json({ data: [{ id: "old-model", context_length: 65_536 }] }));
 		await Promise.all([refreshed, registry.awaitBackgroundRefresh()]);
@@ -329,15 +329,15 @@ describe("ModelRegistry runtime discovery", () => {
 				models: ids.map(id => ({ id, reasoning: false, input: ["text"] })),
 			},
 		});
-		writeRawModelsJson(gateway(["first-model"]));
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		writeRawModelsToml(gateway(["first-model"]));
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 
 		expect(await registry.refreshIfStale()).toBe(false);
 
-		const previousMtime = fs.statSync(modelsJsonPath).mtimeMs;
-		writeRawModelsJson(gateway(["first-model", "added-model"]));
+		const previousMtime = fs.statSync(modelsTomlPath).mtimeMs;
+		writeRawModelsToml(gateway(["first-model", "added-model"]));
 		const changedTime = new Date(previousMtime + 1_000);
-		fs.utimesSync(modelsJsonPath, changedTime, changedTime);
+		fs.utimesSync(modelsTomlPath, changedTime, changedTime);
 
 		expect(registry.find("gateway", "added-model")).toBeUndefined();
 		expect(await registry.refreshIfStale()).toBe(true);
@@ -354,7 +354,7 @@ describe("ModelRegistry runtime discovery", () => {
 			expires: Date.now() - 60_000,
 		});
 		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockAnthropicModelsDiscovery(capture),
 		});
 
@@ -382,7 +382,7 @@ describe("ModelRegistry runtime discovery", () => {
 			expires: Date.now() - 60_000,
 		});
 		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockAnthropicModelsDiscovery(capture),
 		});
 
@@ -401,7 +401,7 @@ describe("ModelRegistry runtime discovery", () => {
 			refresh: "refresh-anthropic",
 			expires: Date.now() - 60_000,
 		});
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: async input => {
 				throw new Error(`Offline discovery should not fetch ${String(input)}`);
 			},
@@ -424,7 +424,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// so the preflight must mint a fresh bearer first.
 		writeModelCache("anthropic", Date.now() - 3 * 60 * 60 * 1000, [], true, "", cacheDbPath);
 		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockAnthropicModelsDiscovery(capture),
 		});
 
@@ -447,7 +447,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// cached model selector must not rotate (or risk disabling) credentials.
 		writeModelCache("anthropic", Date.now() - 60_000, [], true, "", cacheDbPath);
 		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockAnthropicModelsDiscovery(capture),
 		});
 
@@ -495,7 +495,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("openai-codex", "online-if-uncached");
 
@@ -527,7 +527,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("openai-codex", "online");
 
@@ -536,7 +536,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("Codex discovery follows a configured baseUrl and sends only the configured key there (#13830)", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-codex": { baseUrl: "https://codex-proxy.example/backend-api/", apiKey: "sk-gateway" },
 		});
 		await authStorage.credentials.set("openai-codex", {
@@ -564,7 +564,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("openai-codex", "online");
 
@@ -605,7 +605,7 @@ describe("ModelRegistry runtime discovery", () => {
 	};
 
 	test("Codex discovery keeps stored ChatGPT OAuth on chatgpt.com when a relay baseUrl is configured", async () => {
-		writeRawModelsJson({ "openai-codex": { baseUrl: "https://codex-proxy.example/backend-api" } });
+		writeRawModelsToml({ "openai-codex": { baseUrl: "https://codex-proxy.example/backend-api" } });
 		await authStorage.credentials.set("openai-codex", {
 			type: "oauth",
 			access: "chatgpt-oauth-token",
@@ -613,7 +613,7 @@ describe("ModelRegistry runtime discovery", () => {
 			expires: Date.now() + 3_600_000,
 		});
 		const requests: { url: string; authorization: string | null }[] = [];
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: mockOfficialCodexRoster(requests) });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: mockOfficialCodexRoster(requests) });
 
 		await registry.refreshProvider("openai-codex", "online");
 
@@ -631,7 +631,7 @@ describe("ModelRegistry runtime discovery", () => {
 			expires: Date.now() + 3_600_000,
 		});
 		const requests: { url: string; authorization: string | null }[] = [];
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: mockOfficialCodexRoster(requests) });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: mockOfficialCodexRoster(requests) });
 		const sourceId = "ext://codex-proxy";
 		try {
 			registry.registerProvider(
@@ -679,7 +679,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("openai-codex", "online");
 
@@ -725,7 +725,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			return new Response("version: 2.19.1\n");
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("google-antigravity", "online");
 
@@ -781,7 +781,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			return new Response("version: 2.19.1\n");
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("google-antigravity", "online");
 
@@ -803,7 +803,7 @@ describe("ModelRegistry runtime discovery", () => {
 			projectId: "stored-gcp-project",
 		});
 		const capture: GeminiCliDiscoveryCapture = { loadCodeAssistCalls: 0, urls: [] };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockGeminiCliStandardDiscovery(capture),
 		});
 
@@ -822,7 +822,7 @@ describe("ModelRegistry runtime discovery", () => {
 			JSON.stringify({ token: "runtime-gemini-token", project_id: "runtime-gcp-project" }),
 		);
 		const capture: GeminiCliDiscoveryCapture = { loadCodeAssistCalls: 0, urls: [] };
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockGeminiCliStandardDiscovery(capture),
 		});
 
@@ -842,7 +842,7 @@ describe("ModelRegistry runtime discovery", () => {
 			refresh: "refresh-google-gemini-cli",
 			expires: Date.now() + 3_600_000,
 		});
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"google-gemini-cli": {
 				baseUrl: "http://127.0.0.1:4893",
 				api: "openai-completions",
@@ -861,7 +861,7 @@ describe("ModelRegistry runtime discovery", () => {
 			unexpectedUrls.push(url);
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 
 		await registry.refreshProvider("google-gemini-cli", "online");
 
@@ -873,7 +873,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("auto-discovers ollama models without provider config", async () => {
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const ollamaModels = getModelsForProvider(registry, "ollama");
 		expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
@@ -917,7 +917,7 @@ describe("ModelRegistry runtime discovery", () => {
 				throw new Error(`Unexpected URL: ${url}`);
 			};
 
-			const registry1 = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const registry1 = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 			await registry1.refreshProvider("zenmux", "online");
 
 			// Assert Phase 1
@@ -944,7 +944,7 @@ describe("ModelRegistry runtime discovery", () => {
 			const fetchOffline: FetchImpl = async () => {
 				throw new Error("Offline fetch should not be called");
 			};
-			const registry2 = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchOffline });
+			const registry2 = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchOffline });
 			await registry2.refreshProvider("zenmux", "offline");
 
 			const offlineZenmuxModels = getModelsForProvider(registry2, "zenmux");
@@ -966,7 +966,7 @@ describe("ModelRegistry runtime discovery", () => {
 			using _ollamaHost = withEnv("OLLAMA_HOST", undefined);
 			using _llamaCpp = withEnv("LLAMA_CPP_BASE_URL", undefined);
 			using _lmStudio = withEnv("LM_STUDIO_BASE_URL", undefined);
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, modelsTomlPath);
 			await registry.refresh("offline");
 
 			expect(
@@ -978,7 +978,7 @@ describe("ModelRegistry runtime discovery", () => {
 			using _ollama = withEnv("OLLAMA_BASE_URL", "http://ollama.example:11434");
 			using _llamaCpp = withEnv("LLAMA_CPP_BASE_URL", "http://llama-cpp.example:8080");
 			using _lmStudio = withEnv("LM_STUDIO_BASE_URL", "http://lm-studio.example:1234/v1");
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, modelsTomlPath);
 			await registry.refresh("offline");
 
 			expect(
@@ -991,7 +991,7 @@ describe("ModelRegistry runtime discovery", () => {
 		using _baseUrl = withEnv("OLLAMA_BASE_URL", undefined);
 		using _host = withEnv("OLLAMA_HOST", "ollama.lan:12345");
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"], "http://ollama.lan:12345");
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const model = registry.find("ollama", "phi4-mini");
@@ -1003,7 +1003,7 @@ describe("ModelRegistry runtime discovery", () => {
 		using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://omp-ollama.example:2222");
 		using _host = withEnv("OLLAMA_HOST", "ollama-host.example:3333");
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"], "http://omp-ollama.example:2222");
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const model = registry.find("ollama", "phi4-mini");
@@ -1013,7 +1013,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("resolves a bare id shared with implicit ollama to the models.yml provider", async () => {
 		using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://ollama.lan:11434");
-		writeRawModelsJson({
+		writeRawModelsToml({
 			omlx: {
 				baseUrl: "http://omlx.lan:11434/v1",
 				api: "openai-completions",
@@ -1021,7 +1021,7 @@ describe("ModelRegistry runtime discovery", () => {
 				models: [{ id: "phi-4-4bit", name: "Phi-4 4-bit", contextWindow: 128000, maxTokens: 8192 }],
 			},
 		});
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: mockOllamaDiscovery(["phi-4-4bit"], "http://ollama.lan:11434"),
 		});
 		await registry.refresh();
@@ -1039,7 +1039,7 @@ describe("ModelRegistry runtime discovery", () => {
 		};
 		{
 			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://reviewer:topsecret@ollama.typo:11434");
-			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: unreachable });
+			const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: unreachable });
 			await registry.refresh();
 			const warnings = registry.drainConfigWarnings().filter(warning => warning.includes("ollama"));
 			expect(warnings).toHaveLength(1);
@@ -1052,7 +1052,7 @@ describe("ModelRegistry runtime discovery", () => {
 		{
 			// The default loopback probe is optional: a missing local Ollama stays silent.
 			using _baseUrl = withEnv("OLLAMA_BASE_URL", undefined);
-			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: unreachable });
+			const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: unreachable });
 			await registry.refresh();
 			expect(registry.drainConfigWarnings()).toEqual([]);
 		}
@@ -1063,7 +1063,7 @@ describe("ModelRegistry runtime discovery", () => {
 		{
 			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://old-ollama.example:11434/v1/");
 			const fetchOld = mockOllamaDiscovery(["old-model"], "http://old-ollama.example:11434");
-			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 				fetch: async (input, init) => {
 					requested.push(String(input));
 					return fetchOld(input, init);
@@ -1076,7 +1076,7 @@ describe("ModelRegistry runtime discovery", () => {
 		{
 			using _baseUrl = withEnv("OLLAMA_BASE_URL", "http://new-ollama.example:11434");
 			const fetchNew = mockOllamaDiscovery(["new-model"], "http://new-ollama.example:11434");
-			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 				fetch: async (input, init) => {
 					requested.push(String(input));
 					return fetchNew(input, init);
@@ -1096,7 +1096,7 @@ describe("ModelRegistry runtime discovery", () => {
 	test("uses OLLAMA_CONTEXT_LENGTH for implicit ollama context accounting", async () => {
 		using _contextLength = withEnv("OLLAMA_CONTEXT_LENGTH", "16384");
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const model = registry.find("ollama", "phi4-mini");
@@ -1112,7 +1112,7 @@ describe("ModelRegistry runtime discovery", () => {
 			},
 			capabilities: ["completion"],
 		});
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const model = registry.find("ollama", "phi4-mini");
@@ -1128,7 +1128,7 @@ describe("ModelRegistry runtime discovery", () => {
 			},
 			capabilities: ["completion", "thinking"],
 		});
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const model = registry.find("ollama", "qwen3:27b");
@@ -1177,7 +1177,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const local = registry.find("ollama", "phi4-mini");
@@ -1197,7 +1197,7 @@ describe("ModelRegistry runtime discovery", () => {
 		).toBe(true);
 	});
 	test("discovers ollama models at runtime and treats auth:none providers as available", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-completions",
@@ -1225,7 +1225,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const ollamaModels = getModelsForProvider(registry, "ollama");
@@ -1238,7 +1238,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("normalizes cached ollama completions rows to responses on load", () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-responses",
@@ -1261,7 +1261,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}),
 		]);
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 		const ollama = registry.find("ollama", "phi4-mini");
 
 		expect(ollama?.api).toBe("openai-responses");
@@ -1270,7 +1270,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("refreshes cached discovery when models config is newer than the cache", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-responses",
@@ -1281,7 +1281,7 @@ describe("ModelRegistry runtime discovery", () => {
 				},
 			},
 		});
-		const configMtime = fs.statSync(modelsJsonPath).mtimeMs;
+		const configMtime = fs.statSync(modelsTomlPath).mtimeMs;
 		writeCachedOllamaModels(
 			[
 				buildModel({
@@ -1311,7 +1311,7 @@ describe("ModelRegistry runtime discovery", () => {
 			return fetchMock(input, init);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: countingFetch });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: countingFetch });
 		await registry.refresh("online-if-uncached");
 
 		const phi3 = registry.find("ollama", "phi3:3.8b");
@@ -1321,7 +1321,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("discovers ollama thinking capabilities from show metadata", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-completions",
@@ -1358,7 +1358,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected request: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const qwen = registry.find("ollama", "qwen3.5:397b-cloud");
@@ -1401,7 +1401,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected request: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const gemma = registry.find("ollama", "gemma3:4b");
@@ -1412,7 +1412,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("discovery failure does not fail model registry refresh", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434",
 				api: "openai-completions",
@@ -1425,13 +1425,13 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error("connection refused");
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(getModelsForProvider(registry, "ollama")).toHaveLength(0);
 		expect(registry.getError()).toBeUndefined();
 	});
 	test("loads cached local models before live refresh and preserves them on failure", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			ollama: {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-completions",
@@ -1442,14 +1442,14 @@ describe("ModelRegistry runtime discovery", () => {
 
 		{
 			const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
-			const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const primedRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 			await primedRegistry.refresh();
 		}
 
 		const failingFetch: FetchImpl = () => {
 			throw new Error("connection refused");
 		};
-		const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: failingFetch });
+		const cachedRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: failingFetch });
 		expect(getModelsForProvider(cachedRegistry, "ollama").some(model => model.id === "phi4-mini")).toBe(true);
 		expect(cachedRegistry.getProviderDiscoveryState("ollama")?.status).toBe("cached");
 
@@ -1462,7 +1462,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("reports unauthenticated discoverable providers without discarding cached models", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"custom-local": {
 				baseUrl: "http://127.0.0.1:11434/v1",
 				api: "openai-completions",
@@ -1488,7 +1488,7 @@ describe("ModelRegistry runtime discovery", () => {
 				}
 				throw new Error(`Unexpected URL: ${url}`);
 			};
-			const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			const primedRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 			await primedRegistry.refreshProvider("custom-local");
 		}
 
@@ -1500,7 +1500,7 @@ describe("ModelRegistry runtime discovery", () => {
 		const noNetwork: FetchImpl = input => {
 			throw new Error(`Unexpected network call during unauthenticated discovery: ${String(input)}`);
 		};
-		const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: noNetwork });
+		const cachedRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: noNetwork });
 		await cachedRegistry.refreshProvider("custom-local");
 
 		expect(getModelsForProvider(cachedRegistry, "custom-local").some(model => model.id === "local-coder")).toBe(true);
@@ -1542,7 +1542,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const llamaModels = getModelsForProvider(registry, "llama.cpp");
 		expect(llamaModels.some(m => m.id === "llama-3.2:3b")).toBe(true);
@@ -1583,7 +1583,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const state = registry.getProviderDiscoveryState("llama.cpp");
 		if (state?.status !== "ok") {
@@ -1622,7 +1622,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const llama = registry.find("llama.cpp", "qwen35-35b-a3b");
 		expect(llama?.contextWindow).toBe(262144);
@@ -1650,7 +1650,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("llama.cpp", "gemma-3-4b");
 		expect(model?.baseUrl).toBe("http://127.0.0.1:9931/v1");
@@ -1668,7 +1668,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.getProviderDiscoveryState("llama.cpp")?.status).toBe("unauthenticated");
 	});
@@ -1692,7 +1692,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("llama.cpp", "other-server-model")).toBeUndefined();
 		expect(registry.getProviderDiscoveryState("llama.cpp")?.status).toBe("unavailable");
@@ -1725,7 +1725,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		for (const id of ["qwen3-8b", "ternary-bonsai-27b-q2_0", "bonsai-2-27b"]) {
@@ -1760,7 +1760,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured llama.cpp Qwen model keeps its /v1 runtime URL despite a native-root baseUrl override", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"llama.cpp": {
 				baseUrl: "http://127.0.0.1:8080",
 				api: "openai-responses",
@@ -1778,7 +1778,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		// The configured provider's native-root baseUrl wins in mergeDiscoveredModel,
@@ -1790,7 +1790,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured llama.cpp discovery keeps a pi-native gateway URL without doubling /v1", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"custom-llama": {
 				baseUrl: "http://gw:4000",
 				api: "openai-responses",
@@ -1805,7 +1805,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			return Response.json({}, { status: 404 });
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("custom-llama", "prismml/Bonsai-2-27B-Q4_K_M.gguf");
 
@@ -1817,7 +1817,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("cached custom llama.cpp rows regain discovery policy without a successful probe", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"custom-llama": {
 				baseUrl: "http://remote:8080",
 				api: "openai-responses",
@@ -1846,7 +1846,7 @@ describe("ModelRegistry runtime discovery", () => {
 			"",
 			cacheDbPath,
 		);
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, {
 			fetch: async () => Response.json({}, { status: 503 }),
 		});
 		const before = registry.find("custom-llama", "prismml/Bonsai-2-27B-Q4_K_M.gguf");
@@ -1878,7 +1878,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const qwen = registry.find("llama.cpp", "qwen3-8b");
 		expect(qwen?.baseUrl).toBe("http://127.0.0.1:8080/v1");
@@ -1983,7 +1983,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const llama = registry.find("llama.cpp", "q51q41_mtp_30tps_120k");
 		expect(llama?.contextWindow).toBe(123904);
@@ -2015,7 +2015,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const llama = registry.find("llama.cpp", "bounded-output");
 		expect(llama?.contextWindow).toBe(262144);
@@ -2047,7 +2047,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("llama.cpp", "ctx-88k")?.contextWindow).toBe(88832);
 		expect(registry.find("llama.cpp", "ctx-train")?.contextWindow).toBe(128000);
@@ -2073,7 +2073,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("llama.cpp", "ctx-train")?.contextWindow).toBe(65536);
 		expect(registry.find("llama.cpp", "unloaded")?.contextWindow).toBe(128000);
@@ -2150,7 +2150,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("llama.cpp", "long-preset")?.contextWindow).toBe(65536);
 		expect(registry.find("llama.cpp", "short-preset")?.contextWindow).toBe(8192);
@@ -2210,7 +2210,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const stale = registry.find("llama.cpp", "cold-preset");
 		if (!stale) throw new Error("cached llama.cpp model missing");
 		expect(stale.contextWindow).toBe(128000);
@@ -2304,7 +2304,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const stale = registry.find("llama.cpp", "sleeping-model");
 		if (!stale) throw new Error("cached llama.cpp model missing");
 		expect(stale.contextWindow).toBe(128000);
@@ -2361,7 +2361,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const stale = registry.find("llama.cpp", "vision-model");
 		if (!stale) throw new Error("cached llama.cpp model missing");
 		expect(stale.input).toEqual(["text"]);
@@ -2424,7 +2424,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const stale = registry.find("llama.cpp", "router-vision-model");
 		if (!stale) throw new Error("cached llama.cpp model missing");
 		expect(stale.input).toEqual(["text"]);
@@ -2480,7 +2480,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const stale = registry.find("llama.cpp", "swapped-out-model");
 		if (!stale) throw new Error("cached llama.cpp model missing");
 		const refreshed = await registry.refreshSelectedModelMetadata(stale);
@@ -2489,7 +2489,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("llama.cpp selected model refresh clamps unlimited output to overridden context", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"llama.cpp": {
 				baseUrl: "http://127.0.0.1:8080",
 				api: "openai-responses",
@@ -2545,7 +2545,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const bounded = registry.find("llama.cpp", "bounded-context-model");
 		if (!bounded) throw new Error("cached llama.cpp model missing");
 		expect(bounded.contextWindow).toBe(128000);
@@ -2559,7 +2559,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// Pre-create so the before/after comparison works whether or not
 		// registry construction happens to invoke the key command itself.
 		fs.writeFileSync(commandLogPath, "");
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"llama.cpp": {
 				baseUrl: "http://127.0.0.1:8080",
 				apiKey: `!"${process.execPath}" -e 'require("node:fs").appendFileSync(${JSON.stringify(commandLogPath)}, "x"); process.exit(1);'`,
@@ -2581,7 +2581,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const commandOutputBeforeRefresh = fs.readFileSync(commandLogPath, "utf8");
 		const model = registry.find("llama.cpp", "protected-model");
 		if (!model) throw new Error("custom llama.cpp model missing");
@@ -2591,7 +2591,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("llama.cpp selected model refresh preserves same-id custom limits", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"llama.cpp": {
 				baseUrl: "http://127.0.0.1:8080",
 				api: "openai-responses",
@@ -2619,7 +2619,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		const pinned = registry.find("llama.cpp", "pinned-model");
 		if (!pinned) throw new Error("custom llama.cpp model missing");
 		const refreshed = await registry.refreshSelectedModelMetadata(pinned);
@@ -2670,13 +2670,13 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(modelListCalls).toBe(1);
 		expect(registry.find("llama.cpp", "restarted-model")?.contextWindow).toBe(88832);
 	});
 	test("openai-models-list discovery honors API-reported context_length over fallback", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9999",
 				api: "openai-completions",
@@ -2699,7 +2699,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const contextual = registry
 			.getAll()
@@ -2711,7 +2711,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(fallback?.contextWindow).toBe(128000);
 	});
 	test("openai-models-list uses top_provider.max_completion_tokens over the bundled reference", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9995",
 				api: "openai-completions",
@@ -2743,14 +2743,14 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(registry.find("openai-test", "gemini-4-argon")?.maxTokens).toBe(32_768);
 		expect(registry.find("openai-test", "openai-test/limits-win")?.maxTokens).toBe(16_000);
 	});
 	test("openai-models-list uses nested token limits with existing context precedence", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9994",
 				api: "openai-completions",
@@ -2792,7 +2792,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const aiproxyModel = registry.find("openai-test", "gpt-6.1-sol");
@@ -2969,7 +2969,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("openai-models-list honors flat output caps over the bundled reference (#15811)", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9993",
 				api: "openai-completions",
@@ -3008,7 +3008,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(registry.find("openai-test", "auto/deepseek-v4-flash")?.maxTokens).toBe(384_000);
@@ -3018,7 +3018,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("openai-models-list discovery enriches thin /v1/models payloads from the bundled reference catalog", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9997",
 				api: "openai-completions",
@@ -3046,7 +3046,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const proxied = registry.find("openai-test", "gpt-5");
 		expect(proxied?.name).toBe("GPT-5");
@@ -3067,7 +3067,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("openai-models-list discovery marks advertised reasoning ladders reasoning-capable (codex-lb metadata shape)", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9994",
 				api: "openai-completions",
@@ -3111,7 +3111,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const advertised = registry.find("openai-test", "acme-think-1");
 		// The same metadata block carries the route's identity and window; the
@@ -3148,7 +3148,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("openai-models-list discovery reads server-advertised input modalities for ids absent from the catalog", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9996",
 				api: "openai-completions",
@@ -3176,7 +3176,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		// Direct `input`, top-level `input_modalities`, and OpenRouter-style
 		// `architecture.input_modalities` all surface vision support.
@@ -3190,7 +3190,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("openai-models-list discovery routes explicit non-chat output modalities to their runner kind", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"openai-test": {
 				baseUrl: "http://127.0.0.1:9995",
 				api: "openai-completions",
@@ -3224,7 +3224,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		// Embedding rows answer through `{baseUrl}/embeddings`, never the chat API.
 		expect(registry.find("openai-test", "openrouter/openai/text-embedding-3-small")).toMatchObject({
@@ -3264,7 +3264,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// versioned path (`https://api.opper.ai/v3/compat`); the default
 		// normalizer would force `/v1/models` onto that root and land on a
 		// different (much smaller) model list than chat uses.
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"opper-test": {
 				baseUrl: "https://api.opper.ai/v3/compat",
 				api: "openai-completions",
@@ -3282,7 +3282,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		// Discovered models carry the configured URL as their chat base —
 		// discovery and chat share the same endpoint root.
@@ -3295,7 +3295,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// base string, so a query in `baseUrl` would corrupt it
 		// (`?token=x/chat/completions`). The bare normalizer drops queries and
 		// hashes, matching the default mode's normalizer.
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"opper-test": {
 				baseUrl: "https://api.opper.ai/v3/compat?token=gateway",
 				api: "openai-completions",
@@ -3313,13 +3313,13 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("opper-test", "opper-full-a")?.baseUrl).toBe("https://api.opper.ai/v3/compat");
 	});
 
 	test("lm-studio discovery keeps native VLM modalities over a thin OpenAI row", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"lm-studio-test": {
 				baseUrl: "http://127.0.0.1:9995",
 				api: "openai-completions",
@@ -3345,13 +3345,13 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		expect(registry.find("lm-studio-test", "local-vlm")?.input).toEqual(["text", "image"]);
 	});
 
 	test("lm-studio discovery serves decision models as judges over /v1/decisions", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"lm-studio-test": {
 				baseUrl: "http://127.0.0.1:9995",
 				api: "openai-completions",
@@ -3384,7 +3384,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		const judgeModel = registry.find("lm-studio-test", "kev-0.8b");
@@ -3414,7 +3414,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3437,7 +3437,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const anthropic = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "anthropic-model");
 		expect(anthropic?.api).toBe("anthropic-messages");
@@ -3453,7 +3453,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery uses proxy-reported name over bundled placeholder", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3479,14 +3479,14 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "act_two");
 		expect(model?.name).toBe("Act Two");
 	});
 
 	test("proxy discovery falls back to bundled name when proxy reports none", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3511,14 +3511,14 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "gpt-5");
 		expect(model?.name).toBe("GPT-5");
 	});
 
 	test("proxy discovery adopts the ladder its /v1/models rows advertise and sends it as reasoning_effort", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3558,7 +3558,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const advertised = registry.find("proxy-test", "acme-think-1");
 		expect(advertised?.reasoning).toBe(true);
@@ -3603,7 +3603,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery pins an advertised ladder's default so catalog policy cannot inject a tier it omits", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3633,7 +3633,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "kimi-k3");
 		expect(model?.thinking?.efforts).toEqual([Effort.Low, Effort.High]);
@@ -3641,7 +3641,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery honors a row that declares it does not reason over a reasoning-enabled reference", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3671,7 +3671,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "gpt-5");
 		expect(model?.reasoning).toBe(false);
@@ -3680,7 +3680,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery ignores the advertised ladder when discovery.advertisedReasoning is false", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3709,7 +3709,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "acme-think-1");
 		expect(model?.reasoning).toBe(false);
@@ -3717,7 +3717,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery keeps a catalog default that the advertised ladder contains", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3748,7 +3748,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "glm-5.3");
 		expect(model?.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
@@ -3758,7 +3758,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery reads a reasoning denial nested under metadata", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3787,7 +3787,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "gpt-5");
 		expect(model?.reasoning).toBe(false);
@@ -3795,7 +3795,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("proxy discovery keeps an Anthropic row's thinking mode while adopting the advertised ladder", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
 				auth: "none",
@@ -3825,7 +3825,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("proxy-test", "claude-sonnet-4-6");
 		expect(model?.api).toBe("anthropic-messages");
@@ -3884,7 +3884,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured litellm discovery omits non-conversational rich modes", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4004/v1",
 				api: "openai-completions",
@@ -3920,7 +3920,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(
@@ -3931,7 +3931,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured litellm discovery replaces partially and fully filtered rich refreshes", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4006/v1",
 				api: "openai-completions",
@@ -3968,7 +3968,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`/v1/models must not reintroduce the excluded model: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh("online");
 		expect(getModelsForProvider(registry, "litellm-test").map(model => model.id)).toEqual([
 			"keep-chat-a",
@@ -3989,7 +3989,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("built-in litellm discovery replaces partially and fully filtered rich refreshes", async () => {
 		using _litellmBaseUrl = withEnv("LITELLM_BASE_URL", "http://127.0.0.1:4007/v1");
-		writeRawModelsJson({});
+		writeRawModelsToml({});
 		authStorage.keys.setRuntime("litellm", "sk-litellm-test");
 		let modelGroups: Record<string, unknown>[] = [
 			{
@@ -4023,7 +4023,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`/v1/models must not reintroduce the excluded model: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refreshProvider("litellm", "online");
 		expect(getModelsForProvider(registry, "litellm").map(model => model.id)).toEqual(["keep-chat-a", "keep-chat-b"]);
 		expect(registry.getProviderDiscoveryState("litellm")?.status).toBe("ok");
@@ -4041,7 +4041,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery enriches configured proxy models with bundled references", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4000/v1",
 				api: "openai-completions",
@@ -4056,7 +4056,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("litellm-test", "gpt-5");
 
@@ -4068,7 +4068,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery defaults to LiteLLM local proxy when baseUrl is omitted", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				api: "openai-completions",
 				auth: "none",
@@ -4091,7 +4091,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(registry.find("litellm-test", "default-litellm")?.baseUrl).toBe("http://localhost:4000/v1");
@@ -4099,7 +4099,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured litellm /v1/models fallback preserves only selectable modes", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4005/v1",
 				api: "openai-completions",
@@ -4147,7 +4147,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(
@@ -4167,7 +4167,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("configured litellm discovery routes decisions-mode groups to the judge role on both paths (#16939)", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-rich": {
 				baseUrl: "http://127.0.0.1:4012/v1",
 				api: "openai-completions",
@@ -4207,7 +4207,7 @@ describe("ModelRegistry runtime discovery", () => {
 			return new Response("Not Found", { status: 404 });
 		};
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		for (const provider of ["litellm-rich", "litellm-fallback"]) {
@@ -4219,7 +4219,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery reuses configured bearer on rich and fallback requests", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4001",
 				apiKey: "sk-1234",
@@ -4247,7 +4247,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(authByUrl.get("http://127.0.0.1:4001/model_group/info")).toBe("Bearer sk-1234");
@@ -4260,7 +4260,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery rejects invalid rich limits and falls back safely", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4002/v1",
 				api: "openai-completions",
@@ -4277,7 +4277,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 		const model = registry.find("litellm-test", "bad-limits");
 
@@ -4286,7 +4286,7 @@ describe("ModelRegistry runtime discovery", () => {
 	});
 
 	test("litellm discovery accepts v2 model info when model_group info is absent", async () => {
-		writeRawModelsJson({
+		writeRawModelsToml({
 			"litellm-test": {
 				baseUrl: "http://127.0.0.1:4003/v1",
 				api: "openai-completions",
@@ -4311,7 +4311,7 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: fetchMock });
 		await registry.refresh();
 
 		expect(registry.find("litellm-test", "team-gpt")?.contextWindow).toBe(200_000);
@@ -4345,7 +4345,7 @@ describe("ModelRegistry runtime discovery", () => {
 		db.run("UPDATE model_cache SET header_restore_version = 0 WHERE provider_id = ?", [cacheProviderId]);
 		db.close();
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 		await registry.hydrateCredentialScopedModelCaches();
 
 		const restored = registry.find("github-copilot", "gpt-5.6-sol-1m");
@@ -4379,7 +4379,7 @@ describe("ModelRegistry runtime discovery", () => {
 		});
 		writeModelCache(accountACacheId, Date.now(), [cachedVariant], true, "", cacheDbPath, [bundledBase]);
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 		await registry.hydrateCredentialScopedModelCaches();
 		await registry.hydrateCredentialScopedModelCaches();
 
@@ -4417,7 +4417,7 @@ describe("ModelRegistry runtime discovery", () => {
 			expires: Date.now() - 60_000,
 		});
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 		await registry.hydrateCredentialScopedModelCaches();
 
 		expect(registry.find("cursor", "claude-opus-5-5-1m")?.contextWindow).toBe(1_000_000);
@@ -4438,7 +4438,7 @@ describe("ModelRegistry runtime discovery", () => {
 		const cacheProviderId = resolveModelCacheProviderId("github-copilot");
 		writeModelCache(cacheProviderId, Date.now(), [cachedAlias], true, "", cacheDbPath, [bundledBase]);
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, modelsTomlPath);
 
 		expect(registry.find("github-copilot", cachedAlias.id)).toBeUndefined();
 		expect(registry.find("github-copilot", bundledBase.id)?.headers).toEqual(bundledBase.headers);

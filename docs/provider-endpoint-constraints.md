@@ -17,7 +17,7 @@ at the narrowest layer that actually owns the behavior.
 Related references:
 
 - [Providers](./providers.md) — provider availability, credentials, custom providers
-- [Model and Provider Configuration](./models.md) — `models.yml`, routing, and compat fields
+- [Model and Provider Configuration](./models.md) — `models.toml`, routing, and compat fields
 - [Provider streaming internals](./provider-streaming-internals.md) — stream event normalization
 - [Provider compat reference](./provider-compat-reference.md) — every compat flag, reasoning levels, tool handling per provider
 - [Provider quirks](./provider-quirks.md) — per-provider special casings, stream behavior, auth/usage, catalog handling

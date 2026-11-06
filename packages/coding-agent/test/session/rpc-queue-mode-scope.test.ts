@@ -11,6 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { parseSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 import { cfgInterruptMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgFollowUpMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -19,7 +20,7 @@ import { cfgSteeringMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 /**
  * Regression guard for #11555: the RPC queue-mode path (`persist: false`)
  * must configure only the calling session — never write the machine-global
- * `config.yml`, and never leak into later sessions via the shared Settings
+ * `config.toml`, and never leak into later sessions via the shared Settings
  * singleton. The default (settings panel, existing SDK callers) still
  * persists.
  */
@@ -36,7 +37,7 @@ describe("AgentSession queue-mode controls are session-scoped by default", () =>
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-queue-scope-");
 		agentDir = tempDir.path();
-		configPath = path.join(agentDir, "config.yml");
+		configPath = path.join(agentDir, "config.toml");
 
 		authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
@@ -105,7 +106,7 @@ describe("AgentSession queue-mode controls are session-scoped by default", () =>
 		expect(session.interruptMode).toBe("wait");
 	});
 
-	it("persists to global config.yml by default (settings panel and existing callers)", async () => {
+	it("persists to global config.toml by default (settings panel and existing callers)", async () => {
 		session.setSteeringMode("all");
 		session.setFollowUpMode("all");
 		session.setInterruptMode("wait");
@@ -117,8 +118,10 @@ describe("AgentSession queue-mode controls are session-scoped by default", () =>
 			interruptMode: "wait",
 		});
 		const onDisk = await Bun.file(configPath).text();
-		expect(onDisk).toContain("steeringMode: all");
-		expect(onDisk).toContain("followUpMode: all");
-		expect(onDisk).toContain("interruptMode: wait");
+		expect(parseSettingsToml(onDisk)).toMatchObject({
+			steeringMode: "all",
+			followUpMode: "all",
+			interruptMode: "wait",
+		});
 	});
 });

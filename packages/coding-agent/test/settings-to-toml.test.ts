@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
+import { logger, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { parse } from "yaml";
 import { parseConfigArgs, runConfigCommand } from "../src/cli/config-cli";
 import { Settings } from "../src/config/settings";
-import { overlaySettingsToml, parseSettingsToml, stringifySettingsToml } from "../src/config/settings-toml";
+import {
+	parseSettingsToml,
+	publishTomlImport,
+	stringifySettingsToml,
+	writeTomlConfig,
+} from "@oh-my-pi/pi-utils/settings-toml";
 import {
 	convertMainSettingsToToml,
 	convertSettingsFileToToml,
 	convertSettingsYamlToToml,
 } from "../src/config/settings-to-toml";
-import { writeFileAtomically } from "../src/utils/atomic-file";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let root = "";
@@ -19,11 +25,15 @@ let cwd: string;
 let state: SettingsTestState | undefined;
 beforeEach(async () => {
 	state = beginSettingsTest();
-	const cacheDir = path.join(process.env.HOME!, ".cache/npi-canary");
-	await fs.mkdir(cacheDir, { recursive: true });
-	root = await fs.mkdtemp(path.join(cacheDir, "toml-codec-test-"));
+	root = await fs.mkdtemp(path.join(os.tmpdir(), "toml-codec-test-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
+	process.env.HOME = root;
+	delete process.env.PI_CONFIG_FILES;
+	setAgentDir(agentDir);
+	setProjectDir(cwd);
+	spyOn(logger, "info").mockImplementation(() => {});
+	spyOn(logger, "warn").mockImplementation(() => {});
 	await fs.mkdir(agentDir, { recursive: true });
 	await fs.mkdir(cwd, { recursive: true });
 });
@@ -64,15 +74,6 @@ describe("full settings TOML codec", () => {
 		};
 		const content = stringifySettingsToml(value);
 		expect(parseSettingsToml(content)).toEqual(value);
-		expect(
-			overlaySettingsToml(
-				{ clear: "old", unrelated: 7, roleSettings: { custom: { temperature: 0.8 } } },
-				Bun.TOML.parse(content) as Record<string, unknown>,
-			),
-		).toEqual({ ...value, unrelated: 7 });
-		expect(overlaySettingsToml({ clear: "inherited" }, parseSettingsToml(stringifySettingsToml({})))).toEqual({
-			clear: "inherited",
-		});
 	});
 	it("rejects reserved user metadata, unsupported values, cycles and unsafe integers without printing values", () => {
 		for (const value of [
@@ -117,16 +118,19 @@ describe("on-demand full YAML conversion", () => {
 			"# source comment\ncompaction:\n  enabled: false\nunknown-extension:\n  payload: [1, two, true, {key: value}]\n  blank: {}\nroleSettings:\n  custom:\n    temperature: null\n";
 		const sourcePath = path.join(agentDir, "config.yml");
 		await Bun.write(sourcePath, source);
-		const original = await Settings.loadReadOnly({ agentDir, cwd });
+		await fs.chmod(sourcePath, 0o640);
+		const original = parseSettingsToml(convertSettingsYamlToToml(source).content);
 		const result = await convertSettingsFileToToml(sourcePath);
 		expect(result.targetPath).toBe(path.join(agentDir, "config.toml"));
 		expect(parseSettingsToml(await Bun.file(result.targetPath).text())).toEqual(parse(source));
-		expect((await Settings.loadReadOnly({ agentDir, cwd })).getGlobalSettings()).toEqual(
-			original.getGlobalSettings(),
-		);
-		expect(result.diagnostics).toContainEqual({ path: "/compaction", message: "YAML comments are not carried over" });
+		expect((await Settings.loadReadOnly({ agentDir, cwd })).getGlobalSettings()).toEqual(original);
+		expect(result.diagnostics).toContainEqual({
+			path: "/compaction",
+			message: "YAML comments retained in TOML preamble; original field associations are not retained",
+		});
+		expect(await Bun.file(result.targetPath).text()).toContain("# source comment");
 		expect(await Bun.file(sourcePath).text()).toBe(source);
-		expect((await fs.stat(result.targetPath)).mode & 0o777).toBe(0o600);
+		expect((await fs.stat(result.targetPath)).mode & 0o777).toBe(0o640);
 	});
 	it("expands acyclic aliases and reports lost anchors, comments and identity by path", () => {
 		const source = "template: &defaults\n  text: |\n    line one\n    line two\ncopy: *defaults # keep value\n";
@@ -186,36 +190,32 @@ describe("on-demand full YAML conversion", () => {
 		expect(loaded.getGlobalSettings()).toEqual({ compaction: { enabled: false } });
 		expect(await Bun.file(path.join(agentDir, "config.yml")).exists()).toBe(false);
 	});
-	it("refuses existing TOML unless forced, without changing existing bytes on failure", async () => {
+	it("keeps canonical TOML unchanged even when the ignored YAML is malformed", async () => {
 		const source = path.join(agentDir, "config.yml");
 		const target = path.join(agentDir, "config.toml");
-		await Bun.write(source, "value: 1\n");
-		await Bun.write(target, "value = 2\n");
-		await expect(convertSettingsFileToToml(source)).rejects.toThrow("--force");
-		expect(await Bun.file(target).text()).toBe("value = 2\n");
-		await convertSettingsFileToToml(source, { force: true });
-		expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ value: 1 });
 		await Bun.write(source, "value: !unsupported private-value\n");
-		await expect(convertSettingsFileToToml(source, { force: true })).rejects.toThrow("custom tags");
-		expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ value: 1 });
+		await Bun.write(target, "value = 2 # canonical wins\n");
+		const result = await convertSettingsFileToToml(source);
+		expect(result.targetPath).toBe(target);
+		expect(await Bun.file(target).text()).toBe("value = 2 # canonical wins\n");
+		expect(await Bun.file(source).text()).toBe("value: !unsupported private-value\n");
 	});
-	it("does not clobber a destination symlink without --force", async () => {
+	it("does not replace or modify an existing canonical symlink", async () => {
 		const source = path.join(agentDir, "config.yml");
 		const destination = path.join(agentDir, "config.toml");
 		const linked = path.join(agentDir, "private.toml");
 		await Bun.write(source, "value: 1\n");
 		await Bun.write(linked, "keep = true\n");
 		await fs.symlink(linked, destination);
-		await expect(convertSettingsFileToToml(source)).rejects.toThrow("--force");
+		await convertSettingsFileToToml(source);
+		expect(await fs.readlink(destination)).toBe(linked);
 		expect(await Bun.file(linked).text()).toBe("keep = true\n");
 	});
-	it("rejects ambiguous legacy and canonical overlays, including empty legacy files", async () => {
-		const source = path.join(agentDir, "config.yml");
-		await Bun.write(source, "value: 1\n");
+	it("uses canonical TOML even with an empty legacy settings.toml sibling", async () => {
+		await Bun.write(path.join(agentDir, "config.yml"), "value: 1\n");
 		await Bun.write(path.join(agentDir, "settings.toml"), "");
-		await expect(convertSettingsFileToToml(source, { force: true })).rejects.toThrow("Legacy overlay");
-		await Bun.write(path.join(agentDir, "config.toml"), "");
-		await expect(Settings.loadReadOnly({ agentDir, cwd })).rejects.toThrow("Conflicting settings files");
+		await Bun.write(path.join(agentDir, "config.toml"), "# canonical empty document\n");
+		expect((await Settings.loadReadOnly({ agentDir, cwd })).getGlobalSettings()).toEqual({});
 	});
 	it("preserves null masks across real settings reloads and rejects invalid canonical TOML", async () => {
 		await Bun.write(
@@ -244,8 +244,7 @@ describe("on-demand full YAML conversion", () => {
 		const log = spyOn(console, "log").mockImplementation(() => {});
 		const error = spyOn(console, "error").mockImplementation(() => {});
 		try {
-			const command = parseConfigArgs(["config", "to-toml", source, "--force"])!;
-			expect(command.flags.force).toBe(true);
+			const command = parseConfigArgs(["config", "to-toml", source])!;
 			await runConfigCommand(command);
 			expect(parseSettingsToml(await Bun.file(path.join(agentDir, "config.toml")).text())).toEqual({
 				unknown: "private-value",
@@ -259,26 +258,22 @@ describe("on-demand full YAML conversion", () => {
 			error.mockRestore();
 		}
 	});
-	it.each([{ flags: [] }, { flags: ["--force"] }])(
-		"converts without the obsolete acknowledgment, including %j",
-		async ({ flags }) => {
-			const source = path.join(agentDir, "config.yml");
-			const target = path.join(agentDir, "config.toml");
-			await Bun.write(source, "value: new\n");
-			if (flags.length) await Bun.write(target, 'value = "existing"\n');
-			const error = spyOn(console, "error").mockImplementation(() => {});
-			const log = spyOn(console, "log").mockImplementation(() => {});
-			try {
-				await runConfigCommand(parseConfigArgs(["config", "to-toml", source, ...flags])!);
-				expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ value: "new" });
-				expect(error.mock.calls.flat().join(" ")).not.toContain("still write YAML");
-				expect(await Bun.file(source).text()).toBe("value: new\n");
-			} finally {
-				log.mockRestore();
-				error.mockRestore();
-			}
-		},
-	);
+	it("imports through the CLI without an acknowledgment or force compatibility flag", async () => {
+		const source = path.join(agentDir, "config.yml");
+		const target = path.join(agentDir, "config.toml");
+		await Bun.write(source, "value: new\n");
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await runConfigCommand(parseConfigArgs(["config", "to-toml", source])!);
+			expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ value: "new" });
+			expect(error.mock.calls.flat().join(" ")).not.toContain("still write YAML");
+			expect(await Bun.file(source).text()).toBe("value: new\n");
+		} finally {
+			log.mockRestore();
+			error.mockRestore();
+		}
+	});
 	it.each(["--help", "-h"])("prints conversion help on %s without converting", async flag => {
 		const source = path.join(agentDir, "config.yml");
 		await Bun.write(source, "value: example\n");
@@ -293,32 +288,27 @@ describe("on-demand full YAML conversion", () => {
 			log.mockRestore();
 		}
 	});
-	it("atomically refuses publication over an existing file", async () => {
+	it("atomically publishes an imported sibling without clobbering the winner", async () => {
+		const source = path.join(root, "atomic.yml");
 		const target = path.join(root, "atomic.toml");
-		await writeFileAtomically(target, "first", { noReplace: true });
-		await expect(writeFileAtomically(target, "second", { noReplace: true })).rejects.toThrow();
-		expect(await Bun.file(target).text()).toBe("first");
-		expect((await fs.readdir(root)).sort()).toEqual(["agent", "atomic.toml", "project"]);
+		await Bun.write(source, "value: first\n");
+		await fs.chmod(source, 0o640);
+		await publishTomlImport(target, 'value = "first"\n', source);
+		await publishTomlImport(target, 'value = "second"\n', source);
+		expect(await Bun.file(target).text()).toBe('value = "first"\n');
+		expect((await fs.stat(target)).mode & 0o777).toBe(0o640);
+		expect((await fs.readdir(root)).filter(name => name.endsWith(".tmp"))).toEqual([]);
 	});
-	it("preserves a settings symlink while atomically publishing a requested mode", async () => {
+	it("preserves a canonical settings symlink and permissions during saves", async () => {
 		const target = path.join(root, "secret.toml");
 		const link = path.join(root, "linked.toml");
-		await Bun.write(target, "old");
+		await Bun.write(target, '# secret config\nvalue = "old"\n');
+		await fs.chmod(target, 0o640);
 		await fs.symlink(target, link);
-		await writeFileAtomically(link, "new", { mode: 0o640 });
+		await writeTomlConfig(link, { value: "new" }, await Bun.file(link).text());
 		expect(await fs.readlink(link)).toBe(target);
-		expect(await Bun.file(target).text()).toBe("new");
+		expect(await Bun.file(target).text()).toContain("# secret config");
+		expect(parseSettingsToml(await Bun.file(target).text())).toEqual({ value: "new" });
 		expect((await fs.stat(target)).mode & 0o777).toBe(0o640);
-	});
-	it("publishes private files in a missing parent without replacing an existing symlink", async () => {
-		const target = path.join(root, "nested", "secret.toml");
-		await writeFileAtomically(target, "secret", { noReplace: true });
-		expect((await fs.stat(target)).mode & 0o777).toBe(0o600);
-		const link = path.join(root, "existing-link.toml");
-		await fs.symlink(target, link);
-		await expect(writeFileAtomically(link, "replacement", { noReplace: true })).rejects.toThrow();
-		expect(await fs.readlink(link)).toBe(target);
-		expect(await Bun.file(target).text()).toBe("secret");
-		expect((await fs.readdir(root)).sort()).toEqual(["agent", "existing-link.toml", "nested", "project"]);
 	});
 });

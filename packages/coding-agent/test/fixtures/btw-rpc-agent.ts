@@ -18,7 +18,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const settings = await Settings.init({ inMemory: true, cwd });
 const { session } = await createAgentSession({
 	cwd,

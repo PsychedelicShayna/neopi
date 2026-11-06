@@ -78,7 +78,9 @@ export class AdvisorScopeOverlayComponent implements Component {
 	#scopeFocused = true;
 	readonly #scopeStrip: StripState<StripChip<AdvisorConfigScope>> = {
 		chips: (["user", "project", "project-omp", "session"] as const).map(scope => ({
-			label: SCOPE_LABELS[scope], styled: SCOPE_LABELS[scope], action: scope,
+			label: SCOPE_LABELS[scope],
+			styled: SCOPE_LABELS[scope],
+			action: scope,
 		})),
 		index: 0,
 	};
@@ -117,7 +119,6 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#list = this.#buildList();
 	}
 
-
 	#scope(): AdvisorConfigScope {
 		return this.#scopeStrip.chips[this.#scopeStrip.index].action;
 	}
@@ -134,11 +135,13 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	#buildList(state?: SelectListNavigationState): SelectList {
-		const items: SelectItem[] = this.#files.filter(file => file.scope === this.#scope()).map(file => ({
-			value: file.path,
-			label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
-			description: sanitizeDisplayLine(shortenPath(file.path)),
-		}));
+		const items: SelectItem[] = this.#files
+			.filter(file => file.scope === this.#scope())
+			.map(file => ({
+				value: file.path,
+				label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
+				description: sanitizeDisplayLine(shortenPath(file.path)),
+			}));
 		items.push(
 			{ value: "divider", label: "────────────────", disabled: true },
 			{ value: "disable", label: "Disable all active advisors" },
@@ -254,7 +257,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 		const previous = this.navigationSnapshot();
 		const doc = await this.#cb.loadFile(file.path);
 		if (doc.warnings?.length)
-			(this.#cb.warn ?? this.#cb.notify)(`WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`);
+			(this.#cb.warn ?? this.#cb.notify)(`WATCHDOG.toml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`);
 		const editor = new AdvisorConfigOverlayComponent(
 			this.#tui,
 			{ ...this.#deps, effectiveRoster: [], filePath: file.path },
@@ -262,9 +265,13 @@ export class AdvisorScopeOverlayComponent implements Component {
 			doc,
 			{
 				...this.#cb,
-				getSources: async () => Promise.all(this.#files.map(async source => ({
-					...source, doc: await this.#cb.loadFile(source.path),
-				}))),
+				getSources: async () =>
+					Promise.all(
+						this.#files.map(async source => ({
+							...source,
+							doc: await this.#cb.loadFile(source.path),
+						})),
+					),
 				copyAdvisor: async (advisor, targetPath) => {
 					const target = this.#files.find(source => source.path === targetPath);
 					if (!target) throw new Error("Advisor copy destination no longer exists");
@@ -322,7 +329,15 @@ export class AdvisorScopeOverlayComponent implements Component {
 		return this.#help.render(
 			[
 				topBorder(width, title),
-				row(renderHubChips(width - 4, `${this.#scopeFocused ? "›" : " "} Scope: `, this.#scopeStrip, this.#scopeRanges), width),
+				row(
+					renderHubChips(
+						width - 4,
+						`${this.#scopeFocused ? "›" : " "} Scope: `,
+						this.#scopeStrip,
+						this.#scopeRanges,
+					),
+					width,
+				),
 				divider(width),
 				...this.#split.render(width),
 				divider(width),
@@ -426,7 +441,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 		}
 		if (this.#scopeFocused) {
 			if (action?.kind === "horizontal") this.#setScope(this.#scopeStrip.index + action.delta);
-			else if ((action?.kind === "move" && action.delta > 0) || action?.kind === "confirm" || action?.kind === "context") {
+			else if (
+				(action?.kind === "move" && action.delta > 0) ||
+				action?.kind === "confirm" ||
+				action?.kind === "context"
+			) {
 				this.#scopeFocused = false;
 				this.#cb.requestRender();
 			} else if (action?.kind === "search") {
@@ -435,8 +454,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 			}
 			return;
 		}
-		if (action?.kind === "move" && action.delta < 0 &&
-			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value) {
+		if (
+			action?.kind === "move" &&
+			action.delta < 0 &&
+			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value
+		) {
 			this.#scopeFocused = true;
 			this.#cb.requestRender();
 			return;

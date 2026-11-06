@@ -63,7 +63,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		// ModelRegistry (bundled-model load) and the resolved model are immutable across
 		// these tests, so build them once rather than per test.
-		registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		model = modelOrThrow(registry, "claude-sonnet-4-5");
 		tools = [makeTool("read")];
 	});

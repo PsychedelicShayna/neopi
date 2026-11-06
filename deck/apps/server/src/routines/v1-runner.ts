@@ -21,7 +21,7 @@
  * unrecoverable infrastructure errors (db unreachable, etc.).
  */
 
-import { parse as parseYaml } from "yaml";
+import { parseSettingsToml as parseToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { mkdir } from "node:fs/promises";
 import * as path from "node:path";
 
@@ -62,15 +62,15 @@ export interface V1RunHandle {
 }
 
 /**
- * Parse a routine's `specYaml` into a typed RoutineSpec. Returns null if
- * the routine isn't V1 or the YAML is malformed (caller logs + aborts run).
+ * Parse a routine's `specToml` into a typed RoutineSpec. Returns null if
+ * the routine isn't V1 or the TOML is malformed (caller logs + aborts run).
  */
 export function parseSpec(routine: Routine): RoutineSpec | null {
-	if (routine.specVersion !== 1 || !routine.specYaml) return null;
+	if (routine.specVersion !== 1 || !routine.specToml) return null;
 	try {
-		return parseYaml(routine.specYaml) as RoutineSpec;
+		return parseToml(routine.specToml) as unknown as RoutineSpec;
 	} catch (err) {
-		log.warn(`failed to parse spec_yaml for routine ${routine.id}`, err);
+		log.warn(`failed to parse spec_toml for routine ${routine.id}`);
 		return null;
 	}
 }

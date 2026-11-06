@@ -19,7 +19,7 @@ interface Props {
 }
 
 /**
- * Centered modal for task details, raw YAML/body editing, and card agent runs.
+ * Centered modal for task details, raw TOML/body editing, and card agent runs.
  * Open in chat remains a separate operation from assigning an agent.
  */
 export function TaskModal({
@@ -223,24 +223,24 @@ export function TaskModal({
 					{runError ? <p role="alert" className="mt-3 text-sm text-danger">{runError}</p> : null}
 				</section>
 				<div className="mb-3 flex items-center justify-between gap-2">
-					<span className="font-mono text-2xs text-ink-3">Body / YAML properties</span>
+					<span className="font-mono text-2xs text-ink-3">Body / TOML properties</span>
 					<button
 						type="button"
 						onClick={() => setRawEditing((current) => !current)}
 						className="btn-ghost h-7 px-2 text-xs"
 					>
-						{rawEditing ? "Preview" : "Edit raw YAML & body"}
+						{rawEditing ? "Preview" : "Edit raw TOML & body"}
 					</button>
 				</div>
 				{rawEditing ? (
 					<>
 						<textarea
-							aria-label="Raw YAML and task body"
+							aria-label="Raw TOML and task body"
 							rows={14}
 							value={body}
 							onChange={(e) => setBody(e.target.value)}
 							className="field w-full resize-y p-3 font-mono text-xs"
-							placeholder={"---\nread-only: true\nworktree: /absolute/path/to/existing-worktree\nmodel: provider/id\nrole: default\n---\nTask instructions"}
+							placeholder={"+++\nread-only = true\nworktree = \"/absolute/path/to/existing-worktree\"\nmodel = \"provider/id\"\nrole = \"default\"\n+++\nTask instructions"}
 						/>
 						<button
 							type="button"
@@ -257,7 +257,7 @@ export function TaskModal({
 							setBody(next);
 							onSave({ body: next });
 						}}
-						placeholder="Click to add notes — markdown supported. Edit raw YAML & body to set properties."
+						placeholder="Click to add notes — markdown supported. Edit raw TOML & body to set properties."
 					/>
 				)}
 			</div>

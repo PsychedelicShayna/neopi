@@ -3084,8 +3084,8 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
 			await fs.mkdir(agentDir, { recursive: true });
 			await fs.writeFile(
-				path.join(project, ".omp", "secrets.yml"),
-				"- type: plain\n  content: invalid-friendly-secret\n  friendlyName: '***'\n",
+				path.join(project, ".omp", "secrets.toml"),
+				'[[secrets]]\ntype = "plain"\ncontent = "invalid-friendly-secret"\nfriendlyName = "***"\n',
 			);
 
 			const entries = await loadSecrets(project, agentDir);
@@ -3110,8 +3110,8 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
 			await fs.mkdir(agentDir, { recursive: true });
 			await fs.writeFile(
-				path.join(project, ".omp", "secrets.yml"),
-				"- type: plain\n  content: non-string-friendly-secret\n  friendlyName: 123\n",
+				path.join(project, ".omp", "secrets.toml"),
+				'[[secrets]]\ntype = "plain"\ncontent = "non-string-friendly-secret"\nfriendlyName = 123\n',
 			);
 
 			const entries = await loadSecrets(project, agentDir);
@@ -3128,7 +3128,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		}
 	});
 
-	it("rejects a secrets.yml replace regex entry that can never redact a 1-2 char match distinctly from itself", async () => {
+	it("rejects a secrets.toml replace regex entry that can never redact a 1-2 char match distinctly from itself", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secret-friendly-"));
 		try {
 			const project = path.join(root, "project");
@@ -3136,8 +3136,8 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
 			await fs.mkdir(agentDir, { recursive: true });
 			await fs.writeFile(
-				path.join(project, ".omp", "secrets.yml"),
-				'- type: regex\n  mode: replace\n  content: "."\n',
+				path.join(project, ".omp", "secrets.toml"),
+				'[[secrets]]\ntype = "regex"\nmode = "replace"\ncontent = "."\n',
 			);
 
 			const entries = await loadSecrets(project, agentDir);
@@ -3148,7 +3148,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		}
 	});
 
-	it("preserves the raw friendlyName from secrets.yml so a regex entry's self-collision check still catches it", async () => {
+	it("preserves the raw friendlyName from secrets.toml so a regex entry's self-collision check still catches it", async () => {
 		// Regression: `loadFriendlyName` used to return the SANITIZED (uppercased,
 		// separator-stripped) friendlyName, which then got stored verbatim as
 		// `entry.friendlyName` in the loaded `SecretEntry`. That defeated the
@@ -3165,8 +3165,8 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			await fs.mkdir(path.join(project, ".omp"), { recursive: true });
 			await fs.mkdir(agentDir, { recursive: true });
 			await fs.writeFile(
-				path.join(project, ".omp", "secrets.yml"),
-				'- type: regex\n  content: "tok_[a-z0-9]+"\n  friendlyName: "tok_abc123"\n',
+				path.join(project, ".omp", "secrets.toml"),
+				'[[secrets]]\ntype = "regex"\ncontent = "tok_[a-z0-9]+"\nfriendlyName = "tok_abc123"\n',
 			);
 
 			const entries = await loadSecrets(project, agentDir);

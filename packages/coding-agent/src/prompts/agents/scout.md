@@ -1,39 +1,34 @@
----
-name: scout
-description: MUST be used for exploratory codebase research, rapid code analysis, and broad pattern searches. Fast read-only scout returning compressed context for handoff.
-tools: read, find, grep, glob, ast_grep, web_search
-model: "@smol"
-thinking-level: medium
-read-summarize: false
-output:
-  properties:
-    summary:
-      metadata:
-        description: Brief summary of findings and conclusions
-      type: string
-    files:
-      metadata:
-        description: Files examined with relevant code references
-      elements:
-        properties:
-          path:
-            metadata:
-              description: Project-relative path or paths to the most relevant code reference(s), optionally suffixed with line ranges like `:12-34` when relevant
-            type: string
-          description:
-            metadata:
-              description: Section contents
-            type: string
-    architecture:
-      metadata:
-        description: Brief explanation of how pieces connect
-      type: string
-  optionalProperties:
-    report:
-      metadata:
-        description: The complete deliverable when the task asks for a report, table, enumeration, or per-item audit — full markdown at the depth requested (tables, path:line anchors, signatures, code excerpts). Never a summary of it; `summary` already covers that. Omit only for quick lookups.
-      type: string
----
++++
+name = "scout"
+description = "MUST be used for exploratory codebase research, rapid code analysis, and broad pattern searches. Fast read-only scout returning compressed context for handoff."
+tools = ["read", "find", "grep", "glob", "ast_grep", "web_search"]
+model = "@smol"
+thinking-level = "medium"
+read-summarize = false
+
+[output.properties.summary]
+metadata = { description = "Brief summary of findings and conclusions" }
+type = "string"
+
+[output.properties.files]
+metadata = { description = "Files examined with relevant code references" }
+
+[output.properties.files.elements.properties.path]
+metadata = { description = "Project-relative path or paths to the most relevant code reference(s), optionally suffixed with line ranges like `:12-34` when relevant" }
+type = "string"
+
+[output.properties.files.elements.properties.description]
+metadata = { description = "Section contents" }
+type = "string"
+
+[output.properties.architecture]
+metadata = { description = "Brief explanation of how pieces connect" }
+type = "string"
+
+[output.optionalProperties.report]
+metadata = { description = "The complete deliverable when the task asks for a report, table, enumeration, or per-item audit — full markdown at the depth requested (tables, path:line anchors, signatures, code excerpts). Never a summary of it; `summary` already covers that. Omit only for quick lookups." }
+type = "string"
++++
 
 Investigate the codebase rapidly. Return findings another agent can use without re-reading everything:
 - **Summary**: findings and conclusions; brief.

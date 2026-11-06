@@ -24,7 +24,7 @@ describe("AgentSession persistence-keys cache", () => {
 	beforeAll(async () => {
 		authDir = TempDir.createSync("@pi-cache-auth-");
 		authStorage = await AuthStorage.create(authDir.join("auth.db"));
-		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.toml"));
 	});
 
 	afterAll(() => {

@@ -91,7 +91,7 @@ describe("AgentSession.branchFromBtw", () => {
 			options?.persisted === false ? SessionManager.inMemory() : SessionManager.create(tempDir, tempDir);
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		authStorage = await AuthStorage.create(":memory:");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		session = new AgentSession({
 			agent,

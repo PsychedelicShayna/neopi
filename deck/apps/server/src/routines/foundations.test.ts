@@ -1,3 +1,4 @@
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterAll, afterEach, expect } from "bun:test";
 import * as fs from "node:fs";
 import type { RoutineTestFixture } from "./test-fixture.ts";
@@ -19,10 +20,10 @@ function test(name: string, body: (fixture: RoutineTestFixture) => Promise<void>
 	isolatedTest(name, () => fixtures.run(body, agentCommand), timeout);
 }
 function routine(spec: RoutineSpec, enabled = true) {
-	return createV1Routine({ name: `test-${crypto.randomUUID()}`, spec, specYaml: JSON.stringify(spec), enabled });
+	return createV1Routine({ name: `test-${crypto.randomUUID()}`, spec, specToml: stringifyToml(spec), enabled });
 }
 function spec(steps: RoutineSpec["steps"], concurrency: RoutineSpec["concurrency"] = "skip"): RoutineSpec {
-	return { version: 1, name: "test", trigger: [{ manual: {} }], steps, concurrency } as RoutineSpec;
+	return { name: "test", trigger: [{ manual: {} }], steps, concurrency };
 }
 if (isIsolatedCase(import.meta.path)) {
 	afterEach(() => fixtures.join());

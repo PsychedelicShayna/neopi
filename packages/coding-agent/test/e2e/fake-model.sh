@@ -1,6 +1,6 @@
 # Shared by the control e2e scripts. Source it, then call `start_fake_model DIR`.
 # It starts a local OpenAI-compatible fake on a random port and writes
-# DIR/models.yml (provider `fake`, models `echo` and `echo-2`) and DIR/config.yml.
+# DIR/models.toml (provider `fake`, models `echo` and `echo-2`) and DIR/config.toml.
 # No real model is ever contacted: every pane launched with
 # PI_CODING_AGENT_DIR=DIR and --model fake/echo talks to this server.
 #
@@ -83,36 +83,38 @@ JS
 		curl -sf -o /dev/null -X POST "http://127.0.0.1:$FAKE_PORT/v1/chat/completions" -H 'content-type: application/json' -d '{}' && break
 		sleep 0.1
 	done
-	cat >"$dir/models.yml" <<EOF
-providers:
-  fake:
-    baseUrl: http://127.0.0.1:$FAKE_PORT/v1
-    api: openai-completions
-    apiKey: test
-    models:
-      - id: echo
-        name: Echo
-        api: openai-completions
-        reasoning: false
-        input: [text]
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-        contextWindow: 200000
-        maxTokens: 1000
-      - id: echo-2
-        name: Echo 2
-        api: openai-completions
-        reasoning: false
-        input: [text]
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-        contextWindow: 200000
-        maxTokens: 1000
+	cat >"$dir/models.toml" <<EOF
+[providers.fake]
+baseUrl = "http://127.0.0.1:$FAKE_PORT/v1"
+api = "openai-completions"
+apiKey = "test"
+
+[[providers.fake.models]]
+id = "echo"
+name = "Echo"
+api = "openai-completions"
+reasoning = false
+input = ["text"]
+cost = { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }
+contextWindow = 200000
+maxTokens = 1000
+
+[[providers.fake.models]]
+id = "echo-2"
+name = "Echo 2"
+api = "openai-completions"
+reasoning = false
+input = ["text"]
+cost = { input = 0, output = 0, cacheRead = 0, cacheWrite = 0 }
+contextWindow = 200000
+maxTokens = 1000
 EOF
-	cat >"$dir/config.yml" <<'YAML'
-setupVersion: 2
-startup:
-  setupWizard: false
-  quiet: true
-YAML
+	cat >"$dir/config.toml" <<'TOML'
+setupVersion = 2
+[startup]
+setupWizard = false
+quiet = true
+TOML
 }
 
 # Refuse to continue unless the pane reports the fake provider.

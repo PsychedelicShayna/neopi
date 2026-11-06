@@ -7,7 +7,7 @@ type Chains = Record<string, string[]>;
 
 /**
  * The retry fallback the deck gives a chat it starts on its default model
- * (see `InProcessAgentBridge.start`). Session-local: never written to config.yml.
+ * (see `InProcessAgentBridge.start`). Session-local: never written to config.toml.
  */
 export interface DeckFallbacks {
 	model: ModelRef;
@@ -33,7 +33,7 @@ function namesModel(key: string, model: ModelRef, registry: ModelRegistry): bool
  * as a runtime override. The primary's entry yields once the configuration
  * gives that model a chain of its own. A runtime override replaces the whole
  * record, so run this again after every settings reload: otherwise a later
- * config.yml edit never reaches the chat.
+ * config.toml edit never reaches the chat.
  */
 export function applyDeckFallbacks(settings: Settings, deck: DeckFallbacks, registry: ModelRegistry): void {
 	const setting = sdk().cfgRetryFallbackChains;

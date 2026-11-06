@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -79,7 +80,7 @@ const { session } = await createAgentSession({
 	agentDir: dir,
 	sessionManager: SessionManager.inMemory(),
 	authStorage,
-	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.yml")),
+	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.toml")),
 	settings: Settings.isolated(),
 	enableLsp: false,
 	enableMCP: false,
@@ -127,7 +128,7 @@ const { session } = await createAgentSession({
 	agentDir: dir,
 	sessionManager,
 	authStorage,
-	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.yml")),
+	modelRegistry: new ModelRegistry(authStorage, path.join(dir, "models.toml")),
 	model,
 	settings: Settings.isolated(),
 	enableLsp: false,
@@ -367,21 +368,25 @@ describe.skipIf(process.platform !== "linux")("print mode exit-with-parent", () 
 		cleanups.push(() => server.stop(true));
 
 		await Bun.write(
-			path.join(agentDir, "models.yml"),
-			[
-				"providers:",
-				"  fakeai:",
-				`    baseUrl: http://127.0.0.1:${server.port}/v1`,
-				"    apiKey: FAKEAI_KEY",
-				"    api: openai-completions",
-				"    models:",
-				"      - id: fake-model",
-				"        reasoning: false",
-				"        input: [text]",
-				"        contextWindow: 128000",
-				"        maxTokens: 4096",
-				"",
-			].join("\n"),
+			path.join(agentDir, "models.toml"),
+			stringifySettingsToml({
+				providers: {
+					fakeai: {
+						baseUrl: `http://127.0.0.1:${server.port}/v1`,
+						apiKey: "FAKEAI_KEY",
+						api: "openai-completions",
+						models: [
+							{
+								id: "fake-model",
+								reasoning: false,
+								input: ["text"],
+								contextWindow: 128000,
+								maxTokens: 4096,
+							},
+						],
+					},
+				},
+			}),
 		);
 		const mcpServerFile = path.join(dir, "mcp-server.ts");
 		await Bun.write(mcpServerFile, STUBBORN_MCP_SERVER);

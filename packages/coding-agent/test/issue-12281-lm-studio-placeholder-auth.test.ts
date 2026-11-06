@@ -150,7 +150,7 @@ async function bootStorage(name: string): Promise<AuthStorage> {
 }
 
 function bootRegistry(storage: AuthStorage): ModelRegistry {
-	return new ModelRegistry(storage, path.join(tempDir, "models.yml"), {
+	return new ModelRegistry(storage, path.join(tempDir, "models.toml"), {
 		cacheDbPath: path.join(tempDir, "models.db"),
 		fetch: hermeticFetch,
 	});

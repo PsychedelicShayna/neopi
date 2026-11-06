@@ -50,11 +50,17 @@ export const cfgAdvisorDeliveryNit = deliverySetting("nit", "on-yield");
 export const cfgAdvisorDeliveryConcern = deliverySetting("concern", "next-tool-call");
 export const cfgAdvisorDeliveryBlocker = deliverySetting("blocker", "next-tool-call");
 
-export function advisorDeliveryTiming(settings: Settings, severity: "nit" | "concern" | "blocker" = "nit"): AdvisorDeliveryTiming {
+export function advisorDeliveryTiming(
+	settings: Settings,
+	severity: "nit" | "concern" | "blocker" = "nit",
+): AdvisorDeliveryTiming {
 	switch (severity) {
-		case "nit": return cfgAdvisorDeliveryNit.get(settings);
-		case "concern": return cfgAdvisorDeliveryConcern.get(settings);
-		case "blocker": return cfgAdvisorDeliveryBlocker.get(settings);
+		case "nit":
+			return cfgAdvisorDeliveryNit.get(settings);
+		case "concern":
+			return cfgAdvisorDeliveryConcern.get(settings);
+		case "blocker":
+			return cfgAdvisorDeliveryBlocker.get(settings);
 	}
 }
 
@@ -191,7 +197,7 @@ export const cfgAdvisorReviewMode = register({
 		group: "Advisor",
 		label: "Advisor Review Mode",
 		description:
-			"Default advisor cadence when no WATCHDOG.yml roster is present. turn reviews every primary turn; agent-end reviews only final yields.",
+			"Default advisor cadence when no WATCHDOG.toml roster is present. turn reviews every primary turn; agent-end reviews only final yields.",
 		options: [
 			{ value: "turn", label: "Every turn", description: "Review every primary update (tool-call round)." },
 			{ value: "agent-end", label: "Agent end", description: "Review only at final yields (once per run)." },
@@ -210,7 +216,7 @@ export const cfgAdvisorReviewInterval = register({
 		group: "Advisor",
 		label: "Advisor Review Interval",
 		description:
-			"Default advisor cadence when no WATCHDOG.yml roster is present: review every Nth eligible primary update. 1 = every update. Skipped updates are sent with the next scheduled review.",
+			"Default advisor cadence when no WATCHDOG.toml roster is present: review every Nth eligible primary update. 1 = every update. Skipped updates are sent with the next scheduled review.",
 		options: [
 			{ value: "1", label: "Every eligible update", description: "Default." },
 			{ value: "2", label: "Every 2nd" },

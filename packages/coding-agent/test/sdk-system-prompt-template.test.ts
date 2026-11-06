@@ -28,7 +28,7 @@ async function withSession<T>(
 	const authStorage = await AuthStorage.create(":memory:");
 	authStorage.keys.setRuntime("openai", "test-key");
 	authStorage.keys.setRuntime("anthropic", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	let session: AgentSession | undefined;
 	try {
 		const result = await createAgentSession({

@@ -31,7 +31,8 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { acquireFileLock, parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, TempDir } from "@oh-my-pi/pi-utils";
+import { parseNativeMarkdown } from "../../src/utils/native-frontmatter";
 import { __internalsForTesting as fileLockInternals } from "@oh-my-pi/pi-utils/file-lock";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
@@ -1961,7 +1962,7 @@ describe("SessionChronicler capture runtime", () => {
 				for (const batch of batches) {
 					for (const beat of batch.beats) {
 						const raw = await readBeatFile(root, batch.batchId, beat.file);
-						const metadata = parseFrontmatter(raw, { rawKeys: true, repair: false, level: "off" }).frontmatter;
+						const metadata = parseNativeMarkdown(raw).frontmatter;
 						expect(metadata.id).toBe(beat.id);
 						expect(metadata.batch).toBe(batch.batchId);
 						expect(metadata.session).toBe(await headerIdOnDisk(manager.getSessionFile()!));

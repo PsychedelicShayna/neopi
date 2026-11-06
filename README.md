@@ -112,7 +112,7 @@ upstream provider plan. Your administrator controls model grants and routing.
 The confirmed CA and fingerprint are saved **beside this provider's key in the
 normal credential store**, even when the inspection connection was already
 trusted through a public, system, or pre-existing extra CA. They never go into
-`models.yml`, the process environment, or the system/global certificate store.
+`models.toml`, the process environment, or the system/global certificate store.
 Reopening the profile reuses that explicit credential-local pin for discovery
 and inference; `NODE_EXTRA_CA_CERTS` is not needed. Trust is bound to the exact
 HTTPS origin, including its port. Authenticated requests verify the hostname,
@@ -129,7 +129,7 @@ management endpoint.
 
 Only nonsecret endpoint/discovery settings are saved in provider configuration.
 An existing `/v1` suffix is normalized; meaningful reverse-proxy prefixes such
-as `/team/neo` are preserved. No hand-written `models.yml` or copied upstream
+as `/team/neo` are preserved. No hand-written `models.toml` or copied upstream
 credentials are needed. `/login` → **NeoProxy** (or `/login neoproxy`) uses the
 same flow inside a session. Without `--url`, the server URL is requested first.
 A graphical/control host must explicitly support both native trust confirmation

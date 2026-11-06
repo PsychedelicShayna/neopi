@@ -4,6 +4,16 @@ Chronicler capture (`chronicler.enabled`) writes **atoms** — self-contained be
 
 Atoms stay the only source of truth. The view is a cache: deleting it loses nothing, and `npi chronicle index` rebuilds it from the atoms. Nothing from it is injected into sessions.
 
+New canonical beat Markdown, derived `NODE.md` files, and atom stubs use
+standard `+++` TOML frontmatter. Metadata is lossless: explicit nulls use the
+shared `__npi` null-path codec rather than an invented TOML null literal.
+Opening a writable session store imports an older `---` YAML-frontmatter beat
+once into a sibling `<beat>.toml.md`, atomically and with the original permission
+bits. The original Markdown and `COMMIT.json` manifest remain unchanged. Readers
+prefer the TOML sibling and warn with paths only when both exist; manifest-based
+enumeration still counts the atom once. Read-only snapshots and index dry runs
+read legacy metadata in memory without creating imports.
+
 Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
 
 ## The hierarchy
@@ -92,16 +102,19 @@ Backfill command flags override their matching settings. Its `pollMs` setting on
 | `chronicler.recall.ranker` | `model` | `model` or `lexical`. |
 | `chronicler.recall.neighborhoodMinutes` | `90` | Window for adjacency and neighbors. |
 
-```yaml
-chronicler:
-  enabled: true
-  recall:
-    enabled: true
-  index:
-    timezone: America/Sao_Paulo
-modelRoles:
-  chronicler: openai-codex/gpt-6-luna:max
-  chronicler-summary: openai-codex/gpt-6-luna:low
+```toml
+[chronicler]
+enabled = true
+
+[chronicler.recall]
+enabled = true
+
+[chronicler.index]
+timezone = "America/Sao_Paulo"
+
+[modelRoles]
+chronicler = "openai-codex/gpt-6-luna:max"
+chronicler-summary = "openai-codex/gpt-6-luna:low"
 ```
 
 The `chronicler-summary` role writes summaries and ranks during recall. Unset, it follows the `chronicler` role, then the `slow` chain. Summaries send atom text to that model's provider, the same boundary as capture.

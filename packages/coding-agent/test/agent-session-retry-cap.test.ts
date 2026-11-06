@@ -83,7 +83,7 @@ describe("AgentSession retry delay cap", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-retry-cap-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	beforeEach(async () => {
@@ -742,7 +742,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() + 7_200_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 
 			const mock = createMockModel({
 				responses: [
@@ -826,7 +826,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() + 7_200_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 
 			const mock = createMockModel({
 				responses: [
@@ -908,7 +908,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() + 300_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 
 			const mock = createMockModel({
 				responses: [
@@ -999,7 +999,7 @@ describe("AgentSession retry delay cap", () => {
 		);
 		try {
 			localStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 			let now = startMs;
 			const mock = createMockModel();
 			const requestedModels: string[] = [];
@@ -1101,7 +1101,7 @@ describe("AgentSession retry delay cap", () => {
 				{ type: "api_key", key: "opencode-go-key-b" },
 			]);
 			localStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 			const mock = createMockModel();
 			const requestedModels: string[] = [];
 			const primaryKeys: string[] = [];
@@ -1195,7 +1195,7 @@ describe("AgentSession retry delay cap", () => {
 			// the longer block before this session's failing turn. The key
 			// resolution binds the credential to the sibling session, as a
 			// real prior turn would have.
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
 			await localStorage.limits.markReached("opencode-go", "sibling-session", {
 				retryAfterMs: 7_200_000,
@@ -1287,7 +1287,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() + 300_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
 			// The sibling's 20-minute provider-stated block is shorter than
 			// the 30-minute heuristic this session's hintless error will
@@ -1381,7 +1381,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() + 300_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 			await localRegistry.getApiKeyForProvider("opencode-go", "sibling-session");
 			// Hintless sibling error whose report was unavailable: the stored
 			// block is the 30-minute heuristic fallback, not provider timing.
@@ -1507,7 +1507,7 @@ describe("AgentSession retry delay cap", () => {
 				retryAfterMs: 1_800_000,
 			});
 
-			const localRegistry = new ModelRegistry(restartedStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(restartedStorage, path.join(tempDir.path(), "models.toml"));
 
 			const mock = createMockModel({
 				responses: [
@@ -1594,7 +1594,7 @@ describe("AgentSession retry delay cap", () => {
 			{ status: "rate-limited", percent: 100, resetsAtIso: new Date(Date.now() - 3_600_000).toISOString() },
 		);
 		try {
-			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.yml"));
+			const localRegistry = new ModelRegistry(localStorage, path.join(tempDir.path(), "models.toml"));
 
 			const mock = createMockModel({ handler: () => ({ throw: "429 quota exceeded for this account" }) });
 			const requestedModels: string[] = [];

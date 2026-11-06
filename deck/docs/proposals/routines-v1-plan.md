@@ -1,5 +1,12 @@
 # Routines V1 — Comprehensive Plan
 
+> Historical design proposal. Current routine authoring, API transport and
+> execution use direct `RoutineSpec` TOML (`specToml` / `spec_toml`), with no
+> spec wrapper. YAML examples and schema sketches below record the original
+> design, not a supported authoring path. See
+> [the current tutorial](../routines-v1-tutorial.md) for native TOML examples,
+> lossless legacy import and reserved null metadata.
+
 **Goal:** turn omp-deck's routines surface from "single-action cron jobs" into a first-class Pattern-3-agent platform. The V1 proof point is a working **daily-briefing** routine that reads the deck's own tasks / inbox / routine-runs, has an agent summarize into a morning capture, and creates a native **capture item in the deck inbox** (`/api/inbox`, kind=`capture`). V1 also ships a **visual builder** (form-mode editing per step type, YAML round-tripping, trigger picker) so creating routines doesn't require YAML literacy — without it the convenience pitch weakens. External integrations (Gmail, Calendar, etc.) land in **V1.5** via the [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) Workspace MCP server. **Inbox-triager** ships as the V1.5 proof point.
 
 Companion docs: `architecture.md` (current deck internals), `proposals/managed-hosting-v0-proposal.html` (Layer 2 hosting design), `knowledge/domains/agent-hosting-whitelabel-layer-deferred.md` (strategic frame).

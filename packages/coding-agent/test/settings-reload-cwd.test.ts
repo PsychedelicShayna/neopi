@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getProjectAgentDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -67,9 +67,9 @@ it("distinguishes runtime provenance from global when raw values are identical",
 it("reports overlay provenance for a null tombstone that blocks the global fallback after project clear", async () => {
 	const testDir = path.join(os.tmpdir(), `provenance-null-${Snowflake.next()}`);
 	const projectDir = path.join(testDir, "project");
-	const overlayPath = path.join(testDir, "overlay.yml");
+	const overlayPath = path.join(testDir, "overlay.toml");
 	fs.mkdirSync(projectDir, { recursive: true });
-	fs.writeFileSync(overlayPath, "modelRoles:\n  default: null\n");
+	fs.writeFileSync(overlayPath, stringifySettingsToml({ modelRoles: { default: null } }));
 	try {
 		const settings = await Settings.loadIsolated({
 			cwd: projectDir,
@@ -149,7 +149,7 @@ describe("Settings.reloadForCwd", () => {
 	it("loads extra config overlays after project settings", async () => {
 		const testDir = path.join(os.tmpdir(), "test-config-overlay", Snowflake.next());
 		const projectDir = path.join(testDir, "project");
-		const overlayPath = path.join(testDir, "overlay.yml");
+		const overlayPath = path.join(testDir, "overlay.toml");
 		try {
 			resetSettingsForTest();
 			fs.mkdirSync(projectDir, { recursive: true });
@@ -158,7 +158,7 @@ describe("Settings.reloadForCwd", () => {
 				path.join(getProjectAgentDir(projectDir), "settings.json"),
 				JSON.stringify({ compaction: { enabled: true } }),
 			);
-			fs.writeFileSync(overlayPath, "compaction:\n  enabled: false\n");
+			fs.writeFileSync(overlayPath, '"compaction" = { "enabled" = false }\n');
 
 			const settings = await Settings.init({ cwd: projectDir, inMemory: true, configFiles: [overlayPath] });
 			expect(cfgCompactionEnabled.get(settings)).toBe(false);
@@ -177,7 +177,7 @@ describe("Settings.reloadForCwd", () => {
 			resetSettingsForTest();
 			fs.mkdirSync(testDir, { recursive: true });
 
-			const missingPath = path.join(testDir, "nope.yml");
+			const missingPath = path.join(testDir, "nope.toml");
 			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [missingPath] })).rejects.toThrow(
 				`Config overlay not found: ${missingPath}`,
 			);
@@ -189,14 +189,14 @@ describe("Settings.reloadForCwd", () => {
 
 	it("rejects a malformed --config overlay", async () => {
 		const testDir = path.join(os.tmpdir(), "test-config-overlay-bad", Snowflake.next());
-		const overlayPath = path.join(testDir, "bad.yml");
+		const overlayPath = path.join(testDir, "bad.toml");
 		try {
 			resetSettingsForTest();
 			fs.mkdirSync(testDir, { recursive: true });
-			fs.writeFileSync(overlayPath, "compaction: [unclosed\n");
+			fs.writeFileSync(overlayPath, "compaction = [unclosed\n");
 
 			await expect(Settings.init({ cwd: testDir, inMemory: true, configFiles: [overlayPath] })).rejects.toThrow(
-				"Failed to parse config overlay",
+				`Settings config is invalid: ${overlayPath}`,
 			);
 		} finally {
 			resetSettingsForTest();
@@ -260,26 +260,26 @@ describe("Settings.reloadForCwd", () => {
 			try {
 				await expect(settings.reloadForCwd(bareProject)).rejects.toThrow("simulated save failure");
 				expect(settings.getCwd()).toBe(path.normalize(startDir));
-				expect(await Bun.file(path.join(bareProject, ".omp", "config.yml")).exists()).toBe(false);
+				expect(await Bun.file(path.join(bareProject, ".omp", "config.toml")).exists()).toBe(false);
 			} finally {
 				mkdirSpy.mockRestore();
 			}
 
 			await settings.flush();
-			expect(YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(path.join(startDir, ".omp", "config.toml")).text())).toEqual({
 				modelRoles: { default: "anthropic/project" },
 			});
 		});
 
-		it("writes project model roles only to the project YAML", async () => {
+		it("writes project model roles only to the project TOML", async () => {
 			const settings = await Settings.init({ cwd: startDir, agentDir });
-			const projectConfigPath = path.join(startDir, ".omp", "config.yml");
-			const globalConfigPath = path.join(agentDir, "config.yml");
+			const projectConfigPath = path.join(startDir, ".omp", "config.toml");
+			const globalConfigPath = path.join(agentDir, "config.toml");
 
 			settings.setProjectModelRole("default", "anthropic/claude-sonnet-4-5");
 			await settings.flush();
 
-			expect(YAML.parse(await Bun.file(projectConfigPath).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(projectConfigPath).text())).toEqual({
 				modelRoles: { default: "anthropic/claude-sonnet-4-5" },
 			});
 			expect(await Bun.file(globalConfigPath).exists()).toBe(false);
@@ -296,7 +296,7 @@ describe("Settings.reloadForCwd", () => {
 			settings.setProjectModelRole("smol", "anthropic/project-smol");
 			await settings.flush();
 
-			expect(YAML.parse(await Bun.file(path.join(scopedProject, ".omp", "config.yml")).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(path.join(scopedProject, ".omp", "config.toml")).text())).toEqual({
 				modelRoles: { smol: "anthropic/project-smol" },
 			});
 			expect(settings.getProjectModelRole("default")).toBe("anthropic/external");
@@ -311,8 +311,8 @@ describe("Settings.reloadForCwd", () => {
 				}),
 			);
 			await Bun.write(
-				path.join(scopedProject, ".omp", "config.yml"),
-				"compaction:\n  enabled: false\nmodelRoles:\n  default: anthropic/native\n",
+				path.join(scopedProject, ".omp", "config.toml"),
+				'"compaction" = { "enabled" = false }\n"modelRoles" = { "default" = "anthropic/native" }\n',
 			);
 
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
@@ -330,7 +330,7 @@ describe("Settings.reloadForCwd", () => {
 
 			await Promise.all([first.flush(), second.flush()]);
 
-			expect(YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(path.join(startDir, ".omp", "config.toml")).text())).toEqual({
 				modelRoles: {
 					default: "anthropic/default",
 					smol: "anthropic/smol",
@@ -352,7 +352,7 @@ describe("Settings.reloadForCwd", () => {
 			await second.flush();
 			expect(second.getProjectModelRole("smol")).toBe("anthropic/first");
 			expect(second.getProjectRoleEffortSelection("smol")).toEqual({ mode: "fixed", level: ThinkingLevel.Low });
-			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			const persisted = parseSettingsToml(await Bun.file(path.join(startDir, ".omp", "config.toml")).text());
 			expect(persisted).toMatchObject({
 				modelRoles: { smol: "anthropic/first" },
 				roleEffortSelections: { smol: { mode: "fixed", level: "low" } },
@@ -367,7 +367,7 @@ describe("Settings.reloadForCwd", () => {
 			second.writeProjectValue(cfgEffortRules, [{ selector: "anthropic/*", allowed: ["off", ThinkingLevel.Low] }]);
 			await first.flush();
 			await second.flush();
-			const persisted = YAML.parse(await Bun.file(path.join(startDir, ".omp", "config.yml")).text());
+			const persisted = parseSettingsToml(await Bun.file(path.join(startDir, ".omp", "config.toml")).text());
 			expect(persisted).toMatchObject({
 				compaction: { enabled: false },
 				effort: { rules: [{ selector: "anthropic/*", allowed: ["off", "low"] }] },
@@ -454,10 +454,10 @@ describe("Settings.reloadForCwd", () => {
 		});
 
 		it("notifies raw scope edits hidden by a project without looping on equal reloads", async () => {
-			const globalPath = path.join(agentDir, "config.yml");
-			const projectPath = path.join(scopedProject, ".omp", "config.yml");
-			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-first\n");
-			await Bun.write(projectPath, "modelRoles:\n  smol: anthropic/project\n");
+			const globalPath = path.join(agentDir, "config.toml");
+			const projectPath = path.join(scopedProject, ".omp", "config.toml");
+			await Bun.write(globalPath, '"modelRoles" = { "smol" = "anthropic/global-first" }\n');
+			await Bun.write(projectPath, '"modelRoles" = { "smol" = "anthropic/project" }\n');
 			const settings = await Settings.loadIsolated({ cwd: scopedProject, agentDir });
 			let scopesChanged = 0;
 			let effectiveChanged = 0;
@@ -467,7 +467,7 @@ describe("Settings.reloadForCwd", () => {
 			const stopEffective = settings.onEffectiveChange([cfgModelRoles], () => {
 				effectiveChanged++;
 			});
-			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-second\n");
+			await Bun.write(globalPath, '"modelRoles" = { "smol" = "anthropic/global-second" }\n');
 			await settings.reloadFromDisk();
 			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/global-second");
 			expect(settings.getModelRole("smol")).toBe("anthropic/project");
@@ -477,21 +477,24 @@ describe("Settings.reloadForCwd", () => {
 			expect(scopesChanged).toBe(1);
 			cfgCompactionEnabled.override(settings, false);
 			expect(scopesChanged).toBe(1);
-			await Bun.write(projectPath, "modelRoles: {}\n");
+			await Bun.write(projectPath, '"modelRoles" = {  }\n');
 			await settings.reloadFromDisk();
 			expect(settings.getModelRole("smol")).toBe("anthropic/global-second");
 			expect(scopesChanged).toBe(2);
 			expect(effectiveChanged).toBe(1);
 			stopScopes();
 			stopEffective();
-			await Bun.write(globalPath, "modelRoles:\n  smol: anthropic/global-third\n");
+			await Bun.write(globalPath, '"modelRoles" = { "smol" = "anthropic/global-third" }\n');
 			await settings.reloadFromDisk();
 			expect(scopesChanged).toBe(2);
 		});
 
 		it("reports project roles over global role fallbacks", async () => {
-			await Bun.write(path.join(agentDir, "config.yml"), "modelRoles:\n  default: anthropic/global\n");
-			await Bun.write(path.join(scopedProject, ".omp", "config.yml"), "modelRoles:\n  default: anthropic/project\n");
+			await Bun.write(path.join(agentDir, "config.toml"), '"modelRoles" = { "default" = "anthropic/global" }\n');
+			await Bun.write(
+				path.join(scopedProject, ".omp", "config.toml"),
+				'"modelRoles" = { "default" = "anthropic/project" }\n',
+			);
 
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
 
@@ -502,8 +505,11 @@ describe("Settings.reloadForCwd", () => {
 		});
 
 		it("falls back to the global role after reloading a project without config", async () => {
-			await Bun.write(path.join(agentDir, "config.yml"), "modelRoles:\n  default: anthropic/global\n");
-			await Bun.write(path.join(scopedProject, ".omp", "config.yml"), "modelRoles:\n  default: anthropic/project\n");
+			await Bun.write(path.join(agentDir, "config.toml"), '"modelRoles" = { "default" = "anthropic/global" }\n');
+			await Bun.write(
+				path.join(scopedProject, ".omp", "config.toml"),
+				'"modelRoles" = { "default" = "anthropic/project" }\n',
+			);
 			const settings = await Settings.init({ cwd: scopedProject, agentDir });
 			expect(settings.getModelRole("default")).toBe("anthropic/project");
 
@@ -514,7 +520,7 @@ describe("Settings.reloadForCwd", () => {
 			expect(settings.getModelRoleSource("default")).toBe("global");
 		});
 		it("keeps JSON-backed project roles cleared across later assignments and reload", async () => {
-			await Bun.write(path.join(agentDir, "config.yml"), "modelRoles:\n  default: anthropic/global\n");
+			await Bun.write(path.join(agentDir, "config.toml"), '"modelRoles" = { "default" = "anthropic/global" }\n');
 			await Bun.write(
 				path.join(scopedProject, ".omp", "settings.json"),
 				JSON.stringify({ modelRoles: { default: "anthropic/project" } }),
@@ -527,7 +533,7 @@ describe("Settings.reloadForCwd", () => {
 			await settings.flush();
 
 			expect(settings.getModelRole("default")).toBe("anthropic/global");
-			expect(YAML.parse(await Bun.file(path.join(scopedProject, ".omp", "config.yml")).text())).toEqual({
+			expect(parseSettingsToml(await Bun.file(path.join(scopedProject, ".omp", "config.toml")).text())).toEqual({
 				modelRoles: { default: null, smol: "anthropic/project-smol" },
 			});
 			const reloaded = await Settings.loadIsolated({ cwd: scopedProject, agentDir });

@@ -12,7 +12,7 @@
  * streaming / 30 min idle). An entry whose lifetime outlasts the idle window
  * (Anthropic's 1h tier) is therefore only warmed while a run is active.
  *
- * A model is warmed only when its catalog entry (or a models.yml `promptCache`
+ * A model is warmed only when its catalog entry (or a models.toml `promptCache`
  * override) declares a lifetime for the retention tier the request used, so
  * providers whose replay behavior is unvalidated are never touched.
  */

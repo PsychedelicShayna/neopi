@@ -8,7 +8,7 @@ import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 describe("startup model cache header restoration (#5780)", () => {
 	let tempDir: string;
@@ -42,7 +42,7 @@ describe("startup model cache header restoration (#5780)", () => {
 
 		// Next process start: the registry's startup cache loader must restore the
 		// bundled static headers instead of serving header-less cached models.
-		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.json"), {
+		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), {
 			fetch: () => Promise.reject(new Error("offline")),
 		});
 		for (const model of withHeaders) {
@@ -53,12 +53,12 @@ describe("startup model cache header restoration (#5780)", () => {
 	});
 
 	test("uses an explicit cache path independently of the models config directory", async () => {
-		const modelsPath = path.join(tempDir, "config", "models.json");
+		const modelsPath = path.join(tempDir, "config", "models.toml");
 		const cacheDbPath = path.join(tempDir, "data", "models.db");
 		await fs.promises.mkdir(path.dirname(cacheDbPath), { recursive: true });
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					probe: {
 						baseUrl: "https://example.invalid/v1/",
@@ -88,10 +88,10 @@ describe("startup model cache header restoration (#5780)", () => {
 	});
 
 	test("cached configured-discovery models regain derived auth headers on registry startup", async () => {
-		const modelsPath = path.join(tempDir, "models.json");
+		const modelsPath = path.join(tempDir, "models.toml");
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					probe: {
 						baseUrl: "https://example.invalid/v1/",
@@ -146,10 +146,10 @@ describe("startup model cache header restoration (#5780)", () => {
 	});
 
 	test("cached apiKey discovery models without authHeader load on registry startup", async () => {
-		const modelsPath = path.join(tempDir, "models.json");
+		const modelsPath = path.join(tempDir, "models.toml");
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					probe: {
 						baseUrl: "https://example.invalid/v1/",

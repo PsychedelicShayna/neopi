@@ -11,7 +11,7 @@ import type { Task, TaskState } from "@npi-deck/protocol";
 import { broadcastBus } from "../broadcast-bus.ts";
 import { afterCommit, getDb, id, nowIso } from "./index.ts";
 import { latestCardRun } from "./card-runs.ts";
-import { withCardProperties } from "../card-properties.ts";
+import { canonicalCardBody } from "./card-metadata.ts";
 import { latestTaskEvidence, recordTaskEvent } from "./task-evidence.ts";
 
 /**
@@ -328,7 +328,7 @@ export function createTask(input: {
 		db.query<unknown, [string, number, string, string, string, number, string | null, string, string, string]>(
 			`INSERT INTO tasks (id, display_id, title, body, state_id, order_in_state, cwd, created_at, updated_at, state_entered_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(taskId, displayId, input.title, withCardProperties(input.body ?? "", input.properties), state.id, maxOrder + 1000, normalizeCwd(input.cwd), now, now, now);
+		).run(taskId, displayId, input.title, canonicalCardBody(db, taskId, input.body ?? "", input.properties), state.id, maxOrder + 1000, normalizeCwd(input.cwd), now, now, now);
 		recordTaskEvent(taskId, "Entered " + state.name);
 	})();
 	const out = getTask(taskId);
@@ -372,7 +372,7 @@ export function updateTask(
 			 WHERE id = ?`,
 		).run(
 			next.title,
-			withCardProperties(next.body, patch.properties),
+			canonicalCardBody(db, taskId, next.body, patch.properties),
 			next.stateId,
 			next.orderInState,
 			normalizeCwd(next.cwd),

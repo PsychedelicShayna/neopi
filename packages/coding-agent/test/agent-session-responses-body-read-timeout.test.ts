@@ -204,7 +204,7 @@ async function createSessionHarness(options: SessionHarnessOptions = {}): Promis
 		agent,
 		sessionManager,
 		settings,
-		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml"), { settings }),
+		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml"), { settings }),
 	});
 	return {
 		requests,

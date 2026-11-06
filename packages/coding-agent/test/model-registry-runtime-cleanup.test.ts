@@ -7,7 +7,7 @@ import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveModelCacheProviderId, resolveOllamaModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 describe("ModelRegistry runtime source cleanup", () => {
 	let authStorage: AuthStorage;
@@ -116,7 +116,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 			"",
 			tempDir.join("models.db"),
 		);
-		const registry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const registry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		await registry.hydrateCredentialScopedModelCaches();
 		expect(registry.getAvailable().some(model => model.provider === provider && model.id === cachedModel.id)).toBe(
 			true,
@@ -166,7 +166,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 			"",
 			tempDir.join("models.db"),
 		);
-		const registry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const registry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		await registry.hydrateCredentialScopedModelCaches();
 		expect(registry.getAvailable().some(model => model.provider === provider && model.id === cachedModel.id)).toBe(
 			true,
@@ -184,7 +184,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 
 	test("extension rebinding discards discoveries removed from the model config", async () => {
 		using tempDir = TempDir.createSync("@omp-model-registry-config-rebind-");
-		const modelsPath = tempDir.join("models.json");
+		const modelsPath = tempDir.join("models.toml");
 		const cacheDbPath = tempDir.join("models.db");
 		const provider = "configured-ollama";
 		const baseUrl = "http://127.0.0.1:11435";
@@ -202,7 +202,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 		});
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					[provider]: {
 						baseUrl,
@@ -237,7 +237,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 			sourceId,
 		);
 
-		await Bun.write(modelsPath, JSON.stringify({ providers: {} }));
+		await Bun.write(modelsPath, stringifySettingsToml({ providers: {} }));
 		registry.clearSourceRegistrations(sourceId);
 
 		expect(registry.find(provider, discoveredModel.id)).toBeUndefined();
@@ -245,7 +245,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 
 	test("extension rebinding discards discoveries whose model overrides changed", async () => {
 		using tempDir = TempDir.createSync("@omp-model-registry-override-rebind-");
-		const modelsPath = tempDir.join("models.json");
+		const modelsPath = tempDir.join("models.toml");
 		const cacheDbPath = tempDir.join("models.db");
 		const provider = "configured-ollama";
 		const baseUrl = "http://127.0.0.1:11436";
@@ -265,7 +265,7 @@ describe("ModelRegistry runtime source cleanup", () => {
 		const writeConfig = (modelOverrides: Record<string, unknown> | undefined) =>
 			Bun.write(
 				modelsPath,
-				JSON.stringify({
+				stringifySettingsToml({
 					providers: {
 						[provider]: {
 							baseUrl,

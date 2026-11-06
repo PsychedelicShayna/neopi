@@ -4,6 +4,7 @@ import { runConfigCommand } from "@oh-my-pi/pi-coding-agent/cli/config-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getConfigRootDir, getProjectDir, setAgentDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 let testAgentDir: TempDir | undefined;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -62,7 +63,7 @@ describe("config CLI schema coverage", () => {
 		expect(result.output).toContain("# compaction.enabled (boolean)");
 		expect(await Bun.file(path.join(agentDir, "agent.db")).exists()).toBe(false);
 	});
-	it("converts through the real CLI without acknowledgment and still requires force to replace TOML", async () => {
+	it("imports through the real CLI and always preserves existing canonical TOML", async () => {
 		const agentDir = testAgentDir!.path();
 		const source = path.join(agentDir, "config.yml");
 		const target = path.join(agentDir, "config.toml");
@@ -75,11 +76,8 @@ describe("config CLI schema coverage", () => {
 		const original = await Bun.file(target).text();
 		await Bun.write(source, "unknown: updated\n");
 		const refused = await runCliProcess(["config", "to-toml", source], env);
-		expect(refused.exitCode).toBe(1);
+		expect(refused.exitCode).toBe(0);
 		expect(await Bun.file(target).text()).toBe(original);
-		const overwritten = await runCliProcess(["config", "to-toml", source, "--force"], env);
-		expect(overwritten.exitCode).toBe(0);
-		expect(Bun.TOML.parse(await Bun.file(target).text())).toEqual({ unknown: "updated" });
 	});
 	it.each([{ args: ["config", "--help"] }, { args: ["config", "to-toml", "--help"] }])(
 		"omits the obsolete save limitation from real CLI help %j",
@@ -88,6 +86,7 @@ describe("config CLI schema coverage", () => {
 			expect(result.exitCode).toBe(0);
 			expect(result.output).not.toContain("still write YAML");
 			expect(result.output).not.toContain("--yes");
+			expect(result.output).not.toContain("--force");
 			expect(await Bun.file(path.join(testAgentDir!.path(), "config.toml")).exists()).toBe(false);
 		},
 	);
@@ -269,10 +268,10 @@ describe("config CLI schema coverage", () => {
 		const parsed: unknown = JSON.parse(output);
 		expect(parsed).toMatchObject({ modelRoles: { type: "record" } });
 	});
-	it("reports the value written to config.yml and the layer that still overrides it", async () => {
+	it("reports the value written to config.toml and the layer that still overrides it", async () => {
 		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
-		const overlayPath = path.join(testAgentDir.path(), "overlay.yml");
-		await Bun.write(overlayPath, "compaction:\n  enabled: false\n");
+		const overlayPath = path.join(testAgentDir.path(), "overlay.toml");
+		await Bun.write(overlayPath, "[compaction]\nenabled = false\n");
 		const previousConfigFiles = process.env.PI_CONFIG_FILES;
 		process.env.PI_CONFIG_FILES = overlayPath;
 		try {
@@ -290,11 +289,11 @@ describe("config CLI schema coverage", () => {
 	});
 	it("loads PI_CONFIG_FILES overlays in path-list order", async () => {
 		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
-		const baseOverlayPath = path.join(testAgentDir.path(), "base-overlay.yml");
-		const finalOverlayPath = path.join(testAgentDir.path(), "final-overlay.yml");
+		const baseOverlayPath = path.join(testAgentDir.path(), "base-overlay.toml");
+		const finalOverlayPath = path.join(testAgentDir.path(), "final-overlay.toml");
 		await Promise.all([
-			Bun.write(baseOverlayPath, "defaultThinkingLevel: high\n"),
-			Bun.write(finalOverlayPath, "defaultThinkingLevel: max\n"),
+			Bun.write(baseOverlayPath, 'defaultThinkingLevel = "high"\n'),
+			Bun.write(finalOverlayPath, 'defaultThinkingLevel = "max"\n'),
 		]);
 		const { exitCode, output, error } = await runCliProcess(["config", "get", "defaultThinkingLevel", "--json"], {
 			PI_CODING_AGENT_DIR: testAgentDir.path(),
@@ -349,20 +348,14 @@ describe("config list --scope", () => {
 	it("lists only the keys the global file sets, path-scoped entries as written", async () => {
 		if (!testAgentDir || !projectDir) throw new Error("Test directories were not initialized");
 		await Bun.write(
-			path.join(testAgentDir.path(), "config.yml"),
-			[
-				"enabledModels:",
-				"  - anthropic/claude-sonnet-4-5",
-				`  - path: ${projectDir.path()}`,
-				"    models: [openai/gpt-5]",
-				"compaction:",
-				"  enabled: false",
-				"hindsight:",
-				"  apiToken: secret-token",
-				"",
-			].join("\n"),
+			path.join(testAgentDir.path(), "config.toml"),
+			stringifySettingsToml({
+				enabledModels: ["anthropic/claude-sonnet-4-5", { path: projectDir.path(), models: ["openai/gpt-5"] }],
+				compaction: { enabled: false },
+				hindsight: { apiToken: "secret-token" },
+			}),
 		);
-		await Bun.write(path.join(projectDir.path(), ".omp", "config.yml"), "defaultThinkingLevel: high\n");
+		await Bun.write(path.join(projectDir.path(), ".omp", "config.toml"), 'defaultThinkingLevel = "high"\n');
 
 		const layer = await listLayer("global");
 
@@ -382,10 +375,10 @@ describe("config list --scope", () => {
 
 	it("lists the project layer of the current directory", async () => {
 		if (!testAgentDir || !projectDir) throw new Error("Test directories were not initialized");
-		await Bun.write(path.join(testAgentDir.path(), "config.yml"), "compaction:\n  enabled: false\n");
+		await Bun.write(path.join(testAgentDir.path(), "config.toml"), "[compaction]\nenabled = false\n");
 		await Bun.write(
-			path.join(projectDir.path(), ".omp", "config.yml"),
-			"defaultThinkingLevel: high\nenabledModels: [openai/gpt-5]\n",
+			path.join(projectDir.path(), ".omp", "config.toml"),
+			'defaultThinkingLevel = "high"\nenabledModels = ["openai/gpt-5"]\n',
 		);
 
 		const layer = await listLayer("project");
@@ -399,8 +392,8 @@ describe("config list --scope", () => {
 	it("prints the layer's keys in text output and masks credentials", async () => {
 		if (!testAgentDir) throw new Error("Test directory was not initialized");
 		await Bun.write(
-			path.join(testAgentDir.path(), "config.yml"),
-			"compaction:\n  enabled: false\nhindsight:\n  apiToken: secret-token\n",
+			path.join(testAgentDir.path(), "config.toml"),
+			'[compaction]\nenabled = false\n[hindsight]\napiToken = "secret-token"\n',
 		);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

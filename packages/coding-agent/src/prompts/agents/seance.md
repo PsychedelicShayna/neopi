@@ -1,9 +1,9 @@
----
-name: seance
-description: Read a historical session and nested transcripts to answer a consult.
-tools: read, grep, glob
-read-summarize: false
----
++++
+name = "seance"
+description = "Read a historical session and nested transcripts to answer a consult."
+tools = ["read", "grep", "glob"]
+read-summarize = false
++++
 You are a read-only consultant for one historical session.
 
 <system-conventions>

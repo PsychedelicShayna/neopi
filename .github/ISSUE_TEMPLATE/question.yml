@@ -21,7 +21,7 @@ body:
       label: Topic
       options:
         - Provider setup / Login
-        - Custom models (models.yml)
+        - Custom models (models.toml)
         - Extensions
         - MCP servers
         - Skills / Commands

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -24,7 +25,7 @@ describe("issue #1528 discovery maxTokens default", () => {
 	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-issue-1528-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsPath = path.join(tempDir, "models.yml");
+		modelsPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 	});
 
@@ -38,16 +39,19 @@ describe("issue #1528 discovery maxTokens default", () => {
 	test("openai-models-list discovery returns maxTokens=32768 when API advertises no output limit", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  deepseek-compat:",
-				"    baseUrl: https://api.example.com/v1",
-				"    apiKey: sk-test",
-				"    api: openai-completions",
-				"    auth: apiKey",
-				"    discovery:",
-				"      type: openai-models-list",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"deepseek-compat": {
+						baseUrl: "https://api.example.com/v1",
+						apiKey: "sk-test",
+						api: "openai-completions",
+						auth: "apiKey",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: FetchImpl = async input => {
@@ -71,16 +75,19 @@ describe("issue #1528 discovery maxTokens default", () => {
 	test("proxy (anthropic+openai) discovery returns maxTokens=32768 for openai-routed models without bundled limits", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  newapi-proxy:",
-				"    baseUrl: https://proxy.example.com/v1",
-				"    apiKey: sk-test",
-				"    api: openai-completions",
-				"    auth: apiKey",
-				"    discovery:",
-				"      type: proxy",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"newapi-proxy": {
+						baseUrl: "https://proxy.example.com/v1",
+						apiKey: "sk-test",
+						api: "openai-completions",
+						auth: "apiKey",
+						discovery: {
+							type: "proxy",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: FetchImpl = async input => {
@@ -111,16 +118,19 @@ describe("issue #1528 discovery maxTokens default", () => {
 		// the anthropic route.
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  newapi-proxy:",
-				"    baseUrl: https://proxy.example.com/v1",
-				"    apiKey: sk-test",
-				"    api: openai-completions",
-				"    auth: apiKey",
-				"    discovery:",
-				"      type: proxy",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"newapi-proxy": {
+						baseUrl: "https://proxy.example.com/v1",
+						apiKey: "sk-test",
+						api: "openai-completions",
+						auth: "apiKey",
+						discovery: {
+							type: "proxy",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: FetchImpl = async input => {
@@ -161,16 +171,19 @@ describe("issue #1528 discovery maxTokens default", () => {
 		// output tokens, above the Claude 3.x hard cap.
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  third-party-anthropic:",
-				"    baseUrl: https://anthropic-reseller.example.com/v1",
-				"    apiKey: sk-test",
-				"    api: anthropic-messages",
-				"    auth: apiKey",
-				"    discovery:",
-				"      type: openai-models-list",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"third-party-anthropic": {
+						baseUrl: "https://anthropic-reseller.example.com/v1",
+						apiKey: "sk-test",
+						api: "anthropic-messages",
+						auth: "apiKey",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 
 		const fetchMock: FetchImpl = async input => {

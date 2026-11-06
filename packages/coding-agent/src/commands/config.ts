@@ -31,10 +31,9 @@ export default class Config extends Command {
 
 	static flags = {
 		json: Flags.boolean({ description: "Output JSON" }),
-		force: Flags.boolean({ description: "Allow to-toml to replace existing config.toml files" }),
 		scope: Flags.string({
 			description:
-				'With list: only the keys the "global" (config.yml in the agent dir) or "project" (<cwd>/.omp) layer sets, as written',
+				'With list: only the keys the "global" (config.toml in the agent dir) or "project" (<cwd>/.omp) layer sets, as written',
 			options: ["global", "project"],
 		}),
 	};
@@ -54,7 +53,6 @@ export default class Config extends Command {
 			value,
 			flags: {
 				json: flags.json,
-				force: flags.force,
 				scope: flags.scope as ConfigScope | undefined,
 			},
 		};

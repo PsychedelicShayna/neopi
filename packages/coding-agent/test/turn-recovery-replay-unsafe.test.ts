@@ -131,7 +131,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		// pin a runtime key so the test does not depend on host env credentials.
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistrySettings = Settings.isolated();
-		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"), { settings: modelRegistrySettings });
+		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"), { settings: modelRegistrySettings });
 	});
 
 	afterAll(() => {

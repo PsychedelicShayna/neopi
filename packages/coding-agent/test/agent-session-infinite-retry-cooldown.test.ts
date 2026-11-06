@@ -32,7 +32,7 @@ describe("AgentSession infinite retry via cooldown-expiry revert", () => {
 		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
 		authStorage.keys.setRuntime("openai", "openai-test-key");
 		authStorage.keys.setRuntime("google", "google-test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readLines, TempDir } from "@oh-my-pi/pi-utils";
@@ -45,8 +46,10 @@ describe("set_event_filter over RPC", () => {
 		});
 		const home = dir.path();
 		await Bun.write(
-			join(home, ".omp/agent/models.yml"),
-			`providers:\n  anthropic:\n    baseUrl: http://127.0.0.1:${server.port}\n    apiKey: test-dummy-key\n`,
+			join(home, ".omp/agent/models.toml"),
+			stringifySettingsToml({
+				providers: { anthropic: { baseUrl: `http://127.0.0.1:${server.port}`, apiKey: "test-dummy-key" } },
+			}),
 		);
 		const child = Bun.spawn(
 			[

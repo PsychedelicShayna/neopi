@@ -17,6 +17,7 @@
 		"@fontsource/ibm-plex-mono": "^5.2.7",
 		"@fontsource/ibm-plex-sans": "^5.2.8",
 		"@npi-deck/protocol": "workspace:*",
+		"@oh-my-pi/pi-utils": "workspace:*",
 		"@xyflow/react": "^12.10.2",
 		"clsx": "^2.1.1",
 		"highlight.js": "^11.10.0",
@@ -28,6 +29,7 @@
 		"react-router-dom": "^7.15.1",
 		"rehype-highlight": "^7.0.1",
 		"remark-gfm": "^4.0.0",
+		"smol-toml": "^1.4.2",
 		"tailwind-merge": "^2.5.4",
 		"yaml": "^2.9.0",
 		"zustand": "^5.0.1"

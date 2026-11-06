@@ -184,11 +184,11 @@ describe("task schema seance fields", () => {
 		expect(JSON.stringify(absentFromCatalogue.parameters.toJsonSchema())).not.toContain('"sourceSession"');
 
 		const customSeance = parseAgent(
-			"project-seance.md",
-			`---
-name: seance
-description: Custom historical agent.
----
+			"project-seance.toml.md",
+			`+++
+name = "seance"
+description = "Custom historical agent."
++++
 Custom prompt.`,
 			"project",
 		);

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -56,7 +57,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		fixtureDir = path.join(os.tmpdir(), `pi-sdk-model-selection-fixture-${Snowflake.next()}`);
 		fs.mkdirSync(fixtureDir, { recursive: true });
 		fixtureAuthStorage = createInMemoryAuthStorage();
-		fixtureModelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(fixtureDir, "models.yml"));
+		fixtureModelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(fixtureDir, "models.toml"));
 	});
 
 	beforeEach(() => {
@@ -247,7 +248,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		if (authenticatedProvider) authStorage.keys.setRuntime(authenticatedProvider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		const settings = Settings.isolated();
 		if (defaultRole) settings.setModelRole("default", defaultRole);
 		if (smolRole) settings.setModelRole("smol", smolRole);
@@ -382,7 +383,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("resolves explicit dynamic-only modelPattern from fresh runtime cache", async () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelsPath = path.join(tempDir, "models.yml");
+		const modelsPath = path.join(tempDir, "models.toml");
 		const primerRegistry = new ModelRegistry(authStorage, modelsPath);
 		primerRegistry.registerProvider("runtime-provider", dynamicOnlyProviderConfig, "ext://runtime");
 		await primerRegistry.refreshRuntimeProviders("online");
@@ -422,7 +423,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("missing bundled startup model");
 		let fetches = 0;
@@ -485,7 +486,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		modelRegistry.refreshInBackground("offline");
 		await modelRegistry.awaitInitialBackgroundRefresh();
 
@@ -545,7 +546,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			{ id: "github-copilot", apiKey: "copilot-test-key", baseUrl: "https://api.githubcopilot.com" },
 		];
 		authStorage.keys.setRuntime("openai", "openai-test-key");
-		const modelsPath = path.join(tempDir, "models.yml");
+		const modelsPath = path.join(tempDir, "models.toml");
 		const fallbackSelectors: string[] = [];
 		for (const provider of providers) {
 			authStorage.keys.setRuntime(provider.id, provider.apiKey);
@@ -632,7 +633,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			"",
 			cacheDbPath,
 		);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		await modelRegistry.hydrateCredentialScopedModelCaches();
 		expect(modelRegistry.find(provider, firstModel.id)).toBeDefined();
@@ -711,10 +712,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelsPath = path.join(tempDir, "disabled-first-models.yml");
+		const modelsPath = path.join(tempDir, "disabled-first-models.toml");
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					gateway: {
 						baseUrl: "http://127.0.0.1:9995",
@@ -775,7 +776,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime(parentModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-models.toml"));
 		const getApiKeySpy = vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async requested => {
 			if (requested.provider === "runtime-provider") return undefined;
 			if (requested.provider === parentModel.provider) return "test-key";
@@ -854,7 +855,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		settings.setModelRole("task", "runtime-provider/runtime-fallback-model");
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "cli-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "cli-models.toml"));
 		const parsed = parseArgs(["--model", "task:high"]);
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
@@ -912,7 +913,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		settings.setModelRole("task", `runtime-provider/runtime-model,${fallbackModel.provider}/${fallbackModel.id}`);
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "role-chain-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "role-chain-models.toml"));
 		const parsed = parseArgs(["--model", "task"]);
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
@@ -969,7 +970,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("openai", "test-key");
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "ambiguous-role-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "ambiguous-role-models.toml"));
 		const parsed = parseArgs(["--model", "task"]);
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
@@ -1026,7 +1027,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("runtime-provider", "test-key");
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "missing-role-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "missing-role-models.toml"));
 		const parsed = parseArgs(["--model", "slow:low"]);
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
@@ -1089,7 +1090,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("runtime-provider", "test-key");
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-effort-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "fallback-effort-models.toml"));
 		const parsed = parseArgs(["--model", "slow:medium"]);
 		const cliOptions = await buildCliSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
 		expect(cliOptions.thinkingOrigin).toBe("caller");
@@ -1131,7 +1132,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("runtime-provider", "test-key");
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "restart-effort-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "restart-effort-models.toml"));
 		const sessionsDir = path.join(tempDir, "restart-effort-sessions");
 		const manager = SessionManager.create(tempDir, sessionsDir);
 		const sessionOptions = {
@@ -1200,7 +1201,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("runtime-provider", "test-key");
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "default-fallback-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "default-fallback-models.toml"));
 
 		const { session, modelFallbackMessage } = await createAgentSession({
 			cwd: tempDir,
@@ -1242,7 +1243,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		settings.setModelRole("default", "missing-provider/missing-model");
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "alias-fallback-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "alias-fallback-models.toml"));
 		const originalXaiApiKey = Bun.env.XAI_API_KEY;
 		const originalXaiOauthToken = Bun.env.XAI_OAUTH_TOKEN;
 		// XAI_API_KEY authenticates `xai-oauth` requests through an alias, but
@@ -1624,7 +1625,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 			const authStorage = createInMemoryAuthStorage();
 			authStorage.keys.setRuntime(defaultModel.provider, "test-key");
-			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 			const settings = Settings.isolated();
 			settings.setModelRole("default", `${defaultModel.provider}/${defaultModel.id}`);
 
@@ -1692,7 +1693,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		async (configured, reason) => {
 			const authStorage = createInMemoryAuthStorage();
 			authStorage.keys.setRuntime("anthropic", "test-key");
-			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 			const settings = Settings.isolated();
 			settings.setModelRole("default", configured);
 
@@ -1733,7 +1734,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("refreshes cached llama.cpp vision metadata for the startup default model", async () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
-		const modelsPath = path.join(tempDir, "llama-vision-models.yml");
+		const modelsPath = path.join(tempDir, "llama-vision-models.toml");
 		const cacheDbPath = path.join(tempDir, "models.db");
 		const cachedModel = buildModel({
 			id: "vision-model",
@@ -1819,7 +1820,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime(savedModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		const targetSessionFile = path.join(tempDir, "resume-saved-model.jsonl");
 		const timestamp = "2026-06-01T00:00:00.000Z";
@@ -1889,7 +1890,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		return {
 			...buildSessionOptions(""),
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 			sessionManager,
 			settings: Settings.isolated({ modelRoles: { default: "anthropic/claude-sonnet-4-5" } }),
 			extensions: [],
@@ -2155,10 +2156,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		// fall back to (mirrors a real config with Claude as the default role).
 		authStorage.keys.setRuntime(defaultModel.provider, "test-key");
 
-		const modelsPath = path.join(tempDir, "models.yml");
+		const modelsPath = path.join(tempDir, "models.toml");
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					gateway: {
 						baseUrl: "http://127.0.0.1:9994",
@@ -2260,7 +2261,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		// No `default` model role configured: forces the step-4 startup fallback.
 		const settings = Settings.isolated({ enabledModels: ["anthropic/*"] });
 
@@ -2306,7 +2307,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime("devin", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		const { session } = await createAgentSession({
 			cwd: tempDir,
@@ -2379,7 +2380,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			extendedContext: false,
 			"compaction.modelThresholds": { "openai/gpt-5.6-terra": 400_000 },
 		});
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { settings: root });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), { settings: root });
 		const child = executorModule.createSubagentSettings(
 			root,
 			executorModule.compactionThresholdSettings({ thresholdPercent: 80, thresholdTokens: -1 }),
@@ -2465,14 +2466,18 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 	test("loads model overrides from the supplied agent directory", async () => {
 		await Bun.write(
-			path.join(tempDir, "models.yml"),
-			[
-				"providers:",
-				"  openai-codex:",
-				"    modelOverrides:",
-				"      gpt-5.6-sol:",
-				"        contextWindow: 123456",
-			].join("\n"),
+			path.join(tempDir, "models.toml"),
+			stringifySettingsToml({
+				providers: {
+					"openai-codex": {
+						modelOverrides: {
+							"gpt-5.6-sol": {
+								contextWindow: 123456,
+							},
+						},
+					},
+				},
+			}),
 		);
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
@@ -2515,7 +2520,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime(defaultModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		const targetSessionFile = path.join(tempDir, "resume-extension.jsonl");
 		const timestamp = "2026-06-01T00:00:00.000Z";
@@ -2584,7 +2589,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime(settingsDefaultModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		// Saved default points at a provider that has no usable credentials. The
 		// last active role (`smol`) is supplied by the inline extension and is
@@ -2660,7 +2665,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		// The extension provider carries an inline apiKey; the "normally
 		// configured" provider needs credentials so it lands in the startup scope.
 		authStorage.keys.setRuntime(configuredModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "scope-6694-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "scope-6694-models.toml"));
 
 		const enabledModels = ["runtime-provider/runtime-model", `${configuredModel.provider}/${configuredModel.id}`];
 		const settings = Settings.isolated({ enabledModels });
@@ -2736,7 +2741,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime(configuredModel.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "scope-extension-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "scope-extension-models.toml"));
 		const settings = Settings.isolated({ enabledModels: ["runtime-provider/*", configuredSelector] });
 		const parsed = parseArgs([]);
 		const scopeIds = (scope: ReadonlyArray<{ model: { provider: string; id: string } }> | undefined) =>
@@ -2807,7 +2812,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime(scopedTarget.provider, "test-key");
 		authStorage.keys.setRuntime(savedDefault.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "cli-scope-models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "cli-scope-models.toml"));
 		const settings = Settings.isolated({});
 		settings.setModelRole("default", `${savedDefault.provider}/${savedDefault.id}`);
 

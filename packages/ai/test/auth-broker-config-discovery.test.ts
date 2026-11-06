@@ -86,6 +86,21 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		});
 	});
 
+	test("an empty canonical TOML document wholly replaces stale YAML", async () => {
+		const legacy =
+			"auth: { broker: { url: https://stale.example/v1, token: stale } }\nretry: { usageReservePct: 42 }\n";
+		await Bun.write(path.join(agentDir, "config.yml"), legacy);
+		await Bun.write(path.join(agentDir, "config.toml"), "# Intentionally empty\n");
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			expect(await resolveAuthBrokerConfig({ agentDir })).toBeNull();
+			expect(await loadAuthAccountPolicyConfig({ agentDir })).toEqual({
+				accountPolicies: [],
+				defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
+			});
+		});
+		expect(await Bun.file(path.join(agentDir, "config.yml")).text()).toBe(legacy);
+	});
+
 	test("invalid TOML fails closed instead of using valid YAML", async () => {
 		await Bun.write(path.join(agentDir, "config.yml"), "auth: { broker: { url: https://stale.example/v1 } }\n");
 		await Bun.write(path.join(agentDir, "config.toml"), "broken = [");
@@ -103,6 +118,18 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 
 		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
 			await expect(resolveAuthBrokerConfig({ agentDir })).resolves.toEqual({
+				url: "https://yaml-broker.example/v1",
+				token: "yaml-token",
+			});
+		});
+		const canonical = await Bun.file(path.join(agentDir, "config.toml")).text();
+		expect(Bun.TOML.parse(canonical)).toEqual({
+			"auth.broker.url": "https://yaml-broker.example/v1",
+			"auth.broker.token": "yaml-token",
+		});
+		await Bun.write(path.join(agentDir, "config.yaml"), "auth.broker.url: https://stale.example/v1\n");
+		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
+			expect(await resolveAuthBrokerConfig({ agentDir })).toEqual({
 				url: "https://yaml-broker.example/v1",
 				token: "yaml-token",
 			});
@@ -148,7 +175,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 			defaultReservePct: 17,
 		});
 
-		await Bun.write(path.join(agentDir, "config.yml"), "auth: {}\n");
+		await Bun.write(path.join(agentDir, "config.toml"), "[auth]\n");
 		await expect(loadAuthAccountPolicyConfig({ agentDir })).resolves.toEqual({
 			accountPolicies: [],
 			defaultReservePct: DEFAULT_USAGE_RESERVE_PCT,
@@ -260,15 +287,11 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 		const invalidConfigs = [
 			{
 				yaml: "auth: [",
-				error: "contains invalid YAML",
+				error: "config.toml",
 			},
 			{
 				yaml: "[]\n",
-				error: "must contain a YAML object",
-			},
-			{
-				yaml: ["auth:", "  accountPolicies: null", ""].join("\n"),
-				error: "auth.accountPolicies must be an array",
+				error: "config.toml",
 			},
 			{
 				yaml: ["auth:", "  accountPolicies:", "    openai-codex: {}", ""].join("\n"),
@@ -340,6 +363,7 @@ describe("resolveAuthBrokerConfig config discovery", () => {
 
 		await withEnv(SUPPRESS_AUTH_BROKER_ENV, async () => {
 			for (const { yaml, error } of invalidConfigs) {
+				await fs.rm(path.join(agentDir, "config.toml"), { force: true });
 				await Bun.write(path.join(agentDir, "config.yml"), yaml);
 				await expect(loadAuthAccountPolicyConfig({ agentDir })).rejects.toThrow(error);
 			}

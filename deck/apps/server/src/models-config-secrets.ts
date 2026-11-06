@@ -1,5 +1,5 @@
 /**
- * Credential masking for models.yml as the Settings editor shows it. Fails
+ * Credential masking for models.toml as the Settings editor shows it. Fails
  * closed: when a credential cannot be removed from the text unambiguously, the
  * text is withheld rather than partially masked.
  *
@@ -12,7 +12,7 @@
  *   components also join the survival checks below (see urlParts), but are
  *   not substituted elsewhere;
  * - every value under a credential-like key anywhere else (`token`, `secret`,
- *   `password`, `*key`, …), following aliases and merge keys;
+ *   `password`, `*key`, …);
  * - every other occurrence of such a value at least MIN_REPLACE long, in any
  *   scalar or key.
  * A known credential still present anywhere (a short one, one hidden by an
@@ -29,7 +29,7 @@
  * be moved into a field the deck shows.
  */
 import { createHmac, randomBytes } from "node:crypto";
-import { isAlias, isMap, isScalar, isSeq, parseDocument, Parser, type Document, type Scalar } from "yaml";
+import { parseSettingsToml, stringifyTomlValue as scalarSource } from "@oh-my-pi/pi-utils/settings-toml";
 
 export const MASK_MARK = "npi-deck-masked";
 export const COMMENT_MARK = "npi-deck-comment";
@@ -40,7 +40,7 @@ const SECRET_KEY_SUFFIXES = ["key", "authorization", "token", "secret", "passwor
 const MIN_REPLACE = 8;
 /** Path segments and host labels are registered for the survival checks only when token-like: this long and holding a digit; see urlParts. */
 const MIN_URL_SEGMENT = 8;
-/** Walk budget: aliases can multiply a document exponentially. */
+/** Bound nested collections and source tokens before traversing untrusted input. */
 const MAX_VISITS = 100_000;
 const ABSENT = "absent";
 
@@ -64,7 +64,7 @@ export function isSecretKey(key: unknown): boolean {
 type PathKey = string | number | undefined;
 
 /**
- * Credential positions in NeoPi's models.yml schema: `providers.P.apiKey`,
+ * Credential positions in NeoPi's models.toml schema: `providers.P.apiKey`,
  * `providers.P.headers.H`, `providers.P.requestMetadata.K`,
  * `providers.P.models[i].headers.H` and `providers.P.modelOverrides.M.headers.H`.
  */
@@ -213,104 +213,196 @@ function applyEdits(source: string, edits: Edit[]): string {
 	return out;
 }
 
-function parse(text: string): Document | undefined {
-	const doc = parseDocument(text, { uniqueKeys: true });
-	return doc.errors.length === 0 ? doc : undefined;
+interface Scalar {
+	value: unknown;
+	range: [number, number];
+	path: PathKey[];
+	key: boolean;
+	secret: boolean;
 }
 
-/** Every scalar in the document, map keys included. */
-function allScalars(doc: Document): Scalar[] {
-	const out: Scalar[] = [];
-	const walk = (node: unknown): void => {
-		if (isScalar(node)) out.push(node);
-		else if (isMap(node)) for (const pair of node.items) { walk(pair.key); walk(pair.value); }
-		else if (isSeq(node)) for (const item of node.items) walk(item);
-	};
-	walk(doc.contents);
-	return out;
-}
-
-interface Reach {
-	/** Scalars reached through a credential position, a sensitive baseUrl or under a credential-like key: masked. */
-	masked: Set<Scalar>;
-	/** Scalars reached through a credential position of the schema. */
-	credential: Set<Scalar>;
-	/** Scalars reached through a baseUrl. */
-	url: Set<Scalar>;
-	/** Scalars reached through any other position. */
-	elsewhere: Set<Scalar>;
+interface TomlDocument {
+	scalars: Scalar[];
+	comments: Array<{ offset: number; source: string }>;
+	data: Record<string, unknown>;
 }
 
 /**
- * Classify every scalar by each position it is reachable from, following
- * aliases and `<<` merge keys to the data paths NeoPi sees. Undefined when the
- * document exceeds the walk budget.
+ * Locate TOML source spans, not a second semantic parser. The shared codec is
+ * authoritative; this scanner only accepts spans it can map unambiguously.
+ * It handles dotted/quoted keys, tables, array tables, arrays, inline tables,
+ * multiline strings and comments without ever converting through YAML.
  */
-function reach(doc: Document): Reach | undefined {
-	const result: Reach = { masked: new Set(), credential: new Set(), url: new Set(), elsewhere: new Set() };
-	const onPath = new Set<unknown>();
-	let visits = 0;
-	const walk = (node: unknown, path: PathKey[], secret: boolean): boolean => {
-		if (++visits > MAX_VISITS) return false;
-		if (isAlias(node)) {
-			const target = node.resolve(doc);
-			if (target === undefined || onPath.has(target)) return true;
-			onPath.add(target);
-			const ok = walk(target, path, secret);
-			onPath.delete(target);
-			return ok;
-		}
-		if (isScalar(node)) {
-			const credential = isCredentialPath(path);
-			const url = !credential && isUrlPath(path);
-			(credential ? result.credential : url ? result.url : result.elsewhere).add(node);
-			if (secret || credential || url) result.masked.add(node);
-			return true;
-		}
-		if (isMap(node)) {
-			for (const pair of node.items) {
-				const key = isScalar(pair.key) ? pair.key.value : undefined;
-				const merge = key === "<<";
-				const childKey: PathKey = typeof key === "string" || typeof key === "number" ? key : undefined;
-				const childPath = merge ? path : [...path, childKey];
-				if (!walk(pair.value, childPath, secret || (!merge && !isNamePosition(childPath) && isSecretKey(key)))) return false;
+function parse(text: string): TomlDocument | undefined {
+	try {
+		const data = parseSettingsToml(text);
+		const doc: TomlDocument = { data, scalars: [], comments: [] };
+		let at = 0;
+		let visits = 0;
+		let depth = 0;
+		let table: PathKey[] = [];
+		const arrayTables = new Map<string, number>();
+		const fail = (): never => { throw new Error("Unlocatable TOML source"); };
+		const budget = () => { if (++visits > MAX_VISITS) fail(); };
+		const comment = () => {
+			const start = at;
+			while (at < text.length && text[at] !== "\n" && text[at] !== "\r") at++;
+			doc.comments.push({ offset: start, source: text.slice(start, at) });
+		};
+		const space = () => {
+			while (at < text.length) {
+				if (/\s/.test(text[at]!)) at++;
+				else if (text[at] === "#") comment();
+				else break;
 			}
-			return true;
+		};
+		const quoted = () => {
+			const quote = text[at]!;
+			const triple = text.slice(at, at + 3) === quote.repeat(3);
+			at += triple ? 3 : 1;
+			while (at < text.length) {
+				if (quote === '"' && text[at] === "\\") { at += 2; continue; }
+				if (text[at] === quote) {
+					if (!triple) { at++; return; }
+					if (text.slice(at, at + 3) === quote.repeat(3)) {
+						at += 3;
+						// TOML allows one or two extra quotes before the terminator.
+						while (text[at] === quote) at++;
+						return;
+					}
+				}
+				at++;
+			}
+			fail();
+		};
+		const keyPath = (parent: PathKey[]): string[] => {
+			const parts: string[] = [];
+			while (true) {
+				budget();
+				while (text[at] === " " || text[at] === "\t") at++;
+				const start = at;
+				if (text[at] === '"' || text[at] === "'") quoted();
+				else while (at < text.length && /[A-Za-z0-9_-]/.test(text[at]!)) at++;
+				if (at === start) fail();
+				const value = Object.keys(Bun.TOML.parse(`${text.slice(start, at)} = 0`))[0]!;
+				parts.push(value);
+				doc.scalars.push({ value, range: [start, at], path: [...parent, ...parts], key: true, secret: false });
+				while (text[at] === " " || text[at] === "\t") at++;
+				if (text[at] !== ".") break;
+				at++;
+			}
+			return parts;
+		};
+		const value = (path: PathKey[], inheritedSecret: boolean): void => {
+			budget();
+			if (++depth > 128) fail();
+			space();
+			const secret = inheritedSecret || isCredentialPath(path) || isUrlPath(path)
+				|| path.some((key, index) => !isNamePosition(path.slice(0, index + 1)) && isSecretKey(key));
+			if (text[at] === "[") {
+				at++;
+				let index = 0;
+				space();
+				while (text[at] !== "]") {
+					value([...path, index++], secret);
+					space();
+					if (text[at] !== ",") break;
+					at++;
+					space();
+				}
+				if (text[at++] !== "]") fail();
+			} else if (text[at] === "{") {
+				at++;
+				space();
+				while (text[at] !== "}") {
+					const child = [...path, ...keyPath(path)];
+					if (text[at++] !== "=") fail();
+					value(child, secret);
+					space();
+					if (text[at] !== ",") break;
+					at++;
+					space();
+				}
+				if (text[at++] !== "}") fail();
+			} else {
+				const start = at;
+				if (text[at] === '"' || text[at] === "'") quoted();
+				else while (at < text.length && !/[\n\r,#\]}]/.test(text[at]!)) at++;
+				let end = at;
+				while (end > start && /\s/.test(text[end - 1]!)) end--;
+				if (end === start) fail();
+				const parsed = Bun.TOML.parse(`value = ${text.slice(start, end)}`) as Record<string, unknown>;
+				doc.scalars.push({ value: parsed.value, range: [start, end], path, key: false, secret });
+			}
+			depth--;
+		};
+		while (at < text.length) {
+			space();
+			if (at === text.length) break;
+			if (text[at] === "[") {
+				at++;
+				const array = text[at] === "[";
+				if (array) at++;
+				const names = keyPath([]);
+				if (text[at++] !== "]" || (array && text[at++] !== "]")) fail();
+				table = [];
+				for (const [index, name] of names.entries()) {
+					table.push(name);
+					const id = JSON.stringify(table);
+					if (array && index === names.length - 1) {
+						const next = (arrayTables.get(id) ?? -1) + 1;
+						arrayTables.set(id, next);
+						table.push(next);
+					} else if (arrayTables.has(id)) table.push(arrayTables.get(id)!);
+				}
+			} else {
+				const keys = keyPath(table);
+				if (text[at++] !== "=") fail();
+				value([...table, ...keys], false);
+			}
+			while (text[at] === " " || text[at] === "\t") at++;
+			if (text[at] === "#") comment();
+			if (at < text.length && text[at] !== "\n" && text[at] !== "\r") fail();
 		}
-		if (isSeq(node)) {
-			for (const [index, item] of node.items.entries()) if (!walk(item, [...path, index], secret)) return false;
-		}
-		return true;
-	};
-	return walk(doc.contents, [], false) ? result : undefined;
+		return doc;
+	} catch {
+		return undefined;
+	}
 }
 
-/** Offsets and text of every comment, from the concrete syntax tree. */
-function comments(text: string): Array<{ offset: number; source: string }> {
-	const out: Array<{ offset: number; source: string }> = [];
-	const walk = (value: unknown): void => {
-		if (Array.isArray(value)) { for (const item of value) walk(item); return; }
-		if (!value || typeof value !== "object") return;
-		const token = value as { type?: unknown; offset?: unknown; source?: unknown };
-		if (token.type === "comment" && typeof token.offset === "number" && typeof token.source === "string") {
-			out.push({ offset: token.offset, source: token.source });
-			return;
-		}
-		for (const [key, child] of Object.entries(value)) if (key !== "source") walk(child);
-	};
-	for (const token of new Parser().parse(text)) walk(token);
-	return out;
+function allScalars(doc: TomlDocument): Scalar[] { return doc.scalars; }
+
+interface Reach {
+	masked: Set<Scalar>;
+	credential: Set<Scalar>;
+	url: Set<Scalar>;
+	elsewhere: Set<Scalar>;
 }
-/** Whether every comment in `text` is a comment placeholder: no comment text survives. */
+
+function reach(doc: TomlDocument): Reach {
+	const result: Reach = { masked: new Set(), credential: new Set(), url: new Set(), elsewhere: new Set() };
+	for (const node of doc.scalars) {
+		if (node.key) continue;
+		const credential = isCredentialPath(node.path);
+		const url = !credential && isUrlPath(node.path);
+		(credential ? result.credential : url ? result.url : result.elsewhere).add(node);
+		if (node.secret) result.masked.add(node);
+	}
+	return result;
+}
+
+function comments(text: string): Array<{ offset: number; source: string }> {
+	const doc = parse(text);
+	if (!doc) throw new Error("Cannot locate TOML comments");
+	return doc.comments;
+}
+
 function onlyCommentPlaceholders(text: string): boolean {
 	return comments(text).every(comment => COMMENT_EXACT.test(comment.source));
 }
 
-/** Replacement text for a scalar's source range; a block scalar's range ends with its line break, which must stay. */
-function scalarEdit(node: Scalar, source: string, text: string): Edit {
-	const [start, end] = node.range!;
-	const trailing = /\s*$/.exec(source.slice(start, end))![0];
-	return { start, end, text: text + trailing };
+function scalarEdit(node: Scalar, _source: string, text: string): Edit {
+	return { start: node.range[0], end: node.range[1], text };
 }
 
 /** Every string a parsed value holds, keys included. */
@@ -328,33 +420,45 @@ export function leaksSecret(value: unknown, known: readonly string[]): boolean {
 }
 
 /** Mask every credential in `text`, or `{ ok: false }` when that cannot be done unambiguously. */
-export function maskModelsYaml(text: string): MaskResult {
+export function maskModelsToml(text: string): MaskResult {
 	const doc = parse(text);
 	const reached = doc && reach(doc);
 	if (!doc || !reached) return { ok: false, known: [] };
 	const secrets = new Map<string, Secret>();
 	const knownSet = new Set<string>();
-	for (const node of reached.masked) {
-		if (node.value === null || node.value === undefined) continue;
-		const value = String(node.value);
-		if (value === "") continue;
-		knownSet.add(value);
-		const id = placeholderFor(value);
-		secrets.set(id, { value: node.value, text: value, fromUrl: (secrets.get(id)?.fromUrl ?? false) || reached.url.has(node) });
-	}
+	const components = new Set<string>();
+	let visits = 0;
+	const collect = (value: unknown, path: PathKey[], inherited: boolean): void => {
+		if (++visits > MAX_VISITS || path.length > 128) throw new Error("TOML walk budget exceeded");
+		const url = isUrlPath(path);
+		const secret = inherited || url || isCredentialPath(path)
+			|| (!isNamePosition(path) && isSecretKey(path.at(-1)));
+		if (Array.isArray(value)) value.forEach((item, index) => collect(item, [...path, index], secret));
+		else if (value && typeof value === "object") {
+			for (const [key, item] of Object.entries(value)) collect(item, [...path, key], secret);
+		} else if (secret && value !== null && value !== undefined && String(value) !== "") {
+			const text = String(value);
+			knownSet.add(text);
+			const id = placeholderFor(text);
+			secrets.set(id, { value, text, fromUrl: (secrets.get(id)?.fromUrl ?? false) || url });
+			if (url && typeof value === "string") for (const part of urlParts(value)) components.add(part);
+		}
+	};
+	try { collect(doc.data, [], false); }
+	catch { return { ok: false, known: [...knownSet, ...components] }; }
 	// Longest first, so a credential containing another is replaced whole.
 	const replaceable = [...knownSet].filter(secret => secret.length >= MIN_REPLACE).sort((a, b) => b.length - a.length);
-	for (const node of reached.url) if (typeof node.value === "string") for (const part of urlParts(node.value)) knownSet.add(part);
+	for (const part of components) knownSet.add(part);
 	const known = [...knownSet];
 	const edits: Edit[] = [];
 	for (const node of allScalars(doc)) {
 		if (!node.range) continue;
 		if (reached.masked.has(node)) {
-			if (knownSet.has(String(node.value))) edits.push(scalarEdit(node, text, JSON.stringify(placeholderFor(String(node.value)))));
+			if (knownSet.has(String(node.value))) edits.push(scalarEdit(node, text, scalarSource(placeholderFor(String(node.value)))));
 		} else if (typeof node.value === "string") {
 			let value = node.value;
 			for (const secret of replaceable) value = value.split(secret).join(placeholderFor(secret));
-			if (value !== node.value) edits.push(scalarEdit(node, text, JSON.stringify(value)));
+			if (value !== node.value) edits.push(scalarEdit(node, text, scalarSource(value)));
 		}
 	}
 	// A comment inside a rewritten scalar (a block scalar's header comment) goes with it.
@@ -373,7 +477,7 @@ export function maskModelsYaml(text: string): MaskResult {
 	if (!check || known.some(secret => allScalars(check).some(node => String(node.value).includes(secret)))) return { ok: false, known };
 	if (!onlyCommentPlaceholders(masked)) return { ok: false, known };
 	try {
-		if (leaksSecret(Bun.YAML.parse(masked), known)) return { ok: false, known };
+		if (leaksSecret(parseSettingsToml(masked), known)) return { ok: false, known };
 	} catch {
 		return { ok: false, known };
 	}
@@ -415,18 +519,18 @@ const STALE_PLACEHOLDER = "does not match the file on disk (it changed, or the d
  * Put the credentials from `secrets` and the comments from `comments` (the
  * on-disk file's masking) back in place of their placeholders. A credential
  * placeholder is restored only where it is the whole value of a credential
- * position (a masked baseUrl also as a whole baseUrl); anywhere else (a name, id, key, part of a baseUrl, comment, tag, or an alias
- * reaching another field) the document is refused with 400 before anything is
+ * position (a masked baseUrl also as a whole baseUrl); anywhere else (a name,
+ * id, key, part of a baseUrl or comment) the document is refused with 400 before anything is
  * validated or written. A comment placeholder is restored only as a whole,
  * unchanged comment, and refused with 400 anywhere else. An unknown
  * placeholder of either kind is refused with 409.
  */
-export function restoreModelsYaml(raw: string, secrets: Map<string, Secret>, commentSources: Map<string, string>): string {
+export function restoreModelsToml(raw: string, secrets: Map<string, Secret>, commentSources: Map<string, string>): string {
 	if (!raw.includes(MASK_MARK) && !raw.includes(COMMENT_MARK)) return raw;
 	const doc = parse(raw);
 	const reached = doc && reach(doc);
 	if (!doc || !reached) {
-		throw new PlaceholderError("The document holds masked credentials or comments but is not valid YAML, so they cannot be located.", 400);
+		throw new PlaceholderError("The document holds masked credentials or comments but is not valid TOML, so they cannot be located.", 400);
 	}
 	const edits: Edit[] = [];
 	const ranges: Array<[number, number]> = [];
@@ -441,7 +545,7 @@ export function restoreModelsYaml(raw: string, secrets: Map<string, Secret>, com
 		if (!secret) { unknown = true; continue; }
 		// A baseUrl takes back only a masked baseUrl: a credential from elsewhere would change where requests go.
 		if (reached.url.has(node) && !secret.fromUrl) throw new PlaceholderError(`Line ${lineOf(raw, node.range[0])}: a masked credential ${OUTSIDE_CREDENTIAL}`, 400);
-		edits.push(scalarEdit(node, raw, JSON.stringify(secret.value)));
+		edits.push(scalarEdit(node, raw, scalarSource(secret.value)));
 	}
 	const commentRanges: Array<[number, number]> = [];
 	for (const comment of comments(raw)) {
@@ -464,13 +568,13 @@ export function restoreModelsYaml(raw: string, secrets: Map<string, Secret>, com
 	// Cross-check with the parser NeoPi uses: only restored credential positions may differ.
 	let submittedData: unknown;
 	try {
-		submittedData = Bun.YAML.parse(raw);
+		submittedData = parseSettingsToml(raw);
 	} catch {
 		return restored; // NeoPi rejects the submitted document itself; nothing is written.
 	}
 	let restoredData: unknown;
 	try {
-		restoredData = Bun.YAML.parse(restored);
+		restoredData = parseSettingsToml(restored);
 	} catch {
 		throw new PlaceholderError("The masked credentials could not be restored unambiguously. Replace them with the full values.", 400);
 	}

@@ -108,6 +108,13 @@ Dump transcript content includes:
 - Tool results and execution blocks (except `excludeFromContext` bash/python entries)
 - Custom/hook/file mention/branch summary/compaction summary entries
 
+Tool-call arguments are fenced `toml` mappings below `### Tool Call: <name>`.
+The intent field is displayed separately as a `//` comment. Nested tables,
+arrays, and explicit nulls round-trip through the shared TOML codec; nulls are
+recorded in the reserved `__npi.null_paths` metadata. Consumers should decode
+these blocks with `parseSettingsToml`, not a YAML parser or plain TOML parser
+that ignores null metadata.
+
 The best-effort JSON sidecar is named `omp-llm-request-<id>.json` under the OS temporary directory. It contains the current model, thinking level, service tier, system prompt, wire tool schemas, and LLM-converted messages. It persists after the command and can contain raw context or secrets; protect or remove it accordingly. A sidecar failure does not suppress the transcript (the TUI reports the failure; headless execution silently omits the path).
 
 No session persistence entries are appended by dumping.

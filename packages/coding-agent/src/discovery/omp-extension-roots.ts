@@ -10,7 +10,7 @@
  * CLI-provided paths are injected via {@link injectOmpExtensionCliRoots}
  * before discovery runs. Capability loads supply the effective `extensions`
  * setting; direct callers reconstruct its array-replacement precedence from
- * YAML with its TOML overlay and legacy `settings.json`.
+ * native TOML (importing legacy YAML once) and legacy `settings.json`.
  *
  * @see ./omp-plugins.ts
  * @see ./builtin.ts `loadExtensionModules`
@@ -18,9 +18,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger, MAIN_CONFIG_FILENAMES, tryParseJson } from "@oh-my-pi/pi-utils";
-import { overlaySettingsToml, parseSettingsToml, settingsTomlSource } from "@oh-my-pi/pi-utils/settings-toml";
-import { YAML } from "bun";
+import { getAgentDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { settingsTomlSource } from "@oh-my-pi/pi-utils/settings-toml";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { ExtensionRootMode, LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -177,40 +176,18 @@ async function readSettingsExtensions(settingsPath: string): Promise<string[] | 
 	return readExtensionsArray(parsed?.extensions);
 }
 
-/** Project native config filename; matches the single `.omp/config.yml` the settings loader reads. */
-const PROJECT_CONFIG_FILENAMES = ["config.yml"] as const;
-
 interface ConfiguredExtensionLayer {
 	exists: boolean;
 	entries: string[] | null;
 }
 
-/**
- * Read the first present YAML config filename, matching the settings loader's
- * `config.yml` before `config.yaml` selection, then apply its TOML overlay.
- */
-async function readConfiguredLayer(scopeDir: string, filenames: readonly string[]): Promise<ConfiguredExtensionLayer> {
+/** Read only the canonical document; stale YAML never contributes to TOML. */
+async function readConfiguredLayer(scopeDir: string): Promise<ConfiguredExtensionLayer> {
 	const source = await settingsTomlSource(scopeDir);
-	const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
-	const entries = (record: Record<string, unknown>) =>
-		toml.extensions === null ? [] : readExtensionsArray(record.extensions);
-	for (const filename of filenames) {
-		const content = await readFile(path.join(scopeDir, filename));
-		if (content === null) continue;
-		let parsed: unknown;
-		try {
-			parsed = YAML.parse(content);
-		} catch {
-			return { exists: true, entries: null };
-		}
-		if (parsed === null || parsed === undefined) parsed = {};
-		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			return { exists: true, entries: null };
-		}
-		const effective = overlaySettingsToml(parsed as Record<string, unknown>, toml);
-		return { exists: true, entries: entries(effective) };
-	}
-	return { exists: source !== undefined, entries: entries(toml) };
+	return {
+		exists: source !== undefined,
+		entries: source?.data.extensions === null ? [] : readExtensionsArray(source?.data.extensions),
+	};
 }
 
 interface ConfiguredExtensions {
@@ -220,16 +197,16 @@ interface ConfiguredExtensions {
 
 /**
  * Select the persisted `extensions` array with the same array-replacement
- * precedence as `Settings`: project TOML/YAML, project legacy settings, user
- * TOML/YAML, then user legacy settings. A present user main config suppresses
+ * precedence as `Settings`: project TOML, project legacy settings, user
+ * TOML, then user legacy settings. A present user main config suppresses
  * its legacy migration source even when it omits `extensions`.
  */
 async function readConfiguredExtensions(ctx: LoadContext): Promise<ConfiguredExtensions | null> {
 	const { project, user } = scopeDirs(ctx);
 	const [projectConfig, projectSettings, userConfig, userSettings] = await Promise.all([
-		readConfiguredLayer(project, PROJECT_CONFIG_FILENAMES),
+		readConfiguredLayer(project),
 		readSettingsExtensions(path.join(project, "settings.json")),
-		readConfiguredLayer(user, MAIN_CONFIG_FILENAMES),
+		readConfiguredLayer(user),
 		readSettingsExtensions(path.join(user, "settings.json")),
 	]);
 	if (projectConfig.entries !== null) return { entries: projectConfig.entries, level: "project" };

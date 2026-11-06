@@ -136,10 +136,14 @@ triggers. Nested `.kbignore` files below the root are not read.
 
 ### 4. Frontmatter parser
 
-Use a lightweight YAML parser (likely `yaml` npm package, ~30kb) for
-safety — the kb has real YAML (arrays, nested objects, multi-line). The
-header-grep approach from `routes-slash-commands.ts` is insufficient for
-this scale.
+Owned note metadata uses native TOML between `+++` lines and the shared settings
+codec, including nested tables, arrays and reversible null metadata. Legacy YAML
+is parsed only by the persistent one-time importer: `note.md` stays untouched
+while an atomic no-clobber, same-permission `note.toml.md` sibling becomes
+canonical. A pre-existing TOML sibling wins with path-only warnings; indexing
+exposes one logical `note.md` identity so links and search never duplicate notes.
+Raw editing validates TOML and writes the canonical sibling, not the YAML source.
+External `SKILL.md` documents retain their YAML interchange format unchanged.
 
 ### 5. Graph library: `react-force-graph-2d`
 
@@ -279,7 +283,7 @@ are independently valuable. T-39 and T-40 polish the experience.
    assumption holds for `~/kb`.
 5. **Unresolved wikilink click**: prompt-to-create with confirmation.
    Default target directory = current file's directory. Stub frontmatter
-   pre-filled (`type: knowledge`, today's date in `created`/`updated`).
+   pre-filled (`type = "knowledge"`, today's date in `created`/`updated`).
    User can cancel the prompt to leave the link unresolved.
 6. **Graph node click opens a split-pane preview, not a full-page switch.**
    The graph stays mounted on the left; the clicked file renders in a

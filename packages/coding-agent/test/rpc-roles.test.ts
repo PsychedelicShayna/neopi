@@ -18,6 +18,7 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { ControlClient } from "@oh-my-pi/pi-coding-agent/control/client";
 import { readControlEntries } from "@oh-my-pi/pi-coding-agent/control/registry";
 import type { ControlSnapshot } from "@oh-my-pi/pi-coding-agent/control/types";
@@ -251,12 +252,8 @@ describe("RPC get_roles / set_role", () => {
 	test("advertises get_roles and drives roles end to end over the wire", async () => {
 		root = await TempDir.create("@rpc-roles-");
 		await Bun.write(
-			path.join(root.path(), "agent", "config.yml"),
-			[
-				"modelRoles:",
-				...Object.entries(MODEL_ROLES_CONFIG).map(([role, value]) => `  ${role}: "${value}"`),
-				"",
-			].join("\n"),
+			path.join(root.path(), "agent", "config.toml"),
+			stringifySettingsToml({ modelRoles: MODEL_ROLES_CONFIG }),
 		);
 		child = await RpcChild.spawn({
 			root: root.path(),
@@ -321,12 +318,8 @@ describe("RPC get_roles / set_role", () => {
 	test("control snapshots report the same active role as get_state", async () => {
 		root = await TempDir.create("@rpc-roles-control-");
 		await Bun.write(
-			path.join(root.path(), "agent", "config.yml"),
-			[
-				"modelRoles:",
-				...Object.entries(MODEL_ROLES_CONFIG).map(([role, value]) => `  ${role}: "${value}"`),
-				"",
-			].join("\n"),
+			path.join(root.path(), "agent", "config.toml"),
+			stringifySettingsToml({ modelRoles: MODEL_ROLES_CONFIG }),
 		);
 		const controlDir = path.join(root.path(), "control");
 		child = await RpcChild.spawn({

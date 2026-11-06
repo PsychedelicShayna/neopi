@@ -9,7 +9,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { cfgDisabledProviders } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 const probePath = path.join(import.meta.dir, "fixtures", "model-registry-construction-build-probe.ts");
 
@@ -79,7 +79,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 			path.join(tempDir.path(), "models.db"),
 		);
 
-		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		expect(registry.find("litellm", "cached-fixture")?.name).toBe("Cached Fixture");
 	});
 
@@ -89,7 +89,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorages.push(authStorage);
 		const settings = Settings.isolated();
-		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"), { settings });
 		const provider = "snapshot-fixture";
 		const providers = new Set([provider]);
 		const definition = {
@@ -136,7 +136,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 		tempDirs.push(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorages.push(authStorage);
-		const configPath = path.join(tempDir.path(), "models.json");
+		const configPath = path.join(tempDir.path(), "models.toml");
 		const config = {
 			providers: {
 				"refresh-fixture": {
@@ -147,14 +147,14 @@ describe("ModelRegistry lazy bundled composition", () => {
 				},
 			},
 		};
-		await Bun.write(configPath, JSON.stringify(config));
+		await Bun.write(configPath, stringifySettingsToml(config));
 		const registry = new ModelRegistry(authStorage, configPath);
 		const providers = new Set(["refresh-fixture"]);
 		const before = registry.getAvailableForProviders(providers)[0];
 		expect(before.name).toBe("Before");
 		config.providers["refresh-fixture"].models[0].name = "After";
 		config.providers["refresh-fixture"].models[0].contextWindow = 16384;
-		await Bun.write(configPath, JSON.stringify(config));
+		await Bun.write(configPath, stringifySettingsToml(config));
 		await registry.reapplyModelPolicies();
 		const after = registry.getAvailableForProviders(providers)[0];
 		expect(after.name).toBe("After");
@@ -178,7 +178,7 @@ describe("ModelRegistry lazy bundled composition", () => {
 					),
 				);
 			}
-			return new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+			return new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		};
 
 		const findFirstRegistry = await createRegistry("find-first");

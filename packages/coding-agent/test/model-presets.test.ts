@@ -46,7 +46,7 @@ describe("model presets", () => {
 		fixtureDir = TempDir.createSync("@pi-model-presets-fixture-");
 		authStorage = await AuthStorage.create(path.join(fixtureDir.path(), "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.toml"));
 	});
 
 	afterEach(async () => {

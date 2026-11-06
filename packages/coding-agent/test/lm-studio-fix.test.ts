@@ -20,7 +20,7 @@ describe("ModelRegistry LM Studio Fixes", () => {
 	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-lm-studio-fixes-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsJsonPath = path.join(tempDir, "models.json");
+		modelsJsonPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 	});
 

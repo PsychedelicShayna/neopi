@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { parseNativeMarkdown } from "../../src/utils/native-frontmatter";
 import {
 	type BeatInput,
 	type BeatRecord,
@@ -145,20 +146,21 @@ describe("ChroniclerStore transactions", () => {
 
 	async function readBeatFrontmatter(beatPath: string): Promise<Record<string, unknown>> {
 		const raw = await Bun.file(path.join(root, beatPath)).text();
-		return parseFrontmatter(raw, { rawKeys: true, repair: false, level: "off" }).frontmatter;
+		expect(raw).toStartWith("+++\n");
+		return parseNativeMarkdown(raw).frontmatter;
 	}
 
 	/**
 	 * Rewrite exactly one frontmatter line of a committed beat, matching the
-	 * store's own `key: <yaml>` rendering, so a fixture corrupts one field and
+	 * store's own `key = <toml>` rendering, so a fixture corrupts one field and
 	 * nothing else.
 	 */
 	async function patchBeatFrontmatter(beatPath: string, key: string, rendered: string): Promise<void> {
 		const file = path.join(root, beatPath);
 		const raw = await Bun.file(file).text();
-		const line = new RegExp(`^${key}: .*$`, "m");
+		const line = new RegExp(`^${key} = .*$`, "m");
 		if (!line.test(raw)) throw new Error(`committed beat has no ${key} frontmatter line`);
-		await Bun.write(file, raw.replace(line, `${key}: ${rendered}`));
+		await Bun.write(file, raw.replace(line, `${key} = ${rendered}`));
 	}
 
 	async function patchManifest(batchId: string, patch: Record<string, unknown>): Promise<void> {
@@ -189,6 +191,52 @@ describe("ChroniclerStore transactions", () => {
 			files: await allFiles(),
 		};
 	}
+
+	it("imports immutable legacy beats once without changing manifests or duplicating indexed atoms", async () => {
+		const seeded = await seedOneBeat();
+		const file = path.join(root, seeded.record.path);
+		const manifestFile = path.join(root, "beats", seeded.batchId, "COMMIT.json");
+		const manifest = await Bun.file(manifestFile).text();
+		const legacy = `---
+schema: 1
+id: ${seeded.record.id}
+batch: ${seeded.batchId}
+title: Preserve me
+kind: decision
+event_time: "${seeded.record.eventTime}"
+captured_at: "${seeded.record.capturedAt}"
+session: session-a
+project: ${JSON.stringify(tempDir.path())}
+sources: [entry-1]
+topics: [chronicler]
+related: []
+model: ${MODEL}
+---
+
+# Preserve me
+
+${seeded.record.body}
+`;
+		await Bun.write(file, legacy);
+		await fs.chmod(file, 0o640);
+		const snapshot = new ChroniclerStore(root, { sessionId: "", project: "", model: "" }, {}, true);
+		const before = await snapshot.readCommittedBatch(seeded.batchId);
+		expect(before.records).toHaveLength(1);
+		expect(before.records[0]!.path).toBe(seeded.record.path);
+		expect(await allFiles()).toEqual(seeded.files);
+		const reopened = await openStore();
+		const canonicalPath = seeded.record.path.replace(/\.md$/, ".toml.md");
+		expect(reopened.beats).toHaveLength(1);
+		expect(reopened.beats[0]).toEqual({ ...seeded.record, path: canonicalPath });
+		expect(await Bun.file(file).text()).toBe(legacy);
+		expect(await Bun.file(manifestFile).text()).toBe(manifest);
+		expect((await fs.stat(path.join(root, canonicalPath))).mode & 0o777).toBe(0o640);
+		expect(await readBeatFrontmatter(canonicalPath)).toMatchObject({ id: seeded.record.id, batch: seeded.batchId });
+		const imported = await Bun.file(path.join(root, canonicalPath)).text();
+		expect((await openStore()).beats).toHaveLength(1);
+		expect(await Bun.file(path.join(root, canonicalPath)).text()).toBe(imported);
+		expect(await allFiles()).toEqual([...seeded.files, canonicalPath].sort());
+	});
 
 	it("keeps a staged batch invisible until commit publishes beats and coverage together", async () => {
 		const store = await openStore();
@@ -740,7 +788,7 @@ describe("ChroniclerStore transactions", () => {
 		const seeded = await seedOneBeat();
 		// Validation is against the global union of every committed manifest's
 		// entries, not just this beat's own manifest.
-		await patchBeatFrontmatter(seeded.record.path, "sources", "[entry-1,ghost-1]");
+		await patchBeatFrontmatter(seeded.record.path, "sources", '["entry-1", "ghost-1"]');
 
 		await expectHaltedOpen(newStore());
 
@@ -767,7 +815,7 @@ describe("ChroniclerStore transactions", () => {
 		const seeded = await seedOneBeat();
 		// Foreign-session beats are legitimate when inherited whole; a beat
 		// disagreeing with the manifest that published it is corruption.
-		await patchBeatFrontmatter(seeded.record.path, "session", "session-impostor");
+		await patchBeatFrontmatter(seeded.record.path, "session", '"session-impostor"');
 
 		await expectHaltedOpen(newStore());
 
@@ -776,7 +824,7 @@ describe("ChroniclerStore transactions", () => {
 
 	it("halts when a committed beat relates to a beat that does not exist", async () => {
 		const seeded = await seedOneBeat();
-		await patchBeatFrontmatter(seeded.record.path, "related", `[${MISSING_BEAT}]`);
+		await patchBeatFrontmatter(seeded.record.path, "related", `["${MISSING_BEAT}"]`);
 
 		await expectHaltedOpen(newStore());
 
@@ -788,7 +836,7 @@ describe("ChroniclerStore transactions", () => {
 		const raw = await Bun.file(path.join(root, seeded.record.path)).text();
 		await Bun.write(
 			path.join(root, seeded.record.path),
-			raw.replace(/^related: .*$/m, `related: []\nsupersedes: ${MISSING_BEAT}`),
+			raw.replace(/^related = .*$/m, `related = []\nsupersedes = "${MISSING_BEAT}"`),
 		);
 
 		await expectHaltedOpen(newStore());
@@ -798,7 +846,7 @@ describe("ChroniclerStore transactions", () => {
 
 	it("halts when a committed beat references itself", async () => {
 		const seeded = await seedOneBeat();
-		await patchBeatFrontmatter(seeded.record.path, "related", `[${seeded.record.id}]`);
+		await patchBeatFrontmatter(seeded.record.path, "related", `["${seeded.record.id}"]`);
 		await expectHaltedOpen(newStore());
 
 		await patchBeatFrontmatter(seeded.record.path, "related", "[]");
@@ -808,7 +856,7 @@ describe("ChroniclerStore transactions", () => {
 		const raw = await Bun.file(path.join(root, seeded.record.path)).text();
 		await Bun.write(
 			path.join(root, seeded.record.path),
-			raw.replace(/^related: .*$/m, `related: []\nsupersedes: ${seeded.record.id}`),
+			raw.replace(/^related = .*$/m, `related = []\nsupersedes = "${seeded.record.id}"`),
 		);
 		await expectHaltedOpen(newStore());
 

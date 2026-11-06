@@ -60,10 +60,10 @@ export const DECK_SLASH_COMMANDS: DeckSlashCommand[] = [
 	{
 		name: "task add",
 		description: "Create a backlog task in this workspace",
-		argumentHint: "<title> [newline + YAML/body] | <JSON card>",
+		argumentHint: "<title> [newline + TOML/body] | <JSON card>",
 		handle(args, ctx) {
 			const raw = args.trim();
-			if (!raw) throw new Error("Usage: /task add <title> [newline + YAML/body] or <JSON card>");
+			if (!raw) throw new Error("Usage: /task add <title> [newline + TOML/body] or <JSON card>");
 			let input: CreateTaskRequest;
 			if (raw.startsWith("{")) {
 				input = JSON.parse(raw) as CreateTaskRequest;

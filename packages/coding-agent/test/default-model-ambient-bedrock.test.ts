@@ -41,7 +41,7 @@ describe("issue #9967 default model with ambient Bedrock credentials", () => {
 		authStorage = createInMemoryAuthStorage();
 		// The user's only real login: an Anthropic credential.
 		await authStorage.credentials.set("anthropic", [{ type: "api_key", key: "sk-test-anthropic" }]);
-		registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		registry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 	});
 
 	afterEach(() => {

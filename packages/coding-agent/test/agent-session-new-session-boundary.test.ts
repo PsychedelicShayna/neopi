@@ -23,7 +23,7 @@ let modelRegistry: ModelRegistry;
 async function setup(): Promise<void> {
 	sharedDir = TempDir.createSync("@pi-new-session-boundary-shared-");
 	authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
-	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
+	modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.toml"));
 }
 
 async function teardown(): Promise<void> {

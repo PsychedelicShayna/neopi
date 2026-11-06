@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import { Hono } from "hono";
-import { parse as parseYaml } from "yaml";
+import { parseSettingsToml as parseToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 import type {
 	CreateRoutineRequest,
@@ -107,7 +107,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 	});
 	app.get("/routine-migrations/:id/:digest/export", (c) => {
 		try {
-			return c.text(exportRoutineMigration(c.req.param("id"), c.req.param("digest")), 200, { "Content-Type": "application/yaml", "Cache-Control": "no-store" });
+			return c.text(exportRoutineMigration(c.req.param("id"), c.req.param("digest")), 200, { "Content-Type": "application/toml", "Cache-Control": "no-store" });
 		} catch {
 			return c.json({ error: "conversion missing or native definition changed" }, 409);
 		}
@@ -126,16 +126,16 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 	});
 
 	app.post("/routines", async (c) => {
-		let body: CreateRoutineRequest & { specYaml?: string };
+		let body: CreateRoutineRequest & { specToml?: string };
 		try {
-			body = (await c.req.json()) as CreateRoutineRequest & { specYaml?: string };
+			body = (await c.req.json()) as CreateRoutineRequest & { specToml?: string };
 		} catch {
 			return c.json({ error: "invalid json" }, 400);
 		}
 		if (!body || typeof body !== "object" || Array.isArray(body)) return c.json({ error: "invalid request" }, 400);
 		if (body.graph !== undefined) {
 			if (!body.name) return c.json({ error: "name required" }, 400);
-			if (body.specYaml !== undefined || body.cron !== undefined || body.actionKind !== undefined ||
+			if (body.specToml !== undefined || body.cron !== undefined || body.actionKind !== undefined ||
 				body.actionBody !== undefined || body.actionCwd !== undefined) {
 				return c.json({ error: "native graph and legacy authoring fields are exclusive" }, 400);
 			}
@@ -153,10 +153,10 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 				return c.json({ error: String(err) }, 400);
 			}
 		}
-		// V1 routine: presence of specYaml is the discriminator.
-		if (body.specYaml) {
+		// V1 routine: presence of specToml is the discriminator.
+		if (body.specToml) {
 			try {
-				const spec = parseYaml(body.specYaml) as unknown;
+				const spec = parseToml(body.specToml) as unknown;
 				const result = validateRoutineSpec(spec);
 				if (!result.valid) {
 					return c.json({ error: "invalid spec", details: result.errors }, 400);
@@ -165,7 +165,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 				const routine = createV1Routine({
 					name: body.name || typed.name,
 					description: body.description ?? typed.description ?? "",
-					specYaml: body.specYaml,
+					specToml: body.specToml,
 					spec: typed,
 					enabled: body.enabled !== false,
 				});
@@ -179,7 +179,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 		}
 		// V0 path (legacy single-action routine).
 		if (!body.name || !body.cron || !body.actionKind || body.actionBody === undefined) {
-			return c.json({ error: "name, cron, actionKind, actionBody required (or pass specYaml for V1)" }, 400);
+			return c.json({ error: "name, cron, actionKind, actionBody required (or pass specToml for V1)" }, 400);
 		}
 		try {
 			const routine = createRoutine({
@@ -202,9 +202,9 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 	});
 
 	app.patch("/routines/:id", async (c) => {
-		let body: UpdateRoutineRequest & { specYaml?: string };
+		let body: UpdateRoutineRequest & { specToml?: string };
 		try {
-			body = (await c.req.json()) as UpdateRoutineRequest & { specYaml?: string };
+			body = (await c.req.json()) as UpdateRoutineRequest & { specToml?: string };
 		} catch {
 			return c.json({ error: "invalid json" }, 400);
 		}
@@ -213,7 +213,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 		const existing = getRoutine(id);
 		if (!existing) return c.json({ error: "not found" }, 404);
 		if (existing.specVersion === 2) {
-			if (body.specYaml !== undefined || body.cron !== undefined || body.actionKind !== undefined ||
+			if (body.specToml !== undefined || body.cron !== undefined || body.actionKind !== undefined ||
 				body.actionBody !== undefined || body.actionCwd !== undefined) {
 				return c.json({ error: "native graphs cannot be edited through legacy authoring fields" }, 400);
 			}
@@ -235,11 +235,11 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 			}
 		}
 		if (body.graph !== undefined) return c.json({ error: "graph requires a native V2 routine" }, 400);
-		// V1 routine: validate + persist spec_yaml; allow enabled-only patches too.
+		// V1 routine: validate + persist spec_toml; allow enabled-only patches too.
 		if (existing.specVersion === 1) {
-			if (body.specYaml !== undefined) {
+			if (body.specToml !== undefined) {
 				try {
-					const spec = parseYaml(body.specYaml) as unknown;
+					const spec = parseToml(body.specToml) as unknown;
 					const result = validateRoutineSpec(spec);
 					if (!result.valid) {
 						return c.json({ error: "invalid spec", details: result.errors }, 400);
@@ -248,7 +248,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 					const updated = updateV1Routine(id, {
 						name: body.name,
 						description: body.description,
-						specYaml: body.specYaml,
+						specToml: body.specToml,
 						spec: typed,
 						enabled: body.enabled,
 					});
@@ -391,7 +391,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 			hookPath = graphWebhookPath(r.graph);
 		} else {
 			let spec: RoutineSpec;
-			try { spec = parseYaml(r.specYaml ?? "") as RoutineSpec; } catch {
+			try { spec = parseToml(r.specToml ?? "") as unknown as RoutineSpec; } catch {
 				return c.json({ error: "spec parse failure" }, 400);
 			}
 			if (!spec || !Array.isArray(spec.trigger)) return c.json({ error: "spec parse failure" }, 400);
@@ -455,7 +455,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 		const routine = createV1Routine({
 			name: loaded.spec.name,
 			description: loaded.spec.description ?? "",
-			specYaml: loaded.specYaml,
+			specToml: loaded.specToml,
 			spec: loaded.spec,
 			enabled: false,
 		});

@@ -37,7 +37,7 @@ describe("live /tool: command reports and completion", () => {
 		execute.mockClear();
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		auth = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		const registry = new ModelRegistry(auth, path.join(tempDir.path(), "models.yml"));
+		const registry = new ModelRegistry(auth, path.join(tempDir.path(), "models.toml"));
 		const model = registry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 in model registry");
 		const makeTool = (name: string): Tool => ({

@@ -132,7 +132,7 @@ describe("AgentSession retry recovery", () => {
 	beforeAll(async () => {
 		fixtureDir = TempDir.createSync("@pi-retry-recovery-fixture-");
 		authStorage = await AuthStorage.create(path.join(fixtureDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.toml"));
 	});
 
 	beforeEach(async () => {

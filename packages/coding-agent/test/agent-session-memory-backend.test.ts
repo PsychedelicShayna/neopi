@@ -23,7 +23,7 @@ import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-c
 import { BUILTIN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { resetMemoryForTests } from "@oh-my-pi/pi-mnemopi";
-import { getProjectAgentDir, getProjectDir, setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, getProjectDir, setProjectDir, stringifySettingsToml, TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
@@ -98,7 +98,7 @@ describe("AgentSession memory backend lifecycle", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			memoryAgentDir: tempDir.path(),
 			memoryTaskDepth: 0,
 			createMemoryTools,
@@ -433,8 +433,8 @@ describe("AgentSession memory backend lifecycle", () => {
 		await Promise.all(
 			[sourceCwd, destinationCwd].map(cwd =>
 				Bun.write(
-					path.join(getProjectAgentDir(cwd), "config.yml"),
-					Bun.YAML.stringify({
+					path.join(getProjectAgentDir(cwd), "config.toml"),
+					stringifySettingsToml({
 						memory: { backend: "mnemopi" },
 						mnemopi: {
 							scoping: "per-project",
@@ -512,11 +512,11 @@ describe("AgentSession memory backend lifecycle", () => {
 			const sourceCwd = tempDir.path();
 			const destinationCwd = path.join(sourceCwd, "destination");
 			const sourceDbPath = path.join(sourceCwd, "source.db");
-			const destinationConfig = path.join(getProjectAgentDir(destinationCwd), "config.yml");
+			const destinationConfig = path.join(getProjectAgentDir(destinationCwd), "config.toml");
 			const mnemopi = { scoping: "global", autoRetain: false, noEmbeddings: true, llmMode: "none" };
 			await Bun.write(
-				path.join(getProjectAgentDir(sourceCwd), "config.yml"),
-				Bun.YAML.stringify({
+				path.join(getProjectAgentDir(sourceCwd), "config.toml"),
+				stringifySettingsToml({
 					memory: { backend: source },
 					mnemopi: { ...mnemopi, dbPath: sourceDbPath },
 					hindsight: { apiUrl: "http://127.0.0.1:1", mentalModelsEnabled: false },
@@ -525,7 +525,7 @@ describe("AgentSession memory backend lifecycle", () => {
 			// An existing directory is not a SQLite database, regardless of filesystem permissions.
 			await Bun.write(
 				destinationConfig,
-				Bun.YAML.stringify({ memory: { backend: "mnemopi" }, mnemopi: { ...mnemopi, dbPath: sourceCwd } }),
+				stringifySettingsToml({ memory: { backend: "mnemopi" }, mnemopi: { ...mnemopi, dbPath: sourceCwd } }),
 			);
 			settings = await Settings.loadIsolated({ cwd: sourceCwd, agentDir: path.join(sourceCwd, "agent") });
 			const toolSession = {
@@ -573,7 +573,7 @@ describe("AgentSession memory backend lifecycle", () => {
 				const destinationDbPath = path.join(destinationCwd, "memory.db");
 				await Bun.write(
 					destinationConfig,
-					Bun.YAML.stringify({
+					stringifySettingsToml({
 						memory: { backend: "mnemopi" },
 						mnemopi: { ...mnemopi, dbPath: destinationDbPath },
 					}),
@@ -607,15 +607,15 @@ describe("AgentSession memory backend lifecycle", () => {
 			const destinationCwd = path.join(sourceCwd, "destination");
 			const destinationDbPath = path.join(destinationCwd, "memory.db");
 			await Bun.write(
-				path.join(getProjectAgentDir(sourceCwd), "config.yml"),
-				Bun.YAML.stringify({
+				path.join(getProjectAgentDir(sourceCwd), "config.toml"),
+				stringifySettingsToml({
 					memory: { backend: "hindsight" },
 					hindsight: { apiUrl: "http://127.0.0.1:1", mentalModelsEnabled: false },
 				}),
 			);
 			await Bun.write(
-				path.join(getProjectAgentDir(destinationCwd), "config.yml"),
-				Bun.YAML.stringify({
+				path.join(getProjectAgentDir(destinationCwd), "config.toml"),
+				stringifySettingsToml({
 					memory: { backend: "mnemopi" },
 					mnemopi: {
 						scoping: "global",

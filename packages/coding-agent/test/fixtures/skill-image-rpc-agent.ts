@@ -32,7 +32,7 @@ globalThis.fetch = Object.assign(
 
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("zai", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const mock = createMockModel({ handler: { content: ["ok"] } });
 const agent = new Agent({
 	getApiKey: () => "test-key",

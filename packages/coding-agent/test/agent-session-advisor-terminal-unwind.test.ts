@@ -204,7 +204,7 @@ it.each([
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			modelRegistry: new ModelRegistry(auth, temp.join("models.yml")),
+			modelRegistry: new ModelRegistry(auth, temp.join("models.toml")),
 			advisorTools: [],
 			advisorStreamFn: advisorMock.stream,
 		});
@@ -364,7 +364,7 @@ it("continues once on a late nit at advisor.continueSeverity=nit without re-revi
 		agent,
 		sessionManager: SessionManager.inMemory(),
 		settings,
-		modelRegistry: new ModelRegistry(auth, temp.join("models.yml")),
+		modelRegistry: new ModelRegistry(auth, temp.join("models.toml")),
 		advisorTools: [],
 		advisorStreamFn: (advisorModel, context, options) => {
 			if (context.messages.at(-1)?.role === "user") reviewStarts++;

@@ -23,7 +23,7 @@ async function ioDetour(): Promise<void> {
 }
 const authStorage = await AuthStorage.create(path.join(process.cwd(), "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(process.cwd(), "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(process.cwd(), "models.toml"));
 const sessionManager = SessionManager.inMemory(process.cwd());
 const runtime = new ExtensionRuntime();
 const extension = await loadExtensionFromFactory(

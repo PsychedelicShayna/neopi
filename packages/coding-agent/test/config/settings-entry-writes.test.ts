@@ -6,11 +6,11 @@ import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgTaskDisabledAgents } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { acquireFileLock, TempDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Editing one fallback chain or one agent must persist only that entry: every entry another layer
-// (a `--config` overlay) supplies stays out of config.yml.
+// (a `--config` overlay) supplies stays out of config.toml.
 describe("Settings entry-level writes", () => {
 	let state: SettingsTestState | undefined;
 	let tempDir: TempDir;
@@ -23,7 +23,7 @@ describe("Settings entry-level writes", () => {
 		tempDir = TempDir.createSync("@pi-settings-entries-");
 		agentDir = tempDir.join("agent");
 		cwd = tempDir.join("project");
-		overlayPath = tempDir.join("overlay.yml");
+		overlayPath = tempDir.join("overlay.toml");
 		for (const dir of [agentDir, cwd]) fs.mkdirSync(dir, { recursive: true });
 	});
 
@@ -36,12 +36,13 @@ describe("Settings entry-level writes", () => {
 		tempDir.removeSync();
 	});
 
-	const configPath = () => path.join(agentDir, "config.yml");
-	const readConfig = async (): Promise<RawSettings> => YAML.parse(await Bun.file(configPath()).text()) as RawSettings;
+	const configPath = () => path.join(agentDir, "config.toml");
+	const readConfig = async (): Promise<RawSettings> =>
+		parseSettingsToml(await Bun.file(configPath()).text()) as RawSettings;
 
 	async function load(config: RawSettings, overlay: RawSettings): Promise<Settings> {
-		await Bun.write(configPath(), YAML.stringify(config));
-		await Bun.write(overlayPath, YAML.stringify(overlay));
+		await Bun.write(configPath(), stringifySettingsToml(config));
+		await Bun.write(overlayPath, stringifySettingsToml(overlay));
 		return Settings.loadIsolated({ agentDir, cwd, configFiles: [overlayPath] });
 	}
 
@@ -62,10 +63,10 @@ describe("Settings entry-level writes", () => {
 		const settings = await load({ retry: { fallbackChains: { slow: ["user/slow"] } } }, {});
 
 		cfgRetryFallbackChains.setEntry(settings, "openai/gpt-5.4", ["openai/gpt-5.4-mini"]);
-		// Another process edits config.yml before the save merges this write into it.
+		// Another process edits config.toml before the save merges this write into it.
 		await Bun.write(
 			configPath(),
-			YAML.stringify({ temperature: 0.3, retry: { fallbackChains: { slow: ["user/slow"] } } }),
+			stringifySettingsToml({ temperature: 0.3, retry: { fallbackChains: { slow: ["user/slow"] } } }),
 		);
 		await settings.flush();
 		expect(await readConfig()).toEqual({
@@ -86,7 +87,7 @@ describe("Settings entry-level writes", () => {
 		const lock = await acquireFileLock(configPath());
 		let entrySave: Promise<void> | undefined;
 		try {
-			// This save captures the entry write, then cannot read config.yml before the whole record is set.
+			// This save captures the entry write, then cannot read config.toml before the whole record is set.
 			entrySave = settings.flush();
 			cfgRetryFallbackChains.set(settings, { slow: ["final/slow"], smol: ["final/smol"] });
 		} finally {
@@ -118,7 +119,7 @@ describe("Settings entry-level writes", () => {
 
 			cfgRetryFallbackChains.setEntry(settings, "slow", ["intermediate/slow"]);
 			cfgRetryFallbackChains.set(settings, { slow: ["final/slow"], smol: ["final/smol"] });
-			await Bun.write(configPath(), YAML.stringify(external));
+			await Bun.write(configPath(), stringifySettingsToml(external));
 			await settings.flush();
 
 			expect(await readConfig()).toEqual(saved);

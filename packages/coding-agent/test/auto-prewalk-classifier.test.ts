@@ -43,7 +43,7 @@ interface JudgeRequest {
 function nativeJudgeDeps() {
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("typesafe", "ts-key");
-	const registry = new ModelRegistry(authStorage, "/nonexistent/auto-prewalk-models.yml");
+	const registry = new ModelRegistry(authStorage, "/nonexistent/auto-prewalk-models.toml");
 	vi.spyOn(registry, "getAvailable").mockReturnValue([JEV_PREVIEW]);
 	return { settings: Settings.isolated({ modelRoles: { judge: "typesafe/jev-preview" } }), registry };
 }
@@ -160,7 +160,7 @@ describe("classifyAutoPrewalk decision", () => {
 	});
 
 	it("never falls back to a prompted model when the judge role has no native backend", async () => {
-		const registry = new ModelRegistry(createInMemoryAuthStorage(), "/nonexistent/auto-prewalk-models.yml");
+		const registry = new ModelRegistry(createInMemoryAuthStorage(), "/nonexistent/auto-prewalk-models.toml");
 		vi.spyOn(registry, "getAvailable").mockReturnValue([LOCAL]);
 		const settings = Settings.isolated({ modelRoles: { judge: `${LOCAL.provider}/${LOCAL.id}` } });
 		const complete = vi.spyOn(tinyModelClient, "complete").mockResolvedValue("prewalk");

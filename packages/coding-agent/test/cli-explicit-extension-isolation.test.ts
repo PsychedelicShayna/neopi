@@ -30,7 +30,7 @@ test("buildSessionOptions retains explicit extensions and hooks under --no-exten
 	const hookPath = tempDir.join("hook.ts");
 	const parsed = parseArgs(["--no-extensions", "--extension", extensionPath, "--hook", hookPath]);
 	const settings = Settings.isolated();
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 
 	const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
 
@@ -48,7 +48,7 @@ test("trusted extension allowlists are canonical and cannot be expanded by retar
 
 	const parsed = parseArgs(["--trusted-extension", trustedLink]);
 	const settings = Settings.isolated();
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 	const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
 
 	expect(options.disableExtensionDiscovery).toBe(true);
@@ -65,7 +65,7 @@ test("trusted extension allowlists are canonical and cannot be expanded by retar
 test("buildSessionOptions rejects trusted extension directories", async () => {
 	const parsed = parseArgs(["--trusted-extension", tempDir.path()]);
 	const settings = Settings.isolated();
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 
 	await expect(buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings)).rejects.toThrow(
 		/module file, not a directory/,

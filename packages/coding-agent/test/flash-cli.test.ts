@@ -185,7 +185,10 @@ describe("portable payload", () => {
 		for (const required of [
 			"agent/agent.db",
 			"agent/secret-placeholder.key",
-			"agent/models.yml",
+			"agent/config.toml",
+			"agent/models.toml",
+			"agent/WATCHDOG.toml",
+			"agent/CHAINS.toml",
 			"agent/neopi-persona.json",
 			"agent/neopi-loadout.json",
 			"agent/neopi-live-personas.json",
@@ -212,10 +215,15 @@ describe("portable payload", () => {
 	});
 
 	test("forces only the top-level symbol preset", () => {
-		expect(forceAsciiSymbolPreset("setupVersion: 2\nsymbolPreset: nerd\n")).toBe(
-			"setupVersion: 2\nsymbolPreset: ascii\n",
-		);
-		expect(forceAsciiSymbolPreset("setupVersion: 2")).toBe("setupVersion: 2\nsymbolPreset: ascii\n");
+		const source = '# Keep this comment\nsetupVersion = 2\nsymbolPreset = "nerd"\n[nested]\nsymbolPreset = "nerd"\n';
+		const result = forceAsciiSymbolPreset(source);
+		expect(Bun.TOML.parse(result)).toEqual({
+			setupVersion: 2,
+			symbolPreset: "ascii",
+			nested: { symbolPreset: "nerd" },
+		});
+		expect(result).toContain("# Keep this comment");
+		expect(Bun.TOML.parse(forceAsciiSymbolPreset(""))).toEqual({ symbolPreset: "ascii" });
 	});
 
 	test("detects missing and changed staged payload files", async () => {

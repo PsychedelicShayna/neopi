@@ -134,7 +134,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 		sharedAuthStorage.keys.setRuntime("openai-codex", "test-key");
-		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {

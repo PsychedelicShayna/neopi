@@ -18,7 +18,7 @@ describe("Portkey gateway custom models", () => {
 		resetSettingsForTest();
 		tempDir = path.join(os.tmpdir(), `pi-test-portkey-gateway-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsPath = path.join(tempDir, "models.yml");
+		modelsPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(":memory:");
 	});
 
@@ -33,30 +33,29 @@ describe("Portkey gateway custom models", () => {
 	test("gateway @modal/GLM-5-2-FP8 keeps full wire id (not devin glm-5-2)", () => {
 		fs.writeFileSync(
 			modelsPath,
-			`providers:
-  gateway:
-    baseUrl: https://gateway.example.com/v1
-    api: openai-completions
-    apiKey: test
-    authHeader: true
-    headers:
-      x-portkey-api-key: test
-    models:
-      - id: "@modal/GLM-5-2-FP8"
-        name: glm-5p2 (modal)
-        reasoning: true
-        input: [text]
-        contextWindow: 1048576
-        maxTokens: 131072
-        compat:
-          thinkingFormat: openai
-          supportsReasoningEffort: true
-          reasoningEffortMap:
-            minimal: none
-            low: low
-            medium: medium
-            high: high
-            xhigh: max
+			`[providers.gateway]
+baseUrl = "https://gateway.example.com/v1"
+api = "openai-completions"
+apiKey = "test"
+authHeader = true
+[providers.gateway.headers]
+x-portkey-api-key = "test"
+[[providers.gateway.models]]
+id = "@modal/GLM-5-2-FP8"
+name = "glm-5p2 (modal)"
+reasoning = true
+input = ["text"]
+contextWindow = 1048576
+maxTokens = 131072
+[providers.gateway.models.compat]
+thinkingFormat = "openai"
+supportsReasoningEffort = true
+[providers.gateway.models.compat.reasoningEffortMap]
+minimal = "none"
+low = "low"
+medium = "medium"
+high = "high"
+xhigh = "max"
 `,
 		);
 		const registry = new ModelRegistry(authStorage, modelsPath);

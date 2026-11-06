@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { $which, isRecord, logger, pathIsWithin, type WhichOptions } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parseSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import type { ClaudePluginRoot } from "../discovery/helpers";
 import {
 	type ConfigFileAdapter,
@@ -36,13 +36,9 @@ interface NormalizedConfig {
 	idleTimeoutMs?: number;
 }
 
-/** Parse a config file as YAML (`.yaml`/`.yml`) or JSON. */
+/** Parse the canonical native configuration; legacy readers live at import boundaries. */
 export function parseConfigContent(content: string, filePath: string): unknown {
-	const extension = path.extname(filePath).toLowerCase();
-	if (extension === ".yaml" || extension === ".yml") {
-		return YAML.parse(content) as unknown;
-	}
-	return JSON.parse(content) as unknown;
+	return parseSettingsToml(content, filePath);
 }
 
 function normalizeConfig(value: unknown): NormalizedConfig | null {
@@ -403,7 +399,7 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigFileSource<Norma
  * Load LSP configuration.
  *
  * Priority (highest to lowest):
- * 1. Project root: lsp.json/.lsp.json/lsp.yml/.lsp.yml/lsp.yaml/.lsp.yaml
+ * 1. Project root: lsp.toml / .lsp.toml (legacy JSON/YAML imported once)
  * 2. Project config dirs: .omp/lsp.*, .pi/lsp.*, .claude/lsp.* (+ hidden variants)
  * 3. User config dirs: ~/.omp/agent/lsp.*, ~/.pi/agent/lsp.*, ~/.claude/lsp.* (+ hidden variants)
  * 4. User home root: ~/lsp.*, ~/.lsp.*
@@ -411,24 +407,19 @@ function marketplaceConfigSource(root: ClaudePluginRoot): ConfigFileSource<Norma
  *
  * Config files are merged from lowest to highest priority; later files override earlier settings.
  *
- * Config file format (JSON or YAML):
- * ```json
- * {
- *   "servers": {
- *     "typescript-language-server": {
- *       "command": "typescript-language-server",
- *       "args": ["--stdio", "--log-level", "4"],
- *       "disabled": false
- *     },
- *     "my-custom-server": {
- *       "command": "/path/to/server",
- *       "args": ["--stdio"],
- *       "fileTypes": [".xyz"],
- *       "languageId": "xyz",
- *       "rootMarkers": [".xyz-project"]
- *     }
- *   }
- * }
+ * Config file format:
+ * ```toml
+ * [servers.typescript-language-server]
+ * command = "typescript-language-server"
+ * args = ["--stdio", "--log-level", "4"]
+ * disabled = false
+ *
+ * [servers.my-custom-server]
+ * command = "/path/to/server"
+ * args = ["--stdio"]
+ * fileTypes = [".xyz"]
+ * languageId = "xyz"
+ * rootMarkers = [".xyz-project"]
  * ```
  */
 export function loadConfig(cwd: string): LspConfig {

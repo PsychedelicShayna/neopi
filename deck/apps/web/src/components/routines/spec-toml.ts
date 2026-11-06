@@ -1,14 +1,11 @@
 /**
- * YAML <-> RoutineSpec round-tripping for the visual builder.
+ * TOML <-> RoutineSpec round-tripping for the visual builder.
  *
- * The builder is a different rendering of the same source-of-truth as the
- * Spec tab: form edits mutate a `RoutineSpec` object, which gets serialized
- * to YAML on save; valid YAML edits parse back into a `RoutineSpec`.
- *
- * Routine specs use plain parse/stringify. Card body property edits use the
- * Document API so unrelated frontmatter and comments remain intact.
+ * Form edits serialize the direct RoutineSpec object; valid source edits
+ * parse back into the same shape. Card Markdown properties are independent.
  */
-import { isMap, isScalar, parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
+import { createSettingsTomlCodec, decodeSettingsToml } from "@oh-my-pi/pi-utils/settings-toml-codec";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 import {
 	validateRoutineSpec,
@@ -21,68 +18,27 @@ import {
 	type ValidationError,
 } from "@npi-deck/protocol";
 
-/** Card properties remain body text; these helpers do not add runtime semantics. */
-export function cardBodyParts(body: string): { header: string; content: string } {
-	if (!body.startsWith("---\n") && !body.startsWith("---\r\n")) {
-		return { header: "", content: body };
-	}
-	const match = /^---\r?\n([\s\S]*?)^---(?:\r?\n|$)/m.exec(body);
-	if (!match || match.index !== 0) throw new Error("The card frontmatter has no closing delimiter.");
-	return { header: match[1]!, content: body.slice(match[0].length) };
-}
-
-export function cardPropertyDocument(body: string) {
-	const parts = cardBodyParts(body);
-	const document = parseDocument(parts.header);
-	if (document.errors.length > 0 || (document.contents !== null && !isMap(document.contents))) {
-		throw new Error("The card frontmatter must be a valid property mapping.");
-	}
-	return { ...parts, document };
-}
-
-export function setCardBodyContent(body: string, content: string): string {
-	const previous = cardBodyParts(body).content;
-	return body.slice(0, body.length - previous.length) + content;
-}
-
-export function setCardBodyProperty(body: string, key: string, value: string | boolean | undefined): string {
-	const { header, content, document } = cardPropertyDocument(body);
-	if (document.get(key) === value) return body;
-	if (isMap(document.contents) && !document.contents.flow) {
-		const pair = document.contents.items.find((item) => isScalar(item.key) && item.key.value === key);
-		const start = isScalar(pair?.key) ? pair.key.range?.[0] : undefined;
-		const end = pair?.value && "range" in pair.value ? pair.value.range?.[2] : undefined;
-		const replacement = value === undefined ? "" : stringifyYaml({ [key]: value });
-		if (start !== undefined && end !== undefined) {
-			return `---\n${header.slice(0, start)}${replacement}${header.slice(end)}---\n${content}`;
-		}
-		if (!pair) return `---\n${header}${header && !header.endsWith("\n") ? "\n" : ""}${replacement}---\n${content}`;
-	}
-	// Flow mappings or valueless entries need structural editing to stay valid.
-	if (value === undefined) document.delete(key);
-	else document.set(key, value);
-	return `---\n${document.toString({ lineWidth: 0 })}---\n${content}`;
-}
+const codec = createSettingsTomlCodec(parseToml);
 
 export interface ParseResult {
 	ok: boolean;
 	spec?: RoutineSpec;
-	yamlError?: { message: string; line?: number };
+	tomlError?: { message: string; line?: number };
 	schemaErrors?: ValidationError[];
 }
 
 /** Parse + validate. Returns `{ok:false}` with whichever error layer fired. */
-export function parseSpec(yamlText: string): ParseResult {
+export function parseSpec(tomlText: string): ParseResult {
 	let raw: unknown;
 	try {
-		raw = parseYaml(yamlText);
+		raw = decodeSettingsToml(parseToml(tomlText));
 	} catch (e) {
-		const err = e as { message?: string; linePos?: Array<{ line: number }> };
+		const err = e as { message?: string; line?: number };
 		const message = err.message ?? String(e);
-		const line = err.linePos?.[0]?.line;
-		const yamlError: ParseResult["yamlError"] =
+		const line = err.line;
+		const tomlError: ParseResult["tomlError"] =
 			typeof line === "number" ? { message, line } : { message };
-		return { ok: false, yamlError };
+		return { ok: false, tomlError };
 	}
 	const result = validateRoutineSpec(raw);
 	if (!result.valid) {
@@ -91,20 +47,23 @@ export function parseSpec(yamlText: string): ParseResult {
 	return { ok: true, spec: raw as RoutineSpec };
 }
 
-/** Serialize a RoutineSpec to YAML. Stable key order, 2-space indent. */
-export function stringifySpec(spec: RoutineSpec): string {
-	// `yaml` sorts maps in insertion order — we feed it in the canonical
-	// top-level shape so saved files look the same as the daily-briefing
-	// template.
-	const ordered = orderSpec(spec);
-	return stringifyYaml(ordered, {
-		indent: 2,
-		lineWidth: 100,
-		minContentWidth: 20,
-		// Block style is closer to a hand-authored file than flow.
-		defaultStringType: "PLAIN",
-		defaultKeyType: "PLAIN",
-	});
+/** Serialize the direct spec; patch an existing source without discarding comments. */
+export function stringifySpec(spec: RoutineSpec, source?: string): string {
+	const ordered = definedProperties(orderSpec(spec)) as Record<string, unknown>;
+	if (source !== undefined) return codec.patchSettingsToml(source, ordered);
+	// Keep smol-toml's browser formatting while sharing the server's reversible
+	// null representation for arbitrary action payloads and JSON schemas.
+	return stringifyToml(parseToml(codec.stringifySettingsToml(ordered)));
+}
+
+/** Form controls clear optional keys with undefined; those keys are absent in TOML. */
+function definedProperties(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(definedProperties);
+	if (value !== null && typeof value === "object") {
+		return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)
+			.map(([key, entry]) => [key, definedProperties(entry)]));
+	}
+	return value;
 }
 
 function orderSpec(spec: RoutineSpec): Record<string, unknown> {
@@ -124,7 +83,7 @@ function orderSpec(spec: RoutineSpec): Record<string, unknown> {
 /**
  * Stable serialization for the optional `layout` block. Node keys are sorted
  * alphabetically by step id so diffs stay clean across saves; edges preserve
- * authored order; integer coords are emitted as-is so the YAML reads cleanly.
+ * authored order; integer coords are emitted as-is so the TOML reads cleanly.
  */
 function orderLayout(layout: NonNullable<RoutineSpec["layout"]>): Record<string, unknown> {
 	const out: Record<string, unknown> = { version: layout.version };

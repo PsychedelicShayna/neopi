@@ -13,6 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -137,8 +138,8 @@ describe("task spawn routing", () => {
 		const dir = await fs.mkdtemp(`${root}/effort-rule-spawn-`);
 		try {
 			await Bun.write(
-				`${dir}/config.yml`,
-				JSON.stringify({
+				`${dir}/config.toml`,
+				stringifySettingsToml({
 					effort: { rules: [{ selector: "anthropic/claude-haiku-5-5", allowed: ["future-effort"] }] },
 					context: { rules: [{ selector: "anthropic/claude-haiku-5-5", limit: "invalid" }] },
 				}),

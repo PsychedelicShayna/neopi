@@ -106,7 +106,7 @@ Use `matchesKey(data, "...")` for navigation keys and combos.
 
 ### Match app keybinding actions
 
-Extension UI factories receive a `KeybindingsManager` (interactive mode; an in-memory instance carrying the default bindings, not the user's `keybindings.yml`) so you can match action ids instead of hardcoding keys:
+Extension UI factories receive a `KeybindingsManager` (interactive mode; an in-memory instance carrying the default bindings, not the user's `keybindings.toml`) so you can match action ids instead of hardcoding keys:
 
 ```ts
 if (keybindings.matches(data, "app.interrupt")) {

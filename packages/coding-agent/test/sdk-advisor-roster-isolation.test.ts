@@ -60,7 +60,7 @@ describe("SDK advisor roster isolation", () => {
 					agentDir,
 					settings,
 					model,
-					modelRegistry: new ModelRegistry(authStorage, path.join(agentDir, "models.json")),
+					modelRegistry: new ModelRegistry(authStorage, path.join(agentDir, "models.toml")),
 					sessionManager: SessionManager.inMemory(cwd),
 					advisorConfigs,
 					disableExtensionDiscovery: true,

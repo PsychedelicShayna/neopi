@@ -8,7 +8,8 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { parseNativeMarkdown } from "../../src/utils/native-frontmatter";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
 import { loadChronicleCorpus } from "../../src/chronicler/temporal/corpus";
@@ -663,10 +664,7 @@ describe("chronicle recall", () => {
 		const stubs = (await fs.readdir(dir)).filter(name => name.endsWith(".md") && name !== "NODE.md");
 		const scored = await Promise.all(
 			stubs.map(async name => {
-				const { frontmatter, body } = parseFrontmatter(await Bun.file(path.join(dir, name)).text(), {
-					rawKeys: true,
-					level: "off",
-				});
+				const { frontmatter, body } = parseNativeMarkdown(await Bun.file(path.join(dir, name)).text());
 				return { id: String(frontmatter.id), stub: path.join(dir, name), score: lexicalScore(query, body) };
 			}),
 		);

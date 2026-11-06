@@ -35,7 +35,7 @@ export type XAIHttpTransportRegistry = Pick<
  *      default for the (provider, id) pair. Mirrors the chat path's per-model
  *      contract (`openai-responses.ts: model.baseUrl`).
  *   2. `ModelRegistry.getProviderBaseUrl(provider)` — provider-level override
- *      (e.g. `providers.xai-oauth.baseUrl` from models.yml). Reached when the
+ *      (e.g. `providers.xai-oauth.baseUrl` from models.toml). Reached when the
  *      modelId does not appear in the registry under this provider, which
  *      happens for tool-only ids like `grok-imagine-image` that
  *      `applyXAIOAuthCuration` filters out via `XAI_NON_CHAT_PREFIXES`.
@@ -106,7 +106,7 @@ export async function resolveXAIHttpTransport(
  *      of two checks against the registry layer:
  *        a. `authStorage.keys.source("xai-oauth", { env: "none" })` covers stored
  *           credentials (OAuth or api_key), runtime overrides (CLI
- *           `--api-key` for xai-oauth), config overrides (models.yml
+ *           `--api-key` for xai-oauth), config overrides (models.toml
  *           `providers.xai-oauth.apiKey`), and fallback resolvers.
  *        b. `$env.XAI_OAUTH_TOKEN` covers the xai-oauth-specific env var.
  *      `XAI_API_KEY` is intentionally NOT a signal here, even though the
@@ -118,7 +118,7 @@ export async function resolveXAIHttpTransport(
  *      step 2 while preserving every dedicated xai-oauth path.
  *   2. xai (plain API key). Delegates to ModelRegistry.getApiKeyForProvider
  *      which runs AuthStorage.keys.get's full cascade: runtime override →
- *      models.yml config override → stored api_key credential → OAuth
+ *      models.toml config override → stored api_key credential → OAuth
  *      resolution → XAI_API_KEY env var → custom fallback resolver.
  *
  * baseURL: see `resolveXAIBaseURL` above, evaluated for the chosen key.

@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { stripVTControlCharacters } from "node:util";
 import { ModelConfigEditor } from "../src/config/model-config-editor";
 import { ModelsConfigFile } from "../src/config/models-config";
@@ -17,13 +19,11 @@ afterEach(async () => {
 	for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
 
-async function setup(config?: unknown, extension = "yml"): Promise<ModelConfigEditor> {
-	const root = path.join(process.env.HOME!, ".cache/npi-canary/model-overrides-tests");
-	await fs.mkdir(root, { recursive: true });
-	const dir = await fs.mkdtemp(path.join(root, "case-"));
+async function setup(config?: Record<string, unknown>): Promise<ModelConfigEditor> {
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "model-overrides-"));
 	dirs.push(dir);
-	const file = ModelsConfigFile.relocate(path.join(dir, `models.${extension}`));
-	if (config) await Bun.write(file.path(), JSON.stringify(config));
+	const file = ModelsConfigFile.relocate(path.join(dir, "models.toml"));
+	if (config) await Bun.write(file.path(), stringifySettingsToml(config));
 	return new ModelConfigEditor(file);
 }
 
@@ -123,7 +123,7 @@ describe("model override configuration UI", () => {
 		type(panel, "After");
 		panel.handleInput("s");
 		await settled();
-		const saved = Bun.YAML.parse(await Bun.file(editor.file.path()).text());
+		const saved = parseSettingsToml(await Bun.file(editor.file.path()).text());
 		const expected = originalConfig();
 		expected.providers.local.modelOverrides.existing.name = "After";
 		expect(saved).toEqual(expected);
@@ -150,7 +150,7 @@ describe("model override configuration UI", () => {
 		panel.handleInput("\r");
 		await settled();
 		expect(editor.list()).toEqual([]);
-		expect(Bun.YAML.parse(await Bun.file(editor.file.path()).text())).toEqual({ providers: {} });
+		expect(parseSettingsToml(await Bun.file(editor.file.path()).text())).toEqual({ providers: {} });
 	});
 
 	test("adds a custom model and edits its native ID through the panel", async () => {
@@ -194,7 +194,7 @@ describe("model override configuration UI", () => {
 	});
 
 	test("persists custom additions, edits and deletion without touching provider credentials or siblings", async () => {
-		const editor = await setup(originalConfig(), "json");
+		const editor = await setup(originalConfig());
 		editor.list();
 		const entry: HubModelConfigEntry = {
 			provider: "local",
@@ -207,7 +207,7 @@ describe("model override configuration UI", () => {
 		await editor.save({ ...added, fields: { ...added.fields, maxTokens: 1024 } }, added);
 		expect(editor.list().find(candidate => candidate.id === "added")?.fields.maxTokens).toBe(1024);
 		await editor.remove(editor.list().find(candidate => candidate.id === "added")!);
-		expect(await Bun.file(editor.file.path()).json()).toEqual(originalConfig());
+		expect(parseSettingsToml(await Bun.file(editor.file.path()).text())).toEqual(originalConfig());
 	});
 
 	test("rejects invalid fields without replacing the file and leaves the draft editable", async () => {
@@ -223,19 +223,54 @@ describe("model override configuration UI", () => {
 		const entry = editor.list()[0];
 		const external = originalConfig();
 		external.providers.local.futureProvider = "external";
-		await Bun.write(editor.file.path(), JSON.stringify(external));
+		await Bun.write(editor.file.path(), stringifySettingsToml(external));
 		await editor.save({ ...entry, fields: { ...entry.fields, name: "UI" } }, entry);
-		let saved = Bun.YAML.parse(await Bun.file(editor.file.path()).text()) as typeof external;
+		let saved = parseSettingsToml(await Bun.file(editor.file.path()).text()) as typeof external;
 		expect(saved.providers.local.futureProvider).toBe("external");
 		expect(saved.providers.local.modelOverrides.existing.name).toBe("UI");
 		const reopened = editor.list()[0];
 		saved.providers.local.modelOverrides.existing.name = "external name";
-		await Bun.write(editor.file.path(), JSON.stringify(saved));
+		await Bun.write(editor.file.path(), stringifySettingsToml(saved));
 		await expect(
 			editor.save({ ...reopened, fields: { ...reopened.fields, name: "stale UI" } }, reopened),
 		).rejects.toThrow("changed on disk");
-		saved = Bun.YAML.parse(await Bun.file(editor.file.path()).text()) as typeof saved;
+		saved = parseSettingsToml(await Bun.file(editor.file.path()).text()) as typeof saved;
 		expect(saved.providers.local.modelOverrides.existing.name).toBe("external name");
+	});
+
+	test("retains top-level, provider and nested override comments through a native TOML save", async () => {
+		const editor = await setup();
+		await Bun.write(
+			editor.file.path(),
+			[
+				"# Operator model notes",
+				"[providers.local]",
+				'baseUrl = "https://example.invalid/v1" # endpoint',
+				'api = "openai-completions"',
+				'auth = "none"',
+				"# Nested model notes",
+				"[providers.local.modelOverrides.existing]",
+				'name = "Before" # display name',
+				"maxTokens = 100 # output limit",
+				"",
+			].join("\n"),
+		);
+		const entry = editor.list()[0];
+		await editor.save({ ...entry, fields: { ...entry.fields, name: "After" } }, entry);
+		const source = await Bun.file(editor.file.path()).text();
+		for (const comment of [
+			"# Operator model notes",
+			"# endpoint",
+			"# Nested model notes",
+			"# display name",
+			"# output limit",
+		]) {
+			expect(source).toContain(comment);
+		}
+		expect(parseSettingsToml(source)).toMatchObject({
+			providers: { local: { modelOverrides: { existing: { name: "After", maxTokens: 100 } } } },
+		});
+		expect(await Bun.file(path.join(path.dirname(editor.file.path()), "models.yml")).exists()).toBe(false);
 	});
 
 	test("schema-driven fields expose every native top-level field, including future schema additions", async () => {

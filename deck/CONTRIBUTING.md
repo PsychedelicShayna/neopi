@@ -61,7 +61,7 @@ bun run dev      # dev deck lives at http://127.0.0.1:5273
 The two instances now share **history only**. These env vars give you full
 state separation (`NPI_DECK_HOME` moves the db, managed `.env`, uploads and
 run state together; `NPI_DECK_BACKEND` points at a prepared backend tree
-because the new home has no `config.yml`):
+because the new home has no `config.toml`):
 
 | Concern                  | prod tree            | dev worktree                     |
 | ------------------------ | -------------------- | -------------------------------- |

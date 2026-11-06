@@ -7,10 +7,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { YAML } from "bun";
+import { serializeAgentDefinitionDocument } from "../task/agent-definition-document";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { loadBundledAgents } from "../task/agents";
-import type { AgentDefinition } from "../task/types";
 
 export type AgentsAction = "unpack";
 
@@ -52,31 +51,6 @@ function resolveTargetDir(flags: AgentsCommandArgs["flags"]): string {
 	return path.join(getAgentDir(), "agents");
 }
 
-function toFrontmatter(agent: AgentDefinition): Record<string, unknown> {
-	const frontmatter: Record<string, unknown> = {
-		name: agent.name,
-		description: agent.description,
-	};
-
-	if (agent.harness && agent.harness !== "omp") frontmatter.harness = agent.harness;
-
-	if (agent.tools !== undefined) frontmatter.tools = agent.tools;
-	if (agent.spawns !== undefined) frontmatter.spawns = agent.spawns;
-	if (agent.model && agent.model.length > 0) frontmatter.model = agent.model;
-	if (agent.thinkingLevel) frontmatter.thinkingLevel = agent.thinkingLevel;
-	if (agent.output !== undefined) frontmatter.output = agent.output;
-	if (agent.blocking) frontmatter.blocking = true;
-	if (agent.structured) frontmatter.structured = true;
-
-	return frontmatter;
-}
-
-function serializeAgent(agent: AgentDefinition): string {
-	const frontmatter = YAML.stringify(toFrontmatter(agent), null, 2).trimEnd();
-	const body = agent.systemPrompt.trim();
-	return `---\n${frontmatter}\n---\n\n${body}\n`;
-}
-
 async function unpackBundledAgents(flags: AgentsCommandArgs["flags"]): Promise<UnpackResult> {
 	const targetDir = resolveTargetDir(flags);
 	await fs.mkdir(targetDir, { recursive: true });
@@ -86,18 +60,25 @@ async function unpackBundledAgents(flags: AgentsCommandArgs["flags"]): Promise<U
 	const skipped: string[] = [];
 
 	for (const agent of bundledAgents) {
-		const filePath = path.join(targetDir, `${agent.name}.md`);
+		const filePath = path.join(targetDir, `${agent.name}.toml.md`);
 		if (!flags.force) {
-			try {
-				await fs.stat(filePath);
-				skipped.push(filePath);
+			let existing: string | undefined;
+			for (const candidate of [filePath, path.join(targetDir, `${agent.name}.md`)]) {
+				try {
+					await fs.stat(candidate);
+					existing = candidate;
+					break;
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+				}
+			}
+			if (existing) {
+				skipped.push(existing);
 				continue;
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
 			}
 		}
 
-		await Bun.write(filePath, serializeAgent(agent));
+		await Bun.write(filePath, serializeAgentDefinitionDocument(agent));
 		written.push(filePath);
 	}
 

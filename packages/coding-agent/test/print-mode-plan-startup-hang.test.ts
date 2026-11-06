@@ -78,7 +78,7 @@ describe("print mode + plan.defaultOnStartup (#8272)", () => {
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStorage.keys.setRuntime("mock", "mock-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

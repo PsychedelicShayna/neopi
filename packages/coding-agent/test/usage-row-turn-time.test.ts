@@ -457,7 +457,7 @@ describe("AgentSession synthetic follow-up marking", () => {
 		fs.mkdirSync(sharedDir, { recursive: true });
 		authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.toml"));
 	});
 	afterAll(() => {
 		authStorage.close();

@@ -54,7 +54,7 @@ describe("AgentSession prewalk", () => {
 		tempDir = TempDir.createSync("@pi-prewalk-");
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterEach(async () => {
@@ -234,9 +234,9 @@ describe("AgentSession prewalk", () => {
 		);
 		expect(await created.session.newSession()).toBe(true);
 		expect(created.session.model?.id).toBe(planner.id);
-		expect(
-			created.session.sessionManager.getBranch().findLast(entry => entry.type === "model_change"),
-		).toMatchObject({ role: EPHEMERAL_MODEL_CHANGE_ROLE });
+		expect(created.session.sessionManager.getBranch().findLast(entry => entry.type === "model_change")).toMatchObject(
+			{ role: EPHEMERAL_MODEL_CHANGE_ROLE },
+		);
 		expect(created.session.sessionManager.getSessionLocalModelChange()).toBeUndefined();
 		expect(created.session.getPrewalkState()?.target.id).toBe(created.target.id);
 		await created.session.prompt("Implement the change");

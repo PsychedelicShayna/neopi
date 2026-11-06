@@ -190,7 +190,7 @@ describe("createAgentSession MCP catalog handoff", () => {
 				cwd: tempDir,
 				agentDir: tempDir,
 				authStorage,
-				modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+				modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 				model: getBundledModel("openai", "gpt-4o-mini"),
 				// A zero startup window waits for the fixture to connect, so its change
 				// lands while extensions load, the window this contract covers.

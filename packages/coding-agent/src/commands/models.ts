@@ -40,7 +40,7 @@ export default class Models extends Command {
 			description: "Disable extension discovery (explicit -e paths still work)",
 		}),
 		config: Flags.string({
-			description: "Load an extra config.yml-style overlay for this run (repeatable)",
+			description: "Load an extra TOML settings overlay for this run (repeatable; legacy YAML imports once)",
 			multiple: true,
 		}),
 	};

@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { type RpcFrame, RpcChild } from "./helpers/rpc-child";
 
 type SseEvent = Record<string, unknown> & { type: string };
@@ -111,7 +112,7 @@ async function spawnChild(options: {
 	roots.push(root);
 	const agentDir = path.join(root.path(), "agent");
 	fs.mkdirSync(agentDir, { recursive: true });
-	if (options.config) fs.writeFileSync(path.join(agentDir, "config.yml"), options.config);
+	if (options.config) fs.writeFileSync(path.join(agentDir, "config.toml"), options.config);
 	const child = await RpcChild.spawn({
 		root: root.path(),
 		mode: options.mode,
@@ -247,7 +248,7 @@ describe("RPC structured tool approval", () => {
 				frame => frame.type === "tool_approval_request" && frame.toolCallId === repeat.start.toolCallId,
 			),
 		).toBe(false);
-		expect(fs.existsSync(path.join(child.agentDir, "config.yml"))).toBe(false);
+		expect(fs.existsSync(path.join(child.agentDir, "config.toml"))).toBe(false);
 
 		// No approval in this process went through the select dialog.
 		expect(child.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "select")).toBe(
@@ -266,7 +267,7 @@ describe("RPC structured tool approval", () => {
 		const child = await spawnChild({
 			mode: "rpc-ui",
 			approvalMode: "yolo",
-			config: "tools:\n  approval:\n    bash: prompt\n    write: deny\n",
+			config: stringifySettingsToml({ tools: { approval: { bash: "prompt", write: "deny" } } }),
 		});
 
 		// Default handler: the same select dialog as before.
@@ -305,7 +306,7 @@ describe("RPC structured tool approval", () => {
 /** Issue #119: an eval cell calling the browser prelude raises the prelude's own approval. */
 describe("RPC eval prelude approval", () => {
 	// `eval` itself is allowed so the only prompting call is the prelude's host call.
-	const config = "tools:\n  approval:\n    eval: allow\n";
+	const config = stringifySettingsToml({ tools: { approval: { eval: "allow" } } });
 	const cell = { language: "js", code: "return JSON.stringify(await browser.tabs());" };
 
 	function preludeRequest(child: RpcChild, after: number): Promise<RpcFrame> {
@@ -354,8 +355,8 @@ describe("RPC eval prelude approval", () => {
 		expect(repeated.isError).toBe(false);
 		await repeat.settled();
 		expect(child.frames.filter(frame => frame.type === "tool_approval_request")).toHaveLength(2);
-		expect(fs.existsSync(path.join(child.agentDir, "config.yml"))).toBe(true);
-		expect(fs.readFileSync(path.join(child.agentDir, "config.yml"), "utf8")).toBe(config);
+		expect(fs.existsSync(path.join(child.agentDir, "config.toml"))).toBe(true);
+		expect(fs.readFileSync(path.join(child.agentDir, "config.toml"), "utf8")).toBe(config);
 
 		// No `Allow tool:` select appeared while the host handler was active.
 		expect(child.frames.some(frame => frame.type === "extension_ui_request" && frame.method === "select")).toBe(

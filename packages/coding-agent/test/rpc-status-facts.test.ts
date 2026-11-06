@@ -97,7 +97,7 @@ describe("get_state status facts", () => {
 			}),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
-			modelRegistry: new ModelRegistry(authStorage, path.join(os.tmpdir(), "status-facts-models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(os.tmpdir(), "status-facts-models.toml")),
 			thinkingLevel: ThinkingLevel.Low,
 		});
 		return session;

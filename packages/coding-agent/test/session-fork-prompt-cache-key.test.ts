@@ -202,7 +202,7 @@ describe("provider prompt-cache key session affinity", () => {
 		const authStorage = await AuthStorage.create(tempDir.join("scoped-auth.db"));
 		authStorage.keys.setRuntime(OPENAI_TEST_MODEL.provider, "test-key");
 		try {
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const parsed = parseArgs([
 				"--cwd",
 				source.cwd,

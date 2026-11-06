@@ -132,7 +132,7 @@ describe("model merge reuse", () => {
 		);
 		const cached = readModelCache("openai", 60_000, Date.now, cachePath);
 		expect(cached?.models.map(model => model.id)).toEqual(["fallback", "explicit"]);
-		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		const available = registry.getAvailableForProviders(new Set(["openai"]));
 		const all = registry.getAll().filter(model => model.provider === "openai");

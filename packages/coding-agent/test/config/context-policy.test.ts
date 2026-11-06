@@ -6,6 +6,7 @@ import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { logger } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { cfgContextRules, matchContextRule } from "../../src/config/context-policy";
 import { cfgEffortRules, cfgRoleEffortSelections, resolveImplicitEffort } from "../../src/config/effort-policy";
 import { Settings, resetSettingsForTest } from "../../src/config/settings";
@@ -62,8 +63,8 @@ describe("context rules", () => {
 	test("loads unknown effort names without widening rules or blocking unrelated models", async () => {
 		const dir = await directory();
 		await Bun.write(
-			path.join(dir, "config.yml"),
-			JSON.stringify({
+			path.join(dir, "config.toml"),
+			stringifySettingsToml({
 				effort: {
 					rules: [
 						{ selector: "test/broken", allowed: ["future-effort"] },
@@ -101,8 +102,8 @@ describe("context rules", () => {
 	test("rejects unknown efforts on UI writes and blocks invalid matching patterns despite an exact rule", async () => {
 		const dir = await directory();
 		await Bun.write(
-			path.join(dir, "config.yml"),
-			JSON.stringify({
+			path.join(dir, "config.toml"),
+			stringifySettingsToml({
 				effort: {
 					rules: [
 						{ selector: "test/reasoner", allowed: ["high"] },
@@ -166,16 +167,16 @@ describe("context rules", () => {
 		const dir = await directory();
 		const agentDir = path.join(dir, "agent");
 		await Bun.write(
-			path.join(agentDir, "config.yml"),
-			JSON.stringify({
+			path.join(agentDir, "config.toml"),
+			stringifySettingsToml({
 				context: { rules: [{ selector: "test/*", limit: 100_000 }] },
 				effort: { rules: [{ selector: "test/*", allowed: ["low"] }] },
 			}),
 		);
-		const overlay = path.join(dir, "overlay.yml");
+		const overlay = path.join(dir, "overlay.toml");
 		await Bun.write(
 			overlay,
-			JSON.stringify({
+			stringifySettingsToml({
 				context: { rules: [{ selector: "test/reasoner", limit: 50_000 }] },
 				effort: { rules: [{ selector: "test/reasoner", allowed: ["high"] }] },
 			}),

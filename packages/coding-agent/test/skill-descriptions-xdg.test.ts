@@ -153,7 +153,7 @@ describe("skill description failure caching and shutdown", () => {
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const settings = Settings.isolated({ modelRoles: { smol: "anthropic/claude-sonnet-4-5" } });
-		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { settings });
+		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), { settings });
 		vi.spyOn(agentCore, "instrumentedCompleteSimple").mockResolvedValue({
 			...createAssistantMessage(compressed),
 			stopReason,

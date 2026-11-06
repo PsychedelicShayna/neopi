@@ -59,7 +59,7 @@ describe("RPC plan mode", () => {
 		authDir = TempDir.createSync("@pi-rpc-plan-auth-");
 		authStorage = await AuthStorage.create(authDir.join("auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.toml"));
 	});
 
 	afterAll(() => {

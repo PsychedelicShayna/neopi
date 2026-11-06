@@ -1,6 +1,6 @@
 /**
  * Fullscreen `/chain configure` overlay: a mouse- and keyboard-driven editor
- * for the `CHAINS.yml` post-processing chains at project or user level.
+ * for the `CHAINS.toml` post-processing chains at project or user level.
  *
  * It mirrors {@link ./advisor-config} one level deeper: the list screen is a
  * two-pane split (clickable chain sidebar on the left, a preview of the
@@ -46,7 +46,7 @@ import type { SelectListNavigationState } from "../components/select-list";
 
 /** Host callbacks: all disk + live-runtime effects flow through these. */
 export interface ChainConfigCallbacks {
-	/** Load a scope's `CHAINS.yml` into an editable doc (empty when absent). */
+	/** Load a scope's `CHAINS.toml` into an editable doc (empty when absent). */
 	loadDoc: (scope: ChainConfigScope) => Promise<ChainsConfigDoc>;
 	/** Persist the doc to the scope's file and refresh the live chains. */
 	save: (scope: ChainConfigScope, doc: ChainsConfigDoc) => Promise<void>;
@@ -473,9 +473,9 @@ export class ChainConfigOverlayComponent implements Component {
 			value === "add"
 				? "Create a new chain, then add the steps its text passes through, top to bottom."
 				: value === "scope"
-					? `Switch between the project and user CHAINS.yml. Currently editing the ${this.#scope}-level file.`
+					? `Switch between the project and user CHAINS.toml. Currently editing the ${this.#scope}-level file.`
 					: value === "save"
-						? "Write this scope's CHAINS.yml and reload the live chains without a restart."
+						? "Write this scope's CHAINS.toml and reload the live chains without a restart."
 						: value === "close"
 							? "Close the editor. Unsaved changes are discarded."
 							: "";
@@ -682,7 +682,7 @@ export class ChainConfigOverlayComponent implements Component {
 			// the initial scope's warnings when the overlay opens, so only switches
 			// report here — no double-showing the opening file.
 			if (doc.warnings?.length) {
-				const message = `CHAINS.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
+				const message = `CHAINS.toml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
 				if (this.#cb.warn) this.#cb.warn(message);
 				else this.#cb.notify(message);
 			}

@@ -45,7 +45,7 @@ beforeEach(async () => {
 	}
 	tempDir = TempDir.createSync("@moa-validate-");
 	authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-	registry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	registry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 	registry.registerProvider("fake", {
 		baseUrl: "http://127.0.0.1:1/v1",
 		apiKey: "test-key",

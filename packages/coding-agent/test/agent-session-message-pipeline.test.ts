@@ -850,7 +850,7 @@ describe("AgentSession message pipeline", () => {
 		} as ModelSpec<Api>) as Model<Api>;
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -930,7 +930,7 @@ describe("AgentSession message pipeline", () => {
 		} as ModelSpec<Api>) as Model<Api>;
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -2387,7 +2387,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -2459,7 +2459,7 @@ describe("AgentSession message pipeline", () => {
 			}));
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
@@ -2537,7 +2537,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
@@ -2633,7 +2633,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -2735,7 +2735,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -2853,7 +2853,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -2955,7 +2955,7 @@ describe("AgentSession message pipeline", () => {
 			});
 		};
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const { session } = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),

@@ -209,7 +209,7 @@ A chain rewrites a composer prompt through ordered model steps before it is sent
 - **`/chain use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
 - **`/chain status`** lists the mode, the active chain, and every chain's steps; **`/chain configure`** opens the editor.
 
-Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and continue shortcuts are not. Up-arrow history keeps the typed text, not the rewrite. `chaining.auto` and `chaining.active` are settings, so a project can override them in its `.omp/config.yml`.
+Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and continue shortcuts are not. Up-arrow history keeps the typed text, not the rewrite. `chaining.auto` and `chaining.active` are settings, so a project can override them in its `.omp/config.toml`.
 
 While a chain runs, the composer is locked: the draft stays visible with every line painted by the `display.shimmer` sweep (static muted text when shimmer is disabled), typing is ignored, and the status line shows the chain, the step, and `preprocessing…`. Each completed step replaces the composer text, so the rewrite is visible as it happens.
 
@@ -217,27 +217,34 @@ While a chain runs, the composer is locked: the draft stays visible with every l
 - **Esc Esc Esc** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
-Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:
+Chains live in `CHAINS.toml` beside advisors' `WATCHDOG.toml`: `<agent dir>/CHAINS.toml` (global) and the project root's `CHAINS.toml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:
 
 - **`enabled: false`** turns a step off without deleting it: the chain skips it and runs the remaining steps in their configured order, and the step keeps its prompt, model, and position for when it is turned back on. Steps without the key are on. In `/chain configure`, Space on a step row of the chain screen turns that step on or off; the row shows `[x]` or `[ ]`, and `/chain status` and the configure preview mark it `(off)`. A chain whose steps are all off sends the text unchanged, the same as a chain with no steps.
 - **`context: true`** gives the step the live session transcript (thinking elided, tool calls collapsed) wrapped in `<transcript>`, with the text to rewrite in `<draft>`, so references like "remove mine" resolve against the conversation. Both tags carry a per-run boundary so tag-like text inside them cannot close a block. The transcript keeps only the newest messages that fit after the step prompt, granted tool schemas, framing, and the provider's maximum output are reserved; the output reserve includes provider-added reasoning tokens when enabled. Off by default; the configure screen's "Transcript context" row toggles it.
 - **`systemPrompt`** replaces the bundled chain system prompt, which tells the model it is rewriting a draft and to output only the rewrite, with no notes about what changed. The step `prompt` is always appended after it. In `/chain configure` the "System prompt" row shows `(bundled default)`, Enter opens the current text, and Backspace on the row resets an override.
 
-```yaml
-chains:
-  - name: decompose
-    description: Vague request to concrete instructions
-    steps:
-      - name: names
-        model: xai-oauth/grok-4.7:low
-        tools: [bash]
-        context: true
-        prompt: |
-          Check the system username with bash and correct any misspelling of it in the text. Output only the text.
-      - name: instructions
-        prompt: |
-          Rewrite the text as clear, numbered instructions for a coding agent. Output only the rewrite.
+```toml
+[[chains]]
+name = "decompose"
+description = "Vague request to concrete instructions"
+
+[[chains.steps]]
+name = "names"
+model = "xai-oauth/grok-4.7:low"
+tools = ["bash"]
+context = true
+prompt = """Check the system username with bash and correct any misspelling of it in the text. Output only the text.
+"""
+
+[[chains.steps]]
+name = "instructions"
+prompt = """Rewrite the text as clear, numbered instructions for a coding agent. Output only the rewrite.
+"""
 ```
+
+Legacy `CHAINS.yml` / `CHAINS.yaml` is imported once into a sibling TOML file atomically with the same permissions. The YAML remains unchanged; existing TOML wins with a paths-only warning when both formats exist. Editor saves patch TOML while preserving top-level, chain, and step comments and future fields.
+
+YAML comment text is retained in a labelled TOML preamble; its original field associations cannot survive the format change.
 
 Steps without a model use the **Prose** role (`@prose`), which falls back to the fast `smol` chain when unset; switching that one role in the model menu retargets every such step.
 

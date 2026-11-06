@@ -8,9 +8,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { parseSessionContent } from "../../session/session-loader";
 import { type BeatKind, type BeatRecord, ChroniclerStore, type CommittedChroniclerBatch } from "../store";
+import { readNativeMarkdown } from "../../utils/native-frontmatter";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** The session header is the first record after the title slot; this prefix always contains it. */
@@ -147,11 +148,7 @@ function toAtom(
 
 async function frontmatterProject(beatFile: string): Promise<string | undefined> {
 	try {
-		const { frontmatter } = parseFrontmatter(await Bun.file(beatFile).text(), {
-			rawKeys: true,
-			repair: false,
-			level: "off",
-		});
+		const { frontmatter } = await readNativeMarkdown(beatFile, { readOnly: true });
 		return typeof frontmatter.project === "string" ? frontmatter.project.trim() : undefined;
 	} catch {
 		return undefined;

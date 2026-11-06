@@ -62,7 +62,7 @@ describe("disabledProviders takes effect live", () => {
 		const opus = bundled("anthropic", "claude-opus-4-5");
 		const gpt = bundled("openai", "gpt-5");
 		const settings = Settings.isolated();
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"), { settings });
 		const live = startSession(settings, modelRegistry, [sonnet, gpt, opus]);
 		expect(live.getAvailableModels().some(model => model.provider === "openai")).toBe(true);
 
@@ -79,7 +79,7 @@ describe("disabledProviders takes effect live", () => {
 		const sonnet = bundled("anthropic", "claude-sonnet-4-5");
 		const settings = Settings.isolated();
 		cfgDisabledProviders.set(settings, ["lm-studio"]);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"), { settings });
 		startSession(settings, modelRegistry, [sonnet]);
 		expect(modelRegistry.getDiscoverableProviders()).not.toContain("lm-studio");
 		// Only a catalog rebuild re-seeds implicit discovery; await the one the session's

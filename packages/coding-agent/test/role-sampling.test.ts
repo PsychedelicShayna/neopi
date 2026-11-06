@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { streamSimple, type Api, type Model, type SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -71,7 +72,7 @@ describe("role-scoped sampling and request settings", () => {
 		auth = await AuthStorage.create(fixture.join("auth.db"));
 		auth.keys.setRuntime("openai", "test-key");
 		auth.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(auth, fixture.join("models.yml"));
+		modelRegistry = new ModelRegistry(auth, fixture.join("models.toml"));
 	});
 
 	beforeEach(() => {
@@ -244,8 +245,8 @@ describe("role-scoped sampling and request settings", () => {
 		const agentDir = temp.join("agent");
 		const cwd = temp.join("project");
 		await fs.mkdir(cwd, { recursive: true });
-		const configPath = path.join(agentDir, "config.yml");
-		await Bun.write(configPath, "temperature: 0.9\ntextVerbosity: low\n");
+		const configPath = path.join(agentDir, "config.toml");
+		await Bun.write(configPath, stringifySettingsToml({ temperature: 0.9, textVerbosity: "low" }));
 		const settings = await Settings.init({ cwd, agentDir });
 		expect(cfgTemperature.get(settings)).toBe(0.9);
 		expect(cfgTextVerbosity.get(settings)).toBe("low");

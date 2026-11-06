@@ -2,10 +2,10 @@
 
 `omp` resolves settings from built-in defaults, a persistent global config file, optional project-local config, one-shot CLI overlays, and in-memory runtime overrides. Reach for project settings when one repository needs a different provider set, model role, tool policy, memory backend, or UI behavior than your global defaults — without touching your machine-wide configuration.
 
-Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional; numbers and arrays without UI choices remain config-file-only unless the setting opts into the panel's JSON editor (such as `contextFiles.extra`).
+Settings are stored as TOML documents. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional; numbers and arrays without UI choices remain config-file-only unless the setting opts into the panel's JSON editor (such as `contextFiles.extra`).
 
 - For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
-- For custom model definitions in `models.yml`, see [Models](./models.md).
+- For custom model definitions in `models.toml`, see [Models](./models.md).
 - For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
 - For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
 - For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
@@ -14,18 +14,18 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 
 | Scope             | Path                                                  | Read behavior                                                                                                                            | Write behavior                                                                                                                                                                   |
 | ----------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Global            | `~/.omp/agent/config.yml` (or existing `config.yaml`) | The main persistent settings file. `config.yml` is the canonical write target; an existing `config.yaml` is loaded and updated in place. | `/settings`, `omp config set`, and `omp config reset` write here.                                                                                                                |
-| Global legacy     | `~/.omp/agent/settings.json`                          | Considered for migration only when neither main YAML filename exists.                                                                    | Not written; renamed to `settings.json.bak` after a non-empty migrated YAML file is successfully saved.                                                                          |
-| Project           | `<cwd>/.omp/config.yml` (plus `.omp/settings.json`)   | Loaded when the process working directory has a non-empty `.omp/`.                                                                       | Settings commands do not write arbitrary project keys. With `modelRoleStorage: project`, model-selector role assignments update only `modelRoles` here; edit other keys by hand. |
-| Project legacy    | `<cwd>/.omp/settings.json`                            | Still read; project `config.yml` is merged on top of it.                                                                                 | Not written by settings commands.                                                                                                                                                |
-| CLI overlay       | Any file passed with `--config <file>`                | Loaded after global and project settings, for that one process. Repeatable.                                                              | Never persisted.                                                                                                                                                                 |
+| Global | `~/.omp/agent/config.toml` | Canonical persistent settings; legacy YAML imports once if TOML is absent. | `/settings`, `omp config set`, and `omp config reset` write here. |
+| Global legacy | `~/.omp/agent/settings.json` | Considered only when no main settings document exists. | Not written; migrated settings are saved as TOML. |
+| Project           | `<cwd>/.omp/config.toml` (plus `.omp/settings.json`)   | Loaded when the process working directory has a non-empty `.omp/`.                                                                       | Settings commands do not write arbitrary project keys. With `modelRoleStorage: project`, model-selector role assignments update only `modelRoles` here; edit other keys by hand. |
+| Project legacy    | `<cwd>/.omp/settings.json`                            | Still read; project `config.toml` is merged on top of it.                                                                                 | Not written by settings commands.                                                                                                                                                |
+| CLI overlay | Any TOML file passed with `--config <file>` | Loaded after global/project settings, for one process; repeatable. Legacy YAML paths import once to sibling `.toml`. | Overlay settings are never copied to global settings. |
 | Runtime overrides | In-memory only                                        | Set by settings overrides such as `--approval-mode`, role flags, and feature env vars.                                                   | Never persisted.                                                                                                                                                                 |
 
 The global paths above describe the default profile. `omp --profile work` selects `~/.omp/profiles/work/agent` instead, isolating settings, auth, sessions, and caches. `OMP_PROFILE` also selects a profile; `PI_PROFILE` is its compatibility fallback only when `OMP_PROFILE` is absent. An explicit `--profile` wins over both, and `--profile default` selects the default profile.
 
-`PI_CODING_AGENT_DIR` relocates the default profile's agent directory, including `config.yml` and its agent data. Named profiles derive their own agent directory and ignore this override. Use `omp config path` (or `omp --profile work config path`) to print the active settings directory.
+`PI_CODING_AGENT_DIR` relocates the default profile's agent directory, including `config.toml` and its agent data. Named profiles derive their own agent directory and ignore this override. Use `omp config path` (or `omp --profile work config path`) to print the active settings directory.
 
-On Linux and macOS, configured `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` can redirect data/state/cache when the corresponding `omp` directories exist. Named profiles require the corresponding `omp/profiles/<name>` directory. This does not move `config.yml`: it stays under the active agent directory, while `agent.db` and other categorized data may live elsewhere. `omp config init-xdg` creates the base directories but does not migrate files or set environment variables.
+On Linux and macOS, configured `XDG_DATA_HOME`, `XDG_STATE_HOME`, and `XDG_CACHE_HOME` can redirect data/state/cache when the corresponding `omp` directories exist. Named profiles require the corresponding `omp/profiles/<name>` directory. This does not move `config.toml`: it stays under the active agent directory, while `agent.db` and other categorized data may live elsewhere. `omp config init-xdg` creates the base directories but does not migrate files or set environment variables.
 
 Native project settings are intentionally scoped to the process working directory's `.omp/` folder — settings discovery does **not** walk ancestor directories looking for the nearest `.omp/`. Other discovery providers (Claude, Codex, Gemini, Cursor, OpenCode) can also contribute project-level settings from their own files; those are read-only from `omp` settings commands and can be turned off by provider id (see [Provider and source disabling](#provider-and-source-disabling)).
 
@@ -42,46 +42,36 @@ Reloading preserves higher-precedence project, CLI, and session/runtime override
 
 ## Config file formats
 
-The canonical global file is YAML at `config.yml`; `config.yaml` is accepted as a compatibility filename. The generic config loader used for other files (for example `models.yml`) accepts `.yml`, `.yaml`, `.json`, and `.jsonc`:
+Native settings use `config.toml` under the active agent directory and the current project’s `.omp/` directory.
 
-- When a `.yml`/`.yaml` path is requested and only a sibling `.json` exists, it is migrated to YAML automatically (idempotent, once per process).
-- `.json` and `.jsonc` configs are read as-is, with no migration.
-- Empty YAML (or YAML `null`) is treated as an empty settings mapping. Other non-mapping top levels are invalid. On writable startup, `omp` moves a syntactically invalid or non-mapping persistent settings file to a uniquely named `.broken-*` backup and exits with the original error and backup path. A `--config` overlay with a bare array/scalar is also a hard error, but is not moved.
-- Invalid values for ordinary schema entries warn and read as their schema defaults. Settings with explicit validators, such as per-agent compaction triggers or provider concurrency limits, can reject the configuration instead. Unknown keys in hand-written files are not a substitute for a registered setting.
+When TOML is absent, legacy `config.yml`, `config.yaml`, or the earlier `settings.toml` imports once. Atomic import never overwrites a concurrently created canonical file. Legacy sources are never rewritten or deleted. Once TOML exists, the **entire document wins**: even empty or comment-only TOML suppresses stale YAML. Omitted keys resolve through other scopes or defaults, never old YAML.
 
-### Optional TOML overlay
+Invalid canonical TOML fails closed rather than falling back. Invalid ordinary schema values warn and read as defaults; explicit validators can reject configuration.
 
-Place `config.toml` beside the global `config.yml` or `config.yaml`, or in the current project's `.omp/` directory. The legacy name `settings.toml` still works when `config.toml` is absent. Having both is an error, even if one is empty. Missing, empty, and comment-only files leave YAML settings unchanged. TOML-only main settings also load without YAML.
+### Native TOML settings
 
-For each **top-level key**, a TOML value replaces the entire YAML value at that scope. Tables and arrays are not deep-merged or concatenated. For example, `[compaction]` with only `enabled = false` discards the YAML `compaction` table's other entries; those entries fall back to lower scopes or schema defaults. Project settings still override global settings, and explicit `--config` YAML overlays and runtime overrides retain their existing precedence.
-
-Generate a documented, reproducible defaults file without reading your current settings:
+Generate documented defaults without loading current settings:
 
 ```bash
 npi config dump-toml > settings.defaults.toml
 ```
 
-The output includes every registered setting and its schema default. Unset defaults remain comments. Review it before copying it to `config.toml`; a fully populated overlay pins defaults and replaces matching YAML keys. Regenerate it after upgrades to see new settings. Invalid TOML is a hard error naming the file, never a silent fallback. Live settings reloads watch both TOML filenames in user and project directories.
+The output includes registered settings and defaults; unset defaults remain comments. Review before copying to `config.toml`: a fully populated file pins defaults. Scope precedence is unchanged.
 
-The settings panel, `config set`/`reset`, and other Settings setters save to the selected TOML file when one exists at the edited scope, and to YAML otherwise. Global and project saves use the existing lock, atomic replacement, expected-value checks and conflict receipts. A TOML file appearing or disappearing after a settings load rejects the pending save; reload before retrying. YAML bytes stay untouched during a TOML save.
-
-Saves preserve untouched TOML top-level keys, their comments and formatting. An edited top-level table is rewritten as an inline table: its internal comments, quoting, spacing and table layout are not retained. Standalone comments are retained, though their position relative to rewritten keys can change. Explicit-clear metadata is regenerated. Editing a nested key absent from TOML copies its effective YAML top-level table first, so sibling values remain intact. Clearing a whole top-level key writes an explicit null marker instead of exposing the YAML value underneath.
+The settings panel, `config set`/`reset`, and Settings setters always save TOML. Saves preserve unrelated nested comments and values, use atomic replacement and expected-value conflict checks, and never encode YAML. Legacy source bytes remain untouched.
 
 #### Convert your existing settings
 
-Conversion is explicit and takes effect immediately. Subsequent settings saves use TOML, so no YAML-save warning or `--yes` acknowledgment is needed.
+Automatic import needs no command. For explicit conversion:
 
 ```bash
-npi config to-toml                         # user and current project main settings, when present
-npi config to-toml /path/to/config.yaml     # one explicit main settings file
-npi config to-toml /path/to/config.yml --force
+npi config to-toml
+npi config to-toml /path/to/config.yaml
 ```
 
-Conversion writes the replacement-extension sibling `config.toml` with private permissions, leaving YAML bytes unchanged. It carries the full parsed YAML, including unknown extension keys, credentials, nested tables, mixed arrays, arrays of tables and multiline text. It does not add registry defaults. Existing TOML is never overwritten without `--force`. A legacy `settings.toml` must be reconciled or moved first, because creating a second overlay would be ambiguous.
+Explicit conversion writes the sibling `config.toml`, preserving parsed values without adding registry defaults. YAML comments and alias syntax are not retained. Existing TOML always wins; conversion warns and leaves it untouched. Diagnostics identify paths without printing credentials.
 
-The converter reports dropped YAML comments and expanded anchors/aliases by path without printing values. It rejects cycles, multiple documents, non-string mapping keys, unsupported tags, date/time values, and integers or string control characters that the installed reader cannot recover exactly. Date-looking YAML strings remain strings. Quoting and block-scalar style are normalized. Every emitted document is parsed with `Bun.TOML.parse` and checked against the complete parsed YAML before publication. Tabs use literal TOML tabs because this Bun version swaps the `\t` and `\f` escapes. NUL, form feed, other unsupported control characters and unpaired surrogates are reported rather than changed.
-
-TOML has no native null. NeoPi reserves `[__npi]` with `version = 1` and `null_paths`, a list of JSON Pointer paths, to preserve explicit clears. Null object entries are omitted and recorded; null array slots use an empty-string placeholder plus a recorded path. Escape `~` as `~0` and `/` as `~1` in each path segment. Decoding restores nulls before applying top-level precedence, so a YAML value cannot reappear under a TOML clear. For example:
+TOML has no native null. NeoPi reserves `[__npi]` with `version = 1` and `null_paths`, a list of JSON Pointer paths, to preserve explicit clears. Null object entries are omitted and recorded; null array slots use an empty-string placeholder plus a recorded path. Escape `~` as `~0` and `/` as `~1` in each path segment. Decoding restores nulls before settings resolution. For example:
 
 ```toml
 [roleSettings.custom]
@@ -91,9 +81,9 @@ version = 1
 null_paths = ["/roleSettings/custom/temperature"]
 ```
 
-This clears the custom role's temperature rather than inheriting its YAML value. Removing that entire top-level TOML override and its null paths restores YAML fallback. `__npi` in source YAML is a conversion conflict, not a key the converter silently removes. Undefined/unset values are not null and are rejected by the general writer.
+This clears the custom role's temperature. Removing the entry and its null path allows normal scope/default resolution. `__npi` in source YAML is an import conflict, not a user setting.
 
-This converter currently covers main settings only. Other YAML families, independent configuration readers and format-aware menu saves are later phases of [#34](https://github.com/PsychedelicShayna/neopi/issues/34). Until menu saves become format-aware, edit TOML directly to change an overlaid key.
+Other owned configuration families, including models, advisors, chains, secrets, LSP and DAP, also use canonical TOML and one-time legacy import. Their dedicated editors save TOML.
 
 ## Reading and writing settings
 
@@ -104,12 +94,12 @@ Open `/settings global`, `/settings project`, or `/settings session` to edit one
 ```bash
 omp config list                 # all settings with current effective values
 omp config list --json          # same, machine-readable
-omp config list --scope global --json   # only what config.yml sets, as written
+omp config list --scope global --json   # only what config.toml sets, as written
 omp config get theme.dark       # one value
 omp config get theme.dark --json
 omp config set compaction.enabled false
 omp config set defaultThinkingLevel medium
-omp config reset steeringMode   # remove a key from config.yml so its default applies
+omp config reset steeringMode   # remove a key from config.toml so its default applies
 omp config path                 # print the active agent directory
 ```
 
@@ -125,14 +115,14 @@ This only controls the startup splash animation. It does not rerun setup or chan
 
 | Command                        | Effect                                                                                                                                                                                                                                                                                            |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `omp config list`              | Print every setting grouped by tab, with its current value and type. `--json` emits an object keyed by setting path with `{ value, type, description }`. Configured credential fields are masked as `********` in human output; in JSON their `value` is omitted and `redacted: true` is emitted. With `--scope global` or `--scope project`, it lists only the keys that layer (`config.yml`, or the project's settings files for the current directory) sets, with the values as the layer holds them: path-scoped arrays (`enabledModels`, `enabledProviders`, `disabledProviders`) keep their `{ path, … }` entries instead of resolving them for the current directory, and `--json` emits `{ value, type, description }` per key. Defaults, other layers and environment variables are not consulted. |
+| `omp config list`              | Print every setting grouped by tab, with its current value and type. `--json` emits an object keyed by setting path with `{ value, type, description }`. Configured credential fields are masked as `********` in human output; in JSON their `value` is omitted and `redacted: true` is emitted. With `--scope global` or `--scope project`, it lists only the keys that layer (`config.toml`, or the project's settings files for the current directory) sets, with the values as the layer holds them: path-scoped arrays (`enabledModels`, `enabledProviders`, `disabledProviders`) keep their `{ path, … }` entries instead of resolving them for the current directory, and `--json` emits `{ value, type, description }` per key. Defaults, other layers and environment variables are not consulted. |
 | `omp config get <key>`         | Print the effective value of one key. Unknown keys exit non-zero. `--json` emits `{ key, value, type, description }`. This is an explicit single-key request, so credential values are returned unmasked.                                                                                         |
-| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the selected global TOML or YAML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
-| `omp config reset <key>`       | Clear the global key, masking underlying YAML when saving to TOML and allowing another scope or the schema default to apply. Prints the resulting effective value, masking non-empty credentials as `********`; JSON omits a credential's `value` and emits `{ key, redacted: true }`. |
+| `omp config set <key> <value>` | Parse `<value>` against the key's schema type, write it to the selected global TOML file, and print the value written. When another source still supplies the effective value, it says which instead (`--json`: `overriddenBy` is the env var name, or `project`, `overlay`, or `runtime`; `fallbackEnv` names a fallback env var used while the saved value is blank). |
+| `omp config reset <key>` | Remove the global key so another scope or the schema default applies. Prints the resulting effective value, masking credentials as `********`; JSON omits a credential value and emits `{ key, redacted: true }`. |
 | `omp config path`              | Print the active agent directory (honors `PI_CODING_AGENT_DIR`).                                                                                                                                                                                                                                  |
 | `omp config init-xdg`          | On Linux and macOS, create the `omp` directories under the effective XDG data, state, and cache homes. It does not move existing files or set the XDG environment variables. Other platforms exit non-zero.                                                                                       |
 | `npi config dump-toml`         | Write documented registry defaults as TOML to stdout without loading user settings. Redirect to a file to regenerate it. |
-| `npi config to-toml [file] [--force]` | Convert full user and current project main YAML settings, or one explicit `config.yml`/`config.yaml`, to private `config.toml` siblings. Report unsupported values and lost YAML syntax. |
+| `npi config to-toml [file]` | Import user/project legacy YAML, or one explicit `config.yml`/`config.yaml`, into sibling `config.toml`. Existing TOML always wins. |
 
 `omp config` with no subcommand lists settings. `--help` or `-h` displays command help. The `--json` flag is accepted by `list`, `get`, `set`, and `reset`. `--scope` is accepted by `list` only.
 
@@ -155,11 +145,11 @@ Setting-specific normalization and validation still apply after parsing. For exa
 
 ### Where writes go
 
-`omp config set`, `omp config reset`, `/settings`, and persistent runtime settings changes write the global main YAML file under the active agent directory. Runtime-only overrides are not saved. Settings commands do not write arbitrary keys to `<cwd>/.omp/config.yml`. Model-role assignment or clearing with `modelRoleStorage: project` updates only the affected roles there; missing project roles fall back to global roles. To create another project-local override, edit the project file directly (see [Project-local config](#project-local-config)).
+`omp config set`, `omp config reset`, `/settings`, and persistent runtime settings changes write the global main TOML file under the active agent directory. Runtime-only overrides are not saved. Settings commands do not write arbitrary keys to `<cwd>/.omp/config.toml`. Model-role assignment or clearing with `modelRoleStorage: project` updates only the affected roles there; missing project roles fall back to global roles. To create another project-local override, edit the project file directly (see [Project-local config](#project-local-config)).
 
 Saves are debounced and re-read the file under a lock. Disjoint external edits are preserved. If an external writer changed the same global setting or model role after a local change was staged, the stale local change is skipped with a warning rather than overwriting the newer file value.
 
-Saves through a symlinked main config preserve the link and update its resolved target. Targets containing `.` or `..` follow the operating system's rules: Windows collapses those segments before following intermediate links, while POSIX traverses each component on disk. A target such as `alias/../config.yml` can therefore name different files on the two platforms.
+Saves through a symlinked main config preserve the link and update its resolved target. Targets containing `.` or `..` follow the operating system's rules: Windows collapses those segments before following intermediate links, while POSIX traverses each component on disk. A target such as `alias/../config.toml` can therefore name different files on the two platforms.
 
 ### Live file changes
 
@@ -182,17 +172,17 @@ built-in defaults  <-  global config  <-  project config  <-  CLI overlays  <-  
 From highest to lowest:
 
 1. **Setting env var** — an environment variable declared on the setting's definition (for example `PI_PY` for `eval.py`, `OMP_AUTH_BROKER_URL` for `auth.broker.url`). Parsed by the setting's type unless it declares a custom parser; unparseable text (such as `PI_EDIT_VARIANT=auto`) counts as unset. Booleans follow the `parseFlag` convention: empty counts as unset, `1`/`y`/`true`/`yes`/`on` (all-lowercase or all-uppercase) mean true, and any other value means false. A few are declared as fallbacks instead (`SEARXNG_*`, `MNEMOPI_EMBEDDING_MODEL`): they only replace the built-in default, so any configured layer wins over them — except a configured `null`, which counts as unset. `SEARXNG_ENDPOINT`, `SEARXNG_TOKEN`, and `MNEMOPI_EMBEDDING_MODEL` also apply when the setting is a blank string.
-2. **Runtime overrides** — settings applied in memory for the current process, including `--smol`, `--slow`, `--plan`, `--approval-mode`, `--auto-approve`/`--yolo`, `--hide-thinking`, `--advisor`, `--external-thinking`, and protocol-mode defaults. Never persisted. Other one-shot options such as `--model`, `--thinking`, `--service-tier`, `--no-lsp`, `--no-pty`, and `--api-key` affect session/model/transport options rather than all being registry settings. Protocol-mode defaults (RPC/ACP) hold only while nothing else configures the setting: a settings write or reset of it, a `config.yml` or project edit picked up by a reload, or an ACP session's own project config replaces them.
+2. **Runtime overrides** — settings applied in memory for the current process, including `--smol`, `--slow`, `--plan`, `--approval-mode`, `--auto-approve`/`--yolo`, `--hide-thinking`, `--advisor`, `--external-thinking`, and protocol-mode defaults. Never persisted. Other one-shot options such as `--model`, `--thinking`, `--service-tier`, `--no-lsp`, `--no-pty`, and `--api-key` affect session/model/transport options rather than all being registry settings. Protocol-mode defaults (RPC/ACP) hold only while nothing else configures the setting: a settings write or reset of it, a `config.toml` or project edit picked up by a reload, or an ACP session's own project config replaces them.
 3. **CLI config overlays** — each `--config <file>`; later overlay files override earlier ones.
-4. **Project settings** — `<cwd>/.omp/settings.json` then `<cwd>/.omp/config.yml` (and contributions from other discovery providers at project level).
-5. **Global settings** — the active agent/profile directory's `config.yml` (or existing `config.yaml`).
+4. **Project settings** — `<cwd>/.omp/settings.json` then `<cwd>/.omp/config.toml` (and contributions from other discovery providers at project level).
+5. **Global settings** — the active agent/profile directory's `config.toml`.
 6. **Built-in defaults** — from the setting definition.
 
 A key that is unset at every layer resolves to its default at read time.
 
 ### Environment overrides
 
-Environment variables are never written back to `config.yml`. Variables declared on a setting definition form the top layer described above; others are read directly by the feature that owns the value (`PI_NO_PTY`) or applied as runtime overrides (`PI_SMOL_MODEL` sets the `smol` model role for the process). Relevant setting overrides and configuration selectors:
+Environment variables are never written back to `config.toml`. Variables declared on a setting definition form the top layer described above; others are read directly by the feature that owns the value (`PI_NO_PTY`) or applied as runtime overrides (`PI_SMOL_MODEL` sets the `smol` model role for the process). Relevant setting overrides and configuration selectors:
 
 | Env var                                             | Overrides setting                                 | Notes                                                                                             |
 | --------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -219,7 +209,7 @@ Environment variables are never written back to `config.yml`. Variables declared
 | `MNEMOPI_EMBEDDING_MODEL`                           | `mnemopi.embeddingModel`                          | Fallback when absent, null, or blank.                                                             |
 | `PI_CONFIG_FILES`                                   | CLI config overlays                               | Platform path-list (`:` on Unix, `;` on Windows); files load in order before `--config` overlays. |
 
-Provider API keys are resolved separately (stored auth, OAuth, `models.yml`, environment, and `.env` files); see [Providers](./providers.md) and the full [Environment variables](./environment-variables.md) reference.
+Provider API keys are resolved separately (stored auth, OAuth, `models.toml`, environment, and `.env` files); see [Providers](./providers.md) and the full [Environment variables](./environment-variables.md) reference.
 
 ## Merge rules
 
@@ -230,37 +220,40 @@ Layers are combined with a deep merge:
 - **A configured `null` counts as unset at read time**, so the schema default (or a fallback env var) applies rather than a lower-layer value. Project `modelRoles` entries are an exception: cleared/null project roles fall back to global roles.
 - **Named model presets are resolved whole**, not deep-merged across layers. A project preset of the same name replaces the global preset. Runtime/overlay `null` entries can hide a lower-layer preset.
 
-Use nested YAML mappings for dotted setting paths:
+Use nested TOML tables for dotted setting paths:
 
-```yaml
-theme:
-   dark: titanium
-   light: light
+```toml
+["theme"]
+"dark" = "titanium"
+"light" = "light"
 
-tools:
-   approvalMode: write
-   approval:
-      bash: prompt
-      read: allow
+["tools"]
+"approvalMode" = "write"
+
+["tools"."approval"]
+"bash" = "prompt"
+"read" = "allow"
 ```
 
 ### Bash command approval patterns
 
-`tools.approval` is a record keyed by tool name; dotted forms such as `tools.approval.eval` and `tools.approval.computer` identify entries in that record, not separate setting ids. Each entry sets that tool's default policy. One entry is not a tool: the literal key `computer.control` (`tools.approval["computer.control"]`, written `computer.control: allow` in YAML, never nested under `computer`) answers the `computer` tool's requests for foreground control; see [computer use](./computer-use.md#menus-held-input-and-task-control). For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard. Whitespace is the exception: before matching, every run of spaces, tabs, or newlines in both the pattern and the command collapses to a single space, and leading/trailing whitespace is trimmed. A newline in a pattern therefore matches any whitespace: `match: "*\n*"` behaves like `"* *"` and matches every command containing a space. A newline-specific rule is unnecessary to catch dangerous commands in a newline-separated list: `deny` and `prompt` rules check each segment (see below). `allow` rules reject unquoted newline command separators, but can approve commands containing quoted or escaped literal newlines when the full command matches.
+`tools.approval` is a record keyed by tool name; dotted forms such as `tools.approval.eval` and `tools.approval.computer` identify entries in that record, not separate setting ids. Each entry sets that tool's default policy. One entry is not a tool: the literal key `computer.control` (`tools.approval["computer.control"]`, written `"computer.control" = "allow"` in TOML, never nested under `computer`) answers the `computer` tool's requests for foreground control; see [computer use](./computer-use.md#menus-held-input-and-task-control). For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard. Whitespace is the exception: before matching, every run of spaces, tabs, or newlines in both the pattern and the command collapses to a single space, and leading/trailing whitespace is trimmed. A newline in a pattern therefore matches any whitespace: `match: "*\n*"` behaves like `"* *"` and matches every command containing a space. A newline-specific rule is unnecessary to catch dangerous commands in a newline-separated list: `deny` and `prompt` rules check each segment (see below). `allow` rules reject unquoted newline command separators, but can approve commands containing quoted or escaped literal newlines when the full command matches.
 
 By default, an `allow` rule must match the entire command and cannot approve a compound line. Set `bash.allowCompoundCommands: true` to also evaluate conservative chains of two or more literal commands joined only by `&&`:
 
-```yaml
-tools:
-   approvalMode: write
-   approval:
-      bash: allow
+```toml
+["tools"]
+"approvalMode" = "write"
 
-bash:
-   allowCompoundCommands: true
-   patterns:
-      - match: "rm -f *"
-        approval: allow
+["tools"."approval"]
+"bash" = "allow"
+
+["bash"]
+"allowCompoundCommands" = true
+
+[["bash"."patterns"]]
+"match" = "rm -f *"
+"approval" = "allow"
 ```
 
 With this configuration, `cmp tmp/result.json artifacts/result.json && rm -f tmp/result.json` can run without a prompt. OMP resolves the ordered rules independently for each original segment: `rm` is explicitly allowed, while the unmatched `cmp` segment inherits the normal standalone bash policy. When any segment is unmatched, the command retains the `exec` tier with no explicit policy, so the generic resolver applies `tools.approval.bash` and then the active approval mode. An unmatched segment therefore prompts only if that tool-wide policy or mode requires it.
@@ -281,75 +274,84 @@ Valid rule approvals are `allow`, `prompt`, and `deny`. Regardless of the opt-in
 
 `bashInterceptor` is separate from `bash.patterns`: it redirects Bash commands to dedicated tools rather than defining whether a command may execute. Enable it explicitly and configure regular-expression patterns with a replacement tool and a model-facing message:
 
-```yaml
-bashInterceptor:
-   enabled: true
-   patterns:
-      - pattern: '^\s*(cat|head|tail)\s+'
-        tool: read
-        message: "Use the read tool instead."
+```toml
+["bashInterceptor"]
+"enabled" = true
+
+[["bashInterceptor"."patterns"]]
+"pattern" = "^\\s*(cat|head|tail)\\s+"
+"tool" = "read"
+"message" = "Use the read tool instead."
 ```
 
 The named replacement tool must be available in the current session or the interceptor does not block the Bash call. For a detailed comparison of permission policy and dedicated-tool routing, including compound-command behavior and ordering, see [the Bash tool documentation](tools/bash.md#command-policy-and-dedicated-tool-routing).
 
 ### Worked example: global vs. project
 
-```yaml
-# ~/.omp/agent/config.yml
-tools:
-   approvalMode: write
-   approval:
-      bash: prompt
-      read: allow
-disabledProviders:
-   - anthropic
-   - openai
-   - google
+```toml
+# ~/.omp/agent/config.toml
+"disabledProviders" = ["anthropic", "openai", "google"]
 
-# <repo>/.omp/config.yml
-tools:
-   approval:
-      bash: allow
-disabledProviders:
-   - groq
+["tools"]
+"approvalMode" = "write"
+
+["tools"."approval"]
+"bash" = "prompt"
+"read" = "allow"
+```
+
+```toml
+# <repo>/.omp/config.toml
+"disabledProviders" = ["groq"]
+
+["tools"]
+
+["tools"."approval"]
+"bash" = "allow"
 ```
 
 Effective settings inside `<repo>`:
 
-```yaml
-tools:
-   approvalMode: write # kept from global (object deep-merge)
-   approval:
-      bash: allow # overridden by project
-      read: allow # kept from global
-disabledProviders:
-   - groq # project array REPLACES the global array
+```toml
+# approvalMode: write: kept from global (object deep-merge)
+# bash: allow: overridden by project
+# read: allow: kept from global
+# - groq: project array REPLACES the global array
+"disabledProviders" = ["groq"]
+
+["tools"]
+"approvalMode" = "write"
+
+["tools"."approval"]
+"bash" = "allow"
+"read" = "allow"
 ```
 
 Array replacement is the most common surprise: the project's `disabledProviders` does not extend the global list — it becomes the entire list for that project. The same applies to `enabledModels`, `cycleOrder`, `extensions`, and every other array-typed setting.
 
 ## Project-local config
 
-Create `<repo>/.omp/config.yml` when a repository needs its own settings:
+Create `<repo>/.omp/config.toml` when a repository needs its own settings:
 
-```yaml
-# <repo>/.omp/config.yml
-modelRoles:
-   default: anthropic/claude-sonnet-4-5
-   smol: openai/gpt-4.1-mini
-   slow: anthropic/claude-opus-4-5:high
+```toml
+# <repo>/.omp/config.toml
+["modelRoles"]
+"default" = "anthropic/claude-sonnet-4-5"
+"smol" = "openai/gpt-4.1-mini"
+"slow" = "anthropic/claude-opus-4-5:high"
 
-tools:
-   approvalMode: write
-   approval:
-      bash: prompt
+["tools"]
+"approvalMode" = "write"
 
-compaction:
-   methodOrder: [snapcompact, remote, soft]
-   thresholdPercent: 80
+["tools"."approval"]
+"bash" = "prompt"
 
-theme:
-   dark: titanium
+["compaction"]
+"methodOrder" = ["snapcompact", "remote", "soft"]
+"thresholdPercent" = 80
+
+["theme"]
+"dark" = "titanium"
 ```
 
 Keep secrets out of committed project config unless your repository policy allows it. Prefer environment variables, stored auth, an auth broker, or an untracked `--config` overlay for credentials.
@@ -359,35 +361,25 @@ Keep secrets out of committed project config unless your repository policy allow
 Use `--config` for a temporary layer that should not persist:
 
 ```bash
-omp --config ./local/ci-settings.yml "check this failure"
-omp --config ./base.yml --config ./experiment.yml "try this model"
+omp --config ./local/ci-settings.toml "check this failure"
+omp --config ./base.toml --config ./experiment.toml "try this model"
 ```
 
-`--config` is accepted by the default launch command, `acp`, `models`, and `dry-balance`. For `models` and `dry-balance`, put it after the command name (`omp dry-balance --config ./policy.yml`); placed before the command name, it is dropped.
+`--config` is accepted by the default launch command, `acp`, `models`, and `dry-balance`. For `models` and `dry-balance`, put it after the command name (`omp dry-balance --config ./policy.toml`); placed before the command name, it is dropped.
 
 Wrappers may instead set `PI_CONFIG_FILES` to a platform-delimited path list (`:` on Unix, `;` on Windows). Environment overlays load in listed order before explicit `--config` overlays.
 
-Overlay paths are resolved relative to the process working directory (and `~` is expanded). Each overlay must parse as a YAML mapping; a missing file, invalid YAML, or a top-level array/scalar is a hard error — it does **not** silently fall back to lower-precedence settings.
+Overlay paths are resolved relative to the process working directory (and `~` is expanded). Each overlay must parse as a TOML document; a missing file, invalid TOML, or a top-level array/scalar is a hard error — it does **not** silently fall back to lower-precedence settings.
 
 ## Path-scoped arrays
 
 Three array settings — `enabledModels`, `enabledProviders`, and `disabledProviders` — accept path-scoped entries in addition to bare strings, so a single global config can behave differently per directory:
 
-```yaml
-enabledModels:
-   - claude-sonnet-4-5 # applies everywhere
-   - path: ~/work/high-context
-     models:
-        - anthropic/claude-opus-4-5
-
-disabledProviders:
-   - ollama # applies everywhere
-   - paths:
-        - ~/projects/sensitive
-        - ~/clients/acme
-     providers:
-        - anthropic
-        - openai
+```toml
+# - claude-sonnet-4-5: applies everywhere
+# - ollama: applies everywhere
+"enabledModels" = ["claude-sonnet-4-5", { "path" = "~/work/high-context", "models" = ["anthropic/claude-opus-4-5"] }]
+"disabledProviders" = ["ollama", { "paths" = ["~/projects/sensitive", "~/clients/acme"], "providers" = ["anthropic", "openai"] }]
 ```
 
 Bare string entries apply everywhere. A scoped entry applies when the current working directory **is** the configured path or is **under** it. `~` expands to your home directory and relative paths are resolved before matching.
@@ -418,20 +410,19 @@ Most provider-control use cases list model provider ids. Disabling the `claude` 
 
 Because arrays replace rather than append, a project that sets `disabledProviders` must list the complete desired set:
 
-```yaml
-# ~/.omp/agent/config.yml
-disabledProviders:
-   - anthropic
-   - openai
+```toml
+# ~/.omp/agent/config.toml
+"disabledProviders" = ["anthropic", "openai"]
+```
 
-# <repo>/.omp/config.yml — inside this repo ONLY groq is disabled
-disabledProviders:
-   - groq
+```toml
+# <repo>/.omp/config.toml — inside this repo ONLY groq is disabled
+"disabledProviders" = ["groq"]
 ```
 
 The default is an empty array (nothing disabled). For the two subsystems' provider ids and ordering, see [Providers](./providers.md) and [Context files](./context-files.md).
 
-Native project `modelRoles` are also read directly from `.omp/config.yml`; disabling the `native` discovery provider does not suppress that model-role layer.
+Native project `modelRoles` are also read directly from `.omp/config.toml`; disabling the `native` discovery provider does not suppress that model-role layer.
 
 ## Resume picker scope
 
@@ -454,55 +445,38 @@ Model-pattern settings accept literal selectors, existing Bun globs (`*`, `?`, c
 
 Where a setting is an ordered candidate list (including `task.agentModelOverrides`), the first resolvable entry wins; regex entries do not jump ahead of earlier globs. Specificity precedence applies to competing `effort.rules` and fallback-chain keys, as described below.
 
-```yaml
-modelRoles:
-   default: anthropic/claude-sonnet-4-5
-   smol: openai/gpt-4.1-mini
-   slow: anthropic/claude-opus-4-5:high
-   vision: google/gemini-3.1-pro-preview
-   plan: anthropic/claude-opus-4-5
-   advisor: anthropic/claude-sonnet-4-5:medium
+```toml
+# Lightweight chat/tiny workloads
+# Model-kind workloads
+# tiny: []: explicit empty chain: do not fall back
+"cycleOrder" = ["smol", "default", "slow"]
+"modelProviderOrder" = ["anthropic", "openai"]
+"enabledModels" = ["claude-sonnet-4-5"]
 
-   # Lightweight chat/tiny workloads
-   tiny: local/lfm2.5-230m
-   memory: local/lfm2-1.2b
+["modelRoles"]
+"default" = "anthropic/claude-sonnet-4-5"
+"smol" = "openai/gpt-4.1-mini"
+"slow" = "anthropic/claude-opus-4-5:high"
+"vision" = "google/gemini-3.1-pro-preview"
+"plan" = "anthropic/claude-opus-4-5"
+"advisor" = "anthropic/claude-sonnet-4-5:medium"
+"tiny" = "local/lfm2.5-230m"
+"memory" = "local/lfm2-1.2b"
+"image" = "openai/gpt-image-2"
+"web" = "web/duckduckgo"
+"speech" = "local/kokoro"
+"dictation" = "local/parakeet-tdt-0.6b-v3"
+"judge" = "typesafe/jev-1.14.0"
 
-   # Model-kind workloads
-   image: openai/gpt-image-2
-   web: web/duckduckgo
-   speech: local/kokoro
-   dictation: local/parakeet-tdt-0.6b-v3
-   judge: typesafe/jev-1.14.0
+["retry"]
 
-retry:
-   fallbackChains:
-      tiny: [] # explicit empty chain: do not fall back
-      memory:
-         - openai/gpt-4.1-mini
-      web:
-         - web/parallel
-         - web/perplexity
-         - web/exa
-         - web/firecrawl
-      speech: []
-      dictation: []
-      judge:
-         - typesafe/jev-preview
-         - "@tiny"
-         - "@smol"
-         - "@default"
-
-cycleOrder:
-   - smol
-   - default
-   - slow
-
-modelProviderOrder:
-   - anthropic
-   - openai
-
-enabledModels:
-   - claude-sonnet-4-5
+["retry"."fallbackChains"]
+"tiny" = []
+"memory" = ["openai/gpt-4.1-mini"]
+"web" = ["web/parallel", "web/perplexity", "web/exa", "web/firecrawl"]
+"speech" = []
+"dictation" = []
+"judge" = ["typesafe/jev-preview", "@tiny", "@smol", "@default"]
 ```
 
 Built-in chat roles are `default`, `smol`, `slow`, `vision`, `plan`, `agent-author`, `compaction`, `commit`, `tiny`, `title`, `memory`, `task`, `advisor`, `chronicler`, `chronicler-summary`, `chronicler-recall`, `classifier`, `effort`, `prose`, `issues`, `deck-inbox`, and `widget`. `widget` writes background-job widget specs and resolves like `smol` until assigned. The `tiny`, `title`, and `memory` roles accept both `tiny` catalog models and ordinary chat models. Built-in model-kind roles are `image`, `web`, `speech`, `dictation`, and `judge`; they select image, search/grounded-chat, TTS, STT, and judgment runners respectively. `judge` also accepts tiny and chat models, which is why aliases such as `@tiny` are valid fallbacks. The separate `effort` chat role classifies Auto effort and requires a concrete reasoning level; it does not use the `judge` role or the active session model as a fallback. Catalog kinds are `chat`, `tiny`, `image`, `tts`, `stt`, `search`, and `judge`; a custom model with no `kind` remains a chat model.
@@ -531,7 +505,7 @@ Existing configs are migrated automatically when loaded. Retired backend selecto
 | Key                    | Type    | Default                     | Notes                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `modelRoles`           | record  | `{}`                        | Map of role name to primary selector or ordered primary candidates. Custom chat roles can be introduced through assignments, `modelTags`, or `cycleOrder`. `--smol`/`--slow`/`--plan` and their `PI_*_MODEL` vars override those roles for a run; `--model` selects the active chat model.                                                              |
-| `modelRoleStorage`     | enum    | `global`                    | `global` saves model-selector role assignments in the active global/profile config; `project` saves only those role assignments in `<cwd>/.omp/config.yml`. Missing project roles fall back to global roles.                                                                                                                                            |
+| `modelRoleStorage`     | enum    | `global`                    | `global` saves model-selector role assignments in the active global/profile config; `project` saves only those role assignments in `<cwd>/.omp/config.toml`. Missing project roles fall back to global roles.                                                                                                                                            |
 | `modelPresets`         | record  | `{}`                        | Named model presets, each `{ modelRoles, defaultThinkingLevel }`. Written by `/modelpreset save` and the `/models` Roles view (`s`); applied by `/modelpreset switch`. Saves write only the named entry to the global config; project-defined presets are listed and applied but never copied globally. See [Model presets](./models.md#model-presets). |
 | `modelTags`            | record  | `{}`                        | Custom role/tag metadata; can introduce additional chat roles.                                                                                                                                                                                                                                                                                          |
 | `modelProviderOrder`   | array   | `[]`                        | Preferred provider order when a model id is ambiguous.                                                                                                                                                                                                                                                                                                  |
@@ -541,15 +515,15 @@ Existing configs are migrated automatically when loaded. Retired backend selecto
 | `disabledProviders`    | array   | `[]`                        | Disabled model/discovery providers; supports [path-scoped entries](#path-scoped-arrays). See [above](#provider-and-source-disabling).                                                                                                                                                                                                                   |
 | `includeModelInPrompt` | boolean | `true`                      | Include the active model name in the system prompt.                                                                                                                                                                                                                                                                                                     |
 
-See [Models](./models.md) for the `models.yml` schema and custom-provider definitions.
+See [Models](./models.md) for the `models.toml` schema and custom-provider definitions.
 
 ### Advisor
 
 Advisors review primary turns on a configurable cadence and can inject advice. Enable them with `advisor.enabled`, `/advisor on`, or `--advisor`. For the default single advisor, `modelRoles.advisor` selects its model; when unset, resolution uses a configured `slow` role or the built-in slow-model priorities. An unavailable explicit advisor assignment does not silently select another model.
 
-`WATCHDOG.yml` (or `WATCHDOG.yaml`) can define a roster of named advisors with their own models, tools, instructions, note budgets, review cadence, and catch-up policy. See [Advisor configuration](./advisor-watchdog.md) for that schema, shared `WATCHDOG.md` instructions, cadence controls, and catch-up semantics.
+`WATCHDOG.toml` defines a roster of named advisors with their own models, tools, instructions, note budgets, review cadence, and catch-up policy. Legacy `WATCHDOG.yml`/`WATCHDOG.yaml` imports once when TOML is absent. See [Advisor configuration](./advisor-watchdog.md) for the schema, shared `WATCHDOG.md` instructions, cadence controls, and catch-up semantics.
 
-Delivery timing is configured per severity: nits wait for the actual primary run end by default; concerns and blockers are eligible at the next safe completed tool-call boundary without cancelling tools or generation. `on-yield` never releases at an intermediate completed step or advisor continuation. `interrupt` is unsupported because there is no streaming primary feed or provider-independent interrupt mechanism; it raises a configuration error rather than falling back. After yield, `advisor.continueSeverity` governs continuation for both `turn` and `agent-end` reviewers. The immunity window, deliberate-stop suppression, plan mode, and client constraints still apply; terminal batches request at most one permitted continuation. Roster configuration retains stable IDs, scoped discovery, comment-preserving YAML edits, activation sets, and independently selected effort.
+Delivery timing is configured per severity: nits wait for the actual primary run end by default; concerns and blockers are eligible at the next safe completed tool-call boundary without cancelling tools or generation. `on-yield` never releases at an intermediate completed step or advisor continuation. `interrupt` is unsupported because there is no streaming primary feed or provider-independent interrupt mechanism; it raises a configuration error rather than falling back. After yield, `advisor.continueSeverity` governs continuation for both `turn` and `agent-end` reviewers. The immunity window, deliberate-stop suppression, plan mode, and client constraints still apply; terminal batches request at most one permitted continuation. Roster configuration retains stable IDs, scoped discovery, comment-preserving TOML edits, activation sets, and independently selected effort.
 
 | Key                         | Type    | Default   | Notes                                                                                                                                                                                                                                                                                                                                            |
 | --------------------------- | ------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -558,57 +532,71 @@ Delivery timing is configured per severity: nits wait for the actual primary run
 | `advisor.delivery.nit` | enum | `on-yield` | `on-yield` or `next-tool-call`; omitted severity follows this setting. On yield holds admitted notes until the actual primary run end, after maintenance and continuation decisions. |
 | `advisor.delivery.concern` | enum | `next-tool-call` | `on-yield` or `next-tool-call`. Next tool call uses wait-mode steering at the next safe completed tool-call/model-call boundary, without cancelling live tools or generation or automatically withholding WIP findings. |
 | `advisor.delivery.blocker` | enum | `next-tool-call` | `on-yield` or `next-tool-call`. Blockers remain exempt from immunity and note budgets, not from timing, stop, mode, or client guards. |
-| `advisor.syncBacklog`       | enum    | `off`     | Default catch-up policy. `off` never waits; `1`, `3`, or `5` wait up to 30 seconds at that backlog threshold; `strict` waits for scheduled reviews without a wall-clock cap. Abort, failure, quota pause, transition, and disposal release waits. Optional `WATCHDOG.yml` per-advisor `syncBacklog` overrides this policy; omission inherits it. |
-| `advisor.reviewMode`        | enum    | `turn`    | Default advisor cadence when no `WATCHDOG.yml` roster exists: review every primary turn, or only final yields with `agent-end`. Roster entries set their own `reviewMode` (default `turn`). Neither mode grants exclusive continuation rights. Applies live. |
+| `advisor.syncBacklog`       | enum    | `off`     | Default catch-up policy. `off` never waits; `1`, `3`, or `5` wait up to 30 seconds at that backlog threshold; `strict` waits for scheduled reviews without a wall-clock cap. Abort, failure, quota pause, transition, and disposal release waits. Optional `WATCHDOG.toml` per-advisor `syncBacklog` overrides this policy; omission inherits it. |
+| `advisor.reviewMode`        | enum    | `turn`    | Default advisor cadence when no `WATCHDOG.toml` roster exists: review every primary turn, or only final yields with `agent-end`. Roster entries set their own `reviewMode` (default `turn`). Neither mode grants exclusive continuation rights. Applies live. |
 | `advisor.reviewInterval`    | number  | `1`       | Default advisor only: review every Nth eligible update. Skipped updates are sent with the next scheduled review; pending advice delivery never depends on cadence. Applies live.                                                                                                                                                                 |
 | `advisor.continueSeverity`  | enum    | `concern` | Lowest severity allowed to request continuation after a terminal answer: `nit`, `concern`, or `blocker`, for default and roster advisors regardless of review mode. `nit` permits nit continuations; `blocker` preserves lower-severity notes as cards. Stop, immunity, mode, and client guards still apply. |
 | `advisor.immuneTurns`       | number  | `3`       | Completed primary turns protected from further non-blocker steering after successful concern/blocker steering; `0` disables immunity. Tool-loop continuations count independently of review cadence. Concerns become asides while active, or visible cards at terminal idle; blockers are exempt from immunity, not from stop/client guards. |
-| `advisor.maxNotesPerUpdate` | number  | `4`       | Non-blocker notes accepted per advisor review, from 1–32. Higher-severity notes can replace only pending notes from the same review. `WATCHDOG.yml` top-level or per-advisor values override this default.                                                                                                                                       |
+| `advisor.maxNotesPerUpdate` | number  | `4`       | Non-blocker notes accepted per advisor review, from 1–32. Higher-severity notes can replace only pending notes from the same review. `WATCHDOG.toml` top-level or per-advisor values override this default.                                                                                                                                       |
 | `advisor.evictStaleResults` | boolean | `true`    | Before each review, replace the advisor's `read`/`grep`/`glob` output from older reviews with a short placeholder. The latest review is kept.                                                                                                                                                                                                    |
 
 Delivery settings appear in the Model → Advisor group and apply live to all advisors without rebuilding them. Switching a held severity to `next-tool-call` releases its admitted notes once; already-queued notes are not retracted by a later edit. Delivery eligibility is independent of review cadence. Provider live steering leaves wait-mode notes queue-owned without blocking ordinary user steering; order is retained within each delivery class, and ordinary completed-boundary dequeue order is unchanged. See [Delivery controls](./advisor-watchdog.md#delivery-controls) for terminal batching and late-review behavior.
 
 ### Thinking and effort policy
 
-```yaml
-defaultThinkingLevel: high
-hideThinkingBlock: false
-thinkingBudgets:
-  minimal: 1024
-  low: 2048
-  medium: 8192
-  high: 16384
-  xhigh: 32768
-  max: 32768
+```toml
+# mode: replacement: legacy opts back into coarse task hints
+"defaultThinkingLevel" = "high"
+"hideThinkingBlock" = false
 
-modelRoles:
-  default: openai-codex/gpt-5.6-sol
+["thinkingBudgets"]
+"minimal" = 1024
+"low" = 2048
+"medium" = 8192
+"high" = 16384
+"xhigh" = 32768
+"max" = 32768
 
-effort:
-  mode: replacement # legacy opts back into coarse task hints
-  rules:
-    - selector: "openai-codex/gpt-5.6-*"
-      allowed: [low, medium, high]
-    - selector: openai-codex/gpt-5.6-sol
-      allowed: [medium, high, xhigh]
-roleEffortSelections:
-  default:
-    mode: auto
-    allowed: [medium, high, xhigh]
-    selector: openai-codex/gpt-5.6-sol
-  slow:
-    mode: fixed
-    level: high
-  smol:
-    mode: inherit
-retry:
-  fallbackChains:
-    default: [openai-codex/gpt-5.6-luna]
-  fallbackEffortSelections:
-    default:
-      openai-codex/gpt-5.6-luna:
-        mode: auto
-        allowed: [low, medium]
+["modelRoles"]
+"default" = "openai-codex/gpt-5.6-sol"
+
+["effort"]
+"mode" = "replacement"
+
+[["effort"."rules"]]
+"selector" = "openai-codex/gpt-5.6-*"
+"allowed" = ["low", "medium", "high"]
+
+[["effort"."rules"]]
+"selector" = "openai-codex/gpt-5.6-sol"
+"allowed" = ["medium", "high", "xhigh"]
+
+["roleEffortSelections"]
+
+["roleEffortSelections"."default"]
+"mode" = "auto"
+"allowed" = ["medium", "high", "xhigh"]
+"selector" = "openai-codex/gpt-5.6-sol"
+
+["roleEffortSelections"."slow"]
+"mode" = "fixed"
+"level" = "high"
+
+["roleEffortSelections"."smol"]
+"mode" = "inherit"
+
+["retry"]
+
+["retry"."fallbackChains"]
+"default" = ["openai-codex/gpt-5.6-luna"]
+
+["retry"."fallbackEffortSelections"]
+
+["retry"."fallbackEffortSelections"."default"]
+
+["retry"."fallbackEffortSelections"."default"."openai-codex/gpt-5.6-luna"]
+"mode" = "auto"
+"allowed" = ["low", "medium"]
 ```
 
 `thinkingBudgets.<level>` overrides the token budget for the selected thinking level on transports that accept a reasoning token budget (including Anthropic, Google/Gemini, Bedrock Claude, GitLab Duo's Anthropic path, the Anthropic shim, the auth gateway, and budget-mode `cline-pass`). It does not control effort-based OpenAI-compatible requests: `openai-completions` providers such as local llama.cpp and Ollama use their own thinking/effort controls instead, so changing these budgets has no effect on their request bodies. Use `defaultThinkingLevel` or `--thinking` to select an available effort level for those models.
@@ -663,17 +651,20 @@ The supported request settings are `temperature`, `topP`, `topK`, `minP`,
 `presencePenalty`, `repetitionPenalty`, `textVerbosity`, `omitThinking`,
 `tier.openai`, `tier.anthropic`, and `tier.google`.
 
-```yaml
-temperature: 0.9
-roleSettings:
-  precise:
-    temperature: 0
-    topP: 0.3
-    textVerbosity: high
-    omitThinking: true
-    tier.openai: none
-  provider:
-    temperature: -1
+```toml
+"temperature" = 0.9
+
+["roleSettings"]
+
+["roleSettings"."precise"]
+"temperature" = 0
+"topP" = 0.3
+"textVerbosity" = "high"
+"omitThinking" = true
+"tier.openai" = "none"
+
+["roleSettings"."provider"]
+"temperature" = -1
 ```
 
 An omitted entry inherits the current global or project value. A concrete
@@ -693,50 +684,43 @@ role-configurator UI.
 
 ### Retry and fallback
 
-```yaml
-retry:
-  enabled: true
-  maxRetries: 10
-  baseDelayMs: 500
-  maxDelayMs: 300000
-  modelFallback: true
-  fallbackOn: any
-  fallbackRevertPolicy: cooldown-expiry
-  fallbackChains:
-    # Chat roles without their own chain may inherit "default". Model-kind
-    # roles use their own built-in defaults instead.
-    default:
-      - anthropic/claude-opus-4-5
-      - openai/gpt-5.5
-      - google/gemini-3-pro
-    # Per-role chains override inherited or built-in fallbacks. An explicit
-    # [] disables fallback for that role. Chat selectors accept an optional
-    # thinking suffix, e.g. openai/gpt-5.5:low.
-    smol:
-      - openai/gpt-5.5-mini
-      - anthropic/claude-haiku-4-5
-    # A regex key selects either model at high effort; the regex entry
-    # resolves to the first matching model in catalog order.
-    're:^openai-codex/gpt-6-(sol|astra):high$':
-      - 're:^(nous-portal|openrouter)/z-ai/glm-5\.3(-flash)?$'
-    web: []
-    # Model-selector keys (any key containing "/") attach the chain to the
-    # model itself: it applies whenever that model is active, no matter
-    # which role it is assigned to, and survives role reassignment.
-    google/gemini-3-pro:
-      - google-vertex/gemini-3-pro
-    # A `provider/*` KEY covers every model of a provider — current or
-    # future. A `provider/*` ENTRY keeps the failing model's id and swaps
-    # the provider: google-antigravity/x -> google/x -> google-vertex/x.
-    # Ids missing on the target provider are skipped (near-miss ids resolve
-    # fuzzily); exact model keys override the wildcard for a specific model.
-    google-antigravity/*:
-      - google/*
-      - google-vertex/*
+```toml
+# Chat roles without their own chain may inherit "default". Model-kind
+# roles use their own built-in defaults instead.
+# Per-role chains override inherited or built-in fallbacks. An explicit
+# [] disables fallback for that role. Chat selectors accept an optional
+# thinking suffix, e.g. openai/gpt-5.5:low.
+# A regex key selects either model at high effort; the regex entry
+# resolves to the first matching model in catalog order.
+# Model-selector keys (any key containing "/") attach the chain to the
+# model itself: it applies whenever that model is active, no matter
+# which role it is assigned to, and survives role reassignment.
+# A `provider/*` KEY covers every model of a provider — current or
+# future. A `provider/*` ENTRY keeps the failing model's id and swaps
+# the provider: google-antigravity/x -> google/x -> google-vertex/x.
+# Ids missing on the target provider are skipped (near-miss ids resolve
+# fuzzily); exact model keys override the wildcard for a specific model.
+["retry"]
+"enabled" = true
+"maxRetries" = 10
+"baseDelayMs" = 500
+"maxDelayMs" = 300000
+"modelFallback" = true
+"fallbackOn" = "any"
+"fallbackRevertPolicy" = "cooldown-expiry"
 
-providers:
-   anthropic:
-      serverSideFallback: false
+["retry"."fallbackChains"]
+"default" = ["anthropic/claude-opus-4-5", "openai/gpt-5.5", "google/gemini-3-pro"]
+"smol" = ["openai/gpt-5.5-mini", "anthropic/claude-haiku-4-5"]
+"re:^openai-codex/gpt-6-(sol|astra):high$" = ["re:^(nous-portal|openrouter)/z-ai/glm-5\\.3(-flash)?$"]
+"web" = []
+"google/gemini-3-pro" = ["google-vertex/gemini-3-pro"]
+"google-antigravity/*" = ["google/*", "google-vertex/*"]
+
+["providers"]
+
+["providers"."anthropic"]
+"serverSideFallback" = false
 ```
 
 | Key                                      | Type    | Default           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -760,7 +744,7 @@ providers:
 
 In `/models` → Roles, press `y` on a role's displayed primary model or a fallback entry to copy that model into the hub's yank register; `Y` (Shift+Y) on any fallback entry copies its entire chain. A primary model's resolved upstream route (`@upstream`) and a fallback entry's configured suffix are retained. Move to another role, fallback entry, or model/provider chain header and press `p` to append the copied selectors to that target chain. Whole-chain paste appends in source order, skipping selectors already in the target; it never replaces or reorders existing entries. The source and other chains remain unchanged. The register stays in this hub instance, not the system clipboard.
 
-To create a reusable fallback-chain key in `/models` → Roles, select `+ New fallback…`, then `pattern…`. Enter a literal `provider/model-id`, a provider wildcard such as `openai/*`, a model-id prefix wildcard such as `openrouter/google/*`, or a `re:` regex. No concrete primary model is required. Select the chain header and press Enter to edit its key; `f` adds a fallback, and `x` clears the chain. Renaming keeps the chain's entries and effort selections and refuses an existing key. The hub renames chains in the global YAML settings; chains supplied by a TOML, project, or command-line overlay must be renamed in their defining file.
+To create a reusable fallback-chain key in `/models` → Roles, select `+ New fallback…`, then `pattern…`. Enter a literal `provider/model-id`, a provider wildcard such as `openai/*`, a model-id prefix wildcard such as `openrouter/google/*`, or a `re:` regex. No concrete primary model is required. Select the chain header and press Enter to edit its key; `f` adds a fallback, and `x` clears the chain. Renaming keeps the chain's entries and effort selections and refuses an existing key. The hub renames chains in the global TOML settings; chains supplied by a project or command-line overlay must be renamed in their defining file.
 
 Fallback-chain keys support only a literal provider and optional literal model-id path prefix followed by `/*`, not arbitrary globs such as `openai/gpt-*`, `*/model`, `?`, character classes, or brace expansion. Use `re:` for those matches. Regex keys need no slash, for example `re:gemini`, and use the existing selector regex engine. Key precedence is exact model first, then the first declared matching regex, then the longest matching provider/model-id prefix wildcard, then the owning role and `default`. Creating or renaming a pattern key does not require a current catalog match. Role assignment still offers `pick model…` and `pattern…` and resolves a pattern to the first catalog match.
 
@@ -776,15 +760,17 @@ Retry model fallback is not context promotion. `contextPromotion.enabled: false`
 
 ### Tools and approvals
 
-```yaml
-tools:
-   format: auto
-   approvalMode: yolo # default
-   approval:
-      bash: prompt
-      edit: allow
-   maxTimeout: 0
-   intentTracing: true
+```toml
+# approvalMode: yolo: default
+["tools"]
+"format" = "auto"
+"approvalMode" = "yolo"
+"maxTimeout" = 0
+"intentTracing" = true
+
+["tools"."approval"]
+"bash" = "prompt"
+"edit" = "allow"
 ```
 
 | Key                            | Type    | Default   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -819,12 +805,12 @@ Individual built-in tools and Eval preludes are toggled by their own keys, e.g. 
 
 The disabled-by-default `computer` Eval prelude captures and controls real host windows through native OS APIs. Window handles isolate an application without focusing it or moving the real pointer; the `desktop` object preserves selected-display composite and global input behavior. It remains separate from the `browser` Eval prelude, which manages Chromium/CDP tabs and structured page automation.
 
-```yaml
-computer:
-   enabled: true
-   display: all
-   maxWidth: 3840
-   maxHeight: 2400
+```toml
+["computer"]
+"enabled" = true
+"display" = "all"
+"maxWidth" = 3840
+"maxHeight" = 2400
 ```
 
 | Key                           | Type    | Default    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -839,28 +825,30 @@ Computer settings and the active model's coordinate-safe image limits are read f
 
 ### Shell, eval, and LSP
 
-```yaml
-bash:
-   enabled: true
-   allowCompoundCommands: false
-   autoBackground:
-      enabled: true
-      thresholdMs: 60000
+```toml
+# kernelMode: session: session, per-call
+["bash"]
+"enabled" = true
+"allowCompoundCommands" = false
 
-eval:
-   py: true
-   js: true
+["bash"."autoBackground"]
+"enabled" = true
+"thresholdMs" = 60000
 
-python:
-   kernelMode: session # session, per-call
-   interpreter: ""
+["eval"]
+"py" = true
+"js" = true
 
-lsp:
-   enabled: true
-   lazy: true
-   diagnosticsOnWrite: true
-   diagnosticsOnEdit: false
-   formatOnWrite: false
+["python"]
+"kernelMode" = "session"
+"interpreter" = ""
+
+["lsp"]
+"enabled" = true
+"lazy" = true
+"diagnosticsOnWrite" = true
+"diagnosticsOnEdit" = false
+"formatOnWrite" = false
 ```
 
 | Key                               | Type    | Default   | Notes                                                                                                                                                       |
@@ -895,21 +883,24 @@ lsp:
 
 ### Files: editing and reading
 
-```yaml
-edit:
-   mode: hashline # apply_patch, hashline, patch, replace, sloppy
-   fuzzyMatch: true
-   fuzzyThreshold: 0.95
-   blockAutoGenerated: true
-   blackbox:
-      enabled: false
+```toml
+# mode: hashline: apply_patch, hashline, patch, replace, sloppy
+["edit"]
+"mode" = "hashline"
+"fuzzyMatch" = true
+"fuzzyThreshold" = 0.95
+"blockAutoGenerated" = true
 
-read:
-   defaultLimit: 300
-   toolResultPreview: false
-   summarize:
-      enabled: true
-      prose: false
+["edit"."blackbox"]
+"enabled" = false
+
+["read"]
+"defaultLimit" = 300
+"toolResultPreview" = false
+
+["read"."summarize"]
+"enabled" = true
+"prose" = false
 ```
 
 | Key                       | Type    | Default    | Notes                                                                                                             |
@@ -933,30 +924,35 @@ read:
 
 ### Context, compaction, and memory
 
-`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses the Codex default window (272,000 tokens for Astra, 500,000 for GPT-6.1 Sol) and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.yml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
+`/extended-context on` opts in to larger context windows; `/extended-context off` restores standard windows and premium-pricing caps. For `openai-codex/gpt-6-astra`, `openai-codex/gpt-6.1-sol`, and their `-wm` routes, off uses the Codex default window (272,000 tokens for Astra, 500,000 for GPT-6.1 Sol) and on uses the curated 922,000-token input window (1.05M total context with 128K output), or a higher discovered maximum. The curated maximum corrects stale lower discovery values. Explicit per-model `contextWindow` overrides in `models.toml` take precedence in both modes; remove an override if you want the toggle to control that model again. Codex overrides still clamp to the effective server-honored ceiling, allowing the curated or higher live maximum rather than an arbitrary larger window.
 
 Custom providers can opt into the same toggle by setting `contextWindow` (normal)
 and `maxContextWindow` (extended) on a model or `modelOverrides` entry in
-`models.yml`. A `contextWindow` override without `maxContextWindow` remains
+`models.toml`. A `contextWindow` override without `maxContextWindow` remains
 fixed in both modes. See [model configuration](models.md); these values control
 local budgeting, not the upstream endpoint's accepted request size.
 
 Compaction headroom is separate from this opt-in. With the default 15% reserve, Astra's documented extended window has an auto-compaction threshold of 783,700 tokens. A larger window can consume more usage even when there is no additional long-context pricing multiplier.
 
-```yaml
-extendedContext: false
+```toml
+# midTurnEnabled: true: check thresholds between tool-loop provider requests
+# thresholdPercent: -1: -1 = default reserve-based behavior
+# thresholdTokens: -1: fixed token limit when > 0
+# backend: off: off, local, hindsight, mnemopi
+"extendedContext" = false
 
-contextPromotion:
-   enabled: false
+["contextPromotion"]
+"enabled" = false
 
-compaction:
-   enabled: true
-   methodOrder: [remote, snapcompact, handoff, shake, soft]
-   midTurnEnabled: true # check thresholds between tool-loop provider requests
-   thresholdPercent: -1 # -1 = default reserve-based behavior
-   thresholdTokens: -1 # fixed token limit when > 0
-memory:
-   backend: off # off, local, hindsight, mnemopi
+["compaction"]
+"enabled" = true
+"methodOrder" = ["remote", "snapcompact", "handoff", "shake", "soft"]
+"midTurnEnabled" = true
+"thresholdPercent" = -1
+"thresholdTokens" = -1
+
+["memory"]
+"backend" = "off"
 ```
 
 | Key                                      | Type    | Default                                     | Notes                                                                                                                                                                                                                                           |
@@ -987,12 +983,14 @@ Give a model role a persistent absolute-token budget under `roleSettings`. The k
 each role is the dotted setting id. Selecting that role applies the budget without
 changing the global value, and assigning another model to the role keeps the budget:
 
-```yaml
-compaction:
-  thresholdTokens: 100000
-roleSettings:
-  slow:
-    compaction.thresholdTokens: 120000
+```toml
+["compaction"]
+"thresholdTokens" = 100000
+
+["roleSettings"]
+
+["roleSettings"."slow"]
+"compaction.thresholdTokens" = 120000
 ```
 
 In `/settings` → Context → Compaction, **Compaction Token Limit** edits the ordinary
@@ -1008,14 +1006,17 @@ The trigger is exactly what you configure. On a small or provider-capped window,
 
 Per-model compaction limits apply to the models they match. A token count is the base the usual policy scales: omp treats it as the model's window when computing the threshold, so with defaults it compacts at the base minus the reserve (85% for bases above ~109k) and with `compaction.thresholdPercent: 80` at 80% of it; a global `compaction.thresholdTokens` does not apply to that model. Prefix the count with `f` (`f400k`, stored as `"f400000"`) to make it the exact trigger instead. A percentage entry replaces both `compaction.threshold*` settings and scales the real window. Requests and overflow handling still use the real window. The `/models` preview shows where each model compacts; to set a limit, select a role or fallback row in the **Roles** view and press `k` (or click **Compaction limit**), then type `400k`, `f400k`, `1M`, or `80%` (empty input resets). That writes the exact `provider/model-id` key to the global config. By hand:
 
-```yaml
-compaction:
-   thresholdPercent: 80
-   modelThresholds:
-      "deepseek/*": 90000
-      "openrouter/anthropic/*": "60%"
-      anthropic/claude-opus-5.5: 150000 # base: compacts at 80% of 150k
-      openai/gpt-5.6-terra: "f400000" # fixed: compacts at exactly 400k
+```toml
+# anthropic/claude-opus-5.5: 150000: base: compacts at 80% of 150k
+# openai/gpt-5.6-terra: "f400000": fixed: compacts at exactly 400k
+["compaction"]
+"thresholdPercent" = 80
+
+["compaction"."modelThresholds"]
+"deepseek/*" = 90000
+"openrouter/anthropic/*" = "60%"
+"anthropic/claude-opus-5.5" = 150000
+"openai/gpt-5.6-terra" = "f400000"
 ```
 
 - An exact `provider/model-id` key wins; otherwise the longest matching `*`-terminated prefix applies. `*` is only allowed at the end, and every key needs a `provider/` part.
@@ -1027,14 +1028,15 @@ compaction:
 
 Per-agent compaction triggers for task/eval subagents. This keeps the main session at 40,000 tokens while `scout` compacts at 80% of its window and `task` at 90,000 tokens:
 
-```yaml
-compaction:
-   thresholdTokens: 40000
+```toml
+["compaction"]
+"thresholdTokens" = 40000
 
-task:
-   agentCompactionThresholdOverrides:
-      scout: "80%"
-      task: 90000
+["task"]
+
+["task"."agentCompactionThresholdOverrides"]
+"scout" = "80%"
+"task" = 90000
 ```
 
 - Keys are exact, case-sensitive agent names (`scout` does not match `Scout`).
@@ -1045,29 +1047,38 @@ task:
 
 ### Appearance and terminal
 
-```yaml
-theme:
-   dark: titanium
-   light: light
-symbolPreset: unicode # unicode, nerd, ascii
-colorBlindMode: false
-symbolBrandGlyph: theme # temporary; theme, pi, fae-pi, md-axis-z, diamond
-startupBranding: new # new, classic
-symbolEffortGlyphs: theme # temporary; theme, poimandres, nerd
+```toml
+# symbolPreset: unicode: unicode, nerd, ascii
+# symbolBrandGlyph: theme: temporary; theme, pi, fae-pi, md-axis-z, diamond
+# startupBranding: new: new, classic
+# symbolEffortGlyphs: theme: temporary; theme, poimandres, nerd
+# preset: default: default, minimal, compact, full, nerd, ascii, custom
+# hyperlinks: auto: off, auto, always
+"symbolPreset" = "unicode"
+"colorBlindMode" = false
+"symbolBrandGlyph" = "theme"
+"startupBranding" = "new"
+"symbolEffortGlyphs" = "theme"
 
-statusLine:
-   preset: default # default, minimal, compact, full, nerd, ascii, custom
-   separator: powerline-thin
-   transparent: false
-   showHookStatus: true
+["theme"]
+"dark" = "titanium"
+"light" = "light"
 
-terminal:
-   showImages: true
-images:
-   autoResize: true
-   blockImages: false
-tui:
-   hyperlinks: auto # off, auto, always
+["statusLine"]
+"preset" = "default"
+"separator" = "powerline-thin"
+"transparent" = false
+"showHookStatus" = true
+
+["terminal"]
+"showImages" = true
+
+["images"]
+"autoResize" = true
+"blockImages" = false
+
+["tui"]
+"hyperlinks" = "auto"
 ```
 
 | Key                         | Type    | Default          | Values                                                                    |
@@ -1100,7 +1111,7 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 
 Use `/statusline` to edit that layout interactively. The fullscreen editor lists the composer, then every widget in one stable list split into a left and a right side: builtins, configured ids, and provider quota windows discovered in the latest cached usage reports. Disabled widgets keep their place, and Space toggles a widget without moving the selection. `j`/`k` (or up/down) select; `h`/`l` (or left/right, `[`/`]`, Alt+up/down) move the selected widget earlier or later along the status line, crossing to the other side at either end. Ctrl+D/Ctrl+U move half a page, PageUp/PageDown a page, `gg`/`G` (or Home/End) jump to the first and last rows, and Ctrl+E/Ctrl+Y scroll the view without moving the selection. `/` filters rows by name or id; Escape returns to the list with the filter kept and shown in the footer (edit it again with `/`). `<` and `>`, or Space on the composer row, cycle built-in and registered extension composer shapes while the selection and view stay put.
 
-Every change previews live and is autosaved as an unapplied draft in `<agent dir>/neopi-statusline-draft.json`, separate from `config.yml`. `s` or Ctrl+S applies the draft (custom segment lists, usage templates, composer shape) through the settings API and keeps the editor open. Escape with unapplied changes asks first: `y` applies and closes, `n` closes with the active layout unchanged and the draft kept, Escape or `c` stays. Reopening `/statusline`, also after a restart, restores the draft with its selection, view, and filter. The **Reset to Active** row at the bottom, or `R`, discards the draft's edits after a `y` confirmation. A failed apply keeps the draft and the previous configuration; a failed draft write is reported and leaves the configuration untouched.
+Every change previews live and is autosaved as an unapplied draft in `<agent dir>/neopi-statusline-draft.json`, separate from `config.toml`. `s` or Ctrl+S applies the draft (custom segment lists, usage templates, composer shape) through the settings API and keeps the editor open. Escape with unapplied changes asks first: `y` applies and closes, `n` closes with the active layout unchanged and the draft kept, Escape or `c` stays. Reopening `/statusline`, also after a restart, restores the draft with its selection, view, and filter. The **Reset to Active** row at the bottom, or `R`, discards the draft's edits after a `y` confirmation. A failed apply keeps the draft and the previous configuration; a failed draft write is reported and leaves the configuration untouched.
 
 Tab on a usage widget edits the text around its values; Enter, Tab, or Escape returns to the list. Templates are stored per widget in `statusLine.segmentOptions.usageBars.templates`, keyed by segment id, for example `usage:anthropic:5h: "Claude {percent} ({age} ago)"`. `{label}`, `{percent}`, and `{age}` are replaced, `{{` and `}}` produce literal braces, and everything else is shown as plain text; nothing is evaluated. An empty template restores the default `{label} {percent} {age}`. Editing templates or the layout never fetches usage.
 
@@ -1139,44 +1150,46 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 
 Model/backend ordering for image generation, web search, speech, dictation, and judgments is configured through the corresponding `modelRoles` and `retry.fallbackChains` entries in [Models](#models). This section contains transport and service behavior that remains independent of model selection.
 
-```yaml
-providers:
-   fetch: auto
-   webSearchTimeoutSeconds: 60
-   tinyModelDevice: default
-   tinyModelDtype: default
-   openaiWebsockets: auto
-   openaiLiveSteering: false
-   openrouterVariant: default
-   kimiApiFormat: auto
-   cacheRetention: auto
-   maxInFlightRequests:
-      anthropic: 2
+```toml
+# appendOnlyContext: auto: auto, on, off
+["providers"]
+"fetch" = "auto"
+"webSearchTimeoutSeconds" = 60
+"tinyModelDevice" = "default"
+"tinyModelDtype" = "default"
+"openaiWebsockets" = "auto"
+"openaiLiveSteering" = false
+"openrouterVariant" = "default"
+"kimiApiFormat" = "auto"
+"cacheRetention" = "auto"
 
-provider:
-   appendOnlyContext: auto # auto, on, off
+["providers"."maxInFlightRequests"]
+"anthropic" = 2
 
-tts:
-   localVoice: af_heart
-   localSpeed: 1
+["provider"]
+"appendOnlyContext" = "auto"
 
-speech:
-   enabled: false
-   voice: af_heart
-   speed: 1
+["tts"]
+"localVoice" = "af_heart"
+"localSpeed" = 1
 
-stt:
-   enabled: false
-   language: en
-   submitTrigger: never
+["speech"]
+"enabled" = false
+"voice" = "af_heart"
+"speed" = 1
 
-exa:
-   enabled: true
-   searchDelayMs: 1000
+["stt"]
+"enabled" = false
+"language" = "en"
+"submitTrigger" = "never"
 
-searxng:
-   endpoint: https://search.example.com
-   token: SEARXNG_TOKEN
+["exa"]
+"enabled" = true
+"searchDelayMs" = 1000
+
+["searxng"]
+"endpoint" = "https://search.example.com"
+"token" = "SEARXNG_TOKEN"
 ```
 
 | Key                                 | Type    | Default   | Values / notes                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1399,10 +1412,12 @@ To spend one by hand, use `/usage reset` in a session or `omp usage reset` from 
 
 ### Cost limits
 
-```yaml
-session:
-   warnCost: 5 # USD: warn once when the session's spend reaches it
-   maxCost: 10 # USD: stop sending model requests from this spend on
+```toml
+# warnCost: 5: USD: warn once when the session's spend reaches it
+# maxCost: 10: USD: stop sending model requests from this spend on
+["session"]
+"warnCost" = 5
+"maxCost" = 10
 ```
 
 Both are unset by default and accept positive USD amounts; `--warn-cost` and `--max-cost` override them for one run, and setting or changing either while a session is open applies to its next request. Spend counts every model request of the session and its subagents at the costs the model catalog prices: agent turns, side requests (compaction, handoff, advisor reviews, `/btw`, cache warming), eval `completion()`/`judge()`/`judge_batch()`, judgment-backed `find`, image questions, image descriptions for text-only models, edit auto-repair, and job widgets; at the cap these are refused too, and no session title is generated. Memory extraction (Mnemopi and memories consolidation) runs in the background and is neither counted nor refused. The cap is checked before each request goes out, so requests already in flight can finish past it. A session started with `--resume`/`--continue`, or switched to, starts from the spend its session file records (the total the footer and `/usage` show), which leaves out background subagents' spend and side requests from earlier runs; `/new` starts from zero, while fork, branch and `/btw` keep the session's spend. When the cap stops a run, the interactive TUI shows the reason and puts a refused prompt back in the editor, print mode exits with status `3`, and RPC reports `error.code: "cost_cap"`.
@@ -1483,18 +1498,11 @@ These settings follow the same schema-defined type and default rules shown above
 
 ## Legacy migration
 
-`omp` migrates older config shapes automatically. None of these require action; they are listed so you know what changes you may see in `config.yml`.
+`omp` migrates older config shapes automatically. None of these require action; they are listed so you know what changes you may see in `config.toml`.
 
-### Startup migration to `config.yml`
+### Startup migration to `config.toml`
 
-When neither `config.yml` nor the compatible `config.yaml` exists under the active agent directory, writable startup merges legacy sources in this order:
-
-1. `<agent dir>/settings.json`.
-2. Settings persisted in `agent.db` (these override conflicting JSON values).
-
-A non-empty migrated result is written to `config.yml`. Only after that write succeeds is the parsed legacy JSON renamed to `settings.json.bak` and migrated database settings cleared. An empty result does not create a YAML file.
-
-After either main YAML file exists, these legacy sources are no longer consulted. The generic config loader also performs `.json` -> `.yml` migration for other config files when only the `.json` form is present.
+When canonical TOML is absent, startup first imports eligible legacy main documents without changing their source. If no main document exists, legacy `settings.json` and database settings remain eligible for migration; database values override JSON conflicts. The migrated result is saved as TOML. Once a canonical document exists these legacy sources are no longer consulted.
 
 ### Field-level migrations
 
@@ -1510,7 +1518,7 @@ Selected migrations applied whenever raw settings are loaded (global, project, o
 | legacy `task.isolation.mode: <backend>`                                                                                  | `task.isolation.enabled: true` + `isolation.backend: <backend>`                                              |
 | `task.simple`                                                                                                            | removed                                                                                                      |
 | legacy isolation backends (`worktree`, `fuse-overlay`, `fuse-projfs`)                                                    | `rcopy`, `overlayfs`, `projfs`                                                                               |
-| `lastChangelogVersion`                                                                                                   | moved to a marker file and stripped from `config.yml`                                                        |
+| `lastChangelogVersion`                                                                                                   | moved to a marker file and stripped from `config.toml`                                                        |
 | `doubleEscapeAction: branch`                                                                                             | `doubleEscapeAction: rewind`                                                                                 |
 | `collapseChangelog`                                                                                                      | `startup.changelogMode` (`true` → `summary`, `false` → `expanded`)                                           |
 | `edit.mode` / `edit.modelVariants` values `atom`, `vim`                                                                  | `hashline`                                                                                                   |
@@ -1534,9 +1542,9 @@ Selected migrations applied whenever raw settings are loaded (global, project, o
 
 ### A project setting is not taking effect
 
-- Start `omp` from the directory that contains `.omp/config.yml`. Settings discovery only checks the current working directory's `.omp/`, not ancestor directories.
+- Start `omp` from the directory that contains `.omp/config.toml`. Settings discovery only checks the current working directory's `.omp/`, not ancestor directories.
 - Ensure `.omp/` is non-empty; empty config directories are ignored.
-- Confirm the file is valid YAML and its top level is a mapping.
+- Confirm the file is valid TOML and its top level is a mapping.
 - Run `omp config get <key>` from that directory to see the effective value.
 - Remember that `--config` overlays and runtime flags override project config.
 
@@ -1548,20 +1556,20 @@ Arrays replace; they do not append. If a project sets `disabledProviders`, `enab
 
 - Check whether you disabled the model provider id (e.g. `anthropic`) or a discovery source id (e.g. `claude`) — they are different ids in the shared `disabledProviders` namespace, with different effects.
 - Check for a project (or overlay) `disabledProviders` array replacing your global one.
-- Credentials can still come from environment variables, `.env`, OAuth, stored auth, or `models.yml`; disabling a provider blocks selection regardless, but verify you edited the right layer. See [Providers](./providers.md).
+- Credentials can still come from environment variables, `.env`, OAuth, stored auth, or `models.toml`; disabling a provider blocks selection regardless, but verify you edited the right layer. See [Providers](./providers.md).
 - Check for a warning that a live reload retained the last good layer. Provider-source switches affect the next discovery pass; an already-open catalog/picker may need refreshing.
 
 ### `omp config set` changed the wrong file
 
-`omp config set` and `omp config reset` write the main global YAML file (`config.yml`, or the existing compatible `config.yaml`) under the active agent/profile directory. Run `omp config path` to print that directory and check `--profile`, `OMP_PROFILE`, and `PI_CODING_AGENT_DIR`. For project-local keys, edit `<repo>/.omp/config.yml` directly.
+`omp config set` and `omp config reset` write `config.toml` under the active agent/profile directory. Run `omp config path` to print that directory and check `--profile`, `OMP_PROFILE`, and `PI_CODING_AGENT_DIR`. For project-local keys, edit `<repo>/.omp/config.toml` directly.
 
 ### A `--config` overlay fails at startup
 
-`--config` files are process-local YAML mappings. A missing file, invalid YAML, or a top-level array/scalar is a hard error — it does not silently fall back to lower-precedence settings. Fix the path or contents.
+`--config` files are process-local TOML documents. A legacy YAML path imports once to its sibling `.toml`; an existing sibling wholly wins. A missing file or invalid document is a hard error, never a fallback to lower-precedence settings.
 
 ### An environment variable beats my config
 
-Some settings (model roles, eval backends, tiny-model device/precision, auth broker, PTY) are overridable by env vars or CLI flags for per-machine convenience, and those take precedence over `config.yml`. Unset the variable or drop the flag to let the persisted value win. See [Environment overrides](#environment-overrides) and [Environment variables](./environment-variables.md).
+Some settings (model roles, eval backends, tiny-model device/precision, auth broker, PTY) are overridable by env vars or CLI flags for per-machine convenience, and those take precedence over `config.toml`. Unset the variable or drop the flag to let the persisted value win. See [Environment overrides](#environment-overrides) and [Environment variables](./environment-variables.md).
 
 ### `omp config set <key>` says "Unknown setting"
 

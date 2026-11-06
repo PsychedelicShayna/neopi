@@ -7,7 +7,7 @@
  *   bun apps/server/src/backend/contract.ts [--json]
  *
  * The tree is chosen the way the server chooses it (NPI_DECK_BACKEND, else
- * activeBackend in config.yml). The checks run in a child process whose HOME,
+ * activeBackend in config.toml). The checks run in a child process whose HOME,
  * Windows profile selectors, XDG dirs, cwd and PI_CODING_AGENT_DIR point into
  * a fresh temp dir, with credential and PI_/OMP_/NPI_DECK_ env vars dropped and a dummy openrouter
  * key so model resolution works without a real account. No check makes a
@@ -197,9 +197,9 @@ await check("npi-config: registry handles enumerate, parse, persist and report p
 	assert(handle.get(read) === 0.9 && handle.provenance(read) === "global", `persisted ${String(handle.get(read))} via ${handle.provenance(read)}`);
 	handle.unset(writable);
 	await writable.flush();
-	// The deck reports the first existing of these names as the file NeoPi reads and saves.
+	// The deck reports NeoPi's canonical TOML settings path.
 	const [primary] = npiConfig.MAIN_CONFIG_FILENAMES;
-	assert(primary === "config.yml" && await Bun.file(path.join(agentDir, primary)).exists(), `NeoPi saved to a file other than ${primary}`);
+	assert(primary === "config.toml" && await Bun.file(path.join(agentDir, primary)).exists(), `NeoPi saved to a file other than ${primary}`);
 	const cleared = await core.Settings.loadReadOnly({ cwd: agentDir, agentDir });
 	assert(handle.provenance(cleared) === "default", `unset left provenance ${handle.provenance(cleared)}`);
 	return `${all.length} settings (${all.filter(s => !s.ui).length} config-file only) across ${tabs.length} tabs; parse rejects "${rejected}"; set/unset round-trips global↔default`;
@@ -232,19 +232,19 @@ await check("auth: storage, registry, env key, oauth providers", ["discoverAuthS
 	return `${providers.length} OAuth providers; credentials.all() empty; model registry resolves ${cheapModel.provider}/${cheapModel.id}`;
 });
 
-await check("models-config: NeoPi validates a models.yml copy and a registry reload lists its new model", ["ModelsConfigFile"], async () => {
-	const file = path.join(mkdir("models-config"), "models.yml");
-	const provider = (models: string) => `providers:\n  contract-local:\n    baseUrl: http://127.0.0.1:9/v1\n    api: openai-completions\n    auth: none\n    models:\n${models}`;
-	writeFileSync(file, provider("      - id: first\n"));
+await check("models-config: NeoPi validates a models.toml copy and a registry reload lists its new model", ["ModelsConfigFile"], async () => {
+	const file = path.join(mkdir("models-config"), "models.toml");
+	const provider = (models: string) => `[providers.contract-local]\nbaseUrl = "http://127.0.0.1:9/v1"\napi = "openai-completions"\nauth = "none"\n${models}`;
+	writeFileSync(file, provider('[[providers.contract-local.models]]\nid = "first"\n'));
 	const loaded = models.ModelsConfigFile.relocate(file).tryLoad();
 	assert(loaded.status === "ok" && loaded.value.providers?.["contract-local"]?.models?.[0]?.id === "first", `valid copy rejected: ${loaded.error}`);
 	const local = new core.ModelRegistry(registry.authStorage, file);
 	await local.refresh("offline");
 	assert(local.find("contract-local", "first") && !local.find("contract-local", "second"), "custom model not listed after first load");
-	writeFileSync(file, provider("      - id: first\n      - id: second\n"));
+	writeFileSync(file, provider('[[providers.contract-local.models]]\nid = "first"\n[[providers.contract-local.models]]\nid = "second"\n'));
 	await local.reapplyModelPolicies();
 	assert(local.find("contract-local", "second") && !local.getError(), `reapplyModelPolicies did not list the added model: ${local.getError()?.message}`);
-	writeFileSync(file, provider("      - id: first\n        contextWindow: -1\n"));
+	writeFileSync(file, provider('[[providers.contract-local.models]]\nid = "first"\ncontextWindow = -1\n'));
 	const rejected = models.ModelsConfigFile.relocate(file).tryLoad();
 	assert(rejected.status === "error" && rejected.error.message.includes("invalid contextWindow"), `invalid copy accepted: ${rejected.status}`);
 	return `relocated load ok; reload lists added model; rejects with "${rejected.error.message.split("\n")[0]}"`;
@@ -252,7 +252,7 @@ await check("models-config: NeoPi validates a models.yml copy and a registry rel
 
 await check("model-roles: RPC catalog lists built-in then custom roles; role filters split model kinds", ["RpcRoles", "getRoleInfo", "CLI_THINKING_LEVELS"], async () => {
 	const settings = await core.Settings.loadReadOnly({ cwd: agentDir, agentDir });
-	// A runtime override introduces a custom role without writing config.yml.
+	// A runtime override introduces a custom role without writing config.toml.
 	settings.overrideModelRoles({ review: "openrouter/openai/gpt-4o-mini" });
 	const session = { settings, modelRegistry: registry, sessionManager: { getBranch: () => [] }, sessionId: "" };
 	const roles = new modelRoles.RpcRoles(session as unknown as ConstructorParameters<typeof modelRoles.RpcRoles>[0]).list().roles;
@@ -423,7 +423,7 @@ await check("model selector: native search and CLI resolution agree without sele
 	const selector = `${cheapModel.provider}/${cheapModel.id}`;
 	const settings = await core.Settings.loadReadOnly({ cwd: rootB, agentDir });
 	settings.overrideModelRoles({ default: selector });
-	const configPath = path.join(agentDir, "config.yml");
+	const configPath = path.join(agentDir, "config.toml");
 	const before = await Bun.file(configPath).exists() ? await Bun.file(configPath).text() : undefined;
 	const search = feature("model-selector");
 	const source = search.createModelBrowserSource(settings);
@@ -480,7 +480,7 @@ await check("MCP: per-session override rejects unknown and shadowed names", [
 	const discovered = await mcp.loadAllMCPConfigs(cwd, { includeServers: ["admitted"] });
 	assert(Object.keys(discovered.configs).join(",") === "admitted", "MCP discovery admitted the wrong servers");
 	const settings = await core.Settings.loadIsolated({ cwd, agentDir });
-	const configPath = path.join(agentDir, "config.yml");
+	const configPath = path.join(agentDir, "config.toml");
 	const before = await Bun.file(configPath).exists() ? await Bun.file(configPath).text() : undefined;
 	mcp.cfgMcpIncludeServers.override(settings, ["admitted"]);
 	assert(mcp.cfgMcpIncludeServers.get(settings).join(",") === "admitted", "override did not take");
@@ -492,7 +492,7 @@ await check("MCP: per-session override rejects unknown and shadowed names", [
 		assert(!(await Bun.file(markers[1]!).exists()), "excluded MCP server was spawned");
 	} finally { await allowed.dispose(); }
 	const after = await Bun.file(configPath).exists() ? await Bun.file(configPath).text() : undefined;
-	assert(before === after, "MCP override persisted to shared config.yml");
+	assert(before === after, "MCP override persisted to shared config.toml");
 	const unknownSettings = await core.Settings.loadIsolated({ cwd, agentDir });
 	mcp.cfgMcpIncludeServers.override(unknownSettings, ["unknown"]);
 	const failure = await newSession(cwd, { agentId: "Contract-unknown", settings: unknownSettings }).then(
@@ -881,7 +881,7 @@ async function advisorStatus(session: AgentSession): Promise<string> {
 	return overview.advisors.map((a) => `${a.name}:${a.status}`).join(",") || "(none)";
 }
 
-await check("advisors: save WATCHDOG.yml, rediscover, apply live", [
+await check("advisors: save WATCHDOG.toml, rediscover, apply live", [
 	"resolveAdvisorConfigEditPath",
 	"loadWatchdogConfigFile",
 	"saveWatchdogConfigFile",
@@ -895,7 +895,7 @@ await check("advisors: save WATCHDOG.yml, rediscover, apply live", [
 ], async () => {
 	assert(sessionB, "no session");
 	const file = await advisors.resolveAdvisorConfigEditPath("user", { projectDir: rootB, agentDir });
-	assert(file === path.join(agentDir, "WATCHDOG.yml"), `user edit path ${file}`);
+	assert(file === path.join(agentDir, "WATCHDOG.toml"), `user edit path ${file}`);
 	const doc: Parameters<typeof advisors.saveWatchdogConfigFile>[1] = {
 		advisors: [{ name: "Contract", model: "openrouter/openai/gpt-4o-mini", instructions: "Watch the contract." }],
 	};
@@ -905,7 +905,7 @@ await check("advisors: save WATCHDOG.yml, rediscover, apply live", [
 	const discovered = await advisors.discoverAdvisorConfigs(rootB, agentDir);
 	assert(discovered.advisors.some((a) => a.name === "Contract"), "discovery missed the saved advisor");
 	assert(advisors.slugifyAdvisorName("Contract") === "contract", "advisor name normalization changed");
-	const candidates = await advisors.collectConfigCandidates(rootB, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"]);
+	const candidates = await advisors.collectConfigCandidates(rootB, agentDir, ["WATCHDOG.toml"]);
 	assert(candidates.some((candidate) => candidate.path === file), "candidate walk missed user WATCHDOG");
 	const settings = await core.Settings.loadIsolated({ cwd: rootB, agentDir });
 	assert(typeof advisors.cfgAdvisorEnabled.get(settings) === "boolean", "advisor enabled setting unavailable");
@@ -970,7 +970,7 @@ await check("fact: per-root settings isolation (Settings.loadIsolated)", ["Setti
 	bindRoleAdvisor(sessionB);
 	const sameInstance = sessionA.settings === isolated;
 	const before = { a: advisorModel(sessionA), b: advisorModel(sessionB), global: core.settings.getModelRole("advisor") };
-	const configPath = path.join(agentDir, "config.yml");
+	const configPath = path.join(agentDir, "config.toml");
 	const configBefore = await Bun.file(configPath).exists() ? await Bun.file(configPath).text() : undefined;
 	core.cfgModelRoles.override(isolated, { ...core.cfgModelRoles.get(isolated), advisor: altModel });
 	await Bun.sleep(10);
@@ -984,7 +984,7 @@ await check("fact: per-root settings isolation (Settings.loadIsolated)", ["Setti
 		&& persisted === before.global && configBefore === configAfter;
 	facts["settings-isolation"] = {
 		value: liveIsolated ? "composes: non-persisting modelRoles override reaches only this root" : "does not compose",
-		evidence: `session.settings === isolated: ${sameInstance}; advisor A ${before.a} → ${after.a}; advisor B ${before.b} → ${after.b}; global role ${before.global} → ${after.global}; fresh load: ${persisted}; config.yml byte-identical: ${configBefore === configAfter}`,
+		evidence: `session.settings === isolated: ${sameInstance}; advisor A ${before.a} → ${after.a}; advisor B ${before.b} → ${after.b}; global role ${before.global} → ${after.global}; fresh load: ${persisted}; config.toml byte-identical: ${configBefore === configAfter}`,
 	};
 	return facts["settings-isolation"]!.evidence;
 });
@@ -994,7 +994,7 @@ await check("models: new chats select Opus medium with one exact Sol fallback", 
 	"isRetryFallbackModelKey", "isRetryFallbackWildcardKey",
 ], async () => {
 	const cwd = mkdir("root-default");
-	const configPath = path.join(agentDir, "config.yml");
+	const configPath = path.join(agentDir, "config.toml");
 	const before = await Bun.file(configPath).exists() ? await Bun.file(configPath).text() : undefined;
 	const bridge = new InProcessAgentBridge({ idleTimeoutMs: 0 });
 	try {

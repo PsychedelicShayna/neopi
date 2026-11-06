@@ -113,7 +113,7 @@ async function decodeGatewayError(response: Response): Promise<AIError.AuthGatew
 function resolveStreamUrl(model: Model<Api>): string {
 	if (!model.baseUrl) {
 		throw new AIError.ConfigurationError(
-			`pi-native transport requires \`baseUrl\` on model ${model.id} (set it on the provider config in models.yml)`,
+			`pi-native transport requires \`baseUrl\` on model ${model.id} (set it on the provider config in models.toml)`,
 		);
 	}
 	return `${model.baseUrl.replace(/\/+$/, "")}/v1/pi/stream`;

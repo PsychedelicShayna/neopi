@@ -34,7 +34,7 @@ describe("launch profile memory", () => {
 			overrides: { "memory.backend": "off" },
 		});
 		auth = await AuthStorage.create(":memory:");
-		registry = new ModelRegistry(auth, temp.join("models.yml"));
+		registry = new ModelRegistry(auth, temp.join("models.toml"));
 	});
 
 	afterEach(async () => {

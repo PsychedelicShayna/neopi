@@ -26,7 +26,7 @@ beforeEach(() => {
 
 	authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("anthropic", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	const settings = Settings.isolated({ "compaction.enabled": false });
 	sessionManager = SessionManager.inMemory(tempDir.path());
 

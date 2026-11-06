@@ -11,13 +11,11 @@ test("a failed pre-backend probe recovers after loading the backend", () => {
 	const home = mkdtempSync(path.join(tmpdir(), "deck-registry-recovery-"));
 	const agentDir = path.join(home, "agent");
 	mkdirSync(agentDir);
-	writeFileSync(path.join(agentDir, "models.yml"), `providers:
-  recovery-fixture:
-    baseUrl: http://127.0.0.1:1/v1
-    api: openai-completions
-    auth: none
-    models:
-      - id: recovered-model
+	writeFileSync(path.join(agentDir, "models.toml"), `[providers.recovery-fixture]
+baseUrl = "http://127.0.0.1:1/v1"
+api = "openai-completions"
+auth = "none"
+models = [{ id = "recovered-model" }]
 `, { mode: 0o600 });
 	const authUrl = pathToFileURL(path.join(import.meta.dir, "auth-singleton.ts")).href;
 	const runtimeUrl = pathToFileURL(path.join(import.meta.dir, "backend/runtime.ts")).href;

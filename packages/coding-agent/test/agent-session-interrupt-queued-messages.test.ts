@@ -75,7 +75,7 @@ describe("AgentSession editor-restoring interrupt", () => {
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		return { session, sessionManager, mock };
 	}

@@ -15,6 +15,8 @@ import * as path from "node:path";
 
 import { migrationsDir } from "../assets.ts";
 import { logger } from "../log.ts";
+import { migrateLegacyRoutineSpecs } from "../routines/legacy-yaml.ts";
+import { importLegacyCardMetadata } from "./card-metadata.ts";
 
 const log = logger("db");
 
@@ -64,6 +66,8 @@ export function openDb(opts: DbOpenOpts): Database {
 	db.exec("PRAGMA synchronous = NORMAL");
 
 	applyMigrations(db);
+	importLegacyCardMetadata(db);
+	migrateLegacyRoutineSpecs(db);
 	seedWelcomeTaskIfEmpty(db);
 
 	instance = db;

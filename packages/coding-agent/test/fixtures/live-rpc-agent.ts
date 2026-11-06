@@ -22,7 +22,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const sessionManager = SessionManager.create(cwd, path.join(cwd, "sessions"));
 const runtime = new ExtensionRuntime();
 const extension = await loadExtensionFromFactory(

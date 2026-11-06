@@ -1971,7 +1971,7 @@ export class InputController {
 		let chainName = "";
 		let currentStep = "";
 		// Lock before resolving the chain: submit already emptied the buffer, and anything typed
-		// while CHAINS.yml loads or the picker is open would be overwritten. Text typed while
+		// while CHAINS.toml loads or the picker is open would be overwritten. Text typed while
 		// input hooks ran is kept in local history rather than lost. The draft goes back as
 		// displayed so the lock has something to shimmer.
 		if (this.ctx.editor.getText().trim()) {
@@ -2067,7 +2067,7 @@ export class InputController {
 
 	async #resolveActiveChain(): Promise<ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined> {
 		const { chains, warnings } = await discoverChains(this.ctx.sessionManager.getCwd(), getAgentDir());
-		if (warnings.length > 0) this.ctx.showWarning(`CHAINS.yml: ${warnings.join("; ")}`);
+		if (warnings.length > 0) this.ctx.showWarning(`CHAINS.toml: ${warnings.join("; ")}`);
 		if (chains.length === 0) {
 			this.ctx.showWarning("No post-processing chains defined. Create one with /chain configure.");
 			return undefined;
@@ -3680,7 +3680,8 @@ export class InputController {
 				const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
 				if (result !== null) {
 					const message = extractExternalEditorMessage(result);
-					if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+					if (message === null)
+						this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
 					else this.ctx.editor.setText(message);
 				}
 			},

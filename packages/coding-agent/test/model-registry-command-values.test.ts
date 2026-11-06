@@ -10,7 +10,7 @@ import { invalidateAllCommandConfigs, resolveConfigValue } from "@oh-my-pi/pi-co
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import * as piUtils from "@oh-my-pi/pi-utils";
-import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
@@ -101,7 +101,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 	beforeEach(async () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-model-command-values-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsPath = path.join(tempDir, "models.json");
+		modelsPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(":memory:");
 	});
 
@@ -118,7 +118,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 	test("provider apiKey and headers resolve from command stdout", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					anthropic: {
 						baseUrl: "https://anthropic-proxy.example.com/v1",
@@ -147,7 +147,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 	test("modelOverrides headers resolve from command stdout", async () => {
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -179,7 +179,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		fs.writeFileSync(counterFile, "");
 		await Bun.write(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -209,7 +209,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -253,7 +253,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -293,7 +293,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -338,7 +338,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		fs.writeFileSync(tenantFile, "stale-tenant");
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -389,7 +389,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		fs.writeFileSync(tenantFile, "stale-tenant");
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -441,7 +441,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		fs.writeFileSync(tenantFile, "stale-tenant");
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -522,7 +522,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -567,7 +567,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -605,7 +605,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"custom-proxy": {
 						baseUrl: "https://custom-proxy.example.com/v1",
@@ -640,7 +640,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 
 		fs.writeFileSync(
 			modelsPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					"proxy-a": {
 						baseUrl: "https://a.example.com/v1",
@@ -683,7 +683,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		fs.writeFileSync(modelHeaderFile, "stale-model");
 		fs.writeFileSync(providerCounter, "");
 		fs.writeFileSync(modelCounter, "");
-		fs.writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
+		fs.writeFileSync(modelsPath, stringifySettingsToml({ providers: {} }));
 
 		const registry = new ModelRegistry(authStorage, modelsPath);
 		registry.registerProvider("ext-proxy", {
@@ -730,7 +730,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		const modelCounter = path.join(tempDir, "dynamic-counter.txt");
 		fs.writeFileSync(modelHeaderFile, "stale-dynamic");
 		fs.writeFileSync(modelCounter, "");
-		fs.writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
+		fs.writeFileSync(modelsPath, stringifySettingsToml({ providers: {} }));
 
 		const registry = new ModelRegistry(authStorage, modelsPath);
 		registry.registerProvider("dyn-proxy", {
@@ -774,7 +774,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		const tenantFile = path.join(tempDir, "tenant.txt");
 		fs.writeFileSync(bearerFile, "stale-bearer");
 		fs.writeFileSync(tenantFile, "stale-tenant");
-		fs.writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
+		fs.writeFileSync(modelsPath, stringifySettingsToml({ providers: {} }));
 
 		const registry = new ModelRegistry(authStorage, modelsPath);
 		registry.registerProvider("dyn-proxy", {

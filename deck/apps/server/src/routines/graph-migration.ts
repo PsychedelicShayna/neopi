@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseDocument, stringify } from "yaml";
+import { parseSettingsToml as parse, stringifySettingsToml as stringify } from "@oh-my-pi/pi-utils/settings-toml";
+import { importLegacyRoutineYaml } from "./legacy-yaml.ts";
 import { isGraphValue, validateRoutineSpec, type GraphNode, type GraphObject, type GraphValue, type RoutineGraph, type RoutineSpec } from "@npi-deck/protocol";
 import { getDb } from "../db/index.ts";
 import { loadConfig } from "../config.ts";
@@ -12,7 +13,7 @@ export interface MigrationField {
 	path: string;
 	status: "supported" | "preserved-declaration-only" | "explicit-loss" | "blocked";
 	mapping: string;
-	/** No source values, YAML fragments or credentials enter an ordinary report. */
+	/** No source values, TOML fragments or credentials enter an ordinary report. */
 	original: string;
 }
 export interface RoutineMigrationReport {
@@ -22,7 +23,7 @@ export interface RoutineMigrationReport {
 	sourceDigest: string;
 	fields: MigrationField[];
 }
-type Row = Record<string, string | number | null> & { id: string; spec_version: number; spec_yaml: string | null; graph_json: string | null };
+type Row = Record<string, string | number | null> & { id: string; spec_version: number; spec_yaml: string | null; spec_toml: string | null; graph_json: string | null };
 interface Plan { row: Row; report: RoutineMigrationReport; graph?: RoutineGraph }
 interface Conversion { routine_id: string; source_digest: string; original_json: string; converted_graph_json: string; backup_path: string; converted_at: string; restored_at: string | null }
 const hash = (text: string | Uint8Array) => createHash("sha256").update(text).digest("hex");
@@ -48,7 +49,7 @@ function plan(row: Row, registry: GraphNodeRegistry): Plan {
 		if (row.action_kind === "prompt") block("/row/action_kind", "V0 prompt starts an agent. Native agent instantiation, backend pinning and usage contracts depend on neopi#11.");
 		else if (row.action_kind !== "bash" && row.action_kind !== "script") block("/row/action_kind", "Unknown V0 process kind has no native command contract");
 		if (typeof row.action_body !== "string") block("/row/action_body", "V0 process body must be a string");
-		if (row.spec_yaml !== null) block("/row/spec_yaml", "V0 row contains an unexpected YAML declaration; source identity is ambiguous");
+		if (row.spec_yaml !== null || row.spec_toml !== null) block("/row/spec_toml", "V0 row contains an unexpected pipeline declaration; source identity is ambiguous");
 		if (registration) block("/row/webhook_registration", "V0 webhook dispatch historically changes trigger kind to manual; no equivalent native source mapping is selected");
 		if (row.budget_json !== null) field("/row/budget_json", "preserved-declaration-only", "V0 never enforced this column. It remains in the row and protected original, not an active native budget.");
 		const graph: RoutineGraph = {
@@ -77,13 +78,13 @@ function plan(row: Row, registry: GraphNodeRegistry): Plan {
 	}
 	let parsed: unknown;
 	try {
-		if (typeof row.spec_yaml !== "string") throw new Error("Missing source");
-		const document = parseDocument(row.spec_yaml, { uniqueKeys: true });
-		if (document.errors.length) throw new Error("Invalid YAML");
-		parsed = document.toJS({ maxAliasCount: 100 });
-		if (!isGraphValue(parsed)) throw new Error("Non-JSON YAML value");
+		const source = row.spec_toml ?? (row.spec_yaml === null ? undefined : importLegacyRoutineYaml(row.spec_yaml));
+		if (source === undefined) throw new Error("Missing source");
+		parsed = parse(source);
+		if (!isGraphValue(parsed)) throw new Error("Non-JSON TOML value");
+
 	} catch {
-		block("/spec_yaml", "Malformed, duplicate-key, cyclic, excessive-alias or non-JSON YAML. Inspect the protected original, not this report.");
+		block("/spec_toml", "Malformed TOML or legacy declaration cannot be imported losslessly. Inspect the protected original, not this report.");
 		return { row, report };
 	}
 	const validation = validateRoutineSpec(parsed);
@@ -100,16 +101,16 @@ function plan(row: Row, registry: GraphNodeRegistry): Plan {
 		tags: spec.tags?.join(",") ?? null,
 		cron: (spec.trigger.find(trigger => "cron" in trigger) as { cron: string } | undefined)?.cron ?? "",
 	};
-	for (const [key, expected] of Object.entries(mirrors)) if (row[key] !== expected) block(`/row/${key}`, "Raw mirrored column disagrees with YAML; no precedence is guessed");
+	for (const [key, expected] of Object.entries(mirrors)) if (row[key] !== expected) block(`/row/${key}`, "Raw mirrored column disagrees with TOML; no precedence is guessed");
 	let budget: unknown = null;
 	try { budget = row.budget_json === null ? null : JSON.parse(String(row.budget_json)); }
 	catch { block("/row/budget_json", "Malformed raw budget JSON, which normalized readers silently hide"); }
-	if (encode(budget) !== encode(spec.budget ?? null)) block("/row/budget_json", "Raw budget disagrees with YAML");
+	if (encode(budget) !== encode(spec.budget ?? null)) block("/row/budget_json", "Raw budget disagrees with TOML");
 	for (const key of Object.keys(spec.budget ?? {})) field(`/spec/budget/${pointer(key)}`, "supported", `/graph/budget/${pointer(key)}, native routine-v1 per-attempt accounting and abort precedence`);
 	if (spec.tags?.some(tag => tag.includes(",") || tag.trim() !== tag)) block("/spec/tags", "Legacy comma-split tags disagree with the declared array");
 	if (spec.state) field("/spec/state", "preserved-declaration-only", "Informational declared_keys retained in the protected original and semantic export; persisted routine_state remains unchanged");
 	if (spec.layout?.edges?.length) field("/spec/layout/edges", "preserved-declaration-only", "Legacy visual edges never drove execution. Kept in original/export only; not activated as native routing.");
-	field("/spec_yaml/syntax", "explicit-loss", "Semantic export does not reproduce comments, anchors, formatting or key order. Exact raw YAML remains in the durable backup.");
+	field("/spec_toml/syntax", "explicit-loss", "Semantic export does not reproduce comments, anchors, formatting or key order. Exact raw TOML remains in the durable backup.");
 	const graph: RoutineGraph = { version: 2, execution: { mode: "routine-v1" }, nodes: [], edges: [] };
 	for (const key of ["concurrency", "timezone", "tags"] as const) if (spec[key] !== undefined) Object.assign(graph, { [key]: spec[key] });
 	if (spec.budget) graph.budget = spec.budget;
@@ -191,7 +192,7 @@ function plan(row: Row, registry: GraphNodeRegistry): Plan {
 		const sourceSuffix = match?.[2] === "/type" ? "/type" : match?.[3] ?? "";
 		block(stepIndex >= 0 ? `/spec/steps/${stepIndex}${sourceSuffix}${suffix}` : `/graph${error.path}${suffix}`, `Production registry refused mapped node/config (${error.keyword}). Unknown fields and unsupported controls are not discarded.`);
 	}
-	for (const key of ["name", "description", "concurrency", "timezone", "tags", "budget", "layout"] as const) if (Object.hasOwn(spec, key)) field(`/spec/${key}`, "supported", key === "name" || key === "description" ? "Raw row identity remains authoritative; original YAML declaration retained for semantic export" : `/graph/${key}`);
+	for (const key of ["name", "description", "concurrency", "timezone", "tags", "budget", "layout"] as const) if (Object.hasOwn(spec, key)) field(`/spec/${key}`, "supported", key === "name" || key === "description" ? "Raw row identity remains authoritative; original TOML declaration retained for semantic export" : `/graph/${key}`);
 	return { row, report, ...(report.status === "ready" ? { graph } : {}) };
 }
 function plans(registry: GraphNodeRegistry, routineId?: string): Plan[] {
@@ -239,7 +240,7 @@ export function migrateRoutines(registry: GraphNodeRegistry, options: { routineI
 			if (!validation.valid) throw new Error(`Graph validation changed during migration: ${item.row.id}`);
 			const graphJson = encode(item.graph);
 			getDb().query("INSERT INTO routine_graph_conversions (routine_id, source_digest, original_json, converted_graph_json, backup_path, converted_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(routine_id, source_digest) DO UPDATE SET converted_graph_json = excluded.converted_graph_json, backup_path = excluded.backup_path, converted_at = excluded.converted_at, restored_at = NULL").run(item.row.id, item.report.sourceDigest, encode(item.row), graphJson, backupPath, new Date().toISOString());
-			getDb().query("UPDATE routines SET spec_version = 2, graph_json = ?, spec_yaml = NULL WHERE id = ?").run(graphJson, item.row.id);
+			getDb().query("UPDATE routines SET spec_version = 2, graph_json = ?, spec_toml = NULL WHERE id = ?").run(graphJson, item.row.id);
 		}).immediate();
 		item.report.status = "migrated";
 	}
@@ -254,25 +255,38 @@ export function restoreRoutineDefinition(routineId: string, sourceDigest: string
 		const current = getDb().query<Row, [string]>("SELECT * FROM routines WHERE id = ?").get(routineId);
 		if (!current) throw new Error("Routine no longer exists");
 		const original = JSON.parse(conversion.original_json) as Row;
+		const predatesToml = !Object.hasOwn(original, "spec_toml");
+		const specToml = original.spec_toml ?? (
+			original.spec_version === 1 && original.spec_yaml !== null
+				? importLegacyRoutineYaml(original.spec_yaml) : null
+		);
 		// Metadata edits must not disappear as a side effect of restoration.
-		const expected: Row = conversion.restored_at !== null ? original : { ...original, spec_version: 2, spec_yaml: null, graph_json: conversion.converted_graph_json };
+		const expected: Row = conversion.restored_at !== null ? { ...original, spec_toml: specToml } : {
+			...original, spec_version: 2, spec_toml: null, graph_json: conversion.converted_graph_json,
+			...(predatesToml ? { spec_yaml: null } : {}),
+		};
 		for (const key of Object.keys(expected)) {
 			if (key === "last_run_at" || key === "next_run_at") continue;
 			if (current[key] !== expected[key]) throw new Error("Routine metadata changed since conversion");
 		}
 		if (conversion.restored_at !== null) return;
-		getDb().query("UPDATE routines SET spec_version = ?, spec_yaml = ?, graph_json = ?, cron = ?, action_kind = ?, action_body = ?, action_cwd = ?, concurrency = ?, budget_json = ?, timezone = ?, tags = ? WHERE id = ?").run(original.spec_version, original.spec_yaml, original.graph_json, original.cron!, original.action_kind!, original.action_body!, original.action_cwd!, original.concurrency!, original.budget_json!, original.timezone!, original.tags!, routineId);
+		// Old graph conversions cleared YAML. Recover their protected original;
+		// never replace provenance retained by current conversions.
+		if (predatesToml && original.spec_yaml !== null) {
+			getDb().query("UPDATE routines SET spec_yaml = ? WHERE id = ? AND spec_yaml IS NULL").run(original.spec_yaml, routineId);
+		}
+		getDb().query("UPDATE routines SET spec_version = ?, spec_toml = ?, graph_json = ?, cron = ?, action_kind = ?, action_body = ?, action_cwd = ?, concurrency = ?, budget_json = ?, timezone = ?, tags = ? WHERE id = ?").run(original.spec_version, specToml, original.graph_json, original.cron!, original.action_kind!, original.action_body!, original.action_cwd!, original.concurrency!, original.budget_json!, original.timezone!, original.tags!, routineId);
 		getDb().query("UPDATE routine_graph_conversions SET restored_at = ? WHERE routine_id = ? AND source_digest = ?").run(new Date().toISOString(), routineId, sourceDigest);
 	}).immediate();
 }
 
-/** One-shot semantic YAML export, not an authoring or execution source. Refuse edited topology. */
+/** One-shot semantic TOML export, not an authoring or execution source. Refuse edited topology. */
 export function exportRoutineMigration(routineId: string, sourceDigest: string): string {
 	const conversion = getDb().query<Conversion, [string, string]>("SELECT * FROM routine_graph_conversions WHERE routine_id = ? AND source_digest = ?").get(routineId, sourceDigest);
 	if (!conversion) throw new Error("Conversion not found");
 	const row = JSON.parse(conversion.original_json) as Row;
 	// The immutable converted graph and raw definition prove omitted/false/zero/null distinctions.
-	// Exporting later native edits as legacy YAML would invent a reverse mapping; refuse that.
+	// Exporting later native edits as legacy TOML would invent a reverse mapping; refuse that.
 	const current = getDb().query<Row, [string]>("SELECT * FROM routines WHERE id = ?").get(routineId);
 	if (!current || (current.spec_version === 2 && current.graph_json !== conversion.converted_graph_json)) throw new Error("Native definition changed; use native graph export");
 	if (row.spec_version === 0) return stringify({
@@ -281,5 +295,5 @@ export function exportRoutineMigration(routineId: string, sourceDigest: string):
 		...(row.action_cwd !== null ? { actionCwd: row.action_cwd } : {}), enabled: row.enabled === 1,
 		metadata: { concurrency: row.concurrency, budget_json: row.budget_json, timezone: row.timezone, tags: row.tags },
 	});
-	return stringify(parseDocument(row.spec_yaml!, { uniqueKeys: true }).toJS({ maxAliasCount: 100 }));
+	return stringify(parse(row.spec_toml ?? importLegacyRoutineYaml(row.spec_yaml!)));
 }

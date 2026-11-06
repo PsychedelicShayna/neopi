@@ -153,13 +153,13 @@ export function Column({
 							className="w-full bg-transparent text-sm placeholder:text-ink-4 focus:outline-none"
 						/>
 						<label className="mt-2 block font-mono text-2xs text-ink-3">
-							Body / raw YAML properties
+							Body / raw TOML properties
 							<textarea
 								rows={7}
 								value={body}
 								disabled={creating}
 								onChange={(e) => setBody(e.target.value)}
-								placeholder={"---\nread-only: true\nworktree: /absolute/path/to/existing-worktree\nmodel: provider/id\nrole: default\n---\nTask instructions"}
+								placeholder={"+++\nread-only = true\nworktree = \"/absolute/path/to/existing-worktree\"\nmodel = \"provider/id\"\nrole = \"default\"\n+++\nTask instructions"}
 								className="mt-1 w-full resize-y bg-transparent font-mono text-xs placeholder:text-ink-4 focus:outline-none"
 							/>
 						</label>

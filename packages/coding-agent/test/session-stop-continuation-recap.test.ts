@@ -102,7 +102,7 @@ describe("session_stop block continuation — idle recap resilience (#4323)", ()
 		const settings = Settings.isolated();
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorages.push(authStorage);
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
 
 		session = new AgentSession({

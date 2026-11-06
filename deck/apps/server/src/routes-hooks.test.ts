@@ -1,3 +1,4 @@
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import * as fs from "node:fs";
@@ -72,11 +73,11 @@ function setup(enabled: boolean, registration: "current" | "pre-upgrade" = "curr
 	const hookPath = `/hooks/test-${crypto.randomUUID()}`;
 	const shell = createShellFixture(home);
 	const spec = {
-		version: 1, name: "hooked", concurrency: "skip",
+		name: "hooked", concurrency: "skip",
 		trigger: [{ webhook: { path: hookPath, secret_env: "HOOK_SECRET" } }],
 		steps: [{ id: "write", type: "run", cwd: shell.cwd, command: shell.command("write", { marker, bytes: "yes", newline: true }) }],
 	} as RoutineSpec;
-	const routine = createV1Routine({ name: `hooked-${crypto.randomUUID()}`, spec, specYaml: JSON.stringify(spec), enabled });
+	const routine = createV1Routine({ name: `hooked-${crypto.randomUUID()}`, spec, specToml: stringifyToml(spec), enabled });
 	if (registration === "current") {
 		expect(upsertWebhookSecret({ routineId: routine.id, path: hookPath, secret: SECRET })).toBe(true);
 	} else {

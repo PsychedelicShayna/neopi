@@ -39,7 +39,7 @@ const CODEX_GPT_5_6_1M_SLUGS: ReadonlySet<string> = new Set(["gpt-5.6-luna", "gp
  * values while its plain listing is enriched.
  *
  * Deliberate boundary: the "safe" gate is the bundled Codex catalog. A `-wm`
- * slug whose plain counterpart is only a user-local models.yml entry (not
+ * slug whose plain counterpart is only a user-local models.toml entry (not
  * bundled) stays verbatim — authoritative discovery for genuinely distinct
  * `-wm` SKUs is preserved, and a hidden plain backend entry can be re-surfaced
  * through its advertised `-wm` row because the configured plain slug must

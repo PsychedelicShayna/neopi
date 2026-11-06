@@ -57,7 +57,7 @@ The default scope is `session`. It never writes config files, takes precedence o
 
 ## Memory backends
 
-The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):
+The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/agent/config.toml`):
 
 - `off` (default) — no memory subsystem runs.
 - `local` — existing rollout-summarisation pipeline; writes `memory_summary.md` and consolidated artifacts under the agent dir.
@@ -80,15 +80,15 @@ Switching backends mid-session immediately replaces the live backend, memory too
 
 Chronicler is an independent, opt-in background capture feature, not a memory backend or advisor. In `/settings` → Memory, **Chronicler capture** appears directly beneath **Memory Backend**; it can run alongside Local memory. The built-in `chronicler` model role is selectable in the ordinary role UI and cannot be deleted. An unset role follows the `slow` fallback chain.
 
-For example, in `~/.omp/agent/config.yml` or project `.omp/config.yml`:
+For example, in `~/.omp/agent/config.toml` or project `.omp/config.toml`:
 
-```yaml
-memory:
-  backend: local
-chronicler:
-  enabled: true
-modelRoles:
-  chronicler: openai-codex/gpt-5.6-luna:max
+```toml
+[memory]
+backend = "local"
+[chronicler]
+enabled = true
+[modelRoles]
+chronicler = "openai-codex/gpt-5.6-luna:max"
 ```
 
 The model choice is configuration, not a hard-coded requirement. Capture defaults off and is always disabled for task subagents, including SDK sessions identified by `taskDepth` or `parentTaskPrefix`. No primary-agent `retain` call, advisor, or prose reviewer is involved.

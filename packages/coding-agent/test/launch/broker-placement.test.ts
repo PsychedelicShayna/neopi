@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest } from "../../src/config/settings";
 import { type BrokerPlacement, launchBroker, resolveBrokerPlacement } from "../../src/launch/broker-placement";
 import { type DaemonBrokerClient, createDaemonBrokerClient } from "../../src/launch/client";
@@ -224,8 +224,8 @@ describe("daemon broker client placement", () => {
 		const projectDir = path.join(fake.root, "project");
 		await fs.mkdir(getProjectAgentDir(projectDir), { recursive: true });
 		await Bun.write(
-			path.join(getProjectAgentDir(projectDir), "config.yml"),
-			`launch:\n  brokerScope: ${brokerScope}\n`,
+			path.join(getProjectAgentDir(projectDir), "config.toml"),
+			stringifySettingsToml({ launch: { brokerScope } }),
 		);
 		process.env.PATH = `${fake.env.PATH}${path.delimiter}${savedEnv.PATH ?? ""}`;
 		process.env.XDG_RUNTIME_DIR = fake.env.XDG_RUNTIME_DIR;
@@ -257,7 +257,10 @@ describe("daemon broker client placement", () => {
 			const projectDir = path.join(fake.root, "project");
 			const runtimeDir = path.join(fake.root, "broker-run");
 			await fs.mkdir(getProjectAgentDir(projectDir), { recursive: true });
-			await Bun.write(path.join(getProjectAgentDir(projectDir), "config.yml"), "launch:\n  brokerScope: true\n");
+			await Bun.write(
+				path.join(getProjectAgentDir(projectDir), "config.toml"),
+				stringifySettingsToml({ launch: { brokerScope: true } }),
+			);
 			process.env.PATH = `${fake.env.PATH}${path.delimiter}${savedEnv.PATH ?? ""}`;
 			process.env.XDG_RUNTIME_DIR = fake.env.XDG_RUNTIME_DIR;
 			const priorGeneration = process.env.NPI_DECK_GEN;
@@ -329,7 +332,10 @@ describe("daemon broker client placement", () => {
 			const projectDir = path.join(fake.root, "project");
 			const runtimeDir = path.join(fake.root, "broker-run");
 			await fs.mkdir(getProjectAgentDir(projectDir), { recursive: true });
-			await Bun.write(path.join(getProjectAgentDir(projectDir), "config.yml"), "launch:\n  brokerScope: false\n");
+			await Bun.write(
+				path.join(getProjectAgentDir(projectDir), "config.toml"),
+				stringifySettingsToml({ launch: { brokerScope: false } }),
+			);
 			process.env.PATH = `${fake.env.PATH}${path.delimiter}${savedEnv.PATH ?? ""}`;
 			process.env.XDG_RUNTIME_DIR = fake.env.XDG_RUNTIME_DIR;
 			const priorGeneration = process.env.NPI_DECK_GEN;

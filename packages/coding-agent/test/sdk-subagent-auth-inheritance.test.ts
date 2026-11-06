@@ -145,7 +145,7 @@ describe("task subagent OAuth pin inheritance", () => {
 			if (!accountB) throw new Error("Expected account B");
 			expect(authStorage.sessions.pin("anthropic", parentProviderSessionId, accountB.credentialId)).toBe(true);
 
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const settings = Settings.isolated({
 				"async.enabled": false,
 				"compaction.enabled": false,
@@ -311,7 +311,7 @@ describe("task subagent OAuth pin inheritance", () => {
 				agentDir: tempDir.path(),
 				sessionManager: childTranscript,
 				authStorage,
-				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 				settings: Settings.isolated({ "async.enabled": false, "compaction.enabled": false }),
 				model,
 				credentialSourceSessionId: parentProviderSessionId,
@@ -367,7 +367,7 @@ describe("task subagent OAuth pin inheritance", () => {
 				cwd: tempDir.path(),
 				agentDir: tempDir.path(),
 				authStorage,
-				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 				settings: Settings.isolated({ "async.enabled": false, "compaction.enabled": false }),
 				model,
 				credentialSourceSessionId: parentProviderSessionId,
@@ -424,7 +424,7 @@ describe("task subagent OAuth pin inheritance", () => {
 			if (!storedB) throw new Error("Expected account B");
 			expect(authStorage.sessions.pin("anthropic", parentProviderSessionId, storedB.credentialId)).toBe(true);
 
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const settings = Settings.isolated({
 				"async.enabled": false,
 				"compaction.enabled": false,
@@ -516,7 +516,7 @@ describe("task subagent OAuth pin inheritance", () => {
 			]);
 			// An unrestricted lookup takes the runtime key first.
 			authStorage.keys.setRuntime("anthropic", "runtime-key");
-			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+			const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 			const settings = Settings.isolated({
 				"async.enabled": false,
 				"compaction.enabled": false,

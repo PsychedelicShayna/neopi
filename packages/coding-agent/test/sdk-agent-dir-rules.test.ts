@@ -55,7 +55,7 @@ async function createScopedSession(agentDir: string) {
 		agentDir,
 		sessionManager: SessionManager.inMemory(cwd),
 		authStorage,
-		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 		settings: Settings.isolated({ "compaction.enabled": false }),
 		model: buildLocalModel(),
 		disableExtensionDiscovery: true,

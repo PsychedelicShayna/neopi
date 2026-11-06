@@ -14,6 +14,7 @@ import { setMessageEntryId } from "@oh-my-pi/pi-coding-agent/session/message-ent
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { type RpcFrame, RpcChild } from "./helpers/rpc-child";
 import { createTestSession } from "./utilities";
 
@@ -96,17 +97,17 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map(root => root.remove()));
 });
 
-/** Spawn an RPC child; `configYaml` becomes its agent `config.yml` before startup. */
+/** Spawn an RPC child with native agent settings before startup. */
 async function spawnChild(
-	configYaml?: string,
+	config?: Record<string, unknown>,
 	options?: { command?: string; frozenClock?: boolean },
 ): Promise<RpcChild> {
 	let root: string | undefined;
-	if (configYaml || options) {
+	if (config || options) {
 		const dir = await TempDir.create("@rpc-prompt-entry-ids-");
 		roots.push(dir);
 		root = dir.path();
-		if (configYaml) await Bun.write(path.join(root, "agent", "config.yml"), configYaml);
+		if (config) await Bun.write(path.join(root, "agent", "config.toml"), stringifySettingsToml(config));
 		if (options?.command) {
 			await Bun.write(path.join(root, "agent", "commands", "local", "index.ts"), options.command);
 		}
@@ -382,7 +383,7 @@ describe("RPC prompt entry ids (#117)", () => {
 
 	test("after compaction the summary message carries the compaction entry id", async () => {
 		// Keep almost nothing verbatim so two short turns are enough to compact.
-		const child = await spawnChild("compaction:\n  keepRecentTokens: 1\n");
+		const child = await spawnChild({ compaction: { keepRecentTokens: 1 } });
 		await promptAndSettle(child, "p1", "first question");
 		await promptAndSettle(child, "p2", "second question");
 		expect(await child.request({ type: "compact" }, 30_000)).toMatchObject({ success: true });

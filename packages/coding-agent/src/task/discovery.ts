@@ -15,7 +15,7 @@
  * are intentionally skipped because their frontmatter schema is not the NeoPi
  * task-agent contract.
  *
- * Agent files use markdown with YAML frontmatter.
+ * Owned agent files use +++ TOML frontmatter; external plugin contracts retain YAML.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -24,10 +24,11 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
-import { pluginUsesClaudeModelDialect } from "../discovery/agent-plugin-format";
+import { classifyAgentPluginRoot, pluginUsesClaudeModelDialect } from "../discovery/agent-plugin-format";
 import { listClaudePluginRoots } from "../discovery/helpers";
 import { listOmpExtensionRoots } from "../discovery/omp-extension-roots";
-import { loadBundledAgents, parseAgent } from "./agents";
+import { loadBundledAgents, parseAgent, parseExternalAgent } from "./agents";
+import { readNativeMarkdown } from "../utils/native-frontmatter";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 import type { AgentDefinition } from "./types";
 
@@ -45,31 +46,38 @@ interface AgentDirectory {
 	dir: string;
 	source: AgentSource;
 	ignoreModel?: boolean;
+	/** Foreign marketplace/plugin manifests mandate interoperable YAML definitions. */
+	external?: boolean;
 }
 
 /**
  * Load agents from a directory.
  */
-async function loadAgentsFromDir({ dir, source, ignoreModel }: AgentDirectory): Promise<AgentDefinition[]> {
+async function loadAgentsFromDir({ dir, source, ignoreModel, external }: AgentDirectory): Promise<AgentDefinition[]> {
 	const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+	const names = new Set(entries.filter(entry => entry.isFile() || entry.isSymbolicLink()).map(entry => entry.name));
 	const files = entries
-		.filter(entry => (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith(".md"))
+		.filter(
+			entry =>
+				names.has(entry.name) &&
+				entry.name.endsWith(".md") &&
+				(external || !entry.name.endsWith(".toml.md") || !names.has(entry.name.replace(/\.toml\.md$/, ".md"))),
+		)
 		.sort((a, b) => a.name.localeCompare(b.name))
-		.map(file => {
+		.map(async file => {
 			const filePath = path.join(dir, file.name);
-			return fs
-				.readFile(filePath, "utf-8")
-				.then(content => {
-					const agent = parseAgent(filePath, content, source, "warn");
-					if (ignoreModel) agent.model = undefined;
-					return agent;
-				})
-				.catch(error => {
-					logger.warn("Failed to read agent file", { filePath, error });
-					return null;
-				});
+			try {
+				const document = external ? undefined : await readNativeMarkdown(filePath);
+				const agent = document
+					? parseAgent(document.filePath, document, source)
+					: parseExternalAgent(filePath, await Bun.file(filePath).text(), source);
+				if (ignoreModel) agent.model = undefined;
+				return agent;
+			} catch (error) {
+				logger.warn("Failed to read agent file", { filePath, error });
+				return null;
+			}
 		});
-
 	return (await Promise.all(files)).filter(Boolean) as AgentDefinition[];
 }
 
@@ -142,15 +150,19 @@ export async function discoverAgents(
 		// ship a `.claude-plugin` package. Claude-dialect frontmatter is dropped so
 		// its aliases are not misread as NeoPi selectors (#7966); NeoPi-native and
 		// Agent-Plugins-standard plugin agents keep their selectors (#12028).
-		sortedPluginRoots.map(
-			async plugin => plugin.origin === "claude" || (await pluginUsesClaudeModelDialect(plugin.path)),
-		),
+		sortedPluginRoots.map(async plugin => {
+			const ignoreModel = plugin.origin === "claude" || (await pluginUsesClaudeModelDialect(plugin.path));
+			const nativeManifest = await Bun.file(path.join(plugin.path, ".omp-plugin", "plugin.json")).exists();
+			const standard = (await classifyAgentPluginRoot(plugin.path)).kind === "standard";
+			return { ignoreModel, external: !nativeManifest && (ignoreModel || standard) };
+		}),
 	);
 	sortedPluginRoots.forEach((plugin, index) => {
 		orderedDirs.push({
 			dir: path.join(plugin.path, "agents"),
 			source: plugin.scope === "project" ? "project" : "user",
-			ignoreModel: pluginModelDrops[index],
+			ignoreModel: pluginModelDrops[index].ignoreModel,
+			external: pluginModelDrops[index].external,
 		});
 	});
 

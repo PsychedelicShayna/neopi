@@ -143,7 +143,7 @@ describe("BashTool through AgentSession runs children in their own session (e2e)
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("expected claude-sonnet-4-5 to be bundled");
 
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"todo.enabled": false,

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://npi-deck.app/schemas/routine-spec.json",
   "title": "RoutineSpec (V1)",
-  "description": "The parsed V1 routine spec. Source-of-truth lives in routines.spec_yaml; this schema validates the deserialized object.",
+  "description": "The parsed V1 routine spec. Source-of-truth lives in routines.spec_toml; this schema validates the deserialized object.",
   "type": "object",
   "required": ["name", "trigger", "steps"],
   "properties": {

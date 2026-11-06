@@ -61,7 +61,7 @@ describe("session image replacement on a wire that strips images", () => {
 			agentDir: tempDir.path(),
 			sessionManager,
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			model,
 			disableExtensionDiscovery: true,

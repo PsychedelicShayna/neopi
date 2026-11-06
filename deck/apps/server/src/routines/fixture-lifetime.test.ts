@@ -15,6 +15,7 @@ test("an expired routine teardown is joined before its private worker releases a
 		fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
 		fs.writeFileSync(file, `
 import { afterAll, afterEach, expect } from "bun:test";
+import { stringifySettingsToml as stringifyToml } from ${moduleUrl("../../../../../packages/utils/src/settings-toml.ts")};
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createIsolatedTest } from ${moduleUrl("../test-isolation.ts")};
@@ -65,8 +66,8 @@ test("successor persists a real routine after old teardown", async () => {
   // Synthetic agent CLI fixture: the production runner and native SQLite remain real.
   fs.writeFileSync(cli, ${JSON.stringify(agentSource)});
   runner = new RoutinesRunner(() => [process.execPath, cli]);
-  const spec = {version:1, name:"lifetime", trigger:[{manual:{}}], concurrency:"skip", steps:[{id:"agent", type:"agent", prompt:"fixture answer"}]};
-  const routine = createV1Routine({name:"lifetime", spec, specYaml:JSON.stringify(spec), enabled:true});
+  const spec = {name:"lifetime", trigger:[{manual:{}}], concurrency:"skip", steps:[{id:"agent", type:"agent", prompt:"fixture answer"}]};
+  const routine = createV1Routine({name:"lifetime", spec, specToml:stringifyToml(spec), enabled:true});
   await runner.fire(routine.id);
   expect(getDb()).toBe(db);
   const runs = listRuns(routine.id);

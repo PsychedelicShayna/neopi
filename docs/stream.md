@@ -70,7 +70,7 @@ Rows cross a private local Unix socket (`0600`, under the per-directory omp runt
 Redaction is irreversible and intentionally over-matches. Any match replaces the run with `••••••`; a row with a match is sent unstyled. Sources:
 
 - Values of environment variables whose names look secret (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, …) and every value loaded from a `.env` file for the directory, regardless of name (8+ chars).
-- `.omp/secrets.yml` and `~/.omp/agent/secrets.yml` entries.
+- `.omp/secrets.toml` and `~/.omp/agent/secrets.toml` entries.
 - Credential shapes (GitHub/GitLab/OpenAI/Anthropic/AWS/Slack/Stripe/npm/HF tokens, JWTs, PEM blocks, `Bearer …`). Vendor prefixes are matched **without** a length gate so a token is masked while it is still being typed or streamed character by character.
 - `NAME=value`, `NAME: value`, `"NAME": "value"` where `NAME` looks secret — the value is masked (covers `read .env` and config files on screen).
 - Passwords in connection URLs (`scheme://user:password@host`).
@@ -78,7 +78,7 @@ Redaction is irreversible and intentionally over-matches. Any match replaces the
 
 Known plain values are also matched by prefix (6+ characters) so a partially typed secret is masked before it is complete.
 
-Redaction cannot know about secrets it has never seen: a token pasted from elsewhere that matches no shape and no configured value is shown. Use `stream.redactPatterns` or `secrets.yml` for anything unusual. Editing `stream.redactPatterns` during a live session reloads the redactor and repaints its viewport; it cannot retract previously sent rows. Chat messages are sent separately and are not passed through terminal-row redaction.
+Redaction cannot know about secrets it has never seen: a token pasted from elsewhere that matches no shape and no configured value is shown. Use `stream.redactPatterns` or `secrets.toml` for anything unusual. Editing `stream.redactPatterns` during a live session reloads the redactor and repaints its viewport; it cannot retract previously sent rows. Chat messages are sent separately and are not passed through terminal-row redaction.
 
 ## Recording
 

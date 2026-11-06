@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 const CLI_ENTRY = path.join(import.meta.dir, "..", "src", "cli.ts");
 
@@ -96,7 +96,7 @@ describe("omp read skill resources", () => {
 			path.join(skillDir, "SKILL.md"),
 			"---\nname: codex-user-skill\ndescription: Opted-in user skill.\n---\n\n# Codex User Skill\n",
 		);
-		await Bun.write(path.join(agentDir, "config.yml"), "enabledProviders:\n  - codex\n");
+		await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml({ enabledProviders: ["codex"] }));
 
 		const { exitCode, output, error } = await runReadProbe("skill://codex-user-skill");
 

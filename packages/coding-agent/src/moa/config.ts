@@ -1,6 +1,6 @@
 /**
  * `MIXTURES.toml` discovery, loading, and saving. Mixtures live beside
- * `CHAINS.yml` and `WATCHDOG.yml` on the same search path: the user agent dir,
+ * `CHAINS.toml` and `WATCHDOG.toml` on the same search path: the user agent dir,
  * then every directory from `cwd` up to the repository root (both
  * `<dir>/MIXTURES.toml` and `<dir>/.omp/MIXTURES.toml`). Later documents
  * shadow earlier ones by mixture name. Parsing never throws: malformed entries

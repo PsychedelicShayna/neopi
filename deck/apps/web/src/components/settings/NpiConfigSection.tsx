@@ -25,7 +25,7 @@ const DEDICATED_SECTIONS: Readonly<Record<string, { section: string; label: stri
 
 /**
  * Every setting NeoPi registers, grouped by the registry's own tabs and groups.
- * Saves write the global config.yml through NeoPi and reload live chats.
+ * Saves write the global config.toml through NeoPi and reload live chats.
  */
 export function NpiConfigSection() {
 	const [data, setData] = useState<NpiConfigResponse | null>(null);
@@ -222,7 +222,7 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 							variant="outline"
 							size="sm"
 							disabled={locked || busy || !setting.inGlobalConfig}
-							title={setting.inGlobalConfig ? "Remove this key from config.yml" : "config.yml does not set this key"}
+							title={setting.inGlobalConfig ? "Remove this key from config.toml" : "config.toml does not set this key"}
 							onClick={() => void run(() => npiConfigApi.reset(setting.id))}
 						>
 							<RotateCcw className="h-3.5 w-3.5" />
@@ -239,7 +239,7 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 
 function notes(setting: NpiConfigSetting, cwd: string): string[] {
 	const out: string[] = [];
-	if (setting.invalidGlobalValue) out.push("config.yml holds a value this setting rejects; NeoPi ignores it and uses the default. Save a valid value or reset.");
+	if (setting.invalidGlobalValue) out.push("config.toml holds a value this setting rejects; NeoPi ignores it and uses the default. Save a valid value or reset.");
 	if (setting.provenance === "project" || setting.provenance === "overlay" || setting.provenance === "runtime")
 		out.push(`A ${setting.provenance} layer overrides the global value in ${cwd}.`);
 	if (setting.env?.active && setting.env.fallback)

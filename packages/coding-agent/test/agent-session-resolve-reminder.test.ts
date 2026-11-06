@@ -34,7 +34,7 @@ describe("AgentSession resolve reminder", () => {
 
 		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 

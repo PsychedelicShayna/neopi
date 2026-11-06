@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getProjectAgentDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import {
 	matchModelCompactionThreshold,
 	parseCompactionPointInput,
@@ -35,8 +36,8 @@ async function withConfigDirs(run: (dirs: { root: string; agentDir: string; cwd:
 	}
 }
 
-function overridesYaml(value: unknown): string {
-	return JSON.stringify({ task: { agentCompactionThresholdOverrides: value } });
+function overridesToml(value: unknown): string {
+	return stringifySettingsToml({ task: { agentCompactionThresholdOverrides: value } });
 }
 
 describe("task.agentCompactionThresholdOverrides", () => {
@@ -73,9 +74,9 @@ describe("task.agentCompactionThresholdOverrides", () => {
 
 	it("rejects malformed values while loading settings", async () => {
 		await withConfigDirs(async ({ agentDir, cwd }) => {
-			const configPath = path.join(agentDir, "config.yml");
+			const configPath = path.join(agentDir, "config.toml");
 			for (const value of [[], { scout: { thresholdPercent: 80 } }, { scout: "80" }]) {
-				await Bun.write(configPath, overridesYaml(value));
+				await Bun.write(configPath, overridesToml(value));
 				await expect(Settings.loadReadOnly({ agentDir, cwd })).rejects.toThrow(
 					"task.agentCompactionThresholdOverrides",
 				);
@@ -85,9 +86,9 @@ describe("task.agentCompactionThresholdOverrides", () => {
 
 	it("lets a higher-priority layer replace or clear a lower-priority entry", async () => {
 		await withConfigDirs(async ({ root, agentDir, cwd }) => {
-			await Bun.write(path.join(agentDir, "config.yml"), overridesYaml({ scout: 90000, task: 50000 }));
-			const overlay = path.join(root, "overlay.yml");
-			await Bun.write(overlay, overridesYaml({ scout: "80%", task: null }));
+			await Bun.write(path.join(agentDir, "config.toml"), overridesToml({ scout: 90000, task: 50000 }));
+			const overlay = path.join(root, "overlay.toml");
+			await Bun.write(overlay, overridesToml({ scout: "80%", task: null }));
 
 			const settings = await Settings.loadReadOnly({ agentDir, cwd, configFiles: [overlay] });
 			expect(

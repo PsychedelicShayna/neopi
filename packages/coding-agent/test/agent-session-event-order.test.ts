@@ -38,7 +38,7 @@ describe("AgentSession subscriber event order", () => {
 		tempDir = TempDir.createSync("@pi-event-order-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {

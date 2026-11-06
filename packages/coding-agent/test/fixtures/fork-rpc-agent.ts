@@ -17,7 +17,7 @@ process.chdir(root);
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.toml"));
 const askQuestions = [{ id: "target", question: "Where?", options: [{ label: "staging" }, { label: "prod" }] }];
 const mock = createMockModel({
 	// A prompt mentioning "slow" announces with a notice that its model call is in flight, then

@@ -13,7 +13,7 @@
  * depends on chat transports.
  */
 import { escapeXmlAttribute, escapeXmlText, prompt } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import * as AIError from "../error";
 import type { ImageContent, Usage } from "../types";
 import textJudgeRetryTemplate from "./text-judge-retry.md" with { type: "text" };
@@ -78,7 +78,7 @@ function isJsonArray(value: JudgmentState): value is readonly JsonValue[] {
 	return Array.isArray(value);
 }
 
-/** Render judgment state as top-level XML fields; nested values use block YAML. */
+/** Render judgment state as top-level XML fields; nested values use TOML with a `value` root for arrays. */
 export function renderJudgmentState(state: JudgmentState): string {
 	if (typeof state !== "object" || state === null || isJsonArray(state)) {
 		return renderStateField("state", state);
@@ -98,8 +98,8 @@ function renderStateField(key: string, value: JsonValue): string {
 	if (typeof value !== "object" || value === null) {
 		return `${open}${escapeXmlText(value === null ? "null" : String(value))}${close}`;
 	}
-	const yaml = YAML.stringify(value, null, 2);
-	return `${open}\n${escapeXmlText(yaml)}\n${close}`;
+	const toml = stringifySettingsToml(isJsonArray(value) ? { value } : value).trimEnd();
+	return `${open}\n${escapeXmlText(toml)}\n${close}`;
 }
 
 /**

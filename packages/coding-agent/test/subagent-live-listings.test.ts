@@ -68,7 +68,7 @@ describe("live subagent listing facts", () => {
 			agent: new Agent({ initialState: { model, thinkingLevel: ThinkingLevel.Low }, convertToLlm }),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
-			modelRegistry: new ModelRegistry(auth, path.join(root, "models.yml")),
+			modelRegistry: new ModelRegistry(auth, path.join(root, "models.toml")),
 			thinkingLevel: ThinkingLevel.Low,
 		});
 		AgentRegistry.global().register({

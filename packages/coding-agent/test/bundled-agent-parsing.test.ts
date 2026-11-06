@@ -7,11 +7,23 @@ import {
 	resolveModelOverride,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { serializeAgentDefinitionDocument } from "@oh-my-pi/pi-coding-agent/task/agent-definition-document";
+import { getBundledAgent, loadBundledAgents, parseAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import { buildOutputValidator } from "@oh-my-pi/pi-coding-agent/tools/output-schema-validator";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 
 describe("bundled agent parsing", () => {
+	it("round-trips every bundled definition through native TOML without losing metadata", () => {
+		for (const agent of loadBundledAgents()) {
+			const document = serializeAgentDefinitionDocument(agent);
+			expect(document.startsWith("+++\n")).toBe(true);
+			const filePath = `${agent.name}.toml.md`;
+			const parsed = parseAgent(filePath, document, "user");
+			expect(parsed.systemPrompt.trim()).toBe(agent.systemPrompt.trim());
+			expect(parsed).toEqual({ ...agent, systemPrompt: parsed.systemPrompt, source: "user", filePath });
+		}
+	});
+
 	it("defaults the task agent to the auto thinking selector", () => {
 		const task = getBundledAgent("task");
 

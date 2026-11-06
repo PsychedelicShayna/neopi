@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, realpathSync, copyFileSync, writeFileSync, rmSync, rmdirSync } from "node:fs";
 import * as path from "node:path";
+import { readTomlConfigSync } from "@oh-my-pi/pi-utils/settings-toml";
 import { spawnOwned, spawnOwnedSync, terminateOwned } from "./owned-process.ts";
 import type { CardRunOwnership } from "./db/card-runs.ts";
 
@@ -50,13 +51,18 @@ export async function cleanupCardWorkspace(ownership: CardRunOwnership): Promise
 export function snapshotCardAgentState(source: string, target: string): void {
 	mkdirSync(target, { recursive: true, mode: 0o700 });
 	if (!existsSync(source)) return;
+	for (const name of ["config", "models"]) {
+		readTomlConfigSync(path.join(source, `${name}.toml`), {
+			legacyPaths: [path.join(source, `${name}.yml`), path.join(source, `${name}.yaml`)],
+		});
+	}
 	for (const entry of readdirSync(source, { withFileTypes: true })) {
 		if (!entry.isFile()) continue;
 		if (entry.name.endsWith(".db")) {
 			const db = new Database(path.join(source, entry.name), { readonly: true });
 			try { writeFileSync(path.join(target, entry.name), db.serialize(), { mode: 0o600 }); }
 			finally { db.close(); }
-		} else if (["config.yml", "models.yml"].includes(entry.name)) copyFileSync(path.join(source, entry.name), path.join(target, entry.name));
+		} else if (["config.toml", "models.toml"].includes(entry.name)) copyFileSync(path.join(source, entry.name), path.join(target, entry.name));
 	}
 }
 

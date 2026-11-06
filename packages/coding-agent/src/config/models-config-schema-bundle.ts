@@ -114,7 +114,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 	});
 
 	// Provider-level overrides can target bundled models whose API is not repeated
-	// in models.yml, so preserve the sparse compat shape for each supported API.
+	// in models.toml, so preserve the sparse compat shape for each supported API.
 	const ApiCompatSchema = OpenAICompatSchema.and(BedrockCompatSchema);
 
 	const ApiSchema = type(
@@ -123,7 +123,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 
 	// Models may also name a runner API (web search is built in). `validateProviderConfiguration`
 	// checks that `kind` matches the api's kind. `search` is left out with `web-search`: no api
-	// a models.yml entry can name serves it.
+	// a models.toml entry can name serves it.
 	const ModelApiSchema = ApiSchema.or(
 		type.enumerated(...Object.keys(RUNNER_API_KINDS).filter(api => api !== "web-search")),
 	);

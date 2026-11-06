@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { RpcChild } from "./helpers/rpc-child";
 
 const children: RpcChild[] = [];
@@ -17,14 +18,14 @@ afterEach(async () => {
 	await Promise.all(roots.splice(0).map(root => root.remove()));
 });
 
-/** Spawn an RPC child; `configYaml` becomes its agent `config.yml` before startup. */
-async function spawn(configYaml?: string): Promise<RpcChild> {
+/** Spawn an RPC child with native agent settings before startup. */
+async function spawn(config?: Record<string, unknown>): Promise<RpcChild> {
 	let root: string | undefined;
-	if (configYaml) {
+	if (config) {
 		const dir = await TempDir.create("@rpc-set-mode-");
 		roots.push(dir);
 		root = dir.path();
-		await Bun.write(path.join(root, "agent", "config.yml"), configYaml);
+		await Bun.write(path.join(root, "agent", "config.toml"), stringifySettingsToml(config));
 	}
 	const child = await RpcChild.spawn({ root });
 	children.push(child);
@@ -61,7 +62,7 @@ describe("RPC set_mode", () => {
 	}, 60_000);
 
 	test("fails with plan_disabled when plan.enabled is false", async () => {
-		const child = await spawn("plan:\n  enabled: false\n");
+		const child = await spawn({ plan: { enabled: false } });
 
 		const response = await child.request({ type: "set_mode", mode: "plan" }, 30_000);
 		expect(response).toMatchObject({ success: false, command: "set_mode", code: "plan_disabled" });

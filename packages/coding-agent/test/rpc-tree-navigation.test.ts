@@ -37,7 +37,7 @@ async function fixture(options: { persisted?: boolean; extension?: ExtensionRunn
 		authStorage.close();
 	});
 	authStorage.keys.setRuntime("anthropic", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.toml"));
 	const manager = options.persisted ? SessionManager.create(root, root) : SessionManager.inMemory();
 	const agent = new Agent({
 		initialState: { model: getBundledModel("anthropic", "claude-sonnet-4-5")!, systemPrompt: ["Test"], tools: [] },

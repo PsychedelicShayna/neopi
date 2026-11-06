@@ -2,22 +2,21 @@
 
 This document covers the on-device models in the `local` catalog and records the tiny-model experiments behind the shipped title and memory recommendations. Model selection is role-based: use `modelRoles.<role>` for the primary selector and `retry.fallbackChains.<role>` for ordered alternatives. Catalog entries are authored in `packages/catalog/src/compat/rules/providers/local.kdl`; text model exports live in `packages/coding-agent/src/tiny/models.ts`. Benchmark timings below are historical measurements, not current-runtime guarantees.
 
-```yaml
-modelRoles:
-   tiny: local/lfm2.5-230m
-   memory: local/lfm2-1.2b
-   speech: local/kokoro
-   dictation: local/parakeet-tdt-0.6b-v3
-   # A local tiny model may also serve typed judgments:
-   judge: local/lfm2-1.2b
+```toml
+[modelRoles]
+tiny = "local/lfm2.5-230m"
+memory = "local/lfm2-1.2b"
+speech = "local/kokoro"
+dictation = "local/parakeet-tdt-0.6b-v3"
+# A local tiny model may also serve typed judgments:
+judge = "local/lfm2-1.2b"
 
-retry:
-   fallbackChains:
-      tiny: []
-      memory: []
-      speech: []
-      dictation: []
-      judge: []
+[retry.fallbackChains]
+tiny = []
+memory = []
+speech = []
+dictation = []
+judge = []
 ```
 
 An explicit empty chain keeps each workload local. Leaving a model-kind chain unset instead uses that role's built-in priority list. The `default` fallback chain does not apply to `speech`, `dictation`, or `judge`.

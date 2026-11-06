@@ -33,14 +33,14 @@ async function waitForTheme(theme: string): Promise<void> {
 }
 test("continues applying every atomic settings edit after the watched directory is replaced", async () => {
 	const agentDir = path.join(dir, "profile");
-	const file = path.join(agentDir, "config.yml");
-	await Bun.write(file, "theme:\n  dark: titanium\n");
+	const file = path.join(agentDir, "config.toml");
+	await Bun.write(file, '[theme]\ndark = "titanium"\n');
 	settings = await Settings.init({ cwd: dir, agentDir });
 	settings.startWatching();
 	await Bun.sleep(300);
 	await fs.rename(agentDir, path.join(dir, "old-profile"));
 	for (const theme of ["anthracite", "dark", "titanium"]) {
-		await Bun.write(`${file}.next`, `theme:\n  dark: ${theme}\n`);
+		await Bun.write(`${file}.next`, `[theme]\ndark = "${theme}"\n`);
 		await fs.rename(`${file}.next`, file);
 		await waitForTheme(theme);
 		expect(cfgThemeDark.get(settings)).toBe(theme);
@@ -54,13 +54,13 @@ test("keeps applying successive edits when filesystem notifications are dropped"
 		return watcher as fsSync.FSWatcher;
 	});
 	const agentDir = path.join(dir, "profile");
-	const file = path.join(agentDir, "config.yml");
-	await Bun.write(file, "theme:\n  dark: titanium\n");
+	const file = path.join(agentDir, "config.toml");
+	await Bun.write(file, '[theme]\ndark = "titanium"\n');
 	settings = await Settings.init({ cwd: dir, agentDir });
 	settings.startWatching();
 	await Bun.sleep(1300);
 	for (const theme of ["anthracite", "dark", "titanium"]) {
-		await Bun.write(`${file}.next`, `theme:\n  dark: ${theme}\n`);
+		await Bun.write(`${file}.next`, `[theme]\ndark = "${theme}"\n`);
 		await fs.rename(`${file}.next`, file);
 		await waitForTheme(theme);
 		expect(cfgThemeDark.get(settings)).toBe(theme);
@@ -76,19 +76,19 @@ test("rearms a failed watcher and preserves project shadowing of repeated global
 		return watcher;
 	}) as typeof fsSync.watch);
 	const agentDir = path.join(dir, "profile");
-	const file = path.join(agentDir, "config.yml");
-	await Bun.write(file, "theme:\n  dark: titanium\n");
-	await Bun.write(path.join(dir, ".omp/config.yml"), "theme:\n  dark: anthracite\n");
+	const file = path.join(agentDir, "config.toml");
+	await Bun.write(file, '[theme]\ndark = "titanium"\n');
+	await Bun.write(path.join(dir, ".omp/config.toml"), '[theme]\ndark = "anthracite"\n');
 	settings = await Settings.init({ cwd: dir, agentDir });
 	settings.startWatching();
 	await Bun.sleep(300);
 	for (const watcher of watchers) watcher.emit("error", new Error("watch interrupted"));
 	const initialCount = watchers.length;
-	await Bun.write(file, "theme:\n  dark: dark\n");
+	await Bun.write(file, '[theme]\ndark = "dark"\n');
 	await Bun.sleep(1500);
 	expect(watchers.length).toBeGreaterThan(initialCount);
 	expect(settings.getGlobalSettings().theme).toEqual({ dark: "dark" });
 	expect(cfgThemeDark.get(settings)).toBe("anthracite");
-	await fs.rm(path.join(dir, ".omp/config.yml"));
+	await fs.rm(path.join(dir, ".omp/config.toml"));
 	await waitForTheme("dark");
 });

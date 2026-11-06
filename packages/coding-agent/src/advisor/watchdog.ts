@@ -5,6 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { preserveLegacyYamlComments } from "@oh-my-pi/pi-utils/legacy-yaml-import";
+import { importLegacyYaml, publishTomlImport, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { expandAtImports } from "../discovery/at-imports";
 import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
 import contextFilesTemplate from "../prompts/advisor/context-files.md" with { type: "text" };
@@ -168,6 +170,16 @@ export async function collectConfigCandidates(
 	filenames: string[],
 	options: CollectConfigOptions = {},
 ): Promise<ConfigCandidate[]> {
+	return collectCandidates(cwd, agentDir, filenames, options, readBoundedText);
+}
+
+async function collectCandidates(
+	cwd: string,
+	agentDir: string | undefined,
+	filenames: string[],
+	options: CollectConfigOptions,
+	readText: (filePath: string, maxBytes: number | undefined) => Promise<BoundedText>,
+): Promise<ConfigCandidate[]> {
 	const { candidates, userPaths } = configCandidatePaths(cwd, agentDir, filenames);
 	const items: ConfigCandidate[] = [];
 	for (const candidate of candidates) {
@@ -178,7 +190,7 @@ export async function collectConfigCandidates(
 		const ownerBaseName = ownerDir.split(path.sep).pop() ?? "";
 		if (!isUser && ownerBaseName.startsWith(".") && baseName !== ".omp") continue;
 		try {
-			const read = await readBoundedText(candidate, options.maxBytes);
+			const read = await readText(candidate, options.maxBytes);
 			if ("rejected" in read) {
 				if (options.onRejected) options.onRejected(candidate, read.rejected);
 				else logger.warn("Skipped config candidate", { path: candidate, ...read.rejected });
@@ -203,6 +215,51 @@ export async function collectConfigCandidates(
 	});
 
 	return items;
+}
+
+/** Bounded discovery followed by one-time import of sibling YAML configurations. */
+export async function collectTomlConfigCandidates(
+	cwd: string,
+	agentDir: string | undefined,
+	filename: string,
+	options: CollectConfigOptions = {},
+): Promise<ConfigCandidate[]> {
+	return collectCandidates(cwd, agentDir, [filename], options, readBoundedTomlConfig);
+}
+
+/** Read one canonical roster, refusing non-regular legacy files before import. */
+export async function readBoundedTomlConfig(target: string, maxBytes: number | undefined): Promise<BoundedText> {
+	const base = target.slice(0, -".toml".length);
+	const legacyPaths = [`${base}.yml`, `${base}.yaml`];
+	try {
+		const canonical = await readBoundedText(target, maxBytes);
+		// Existing TOML does not read or parse any legacy payload.
+		for (const sourcePath of legacyPaths) {
+			try {
+				await fs.lstat(sourcePath);
+				logger.warn("Ignoring legacy configuration in favor of TOML", { sourcePath, targetPath: target });
+			} catch (error) {
+				if (!isEnoent(error))
+					logger.warn("Cannot inspect legacy configuration", { sourcePath, targetPath: target });
+			}
+		}
+		return canonical;
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	for (const legacyPath of legacyPaths) {
+		try {
+			const legacy = await readBoundedText(legacyPath, maxBytes);
+			if ("rejected" in legacy) return legacy;
+			const data = importLegacyYaml(legacy.content, legacyPath);
+			const content = preserveLegacyYamlComments(legacy.content, stringifySettingsToml(data));
+			await publishTomlImport(target, content, legacyPath);
+			return readBoundedTomlConfig(target, maxBytes);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+	}
+	throw Object.assign(new Error("No configuration file"), { code: "ENOENT" });
 }
 
 /**

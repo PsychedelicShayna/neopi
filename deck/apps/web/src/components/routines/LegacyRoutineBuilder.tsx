@@ -49,7 +49,7 @@ import {
 	replaceTriggers,
 	scaffoldStep,
 	stringifySpec,
-} from "./spec-yaml";
+} from "./spec-toml";
 
 import type { RoutineBuilderProps } from "./RoutineBuilder";
 
@@ -68,8 +68,8 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					: { id: "action", type: "run", command: routine.actionBody, cwd: routine.actionCwd }],
 			};
 		}
-		if (routine?.specYaml) {
-			const parsed = parseSpec(routine.specYaml);
+		if (routine?.specToml) {
+			const parsed = parseSpec(routine.specToml);
 			if (parsed.ok && parsed.spec) return parsed.spec;
 		}
 		return emptyV1Spec();
@@ -91,11 +91,11 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 	const [spec, setSpec] = useState<RoutineSpec>(initialSpec);
 	const persistedSpec = useRef(initialSpec);
 	const [stepKeys, setStepKeys] = useState<string[]>(() => makeStepKeys(initialSpec.steps.length));
-	const [yamlBuffer, setYamlBuffer] = useState<string>(() =>
-		routine?.specYaml ?? stringifySpec(initialSpec),
+	const [tomlBuffer, setTomlBuffer] = useState<string>(() =>
+		routine?.specToml ?? stringifySpec(initialSpec),
 	);
-	const [yamlDirty, setYamlDirty] = useState(false);
-	const [yamlError, setYamlError] = useState<string | undefined>();
+	const [tomlDirty, setTomlDirty] = useState(false);
+	const [tomlError, setTomlError] = useState<string | undefined>();
 	const [schemaErrors, setSchemaErrors] = useState<ValidationError[] | undefined>();
 	const [tab, setTab] = useState<Tab>("canvas");
 	const [advanced, setAdvanced] = useState(false);
@@ -107,11 +107,11 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 	const [showRuns, setShowRuns] = useState(false);
 	const [selectRequest, setSelectRequest] = useState<CanvasSelectRequest | null>(null);
 	// Pre-save diff preview state. When non-null, the SavePreviewDialog is
-	// open and the contained `specToSave` + `specYaml` are what will be PATCHed
+	// open and the contained `specToSave` + `specToml` are what will be PATCHed
 	// or POSTed when the user confirms. Cancelling clears this back to null.
 	const [pendingSave, setPendingSave] = useState<{
 		specToSave: RoutineSpec;
-		specYaml: string;
+		specToml: string;
 	} | null>(null);
 
 	// When the parent passes a different routine, reset everything.
@@ -122,9 +122,9 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		setStepKeys(makeStepKeys(initialSpec.steps.length));
 		setSpec(initialSpec);
 		persistedSpec.current = initialSpec;
-		setYamlBuffer(routine?.specYaml ?? stringifySpec(initialSpec));
-		setYamlDirty(false);
-		setYamlError(undefined);
+		setTomlBuffer(routine?.specToml ?? stringifySpec(initialSpec));
+		setTomlDirty(false);
+		setTomlError(undefined);
 		setSchemaErrors(undefined);
 		setEnabled(routine?.enabled ?? false);
 		setTab("canvas");
@@ -144,7 +144,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		void routinesApi.runs(routine.id, 10).then((r) => setRuns(r.runs));
 	}, [routine]);
 
-	// Form -> YAML sync. Step cards use render-only keys that are deliberately
+	// Form -> TOML sync. Step cards use render-only keys that are deliberately
 	// separate from editable step ids; otherwise changing `id` remounts the
 	// active input and drops focus after every character.
 	function updateSpec(next: RoutineSpec, nextStepKeys?: string[]): void {
@@ -152,18 +152,18 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		if (nextStepKeys) setStepKeys(nextStepKeys);
 		else reconcileStepKeys(next);
 		setSpec(next);
-		setYamlBuffer(stringifySpec(next));
-		setYamlDirty(false);
-		setYamlError(undefined);
+		setTomlBuffer(stringifySpec(next, tomlBuffer));
+		setTomlDirty(false);
+		setTomlError(undefined);
 		setSchemaErrors(undefined);
 	}
-	// YAML -> form sync: the textarea onChange just tracks the buffer; we
+	// TOML -> form sync: the textarea onChange just tracks the buffer; we
 	// re-parse when the user clicks "Apply", switches tab or saves.
-	function applyYaml(): RoutineSpec | undefined {
-		const result = parseSpec(yamlBuffer);
+	function applyToml(): RoutineSpec | undefined {
+		const result = parseSpec(tomlBuffer);
 		if (!result.ok) {
-			if (result.yamlError) setYamlError(`${result.yamlError.message}${result.yamlError.line ? ` (line ${result.yamlError.line})` : ""}`);
-			else setYamlError(undefined);
+			if (result.tomlError) setTomlError(`${result.tomlError.message}${result.tomlError.line ? ` (line ${result.tomlError.line})` : ""}`);
+			else setTomlError(undefined);
 			if (result.schemaErrors) setSchemaErrors(result.schemaErrors);
 			else setSchemaErrors(undefined);
 			return undefined;
@@ -171,17 +171,17 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		const nextSpec = result.spec ?? emptyV1Spec();
 		setStepKeys(makeStepKeys(nextSpec.steps.length));
 		setSpec(nextSpec);
-		setYamlDirty(false);
-		setYamlError(undefined);
+		setTomlDirty(false);
+		setTomlError(undefined);
 		setSchemaErrors(undefined);
 		return nextSpec;
 	}
 
 	function switchTab(next: Tab): void {
-		// If leaving the source tab with unapplied YAML, try to apply it first;
+		// If leaving the source tab with unapplied TOML, try to apply it first;
 		// if invalid, stay on the source tab so the problem is visible.
-		if (tab === "spec" && yamlDirty && next !== "spec") {
-			const ok = applyYaml();
+		if (tab === "spec" && tomlDirty && next !== "spec") {
+			const ok = applyToml();
 			if (!ok) return;
 		}
 		setTab(next);
@@ -189,7 +189,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 
 	function toggleAdvanced(): void {
 		if (advanced) {
-			if (tab === "spec" && yamlDirty && !applyYaml()) return;
+			if (tab === "spec" && tomlDirty && !applyToml()) return;
 			setTab("canvas");
 		}
 		setAdvanced((value) => !value);
@@ -215,7 +215,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 			await commitSave(spec, "");
 			return;
 		}
-		const currentSpec = yamlDirty ? applyYaml() : spec;
+		const currentSpec = tomlDirty ? applyToml() : spec;
 		if (!currentSpec) {
 			onError("The source has problems. Fix them before saving.");
 			return;
@@ -227,8 +227,8 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		}
 		// An untouched loaded routine keeps its exact authored source and step
 		// order; opening the canvas is not an implicit migration or graph edit.
-		if (routine?.specYaml && !yamlDirty && currentSpec === persistedSpec.current) {
-			await commitSave(currentSpec, routine.specYaml);
+		if (routine?.specToml && !tomlDirty && currentSpec === persistedSpec.current) {
+			await commitSave(currentSpec, routine.specToml);
 			return;
 		}
 		const finalCompile = compileGraph(currentSpec);
@@ -242,7 +242,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		const specToSave: RoutineSpec = finalCompile.steps === currentSpec.steps
 			? currentSpec
 			: { ...currentSpec, steps: finalCompile.steps };
-		const specYaml = stringifySpec(specToSave);
+		const specToml = stringifySpec(specToSave, tomlBuffer);
 
 		// Source review is optional, never part of the normal create/save path.
 		const previewable =
@@ -250,15 +250,15 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 			!embedded &&
 			!legacy &&
 			!shouldSkipSavePreview() &&
-			specYaml !== (routine?.specYaml ?? "");
+			specToml !== (routine?.specToml ?? "");
 		if (previewable) {
-			setPendingSave({ specToSave, specYaml });
+			setPendingSave({ specToSave, specToml });
 			return;
 		}
-		await commitSave(specToSave, specYaml);
+		await commitSave(specToSave, specToml);
 	}
 
-	async function commitSave(specToSave: RoutineSpec, specYaml: string): Promise<void> {
+	async function commitSave(specToSave: RoutineSpec, specToml: string): Promise<void> {
 		setBusy(true);
 		try {
 			if (routine && legacy) {
@@ -278,7 +278,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 				const updated = await routinesApi.update(routine.id, {
 					name: specToSave.name,
 					description: specToSave.description ?? "",
-					specYaml,
+					specToml,
 					enabled,
 				});
 				onSaved(updated);
@@ -286,19 +286,15 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 				const created = await routinesApi.create({
 					name: specToSave.name,
 					description: specToSave.description ?? "",
-					// V0 fields are ignored when specYaml is present.
-					cron: "",
-					actionKind: "bash",
-					actionBody: "",
 					enabled,
-					specYaml,
+					specToml,
 				});
 				onSaved(created);
 			}
 			setPendingSave(null);
 			persistedSpec.current = specToSave;
 			setSpec(specToSave);
-			setYamlBuffer(specYaml || stringifySpec(specToSave));
+			setTomlBuffer(specToml || stringifySpec(specToSave));
 		} catch (e) {
 			onError(String(e));
 		} finally {
@@ -364,7 +360,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 			: specValidation.valid && fieldErrors.count === 0) &&
 		compile.errors.length === 0 &&
 		!busy;
-	const dirty = yamlDirty || spec !== persistedSpec.current || (routine !== undefined && enabled !== routine.enabled);
+	const dirty = tomlDirty || spec !== persistedSpec.current || (routine !== undefined && enabled !== routine.enabled);
 	useImperativeHandle(editorRef, () => ({
 		save,
 		updateSpec,
@@ -398,7 +394,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 		if (tab !== "canvas") {
 			// Leaving the source tab applies the buffer first; an invalid buffer
 			// keeps the author on Source where the problem is shown.
-			if (tab === "spec" && yamlDirty && !applyYaml()) return;
+			if (tab === "spec" && tomlDirty && !applyToml()) return;
 			setTab("canvas");
 		}
 		if (!first.target) return;
@@ -529,14 +525,14 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					<div className="neo-source">
 						<div className="neo-source-bar">
 							<span>Source</span>
-							<span className="neo-mono text-ink-4">YAML</span>
+							<span className="neo-mono text-ink-4">TOML</span>
 							<span className="ml-auto">
-								{yamlDirty ? <span className="neo-badge" data-tone="warn">Not applied yet</span> : <span className="text-ink-4">Matches the canvas</span>}
+								{tomlDirty ? <span className="neo-badge" data-tone="warn">Not applied yet</span> : <span className="text-ink-4">Matches the canvas</span>}
 							</span>
 							<button
 								type="button"
-								onClick={applyYaml}
-								disabled={!yamlDirty}
+								onClick={applyToml}
+								disabled={!tomlDirty}
 								className="neo-btn"
 								data-size="sm"
 							>
@@ -544,17 +540,17 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 							</button>
 						</div>
 						<textarea
-							value={yamlBuffer}
+							value={tomlBuffer}
 							aria-label="Routine source"
 							onChange={(e) => {
-								setYamlBuffer(e.target.value);
-								setYamlDirty(true);
+								setTomlBuffer(e.target.value);
+								setTomlDirty(true);
 							}}
 							spellCheck={false}
 						/>
-						{yamlError || schemaErrors ? (
+						{tomlError || schemaErrors ? (
 							<div className="neo-source-problems" role="alert">
-								{yamlError ? <div>{yamlError}</div> : null}
+								{tomlError ? <div>{tomlError}</div> : null}
 								{schemaErrors?.slice(0, 6).map((e, idx) => (
 									<div key={idx}>
 										<span className="neo-mono">{e.path || "/"}</span>
@@ -594,14 +590,14 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 			/> : null}
 			{pendingSave ? (
 				<SavePreviewDialog
-					currentYaml={routine?.specYaml ?? ""}
-					newYaml={pendingSave.specYaml}
+					currentToml={routine?.specToml ?? ""}
+					newToml={pendingSave.specToml}
 					busy={busy}
 					onCancel={() => {
 						if (!busy) setPendingSave(null);
 					}}
 					onConfirm={() => {
-						void commitSave(pendingSave.specToSave, pendingSave.specYaml);
+						void commitSave(pendingSave.specToSave, pendingSave.specToml);
 					}}
 				/>
 			) : null}

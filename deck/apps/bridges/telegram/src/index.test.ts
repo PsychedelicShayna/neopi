@@ -229,20 +229,20 @@ describe("mention-gated task contents", () => {
 		try {
 			const prose = "Investigate the literal '@deck_bot' without editing it";
 			await h.send({ ...message, text: prose, reply_to_message: { from: { id: 99 } } });
-			await h.send({ ...message, message_id: 2, caption: "---\nread-only: true\nowner: '@deck_bot'\n---\nResearch the '@deck_bot' identifier", reply_to_message: { from: { id: 99 } } });
+			await h.send({ ...message, message_id: 2, caption: "+++\nread-only = true\nowner = '@deck_bot'\n+++\nResearch the '@deck_bot' identifier", reply_to_message: { from: { id: 99 } } });
 			expect(h.filedCards[0]).toEqual({ title: prose, body: prose });
 			const body = h.filedCards[1]!.body!;
-			const properties = parseProperties(body.slice(4, body.indexOf("\n---", 4)));
+			const properties = parseProperties(body.slice(4, body.indexOf("\n+++", 4)));
 			expect(properties.owner).toBe("@deck_bot");
 			expect(properties["read-only"]).toBe(true);
 			expect(h.filedCards[1]!.title).toBe("Research the '@deck_bot' identifier");
 			expect(body).toContain("Research the '@deck_bot' identifier");
 		} finally { h.bridge.close(); }
 	});
-	test("bot references in ambient prose, URLs and YAML do not invoke task intake", async () => {
+	test("bot references in ambient prose, URLs and TOML do not invoke task intake", async () => {
 		const h = harness();
 		try {
-			for (const text of ["See https://t.me/deck_bot", "Investigate the literal '@deck_bot'", "---\nowner: '@deck_bot'\n---\nAmbient card example", "@deck_bot_other task"]) {
+			for (const text of ["See https://t.me/deck_bot", "Investigate the literal '@deck_bot'", "+++\nowner = '@deck_bot'\n+++\nAmbient card example", "@deck_bot_other task"]) {
 				await h.send({ ...message, text });
 				await h.send({ ...message, text: undefined, caption: text });
 			}
@@ -287,6 +287,21 @@ describe("retained conversation commands", () => {
 			h.failPrompt();
 			await h.send({ ...message, text: "/chat fail" });
 			expect(h.replies.at(-1)).toContain("Bridge error: Error: turn failed");
+		} finally { h.bridge.close(); }
+	});
+});
+
+describe("TOML card default commands", () => {
+	test("properties accepts and displays native TOML and refuses YAML without replacing defaults", async () => {
+		const h = harness();
+		try {
+			await h.send({ ...message, text: "/properties read-only = true\nowner = 'Captain'\n[custom]\ntags = ['one', 'two']" });
+			const response = h.replies.at(-1)!;
+			expect(response).toContain("Default card properties");
+			expect(parseProperties(response.slice(response.indexOf(":\n") + 2))).toEqual({ "read-only": true, owner: "Captain", custom: { tags: ["one", "two"] } });
+			await h.send({ ...message, message_id: 2, text: "/properties owner: Pilot" });
+			expect(h.replies.at(-1)).toContain("TOML");
+			expect(h.store.getProperties("-10:42").owner).toBe("Captain");
 		} finally { h.bridge.close(); }
 	});
 });

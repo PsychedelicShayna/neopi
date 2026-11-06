@@ -31,7 +31,7 @@ describe("AgentSession role model thinking behavior", () => {
 		authStorage = await AuthStorage.create(path.join(fixtureDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		authStorage.keys.setRuntime("openai", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.toml"));
 	});
 
 	beforeEach(() => {

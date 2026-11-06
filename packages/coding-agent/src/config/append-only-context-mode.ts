@@ -11,7 +11,7 @@ export interface AppendOnlyContextModel {
 
 /** True when `baseUrl` resolves to a loopback or RFC1918 host — covers
  * llama.cpp/vLLM/sglang servers registered under a user-defined provider id
- * via `models.yaml`. Built-in local provider ids (`ollama`, `lm-studio`,
+ * via `models.toml`. Built-in local provider ids (`ollama`, `lm-studio`,
  * `llama.cpp`) are already handled by the catalog provider policy.
  * Substring match on the parsed hostname only; ports, paths, and unparseable
  * URLs return false.

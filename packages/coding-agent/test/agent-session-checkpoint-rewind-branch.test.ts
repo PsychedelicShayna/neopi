@@ -122,7 +122,7 @@ async function createHarness(
 	authStorage.keys.setRuntime("mock", "test-key");
 
 	const mock = createMockModel({ responses });
-	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	const settings = Settings.isolated({
 		"compaction.enabled": false,
 		"retry.enabled": false,

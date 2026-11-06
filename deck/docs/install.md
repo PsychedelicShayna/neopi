@@ -22,11 +22,11 @@ For a supervised deployment, build the web bundle with
 `bun --cwd=deck/apps/web run build`, then run
 `NPI_DECK_BACKEND="$PWD" deck/bin/npi-deck`. This override pins the launch to
 the repository root. To switch from Settings, register source trees in
-`config.yml` and omit the override.
+`config.toml` and omit the override.
 
 - [Prerequisites](#prerequisites)
 - [NeoPi backend tree](#neopi-backend-tree)
-- [config.yml](#configyml)
+- [config.toml](#configtoml)
 - [The npi-deck launcher](#the-npi-deck-launcher)
 - [Sign in to a provider](#sign-in-to-a-provider)
 - [Verifying the install](#verifying-the-install)
@@ -79,25 +79,32 @@ Check the runtime SDK contract without sending provider requests:
 NPI_DECK_BACKEND="$PWD" bun deck/apps/server/src/backend/contract.ts
 ```
 
-## config.yml
+## config.toml
 
-`~/.npi-deck/config.yml` lists backend source trees and names the one the deck
+`~/.npi-deck/config.toml` lists backend source trees and names the one the deck
 loads when `NPI_DECK_BACKEND` is unset. For example:
 
-```yaml
-backends:
-  - id: workspace
-    kind: source
-    path: /home/you/repos/neopi
-activeBackend: workspace
+```toml
+activeBackend = "workspace"
+
+[[backends]]
+id = "workspace"
+kind = "source"
+path = "/home/you/repos/neopi"
 ```
 
-- `kind: source` is the only kind the deck loads; `kind: gateway` is reserved
+- `kind = "source"` is the only kind the deck loads; `kind = "gateway"` is reserved
   and cannot be selected.
 - `activeBackend` names a registered tree. **Settings → Backend** changes it.
-- `NPI_DECK_BACKEND` (a backend id from `config.yml`, or an absolute tree
+- `NPI_DECK_BACKEND` (a backend id from `config.toml`, or an absolute tree
   path) overrides `activeBackend` for the whole launch, including the source
   shown in Settings; remove it and restart the launcher to switch from the UI.
+
+The deck reads and writes native TOML only. If only `config.yml` or
+`config.yaml` exists, the first read imports it to `config.toml` atomically,
+keeps its file permissions, and leaves the YAML byte-for-byte unchanged.
+When both exist, TOML wins and a paths-only warning identifies the ignored
+legacy sibling. Backend-picker edits retain unrelated TOML comments.
 
 The server imports NeoPi from the selected tree at startup. If no backend is
 configured, the deck still starts: kanban, inbox, routine editing and settings
@@ -228,7 +235,7 @@ If any of those fail, see [troubleshooting](#troubleshooting) below.
 Deck state lives in `~/.npi-deck` (`NPI_DECK_HOME` overrides; it is read from
 the environment that starts the deck, not from the managed `.env` inside it):
 
-- **Backend selection**: `config.yml`. Existing legacy backend worktrees are not deleted.
+- **Backend selection**: `config.toml`. Existing legacy backend worktrees are not deleted.
 - **Kanban, routines, inbox**: `deck.db` (`NPI_DECK_DB_PATH` overrides), with
   pasted images under `uploads/`.
 - **Managed env file and audit log**: `.env` and `env-audit.log`.
@@ -253,7 +260,7 @@ Elsewhere:
 hot reload on :5173 (open the latter). It is for working on the deck, not for
 running it: nothing supervises that server, so Settings → Restart and the
 backend picker's switch do not work, and processes it spawns are not confined
-to a cgroup. It loads the same `config.yml` backend. See
+to a cgroup. It loads the same `config.toml` backend. See
 [CONTRIBUTING.md](../CONTRIBUTING.md) for running a dev deck beside your
 everyday one.
 

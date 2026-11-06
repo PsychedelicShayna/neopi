@@ -178,7 +178,7 @@ describe.serial("createAgentSession resolveServiceTierByFamily", () => {
 			cwd,
 			agentDir: cwd,
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, path.join(cwd, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(cwd, "models.toml")),
 			settings,
 			sessionManager,
 			disableExtensionDiscovery: true,

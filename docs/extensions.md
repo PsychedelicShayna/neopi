@@ -141,7 +141,7 @@ labeling action. `getAllTools()` returns tool schemas and source metadata, while
 
 ### Provider registration
 
-Provider `models` entries and rows returned by `fetchDynamicModels` accept the same `api`/`kind` pairs as `models.yml` (see [Models](./models.md)): a runner API such as `openai-images` implies its kind, so the model reaches the `image` role and `generate_image` instead of registering as chat. A static `models` entry whose `kind` its api cannot serve fails `registerProvider`; such a `fetchDynamicModels` row is dropped with a logged warning.
+Provider `models` entries and rows returned by `fetchDynamicModels` accept the same `api`/`kind` pairs as `models.toml` (see [Models](./models.md)): a runner API such as `openai-images` implies its kind, so the model reaches the `image` role and `generate_image` instead of registering as chat. A static `models` entry whose `kind` its api cannot serve fails `registerProvider`; such a `fetchDynamicModels` row is dropped with a logged warning.
 
 ```ts
 pi.registerProvider("my-gateway", {
@@ -278,7 +278,7 @@ child process and emit only the resulting assistant events if those tools must
 remain owned by the child. A complete subprocess adapter should also remove
 credentials it must not inherit, honor `options.signal`, use `options.cwd`, map
 one stable session id to one child conversation, and convert non-zero exits into
-a stream error. `models.yml` remains HTTP/configuration-only; extensions are the
+a stream error. `models.toml` remains HTTP/configuration-only; extensions are the
 supported escape hatch for non-HTTP transports.
 
 In interactive mode, `input` handlers run before the built-in first-message auto-title check. Extensions that call `await pi.setSessionName(...)` from `input` can set the persisted session name and prevent the default auto-generated title from running for that session.

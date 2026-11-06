@@ -15,38 +15,64 @@ let selector: SettingsSelectorComponent;
 const requestRender = vi.fn();
 
 function page(): TspPrefsProps {
-	const node = selector.describe({ cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true });
+	const node = selector.describe({
+		cols: 120,
+		reduceMotion: false,
+		dark: true,
+		supports: () => true,
+		feature: () => true,
+	});
 	if (node.k !== "prefs" || !node.p) throw new Error("Expected the Settings prefs page");
 	return node.p;
 }
 
 function row(id: string) {
-	const found = page().sections.flatMap(section => section.rows).find(item => item.id === id);
+	const found = page()
+		.sections.flatMap(section => section.rows)
+		.find(item => item.id === id);
 	if (!found) throw new Error(`Missing Settings row ${id}`);
 	return found;
 }
 
 async function reload(theme: string, screenshotDir = "/screenshots"): Promise<void> {
-	await Bun.write(path.join(root, "profile", "config.yml"), `theme:\n  dark: ${theme}\nbrowser:\n  screenshotDir: ${screenshotDir}\n`);
+	await Bun.write(
+		path.join(root, "profile", "config.toml"),
+		`[theme]\ndark = ${JSON.stringify(theme)}\n[browser]\nscreenshotDir = ${JSON.stringify(screenshotDir)}\n`,
+	);
 	await store.applySettingsReload();
 }
 
-beforeAll(async () => { await initTheme(); });
+beforeAll(async () => {
+	await initTheme();
+});
 beforeEach(async () => {
 	root = await fs.mkdtemp(path.join(os.homedir(), ".cache/npi-canary/settings-open-refresh-"));
 	await fs.mkdir(path.join(root, "project"), { recursive: true });
-	await Bun.write(path.join(root, "profile", "config.yml"), "theme:\n  dark: dark\nbrowser:\n  screenshotDir: /screenshots\n");
+	await Bun.write(
+		path.join(root, "profile", "config.toml"),
+		'[theme]\ndark = "dark"\n[browser]\nscreenshotDir = "/screenshots"\n',
+	);
 	store = await Settings.loadIsolated({ cwd: path.join(root, "project"), agentDir: path.join(root, "profile") });
 	requestRender.mockClear();
-	selector = new SettingsSelectorComponent({
-		settings: createSettingsHost(store),
-		plugins: createPluginSettingsHost(path.join(root, "project")),
-		availableThemes: ["dark", "light", "titanium"],
-		availableThinkingLevels: [], thinkingLevel: undefined, providers: [], requestRender,
-	}, {
-		onChange: () => {}, onCancel: () => {},
-		onApply: async () => { await store.applySettingsReload(); return "Applied"; },
-	});
+	selector = new SettingsSelectorComponent(
+		{
+			settings: createSettingsHost(store),
+			plugins: createPluginSettingsHost(path.join(root, "project")),
+			availableThemes: ["dark", "light", "titanium"],
+			availableThinkingLevels: [],
+			thinkingLevel: undefined,
+			providers: [],
+			requestRender,
+		},
+		{
+			onChange: () => {},
+			onCancel: () => {},
+			onApply: async () => {
+				await store.applySettingsReload();
+				return "Applied";
+			},
+		},
+	);
 });
 afterEach(async () => {
 	selector?.dispose();
@@ -103,7 +129,7 @@ describe("open Settings reloads", () => {
 	});
 
 	it("refreshes after this session's Apply and unsubscribes when disposed", async () => {
-		await Bun.write(path.join(root, "profile", "config.yml"), "theme:\n  dark: light\n");
+		await Bun.write(path.join(root, "profile", "config.toml"), '[theme]\ndark = "light"\n');
 		selector.handleInput("\x1b[17~");
 		for (let i = 0; i < 100 && !page().lead?.includes("Applied"); i++) await Bun.sleep(5);
 		expect(page().lead).toContain("Applied");

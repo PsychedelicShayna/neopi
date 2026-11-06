@@ -38,7 +38,7 @@ it("prints the requested answer without continuing stale todos in print mode", a
 		}),
 		sessionManager,
 		settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": true, "todo.reminders": true }),
-		modelRegistry: new ModelRegistry(auth, path.join(dir.path(), "models.yml")),
+		modelRegistry: new ModelRegistry(auth, path.join(dir.path(), "models.toml")),
 	});
 	try {
 		const code = await runPrintMode(session, { mode: "text", initialMessage: "Reply with PONG" });

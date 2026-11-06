@@ -17,7 +17,7 @@ import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { renderNativeMarkdown } from "../../utils/native-frontmatter";
 import { hashText } from "./corpus";
 import type { AtomEntry, IndexConfig, NodeLevel } from "./tree";
 
@@ -224,26 +224,22 @@ export function routingText(node: ViewNode): string {
 	return lines.join("\n");
 }
 
-function yamlLine(key: string, value: unknown): string {
-	return `${key}: ${YAML.stringify(value)}`;
-}
-
 export function renderNodeMarkdown(node: ViewNode): string {
-	const front = [
-		yamlLine("key", node.key || "/"),
-		yamlLine("level", node.level),
-		yamlLine("label", node.label),
-		yamlLine("period", `${node.localStart} – ${node.localEnd}`),
-		yamlLine("atoms", node.atomCount),
-		yamlLine("projects", node.projects),
-		yamlLine("sessions", node.sessions),
-		yamlLine("identity", node.identity),
-		yamlLine("content", node.contentHash),
-		yamlLine("generated_by", node.provenance.model ?? node.provenance.kind),
-		yamlLine("generated_at", node.provenance.generatedAt),
-		yamlLine("truncated", node.provenance.truncated),
-	];
-	const lines = ["---", ...front, "---", "", `# ${node.label}`, ""];
+	const front = {
+		key: node.key || "/",
+		level: node.level,
+		label: node.label,
+		period: `${node.localStart} – ${node.localEnd}`,
+		atoms: node.atomCount,
+		projects: node.projects,
+		sessions: node.sessions,
+		identity: node.identity,
+		content: node.contentHash,
+		generated_by: node.provenance.model ?? node.provenance.kind,
+		generated_at: node.provenance.generatedAt,
+		truncated: node.provenance.truncated,
+	};
+	const lines = ["", `# ${node.label}`, ""];
 	if (node.atoms) {
 		lines.push(
 			"Terminal bucket: every atom is enumerated. Open a stub for its descriptor, or its canonical file for the full text.",
@@ -260,28 +256,28 @@ export function renderNodeMarkdown(node: ViewNode): string {
 			);
 		}
 	}
-	return `${lines.join("\n")}\n`;
+	return renderNativeMarkdown(front, `${lines.join("\n")}\n`);
 }
 
 export function renderStub(atom: AtomEntry): string {
-	const front = [
-		yamlLine("id", atom.id),
-		yamlLine("title", atom.title),
-		yamlLine("kind", atom.kind),
-		yamlLine("event_time", atom.eventTime),
-		yamlLine("local_time", atom.localTime),
-		yamlLine("captured_at", atom.capturedAt),
-		yamlLine("project", atom.project),
-		yamlLine("session", atom.sessionId),
-		yamlLine("topics", atom.topics),
-		yamlLine("beat", atom.beatFile),
-		yamlLine("batch", atom.batchId),
-		yamlLine("transcript", atom.transcriptPath),
-		yamlLine("sources", atom.sources),
-		yamlLine("fingerprint", atom.fingerprint),
-	];
+	const front = {
+		id: atom.id,
+		title: atom.title,
+		kind: atom.kind,
+		event_time: atom.eventTime,
+		local_time: atom.localTime,
+		captured_at: atom.capturedAt,
+		project: atom.project,
+		session: atom.sessionId,
+		topics: atom.topics,
+		beat: atom.beatFile,
+		batch: atom.batchId,
+		transcript: atom.transcriptPath,
+		sources: atom.sources,
+		fingerprint: atom.fingerprint,
+	};
 	const lead = atom.leadRemainder > 0 ? `${atom.lead} … [+${atom.leadRemainder} chars in canonical atom]` : atom.lead;
-	return `---\n${front.join("\n")}\n---\n\n# ${atom.title}\n\n${lead}\n\nCanonical atom: ${atom.beatFile}\n`;
+	return renderNativeMarkdown(front, `\n# ${atom.title}\n\n${lead}\n\nCanonical atom: ${atom.beatFile}\n`);
 }
 
 async function writeAtomic(file: string, text: string): Promise<void> {

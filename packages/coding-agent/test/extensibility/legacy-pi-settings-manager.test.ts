@@ -12,7 +12,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Issue #10397: pi-vim (and any pi extension) does, at module/session_start scope:
@@ -46,8 +46,8 @@ describe("legacy pi SettingsManager shim (issue #10397)", () => {
 	it("reads arbitrary extension-namespaced keys from the global and project layers", async () => {
 		// Keys the typed, schema-bound `get(path)` cannot reach — an extension's own block.
 		await Bun.write(
-			path.join(agentDir, "config.yml"),
-			YAML.stringify({ piVim: { mode: "normal" }, shellCommandPrefix: "export GLOBAL=1" }, null, 2),
+			path.join(agentDir, "config.toml"),
+			stringifySettingsToml({ piVim: { mode: "normal" }, shellCommandPrefix: "export GLOBAL=1" }),
 		);
 		fs.mkdirSync(path.join(projectDir, ".claude"), { recursive: true });
 		await Bun.write(path.join(projectDir, ".claude", "settings.json"), JSON.stringify({ piVim: { leader: "," } }));
@@ -61,7 +61,7 @@ describe("legacy pi SettingsManager shim (issue #10397)", () => {
 	});
 
 	it("returns a deep clone so callers cannot mutate internal state", async () => {
-		await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ piVim: { mode: "normal" } }, null, 2));
+		await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml({ piVim: { mode: "normal" } }));
 		await Settings.init({ cwd: projectDir, agentDir });
 		const s = SettingsManager.create(projectDir);
 
@@ -112,12 +112,16 @@ describe("legacy pi SettingsManager shim (issue #10397)", () => {
 		const sdkAgentDir = tempDir.join("sdk-agent");
 		fs.mkdirSync(sdkAgentDir, { recursive: true });
 		await Bun.write(
-			path.join(agentDir, "config.yml"),
-			YAML.stringify({ piVim: { session: "default" }, shellPath: "/bin/sh", shellCommandPrefix: "export OTHER=1" }),
+			path.join(agentDir, "config.toml"),
+			stringifySettingsToml({
+				piVim: { session: "default" },
+				shellPath: "/bin/sh",
+				shellCommandPrefix: "export OTHER=1",
+			}),
 		);
 		await Bun.write(
-			path.join(sdkAgentDir, "config.yml"),
-			YAML.stringify({
+			path.join(sdkAgentDir, "config.toml"),
+			stringifySettingsToml({
 				piVim: { session: "sdk" },
 				shellPath: "~/.local/bin/bash",
 				shellCommandPrefix: "export GLOBAL=1",
@@ -185,7 +189,7 @@ describe("legacy pi SettingsManager shim (issue #10397)", () => {
 		// same-cwd singleton that would otherwise be the newest matching fallback.
 		const sdkAgentDir = tempDir.join("cmd-sdk-agent");
 		fs.mkdirSync(sdkAgentDir, { recursive: true });
-		await Bun.write(path.join(sdkAgentDir, "config.yml"), YAML.stringify({ piVim: { session: "sdk" } }));
+		await Bun.write(path.join(sdkAgentDir, "config.toml"), stringifySettingsToml({ piVim: { session: "sdk" } }));
 
 		const sdkSettings = await Settings.loadIsolated({ cwd: projectDir, agentDir: sdkAgentDir });
 		const singleton = await Settings.init({ cwd: projectDir, agentDir });
@@ -242,7 +246,7 @@ describe("legacy pi SettingsManager shim (issue #10397)", () => {
 	it("scopes registered tool execution to the active session settings", async () => {
 		const sdkAgentDir = tempDir.join("tool-sdk-agent");
 		fs.mkdirSync(sdkAgentDir, { recursive: true });
-		await Bun.write(path.join(sdkAgentDir, "config.yml"), YAML.stringify({ piVim: { session: "sdk" } }));
+		await Bun.write(path.join(sdkAgentDir, "config.toml"), stringifySettingsToml({ piVim: { session: "sdk" } }));
 
 		const sdkSettings = await Settings.loadIsolated({ cwd: projectDir, agentDir: sdkAgentDir });
 		const singleton = await Settings.init({ cwd: projectDir, agentDir });

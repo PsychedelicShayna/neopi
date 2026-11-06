@@ -6,7 +6,13 @@ import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-age
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, loadCapability, resetCapabilityForTests } from "@oh-my-pi/pi-coding-agent/discovery";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { __resetDirsFromEnvForTests, getProjectAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import {
+	__resetDirsFromEnvForTests,
+	getProjectAgentDir,
+	removeWithRetries,
+	setAgentDir,
+	stringifySettingsToml,
+} from "@oh-my-pi/pi-utils";
 
 function restoreEnv(key: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -196,8 +202,8 @@ describe("contextFiles.extra", () => {
 		await fs.writeFile(path.join(agentDir, "secrets.md"), "# user secret\n");
 		await fs.writeFile(path.join(tempDir, "secrets.md"), "# project file\n");
 		await Bun.write(
-			path.join(getProjectAgentDir(tempDir), "config.yml"),
-			"contextFiles:\n  extra:\n    - secrets.md\n",
+			path.join(getProjectAgentDir(tempDir), "config.toml"),
+			stringifySettingsToml({ contextFiles: { extra: ["secrets.md"] } }),
 		);
 		initializeWithSettings(await Settings.init({ cwd: tempDir, agentDir }));
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@oh-my-pi/pi-utils";
 import { listOmpExtensionRoots, withOmpExtensionRootScope } from "../src/discovery/omp-extension-roots";
@@ -9,9 +10,7 @@ let root: string;
 let agentDir: string;
 let cwd: string;
 beforeEach(async () => {
-	const scratch = "/mnt/alias/m2/agents/scratch/TomlReaders";
-	await fs.mkdir(scratch, { recursive: true });
-	root = await fs.mkdtemp(path.join(scratch, "roots-"));
+	root = await fs.mkdtemp(path.join(os.tmpdir(), "npi-extension-roots-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(path.join(cwd, "extension"), { recursive: true });
@@ -49,9 +48,12 @@ for (const scope of ["user", "project"] as const) {
 		await Bun.write(path.join(directory, "config.toml"), "broken = [");
 		await expect(roots()).rejects.toThrow("config.toml");
 	});
-	test(`${scope} YAML-only extension roots keep their scope`, async () => {
+	test(`${scope} YAML-only extension roots import once and keep their scope`, async () => {
 		const directory = scope === "user" ? agentDir : path.join(cwd, ".omp");
 		await Bun.write(path.join(directory, "config.yml"), 'extensions: ["./extension"]\n');
+		expect(await roots()).toEqual([{ path: path.join(cwd, "extension"), name: "extension", level: scope }]);
+		expect(await Bun.file(path.join(directory, "config.toml")).exists()).toBe(true);
+		await Bun.write(path.join(directory, "config.yml"), "extensions: []\n");
 		expect(await roots()).toEqual([{ path: path.join(cwd, "extension"), name: "extension", level: scope }]);
 	});
 }

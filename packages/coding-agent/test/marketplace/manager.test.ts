@@ -16,6 +16,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 // Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
 // what these tests assert — one plugin entry plus a plugin.json whose version takes precedence
@@ -837,7 +838,7 @@ describe("MarketplaceManager", () => {
 		await ctx.manager.addMarketplace(marketplaceDir);
 		const instEntry = await ctx.manager.installPlugin("csharp-lsp", "config-only-marketplace");
 
-		const lspConfig = await Bun.file(path.join(instEntry.installPath, ".lsp.json")).json();
+		const lspConfig = parseSettingsToml(await Bun.file(path.join(instEntry.installPath, ".lsp.toml")).text());
 		expect(lspConfig).toEqual({
 			servers: {
 				"csharp-ls": {
@@ -894,7 +895,7 @@ describe("MarketplaceManager", () => {
 		await ctx.manager.addMarketplace(marketplaceDir);
 		const instEntry = await ctx.manager.installPlugin("ruby-dap", "config-only-dap-marketplace");
 
-		const dapConfig = await Bun.file(path.join(instEntry.installPath, ".dap.json")).json();
+		const dapConfig = parseSettingsToml(await Bun.file(path.join(instEntry.installPath, ".dap.toml")).text());
 		expect(dapConfig).toEqual({
 			adapters: {
 				"ruby-debug": {
@@ -905,29 +906,37 @@ describe("MarketplaceManager", () => {
 		});
 	});
 
-	it("installPlugin preserves YAML extension when embedding DAP metadata files", async () => {
-		const marketplaceDir = path.join(ctx.tmpDir, "yaml-dap-marketplace");
-		const pluginDir = path.join(marketplaceDir, "plugins", "ruby-dap-yaml");
+	it.each(["yaml", "toml"] as const)("installPlugin embeds %s DAP metadata as native TOML", async format => {
+		const marketplaceDir = path.join(ctx.tmpDir, `${format}-dap-marketplace`);
+		const pluginDir = path.join(marketplaceDir, "plugins", `ruby-dap-${format}`);
 		await fs.promises.mkdir(pluginDir, { recursive: true });
-		await Bun.write(
-			path.join(pluginDir, "dap.yaml"),
-			["adapters:", "  ruby-debug:", "    command: ruby-debug-adapter", "    fileTypes:", "      - .rb", ""].join(
-				"\n",
-			),
-		);
+		const source =
+			format === "toml"
+				? stringifySettingsToml({
+						adapters: { "ruby-debug": { command: "ruby-debug-adapter", fileTypes: [".rb"] } },
+					})
+				: [
+						"adapters:",
+						"  ruby-debug:",
+						"    command: ruby-debug-adapter",
+						"    fileTypes:",
+						"      - .rb",
+						"",
+					].join("\n");
+		await Bun.write(path.join(pluginDir, `dap.${format}`), source);
 		await fs.promises.mkdir(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
 		await Bun.write(
 			path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
 			`${JSON.stringify(
 				{
-					name: "yaml-dap-marketplace",
+					name: `${format}-dap-marketplace`,
 					owner: { name: "Test Author" },
 					plugins: [
 						{
-							name: "ruby-dap-yaml",
-							source: "./plugins/ruby-dap-yaml",
+							name: `ruby-dap-${format}`,
+							source: `./plugins/ruby-dap-${format}`,
 							version: "1.0.0",
-							dapAdapters: "dap.yaml",
+							dapAdapters: `dap.${format}`,
 						},
 					],
 				},
@@ -937,11 +946,34 @@ describe("MarketplaceManager", () => {
 		);
 
 		await ctx.manager.addMarketplace(marketplaceDir);
-		const instEntry = await ctx.manager.installPlugin("ruby-dap-yaml", "yaml-dap-marketplace");
+		const instEntry = await ctx.manager.installPlugin(`ruby-dap-${format}`, `${format}-dap-marketplace`);
 
-		expect(fs.existsSync(path.join(instEntry.installPath, ".dap.yaml"))).toBe(true);
+		expect(fs.existsSync(path.join(instEntry.installPath, ".dap.yaml"))).toBe(false);
 		expect(fs.existsSync(path.join(instEntry.installPath, ".dap.json"))).toBe(false);
-		expect(await Bun.file(path.join(instEntry.installPath, ".dap.yaml")).text()).toContain("ruby-debug-adapter");
+		expect(parseSettingsToml(await Bun.file(path.join(instEntry.installPath, ".dap.toml")).text())).toEqual({
+			adapters: { "ruby-debug": { command: "ruby-debug-adapter", fileTypes: [".rb"] } },
+		});
+		expect(await Bun.file(path.join(pluginDir, `dap.${format}`)).text()).toBe(source);
+
+		if (format === "yaml") {
+			await Bun.write(
+				path.join(pluginDir, "dap.toml"),
+				stringifySettingsToml({ adapters: { "native-ruby": { command: "native-debug-adapter" } } }),
+			);
+			await ctx.manager.installPlugin(`ruby-dap-${format}`, `${format}-dap-marketplace`, { force: true });
+			expect(parseSettingsToml(await Bun.file(path.join(instEntry.installPath, ".dap.toml")).text())).toEqual({
+				adapters: { "native-ruby": { command: "native-debug-adapter" } },
+			});
+			expect(await Bun.file(path.join(pluginDir, "dap.yaml")).text()).toBe(source);
+		}
+
+		const installedConfigPath = path.join(instEntry.installPath, ".dap.toml");
+		const installedSource = await Bun.file(installedConfigPath).text();
+		await Bun.write(path.join(pluginDir, "dap.toml"), "[adapters.invalid\n");
+		await expect(
+			ctx.manager.installPlugin(`ruby-dap-${format}`, `${format}-dap-marketplace`, { force: true }),
+		).rejects.toThrow();
+		expect(await Bun.file(installedConfigPath).text()).toBe(installedSource);
 	});
 
 	it("installPlugin with scope:project → persisted in project registry, isolated from user", async () => {

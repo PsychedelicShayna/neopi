@@ -64,7 +64,7 @@ export function AdvisorsView() {
 		try {
 			const { file } = await advisorsApi.setRosterEnabled(config.cwd, name, enabled);
 			await reload(config.cwd);
-			setNotice(`${name}: wrote enabled: ${enabled} to ${file} and applied it to live sessions.`);
+			setNotice(`${name}: wrote enabled = ${enabled} to ${file} and applied it to live sessions.`);
 		} catch (e) {
 			// Show what the files say now; a refused toggle may follow an external edit.
 			await reload(config.cwd);
@@ -82,8 +82,8 @@ export function AdvisorsView() {
 			<label className="block text-sm">Live workspace <select className="field ml-3 px-2 py-1" value={currentCwd} onChange={e => setWorkspace(e.target.value)}>{workspaces.map(w => <option key={w.cwd} value={w.cwd}>{w.label} — {w.cwd}</option>)}</select></label>
 			{error && <div role="alert" className="rounded border border-red-400 p-3 text-sm text-red-600">{error}</div>}
 			{notice && <div role="status" className="rounded border border-line p-3 text-sm">{notice}</div>}
-			{settings && <section className="space-y-3 rounded border border-line p-4"><h2 className="font-semibold">Global settings · config.yml</h2>
-				<p className="text-xs text-ink-3">Saving rewrites config.yml; comments are not preserved.</p>
+			{settings && <section className="space-y-3 rounded border border-line p-4"><h2 className="font-semibold">Global settings · config.toml</h2>
+				<p className="text-xs text-ink-3">Saving patches config.toml; unrelated top-level and nested comments are preserved.</p>
 				<label className="flex gap-2 text-sm"><input type="checkbox" checked={settings.enabled} onChange={e => setSettings({ ...settings, enabled: e.target.checked })} /> Enable advisor by default (not the current session switch)</label>
 				<label className="block text-sm">Advisor model role <input className="field ml-2 w-72 px-2 py-1" placeholder="provider/model" value={settings.model} onChange={e => setSettings({ ...settings, model: e.target.value })} /></label>
 				<label className="block text-sm">Sync backlog <select className="field ml-2 px-2 py-1" value={settings.syncBacklog} onChange={e => setSettings({ ...settings, syncBacklog: e.target.value })}>{["off", "1", "3", "5"].map(v => <option key={v} value={v}>{v}</option>)}</select></label>
@@ -93,7 +93,7 @@ export function AdvisorsView() {
 			</section>}
 			{config && <section className="space-y-4 rounded border border-line p-4"><h2 className="font-semibold">WATCHDOG roster</h2><div className="flex gap-2">{(["user", "project"] as const).map(v => <button type="button" key={v} className={scope === v ? "btn-primary px-3 py-1" : "btn-ghost px-3 py-1"} onClick={() => selectScope(v)}>{v === "user" ? "User" : "Project"}</button>)}</div>
 				<div className="break-all font-mono text-xs text-ink-3" title={config[scope].file}>Editing {config[scope].file}</div>
-				<p className="text-xs text-ink-3">Saving rewrites WATCHDOG.yml; comments and unknown fields are not preserved.</p>
+				<p className="text-xs text-ink-3">Saving patches WATCHDOG.toml; unrelated comments and unknown fields are preserved. Legacy YAML imports once and is never rewritten.</p>
 				{doc.warnings?.map((warning, i) => <p key={i} role="alert" className="text-sm text-red-600">{warning}</p>)}
 				<label className="block text-sm">Shared instructions<textarea className="field mt-1 min-h-24 w-full p-2" value={doc.instructions ?? ""} onChange={e => setDoc({ ...doc, instructions: e.target.value || undefined })} /></label>
 				<label className="block text-sm">Shared max notes <input type="number" min={1} className="field ml-2 w-20 px-2 py-1" value={doc.maxNotesPerUpdate ?? ""} onChange={e => setDoc({ ...doc, maxNotesPerUpdate: e.target.value ? Number(e.target.value) : undefined })} /></label>
@@ -101,8 +101,8 @@ export function AdvisorsView() {
 					<div className="flex items-center gap-3"><input aria-label="Advisor name" className="field flex-1 px-2 py-1" placeholder="Advisor name" value={advisor.name} onChange={e => updateAdvisor(index, { name: e.target.value })} /><button type="button" className="btn-ghost" onClick={() => setDoc({ ...doc, advisors: doc.advisors.filter((_, i) => i !== index) })}>Remove</button></div>
 					<label className="block text-sm">Enabled <select aria-label={`${advisor.name || "New advisor"} enabled`} className="field ml-2 px-2 py-1" value={advisor.enabled === undefined ? "unset" : String(advisor.enabled)}
 						onChange={e => updateAdvisor(index, { enabled: e.target.value === "unset" ? undefined : e.target.value === "true" })}>
-						<option value="false">Disabled — enabled: false</option>
-						<option value="true">Enabled — enabled: true</option>
+						<option value="false">Disabled — enabled = false</option>
+						<option value="true">Enabled — enabled = true</option>
 						<option value="unset">Enabled by default — no enabled key</option>
 					</select></label>
 					<label className="block text-sm">Model <input className="field ml-2 w-72 px-2 py-1" placeholder="Inherited advisor role" value={advisor.model ?? ""} onChange={e => updateAdvisor(index, { model: e.target.value || undefined })} /></label>
@@ -115,11 +115,11 @@ export function AdvisorsView() {
 				<button type="button" className="btn-primary ml-2 px-3 py-1" disabled={busy || !!doc.warnings?.length} onClick={() => void saveRoster()}>Save WATCHDOG</button>
 				<div className="space-y-1 border-t border-line pt-3">
 					<h3 className="text-sm font-semibold">Effective roster · discovered precedence</h3>
-					<p className="text-xs text-ink-3">Roster enabled state is the default when a chat runs its whole roster. Chats that choose advisors run only their choice. Each switch writes <code>enabled:</code> to the file the advisor comes from.</p>
+					<p className="text-xs text-ink-3">Roster enabled state is the default when a chat runs its whole roster. Chats that choose advisors run only their choice. Each switch writes <code>enabled =</code> to the file the advisor comes from.</p>
 					{draftDirty && <p className="text-xs text-warn">Save or discard the {scope} roster draft before switching advisors here.</p>}
 					{config.merged.advisors.map((a, i) => {
 						const on = a.enabled !== false;
-						const state = a.enabled === undefined ? "Enabled by default (no enabled key)" : on ? "Enabled (enabled: true)" : "Disabled (enabled: false)";
+						const state = a.enabled === undefined ? "Enabled by default (no enabled key)" : on ? "Enabled (enabled = true)" : "Disabled (enabled = false)";
 						return <div key={i} className="flex items-start gap-3 py-1 text-sm">
 							<label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
 								<input type="checkbox" className="mt-1" checked={on} disabled={busy || draftDirty || !a.source} aria-label={`${a.name} enabled in roster`} onChange={e => void toggleEnabled(a.name, e.target.checked)} />

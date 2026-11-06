@@ -33,7 +33,7 @@ afterEach(() => {
 function makeRegistry(models: Model<Api>[], keys: Record<string, string> = {}): ModelRegistry {
 	const authStorage = createInMemoryAuthStorage();
 	for (const provider in keys) authStorage.keys.setRuntime(provider, keys[provider]!);
-	const registry = new ModelRegistry(authStorage, "/nonexistent/unexpected-stop-models.yml");
+	const registry = new ModelRegistry(authStorage, "/nonexistent/unexpected-stop-models.toml");
 	vi.spyOn(registry, "getAvailable").mockReturnValue(models);
 	return registry;
 }

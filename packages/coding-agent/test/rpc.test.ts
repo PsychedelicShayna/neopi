@@ -13,6 +13,7 @@ import {
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
 import type { BashExecutionMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { rejectionOf } from "./helpers/rejection";
 import { e2eApiKey } from "./utilities";
 
@@ -320,7 +321,10 @@ describe("RPC fast mode with unsupported Fireworks model and priority tier", () 
 
 	beforeEach(async () => {
 		sessionDir = path.join(os.tmpdir(), `omp-rpc-fast-mode-test-${Snowflake.next()}`);
-		await Bun.write(path.join(sessionDir, "config.yml"), ["providers:", "  fireworksTier: priority", ""].join("\n"));
+		await Bun.write(
+			path.join(sessionDir, "config.toml"),
+			stringifySettingsToml({ providers: { fireworksTier: "priority" } }),
+		);
 		// Startup discovery stays inside the temp dir: the developer's home and this repo's
 		// context, plugins, and model caches are not part of the contract and slow the cold start.
 		client = new RpcClient({

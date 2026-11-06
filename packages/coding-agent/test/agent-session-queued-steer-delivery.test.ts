@@ -69,7 +69,7 @@ describe("AgentSession queued steer delivery", () => {
 		fs.mkdirSync(fixtureDir, { recursive: true });
 		authStorage = await AuthStorage.create(path.join(fixtureDir, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir, "models.toml"));
 	});
 
 	beforeEach(() => {

@@ -53,7 +53,7 @@ describe("--no-context-files", () => {
 		]);
 		authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime("openai", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 	});
 
 	afterAll(async () => {

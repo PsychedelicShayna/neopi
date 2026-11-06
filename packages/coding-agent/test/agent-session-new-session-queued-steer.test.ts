@@ -86,7 +86,7 @@ describe("newSession() atomic boundary vs queued hidden steer", () => {
 		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 
 		// Build an old session with recognizable user + assistant messages.

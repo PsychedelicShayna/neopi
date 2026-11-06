@@ -25,7 +25,7 @@ import {
 	TextArea,
 	TextInput,
 } from "./form-primitives";
-import { cardBodyParts, cardPropertyDocument, setCardBodyContent, setCardBodyProperty } from "./spec-yaml";
+import { cardBodyParts, cardPropertyDocument, setCardBodyContent, setCardBodyProperty, type CardPropertyDocument } from "../../lib/card-frontmatter";
 
 type Extract2<T extends RoutineStep["type"]> = Extract<RoutineStep, { type: T }>;
 
@@ -50,7 +50,7 @@ function CardBodyProperties({ body, onChange, advanced, children }: {
 }) {
 	const [propertyName, setPropertyName] = useState("");
 	const [propertyValue, setPropertyValue] = useState("");
-	let parsed: ReturnType<typeof cardPropertyDocument>;
+	let parsed: CardPropertyDocument;
 	try {
 		parsed = cardPropertyDocument(body);
 	} catch {
@@ -60,20 +60,20 @@ function CardBodyProperties({ body, onChange, advanced, children }: {
 			{children}
 		</details>;
 	}
-	const readOnly = parsed.document.get("read-only");
-	const worktree = parsed.document.get("worktree");
+	const readOnly = parsed.properties["read-only"];
+	const worktree = parsed.properties.worktree;
 	const properties: Record<string, string> = Object.fromEntries(
-		Object.entries((parsed.document.toJSON() ?? {}) as Record<string, unknown>)
+		Object.entries(parsed.properties)
 			.filter(([key, value]) => key !== "read-only" && key !== "worktree"
 				&& (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
 				&& !hasAdvancedContent(key) && !hasAdvancedContent(String(value)))
 			.map(([key, value]) => [key, String(value)]),
 	);
-	const hiddenProperties = Object.keys(parsed.document.toJSON() ?? {})
+	const hiddenProperties = Object.keys(parsed.properties)
 		.some((key) => key !== "read-only" && key !== "worktree" && !(key in properties));
 	const newPropertyName = propertyName.trim();
 	const canAddProperty = newPropertyName !== "" && newPropertyName !== "read-only"
-		&& newPropertyName !== "worktree" && !parsed.document.has(newPropertyName)
+		&& newPropertyName !== "worktree" && !Object.hasOwn(parsed.properties, newPropertyName)
 		&& !hasAdvancedContent(newPropertyName) && !hasAdvancedContent(propertyValue);
 	return (
 		<details className="space-y-3">
@@ -116,9 +116,9 @@ function CardBodyProperties({ body, onChange, advanced, children }: {
 			{!advanced && hiddenProperties ? <Help>
 				Other existing properties use advanced content. Turn on Advanced to edit them.
 			</Help> : null}
-			{advanced ? <Field label="Other properties" help="YAML frontmatter, kept verbatim.">
+			{advanced ? <Field label="Other properties" help="TOML frontmatter, kept verbatim.">
 				<TextArea value={parsed.header} rows={4}
-					onChange={(header) => onChange(header === "" ? parsed.content : `---\n${header.endsWith("\n") ? header : `${header}\n`}---\n${parsed.content}`)} />
+					onChange={(header) => onChange(header === "" ? parsed.content : `+++\n${header.endsWith("\n") ? header : `${header}\n`}+++\n${parsed.content}`)} />
 			</Field> : null}
 		</details>
 	);

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -30,7 +31,7 @@ describe("createAgentSession deferred role alias on discoverable provider (#8863
 		}
 		tempDir = path.join(os.tmpdir(), `pi-test-sdk-deferred-role-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsJsonPath = path.join(tempDir, "models.json");
+		modelsJsonPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(":memory:");
 	});
 
@@ -66,7 +67,7 @@ describe("createAgentSession deferred role alias on discoverable provider (#8863
 	it("refreshes discoverable providers so @smol resolves to the discovered model", async () => {
 		fs.writeFileSync(
 			modelsJsonPath,
-			JSON.stringify({
+			stringifySettingsToml({
 				providers: {
 					ollama: {
 						baseUrl: "http://127.0.0.1:11434/v1",

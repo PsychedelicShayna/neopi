@@ -20,43 +20,44 @@ describe("ModelRegistry.create() factory (F6)", () => {
 		await tempDir.remove().catch(() => {});
 	});
 
-	test("migrates legacy models.json → models.yml ahead of the sync constructor", async () => {
-		const yml = path.join(tempDir.path(), "models.yml");
+	test("imports legacy models.json into models.toml ahead of the sync constructor", async () => {
+		const toml = path.join(tempDir.path(), "models.toml");
 		const json = path.join(tempDir.path(), "models.json");
 
 		// Seed a legacy JSON config; factory should migrate it asynchronously
-		// before the sync constructor reads from the yml path.
+		// before the sync constructor reads from the native TOML path.
 		await Bun.write(json, JSON.stringify({ models: [] }));
-		expect(fs.existsSync(yml)).toBe(false);
+		expect(fs.existsSync(toml)).toBe(false);
 
 		const authStorage = await AuthStorage.create(":memory:");
 		try {
-			new ModelRegistry(authStorage, yml);
-			expect(fs.existsSync(yml)).toBe(true);
+			new ModelRegistry(authStorage, toml);
+			expect(fs.existsSync(toml)).toBe(true);
+			expect(await Bun.file(json).text()).toBe(JSON.stringify({ models: [] }));
 		} finally {
 			authStorage.close();
 		}
 	});
 
 	test("ConfigFile migration is idempotent — second load is a no-op", async () => {
-		const yml = path.join(tempDir.path(), "models.yml");
+		const toml = path.join(tempDir.path(), "models.toml");
 		const json = path.join(tempDir.path(), "models.json");
 		await Bun.write(json, JSON.stringify({ models: [] }));
 
-		const cf = new ConfigFile("models", ModelsConfigSchema, yml);
+		const cf = new ConfigFile("models", ModelsConfigSchema, toml);
 		cf.tryLoad();
-		expect(fs.existsSync(yml)).toBe(true);
-		const mtime1 = fs.statSync(yml).mtimeMs;
+		expect(fs.existsSync(toml)).toBe(true);
+		const mtime1 = fs.statSync(toml).mtimeMs;
 
 		// Second load should not rewrite the file (idempotent migration path).
 		cf.invalidate();
 		cf.tryLoad();
-		const mtime2 = fs.statSync(yml).mtimeMs;
+		const mtime2 = fs.statSync(toml).mtimeMs;
 		expect(mtime2).toBe(mtime1);
 	});
 
 	test("ConfigFile migrates legacy models.json containing comments", async () => {
-		const yml = path.join(tempDir.path(), "models.yml");
+		const toml = path.join(tempDir.path(), "models.toml");
 		const json = path.join(tempDir.path(), "models.json");
 		await Bun.write(
 			json,
@@ -68,9 +69,9 @@ describe("ModelRegistry.create() factory (F6)", () => {
 			}`,
 		);
 
-		const cf = new ConfigFile("models", ModelsConfigSchema, yml);
+		const cf = new ConfigFile("models", ModelsConfigSchema, toml);
 		const result = cf.tryLoad();
 		expect(result.status).toBe("ok");
-		expect(fs.existsSync(yml)).toBe(true);
+		expect(fs.existsSync(toml)).toBe(true);
 	});
 });

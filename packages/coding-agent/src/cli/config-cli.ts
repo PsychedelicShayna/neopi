@@ -21,7 +21,7 @@ import { convertMainSettingsToToml } from "../config/settings-to-toml";
 
 export type ConfigAction = "list" | "get" | "set" | "reset" | "path" | "init-xdg" | "dump-toml" | "to-toml";
 
-/** Layer `list --scope` reads as written: the agent dir's `config.yml`, or the project's settings files. */
+/** Layer `list --scope` reads as written: the agent dir's `config.toml`, or the project's settings files. */
 export type ConfigScope = "global" | "project";
 
 export interface ConfigCommandArgs {
@@ -30,7 +30,6 @@ export interface ConfigCommandArgs {
 	value?: string;
 	flags: {
 		json?: boolean;
-		force?: boolean;
 		help?: boolean;
 		/** `list` shows only the keys this layer sets, with the values as written. */
 		scope?: ConfigScope;
@@ -104,8 +103,6 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 		const arg = args[i];
 		if (arg === "--json") {
 			result.flags.json = true;
-		} else if (arg === "--force" && action === "to-toml") {
-			result.flags.force = true;
 		} else if ((arg === "--help" || arg === "-h") && action === "to-toml") {
 			result.flags.help = true;
 		} else if (!arg.startsWith("-")) {
@@ -114,7 +111,7 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 	}
 
 	if (action === "to-toml" && positionalArgs.length > 1) {
-		throw new Error("Usage: npi config to-toml [config.yml|config.yaml] [--force]");
+		throw new Error("Usage: npi config to-toml [config.yml|config.yaml]");
 	}
 	if (positionalArgs.length > 0) {
 		result.key = positionalArgs[0];
@@ -187,9 +184,9 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 			return;
 		}
 		try {
-			const results = await convertMainSettingsToToml({ file: cmd.key, force: cmd.flags.force });
+			const results = await convertMainSettingsToToml({ file: cmd.key });
 			for (const result of results) {
-				console.log(`Converted ${result.sourcePath} -> ${result.targetPath}`);
+				console.log(`TOML settings: ${result.sourcePath} -> ${result.targetPath}`);
 				for (const diagnostic of result.diagnostics) {
 					console.error(`${result.sourcePath} ${diagnostic.path}: ${diagnostic.message}`);
 				}
@@ -379,7 +376,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		process.exit(1);
 	}
 
-	// Report the value written to config.yml. When another layer or an environment variable still
+	// Report the value written to config.toml. When another layer or an environment variable still
 	// supplies the effective value, say which instead of echoing its value as if it had been set.
 	const saved = globalValue(def.setting);
 	const shadow = shadowingSource(def.setting);
@@ -491,12 +488,14 @@ ${chalk.bold("Commands:")}
   path               Print the config directory path
   init-xdg           Initialize XDG Base Directory structure
   dump-toml          Print documented defaults as TOML
-  to-toml [file]      Convert user/project main YAML settings to config.toml
+  to-toml [file]      Explicitly import legacy YAML settings into config.toml
 
 ${chalk.bold("Options:")}
   --json             Output as JSON
-  --force            Replace existing config.toml during explicit conversion
   --scope <scope>    With list: only the keys the global or project layer sets, as written
+
+Native settings are read and saved as config.toml. If absent, legacy config.yml/config.yaml
+is imported once without changing the source. An existing TOML file wholly wins.
 
 ${chalk.bold("Examples:")}
   ${APP_NAME} config list

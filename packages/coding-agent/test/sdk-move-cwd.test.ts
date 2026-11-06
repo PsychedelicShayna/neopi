@@ -108,7 +108,7 @@ describe("createAgentSession cwd after /move", () => {
 					agentDir,
 					sessionManager,
 					authStorage,
-					modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+					modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 					settings,
 					model: getBundledModel("openai", "gpt-4o-mini"),
 					toolNames: ["read"],
@@ -168,7 +168,7 @@ describe("createAgentSession cwd after /move", () => {
 
 		const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
 		const authStorage = createInMemoryAuthStorage();
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 		const { session } = await createAgentSession({
 			cwd: cwdA,
 			agentDir,
@@ -234,7 +234,7 @@ describe("createAgentSession cwd after /move", () => {
 			agentDir,
 			sessionManager,
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 			settings,
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			restrictToolNames: true,

@@ -30,6 +30,6 @@ export const cfgStreamRedactPatterns = register({
 		group: "Stream",
 		label: "Extra Redaction Patterns",
 		description:
-			"Additional regular expressions redacted from every streamed row, on top of env/secrets.yml values and built-in credential shapes",
+			"Additional regular expressions redacted from every streamed row, on top of env/secrets.toml values and built-in credential shapes",
 	},
 });

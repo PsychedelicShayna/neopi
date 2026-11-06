@@ -5,6 +5,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import {
+	parseSettingsToml,
+	patchSettingsToml,
+	readTomlConfig,
+	settingsTomlSource,
+} from "@oh-my-pi/pi-utils/settings-toml";
 import { type PortableBundle, validatePortableBundle } from "./portable-bundle";
 
 export interface FlashCommandArgs {
@@ -64,8 +70,14 @@ export interface PortableAgentEntry {
 }
 
 export const PORTABLE_AGENT_MANIFEST: readonly PortableAgentEntry[] = [
+	{ root: "agent", source: "config.toml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "config.yml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "config.yaml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "settings.toml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "WATCHDOG.toml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "CHAINS.toml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "CHAINS.yml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "CHAINS.yaml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "WATCHDOG.yml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "WATCHDOG.yaml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "RULES.md", scopes: ["seed", "ram"] },
@@ -74,7 +86,9 @@ export const PORTABLE_AGENT_MANIFEST: readonly PortableAgentEntry[] = [
 	{ root: "agent", source: "ssh.json", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "kimi-device-id", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "secret-placeholder.key", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "models.toml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "models.yml", scopes: ["seed", "ram"] },
+	{ root: "agent", source: "models.yaml", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "neopi-persona.json", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "neopi-loadout.json", scopes: ["seed", "ram"] },
 	{ root: "agent", source: "neopi-live-personas.json", scopes: ["seed", "ram"] },
@@ -207,8 +221,7 @@ export function rewriteGrubDefaults(contents: string, luksUuid: string): string 
 }
 
 export function forceAsciiSymbolPreset(contents: string): string {
-	if (/^symbolPreset:/m.test(contents)) return contents.replace(/^symbolPreset:.*$/m, "symbolPreset: ascii");
-	return `${contents.length === 0 || contents.endsWith("\n") ? contents : `${contents}\n`}symbolPreset: ascii\n`;
+	return patchSettingsToml(contents, { ...parseSettingsToml(contents), symbolPreset: "ascii" });
 }
 
 export function missingHostTools(which: (tool: string) => string | null): [string, string][] {
@@ -541,14 +554,17 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 
 		const agentDir = path.join(stagedHome, ".omp", "agent");
 		await fs.mkdir(agentDir, { recursive: true });
-		const yml = path.join(agentDir, "config.yml");
-		const yaml = path.join(agentDir, "config.yaml");
-		const ymlExists = await exists(yml);
-		const yamlExists = await exists(yaml);
-		const configPath = ymlExists ? yml : yamlExists ? yaml : yml;
-		if (ymlExists && yamlExists)
-			warnings.push("config.yaml is shadowed by canonical config.yml; only config.yml received symbolPreset: ascii");
-		await fs.writeFile(configPath, forceAsciiSymbolPreset(await fs.readFile(configPath, "utf8").catch(() => "")));
+		const configPath = path.join(agentDir, "config.toml");
+		const source = await settingsTomlSource(agentDir);
+		await fs.writeFile(configPath, forceAsciiSymbolPreset(source?.content ?? ""));
+		await readTomlConfig(path.join(agentDir, "models.toml"), {
+			legacyPaths: ["models.yml", "models.yaml"].map(filename => path.join(agentDir, filename)),
+		});
+		for (const name of ["WATCHDOG", "CHAINS"]) {
+			await readTomlConfig(path.join(agentDir, `${name}.toml`), {
+				legacyPaths: ["yml", "yaml"].map(extension => path.join(agentDir, `${name}.${extension}`)),
+			});
+		}
 
 		const entries = await walkManifest(stagedHome);
 		await fs.writeFile(

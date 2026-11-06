@@ -7,6 +7,10 @@
 - `formatAuthGatewayLink` / `parseAuthGatewayLink` define the `neopi-gateway://` connection-link format, with LAN-address selection for gateways bound to every interface.
 - Share individual broker-backed accounts with NeoProxy through an authenticated, secret-free account catalogue and credential-pinned inference that refreshes the selected account without rotating to siblings.
 
+### Changed
+
+- Auth discovery uses canonical `config.toml`, and structured judgment prompt data is rendered as TOML.
+
 ### Fixed
 
 - Preserve terminal credential-scope refusals through transport, provider and turn error classification so rejected origins, redirects and replacement certificates do not enter retry loops ([#649](https://github.com/PsychedelicShayna/neopi/issues/649), [#651](https://github.com/PsychedelicShayna/neopi/issues/651)).

@@ -23,22 +23,24 @@ OMP merges LSP config from multiple sources, lowest to highest precedence:
 
 | Precedence | Location                                                                                                     |
 | ---------: | ------------------------------------------------------------------------------------------------------------ |
-|     Lowest | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml`, `~/lsp.yml`, `~/.lsp.yml`                          |
+|     Lowest | `~/lsp.toml`, `~/.lsp.toml`                                                                                   |
 |            | Plugin LSP configs (marketplace / `--plugin-dir` roots)                                                      |
 |            | User config dirs: active native agent directory, then `~/.claude/lsp.*`, `~/.codex/lsp.*`, `~/.gemini/lsp.*` |
 |            | Cwd config dirs: `<cwd>/.omp/lsp.*`, `<cwd>/.claude/lsp.*`, `<cwd>/.codex/lsp.*`, `<cwd>/.gemini/lsp.*`      |
 |    Highest | Cwd root: `<cwd>/lsp.*` and `<cwd>/.lsp.*`                                                                   |
 
-Within each config-directory row, directories are listed highest to lowest priority. Each location accepts `.json`, `.yaml`, and `.yml`, including hidden variants. When multiple variants coexist in one location, precedence from highest to lowest is `lsp.json`, `.lsp.json`, `lsp.yaml`, `.lsp.yaml`, `lsp.yml`, `.lsp.yml`. All readable variants are merged; this is not a first-file-only search.
+Within each config-directory row, directories are listed highest to lowest priority. Each location accepts `lsp.toml` and `.lsp.toml`; the visible spelling has higher precedence. A missing TOML file imports its `.json`, `.yaml`, or `.yml` sibling once, in that order, atomically with the original permissions. Legacy files are never changed or deleted. Existing TOML wins with a paths-only warning when legacy siblings coexist; legacy files are no longer merged into it.
+
+YAML comment text is retained in a labelled TOML preamble with an explicit notice that the original field associations are lost.
 
 Merging is shallow per server: a higher-precedence server object overrides only its top-level fields, but object-valued fields such as `settings`, `initOptions`, `capabilities`, and `workspaceReadyTimings` replace the lower value as a whole rather than deep-merging it. Servers absent from override files remain at built-in defaults.
 
-The native user config directory follows `PI_CONFIG_DIR` and active profiles; `~/.omp/agent/lsp.json` is the default-profile spelling. This shared config lookup does not use `PI_CODING_AGENT_DIR` as an arbitrary replacement base. Claude's user directory honors `CLAUDE_CONFIG_DIR`. Foreign user sources (Claude, Codex, Gemini) are opt-in through the enabled-provider configuration; setting `CLAUDE_CONFIG_DIR` also opts Claude in unless explicitly disabled. Project and cwd sources do not walk ancestors and are not subject to that user-source opt-in.
+The native user config directory follows `PI_CONFIG_DIR` and active profiles; `~/.omp/agent/lsp.toml` is the default-profile spelling. This shared config lookup does not use `PI_CODING_AGENT_DIR` as an arbitrary replacement base. Claude's user directory honors `CLAUDE_CONFIG_DIR`. Foreign user sources (Claude, Codex, Gemini) are opt-in through the enabled-provider configuration; setting `CLAUDE_CONFIG_DIR` also opts Claude in unless explicitly disabled. Project and cwd sources do not walk ancestors and are not subject to that user-source opt-in.
 
 **Recommended locations:**
 
-- User-wide preferences → active native agent directory's `lsp.json`
-- Project-specific overrides → `<cwd>/.omp/lsp.json`
+- User-wide preferences → active native agent directory's `lsp.toml`
+- Project-specific overrides → `<cwd>/.omp/lsp.toml`
 
 > **Note:** There is no separate configured-server mode: built-in defaults, partial overrides, and new custom servers all pass through the same root-marker/binary/`disabled` filter. A config that only sets `idleTimeoutMs` leaves server selection unchanged.
 
@@ -46,24 +48,26 @@ Config is cached per cwd. After changing LSP files, root markers, or installed b
 
 ## File shape
 
-Both JSON and YAML are accepted. The top-level object can use either a `servers` wrapper key or a flat map directly:
+TOML is canonical. The top-level table can use a `servers` wrapper or a flat map:
 
-```json
-{
-  "servers": {
-    "server-name": { ... }
-  },
-  "idleTimeoutMs": 300000
-}
+```toml
+idleTimeoutMs = 300000
+
+[servers.server-name]
+command = "my-server"
+fileTypes = [".xyz"]
+rootMarkers = [".git"]
 ```
 
 or (flat, without the `servers` wrapper):
 
-```json
-{
-  "server-name": { ... },
-  "idleTimeoutMs": 300000
-}
+```toml
+idleTimeoutMs = 300000
+
+[server-name]
+command = "my-server"
+fileTypes = [".xyz"]
+rootMarkers = [".git"]
 ```
 
 Top-level keys:
@@ -98,16 +102,13 @@ For plugin-compatible definitions, `initializationOptions` is accepted when `ini
 
 The `capabilities` object enables optional server-specific features that OMP supports on a per-server basis:
 
-```json
-{
-	"capabilities": {
-		"flycheck": true,
-		"ssr": true,
-		"expandMacro": true,
-		"runnables": true,
-		"relatedTests": true
-	}
-}
+```toml
+[servers.rust-analyzer.capabilities]
+flycheck = true
+ssr = true
+expandMacro = true
+runnables = true
+relatedTests = true
 ```
 
 All fields are boolean and optional. They are currently used by `rust-analyzer`.
@@ -116,19 +117,12 @@ All fields are boolean and optional. They are currently used by `rust-analyzer`.
 
 `workspaceReadyTimings` tunes rust-analyzer's workspace-ready polling:
 
-```json
-{
-	"servers": {
-		"rust-analyzer": {
-			"workspaceReadyTimings": {
-				"timeoutMs": 30000,
-				"pollMs": 250,
-				"settleMs": 2000,
-				"statusRequestTimeoutMs": 2000
-			}
-		}
-	}
-}
+```toml
+[servers.rust-analyzer.workspaceReadyTimings]
+timeoutMs = 30000
+pollMs = 250
+settleMs = 2000
+statusRequestTimeoutMs = 2000
 ```
 
 All four fields are optional millisecond values. Defaults are `timeoutMs: 5000`, `pollMs: 100`, `settleMs: 2000`, and `statusRequestTimeoutMs: 1000`. This is an advanced tuning surface; normal configurations should use the defaults.
@@ -139,79 +133,54 @@ All four fields are optional millisecond values. Defaults are `timeoutMs: 5000`,
 
 Partial overrides are merged onto the built-in defaults. You only need to specify the fields you want to change.
 
-```json
-{
-	"servers": {
-		"typescript-language-server": {
-			"args": ["--stdio", "--log-level", "4"]
-		}
-	}
-}
+```toml
+[servers.typescript-language-server]
+args = ["--stdio", "--log-level", "4"]
 ```
 
-```yaml
-servers:
-   gopls:
-      settings:
-         gopls:
-            gofumpt: false
-            staticcheck: false
+```toml
+[servers.gopls.settings.gopls]
+gofumpt = false
+staticcheck = false
 ```
 
 ### Disable a built-in server
 
-```json
-{
-	"servers": {
-		"eslint": {
-			"disabled": true
-		}
-	}
-}
+```toml
+[servers.eslint]
+disabled = true
 ```
 
 ### Register a custom server
 
-New native-format servers require non-empty `command`, `fileTypes`, and `rootMarkers`. Invalid new definitions are ignored with a warning; invalid overrides retain the previous server definition. An unreadable file or invalid JSON/YAML is ignored; the loader continues with the remaining sources.
+New native-format servers require non-empty `command`, `fileTypes`, and `rootMarkers`. Invalid new definitions are ignored with a warning; invalid overrides retain the previous server definition. An unreadable file or invalid TOML is ignored; the loader continues with the remaining sources.
 
-```json
-{
-	"servers": {
-		"my-lsp": {
-			"command": "my-lsp-server",
-			"args": ["--stdio"],
-			"fileTypes": [".xyz"],
-			"rootMarkers": [".xyz-project", ".git"]
-		}
-	}
-}
+```toml
+[servers.my-lsp]
+command = "my-lsp-server"
+args = ["--stdio"]
+fileTypes = [".xyz"]
+rootMarkers = [".xyz-project", ".git"]
 ```
 
 ### Set a global idle timeout
 
 Shut down language servers that have been inactive for more than five minutes:
 
-```json
-{
-	"idleTimeoutMs": 300000
-}
+```toml
+idleTimeoutMs = 300000
 ```
 
 ### Disable a server for one project, keep it globally
 
-Place the override in `<project>/.omp/lsp.json`:
+Place the override in `<project>/.omp/lsp.toml`:
 
-```json
-{
-	"servers": {
-		"pylsp": {
-			"disabled": true
-		}
-	}
-}
+```toml
+[servers.pylsp]
+disabled = true
 ```
 
-The user-level config in `~/.omp/agent/lsp.json` is unaffected; pylsp is only suppressed in this project.
+The user-level config in `~/.omp/agent/lsp.toml` is unaffected; pylsp is only suppressed in this project.
 
 ## Built-in server list
 

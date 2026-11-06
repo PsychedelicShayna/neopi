@@ -12,15 +12,15 @@ import {
 	removeWithRetries,
 	setProfile,
 } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 function ctrl(key: string): string {
 	return String.fromCharCode(key.toLowerCase().charCodeAt(0) & 31);
 }
 
-async function writeKeybindingsYaml(agentDir: string, config: KeybindingsConfig): Promise<void> {
+async function writeKeybindingsToml(agentDir: string, config: KeybindingsConfig): Promise<void> {
 	await fs.mkdir(agentDir, { recursive: true });
-	await Bun.write(path.join(agentDir, "keybindings.yml"), YAML.stringify(config, null, 2));
+	await Bun.write(path.join(agentDir, "keybindings.toml"), stringifySettingsToml(config));
 }
 
 function restoreEnvValue(key: string, value: string | undefined): void {
@@ -39,10 +39,10 @@ describe("KeybindingsManager.create", () => {
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 
-	it("migrates legacy keybinding JSON to YAML during create", async () => {
+	it("migrates legacy keybinding JSON to TOML during create", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
 		const jsonPath = path.join(agentDir, "keybindings.json");
-		const ymlPath = path.join(agentDir, "keybindings.yml");
+		const tomlPath = path.join(agentDir, "keybindings.toml");
 
 		await Bun.write(
 			jsonPath,
@@ -60,7 +60,7 @@ describe("KeybindingsManager.create", () => {
 
 		try {
 			const manager = KeybindingsManager.create(agentDir);
-			const writtenConfig = YAML.parse(await Bun.file(ymlPath).text());
+			const writtenConfig = parseSettingsToml(await Bun.file(tomlPath).text());
 
 			expect(manager.getKeys("app.session.fork")).toEqual(["ctrl+f"]);
 			expect(manager.getKeys("tui.select.confirm")).toEqual(["enter"]);
@@ -79,10 +79,10 @@ describe("KeybindingsManager.create", () => {
 		}
 	});
 
-	it("migrates legacy keybinding JSON with comments to YAML during create", async () => {
+	it("migrates legacy keybinding JSON with comments to TOML during create", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
 		const jsonPath = path.join(agentDir, "keybindings.json");
-		const ymlPath = path.join(agentDir, "keybindings.yml");
+		const tomlPath = path.join(agentDir, "keybindings.toml");
 
 		await Bun.write(
 			jsonPath,
@@ -98,7 +98,7 @@ describe("KeybindingsManager.create", () => {
 
 		try {
 			const manager = KeybindingsManager.create(agentDir);
-			const writtenConfig = YAML.parse(await Bun.file(ymlPath).text());
+			const writtenConfig = parseSettingsToml(await Bun.file(tomlPath).text());
 
 			expect(manager.getKeys("app.session.fork")).toEqual(["ctrl+f"]);
 			expect(manager.getKeys("tui.select.confirm")).toEqual(["enter"]);
@@ -116,20 +116,16 @@ describe("KeybindingsManager.create", () => {
 		}
 	});
 
-	it("loads keybindings.yml directly", async () => {
+	it("loads keybindings.toml directly", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
-		const configPath = path.join(agentDir, "keybindings.yml");
+		const configPath = path.join(agentDir, "keybindings.toml");
 
 		await Bun.write(
 			configPath,
-			YAML.stringify(
-				{
-					"app.session.fork": "ctrl+f",
-					"app.clipboard.copyPrompt": ["alt+c", "ctrl+shift+c"],
-				},
-				null,
-				2,
-			),
+			stringifySettingsToml({
+				"app.session.fork": "ctrl+f",
+				"app.clipboard.copyPrompt": ["alt+c", "ctrl+shift+c"],
+			}),
 		);
 
 		try {
@@ -142,29 +138,53 @@ describe("KeybindingsManager.create", () => {
 		}
 	});
 
-	it("accepts keybindings.yaml when present", async () => {
+	it("imports keybindings.yaml once without changing the legacy source", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
 		const yamlPath = path.join(agentDir, "keybindings.yaml");
-		const canonicalPath = path.join(agentDir, "keybindings.yml");
+		const canonicalPath = path.join(agentDir, "keybindings.toml");
 
-		await Bun.write(
-			yamlPath,
-			YAML.stringify(
-				{
-					"app.plan.toggle": "alt+shift+p",
-				},
-				null,
-				2,
-			),
-		);
+		const legacySource = '"app.plan.toggle": alt+shift+p\n';
+		await Bun.write(yamlPath, legacySource);
 
 		try {
 			const manager = KeybindingsManager.create(agentDir);
 
 			expect(manager.getKeys("app.plan.toggle")).toEqual(["alt+shift+p"]);
-			expect(await Bun.file(canonicalPath).exists()).toBe(false);
+			expect(parseSettingsToml(await Bun.file(canonicalPath).text())).toEqual({
+				"app.plan.toggle": "alt+shift+p",
+			});
+			expect(await Bun.file(yamlPath).text()).toBe(legacySource);
+			await Bun.write(yamlPath, '"app.plan.toggle": ctrl+p\n');
+			expect(KeybindingsManager.create(agentDir).getKeys("app.plan.toggle")).toEqual(["alt+shift+p"]);
 		} finally {
 			await removeWithRetries(agentDir);
+		}
+	});
+
+	it("preserves native comments and persists only profile overrides", async () => {
+		const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-profile-save-"));
+		const defaultAgentDir = path.join(rootDir, "default", "agent");
+		const profileAgentDir = path.join(rootDir, "profiles", "work", "agent");
+		const profilePath = path.join(profileAgentDir, "keybindings.toml");
+		await writeKeybindingsToml(defaultAgentDir, {
+			"app.session.new": "ctrl+n",
+			"app.session.fork": "ctrl+f",
+		});
+		await Bun.write(profilePath, '# profile notes\n"app.session.fork" = "alt+f" # keep this\n');
+
+		try {
+			const manager = KeybindingsManager.create(profileAgentDir, { inheritedAgentDir: defaultAgentDir });
+			expect(manager.setPersisted("app.clipboard.copyLine", ["alt+l"])).toBe(true);
+			const source = await Bun.file(profilePath).text();
+			expect(source).toContain('# profile notes\n"app.session.fork" = "alt+f" # keep this\n');
+			expect(parseSettingsToml(source)).toEqual({
+				"app.session.fork": "alt+f",
+				"app.clipboard.copyLine": ["alt+l"],
+			});
+			expect(manager.getKeys("app.session.new")).toEqual(["ctrl+n"]);
+			expect(manager.getKeys("app.clipboard.copyLine")).toEqual(["alt+l"]);
+		} finally {
+			await removeWithRetries(rootDir);
 		}
 	});
 
@@ -173,7 +193,7 @@ describe("KeybindingsManager.create", () => {
 		const defaultAgentDir = path.join(rootDir, "default", "agent");
 		const profileAgentDir = path.join(rootDir, "profiles", "work", "agent");
 
-		await writeKeybindingsYaml(defaultAgentDir, {
+		await writeKeybindingsToml(defaultAgentDir, {
 			"app.session.fork": "ctrl+f",
 			"tui.editor.deleteCharBackward": ["backspace", "ctrl+h"],
 		});
@@ -193,11 +213,11 @@ describe("KeybindingsManager.create", () => {
 		const defaultAgentDir = path.join(rootDir, "default", "agent");
 		const profileAgentDir = path.join(rootDir, "profiles", "work", "agent");
 
-		await writeKeybindingsYaml(defaultAgentDir, {
+		await writeKeybindingsToml(defaultAgentDir, {
 			"app.session.fork": "ctrl+f",
 			"app.session.new": "ctrl+n",
 		});
-		await writeKeybindingsYaml(profileAgentDir, {
+		await writeKeybindingsToml(profileAgentDir, {
 			"app.session.fork": "alt+f",
 			"app.clipboard.copyLine": "alt+l",
 		});
@@ -219,7 +239,7 @@ describe("KeybindingsManager.create", () => {
 		const profileAgentDir = path.join(rootDir, "profiles", "work", "agent");
 
 		// Legacy JSON in the default dir: loading it with a write-back path would
-		// materialize keybindings.yml there. The inherited load must stay read-only.
+		// materialize keybindings.toml there. The inherited load must stay read-only.
 		await fs.mkdir(defaultAgentDir, { recursive: true });
 		await Bun.write(
 			path.join(defaultAgentDir, "keybindings.json"),
@@ -230,7 +250,7 @@ describe("KeybindingsManager.create", () => {
 			const manager = KeybindingsManager.create(profileAgentDir, { inheritedAgentDir: defaultAgentDir });
 
 			expect(manager.getKeys("app.session.fork")).toEqual(["ctrl+f"]);
-			expect(await Bun.file(path.join(defaultAgentDir, "keybindings.yml")).exists()).toBe(false);
+			expect(await Bun.file(path.join(defaultAgentDir, "keybindings.toml")).exists()).toBe(false);
 		} finally {
 			await removeWithRetries(rootDir);
 		}
@@ -252,11 +272,11 @@ describe("KeybindingsManager.create", () => {
 
 			const defaultAgentDir = path.join(getProfileRootDir(undefined), "agent");
 			const profileAgentDir = path.join(getProfileRootDir("work"), "agent");
-			await writeKeybindingsYaml(defaultAgentDir, {
+			await writeKeybindingsToml(defaultAgentDir, {
 				"app.session.fork": "ctrl+f",
 				"app.session.new": "ctrl+n",
 			});
-			await writeKeybindingsYaml(profileAgentDir, {
+			await writeKeybindingsToml(profileAgentDir, {
 				"app.session.fork": "alt+f",
 				"app.clipboard.copyLine": "alt+l",
 			});

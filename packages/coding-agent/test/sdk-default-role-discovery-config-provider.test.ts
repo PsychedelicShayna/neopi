@@ -1,7 +1,7 @@
 /**
  * Regression: issue #6162.
  *
- * `modelRoles.default` set to a `models.yml` discovery provider model
+ * `modelRoles.default` set to a `models.toml` discovery provider model
  * (a custom OpenAI-compatible endpoint with `discovery.type: openai-models-list`)
  * was silently replaced on a cache-cold interactive launch by an unrelated
  * authenticated provider's default. The configured provider ships no static
@@ -15,6 +15,7 @@
  * is still unresolved and discoverable providers exist, before accepting the
  * bundled-provider fallback.
  */
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -61,19 +62,21 @@ describe("issue #6162 fresh launch default role from models.yml discovery provid
 	}
 
 	test("selects the configured models.yml default over a competing bundled provider on cold cache", async () => {
-		const modelsPath = path.join(tempDir, "models.yml");
+		const modelsPath = path.join(tempDir, "models.toml");
 		fs.writeFileSync(
 			modelsPath,
-			[
-				"providers:",
-				"  my-provider:",
-				`    baseUrl: ${baseUrl}`,
-				"    api: openai-completions",
-				"    apiKey: MY_API_KEY",
-				"    discovery:",
-				"      type: openai-models-list",
-				"",
-			].join("\n"),
+			stringifySettingsToml({
+				providers: {
+					"my-provider": {
+						baseUrl: `${baseUrl}`,
+						api: "openai-completions",
+						apiKey: "MY_API_KEY",
+						discovery: {
+							type: "openai-models-list",
+						},
+					},
+				},
+			}),
 		);
 
 		const authStorage = createInMemoryAuthStorage();

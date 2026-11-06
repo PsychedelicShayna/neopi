@@ -1,8 +1,8 @@
-# Advisor, WATCHDOG.md, and WATCHDOG.yml
+# Advisor, WATCHDOG.md, and WATCHDOG.toml
 
 The advisor subsystem attaches one or more optional reviewer models to a session. Each advisor reviews primary-agent transcript updates, can inspect the workspace with its own tools, and injects concise advice back into the primary session.
 
-An advisor does not approve actions or mutate primary session state directly. Its default investigative toolset is `read`, `grep`, and `glob`, plus `recall` when the active memory backend provides it, but a `WATCHDOG.yml` roster entry may grant any built-in — including mutating tools such as `edit`, `write`, `bash`, and `eval`. Those tools run in an isolated advisor `ToolSession`, but they honor the session's normal approval mode and per-tool policies; grant them only when the advisor model and workspace are trusted (see [Tools and isolation](#tools-and-isolation)).
+An advisor does not approve actions or mutate primary session state directly. Its default investigative toolset is `read`, `grep`, and `glob`, plus `recall` when the active memory backend provides it, but a `WATCHDOG.toml` roster entry may grant any built-in — including mutating tools such as `edit`, `write`, `bash`, and `eval`. Those tools run in an isolated advisor `ToolSession`, but they honor the session's normal approval mode and per-tool policies; grant them only when the advisor model and workspace are trusted (see [Tools and isolation](#tools-and-isolation)).
 
 ## Implementation files
 
@@ -27,18 +27,18 @@ The subsystem requires `advisor.enabled: true`. RPC and ACP hosts use protocol d
 
 Model selection depends on the roster:
 
-- Without any discovered `WATCHDOG.yml` advisor entries, OMP creates the legacy/default advisor and resolves the `advisor` role.
+- Without any discovered `WATCHDOG.toml` advisor entries, OMP creates the legacy/default advisor and resolves the `advisor` role.
 - With a roster, each enabled entry uses its explicit `model` when present, otherwise the `advisor` role. An unresolvable entry is reported as `no_model` without preventing other entries from running.
 - Without a role activation set, `advisors[].enabled: false` keeps an entry visible as paused but does not build its runtime.
 
 Example:
 
-```yaml
-modelRoles:
-   advisor: anthropic/claude-sonnet-4-5:medium
+```toml
+[modelRoles]
+advisor = "anthropic/claude-sonnet-4-5:medium"
 
-advisor:
-   enabled: true
+[advisor]
+enabled = true
 ```
 
 Model selectors use normal role/model resolution, including provider-prefixed ids, canonical ids, fallback lists, and optional thinking suffixes.
@@ -49,17 +49,15 @@ Without an effort suffix, advisors request `medium`, clamped to the model's supp
 
 ### Role activation sets
 
-Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.yml` when declaring a role activation set.
+Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.toml` when declaring a role activation set.
 
 Duplicate IDs within one file emit a warning without hiding rows. Only the first row uses the shared ID during discovery. Saving in `/advisor configure` gives later duplicates fresh IDs and preserves each row's settings.
 
-Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.yml`:
+Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.toml`:
 
-```yaml
-roleSettings:
-  slow:
-    advisor.activationSet:
-      - 0198ad12-6751-7455-b102-45e8fe384b9e
+```toml
+[roleSettings.slow]
+"advisor.activationSet" = ["0198ad12-6751-7455-b102-45e8fe384b9e"]
 ```
 
 User-scoped sets can reference user advisors only. Project-scoped sets can reference any advisor visible in that project. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
@@ -77,15 +75,12 @@ Switching roles stops old-only advisors and starts new-only advisors. Advisors s
 
 When the advisor's model fails (outage, rate limit, unreachable endpoint), the advisor switches to the next model in its `retry.fallbackChains` entry and retries the same review. Key the chain on the `advisor` role, or on the advisor's exact model selector:
 
-```yaml
-modelRoles:
-   advisor: openai/gpt-5.5:medium
+```toml
+[modelRoles]
+advisor = "openai/gpt-5.5:medium"
 
-retry:
-   fallbackChains:
-      advisor:
-         - anthropic/claude-sonnet-4-5:medium
-         - google-vertex/gemini-3-pro
+[retry.fallbackChains]
+advisor = ["anthropic/claude-sonnet-4-5:medium", "google-vertex/gemini-3-pro"]
 ```
 
 This follows the same rules as the primary's fallback: `retry.enabled` and `retry.modelFallback` must be on, candidates still cooling down, without credentials, or incompatible with native advisor history are skipped, and `retry.fallbackRevertPolicy: cooldown-expiry` returns the advisor to its primary model once the cooldown ends. Credential rotation is attempted before switching models. Short usage-limit blocks can instead be waited out within `retry.maxDelayMs` and the retry budget; longer/exhausted blocks pause the advisor.
@@ -98,7 +93,7 @@ A classifier refusal by the advisor's primary model (for example Anthropic's `Re
 
 ### Default advisor settings
 
-When no `WATCHDOG.yml` roster is present, the default advisor uses these settings from the Model tab:
+When no `WATCHDOG.toml` roster is present, the default advisor uses these settings from the Model tab:
 
 - `advisor.reviewMode` — review cadence: `turn` (default) reviews every primary turn; `agent-end` reviews only final yields.
 - `advisor.reviewInterval` — review every Nth eligible update (default `1`). Skipped updates are captured as the primary saw them and sent with the next scheduled review.
@@ -107,7 +102,7 @@ When no `WATCHDOG.yml` roster is present, the default advisor uses these setting
 
 Edits to these settings apply to the running advisor at its next primary boundary without rebuilding it.
 
-Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.yml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`.
+Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.toml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`.
 
 Rebuilding advisors (saving `/advisor configure`, model-role or context changes) keeps updates the cadence skipped: each rebuilt advisor receives them with its next scheduled review.
 
@@ -192,7 +187,7 @@ Every advisor has the `advise` tool for surfacing notes into the primary transcr
 - `glob`
 - `recall`, only when the active memory backend constructs it (Hindsight or Mnemopi)
 
-A `WATCHDOG.yml` roster entry may select any subset of built-ins that were actually constructed for the session (a factory that returned `null`, such as unavailable `lsp`, is absent). An explicit empty `tools: []` grants no investigative tools; `advise` remains available. Unknown-only lists are dropped with a warning and currently fall back to the default subset. Grantable names include mutating tools such as `edit`, `write`, `bash`, `eval`, `debug`, `ast_edit`, `task`, and memory tools, plus the read-approved `wait` tool. Enabled browser/computer preludes are reached through `eval`, not granted as tools.
+A `WATCHDOG.toml` roster entry may select any subset of built-ins that were actually constructed for the session (a factory that returned `null`, such as unavailable `lsp`, is absent). An explicit empty `tools: []` grants no investigative tools; `advise` remains available. Unknown-only lists are dropped with a warning and currently fall back to the default subset. Grantable names include mutating tools such as `edit`, `write`, `bash`, `eval`, `debug`, `ast_edit`, `task`, and memory tools, plus the read-approved `wait` tool. Enabled browser/computer preludes are reached through `eval`, not granted as tools.
 
 Advisor tools are built against the isolated advisor `ToolSession` and wrapped with `ExtensionToolWrapper`, so `tools.approvalMode`, per-tool approval policies, and `autoApprove` apply just as they do to registry tools. Cursor's server-side exec bridge uses the same approval context and only exposes delete/edit/search capabilities when the corresponding advisor grant exists.
 
@@ -239,7 +234,7 @@ Each advisor has its own `AdvisorEmissionGuard` (`src/advisor/emission-guard.ts`
 1. **Normalization.** Lowercase, NFKC, collapse every run of non-alphanumeric characters to one space, then trim. `"Stop."`, `"*Stop*"`, and `"  stop  "` all key to `stop`.
 2. **Content-free phrase filter.** Short phrases with no concrete reason — `stop`, `done`, `complete`, `no issue continue`, `lgtm`, `nothing to add`, and similar — are suppressed.
 3. **Severity-aware dedupe.** A repeated normalized note is dropped at equal or lower severity. A higher-severity re-raise (`nit` → `concern` → `blocker`) remains eligible even after the earlier note was delivered. The prompt is stricter: it permits re-raising prior non-blocker advice only as a `blocker`, once new transcript evidence meets `blocker` criteria. The FIFO history holds at most 4096 entries.
-4. **Per-update rank budget.** Up to N non-blocker notes per advisor model `prompt()` cycle (default 4, configurable from 1–32). At capacity, a higher-severity note may replace the lowest-rank still-pending note from the same update. Routed notes retain their slots; earlier updates' pending notes remain reserved. Blockers are exempt, and suppressed noise consumes no budget. Precedence: per-advisor config > shared `WATCHDOG.yml` top-level > `advisor.maxNotesPerUpdate` setting > default 4. There is no additional aggregate backlog budget.
+4. **Per-update rank budget.** Up to N non-blocker notes per advisor model `prompt()` cycle (default 4, configurable from 1–32). At capacity, a higher-severity note may replace the lowest-rank still-pending note from the same update. Routed notes retain their slots; earlier updates' pending notes remain reserved. Blockers are exempt, and suppressed noise consumes no budget. Precedence: per-advisor config > shared `WATCHDOG.toml` top-level > `advisor.maxNotesPerUpdate` setting > default 4. There is no additional aggregate backlog budget.
 
 Acknowledgments distinguish acceptance, conditional deferral, duplicates, noise, and budget suppression. Acceptance means the host accepted the note for primary delivery, not that the primary model consumed it. Deferred acceptance warns that a higher-severity finding from the same review may displace the note. A rejected note receives no delivery promise; the advisor should not rephrase rejected findings to evade the guard.
 
@@ -247,7 +242,7 @@ The guard's full state — dedupe history and per-update gate — clears on ever
 
 ## Catch-up with `advisor.syncBacklog`
 
-Catch-up policy controls how long the primary waits for each scheduled advisor, not how often that advisor reviews. Each `WATCHDOG.yml` entry may set `syncBacklog`; omission inherits the current global `advisor.syncBacklog` setting.
+Catch-up policy controls how long the primary waits for each scheduled advisor, not how often that advisor reviews. Each `WATCHDOG.toml` entry may set `syncBacklog`; omission inherits the current global `advisor.syncBacklog` setting.
 
 Allowed values:
 
@@ -278,14 +273,16 @@ A batch containing a note at or above `advisor.continueSeverity` can request **a
 
 Keep turn reviews asynchronous while waiting for final reviews:
 
-```yaml
-advisors:
-   - name: Turn reviewer
-     reviewMode: turn
-     syncBacklog: off
-   - name: Final reviewer
-     reviewMode: agent-end
-     syncBacklog: strict
+```toml
+[[advisors]]
+name = "Turn reviewer"
+reviewMode = "turn"
+syncBacklog = "off"
+
+[[advisors]]
+name = "Final reviewer"
+reviewMode = "agent-end"
+syncBacklog = "strict"
 ```
 
 Advisor failures do not permanently stall the primary. The host first attempts its credential/fallback recovery. Retriable failures are attempted up to three times before that backlog is dropped; three dropped-backlog cycles halt the runtime until an explicit reset, and a permanent request rejection can halt it after one cycle. Context-maintenance re-primes do not erase these strikes. A quota/usage-limit failure that cannot recover through credential rotation, model fallback, or a bounded cooldown wait pauses the advisor with its batch retained until its runtime is reset or rebuilt: compaction, dropping images, a shake, a session switch or new session, an `/advisor` rebuild, a configuration reload, or a restart. Provider-stated Codex 429 waits use the bounded provider-wait recovery path rather than immediately discarding the review. Tool-output pruning keeps the pause, and no timer resumes it. The primary's catch-up waiters (`advisor.syncBacklog`) are released as soon as an advisor is failing; only the headless shutdown drain waits through recovery.
@@ -367,11 +364,15 @@ Especially pay attention to:
 
 Later project files sit closer to the end of the advisor prompt, so narrower directory guidance is more prominent than broad ancestor guidance.
 
-## WATCHDOG.yml
+## WATCHDOG.toml
 
-`WATCHDOG.yml` (or `WATCHDOG.yaml`) is the advisor roster. Each named entry can set its own enabled state, model, tools, and specialization prompt; `WATCHDOG.md` supplies shared review guidance.
+`WATCHDOG.toml` is the canonical advisor roster. Each named entry can set its own enabled state, model, tools, and specialization prompt; `WATCHDOG.md` supplies shared review guidance.
 
-Discovery and `/advisor configure` use the same per-entry validation: malformed entries are skipped with named warnings while healthy advisors remain usable. Invalid YAML or a non-mapping document is skipped with a file warning. Problems appear in an aggregated startup warning and remain visible in the selected file's editor. Saving the editor document writes only valid entries.
+When only `WATCHDOG.yml` or `WATCHDOG.yaml` exists, NeoPi imports it once into a sibling TOML file atomically with the source permissions. Legacy YAML is never changed or deleted. Existing TOML wins with a paths-only warning when both formats exist. YAML is not a live overlay.
+
+Import retains YAML comment text in a labelled TOML preamble, with an explicit notice that its original field associations are lost. Native TOML comments retain their nested associations on later editor saves.
+
+Discovery and `/advisor configure` use the same per-entry validation: malformed entries are skipped with named warnings while healthy advisors remain usable. Invalid TOML is skipped with a file warning. Problems appear in an aggregated startup warning and remain visible in the selected file's editor. Saving the editor document writes only valid entries.
 
 The editor opens with every discovered user, ancestor, `.omp`, and launch-directory file in load order. Each row shows its exact path. Hover or select a row to preview that file's advisor names and enabled states; Enter opens its per-advisor editor. Esc from that editor returns to the file list. When no files exist, the list offers the repository-root file, or cwd outside a repository, so a roster can still be created.
 
@@ -383,42 +384,43 @@ On an advisor row or its detail page, `c` clones every field into a new entry in
 
 Example:
 
-```yaml
-instructions: |
-   Everyone: prefer diffs that keep tests unified.
+```toml
+instructions = """Everyone: prefer diffs that keep tests unified.
+"""
 
-advisors:
-  - name: Architecture
-    enabled: true
-    model: anthropic/claude-sonnet-4-5:medium
-    tools: [read, grep, glob]
-    includeThinking: false
-    instructions: |
-      Watch cross-module coupling and public-API growth.
+[[advisors]]
+name = "Architecture"
+enabled = true
+model = "anthropic/claude-sonnet-4-5:medium"
+tools = ["read", "grep", "glob"]
+includeThinking = false
+instructions = """Watch cross-module coupling and public-API growth.
+"""
 
-   - name: Fixer
-     enabled: false
-     model: anthropic/claude-sonnet-4-5:high
-     tools: [read, grep, glob, edit, bash]
-     instructions: |
-        You may edit and run tests to prove a fix locally, then advise.
+[[advisors]]
+name = "Fixer"
+enabled = false
+model = "anthropic/claude-sonnet-4-5:high"
+tools = ["read", "grep", "glob", "edit", "bash"]
+instructions = """You may edit and run tests to prove a fix locally, then advise.
+"""
 ```
 
 For a final-yield reviewer that runs every third completed primary turn:
 
-```yaml
-advisors:
-   - name: Final reviewer
-     reviewMode: agent-end
-     reviewInterval: 3
-     instructions: |
-        Review the complete turn. Stay silent unless concrete evidence shows a material problem.
+```toml
+[[advisors]]
+name = "Final reviewer"
+reviewMode = "agent-end"
+reviewInterval = 3
+instructions = """Review the complete turn. Stay silent unless concrete evidence shows a material problem.
+"""
 ```
 
 Fields:
 
 - `enabled` (top level): optional whole-file switch, default `true`. `false` excludes the file's advisors, shared instructions, and budget while preserving its editable entries.
-- `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
+- `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.toml` files.
 - `advisors[].id`: hidden persistent identity assigned at creation or a legacy entry's first save. Distinct IDs keep identical configurations separate; renames preserve references.
 - `advisors[].name`: human label, slugified for transcript filenames. Entries without persisted IDs retain legacy slug precedence until their first save.
 - `advisors[].enabled`: optional per-advisor switch, default `true`. Without a role activation set, `false` leaves the advisor paused. An explicit set replaces this flag.
@@ -427,7 +429,7 @@ Fields:
 - `advisors[].tools`: optional list of built-in tool names to grant. Omitted → `read`/`grep`/`glob`, plus `recall` when the active memory backend provides it; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
 - `advisors[].reviewMode`: optional cadence mode. `turn` (default) reviews every primary turn — every tool-call round, including `willContinue: true` tool-loop continuations; `agent-end` reviews only final yields where `willContinue` is not true, i.e. once per run.
 - `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Admitted advice follows its configured delivery timing even when cadence skips a review.
-- `advisors[].syncBacklog`: optional `off`, `1`, `3`, `5`, or `strict`. Numeric thresholds may be unquoted YAML numbers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `off` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
+- `advisors[].syncBacklog`: optional `"off"`, `1`, `3`, `5`, or `"strict"`. Numeric thresholds may be TOML integers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `"off"` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
 - `advisors[].scope`: optional `main`, `subagent`, or `all` (default `all`). Restricts which session kinds build this advisor: `main` attaches only to the top-level session, while `subagent` attaches only to advised spawned subagent sessions.
 - `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
@@ -435,28 +437,28 @@ Fields:
 
 In `/advisor configure`, open an advisor to toggle **Read primary reasoning stream** next to **Enabled**. For the implicit default advisor, turning this off saves a roster entry; untouched defaults are not written. Changes apply to the live advisor on **Save & apply**, without `/new`.
 
-Select **System prompt** below **Instructions** to edit the base prompt. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved YAML.
+Select **System prompt** below **Instructions** to edit the base prompt. Enter opens the shared multiline editor, prefilled with the current override or the bundled default. Ctrl+G opens your external editor; Ctrl+Q / Ctrl+Enter accepts the text, and Esc cancels without changing the override. Backspace while **System prompt** is highlighted in the list clears the override; Backspace inside the editor only edits text. **Save & apply** persists the change and rebuilds the live advisors. Clearing removes `systemPrompt` from the saved TOML.
 
-Saves stage and sync the complete `WATCHDOG.yml` beside its destination,
+Saves stage and sync the complete `WATCHDOG.toml` beside its destination,
 then publish it under the existing file lock. Readers see either the previous
-complete YAML or the new one, never a truncated write. Existing symlinks to
+complete TOML or the new one, never a truncated write. Existing symlinks to
 a shared roster keep pointing at that roster after a save.
 
-The editor updates the existing YAML document while preserving comments and fields outside the edited advisor configuration; it does not replace the roster with a freshly serialized subset.
+The editor patches the existing TOML document while preserving top-level and nested comments, unknown fields, and disjoint concurrent changes; it does not replace the roster with a freshly serialized subset.
 
-The **Read primary reasoning stream** checkbox sits beside **Enabled** in each advisor's detail screen. Save & apply writes an explicit `false` to `WATCHDOG.yml` and rebuilds that advisor; turning it back on restores readable primary reasoning for future updates.
+The **Read primary reasoning stream** checkbox sits beside **Enabled** in each advisor's detail screen. Save & apply writes an explicit `false` to `WATCHDOG.toml` and rebuilds that advisor; turning it back on restores readable primary reasoning for future updates.
 
 A continuation an advisor delivery itself starts — a steer while the primary is idle or past its final boundary — neither schedules reviews nor advances interval counters through its own final boundary, so advisor deliveries cannot re-wake reviewers into an advisor→primary→advisor cascade. Its updates are still captured and reach the next scheduled review. Continuations started by anything else (todo reminders, async job wakes, live delegations, user input) are reviewed under the normal cadence, so an `agent-end` reviewer also reviews the run a todo reminder resumes. Delivery itself never pauses: advice already produced still steers, flushes, or rides asides to the primary.
 
 ### Discovery locations
 
-`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user and project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root, or the home directory when no repo root is found. All discovered files load together. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
+`WATCHDOG.toml` shares the user and project search path of `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.toml` plus every `WATCHDOG.toml`/`.omp/WATCHDOG.toml` encountered while walking from `cwd` up to the repository root, or the home directory when no repo root is found. Session-scoped rosters live beside the session's configuration. All discovered files load together. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
 
-For compatibility, a `$HOME/WATCHDOG.yml` or `$HOME/.omp/WATCHDOG.yml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
+For compatibility, a `$HOME/WATCHDOG.toml` or `$HOME/.omp/WATCHDOG.toml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
 
-The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed YAML leaves the previous live roster running, with a logged warning, until a subsequent valid edit.
+The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed TOML leaves the previous live roster running, with a logged warning, until a subsequent valid edit. Legacy paths are watched only to notice an initial import; editing YAML after TOML exists does not override the canonical file.
 
-At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win identity collisions; top-level instructions still concatenate.
+At the same directory depth, `.omp/WATCHDOG.toml` precedes standalone `WATCHDOG.toml`. Later entries win identity collisions; top-level instructions still concatenate.
 ## Subagents
 
 Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:
@@ -466,7 +468,7 @@ Subagents run unadvised by default; advisors are opted in **per agent** instead 
 
 The legacy `advisor.subagents: true` setting migrates to `task.agentAdvisor: { task: "on" }` — the bundled generic `task` agent keeps its advisor, other agents start unadvised.
 
-An advised subagent session builds its own advisor subsystem with the same settings/model-role resolution (an explicit pattern lands on the spawned session's `modelRoles.advisor`), then reruns both `WATCHDOG.md` and `WATCHDOG.yml` discovery for that subagent session's `cwd` and agent directory. Subagent advisors remain isolated from the subagent's primary tool session in the same way the main advisor is isolated from the main agent.
+An advised subagent session builds its own advisor subsystem with the same settings/model-role resolution (an explicit pattern lands on the spawned session's `modelRoles.advisor`), then reruns both `WATCHDOG.md` and `WATCHDOG.toml` discovery for that subagent session's `cwd` and agent directory. Subagent advisors remain isolated from the subagent's primary tool session in the same way the main advisor is isolated from the main agent.
 
 ## Cost and context behavior
 

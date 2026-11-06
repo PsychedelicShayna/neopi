@@ -156,7 +156,7 @@ Tables:
 - `task_states` — kanban columns. Configurable.
 - `tasks` — backlog/active/blocked/done items. `display_id` for human IDs (`T-1`, ...).
 - `inbox_items` — quick captures + promote-to-task records.
-- `routines` — cron / webhook / manual / event definitions: V0 single-action, V1 pipelines in `spec_yaml`, or V2 native graphs in `graph_json`.
+- `routines` — cron / webhook / manual / event definitions: V0 single-action, V1 direct `RoutineSpec` TOML in `spec_toml`, or V2 native graphs in `graph_json`. The additive TOML column leaves legacy `spec_yaml` intact as read-only import provenance.
 - `routine_runs` — per-run history with status, duration, total cost, pinned NeoPi backend identity for agent steps, and immutable V2 execution traces in `graph_run_json`.
 - `routine_step_runs` — per-step records inside a V1 run (stdout / stderr excerpts, JSON output, model, tokens, cost, retry attempt).
 - `routine_state` — cross-run persistent state per routine, addressable from the templating engine.
@@ -170,7 +170,25 @@ On first boot against an empty `tasks` table the deck seeds a single
 
 ### One-shot routine conversion
 
-`GET /api/routine-migrations` inventories raw database columns and YAML, not
+At startup, valid legacy V1 YAML is imported losslessly into `spec_toml` once;
+first reads also import legacy rows added after startup. Invalid or unsupported
+values leave both the original YAML and any existing TOML unchanged and produce
+source-free diagnostics. All V1 API writes, execution parsers and bundled
+`.toml` templates use the shared TOML codec; the browser binds `smol-toml` and
+the embedded server binds Bun's TOML parser. YAML parsing is import-only.
+Explicit nested null values use reserved `[__npi]` metadata with `version = 1`
+and JSON Pointer `null_paths`; callers validate and execute the decoded direct
+`RoutineSpec`, never a wrapper. Empty strings and absent keys stay distinct.
+Legacy YAML comments are carried into the TOML preamble when their original
+table association cannot be preserved; the original YAML also remains exact.
+Subsequent TOML edits patch the source rather than discarding those comments.
+
+YAML-only user templates import on first listing or install into atomic,
+no-clobber `.toml` siblings with the source permissions. Original `.yaml` and
+`.yml` files remain untouched. Existing TOML always wins, with a warning even
+when a legacy sibling is malformed; edits to the old file never replace TOML.
+
+`GET /api/routine-migrations` inventories raw database columns and TOML, not
 the normalized routine reader. `POST /api/routine-migrations/:id` explicitly
 converts one supported original in place. Neither listing, server startup nor
 conversion invokes an action. Active or queued routine work blocks the API
@@ -187,7 +205,7 @@ The `routine_graph_conversions` journal saves the raw row, converted graph,
 source digest and backup path in the same transaction as the definition.
 Routine ids, enabled state, timestamps, schedules, state, credential
 registrations and historical relationships are not rewritten. A converted
-row has `spec_version=2`, `graph_json` populated and `spec_yaml=NULL`. Execution
+row has `spec_version=2`, `graph_json` populated and `spec_toml=NULL`; its legacy `spec_yaml` is untouched. Execution
 never consults the original backup. Repeating conversion after restart is a
 no-op for a native row.
 
@@ -195,9 +213,9 @@ Reports identify each original by digest and exact field path without
 including its value. Supported fields have a native configuration or
 unchanged metadata mapping. Informational state declarations and visual
 legacy edges remain in the protected original. Those visual edges do not
-become executable connections. Semantic export does not reproduce YAML
-comments, anchors, formatting or key order, which the report names as a
-syntax loss. The raw snapshot retains them exactly.
+become executable connections. Semantic TOML export does not reproduce source
+comments, formatting or key order, which the report names as a syntax loss.
+The raw snapshot retains them exactly.
 
 Conversion supports V1 `run`, `write`, `http`, `deck`, `mcp`, `transform`,
 `wait` and `set_state` actions. The production registry validates every
@@ -260,9 +278,9 @@ MCP schemas and configuration can migrate, but live MCP equivalence is not
 established by these tests.
 
 `GET /api/routine-migrations/:id/:sourceDigest/export` returns the original's
-semantic YAML for one-shot round trips, only while its native definition is
+semantic TOML for one-shot round trips, only while its native definition is
 unchanged. V0 export contains its original single-action request fields,
-`version: 0` and raw concurrency/budget/timezone/tag columns in `metadata`;
+`version = 0` and raw concurrency/budget/timezone/tag columns in `metadata`;
 V1 export contains the original semantic spec. Neither is an authoring
 source. `POST
 /api/routine-migrations/:id/:sourceDigest/restore` restores that definition,
@@ -273,18 +291,20 @@ its WAL/SHM files separately, replace the database with the protected snapshot
 and remove the old WAL/SHM files before restarting. A full rollback also
 rewinds unrelated database changes since the snapshot.
 
-This is not the completed #163 cutover. V0/V1 readers and YAML authoring,
-templates, the old builder/compiler and legacy runtime dispatch still serve
-unconverted callers and rows. They must be removed only after that dependency
-count reaches zero. Studio TOML documents in `studio_graphs` are a distinct
-model; conversion here targets the executable `/api/routines` native graph,
-not a lossy copy into Studio.
+This is not the completed #163 graph-runtime cutover. V0/V1 execution and the
+linear builder/compiler still serve unconverted callers and rows, but V1
+authoring and execution source are now TOML. YAML is retained only as read-only
+import provenance. Studio TOML documents in `studio_graphs` are a distinct model;
+conversion here targets the executable `/api/routines` native graph, not a
+lossy copy into Studio. Pre-TOML conversion journals remain restorable: their
+exact protected YAML is recovered and imported into canonical TOML without
+rewriting the journal or running an action.
 
 ## Native routine graphs
 
 `packages/protocol/src/graph.ts` owns the shared V2 contracts. A `RoutineGraph`
 contains typed nodes, named input/output ports and directed edges; its JSON,
-not YAML or canvas layout, is the execution source of truth. Port types are
+not TOML or canvas layout, is the execution source of truth. Port types are
 `object`, `array`, `string`, `number`, `boolean` and `null`. `object` is the
 general type: narrower outputs may connect to it, but a general output cannot
 connect to a narrower input. Required inputs and single/multiple cardinality
@@ -321,7 +341,7 @@ Create and update through `POST /api/routines` and
 `PATCH /api/routines/:id` with `graph`, and execute through the existing run
 endpoint. `GET /api/routine-node-types` returns the shared catalogue;
 `POST /api/routine-graphs/validate` rejects invalid connections before saving or
-running them. Native graphs reject legacy action/YAML authoring fields.
+running them. Native graphs reject legacy action/TOML-pipeline authoring fields.
 `GET /api/routines/:id/runs/:runId/graph` returns a `GraphRunRecord`, including
 the executed definition, activation, ordered node records, outputs, status and
 usage. Final traces and existing run aggregates persist atomically. Before
@@ -346,7 +366,7 @@ start as V2 JSON. Palette entries, typed handles and configuration fields consum
 the production registry, with shared connection validation during authoring and
 server configuration validation before saving or running. Incomplete local drafts
 can be wired progressively; saved executable graphs must pass full validation.
-Source view deliberately exposes the same native JSON, not generated YAML.
+Source view deliberately exposes the same native JSON, not generated TOML.
 Existing legacy routines retain their editor until explicit migration.
 
 The Runs panel and node inspector read the selected run's `trace.graph`, never
@@ -390,7 +410,7 @@ pipeline. Model operations report actual usage through `recordUsage`.
 
 `db/inbox.ts::createInbox` commits the card and its `inbox_graph_events`
 deliveries in one transaction. The card snapshot includes all currently
-persisted inbox properties (including an empty body/source and YAML in the body).
+persisted inbox properties (including an empty body/source and TOML in the body).
 Each enabled native flow/source configured at creation gets one durable delivery,
 keyed by `(card id, routine id, source node id)`. No title/body deduplication is
 used. Transaction rollback drops both the delivery and its after-commit wakeup;
@@ -430,7 +450,7 @@ silently becoming empty strings. The action result holds `status`, `logicalKey`,
 recursive envelopes, including on failure or cancellation.
 
 - Create-card requests support `title`, `body`, `stateId`, `cwd`, `properties`,
-  `orderInState` and `archived`. Leading YAML and arbitrary stored properties
+  `orderInState` and `archived`. Leading TOML and arbitrary stored properties
   survive; execution properties (`read-only`, `worktree`, `model`, `role`) use
   the same validation as card execution. Unknown top-level properties fail.
   The receipt is the persisted card, including id/displayId and parsed front
@@ -527,7 +547,7 @@ Chat is fully store-driven because it needs cross-session state.
 
 The deck typechecks against NeoPi's workspace packages in the same repository.
 At runtime it loads the source tree selected by `NPI_DECK_BACKEND` or
-`activeBackend` in `~/.npi-deck/config.yml`. Point that selection at the repository
+`activeBackend` in `~/.npi-deck/config.toml`. Point that selection at the repository
 root to run the in-tree NeoPi. The deck reads from:
 
 - NeoPi's agent dir (`getAgentDir()`, default `~/.omp/agent/`; `PI_CODING_AGENT_DIR` overrides) — sessions JSONL, auth.db,

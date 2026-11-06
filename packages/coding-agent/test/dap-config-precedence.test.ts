@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAdapterConfigs } from "@oh-my-pi/pi-coding-agent/dap/config";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 const ADAPTER = "omp-precedence-probe";
 
@@ -17,14 +18,27 @@ describe("DAP config layering", () => {
 	test("a cwd file overrides the project config dir field by field", async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dap-precedence-"));
 		await Bun.write(
-			path.join(tempDir, ".omp", "dap.yaml"),
-			`${ADAPTER}:\n  command: project-cmd\n  args: [from-project]\n`,
+			path.join(tempDir, ".omp", "dap.toml"),
+			stringifySettingsToml({ [ADAPTER]: { command: "project-cmd", args: ["from-project"] } }),
 		);
-		await Bun.write(path.join(tempDir, "dap.json"), JSON.stringify({ [ADAPTER]: { command: "cwd-cmd" } }));
+		await Bun.write(path.join(tempDir, "dap.toml"), stringifySettingsToml({ [ADAPTER]: { command: "cwd-cmd" } }));
 
 		const adapter = getAdapterConfigs(tempDir)[ADAPTER];
 
 		expect(adapter?.command).toBe("cwd-cmd");
 		expect(adapter?.args).toEqual(["from-project"]);
+	});
+
+	test("native TOML wholly wins over legacy siblings without importing stale fields", async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dap-native-precedence-"));
+		const legacyPath = path.join(tempDir, "dap.json");
+		const legacySource = JSON.stringify({ [ADAPTER]: { command: "legacy-cmd", args: ["stale"] } });
+		await Bun.write(legacyPath, legacySource);
+		await Bun.write(path.join(tempDir, "dap.toml"), stringifySettingsToml({ [ADAPTER]: { command: "native-cmd" } }));
+
+		const adapter = getAdapterConfigs(tempDir)[ADAPTER];
+		expect(adapter?.command).toBe("native-cmd");
+		expect(adapter?.args).toEqual([]);
+		expect(await Bun.file(legacyPath).text()).toBe(legacySource);
 	});
 });

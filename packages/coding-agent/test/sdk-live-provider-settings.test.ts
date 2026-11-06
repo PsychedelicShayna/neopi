@@ -64,7 +64,7 @@ describe("primary-agent provider settings changed mid-session", () => {
 			agentDir: tempDir.path(),
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 			settings,
 			model,
 			disableExtensionDiscovery: true,

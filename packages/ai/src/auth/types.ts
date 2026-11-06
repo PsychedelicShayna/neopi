@@ -974,7 +974,7 @@ export interface KeysApi {
 	 * Get API key for a provider.
 	 * Priority (first match wins):
 	 * 1. Runtime override (CLI --api-key)
-	 * 2. Config override (models.yml `providers.<name>.apiKey`)
+	 * 2. Config override (models.toml `providers.<name>.apiKey`)
 	 * 3. OAuth token from storage (auto-refreshed)
 	 * 4. API key persisted by a successful `/login`
 	 * 5. Environment variable
@@ -1043,7 +1043,7 @@ export interface KeysApi {
 	 *
 	 * Mirrors {@link AuthStorage.keys.get} precedence, highest first:
 	 *   1. Runtime override (`--api-key`).
-	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
+	 *   2. Config override (`models.toml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
 	 *   4. API key persisted by a successful `/login`.
 	 *   5. Env var — overrides a stored static api_key (e.g. a stale broker copy).
@@ -1063,7 +1063,7 @@ export interface KeysApi {
 	removeRuntime(provider: string): void;
 	/**
 	 * Register a per-provider API key sourced from user configuration
-	 * (e.g. `models.yml` `providers.<name>.apiKey`). Higher priority than
+	 * (e.g. `models.toml` `providers.<name>.apiKey`). Higher priority than
 	 * stored credentials and OAuth tokens — when the user pins a key in
 	 * config, that key is what authenticates outbound requests, regardless
 	 * of whatever the broker happens to have loaded for that provider.
@@ -1082,7 +1082,7 @@ export interface KeysApi {
 	removeConfig(provider: string): void;
 	/**
 	 * Drop every config-sourced API key. Called by `ModelRegistry` before
-	 * re-parsing `models.yml` so removed entries actually disappear.
+	 * re-parsing `models.toml` so removed entries actually disappear.
 	 */
 	clearConfig(): void;
 	/**

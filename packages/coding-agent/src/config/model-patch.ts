@@ -60,7 +60,7 @@ export function resolveProviderBaseUrl<TApi extends Api>(
  * (or a runtime provider override when no bundled entry exists).
  *
  * `baseUrl` resolution priority:
- *   1. User-set `providerOverride.baseUrl` (explicit override in models.json)
+ *   1. User-set `providerOverride.baseUrl` (explicit override in models.toml)
  *   2. Discovered baseUrl (xiaomi `tp-` token-plan keys resolve to
  *      `token-plan-sgp.xiaomimimo.com` at discovery time)
  *   3. Existing bundled baseUrl (the host baked into `models.json`)
@@ -74,7 +74,7 @@ export function resolveProviderBaseUrl<TApi extends Api>(
  * preferred over (3), the bundled `api.xiaomimimo.com` would shadow the
  * tp- token-plan host and produce 401s on the first stream call.
  * Without explicit transport propagation, an openrouter (or any) entry
- * marked `transport: pi-native` in models.yml silently reverts to the
+ * marked `transport: pi-native` in models.toml silently reverts to the
  * default openai-completions transport after the background catalog
  * refresh — so the first `/model` switch after boot hits the raw OpenAI
  * chat-completions URL instead of the gateway's `/v1/pi/stream` (#2555).
@@ -384,7 +384,7 @@ export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: 
 
 /**
  * The explicit `kind` of a `modelOverrides` entry that the api `model` ends up
- * on does not serve. Config validation only sees apis named in models.yml;
+ * on does not serve. Config validation only sees apis named in models.toml;
  * built-in, discovered, and `kind-apis` rows are checked here, against their
  * resolved api, and the override's kind is ignored.
  */

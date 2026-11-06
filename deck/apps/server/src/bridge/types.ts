@@ -72,7 +72,7 @@ export interface AgentBridge {
 	/**
 	 * Re-read the persisted settings layers into every live session's settings
 	 * (and NeoPi's process-wide instance, once a tool has initialized it) after
-	 * a config.yml write, so the change applies without a restart.
+	 * a config.toml write, so the change applies without a restart.
 	 */
 	reloadLiveSettings(): Promise<LiveSettingsReload[]>;
 	/**
@@ -156,7 +156,7 @@ export interface LiveSettingsReload {
 	sessionId: string;
 	cwd: string;
 	settings: Settings;
-	/** The reload failed and was logged (its message can quote config.yml); the session keeps its previous layers. */
+	/** The reload failed and was logged (its message can quote config.toml); the session keeps its previous layers. */
 	failed?: true;
 }
 

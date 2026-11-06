@@ -26,7 +26,7 @@ const activeHarnesses: Harness[] = [];
 const sharedDir = TempDir.createSync("@pi-empty-stop-guard-shared-");
 const sharedAuthStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 sharedAuthStorage.keys.setRuntime("mock", "test-key");
-const sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
+const sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.toml"));
 
 afterAll(() => {
 	sharedAuthStorage.close();

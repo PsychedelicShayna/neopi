@@ -266,7 +266,7 @@ export class SecretObfuscator {
 				// never redact a 1-2 char match distinctly from itself (see
 				// `regexHasUnresolvableShortMatchFallback`) is dropped rather than
 				// risk a real secret round-tripping unredacted; `secrets/index.ts`
-				// warns loudly for the `secrets.yml`-loaded path — this is the
+				// warns loudly for the `secrets.toml`-loaded path — this is the
 				// silent backstop for direct construction.
 				if (
 					mode === "replace" &&
@@ -1481,7 +1481,7 @@ export class SecretObfuscator {
 
 	// A placeholder is an exact match, or the friendly-name-independent bare
 	// alias: needed so a placeholder minted under a NOW-renamed friendly name
-	// (same secret, same key, different `secrets.yml` label) still round-trips
+	// (same secret, same key, different `secrets.toml` label) still round-trips
 	// when older provider-visible text is re-scanned by a renamed-config
 	// instance — the hash suffix is a keyed digest of the secret VALUE alone,
 	// so a same-key instance recomputes it identically regardless of the

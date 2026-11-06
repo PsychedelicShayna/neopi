@@ -5,7 +5,7 @@ import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
 import { all, bindEffects, combine, effect, lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 import {
 	cfgProvidersMaxInFlightRequests,
@@ -246,8 +246,8 @@ describe("settings registry", () => {
 			fs.mkdirSync(agentDir, { recursive: true });
 			fs.mkdirSync(cwd, { recursive: true });
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				YAML.stringify({ temperature: "hot", statusLine: { leftSegments: ["modle"] } }),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({ temperature: "hot", statusLine: { leftSegments: ["modle"] } }),
 			);
 			const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 			const warnings = (prefix: string) => warn.mock.calls.filter(([message]) => String(message).startsWith(prefix));

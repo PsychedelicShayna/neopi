@@ -358,9 +358,9 @@ export class ModelRegistry {
 	#runtimeKeylessProviders: Set<string> = new Set();
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
 	/**
-	 * Local providers registered without a models.yml entry (ollama, llama.cpp,
+	 * Local providers registered without a models.toml entry (ollama, llama.cpp,
 	 * lm-studio, apple). Their models sort after every other provider's, so a
-	 * bare id the user also defined in models.yml resolves to the configured one.
+	 * bare id the user also defined in models.toml resolves to the configured one.
 	 */
 	#implicitLocalProviders: Set<string> = new Set();
 	/** Implicit local provider → env var that set its discovery endpoint. */
@@ -433,7 +433,7 @@ export class ModelRegistry {
 	#runtimeProviderOverrides: Map<string, ProviderOverride> = new Map();
 	// Command-backed values from registerProvider (apiKey + provider/model
 	// headers). Separate from #commandConfigsByProvider because static reload
-	// rebuilds that map from models.yml only; runtime entries must survive.
+	// rebuilds that map from models.toml only; runtime entries must survive.
 	#runtimeCommandConfigsByProvider: Map<string, Set<string>> = new Map();
 	// Credential-aware model projections registered via
 	// `registerProvider({ oauth: { modifyModels } })`. Persisted for the same
@@ -593,7 +593,7 @@ export class ModelRegistry {
 		modelsPath?: string,
 		options?: {
 			/**
-			 * Gateway mode: ignore local `models.yml` entirely (provider overrides,
+			 * Gateway mode: ignore local `models.toml` entirely (provider overrides,
 			 * config API keys, custom models, custom discovery). A broker-backed
 			 * gateway serves only bundled + broker-discovered catalog metadata and
 			 * must never apply client-side credential or routing overrides.
@@ -613,7 +613,7 @@ export class ModelRegistry {
 			(isBunTestRuntime()
 				? () => Promise.reject(new Error("network disabled in model-registry runtime test"))
 				: wrapFetchForExtraCa(fetch));
-		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
+		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.toml"));
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
 		this.authStorage.keys.setResolver(resolveConfigValue);
@@ -674,7 +674,7 @@ export class ModelRegistry {
 
 	/**
 	 * Rebuild the catalog after a policy-affecting setting change (e.g.
-	 * `extendedContext`). Forces the static reload past the models.yml mtime
+	 * `extendedContext`). Forces the static reload past the models.toml mtime
 	 * gate, then restores runtime-discovered models from the SQLite cache —
 	 * offline, a settings flip must never hit the network. Concurrent calls
 	 * coalesce onto one rebuild.
@@ -741,7 +741,7 @@ export class ModelRegistry {
 	/**
 	 * Catch the catalog up for a view that just read it, rebuilding only when it
 	 * is actually stale: waits out an in-flight background refresh, then runs an
-	 * offline {@link refresh} if models.yml changed on disk since the last load.
+	 * offline {@link refresh} if models.toml changed on disk since the last load.
 	 * Resolves `true` when either may have changed the catalog (the view should
 	 * re-read it), `false` without any rebuild when the in-memory catalog is
 	 * already current. Rejects when the offline rebuild fails.
@@ -827,7 +827,7 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Refresh only the named discovery providers (configured `models.yml` providers
+	 * Refresh only the named discovery providers (configured `models.toml` providers
 	 * and extension `fetchDynamicModels` managers), leaving every other
 	 * provider's discovered models and any in-flight runtime discovery untouched.
 	 * Unlike {@link refreshProvider}, this does no static reload, so restoring a
@@ -1015,7 +1015,7 @@ export class ModelRegistry {
 		this.#keylessProviders.clear();
 		this.#discoverableProviders = [];
 		// Drop config-sourced apiKeys from AuthStorage before reload; entries
-		// removed from models.yml must actually disappear from the resolver, not
+		// removed from models.toml must actually disappear from the resolver, not
 		// linger from the previous parse. The post-load setters below repopulate.
 		this.authStorage.keys.clearConfig();
 		// Restore runtime API keys before #loadModels — survives because
@@ -1081,7 +1081,7 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Drain non-fatal diagnostics: models.yml key problems (once per key path)
+	 * Drain non-fatal diagnostics: models.toml key problems (once per key path)
 	 * and discovery failures of env-redirected built-in providers (once per
 	 * distinct error).
 	 */
@@ -1972,7 +1972,7 @@ export class ModelRegistry {
 
 	#loadCustomModels(): CustomModelsResult {
 		// Gateway mode: serve bundled + broker-discovered catalog metadata only.
-		// Local models.yml provider overrides (baseUrl/apiKey/headers/transport),
+		// Local models.toml provider overrides (baseUrl/apiKey/headers/transport),
 		// custom models, custom discovery, and config API keys are all client-side
 		// routing that MUST NOT reach a broker-backed gateway — applying them would
 		// send broker bearers to a configured endpoint, install config keys that
@@ -2106,7 +2106,7 @@ export class ModelRegistry {
 
 			// Store API key for fallback resolver AND register as config override
 			// so it wins over OAuth tokens from the broker — when the user pins a
-			// bearer in models.yml (e.g. for an auth-gateway baseUrl), that bearer
+			// bearer in models.toml (e.g. for an auth-gateway baseUrl), that bearer
 			// must authenticate the outbound request.
 			if (providerConfig.apiKey) {
 				this.#installProviderApiKey(providerName, providerConfig.apiKey);
@@ -2682,7 +2682,7 @@ export class ModelRegistry {
 				providerId: "openai-codex",
 				resolveKey: value => value,
 				createOptions: accessToken => {
-					// A custom endpoint (models.yml `baseUrl`) receives only a configured,
+					// A custom endpoint (models.toml `baseUrl`) receives only a configured,
 					// runtime, or command key. Official credentials (stored ChatGPT OAuth or
 					// the provider env token) keep discovering against chatgpt.com, as on a
 					// relay setup chat still works with them. The check looks at the token
@@ -3526,7 +3526,7 @@ export class ModelRegistry {
 
 	/**
 	 * Whether `providerId` is known to the registry: it has at least one live
-	 * model, or it is configured for dynamic discovery (models.yml `discovery:`
+	 * model, or it is configured for dynamic discovery (models.toml `discovery:`
 	 * or a runtime extension provider) and is not disabled. Discovery-only
 	 * providers can hold zero models at startup — cached rows never persist
 	 * live auth headers (#5780), so a provider whose discovered models all

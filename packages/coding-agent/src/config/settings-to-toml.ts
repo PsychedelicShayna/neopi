@@ -1,8 +1,13 @@
+import { preserveLegacyYamlComments } from "@oh-my-pi/pi-utils/legacy-yaml-import";
 import * as path from "node:path";
-import { getAgentDir, getProjectAgentDir, isEexist, isEnoent, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getProjectAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { isAlias, isMap, isNode, isScalar, isSeq, parseAllDocuments } from "yaml";
-import { writeFileAtomically } from "../utils/atomic-file";
-import { CONFIG_TOML, SETTINGS_TOML, stringifySettingsToml } from "./settings-toml";
+import {
+	importLegacyYaml,
+	publishTomlImport,
+	readTomlConfig,
+	stringifySettingsToml,
+} from "@oh-my-pi/pi-utils/settings-toml";
 
 export interface TomlConversionDiagnostic {
 	path: string;
@@ -27,10 +32,12 @@ export function convertSettingsYamlToToml(source: string): TomlConversion {
 	}
 	const report = (pointer: string, message: string) => diagnostics.push({ path: pointer || "/", message });
 	const ancestors = new Set<unknown>();
-	if (document.commentBefore || document.comment) report("/", "YAML comments are not carried over");
+	if (document.commentBefore || document.comment)
+		report("/", "YAML comments retained in TOML preamble; original field associations are not retained");
 	function inspect(node: unknown, pointer: string): void {
 		if (!isNode(node)) return;
-		if (node.commentBefore || node.comment) report(pointer, "YAML comments are not carried over");
+		if (node.commentBefore || node.comment)
+			report(pointer, "YAML comments retained in TOML preamble; original field associations are not retained");
 		if (isAlias(node)) {
 			if (ancestors.has(node.resolve(document)))
 				throw new Error(`${pointer}: cyclic YAML aliases cannot be represented`);
@@ -76,11 +83,11 @@ export function convertSettingsYamlToToml(source: string): TomlConversion {
 	// values, including merge-key expansion, exactly as in Settings.
 	let parsed: unknown;
 	try {
-		parsed = Bun.YAML.parse(source);
+		parsed = importLegacyYaml(source);
 	} catch {
 		throw new Error("/: the settings YAML reader rejected this document; no TOML was written");
 	}
-	const content = stringifySettingsToml((parsed ?? {}) as Record<string, unknown>);
+	const content = preserveLegacyYamlComments(source, stringifySettingsToml((parsed ?? {}) as Record<string, unknown>));
 	return { content, diagnostics };
 }
 
@@ -90,32 +97,18 @@ export interface SettingsTomlConversionResult {
 	diagnostics: TomlConversionDiagnostic[];
 }
 
-/** Explicit conversion only. YAML is retained; later settings saves use the TOML sibling. */
-export async function convertSettingsFileToToml(
-	filePath: string,
-	options: { force?: boolean } = {},
-): Promise<SettingsTomlConversionResult> {
+/** Explicit import is also non-destructive: an existing canonical document always wins. */
+export async function convertSettingsFileToToml(filePath: string): Promise<SettingsTomlConversionResult> {
 	const sourcePath = path.resolve(filePath);
-	if (!(MAIN_CONFIG_FILENAMES as readonly string[]).includes(path.basename(sourcePath))) {
-		throw new Error("Only main settings config.yml or config.yaml files are supported by this converter");
-	}
-	const targetPath = path.join(path.dirname(sourcePath), CONFIG_TOML);
-	const legacy = path.join(path.dirname(sourcePath), SETTINGS_TOML);
-	try {
-		await Bun.file(legacy).text();
-		throw new Error(
-			`Legacy overlay exists: ${legacy}. Reconcile or move it before creating ${targetPath}; --force does not discard a legacy overlay.`,
-		);
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
+	if (!/\.ya?ml$/i.test(sourcePath)) throw new Error("Pass a legacy .yml or .yaml settings file");
+	const targetPath = sourcePath.replace(/\.ya?ml$/i, ".toml");
+	const existing = await readTomlConfig(targetPath);
+	if (existing) {
+		await readTomlConfig(targetPath, { legacyPaths: [sourcePath] });
+		return { sourcePath, targetPath, diagnostics: [] };
 	}
 	const converted = convertSettingsYamlToToml(await Bun.file(sourcePath).text());
-	try {
-		await writeFileAtomically(targetPath, converted.content, { noReplace: !options.force });
-	} catch (error) {
-		if (isEexist(error)) throw new Error(`Refusing to overwrite ${targetPath}; use --force to replace it`);
-		throw error;
-	}
+	await publishTomlImport(targetPath, converted.content, sourcePath);
 	return { sourcePath, targetPath, diagnostics: converted.diagnostics };
 }
 
@@ -123,15 +116,14 @@ export async function convertSettingsFileToToml(
 export async function convertMainSettingsToToml(
 	options: {
 		file?: string;
-		force?: boolean;
 		agentDir?: string;
 		cwd?: string;
 	} = {},
 ): Promise<SettingsTomlConversionResult[]> {
-	if (options.file) return [await convertSettingsFileToToml(options.file, options)];
+	if (options.file) return [await convertSettingsFileToToml(options.file)];
 	const sources: string[] = [];
 	for (const directory of [options.agentDir ?? getAgentDir(), getProjectAgentDir(options.cwd ?? process.cwd())]) {
-		for (const filename of MAIN_CONFIG_FILENAMES) {
+		for (const filename of ["config.yml", "config.yaml"]) {
 			const sourcePath = path.resolve(directory, filename);
 			try {
 				await Bun.file(sourcePath).text();
@@ -147,7 +139,7 @@ export async function convertMainSettingsToToml(
 	const results: SettingsTomlConversionResult[] = [];
 	for (const source of sources) {
 		try {
-			results.push(await convertSettingsFileToToml(source, options));
+			results.push(await convertSettingsFileToToml(source));
 		} catch (error) {
 			if (!results.length) throw error;
 			const published = results.flatMap(result => [

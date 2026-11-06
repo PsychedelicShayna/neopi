@@ -32,7 +32,7 @@ describe("createAgentSession preloadedExtensions isolation (issue #2190)", () =>
 	beforeAll(() => {
 		sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-preloaded-ext-"));
 		authStorage = createInMemoryAuthStorage();
-		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.toml"));
 	});
 
 	afterAll(() => {

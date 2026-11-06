@@ -120,7 +120,7 @@ describe("AuthStorage config-override apiKey", () => {
 			if (!authStorage) throw new Error("test setup failed");
 			await seedOAuth("anthropic", "oauth-from-broker");
 			authStorage.keys.setConfig("anthropic", "gateway-bearer");
-			expect(authStorage.keys.describe("anthropic")).toBe("config override (models.yml)");
+			expect(authStorage.keys.describe("anthropic")).toBe("config override (models.toml)");
 		});
 	});
 });

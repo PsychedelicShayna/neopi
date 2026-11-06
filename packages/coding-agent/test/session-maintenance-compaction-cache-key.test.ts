@@ -89,7 +89,7 @@ describe("session-maintenance V2 compaction cache-key provenance", () => {
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime(goModel.provider, "go-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

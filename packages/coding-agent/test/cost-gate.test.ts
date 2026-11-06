@@ -318,7 +318,7 @@ describe("cost gate in a running session", () => {
 			agentDir: tempDir.path(),
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			settings: Settings.isolated({ "compaction.enabled": false, ...values }),
 			model: createCostModel(api),
 			disableExtensionDiscovery: true,

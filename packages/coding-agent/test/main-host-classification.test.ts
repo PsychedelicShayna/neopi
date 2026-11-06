@@ -4,7 +4,7 @@ import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
-import { getDbBusyTimeoutMs, setInteractiveHost, TempDir } from "@oh-my-pi/pi-utils";
+import { getDbBusyTimeoutMs, setInteractiveHost, TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 // `runRootCommand` registers the CLI's extension roots (`--no-extensions` → explicit-only) process-wide.
 afterEach(() => {
@@ -42,8 +42,8 @@ it("standalone auth discovery routes by PI_CONFIG_FILES policy over main config"
 	using tempDir = TempDir.createSync("@omp-standalone-policy-");
 	const overlayPath = tempDir.join("policy.yml");
 	await Bun.write(
-		tempDir.join("config.yml"),
-		"auth:\n  accountPolicies:\n    - provider: test-provider\n      unsupported: true\n",
+		tempDir.join("config.toml"),
+		stringifySettingsToml({ auth: { accountPolicies: [{ provider: "test-provider", unsupported: true }] } }),
 	);
 	await Bun.write(
 		overlayPath,

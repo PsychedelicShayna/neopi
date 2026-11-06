@@ -96,7 +96,7 @@ export function TextArea({
 
 /** Expressions and card frontmatter belong to deliberate advanced editing. */
 export function hasAdvancedContent(value: string): boolean {
-	return value.includes("{{") || /^---\r?\n/.test(value);
+	return value.includes("{{") || /^\+\+\+\r?\n/.test(value);
 }
 
 /** Never replace a stored expression with a basic-mode placeholder value. */

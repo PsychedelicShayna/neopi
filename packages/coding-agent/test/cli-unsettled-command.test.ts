@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 // Regression: `npi config set collab.autoStart control` on a fresh Windows profile over WinRM
-// exited 0 with no output and never wrote config.yml. The CLI entry is a floating `runCli()`
+// exited 0 with no output and never wrote settings. The CLI entry is a floating `runCli()`
 // call (top-level await breaks `--bytecode` builds), so a one-shot command whose await never
 // settles and holds no live handle let the event loop drain, and Bun exited 0: an unfinished
 // command reported as success. The process entry now fails that drain with exit 1 and a
@@ -87,7 +87,7 @@ async function runConfigSet(tempDir: TempDir, settingsInit: SettingsInitMode): P
 		new Response(proc.stdout).text(),
 		new Response(proc.stderr).text(),
 	]);
-	return { exitCode, stdout, stderr, configPath: path.join(home, ".omp", "agent", "config.yml") };
+	return { exitCode, stdout, stderr, configPath: path.join(home, ".omp", "agent", "config.toml") };
 }
 
 // Each case cold-starts the CLI graph in a child process; the budget covers that transpile.
@@ -111,7 +111,7 @@ describe("one-shot CLI command settlement", () => {
 		expect(run.exitCode, run.stderr).toBe(0);
 		expect(run.stdout).toContain("Set collab.autoStart = control");
 		expect(run.stderr).not.toContain(DIAGNOSTIC);
-		expect(Bun.YAML.parse(await Bun.file(run.configPath).text())).toMatchObject({ collab: { autoStart: "control" } });
+		expect(Bun.TOML.parse(await Bun.file(run.configPath).text())).toMatchObject({ collab: { autoStart: "control" } });
 	}, 30_000);
 
 	it("keeps exit 0 when the loop resumes after a premature beforeExit and the command completes", async () => {
@@ -121,7 +121,7 @@ describe("one-shot CLI command settlement", () => {
 		expect(run.exitCode, run.stderr).toBe(0);
 		expect(run.stdout).toContain("Set collab.autoStart = control");
 		expect(run.stderr).not.toContain(DIAGNOSTIC);
-		expect(Bun.YAML.parse(await Bun.file(run.configPath).text())).toMatchObject({ collab: { autoStart: "control" } });
+		expect(Bun.TOML.parse(await Bun.file(run.configPath).text())).toMatchObject({ collab: { autoStart: "control" } });
 	}, 30_000);
 
 	it("keeps an explicit exit's code when the loop resumed after a premature beforeExit", async () => {

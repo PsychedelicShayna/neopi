@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { readonlyCardCommand } from "./card-workspace.ts";
+import { readonlyCardCommand, snapshotCardAgentState } from "./card-workspace.ts";
 import { spawnOwnedSync } from "./owned-process.ts";
 
 const namespaces = ["mnt", "user", "pid", "ipc", "uts"];
@@ -74,3 +74,26 @@ for (const runtimeAlias of [false, true]) {
 		});
 	}
 }
+
+test("card snapshots copy canonical TOML and import legacy sources without copying YAML", () => {
+	const root = mkdtempSync(path.join(tmpdir(), "deck-card-config-snapshot-"));
+	try {
+		const source = path.join(root, "source");
+		const target = path.join(root, "runtime");
+		mkdirSync(source);
+		const legacy = "theme:\n  dark: titanium\n";
+		writeFileSync(path.join(source, "config.yml"), legacy);
+		chmodSync(path.join(source, "config.yml"), 0o640);
+		writeFileSync(path.join(source, "models.toml"), '# custom models\n[providers]\n');
+		writeFileSync(path.join(source, "models.yaml"), "providers: {}\n");
+		writeFileSync(path.join(source, "unrelated.txt"), "not runtime state");
+		snapshotCardAgentState(source, target);
+		expect(Bun.TOML.parse(readFileSync(path.join(target, "config.toml"), "utf8"))).toEqual({ theme: { dark: "titanium" } });
+		expect(statSync(path.join(source, "config.toml")).mode & 0o777).toBe(0o640);
+		expect(readFileSync(path.join(source, "config.yml"), "utf8")).toBe(legacy);
+		expect(readFileSync(path.join(target, "models.toml"), "utf8")).toBe('# custom models\n[providers]\n');
+		for (const name of ["config.yml", "models.yaml", "unrelated.txt"]) expect(existsSync(path.join(target, name))).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

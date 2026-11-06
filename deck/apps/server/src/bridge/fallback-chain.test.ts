@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import type { NpiConfigPatchResponse, SessionFallbackChainResponse } from "@npi-deck/protocol";
 import { loadBackend, resolveBackendSelection } from "../backend/runtime.ts";
 import type { Config } from "../config.ts";
@@ -52,7 +53,7 @@ if (!fixtureRoot) {
 } else {
 	const agentDir = process.env.PI_CODING_AGENT_DIR!;
 	const project = path.join(fixtureRoot, "project");
-	const configYml = path.join(agentDir, "config.yml");
+	const configToml = path.join(agentDir, "config.toml");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(project, { recursive: true });
 	await loadBackend(resolveBackendSelection()!);
@@ -92,8 +93,8 @@ if (!fixtureRoot) {
 	const opus = "anthropic/claude-opus-5-5";
 	const deckFallback = "openrouter/openai/gpt-6-sol:medium";
 
-	test("a new chat's picker chain starts at the deck default and follows config.yml edits live", async () => {
-		await writeFile(configYml, "retry:\n  fallbackChains:\n    openrouter/openai/gpt-4o-mini:\n      - openrouter/openai/gpt-4o\n");
+	test("a new chat's picker chain starts at the deck default and follows config.toml edits live", async () => {
+		await writeFile(configToml, '[retry.fallbackChains]\n"openrouter/openai/gpt-4o-mini" = ["openrouter/openai/gpt-4o"]\n');
 		await withBridge(async ({ bridge, chain, setEntries }) => {
 			const handle = await bridge.createSession({ cwd: project, mcpServersAllowed: [] });
 			expect(await chain(handle.sessionId)).toEqual({
@@ -111,7 +112,7 @@ if (!fixtureRoot) {
 				resolved: { key: opus, chain: ["openrouter/openai/gpt-4o-mini", deckFallback] },
 			});
 			// Other configured chains survived the entry edit, on disk and in the chat.
-			expect(await readFile(configYml, "utf8")).toContain("openrouter/openai/gpt-4o-mini:\n      - openrouter/openai/gpt-4o\n");
+			expect(parseSettingsToml(await readFile(configToml, "utf8"))).toMatchObject({ retry: { fallbackChains: { "openrouter/openai/gpt-4o-mini": ["openrouter/openai/gpt-4o"] } } });
 			const liveChains = saved.live.find(entry => entry.sessionId === handle.sessionId)?.effectiveValue as Record<string, string[]>;
 			expect(liveChains["openrouter/openai/gpt-4o-mini"]).toEqual(["openrouter/openai/gpt-4o"]);
 			expect(liveChains.default).toEqual([deckFallback]);
@@ -123,12 +124,12 @@ if (!fixtureRoot) {
 			// Removing the model's chain hands it back to the deck default.
 			await setEntries({ [opus]: null });
 			expect((await chain(handle.sessionId)).resolved).toEqual({ key: `${opus}:medium`, chain: [deckFallback], deckDefault: true });
-			expect(await readFile(configYml, "utf8")).not.toContain(`${opus}:`);
+			expect((parseSettingsToml(await readFile(configToml, "utf8")).retry as { fallbackChains: Record<string, unknown> }).fallbackChains).not.toHaveProperty(opus);
 		});
 	}, 120_000);
 
 	test("a configured chain for the model beats the deck default from the start; an effort key is edited in place", async () => {
-		await writeFile(configYml, `retry:\n  fallbackChains:\n    ${opus}:medium:\n      - openrouter/openai/gpt-4o\n`);
+		await writeFile(configToml, `[retry.fallbackChains]\n"${opus}:medium" = ["openrouter/openai/gpt-4o"]\n`);
 		await withBridge(async ({ bridge, chain }) => {
 			const fresh = await bridge.createSession({ cwd: project, mcpServersAllowed: [] });
 			expect(await chain(fresh.sessionId)).toEqual({

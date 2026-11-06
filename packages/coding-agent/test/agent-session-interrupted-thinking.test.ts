@@ -169,7 +169,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 			agent,
 			sessionManager,
 			settings,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			extensionRunner,
 		});
 		return { model, sessionManager, session };
@@ -317,7 +317,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 			extensionRuntime,
 			tempDir.path(),
 			SessionManager.inMemory(),
-			new ModelRegistry(authStorage, path.join(tempDir.path(), "extension-models.yml")),
+			new ModelRegistry(authStorage, path.join(tempDir.path(), "extension-models.toml")),
 		);
 		const harness = createSession(extensionRunner);
 		const persisted = Promise.withResolvers<void>();

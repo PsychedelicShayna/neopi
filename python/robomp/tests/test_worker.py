@@ -308,20 +308,20 @@ def test_build_extra_env_stages_agent_home(tmp_path: Path, settings: Settings, m
     omp_agent_dir.mkdir(parents=True)
     (agent_dir / "AGENTS.md").write_text("agent instructions\n", encoding="utf-8")
     (agent_rules_dir / "rule.md").write_text("rule\n", encoding="utf-8")
-    (omp_agent_dir / "models.yml").write_text("models: []\n", encoding="utf-8")
+    (omp_agent_dir / "models.toml").write_text("[providers]\n", encoding="utf-8")
 
     env = worker._build_extra_env(settings)
 
     assert env["HOME"] == str(agent_home)
     assert (agent_home / ".agent" / "AGENTS.md").is_file()
     assert (agent_home / ".agent" / "rules" / "rule.md").is_file()
-    assert (agent_home / ".omp" / "agent" / "models.yml").is_file()
+    assert (agent_home / ".omp" / "agent" / "models.toml").is_file()
     assert (agent_home / ".agent").stat().st_mode & 0o777 == 0o755
     assert (agent_home / ".agent" / "AGENTS.md").stat().st_mode & 0o777 == 0o644
     assert (agent_home / ".agent" / "rules").stat().st_mode & 0o777 == 0o755
     assert (agent_home / ".agent" / "rules" / "rule.md").stat().st_mode & 0o777 == 0o644
     assert (agent_home / ".omp" / "agent").stat().st_mode & 0o777 == 0o755
-    assert (agent_home / ".omp" / "agent" / "models.yml").stat().st_mode & 0o777 == 0o644
+    assert (agent_home / ".omp" / "agent" / "models.toml").stat().st_mode & 0o777 == 0o644
 
 
 @pytest.mark.asyncio

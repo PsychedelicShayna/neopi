@@ -19,7 +19,7 @@ type AdvisorSession = {
 	applyAdvisorConfigs(config: Discovered): void;
 };
 type AdvisorBridge = AgentBridge & { advisorSession(id: string): AdvisorSession | undefined; liveAdvisorSessions(): AdvisorSession[] };
-const WATCHDOG_NAMES = ["WATCHDOG.yml", "WATCHDOG.yaml"];
+const WATCHDOG_NAMES = ["WATCHDOG.toml"];
 const digest = (value: string | null) => createHash("sha256").update(value === null ? "missing\0" : `present\0${value}`).digest("hex");
 const errorText = (err: unknown) => err instanceof Error ? err.message : String(err);
 
@@ -40,8 +40,9 @@ function directories(cwd: string): { projectDir: string; agentDir: string } {
 }
 async function scopeDoc(api: AdvisorSdk, scope: "user" | "project", cwd: string) {
 	const file = await api.resolveAdvisorConfigEditPath(scope, directories(cwd));
+	const doc = await api.loadWatchdogConfigFile(file);
 	const snapshot = await fileSnapshot(file);
-	return { file, hash: snapshot.hash, doc: await api.loadWatchdogConfigFile(file) };
+	return { file, hash: snapshot.hash, doc };
 }
 async function discovery(api: AdvisorSdk, cwd: string) {
 	const agentDir = sdk().getAgentDir();
@@ -60,7 +61,7 @@ async function discovery(api: AdvisorSdk, cwd: string) {
 // Serialize WATCHDOG compare-and-save, enabled toggles and session roster
 // selection across browser editors in this process, so each applies against
 // the roster the previous one wrote. The final re-read also catches external
-// edits; NeoPi owns YAML serialization.
+// edits; NeoPi owns comment-preserving TOML serialization.
 let saveQueue: Promise<void> = Promise.resolve();
 function serialize<T>(run: () => Promise<T>): Promise<T> {
 	const result = saveQueue.then(run);
@@ -142,6 +143,8 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 				const api = feature("advisors");
 				const slug = api.slugifyAdvisorName(name);
 				let source: { file: string; doc: Doc; index: number } | undefined;
+				// Discovery performs the one-time legacy imports before enumerating canonical sources.
+				await api.discoverAdvisorConfigs(cwd, sdk().getAgentDir());
 				for (const candidate of await api.collectConfigCandidates(cwd, sdk().getAgentDir(), WATCHDOG_NAMES)) {
 					const doc = await api.loadWatchdogConfigFile(candidate.path);
 					const index = doc.advisors.findLastIndex(advisor => api.slugifyAdvisorName(advisor.name) === slug);
@@ -183,7 +186,7 @@ export function buildAdvisorsRouter(bridge: AgentBridge, config: import("./confi
 			await settings.flush();
 			// Reload the persisted layer on each independent live settings instance.
 			// NeoPi fires its effective modelRoles change hook on reload, retargeting
-			// the live role without queuing a second write to config.yml.
+			// the live role without queuing a second write to config.toml.
 			await bridge.reloadLiveSettings();
 			await applyToSessions(sessions, feature("advisors"));
 			return c.json({ ok: true });

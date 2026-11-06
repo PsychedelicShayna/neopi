@@ -23,7 +23,7 @@ describe("post-processing chain config", () => {
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
-	it("round-trips a chain with multiline prompts, models, tools, context, and system prompts through CHAINS.yml", async () => {
+	it("round-trips a chain with multiline prompts, models, tools, context, and system prompts through CHAINS.toml", async () => {
 		const file = chainsConfigFilePath("user", { projectDir: project, agentDir });
 		const doc = {
 			chains: [
@@ -102,21 +102,23 @@ describe("post-processing chain config", () => {
 
 	it("loads steps stored without an enabled key as enabled and keeps a chain whose steps are all off", async () => {
 		await Bun.write(
-			path.join(project, "CHAINS.yml"),
+			path.join(project, "CHAINS.toml"),
 			[
-				"chains:",
-				"  - name: legacy",
-				"    steps:",
-				"      - name: one",
-				"        prompt: first",
-				"      - name: two",
-				"        enabled: true",
-				"        prompt: second",
-				"  - name: parked",
-				"    steps:",
-				"      - name: only",
-				"        enabled: false",
-				"        prompt: kept",
+				"[[chains]]",
+				'name = "legacy"',
+				"[[chains.steps]]",
+				'name = "one"',
+				'prompt = "first"',
+				"[[chains.steps]]",
+				'name = "two"',
+				"enabled = true",
+				'prompt = "second"',
+				"[[chains]]",
+				'name = "parked"',
+				"[[chains.steps]]",
+				'name = "only"',
+				"enabled = false",
+				'prompt = "kept"',
 			].join("\n"),
 		);
 
@@ -134,31 +136,33 @@ describe("post-processing chain config", () => {
 
 	it("lets a project chain shadow a user chain by name and drops invalid entries with warnings", async () => {
 		await Bun.write(
-			path.join(agentDir, "CHAINS.yml"),
+			path.join(agentDir, "CHAINS.toml"),
 			[
-				"chains:",
-				"  - name: concise",
-				"    steps:",
-				"      - name: user-step",
-				"        prompt: user version",
-				"  - name: lewd",
-				"    steps:",
-				"      - name: scene",
-				"        prompt: keep the scene",
-				"  - name: broken",
-				"    steps:",
-				"      - name: no-prompt",
+				"[[chains]]",
+				'name = "concise"',
+				"[[chains.steps]]",
+				'name = "user-step"',
+				'prompt = "user version"',
+				"[[chains]]",
+				'name = "lewd"',
+				"[[chains.steps]]",
+				'name = "scene"',
+				'prompt = "keep the scene"',
+				"[[chains]]",
+				'name = "broken"',
+				"[[chains.steps]]",
+				'name = "no-prompt"',
 			].join("\n"),
 		);
 		await Bun.write(
-			path.join(project, "CHAINS.yml"),
+			path.join(project, "CHAINS.toml"),
 			[
-				"chains:",
-				"  - name: concise",
-				"    steps:",
-				"      - name: project-step",
-				"        tools: [bash, not_a_tool]",
-				"        prompt: project version",
+				"[[chains]]",
+				'name = "concise"',
+				"[[chains.steps]]",
+				'name = "project-step"',
+				'tools = ["bash", "not_a_tool"]',
+				'prompt = "project version"',
 			].join("\n"),
 		);
 

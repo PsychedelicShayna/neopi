@@ -29,7 +29,7 @@ export function getDeckModelRegistry(): Promise<ModelRegistry> {
 		const { discoverAuthStorage, ModelRegistry } = sdk();
 		const auth = await discoverAuthStorage();
 		const registry = new ModelRegistry(auth);
-		// Offline refresh = read models.yml + built-ins; online runs in background.
+		// Offline refresh = read models.toml + built-ins; online runs in background.
 		// Mirrors the bridge's previous behavior exactly so boot stays fast.
 		await registry.refresh("offline");
 		registry.refreshInBackground("online");

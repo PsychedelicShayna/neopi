@@ -7,6 +7,7 @@ import type { AgentToolResult, RenderResultOptions } from "@oh-my-pi/pi-agent-co
 import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { rejectionOf, trackUnhandled } from "../helpers/rejection";
 import { restoreEnvValue } from "../helpers/settings-test-state";
 import { createLspWritethrough, LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
@@ -382,7 +383,7 @@ function textResult(result: AgentToolResult<LspToolDetails>): string {
 /**
  * `loadConfig` walks the user config directories (~/.omp/agent, ~/.pi/agent,
  * ~/.claude), which resolve from os.homedir(). A developer with a real
- * lsp.json there flips loadConfig off its auto-detect path onto the override
+ * lsp.toml there flips loadConfig off its auto-detect path onto the override
  * path, where their rootMarkers replace the packaged ones — so these tests
  * would assert against that machine's config instead of the defaults. Point
  * HOME at an empty directory so every case sees a pristine environment.
@@ -500,14 +501,41 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("uses native LSP TOML instead of merging legacy sibling servers", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-native-precedence-");
+		const legacyPath = path.join(tempDir.path(), ".omp", "lsp.json");
+		const legacySource = JSON.stringify({
+			servers: {
+				"legacy-only": { command: process.execPath, fileTypes: [".legacy"] },
+			},
+		});
+		try {
+			await Bun.write(legacyPath, legacySource);
+			await Bun.write(
+				path.join(tempDir.path(), ".omp", "lsp.toml"),
+				stringifySettingsToml({
+					servers: {
+						"native-only": { command: process.execPath, fileTypes: [".native"], rootMarkers: [".omp"] },
+					},
+				}),
+			);
+			const config = loadConfig(tempDir.path());
+			expect(config.servers["native-only"]?.command).toBe(process.execPath);
+			expect(config.servers["legacy-only"]).toBeUndefined();
+			expect(await Bun.file(legacyPath).text()).toBe(legacySource);
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
 	it("uses a custom server languageId for disk and in-memory document opens", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-language-id-");
 		const filePath = path.join(tempDir.path(), "foo.gd");
 		const syncedFilePath = path.join(tempDir.path(), "unsaved.gd");
 		try {
 			await Bun.write(
-				path.join(tempDir.path(), ".omp", "lsp.json"),
-				JSON.stringify({
+				path.join(tempDir.path(), ".omp", "lsp.toml"),
+				stringifySettingsToml({
 					servers: {
 						"fake-gd": {
 							command: process.execPath,
@@ -6082,9 +6110,9 @@ describe("lsp regressions", () => {
 		expect(output).toContain("typescript-language-server (ready)");
 	});
 
-	it("reload * invalidates the per-cwd config cache so newly written .omp/lsp.json is observed", async () => {
+	it("reload * invalidates the per-cwd config cache so newly written .omp/lsp.toml is observed", async () => {
 		// #3546: `getConfig` caches the first `loadConfig` result per cwd
-		// permanently. Creating `.omp/lsp.json` after the first LSP call left
+		// permanently. Creating `.omp/lsp.toml` after the first LSP call left
 		// the tool stuck on "No language servers configured" until the process
 		// restarted. `reload *` (the user's explicit refresh) must invalidate
 		// that cache so subsequent calls observe the fresh config from disk.

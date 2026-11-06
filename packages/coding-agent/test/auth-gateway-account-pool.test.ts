@@ -6,7 +6,7 @@ import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { type AuthBrokerServerHandle, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import { runAuthGatewayCommand } from "@oh-my-pi/pi-coding-agent/cli/auth-gateway-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, removeWithRetries, setAgentDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 const BROKER_TOKEN = "gateway-account-pool-token";
 const ENV_KEYS = [
@@ -112,16 +112,14 @@ describe("auth-gateway account pool", () => {
 		const overlayPath = path.join(tempDir, "overlay.yml");
 		await Promise.all([
 			Bun.write(
-				path.join(tempDir, "config.yml"),
-				[
-					"auth:",
-					"  accountPolicies:",
-					"    - provider: anthropic",
-					"      account:",
-					"        email: stale@example.com",
-					"      unsupported: true",
-					"",
-				].join("\n"),
+				path.join(tempDir, "config.toml"),
+				stringifySettingsToml({
+					auth: {
+						accountPolicies: [
+							{ provider: "anthropic", account: { email: "stale@example.com" }, unsupported: true },
+						],
+					},
+				}),
 			),
 			Bun.write(
 				overlayPath,

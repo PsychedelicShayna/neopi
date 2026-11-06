@@ -7,12 +7,13 @@ import { resetSettingsForTest } from "../../src/config/settings";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { removeWithRetries, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Every test below discovers skills through the real capability loader, which
 // walks `os.homedir()` and `getAgentDir()` for user-level providers (native
 // `<agentDir>/skills`, `~/.claude/skills`, managed auto-learn skills, and
-// `Settings.init()`'s own config.yml/settings.json lookup in the
+// `Settings.init()`'s own config.toml/settings.json lookup in the
 // `handleSkillList` tests below). Without isolating both seams, the developer's
 // or CI runner's real agent config leaks into every assertion here.
 let tempHome: string;
@@ -125,7 +126,7 @@ describe("runSkillsCommand", () => {
 describe("handleSkillList", () => {
 	// `handleSkillList` reads the inspected directory's config through
 	// `Settings.init({ cwd })`, which returns an already-initialized singleton
-	// unchanged; start from none so the fixture's `.omp/config.yml` is read.
+	// unchanged; start from none so the fixture's `.omp/config.toml` is read.
 	beforeEach(() => {
 		resetSettingsForTest();
 	});
@@ -147,8 +148,8 @@ describe("handleSkillList", () => {
 			);
 		}
 		await Bun.write(
-			path.join(directory, ".omp", "config.yml"),
-			"skills:\n  customDirectories:\n    - first\n    - second\n",
+			path.join(directory, ".omp", "config.toml"),
+			stringifySettingsToml({ skills: { customDirectories: ["first", "second"] } }),
 		);
 
 		let stdout = "";

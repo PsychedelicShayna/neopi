@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import * as path from "node:path";
 import { tmpdir } from "node:os";
+import { parseSettingsToml as parse } from "@oh-my-pi/pi-utils/settings-toml";
 import type { NpiConfigPatchResponse, NpiConfigResponse, NpiModelRolesResponse } from "@npi-deck/protocol";
 import { loadBackend, resolveBackendSelection, sdk } from "./backend/runtime.ts";
 import { buildNpiConfigRouter } from "./routes-npi-config.ts";
@@ -17,11 +18,11 @@ await mkdir(project);
 const backend = resolveBackendSelection();
 if (!backend) throw new Error("NeoPi config tests require a configured NeoPi backend");
 await loadBackend(backend);
-// Retain the actual SDK-path refusal before rewriting config.yml.
+// Retain the actual SDK-path refusal before rewriting config.toml.
 const agentDir = sdk().getAgentDir();
 if (!agentDir.startsWith(tmpdir())) throw new Error(`refusing to edit a non-temporary agent dir: ${agentDir}`);
 await mkdir(agentDir, { recursive: true });
-const configFile = path.join(agentDir, "config.yml");
+const configFile = path.join(agentDir, "config.toml");
 const priorConfig = await Bun.file(configFile).exists() ? await readFile(configFile, "utf8") : null;
 const config: Config = { defaultCwd: project, extraWorkspaces: [], host: "127.0.0.1", port: 0, devMode: true, idleTimeoutMs: 0, dbPath: path.join(root, "db"), uploadsRoot: path.join(root, "uploads") };
 
@@ -46,7 +47,7 @@ const roles = async () => {
 const BUILTIN_ROLES = ["default", "smol", "slow", "vision", "plan", "commit", "tiny", "memory", "task", "advisor", "chronicler", "prose", "image", "web", "speech", "dictation", "judge"];
 
 beforeEach(async () => {
-	await writeFile(configFile, "theme:\n  dark: titanium\n");
+	await writeFile(configFile, '[theme]\ndark = "titanium"\n');
 	live = await sdk().Settings.loadIsolated({ cwd: project, agentDir });
 });
 afterEach(() => {
@@ -71,13 +72,13 @@ test("every registered setting is listed once; settings without panel metadata l
 	}
 });
 
-test("a saved record reaches config.yml and the live session; reset removes the key", async () => {
+test("a saved record reaches config.toml and the live session; reset removes the key", async () => {
 	const chains = { "anthropic/claude-opus-5-5": ["openai-codex/gpt-6-sol:medium"] };
 	const saved = await patch({ id: "retry.fallbackChains", value: chains });
 	expect(saved.status).toBe(200);
 	const result = await saved.json() as NpiConfigPatchResponse;
 	const text = await readFile(configFile, "utf8");
-	expect(text).toContain("dark: titanium");
+	expect(parse(text)).toHaveProperty("theme.dark", "titanium");
 	expect(text).toContain("openai-codex/gpt-6-sol:medium");
 	expect(result.setting).toMatchObject({ provenance: "global", inGlobalConfig: true, value: chains });
 	expect(result.live).toEqual([{ sessionId: "live", cwd: project, provenance: "global", effectiveValue: chains }]);
@@ -123,7 +124,7 @@ test.skipIf(!("setActiveRole" in live))("live settings report role provenance wi
 		.toMatchObject({ provenance: "global", effectiveValue: 32000 });
 });
 
-test("invalid values fail with the setting's own message and leave config.yml untouched", async () => {
+test("invalid values fail with the setting's own message and leave config.toml untouched", async () => {
 	const before = await readFile(configFile, "utf8");
 	const cases: Array<[string, unknown, string]> = [
 		["edit.fuzzyThreshold", "abc", "Invalid number: abc"],
@@ -142,7 +143,7 @@ test("invalid values fail with the setting's own message and leave config.yml un
 });
 
 test("credentials are write-only: configured and saved secrets never appear in responses", async () => {
-	await writeFile(configFile, "searxng:\n  token: s3cret-configured\n");
+	await writeFile(configFile, '[searxng]\ntoken = "s3cret-configured"\n');
 	const response = await request("/npi-config");
 	expect(await response.clone().text()).not.toContain("s3cret-configured");
 	const token = ((await response.json()) as NpiConfigResponse).settings.find(s => s.id === "searxng.token");
@@ -154,15 +155,15 @@ test("credentials are write-only: configured and saved secrets never appear in r
 	expect(await readFile(configFile, "utf8")).toContain("s3cret-saved");
 });
 
-test("a malformed config.yml fails with a generic error, never quotes the file, and stays in place", async () => {
-	// NeoPi's load error embeds the parser's message, which can quote the offending line.
-	const broken = "searxng:\n  token: s3cret-in-broken-line: [\n";
+test("a malformed config.toml fails without quoting the file and stays in place", async () => {
+	// Parser detail must not escape even when its offending line contains a secret.
+	const broken = '[searxng]\ntoken = "s3cret-in-broken-line\n';
 	await writeFile(configFile, broken);
 	for (const response of [await request("/npi-config"), await patch({ id: "edit.mode", value: "replace" })]) {
 		expect(response.status).toBe(500);
 		const text = await response.text();
 		expect(text).not.toContain("s3cret");
-		expect(JSON.parse(text).error).toContain("server log");
+		expect(JSON.parse(text).error).toContain("could not load or save");
 	}
 	expect(await readFile(configFile, "utf8")).toBe(broken);
 });
@@ -179,9 +180,9 @@ test("rejected credential values are not echoed back", async () => {
 
 test("credential record entries merge field-wise and keep the hidden others", async () => {
 	await writeFile(configFile, [
-		"images:", "  urls:", "    credentials:",
-		"      alpha:", "        clientId: s3cret-alpha-id", "        accessToken: s3cret-alpha-old", "        refreshToken: s3cret-alpha-refresh",
-		"      beta:", "        token: s3cret-beta", "",
+		"[images.urls.credentials.alpha]",
+		'clientId = "s3cret-alpha-id"', 'accessToken = "s3cret-alpha-old"', 'refreshToken = "s3cret-alpha-refresh"',
+		"[images.urls.credentials.beta]", 'token = "s3cret-beta"', "",
 	].join("\n"));
 	const listed = (await list()).settings.find(s => s.id === "images.urls.credentials");
 	expect(listed).toMatchObject({
@@ -200,28 +201,27 @@ test("credential record entries merge field-wise and keep the hidden others", as
 		{ key: "alpha", fields: ["clientId", "accessToken"] },
 		{ key: "gamma", fields: ["token"] },
 	]);
-	const saved = Bun.YAML.parse(await readFile(configFile, "utf8")) as { images: { urls: { credentials: unknown } } };
+	const saved = parse(await readFile(configFile, "utf8")) as { images: { urls: { credentials: unknown } } };
 	expect(saved.images.urls.credentials).toEqual({
 		alpha: { clientId: "s3cret-alpha-id", accessToken: "s3cret-alpha-new" },
 		gamma: { token: "s3cret-gamma" },
 	});
 });
 
-test("with only config.yaml, NeoPi's file is reported and saves update it in place", async () => {
+test("legacy config.yaml imports once and future saves write only config.toml", async () => {
 	const yamlFile = path.join(agentDir, "config.yaml");
+	const original = "theme:\n  dark: titanium\nedit:\n  mode: patch\n";
 	await rm(configFile);
-	await writeFile(yamlFile, "theme:\n  dark: titanium\nedit:\n  mode: patch\n");
+	await writeFile(yamlFile, original);
 	try {
 		const body = await list();
-		expect(body.configPath).toBe(yamlFile);
+		expect(body.configPath).toBe(configFile);
 		expect(body.settings.find(s => s.id === "edit.mode")).toMatchObject({ provenance: "global", value: "patch" });
 		const response = await patch({ id: "edit.mode", value: "replace" });
 		expect(response.status).toBe(200);
 		expect(((await response.json()) as NpiConfigPatchResponse).setting).toMatchObject({ provenance: "global", value: "replace" });
-		const text = await readFile(yamlFile, "utf8");
-		expect(text).toContain("mode: replace");
-		expect(text).toContain("dark: titanium");
-		expect(await Bun.file(configFile).exists()).toBe(false);
+		expect(parse(await readFile(configFile, "utf8"))).toMatchObject({ edit: { mode: "replace" }, theme: { dark: "titanium" } });
+		expect(await readFile(yamlFile, "utf8")).toBe(original);
 	} finally {
 		await rm(yamlFile, { force: true });
 	}
@@ -245,10 +245,10 @@ test("model roles: every built-in role in NeoPi's order, then custom roles, each
 	const builtins = (await roles()).roles;
 	expect(builtins.every(role => role.builtin)).toBe(true);
 	expect(builtins.map(role => role.id).filter(id => BUILTIN_ROLES.includes(id))).toEqual(BUILTIN_ROLES);
-	await writeFile(configFile, "modelRoles:\n  smol: openrouter/openai/gpt-4o-mini\n  review: anthropic/claude-opus-5-5:high\n  sweep:\n    - openai/gpt-5\n    - \"@smol\"\n");
+	await writeFile(configFile, '[modelRoles]\nsmol = "openrouter/openai/gpt-4o-mini"\nreview = "anthropic/claude-opus-5-5:high"\nsweep = ["openai/gpt-5", "@smol"]\n');
 	const projectDir = path.join(project, ".omp");
 	await mkdir(projectDir, { recursive: true });
-	await writeFile(path.join(projectDir, "config.yml"), "modelRoles:\n  plan: openai/gpt-5:high\n");
+	await writeFile(path.join(projectDir, "config.toml"), '[modelRoles]\nplan = "openai/gpt-5:high"\n');
 	try {
 		const body = await roles();
 		expect(body.roles.map(r => r.id)).toEqual([...builtins.map(role => role.id), "review", "sweep"]);
@@ -274,7 +274,7 @@ test("model roles: every built-in role in NeoPi's order, then custom roles, each
 });
 
 test("model roles: assigning or unsetting one role keeps every other role, including unknown ones", async () => {
-	await writeFile(configFile, "modelRoles:\n  smol: openrouter/openai/gpt-4o-mini\n  review: anthropic/claude-opus-5-5:high\n");
+	await writeFile(configFile, '[modelRoles]\nsmol = "openrouter/openai/gpt-4o-mini"\nreview = "anthropic/claude-opus-5-5:high"\n');
 	const saved = await patch({ id: "modelRoles", entries: { slow: "anthropic/claude-opus-5-5:high" } });
 	expect(saved.status).toBe(200);
 	expect((await saved.json() as NpiConfigPatchResponse).live[0]?.effectiveValue).toMatchObject({ slow: "anthropic/claude-opus-5-5:high", review: "anthropic/claude-opus-5-5:high" });
@@ -284,7 +284,16 @@ test("model roles: assigning or unsetting one role keeps every other role, inclu
 	expect(role("slow")).toMatchObject({ value: "anthropic/claude-opus-5-5:high", provenance: "global" });
 	expect(role("smol")).toMatchObject({ value: null, provenance: "default" });
 	expect(role("review")).toMatchObject({ builtin: false, value: "anthropic/claude-opus-5-5:high" });
-	const saved2 = Bun.YAML.parse(await readFile(configFile, "utf8")) as { modelRoles: Record<string, string> };
+	const saved2 = parse(await readFile(configFile, "utf8")) as { modelRoles: Record<string, string> };
 	expect(saved2.modelRoles).toEqual({ review: "anthropic/claude-opus-5-5:high", slow: "anthropic/claude-opus-5-5:high" });
+});
+
+test("GUI saves preserve top-level and nested TOML comments", async () => {
+	await writeFile(configFile, '# operator heading\n[theme] # theme section\ndark = "titanium" # theme note\n\n[edit]\n# edit policy\nmode = "patch" # mode note\n');
+	const response = await patch({ id: "edit.mode", value: "replace" });
+	expect(response.status).toBe(200);
+	const saved = await readFile(configFile, "utf8");
+	for (const comment of ["# operator heading", "# theme section", "# theme note", "# edit policy", "# mode note"]) expect(saved).toContain(comment);
+	expect(parse(saved)).toMatchObject({ theme: { dark: "titanium" }, edit: { mode: "replace" } });
 });
 }

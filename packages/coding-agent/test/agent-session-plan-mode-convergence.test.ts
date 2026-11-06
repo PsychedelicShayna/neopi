@@ -111,7 +111,7 @@ describe("AgentSession plan-mode convergence", () => {
 		authDir = TempDir.createSync("@pi-plan-converge-auth-");
 		authStorage = await AuthStorage.create(authDir.join("auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, authDir.join("models.toml"));
 	});
 
 	afterAll(() => {

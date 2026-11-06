@@ -83,7 +83,7 @@ body:
         - Amazon Bedrock
         - OpenRouter
         - Ollama / Local
-        - Custom (models.yml)
+        - Custom (models.toml)
         - Other
 
   - type: dropdown

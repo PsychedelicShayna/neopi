@@ -156,8 +156,14 @@ Install version resolution tries catalog `version`, `.claude-plugin/plugin.json`
 | `agents`      | no       | Agent metadata; preserved but not consumed by marketplace installation                         |
 | `hooks`       | no       | Hook metadata; preserved but runtime hooks are discovered from the installed plugin tree       |
 | `mcpServers`  | no       | MCP metadata; preserved here; runtime MCP configuration comes from the plugin manifest/tree    |
-| `lspServers`  | no       | Inline map or in-plugin path; copied to `.lsp.json` during installation                        |
-| `dapAdapters` | no       | Inline map or in-plugin JSON/YAML path; copied to `.dap.json`, `.dap.yaml`, or `.dap.yml`      |
+| `lspServers`  | no       | Inline map or in-plugin TOML/JSON/legacy YAML path; normalized to `.lsp.toml` during installation |
+| `dapAdapters` | no       | Inline map or in-plugin TOML/JSON/legacy YAML path; normalized to `.dap.toml` during installation |
+
+Marketplace catalogs and third-party plugin manifests retain their JSON formats.
+Referenced configuration files are read without modifying the originals; YAML
+is accepted only at this legacy import boundary. When a referenced JSON/YAML
+file has a matching `.toml` sibling, TOML wins and the legacy file is ignored
+with a warning. Generated runtime configuration always uses TOML.
 
 ### Plugin source formats
 

@@ -16,7 +16,7 @@
 - Off by default. `chronicler.recall.enabled: true` grants it to top-level sessions; it follows the setting live through the settings-gated built-in reconcile.
 - Independent of `memory.backend`: it coexists with `recall`/`retain` from Hindsight or Mnemopi, and with Local memory.
 - Task subagents get it only when their explicit tool list names `chronicle_recall`. Restricted tool lists are never widened with it.
-- Advisors get it only when their `WATCHDOG.yml` `tools:` list names it; the default advisor roster adds `recall`, not `chronicle_recall`.
+- Advisors get it only when their `WATCHDOG.toml` `tools:` list names it; the default advisor roster adds `recall`, not `chronicle_recall`.
 - Nothing is injected at session start: no system-prompt section, no first-turn context, no compaction context.
 
 ## Inputs

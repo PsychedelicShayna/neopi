@@ -59,7 +59,7 @@ async function createSession(
 		}),
 		sessionManager,
 		settings: Settings.isolated({ "compaction.enabled": false }),
-		modelRegistry: new ModelRegistry(auth, path.join(dir, `${name}-models.yml`)),
+		modelRegistry: new ModelRegistry(auth, path.join(dir, `${name}-models.toml`)),
 	});
 	cleanups.push(async () => {
 		await session.dispose();

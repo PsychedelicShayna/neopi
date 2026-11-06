@@ -6,10 +6,10 @@ import { cfgThemeDark } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
-// A write that leaves the persisted value unchanged must not rewrite config.yml: each rewrite is a
+// A write that leaves the persisted value unchanged must not rewrite config.toml: each rewrite is a
 // read, fsync, and rename that also wakes every other process watching the file.
 describe("Settings no-op saves", () => {
 	let state: SettingsTestState | undefined;
@@ -34,19 +34,19 @@ describe("Settings no-op saves", () => {
 		tempDir.removeSync();
 	});
 
-	const configPath = () => path.join(agentDir, "config.yml");
+	const configPath = () => path.join(agentDir, "config.toml");
 
-	/** Backdates config.yml so any rewrite is visible in its mtime; returns the bytes and mtime. */
+	/** Backdates config.toml so any rewrite is visible in its mtime; returns the bytes and mtime. */
 	function snapshotConfig(): { text: string; mtimeMs: number } {
 		const past = new Date(Date.now() - 3_600_000);
 		fs.utimesSync(configPath(), past, past);
 		return { text: fs.readFileSync(configPath(), "utf8"), mtimeMs: fs.statSync(configPath()).mtimeMs };
 	}
 
-	it("re-setting persisted values, entries, and model roles leaves config.yml untouched", async () => {
+	it("re-setting persisted values, entries, and model roles leaves config.toml untouched", async () => {
 		await Bun.write(
 			configPath(),
-			YAML.stringify({
+			stringifySettingsToml({
 				theme: { dark: "titanium" },
 				retry: { fallbackChains: { slow: ["user/slow"] } },
 				modelRoles: { default: "openai/gpt-5" },
@@ -66,7 +66,7 @@ describe("Settings no-op saves", () => {
 		);
 	});
 
-	it("skips a save whose merged YAML matches the file, while a real change still writes", async () => {
+	it("skips a save whose merged TOML matches the file, while a real change still writes", async () => {
 		const settings = await Settings.loadIsolated({ agentDir, cwd });
 		cfgThemeDark.set(settings, "anthracite");
 		await settings.flush();
@@ -82,6 +82,6 @@ describe("Settings no-op saves", () => {
 		cfgThemeDark.set(settings, "titanium");
 		await settings.flush();
 		expect(fs.statSync(configPath()).mtimeMs).toBeGreaterThan(before.mtimeMs);
-		expect(YAML.parse(fs.readFileSync(configPath(), "utf8"))).toEqual({ theme: { dark: "titanium" } });
+		expect(parseSettingsToml(fs.readFileSync(configPath(), "utf8"))).toEqual({ theme: { dark: "titanium" } });
 	});
 });

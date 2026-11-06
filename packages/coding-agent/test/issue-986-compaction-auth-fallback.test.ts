@@ -73,7 +73,7 @@ describe("issue #986 compaction auth fallback", () => {
 		if (options?.configureFallbackAuth !== false) {
 			authStorage.keys.setRuntime(fallbackModel.provider, "anthropic-token");
 		}
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 
 		session = new AgentSession({
 			agent,
@@ -148,7 +148,7 @@ describe("issue #986 compaction auth fallback", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime(currentModel.provider, "openai-token");
 		authStorage.keys.setRuntime(crossProviderModel.provider, "anthropic-token");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

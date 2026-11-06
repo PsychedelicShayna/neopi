@@ -6,8 +6,8 @@ import * as path from "node:path";
 import { getActiveProfile, getAgentDir, getProfileRootDir } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
-import { JSONC, YAML } from "bun";
+import { importLegacyYaml, readTomlConfigSync, writeTomlConfigSync } from "@oh-my-pi/pi-utils/settings-toml";
+import { JSONC } from "bun";
 import { formatKeyHints } from "./key-hint-format";
 import {
 	canonicalKeyId,
@@ -540,13 +540,11 @@ function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
 	return ordered;
 }
 
-const KEYBINDINGS_YML = "keybindings.yml";
-const KEYBINDINGS_YAML = "keybindings.yaml";
-const LEGACY_KEYBINDINGS_JSON = "keybindings.json";
+const KEYBINDINGS_TOML = "keybindings.toml";
 
-interface KeybindingsConfigPaths {
-	readPath: string;
-	writeBackPath: string;
+function legacyKeybindingsPaths(filePath: string): string[] {
+	const base = filePath.slice(0, -".toml".length);
+	return [`${base}.yml`, `${base}.yaml`, `${base}.json`];
 }
 
 /** Controls inherited keybinding lookup when creating a manager for a named profile. */
@@ -555,57 +553,30 @@ export interface KeybindingsCreateOptions {
 	inheritedAgentDir?: string;
 }
 
-/**
- * Load raw config from a file synchronously.
- * Returns parsed JSON/YAML or null if file doesn't exist or is invalid.
- */
-function loadRawConfig(filePath: string): unknown {
-	try {
-		const content = fs.readFileSync(filePath, "utf-8");
-		if (filePath.endsWith(".json")) {
-			return JSONC.parse(content);
-		}
-		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
-			return YAML.parse(content);
-		}
-		throw new Error(`Unsupported keybindings config extension: ${filePath}`);
-	} catch (error) {
-		if (isEnoent(error)) {
-			return null;
-		}
-		logger.warn("Failed to parse keybindings config", { path: filePath, error: String(error) });
-		return null;
+/** Parse old formats only at the one-time import boundary. */
+function importLegacyKeybindings(content: string, filePath: string): Record<string, unknown> {
+	const parsed = filePath.endsWith(".json") ? JSONC.parse(content) : importLegacyYaml(content, filePath);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("Expected a keybindings mapping");
 	}
+	return orderKeybindingsConfig(migrateKeybindingNames(parsed).config);
 }
 
 export function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): boolean {
+	filePath = filePath.replace(/\.(?:yml|yaml|json)$/, ".toml");
 	try {
-		fs.writeFileSync(filePath, stringifyYamlConfig(config), "utf-8");
-		logger.debug("Migrated keybindings config", { path: filePath });
+		let source = "";
+		try {
+			source = fs.readFileSync(filePath, "utf8");
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		writeTomlConfigSync(filePath, config, source);
 		return true;
-	} catch (error) {
-		logger.warn("Failed to write migrated keybindings config", { path: filePath, error: String(error) });
+	} catch {
+		logger.warn("Failed to write keybindings config", { path: filePath });
 		return false;
 	}
-}
-
-function resolveKeybindingsConfigPaths(agentDir: string): KeybindingsConfigPaths {
-	const ymlPath = path.join(agentDir, KEYBINDINGS_YML);
-	if (fs.existsSync(ymlPath)) {
-		return { readPath: ymlPath, writeBackPath: ymlPath };
-	}
-
-	const yamlPath = path.join(agentDir, KEYBINDINGS_YAML);
-	if (fs.existsSync(yamlPath)) {
-		return { readPath: yamlPath, writeBackPath: yamlPath };
-	}
-
-	const jsonPath = path.join(agentDir, LEGACY_KEYBINDINGS_JSON);
-	if (fs.existsSync(jsonPath)) {
-		return { readPath: jsonPath, writeBackPath: ymlPath };
-	}
-
-	return { readPath: ymlPath, writeBackPath: ymlPath };
 }
 
 function mergeKeybindingsConfig(
@@ -631,18 +602,15 @@ function loadMergedKeybindingsConfig(
 	profilePath: string;
 	inheritedPath: string | undefined;
 } {
-	const profilePaths = resolveKeybindingsConfigPaths(agentDir);
-	const profile = loadKeybindingsConfig(profilePaths.readPath, profilePaths.writeBackPath);
+	const profile = loadKeybindingsConfig(path.join(agentDir, KEYBINDINGS_TOML), true);
 	const inheritedAgentDir = resolveInheritedAgentDir(agentDir, options);
 	if (!inheritedAgentDir) {
 		return { config: profile.config, profilePath: profile.persistedPath, inheritedPath: undefined };
 	}
 
-	const inheritedPaths = resolveKeybindingsConfigPaths(inheritedAgentDir);
-	// Read-only: a named-profile process must never write migration output into
-	// the default profile's agent dir. Name migration still applies in-memory;
-	// the on-disk migration happens when the default profile itself launches.
-	const inherited = loadKeybindingsConfig(inheritedPaths.readPath, undefined);
+	// A named-profile process reads inherited legacy bindings without writing to
+	// the default profile. Its own launch performs that profile's import.
+	const inherited = loadKeybindingsConfig(path.join(inheritedAgentDir, KEYBINDINGS_TOML), false);
 	return {
 		config: mergeKeybindingsConfig(inherited.config, profile.config),
 		profilePath: profile.persistedPath,
@@ -650,38 +618,29 @@ function loadMergedKeybindingsConfig(
 	};
 }
 
-/**
- * Load and migrate keybindings config.
- * Legacy JSON is read for compatibility, but successful write-back goes to YAML.
- */
+/** Canonical TOML wins; legacy formats are imported once without changing them. */
 function loadKeybindingsConfig(
 	filePath: string,
-	writeBackPath: string | undefined,
-): {
-	config: KeybindingsConfig;
-	persistedPath: string;
-} {
-	const rawConfig = loadRawConfig(filePath);
-
-	if (rawConfig === null) {
+	migrate = false,
+): { config: KeybindingsConfig; persistedPath: string } {
+	try {
+		const loaded = readTomlConfigSync(filePath, {
+			legacyPaths: legacyKeybindingsPaths(filePath),
+			parseLegacy: importLegacyKeybindings,
+			migrate,
+		});
+		if (!loaded) return { config: {}, persistedPath: filePath };
+		const { config, migrated } = migrateKeybindingNames(loaded.data);
+		if (migrate && migrated) writeKeybindingsConfig(filePath, orderKeybindingsConfig(config));
+		return { config, persistedPath: filePath };
+	} catch {
+		logger.warn("Failed to load keybindings config", { path: filePath });
 		return { config: {}, persistedPath: filePath };
 	}
-
-	const { config: migratedConfig, migrated } = migrateKeybindingNames(rawConfig);
-	const shouldWriteBack = writeBackPath !== undefined && (migrated || writeBackPath !== filePath);
-	if (shouldWriteBack) {
-		const ordered = orderKeybindingsConfig(migratedConfig);
-		const persistedPath = writeKeybindingsConfig(writeBackPath, ordered) ? writeBackPath : filePath;
-		return { config: migratedConfig, persistedPath };
-	}
-
-	return { config: migratedConfig, persistedPath: filePath };
 }
 
-/** Migrate legacy keybinding names and JSON configuration in an agent directory. */
 function migrateKeybindingsConfigFile(agentDir: string): void {
-	const { readPath, writeBackPath } = resolveKeybindingsConfigPaths(agentDir);
-	loadKeybindingsConfig(readPath, writeBackPath);
+	loadKeybindingsConfig(path.join(agentDir, KEYBINDINGS_TOML), true);
 }
 
 const FOLLOW_UP_KEYBINDING: AppKeybinding = "app.message.followUp";
@@ -741,8 +700,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	}
 
 	/**
-	 * Create from config files at agentDir/keybindings.yml and the default profile.
-	 * Legacy keybindings.json is migrated to keybindings.yml on load.
+	 * Create from agentDir/keybindings.toml and inherited default-profile bindings.
+	 * Legacy YAML/JSON is imported once without changing the source file.
 	 */
 	static create(agentDir: string = getAgentDir(), options: KeybindingsCreateOptions = {}): KeybindingsManager {
 		const { config: userBindings, profilePath, inheritedPath } = loadMergedKeybindingsConfig(agentDir, options);
@@ -774,7 +733,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	/** Write one action's chords into the profile file and reload. */
 	setPersisted(actionId: string, keys: string[]): boolean {
 		if (!this.#configPath) return false;
-		const next = { ...this.#userBindings, [actionId]: keys } as KeybindingsConfig;
+		const { config } = loadKeybindingsConfig(this.#configPath, true);
+		const next = { ...config, [actionId]: keys } as KeybindingsConfig;
 		if (!writeKeybindingsConfig(this.#configPath, next)) return false;
 		this.reload();
 		return true;
@@ -815,11 +775,8 @@ export class KeybindingsManager extends TuiKeybindingsManager {
 	/**
 	 * Load user bindings from a file, migrating old names if needed.
 	 */
-	static #loadFromFile(
-		filePath: string,
-		writeBackPath?: string,
-	): { config: KeybindingsConfig; persistedPath: string } {
-		return loadKeybindingsConfig(filePath, writeBackPath);
+	static #loadFromFile(filePath: string, migrate = false): { config: KeybindingsConfig; persistedPath: string } {
+		return loadKeybindingsConfig(filePath, migrate);
 	}
 }
 

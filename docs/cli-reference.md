@@ -75,7 +75,7 @@ Argument handling:
 | `--allow-home` | Allow starting in `~` without auto-switching to a temp dir. |
 | `--profile <name>` | Use an isolated profile for auth, sessions, settings, and caches. |
 | `--alias <name>` | Create a shell shortcut for a named profile and exit; requires `--profile` or `OMP_PROFILE`. |
-| `--config <file>` | Load an extra `config.yml`-style overlay for this run (repeatable). |
+| `--config <file>` | Load an extra TOML settings overlay for this run (repeatable). Legacy YAML paths import once to a sibling `.toml`; an existing TOML sibling wins. |
 | `--session-dir <dir>` | Directory for session storage and lookup. |
 | `--no-session` | Don't save the session (ephemeral). |
 | `--new-session` | Start a new session in the default per-cwd session directory (or `--session-dir`), ignoring `autoResume`. Cannot be combined with `--continue`, `--resume`/`--session`, or `--fork`. |

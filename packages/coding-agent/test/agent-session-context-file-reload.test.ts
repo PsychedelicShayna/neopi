@@ -39,7 +39,7 @@ async function expectContextReload(reset: (session: AgentSession) => Promise<unk
 	const api = `context-reload-${marker}`;
 	const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 	authStorage.keys.setRuntime("managed-primary", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 
 	const { session } = await createAgentSession({
 		cwd: tempDir.path(),

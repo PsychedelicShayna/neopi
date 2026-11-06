@@ -3,7 +3,7 @@
  *
  * Renders a prelude (system prompt, model/thinking config, tool inventory)
  * followed by the message history as per-message markdown headings: `## User`,
- * `## Assistant` (with `<thinking>` blocks and `### Tool Call: <name>` + YAML
+ * `## Assistant` (with `<thinking>` blocks and `### Tool Call: <name>` + TOML
  * args), `### Tool Result: <name>`, and the execution/summary sections.
  * `/dump all` renders each persisted subagent as its own `# Subagent: <path>` document.
  */
@@ -13,7 +13,7 @@ import { renderDelimitedThinking, renderToolInventory } from "@oh-my-pi/pi-ai/di
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { getPromptAssetProvenance } from "@oh-my-pi/pi-utils/prompt-assets";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import {
 	type BashExecutionMessage,
@@ -229,8 +229,8 @@ function appendAssistantContent(lines: string[], content: AssistantMessage["cont
 					hasArgs = true;
 				}
 				if (hasArgs) {
-					lines.push("```yaml");
-					lines.push(YAML.stringify(args, null, 2).trimEnd());
+					lines.push("```toml");
+					lines.push(stringifySettingsToml(args).trimEnd());
 					lines.push("```\n");
 				}
 			}

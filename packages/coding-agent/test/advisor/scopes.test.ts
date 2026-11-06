@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -54,15 +55,20 @@ describe("persisted advisor file scopes", () => {
 	});
 
 	it("keeps every file in load order while a disabled file contributes neither advisors nor shared configuration", async () => {
-		const user = path.join(agentDir, "WATCHDOG.yaml");
-		const project = path.join(root, "project", "WATCHDOG.yml");
-		const nested = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(user, "advisors:\n  - name: User\n");
+		const user = path.join(agentDir, "WATCHDOG.toml");
+		const project = path.join(root, "project", "WATCHDOG.toml");
+		const nested = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(user, stringifySettingsToml({ advisors: [{ name: "User" }] }));
 		await Bun.write(
 			project,
-			"enabled: false\ninstructions: Hidden baseline\nmaxNotesPerUpdate: 7\nadvisors:\n  - name: Root\n",
+			stringifySettingsToml({
+				enabled: false,
+				instructions: "Hidden baseline",
+				maxNotesPerUpdate: 7,
+				advisors: [{ name: "Root" }],
+			}),
 		);
-		await Bun.write(nested, "advisors:\n  - name: Nested\n");
+		await Bun.write(nested, stringifySettingsToml({ advisors: [{ name: "Nested" }] }));
 		const result = await discoverAdvisorConfigs(cwd, agentDir);
 		expect(result.files).toEqual([
 			{ path: user, scope: "user" },
@@ -76,24 +82,24 @@ describe("persisted advisor file scopes", () => {
 	});
 
 	it("keeps the implicit default for instructions-only files but not an all-disabled configuration", async () => {
-		const file = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(file, "instructions: Shared guidance\n");
+		const file = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ instructions: "Shared guidance" }));
 		expect(advisorRosterForRuntime(await discoverAdvisorConfigs(cwd, agentDir))).toBeUndefined();
-		await Bun.write(file, "enabled: false\ninstructions: Shared guidance\n");
+		await Bun.write(file, stringifySettingsToml({ enabled: false, instructions: "Shared guidance" }));
 		expect(advisorRosterForRuntime(await discoverAdvisorConfigs(cwd, agentDir))).toEqual([]);
 	});
 
 	it("persists whole-file toggles without losing comments, extensions, or each advisor's own disabled state", async () => {
-		const file = path.join(cwd, "WATCHDOG.yml");
+		const file = path.join(cwd, "WATCHDOG.toml");
 		await Bun.write(
 			file,
-			"# Keep this comment\nfuture: keep\nadvisors:\n  - name: Active\n  - name: Paused\n    enabled: false\n",
+			'# Keep this comment\nfuture = "keep"\n[[advisors]]\nname = "Active"\n[[advisors]]\nname = "Paused"\nenabled = false\n',
 		);
 		let doc = await loadWatchdogConfigFile(file);
 		doc.enabled = false;
 		await saveWatchdogConfigFile(file, doc);
 		expect(await Bun.file(file).text()).toContain("# Keep this comment");
-		expect(await Bun.file(file).text()).toContain("future: keep");
+		expect(await Bun.file(file).text()).toContain('future = "keep"');
 		expect((await discoverAdvisorConfigs(cwd, agentDir)).advisors).toEqual([]);
 		doc = await loadWatchdogConfigFile(file);
 		expect(doc.enabled).toBe(false);
@@ -106,12 +112,12 @@ describe("persisted advisor file scopes", () => {
 			["Active", undefined],
 			["Paused", false],
 		]);
-		expect(serializeWatchdogConfig({ advisors: [], enabled: false })).toBe("enabled: false\n");
+		expect(serializeWatchdogConfig({ advisors: [], enabled: false })).toBe(stringifySettingsToml({ enabled: false }));
 	});
 
 	it("stops the final file's live advisors on apply and restores them after re-enabling", async () => {
-		const file = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Reviewer\n");
+		const file = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Reviewer" }] }));
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Missing bundled model");
 		const auth = createInMemoryAuthStorage();

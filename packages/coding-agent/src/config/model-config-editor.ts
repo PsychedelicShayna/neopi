@@ -4,7 +4,7 @@ import { getModelsConfigSchemaBundle } from "./models-config-schema-bundle";
 import type { ConfigFile } from "./config-file";
 import type { ModelsConfig } from "./models-config-schema";
 
-/** Mutate only the selected entry, keeping provider settings and unknown fields intact. */
+/** Edit native models.toml through ConfigFile's comment-preserving, stale-safe saves. */
 export class ModelConfigEditor {
 	#snapshot: ModelsConfig | null | undefined;
 	constructor(readonly file: ConfigFile<ModelsConfig>) {}

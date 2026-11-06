@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import { classifyDifficulty } from "../src/auto-thinking/classifier";
 import { readEffortContext, renderEffortContext } from "../src/auto-thinking/context";
 import {
@@ -46,7 +46,7 @@ const model = buildModel({
 function registry(models: Model[] = [model]): ModelRegistry {
 	const storage = createInMemoryAuthStorage();
 	storage.keys.setRuntime("mock", "test-key");
-	const result = new ModelRegistry(storage, "/nonexistent/effort-models.yml");
+	const result = new ModelRegistry(storage, "/nonexistent/effort-models.toml");
 	vi.spyOn(result, "getAvailable").mockReturnValue(models);
 	return result;
 }
@@ -554,8 +554,15 @@ describe("implicit effort policy resolution", () => {
 		const temp = TempDir.createSync("@pi-effort-loaded-regex-");
 		try {
 			await Bun.write(
-				path.join(temp.path(), "config.yml"),
-				"effort:\n  rules:\n    - selector: 're:['\n      allowed: [xhigh]\n    - selector: 'MOCK/{CLASSIFIER,OTHER}'\n      allowed: [low]\n",
+				path.join(temp.path(), "config.toml"),
+				stringifySettingsToml({
+					effort: {
+						rules: [
+							{ selector: "re:[", allowed: ["xhigh"] },
+							{ selector: "MOCK/{CLASSIFIER,OTHER}", allowed: ["low"] },
+						],
+					},
+				}),
 			);
 			const settings = await Settings.loadReadOnly({ agentDir: temp.path(), cwd: temp.path() });
 			expect(matchEffortRule(settings, model)?.allowed).toEqual([Effort.Low]);

@@ -69,7 +69,7 @@ describe("issue #6114 fresh launch default role from discovery-only local provid
 		// masking the still-unresolved configured local default. Without the retry
 		// the session silently starts on the bundled fallback and never switches.
 		authStorage.keys.setRuntime("openai", "test-openai-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), {
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), {
 			fetch: mockLmStudio(["qwen3-coder-30b"]),
 		});
 

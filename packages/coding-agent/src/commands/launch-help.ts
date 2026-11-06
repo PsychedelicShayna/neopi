@@ -61,7 +61,7 @@ export const launchHelp = {
 			options: ["text", "json", "rpc", "acp", "rpc-ui"],
 		}),
 		config: Flags.string({
-			description: "Load an extra config.yml-style overlay for this run (repeatable)",
+			description: "Load an extra TOML settings overlay for this run (repeatable; legacy YAML imports once)",
 			multiple: true,
 		}),
 		"add-dir": Flags.string({

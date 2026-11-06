@@ -27,12 +27,11 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
-	MAIN_CONFIG_FILENAMES,
 	procmgr,
 } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
-import { JSONC, YAML } from "bun";
+import { JSONC } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
@@ -40,10 +39,7 @@ import { loadCapability } from "../discovery";
 import { AgentStorage } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
-import { writeFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
-import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
-import { patchYamlDocument, type YamlPathMutation } from "./yaml-document";
 import {
 	type AnySetting,
 	type Setting,
@@ -71,12 +67,12 @@ import { assertValidSelectorPattern } from "./selector-pattern";
 import { cfgShellPath } from "../exec/settings";
 import {
 	CONFIG_TOML,
-	overlaySettingsToml,
 	parseSettingsToml,
-	patchSettingsToml,
 	settingsTomlSource,
 	SETTINGS_TOML,
-} from "./settings-toml";
+	readTomlConfig,
+	writeTomlConfig,
+} from "@oh-my-pi/pi-utils/settings-toml";
 
 export interface RuntimeModelOverrides {
 	modelRoles: Record<string, string>;
@@ -136,12 +132,12 @@ export interface SettingsScopeDetails {
 	shadowed: boolean;
 }
 
-/** Raw settings object as stored in YAML */
+/** Raw settings object decoded from the canonical TOML document. */
 export interface RawSettings {
 	[key: string]: unknown;
 }
 
-type YamlContentGeneration = {
+type SettingsContentGeneration = {
 	kind: "content";
 	source: string;
 	mtimeNs: bigint;
@@ -150,25 +146,25 @@ type YamlContentGeneration = {
 	size: bigint;
 };
 
-type YamlGeneration = { kind: "missing" } | YamlContentGeneration | { kind: "unreadable" };
+type SettingsGeneration = { kind: "missing" } | SettingsContentGeneration | { kind: "unreadable" };
 
-type PendingYamlMutation = {
-	generation: YamlGeneration;
+type PendingSettingsMutation = {
+	generation: SettingsGeneration;
 	baseValue: unknown;
 };
 
-type YamlLoadResult =
+type SettingsLoadResult =
 	| { kind: "missing" }
-	| { kind: "loaded"; settings: RawSettings; generation: YamlContentGeneration }
-	| { kind: "invalid"; error: unknown; generation: YamlContentGeneration; backupPath?: string }
+	| { kind: "loaded"; settings: RawSettings; generation: SettingsContentGeneration }
+	| { kind: "invalid"; error: unknown; generation: SettingsContentGeneration; backupPath?: string }
 	| { kind: "unreadable"; error: unknown };
 
-type LockedYamlLoadResult = {
+type LockedSettingsLoadResult = {
 	settings: RawSettings | null;
-	generation: YamlGeneration;
+	generation: SettingsGeneration;
 };
 
-function yamlGenerationFromLoadResult(result: YamlLoadResult): YamlGeneration {
+function settingsGenerationFromLoadResult(result: SettingsLoadResult): SettingsGeneration {
 	switch (result.kind) {
 		case "missing":
 			return { kind: "missing" };
@@ -180,7 +176,7 @@ function yamlGenerationFromLoadResult(result: YamlLoadResult): YamlGeneration {
 	}
 }
 
-function yamlGenerationsMatch(left: YamlGeneration, right: YamlGeneration): boolean {
+function settingsGenerationsMatch(left: SettingsGeneration, right: SettingsGeneration): boolean {
 	switch (left.kind) {
 		case "missing":
 			return right.kind === "missing";
@@ -198,47 +194,14 @@ function yamlGenerationsMatch(left: YamlGeneration, right: YamlGeneration): bool
 	}
 }
 
-function collectYamlMutations(
-	before: unknown,
-	after: unknown,
-	path: readonly string[],
-	mutations: YamlPathMutation[],
-): void {
-	if (Bun.deepEquals(before, after)) return;
-	if (isRecord(before) && isRecord(after)) {
-		const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-		for (const key of keys) collectYamlMutations(before[key], after[key], [...path, key], mutations);
-		return;
-	}
-	if (after === undefined) mutations.push({ path, operation: "delete" });
-	else mutations.push({ path, operation: "set", value: after });
-}
-
-function yamlMigrationMutations(source: string, settings: RawSettings): YamlPathMutation[] | null {
-	try {
-		const parsed: unknown = YAML.parse(source);
-		const raw = parsed === null || parsed === undefined ? {} : parsed;
-		if (!isRecord(raw)) return null;
-		const mutations: YamlPathMutation[] = [];
-		collectYamlMutations(raw, settings, [], mutations);
-		return mutations;
-	} catch {
-		return null;
-	}
-}
-
-type MainYamlReadResult = {
+type MainSettingsReadResult = {
 	settings: RawSettings | null;
 	configPath: string | null;
-	toml?: RawSettings;
-	tomlPath?: string;
 };
 
 type ProjectSettingsReadResult = {
 	settings: RawSettings;
 	fileSettings: RawSettings;
-	toml: RawSettings;
-	tomlPath?: string;
 	shellPathSource: string | undefined;
 	/** Files that supplied merged project-level settings items. */
 	sourcePaths: string[];
@@ -272,7 +235,7 @@ interface PendingSettingsReceipt {
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
-	/** Agent directory for config.yml/config.yaml storage */
+	/** Agent directory for canonical config.toml storage. */
 	agentDir?: string;
 	/** Don't persist to disk (for tests) */
 	inMemory?: boolean;
@@ -280,7 +243,7 @@ export interface SettingsOptions {
 	readOnly?: boolean;
 	/** Initial runtime overrides, keyed by setting id (legacy ids migrate; values are checked like `override`). */
 	overrides?: Readonly<Record<string, unknown>>;
-	/** Extra config.yml-style overlays loaded after global/project settings */
+	/** Extra TOML overlays loaded after global/project settings; YAML paths import once. */
 	configFiles?: string[];
 }
 
@@ -363,14 +326,14 @@ function isPathPrefix(prefix: readonly string[], segments: readonly string[]): b
  * of a record written whole was written at its latest value.
  */
 function pendingChangeApplies(
-	mutation: PendingYamlMutation | undefined,
+	mutation: PendingSettingsMutation | undefined,
 	segments: readonly string[],
 	current: RawSettings,
-	generation: YamlGeneration,
+	generation: SettingsGeneration,
 	written: readonly (readonly string[])[],
 ): boolean {
 	if (mutation === undefined || mutation.generation.kind === "unreadable") return false;
-	if (yamlGenerationsMatch(mutation.generation, generation)) return true;
+	if (settingsGenerationsMatch(mutation.generation, generation)) return true;
 	const onDisk: RawSettings = { value: getByPath(current, segments) };
 	const captured: RawSettings = { value: mutation.baseValue };
 	for (const writtenPath of written) {
@@ -415,8 +378,6 @@ function projectLayerForMerge(project: RawSettings): RawSettings {
 interface OwnLayers {
 	global: RawSettings;
 	project: RawSettings;
-	globalToml?: RawSettings;
-	projectToml?: RawSettings;
 	configOverlay: RawSettings;
 	overrides: RawSettings;
 	session: RawSettings;
@@ -429,7 +390,6 @@ export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides" | "s
 interface LayerRefresh {
 	layer: "global" | "project" | "configOverlay";
 	settings: RawSettings;
-	toml?: RawSettings;
 	source: string;
 	commit(): void;
 }
@@ -701,17 +661,15 @@ export class Settings {
 	#storage: AgentStorage | null = null;
 
 	#configFiles: string[] = [];
-	/** Global settings from config.yml/config.yaml */
+	/** Global settings from config.toml. */
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
 	#project: RawSettings = {};
-	#globalToml: RawSettings = {};
-	#projectToml: RawSettings = {};
-	/** Last successfully loaded native .omp/config.yml contents. */
+	/** Last successfully loaded native .omp/config.toml contents. */
 	#projectFileSettings: RawSettings = {};
 	/** Logical config paths whose malformed targets were moved aside. */
-	#quarantinedYamlTargets = new Map<string, string>();
-	/** Extra config.yml-style overlays passed by CLI */
+	#quarantinedSettingsTargets = new Map<string, string>();
+	/** Extra TOML overlays passed by CLI. */
 	#configOverlay: RawSettings = {};
 	/** Project settings file that most recently supplied shellPath. */
 	#projectShellPathSource: string | undefined;
@@ -775,8 +733,6 @@ export class Settings {
 	#modifiedProjectValues = new Map<string, readonly string[]>();
 	/** Native-file values observed before pending project writes, checked again under its write lock. */
 	#modifiedProjectMutations = new Map<string, { segments: readonly string[]; baseValue: unknown }>();
-	#globalTomlPath?: string;
-	#projectTomlPath?: string;
 	#pairedProjectRoleMutations = new Set<string>();
 	#activeReceipt?: PendingSettingsReceipt;
 	#globalReceipts = new Map<string, PendingSettingsReceipt>();
@@ -792,9 +748,9 @@ export class Settings {
 	/** Fallback chains whose selectors and effort metadata share one conflict decision. */
 	#pairedGlobalFallbackMutations = new Set<string>();
 	/** On-disk generations and prior values observed before each pending global mutation, keyed like {@link #modified}. */
-	#modifiedPathMutations = new Map<string, PendingYamlMutation>();
-	#modifiedGlobalModelRoleMutations = new Map<string, PendingYamlMutation>();
-	#modifiedGlobalRoleEffortMutations = new Map<string, PendingYamlMutation>();
+	#modifiedPathMutations = new Map<string, PendingSettingsMutation>();
+	#modifiedGlobalModelRoleMutations = new Map<string, PendingSettingsMutation>();
+	#modifiedGlobalRoleEffortMutations = new Map<string, PendingSettingsMutation>();
 	/** Changes whenever a live API mutates a persisted layer. */
 	#persistedMutationGeneration = 0;
 	/**
@@ -832,7 +788,7 @@ export class Settings {
 	private constructor(options: SettingsOptions = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
-		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, CONFIG_TOML);
 		const configFiles = process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? [];
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
@@ -899,8 +855,8 @@ export class Settings {
 	}
 
 	/**
-	 * Load effective settings from config.yml and project providers without
-	 * opening agent.db, migrating legacy settings, or writing marker files.
+	 * Load config.toml and project providers without opening agent.db or writing
+	 * marker files. YAML-only sources still receive their non-destructive import.
 	 */
 	static loadReadOnly(options: SettingsOptions = {}): Promise<Settings> {
 		return Promise.try(() => new Settings({ ...options, readOnly: true }).#loadReadOnly());
@@ -1018,14 +974,17 @@ export class Settings {
 	 * (path-scoped entries resolved for this cwd), or `undefined` when unset — the handle
 	 * supplies the default. Read settings through their handles, not this.
 	 *
-	 * A configured `null` is treated as unset: YAML writes `null` for a key left
-	 * without a value (`fallbackChains:`). The handle supplies its declared default,
+	 * A configured `null` is treated as unset (including imported legacy clears).
+	 * The handle supplies its declared default,
 	 * which can itself be null for an optional selection such as advisor.activationSet.
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
-		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
-			configuredValue(this.#session, setting, this.#cwd) === undefined) {
+		if (
+			setting.roleScoped &&
+			configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
+			configuredValue(this.#session, setting, this.#cwd) === undefined
+		) {
 			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
 			if (roleValue !== undefined) return roleValue;
 		}
@@ -1124,13 +1083,20 @@ export class Settings {
 
 	/** Bind only at a session identity change; changing cwd must not rebind this path. */
 	async attachSessionFile(sessionFile: string | undefined): Promise<void> {
-		const nextPath = sessionFile?.endsWith(".jsonl") ? path.join(sessionFile.slice(0, -6), "settings.yml") : undefined;
+		const nextPath = sessionFile?.endsWith(".jsonl")
+			? path.join(sessionFile.slice(0, -6), "settings.toml")
+			: undefined;
 		if (nextPath === this.#sessionSettingsPath) return;
 		await this.saveSessionSettings();
 		let loaded: RawSettings = {};
 		if (nextPath) {
 			try {
-				const parsed: unknown = YAML.parse(await Bun.file(nextPath).text());
+				const parsed: unknown =
+					(
+						await readTomlConfig(nextPath, {
+							legacyPaths: [nextPath.replace(/\.toml$/, ".yml"), nextPath.replace(/\.toml$/, ".yaml")],
+						})
+					)?.data ?? {};
 				if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${nextPath}`);
 				assertKnownSettingPaths(parsed);
 				for (const setting of allSettings()) {
@@ -1153,7 +1119,13 @@ export class Settings {
 	async saveSessionSettings(): Promise<void> {
 		if (!this.#sessionDirty || !this.#sessionSettingsPath) return;
 		const snapshot = this.#session;
-		await writeFileAtomically(this.#sessionSettingsPath, stringifyYamlConfig(snapshot));
+		let source: string | undefined;
+		try {
+			source = await Bun.file(this.#sessionSettingsPath).text();
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		await writeTomlConfig(this.#sessionSettingsPath, snapshot, source);
 		if (snapshot === this.#session) this.#sessionDirty = false;
 	}
 
@@ -1185,7 +1157,7 @@ export class Settings {
 		}
 		if (layer === "override") this.#softPins.delete(setting);
 		const prev = setting.get(this);
-		// Re-setting the persisted global value is a no-op for config.yml: staging it would still
+		// Re-setting the persisted global value is a no-op for config.toml: staging it would still
 		// queue a full re-read, rewrite, fsync, and rename of the file.
 		const persistGlobal =
 			layer === "global" && (this.#activeReceipt !== undefined || !this.#globalWriteIsNoop(setting.segments, value));
@@ -1228,7 +1200,7 @@ export class Settings {
 		if (setting.type !== "record") throw new Error(`Setting ${setting.id} is not a record`);
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
-		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
+		// An entry re-set to its persisted value stages nothing (no config.toml rewrite).
 		const staged =
 			this.#activeReceipt !== undefined ||
 			(value !== undefined
@@ -1454,7 +1426,7 @@ export class Settings {
 	}
 
 	#persistedLayers(): RawSettings[] {
-		return [this.#global, this.#globalToml, this.#project, this.#projectToml, this.#configOverlay];
+		return [this.#global, this.#project, this.#configOverlay];
 	}
 
 	#notifyPersistedLayersChange(): void {
@@ -1490,7 +1462,7 @@ export class Settings {
 	}
 
 	/**
-	 * Apply on-disk edits live: watch the directories holding config.yml, the
+	 * Apply on-disk edits live: watch the directories holding config.toml, the
 	 * project settings files, and `--config` overlays, and run a debounced
 	 * keep-last-good reload (a file that fails to parse or validate keeps its
 	 * layer's last good values). Arming a watch also schedules one reload, so
@@ -1561,7 +1533,7 @@ export class Settings {
 				}
 			}
 		};
-		for (const filename of MAIN_CONFIG_FILENAMES) addFile(path.join(this.#agentDir, filename));
+		for (const filename of ["config.yml", "config.yaml"]) addFile(path.join(this.#agentDir, filename));
 		addFile(path.join(this.#agentDir, SETTINGS_TOML));
 		addFile(path.join(this.#agentDir, CONFIG_TOML));
 		const projectCwd = path.resolve(this.#cwd);
@@ -1572,7 +1544,10 @@ export class Settings {
 		addFile(path.join(projectConfigDir, "settings.json"));
 		addFile(path.join(projectCwd, ".claude", "settings.json"));
 		for (const file of this.#projectSourcePaths) addFile(file);
-		for (const file of this.#configFiles) addFile(file);
+		for (const file of this.#configFiles) {
+			addFile(file);
+			if (/\.ya?ml$/i.test(file)) addFile(file.replace(/\.ya?ml$/i, ".toml"));
+		}
 		return targets;
 	}
 	/** Poll metadata, not config contents: reload only when a source changed or a watch was rearmed. */
@@ -1695,7 +1670,7 @@ export class Settings {
 
 	/**
 	 * Persist one validated native mutation and return the decision made under
-	 * the YAML write lock. A stale intent remains a conflict even when another
+	 * the settings write lock. A stale intent remains a conflict even when another
 	 * writer saved an identical value. Existing setters retain their signatures.
 	 */
 	async persistWithReceipt(mutate: () => void): Promise<SettingsMutationReceipt> {
@@ -1778,7 +1753,6 @@ export class Settings {
 		if (this.#parent) {
 			cloned = (await this.#parent.cloneForCwd(cwd)).overlay();
 			cloned.#project = structuredClone(this.#project);
-			cloned.#projectToml = structuredClone(this.#projectToml);
 		} else {
 			cloned = new Settings({
 				cwd,
@@ -1793,9 +1767,6 @@ export class Settings {
 			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
-		cloned.#globalToml = structuredClone(this.#globalToml);
-		cloned.#globalTomlPath = this.#globalTomlPath;
-		cloned.#projectTomlPath = this.#projectTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		cloned.#session = structuredClone(this.#session);
 		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
@@ -1863,7 +1834,7 @@ export class Settings {
 			const mutationGeneration = this.#persistedMutationGeneration;
 
 			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
-				this.#readExistingMainYaml(false),
+				this.#readExistingMainSettings(false),
 				this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood }),
 				this.#readConfigOverlays(false),
 			]);
@@ -1881,17 +1852,15 @@ export class Settings {
 				const { configPath } = globalResult.value;
 				// A config this instance moved aside as malformed reads as missing until a save
 				// recreates it; keep the last good layer instead of rebuilding it from pending writes.
-				const quarantined = this.#configPath !== null && this.#quarantinedYamlTargets.has(this.#configPath);
+				const quarantined = this.#configPath !== null && this.#quarantinedSettingsTargets.has(this.#configPath);
 				const settings = globalResult.value.settings ?? (quarantined ? structuredClone(this.#global) : {});
 				this.#applyPendingGlobalWrites(settings);
 				refreshed.push({
 					layer: "global",
 					settings,
-					toml: globalResult.value.toml,
-					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
+					source: configPath ?? path.join(this.#agentDir, CONFIG_TOML),
 					commit: () => {
 						this.#configPath = configPath;
-						this.#globalTomlPath = globalResult.value.tomlPath;
 					},
 				});
 			}
@@ -1901,7 +1870,6 @@ export class Settings {
 				refreshed.push({
 					layer: "project",
 					settings: project.settings,
-					toml: project.toml,
 					source: project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd),
 					commit: () => this.#commitProjectRead(project),
 				});
@@ -1925,8 +1893,6 @@ export class Settings {
 			const adopted: LayerRefresh[] = [];
 			for (const refresh of refreshed) {
 				const trial: OwnLayers = { ...layers, [refresh.layer]: refresh.settings };
-				if (refresh.layer === "global") trial.globalToml = refresh.toml;
-				if (refresh.layer === "project") trial.projectToml = refresh.toml;
 				if (keepLastGood && !this.#acceptsLayers(trial, refresh.source)) continue;
 				layers = trial;
 				adopted.push(refresh);
@@ -1938,8 +1904,6 @@ export class Settings {
 			for (const refresh of adopted) refresh.commit();
 			this.#global = layers.global;
 			this.#project = layers.project;
-			this.#globalToml = layers.globalToml ?? {};
-			this.#projectToml = layers.projectToml ?? {};
 			this.#configOverlay = layers.configOverlay;
 			this.#overrides = layers.overrides;
 			for (const setting of settled) this.#softPins.delete(setting);
@@ -2002,8 +1966,6 @@ export class Settings {
 			const candidate: OwnLayers = {
 				global: this.#global,
 				project: project?.settings ?? this.#project,
-				globalToml: this.#globalToml,
-				projectToml: project?.toml ?? this.#projectToml,
 				configOverlay: this.#configOverlay,
 				session: this.#session,
 				overrides:
@@ -2052,8 +2014,8 @@ export class Settings {
 	/** File edited by the configuration UI for a persisted scope. */
 	getConfigFile(scope: "global" | "project" = "global"): string {
 		return scope === "project"
-			? path.join(getProjectAgentDir(this.#cwd), "config.yml")
-			: (this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]));
+			? path.join(getProjectAgentDir(this.#cwd), CONFIG_TOML)
+			: (this.#configPath ?? path.join(this.#agentDir, CONFIG_TOML));
 	}
 
 	/** Resolved absolute paths of the config overlays supplied to this instance. */
@@ -2072,7 +2034,7 @@ export class Settings {
 	}
 
 	/**
-	 * Raw global settings layer (`config.yml`/`config.yaml`), deep-cloned.
+	 * Raw global settings layer (`config.toml`), deep-cloned.
 	 *
 	 * Exposes arbitrary namespaced keys (e.g. an extension's own `piVim` block)
 	 * that the typed, schema-bound {@link get} cannot reach. Used by the legacy
@@ -2086,7 +2048,7 @@ export class Settings {
 	}
 
 	/**
-	 * Raw project settings layer (`.claude/settings.yml`, `.omp/config.yml`,
+	 * Raw project settings layer (`.claude/settings.json`, `.omp/config.toml`,
 	 * etc.), deep-cloned. Companion to {@link getGlobalSettings} for the legacy
 	 * pi `SettingsManager` shim's `getProjectSettings()`; an {@link overlay}
 	 * likewise reports its parent's layer under its own.
@@ -2109,27 +2071,21 @@ export class Settings {
 
 	/** Where the effective `shellPath` comes from, for error messages; an overlay defers to its parent. */
 	#shellPathSource(): string {
-		const tomlSource = (directory: string) => {
-			const canonical = path.join(directory, CONFIG_TOML);
-			return fs.existsSync(canonical) ? canonical : path.join(directory, SETTINGS_TOML);
-		};
 		if (Object.hasOwn(this.#overrides, "shellPath")) return "the runtime settings override";
 		if (Object.hasOwn(this.#configOverlay, "shellPath")) {
 			return this.#overlayShellPathSource ?? "the active config overlay";
 		}
-		if (Object.hasOwn(this.#projectToml, "shellPath")) return tomlSource(getProjectAgentDir(this.#cwd));
 		if (Object.hasOwn(this.#project, "shellPath")) {
 			return this.#projectShellPathSource ?? "the active project configuration";
 		}
-		if (Object.hasOwn(this.#globalToml, "shellPath")) return tomlSource(this.#agentDir);
 		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
-		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		return this.#configPath ?? path.join(this.#agentDir, CONFIG_TOML);
 	}
 
 	/**
 	 * Provenance of the effective `extensions` array for extension-root
 	 * sub-discovery. `"project"` only when a project settings provider owns it
-	 * (any of `.omp/config.yml`, `.omp/settings.json`, `.claude/settings.json`,
+	 * (any of `.omp/config.toml`, `.omp/settings.json`, `.claude/settings.json`,
 	 * … — all merged into the project layer) and no higher user-level layer (a
 	 * `--config` overlay or a runtime override) replaces it; otherwise `"user"`.
 	 * Callers pass this into {@link EffectiveExtensionRoots.configuredLevel} so
@@ -2140,10 +2096,8 @@ export class Settings {
 	extensionsSourceLevel(): "user" | "project" {
 		if (Object.hasOwn(this.#overrides, "extensions")) return "user";
 		if (Object.hasOwn(this.#configOverlay, "extensions")) return "user";
-		if (Object.hasOwn(this.#projectToml, "extensions")) return "project";
 		if (Object.hasOwn(this.#project, "extensions")) return "project";
-		if (this.#parent && !Object.hasOwn(this.#global, "extensions") && !Object.hasOwn(this.#globalToml, "extensions"))
-			return this.#parent.extensionsSourceLevel();
+		if (this.#parent && !Object.hasOwn(this.#global, "extensions")) return this.#parent.extensionsSourceLevel();
 		return "user";
 	}
 
@@ -2176,8 +2130,8 @@ export class Settings {
 		for (const [layer, scope] of [
 			[this.#overrides, "user"],
 			[this.#configOverlay, "user"],
-			[overlaySettingsToml(this.#project, this.#projectToml), "project"],
-			[overlaySettingsToml(this.#global, this.#globalToml), "user"],
+			[this.#project, "project"],
+			[this.#global, "user"],
 		] as const) {
 			if (getByPath(layer, segments) !== undefined) return scope;
 		}
@@ -2322,7 +2276,7 @@ export class Settings {
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const prev = cfgModelRoles.get(this);
-		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
+		// Re-setting the persisted role (or clearing an absent one) stages no config.toml rewrite;
 		// the runtime-override sync below still applies.
 		if (this.#activeReceipt || !this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
 			const current = this.#modelRolesFromLayer(this.#global);
@@ -2527,7 +2481,7 @@ export class Settings {
 			const segments = [...cfgRetryFallbackChains.segments, previousRole];
 			if (
 				!Object.hasOwn(chains, previousRole) ||
-				[this.#globalToml, this.#project, this.#projectToml, this.#configOverlay, this.#overrides].some(
+				[this.#project, this.#configOverlay, this.#overrides].some(
 					layer => getByPath(layer, segments) !== undefined,
 				)
 			) {
@@ -2691,8 +2645,14 @@ export class Settings {
 		};
 		const winner = this.getModelRoleProvenance(role);
 		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
-		return { global: value("global"), project: value("project"), session: value("session"),
-			effective: this.getModelRole(role), winner, shadowed: rank[winner] > rank[scope] };
+		return {
+			global: value("global"),
+			project: value("project"),
+			session: value("session"),
+			effective: this.getModelRole(role),
+			winner,
+			shadowed: rank[winner] > rank[scope],
+		};
 	}
 
 	/**
@@ -2816,19 +2776,19 @@ export class Settings {
 	}
 	async #loadGlobalSettings(): Promise<void> {
 		this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
-		const existingConfig = await this.#loadExistingMainYaml();
+		const existingConfig = await this.#loadExistingMainSettings();
 		if (existingConfig) {
 			this.#global = existingConfig;
 		} else {
 			await this.#migrateFromLegacy();
-			this.#global = await this.#loadYaml(this.#configPath!);
+			this.#global = await this.#loadSettings(this.#configPath!);
 		}
 		await this.#seedLastChangelogVersionMarker();
 	}
 
 	async #loadReadOnly(): Promise<Settings> {
 		const [globalResult, projectResult] = await Promise.allSettled([
-			this.#loadExistingMainYaml(),
+			this.#loadExistingMainSettings(),
 			this.#loadProjectSettings(),
 		]);
 		if (globalResult.status === "rejected") throw globalResult.reason;
@@ -2844,7 +2804,7 @@ export class Settings {
 		return this;
 	}
 
-	#readYamlGeneration(filePath: string): YamlGeneration {
+	#readSettingsGeneration(filePath: string): SettingsGeneration {
 		try {
 			const source = fs.readFileSync(filePath, "utf8");
 			const stat = fs.statSync(filePath, { bigint: true });
@@ -2861,23 +2821,22 @@ export class Settings {
 		}
 	}
 
-	#captureGlobalMutation(key: string, mutations: Map<string, PendingYamlMutation>, baseValue: unknown): void {
+	#captureGlobalMutation(key: string, mutations: Map<string, PendingSettingsMutation>, baseValue: unknown): void {
 		if (!this.#persist || !this.#configPath) return;
 		mutations.set(key, {
-			generation: this.#readYamlGeneration(this.#globalTomlPath ?? this.#configPath),
+			generation: this.#readSettingsGeneration(this.#configPath),
 			baseValue: structuredClone(baseValue),
 		});
 	}
 
 	/**
-	 * Whether a global write of `value` at `segments` would leave config.yml unchanged: the global
+	 * Whether a global write of `value` at `segments` would leave config.toml unchanged: the global
 	 * layer already holds it and so does the file on disk (unparseable, legacy-shaped, or externally
 	 * edited files report false, so the write is staged and the save re-reads and merges as usual).
 	 */
 	#globalWriteIsNoop(segments: readonly string[], value: unknown): boolean {
 		if (!settingValuesEqual(getByPath(this.#global, segments), value)) return false;
 		if (!this.#persist || !this.#configPath) return true;
-		if (this.#globalTomlPath) return false;
 		let source: string;
 		try {
 			source = fs.readFileSync(this.#configPath, "utf8");
@@ -2886,21 +2845,21 @@ export class Settings {
 		}
 		let onDisk: unknown;
 		try {
-			onDisk = YAML.parse(source);
+			onDisk = parseSettingsToml(source);
 		} catch {
 			return false;
 		}
 		return settingValuesEqual(isRecord(onDisk) ? getByPath(onDisk, segments) : undefined, value);
 	}
 
-	async #loadYaml(filePath: string): Promise<RawSettings> {
-		const loaded = await this.#loadYamlIfPresentForStartup(filePath);
+	async #loadSettings(filePath: string): Promise<RawSettings> {
+		const loaded = await this.#loadSettingsIfPresentForStartup(filePath);
 		return loaded ?? {};
 	}
 
-	async #loadYamlIfPresent(filePath: string, captureLegacyChangelogVersion = true): Promise<YamlLoadResult> {
+	async #loadSettingsIfPresent(filePath: string, captureLegacyChangelogVersion = true): Promise<SettingsLoadResult> {
 		let content: string;
-		let generation: YamlContentGeneration;
+		let generation: SettingsContentGeneration;
 		try {
 			content = await fs.promises.readFile(filePath, "utf8");
 			const stat = await fs.promises.stat(filePath, { bigint: true });
@@ -2919,7 +2878,7 @@ export class Settings {
 
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(content);
+			parsed = parseSettingsToml(content, filePath);
 		} catch (error) {
 			return { kind: "invalid", error, generation };
 		}
@@ -2929,7 +2888,7 @@ export class Settings {
 		if (typeof parsed !== "object" || Array.isArray(parsed)) {
 			return {
 				kind: "invalid",
-				error: new Error("Settings YAML must contain a mapping at the document root"),
+				error: new Error("Settings TOML must contain a table at the document root"),
 				generation,
 			};
 		}
@@ -2940,8 +2899,8 @@ export class Settings {
 		};
 	}
 
-	async #resolveYamlWritePath(filePath: string): Promise<string> {
-		const quarantinedTarget = this.#quarantinedYamlTargets.get(filePath);
+	async #resolveSettingsWritePath(filePath: string): Promise<string> {
+		const quarantinedTarget = this.#quarantinedSettingsTargets.get(filePath);
 		if (quarantinedTarget) return quarantinedTarget;
 		try {
 			return await fs.promises.realpath(filePath);
@@ -3167,53 +3126,53 @@ export class Settings {
 		return path.resolve(filePath);
 	}
 
-	async #withYamlWriteLock<T>(filePath: string, fn: (writePath: string) => Promise<T>): Promise<T> {
-		const writePath = await this.#resolveYamlWritePath(filePath);
+	async #withSettingsWriteLock<T>(filePath: string, fn: (writePath: string) => Promise<T>): Promise<T> {
+		const writePath = await this.#resolveSettingsWritePath(filePath);
 		return await withFileLock(writePath, async () => fn(writePath));
 	}
 
-	async #loadYamlIfPresentForStartup(filePath: string): Promise<RawSettings | null> {
-		const result = await this.#loadYamlIfPresent(filePath);
+	async #loadSettingsIfPresentForStartup(filePath: string): Promise<RawSettings | null> {
+		const result = await this.#loadSettingsIfPresent(filePath);
 		if (result.kind !== "invalid" || !this.#persist) {
-			return this.#unwrapYamlLoadResult(filePath, result);
+			return this.#unwrapSettingsLoadResult(filePath, result);
 		}
-		return await this.#withYamlWriteLock(filePath, async writePath => {
-			const loaded = await this.#loadYamlIfPresentForWriteLocked(filePath, writePath, true);
+		return await this.#withSettingsWriteLock(filePath, async writePath => {
+			const loaded = await this.#loadSettingsIfPresentForWriteLocked(filePath, writePath, true);
 			return loaded.settings;
 		});
 	}
 
 	/**
-	 * Read a YAML settings file while its write lock is held. Invalid files are
+	 * Read a TOML settings file while its write lock is held. Invalid files are
 	 * moved aside before reporting failure, so a later write can never truncate
 	 * the only copy of the user's configuration.
 	 */
-	async #loadYamlIfPresentForWriteLocked(
+	async #loadSettingsIfPresentForWriteLocked(
 		filePath: string,
 		writePath: string,
 		rejectMissing = false,
-	): Promise<LockedYamlLoadResult> {
-		let result = await this.#loadYamlIfPresent(writePath);
-		const generation = yamlGenerationFromLoadResult(result);
+	): Promise<LockedSettingsLoadResult> {
+		let result = await this.#loadSettingsIfPresent(writePath);
+		const generation = settingsGenerationFromLoadResult(result);
 		if (result.kind === "missing" && rejectMissing) {
 			throw new Error(
 				`Settings config was invalid before locking and is now missing: ${filePath}; another process may have moved it aside`,
 			);
 		}
 		if (result.kind === "invalid") {
-			result = await this.#quarantineInvalidYamlLocked(writePath, result);
-			this.#quarantinedYamlTargets.set(filePath, writePath);
+			result = await this.#quarantineInvalidSettingsLocked(writePath, result);
+			this.#quarantinedSettingsTargets.set(filePath, writePath);
 		}
 		return {
-			settings: this.#unwrapYamlLoadResult(filePath, result),
+			settings: this.#unwrapSettingsLoadResult(filePath, result),
 			generation,
 		};
 	}
 
-	async #quarantineInvalidYamlLocked(
+	async #quarantineInvalidSettingsLocked(
 		filePath: string,
-		result: Extract<YamlLoadResult, { kind: "invalid" }>,
-	): Promise<Extract<YamlLoadResult, { kind: "invalid" }>> {
+		result: Extract<SettingsLoadResult, { kind: "invalid" }>,
+	): Promise<Extract<SettingsLoadResult, { kind: "invalid" }>> {
 		const backupPath = `${filePath}.broken-${Date.now()}-${process.pid}-${randomUUID()}`;
 		try {
 			await fs.promises.rename(filePath, backupPath);
@@ -3230,7 +3189,7 @@ export class Settings {
 		return { ...result, backupPath };
 	}
 
-	#unwrapYamlLoadResult(filePath: string, result: YamlLoadResult): RawSettings | null {
+	#unwrapSettingsLoadResult(filePath: string, result: SettingsLoadResult): RawSettings | null {
 		switch (result.kind) {
 			case "missing":
 				return null;
@@ -3245,31 +3204,34 @@ export class Settings {
 		}
 	}
 
-	async #readExistingMainYaml(quarantineInvalid: boolean): Promise<MainYamlReadResult> {
-		if (!this.#configPath) return { settings: null, configPath: null };
-		const source = await settingsTomlSource(this.#agentDir);
-		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
-		for (const filename of MAIN_CONFIG_FILENAMES) {
-			const configPath = path.join(this.#agentDir, filename);
-			const loaded = quarantineInvalid
-				? await this.#loadYamlIfPresentForStartup(configPath)
-				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
-			if (loaded)
-				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath };
+	/** Import once, leaving canonical parse/quarantine handling to the locked loader. */
+	async #importSettings(directory: string): Promise<void> {
+		const canonical = path.join(directory, CONFIG_TOML);
+		if (this.#quarantinedSettingsTargets.has(canonical)) return;
+		try {
+			await settingsTomlSource(directory);
+		} catch (error) {
+			try {
+				await fs.promises.access(canonical);
+			} catch {
+				throw error;
+			}
 		}
-		return {
-			settings: source ? toml : null,
-			toml,
-			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
-			tomlPath: source?.filePath,
-		};
 	}
 
-	async #loadExistingMainYaml(): Promise<RawSettings | null> {
-		const result = await this.#readExistingMainYaml(true);
+	async #readExistingMainSettings(quarantineInvalid: boolean): Promise<MainSettingsReadResult> {
+		if (!this.#configPath) return { settings: null, configPath: null };
+		const configPath = path.join(this.#agentDir, CONFIG_TOML);
+		await this.#importSettings(this.#agentDir);
+		const loaded = quarantineInvalid
+			? await this.#loadSettingsIfPresentForStartup(configPath)
+			: this.#unwrapSettingsLoadResult(configPath, await this.#loadSettingsIfPresent(configPath, false));
+		return { settings: loaded, configPath };
+	}
+
+	async #loadExistingMainSettings(): Promise<RawSettings | null> {
+		const result = await this.#readExistingMainSettings(true);
 		this.#configPath = result.configPath;
-		this.#globalToml = result.toml ?? {};
-		this.#globalTomlPath = result.tomlPath;
 		return result.settings;
 	}
 
@@ -3291,7 +3253,7 @@ export class Settings {
 		// relative cwds (e.g. ".") produce absolute provider paths that match.
 		const discoveryCwd = path.resolve(cwd);
 		const projectConfigDir = getProjectAgentDir(cwd);
-		const projectConfigPath = path.join(projectConfigDir, "config.yml");
+		const projectConfigPath = path.join(projectConfigDir, CONFIG_TOML);
 		invalidateCapabilityFsCache(projectConfigPath);
 		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
 		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
@@ -3339,21 +3301,26 @@ export class Settings {
 		}
 		// A native config this instance moved aside reads as missing until a save recreates it;
 		// keep its last good contents, as `#saveProjectNow` does.
+		await this.#importSettings(projectConfigDir);
 		const nativeProject = quarantineInvalid
-			? await this.#loadYaml(projectConfigPath)
-			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
-				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
+			? await this.#loadSettings(projectConfigPath)
+			: (this.#unwrapSettingsLoadResult(
+					projectConfigPath,
+					await this.#loadSettingsIfPresent(projectConfigPath, false),
+				) ??
+				(this.#quarantinedSettingsTargets.has(projectConfigPath)
+					? structuredClone(this.#projectFileSettings)
+					: {}));
+		if (Object.hasOwn(nativeProject, "shellPath")) shellPathSource = projectConfigPath;
+		if (Object.keys(nativeProject).length && !sourcePaths.includes(projectConfigPath))
+			sourcePaths.push(projectConfigPath);
 		const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
 		if (nativeModelRoles !== undefined) {
 			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
 		}
-		const source = await settingsTomlSource(projectConfigDir);
-		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		return {
-			settings: overlaySettingsToml(this.#migrateRawSettings(merged, quarantineInvalid), toml),
-			fileSettings: structuredClone(overlaySettingsToml(nativeProject, toml)),
-			toml,
-			tomlPath: source?.filePath,
+			settings: this.#deepMerge(this.#migrateRawSettings(merged, quarantineInvalid), nativeProject),
+			fileSettings: structuredClone(nativeProject),
 			shellPathSource,
 			sourcePaths,
 			warningsSeen,
@@ -3369,8 +3336,6 @@ export class Settings {
 	/** Adopts the read-side state of a project read whose layer is being committed. */
 	#commitProjectRead(result: ProjectSettingsReadResult): void {
 		this.#projectFileSettings = result.fileSettings;
-		this.#projectToml = result.toml;
-		this.#projectTomlPath = result.tomlPath;
 		this.#projectShellPathSource = result.shellPathSource;
 		this.#projectSourcePaths = result.sourcePaths;
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
@@ -3380,9 +3345,9 @@ export class Settings {
 		let shellPathSource: string | undefined;
 		let settings: RawSettings = {};
 		for (const filePath of this.#configFiles) {
-			const overlay = await this.#loadOverlayYaml(filePath, captureLegacyChangelogVersion);
+			const overlay = await this.#loadOverlaySettings(filePath, captureLegacyChangelogVersion);
 			settings = this.#deepMerge(settings, overlay);
-			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath;
+			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath.replace(/\.ya?ml$/i, ".toml");
 		}
 		return { settings, shellPathSource };
 	}
@@ -3394,32 +3359,17 @@ export class Settings {
 	}
 
 	/**
-	 * Strict loader for explicit `--config` overlays: unlike `#loadYaml`,
+	 * Strict loader for explicit `--config` overlays: unlike `#loadSettings`,
 	 * missing or malformed files are hard errors so a typo'd path cannot
 	 * silently fall back to the persistent settings.
 	 */
-	async #loadOverlayYaml(filePath: string, captureLegacyChangelogVersion = true): Promise<RawSettings> {
-		let content: string;
-		try {
-			content = await Bun.file(filePath).text();
-		} catch (error) {
-			throw new Error(
-				isEnoent(error)
-					? `Config overlay not found: ${filePath}`
-					: `Failed to read config overlay ${filePath}: ${String(error)}`,
-			);
-		}
-		let parsed: unknown;
-		try {
-			parsed = YAML.parse(content);
-		} catch (error) {
-			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
-		}
-		if (parsed === null || parsed === undefined) return {};
-		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error(`Config overlay must be a YAML mapping: ${filePath}`);
-		}
-		return this.#migrateRawSettings(parsed as RawSettings, captureLegacyChangelogVersion);
+	async #loadOverlaySettings(filePath: string, captureLegacyChangelogVersion = true): Promise<RawSettings> {
+		const legacy = /\.ya?ml$/i.test(filePath);
+		const targetPath = legacy ? filePath.replace(/\.ya?ml$/i, ".toml") : filePath;
+		const source = await readTomlConfig(targetPath, { legacyPaths: legacy ? [filePath] : [] });
+		if (!source) throw new Error(`Config overlay not found: ${filePath}`);
+		if (legacy) this.#configFiles = this.#configFiles.map(current => (current === filePath ? targetPath : current));
+		return this.#migrateRawSettings(source.data, captureLegacyChangelogVersion);
 	}
 
 	async #migrateFromLegacy(): Promise<void> {
@@ -3460,10 +3410,10 @@ export class Settings {
 
 		if (migrated && Object.keys(settings).length > 0) {
 			try {
-				await this.#writeYamlAtomically(this.#configPath, settings);
-				logger.debug("Settings: migrated to config.yml", { path: this.#configPath });
+				await writeTomlConfig(this.#configPath, settings);
+				logger.debug("Settings: migrated to config.toml", { path: this.#configPath });
 			} catch (error) {
-				logger.warn("Settings: failed to write migrated config.yml", {
+				logger.warn("Settings: failed to write migrated config.toml", {
 					path: this.#configPath,
 					error: String(error),
 				});
@@ -4127,7 +4077,7 @@ export class Settings {
 		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
 		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
 		// replacement (`tools.xdev` stays at its own default). Dead keys are
-		// deleted so they stop lingering in config.yml.
+		// deleted so they stop lingering in config.toml.
 		const toolsObj = raw.tools as Record<string, unknown> | undefined;
 		if (toolsObj) {
 			delete toolsObj.discoveryMode;
@@ -4146,7 +4096,7 @@ export class Settings {
 		// Retired provider/model selectors now live in modelRoles plus explicit
 		// retry chains. Read nested and quoted-dotted forms from the same layer;
 		// an owned nested key wins even when its value is undefined. Every legacy
-		// key is removed after inspection so it cannot leak back into config.yml.
+		// key is removed after inspection so it cannot leak back into config.toml.
 		function migrateKindRoleSettings(): void {
 			const providerSettings = isRecord(raw.providers) ? raw.providers : undefined;
 			const ttsSettings = isRecord(raw.tts) ? raw.tts : undefined;
@@ -4476,86 +4426,20 @@ export class Settings {
 	// Saving
 	// ─────────────────────────────────────────────────────────────────────────
 
-	async #writeYamlAtomically(
-		filePath: string,
-		settings: RawSettings,
-		source?: string,
-		mutations?: readonly YamlPathMutation[],
-	): Promise<void> {
-		const content =
-			source !== undefined && mutations !== undefined
-				? patchYamlDocument(source, mutations)
-				: stringifyYamlConfig(settings);
-		// Reverted changes or an external edit can already hold the requested values.
-		if (content === source) return;
-		await writeFileAtomically(filePath, content);
-	}
-
-	async #withSettingsWriteLock<T>(configPath: string, fn: (yamlWritePath: string) => Promise<T>): Promise<T> {
-		return this.#withYamlWriteLock(configPath, async yamlWritePath => {
-			const source = await settingsTomlSource(path.dirname(configPath));
-			if (!source) return fn(yamlWritePath);
-			const tomlWritePath = await this.#resolveYamlWritePath(source.filePath);
-			// Distinct scopes may point at the same physical TOML file.
-			if (tomlWritePath === yamlWritePath) throw new Error("TOML and YAML settings must be distinct files");
-			return withFileLock(tomlWritePath, () => fn(yamlWritePath));
-		});
-	}
-
-	/** Keep TOML selection and writes inside the existing logical YAML lock. */
 	async #settingsWriteTarget(
 		configPath: string,
-		yamlWritePath: string,
-		expectedTomlPath: string | undefined,
+		writePath: string,
 	): Promise<{
-		loaded: LockedYamlLoadResult;
+		loaded: LockedSettingsLoadResult;
 		writePath: string;
 		tomlSource?: string;
-		toml?: RawSettings;
-		sourceMatches: boolean;
 	}> {
-		const yaml = await this.#loadYamlIfPresentForWriteLocked(configPath, yamlWritePath);
-		const source = await settingsTomlSource(path.dirname(configPath));
-		if (!source) return { loaded: yaml, writePath: yamlWritePath, sourceMatches: !expectedTomlPath };
-		const toml = parseSettingsToml(source.content, source.filePath);
+		const loaded = await this.#loadSettingsIfPresentForWriteLocked(configPath, writePath);
 		return {
-			loaded: {
-				settings: overlaySettingsToml(yaml.settings ?? {}, toml),
-				generation: this.#readYamlGeneration(source.filePath),
-			},
-			writePath: await this.#resolveYamlWritePath(source.filePath),
-			tomlSource: source.content,
-			toml,
-			sourceMatches: source.filePath === expectedTomlPath,
+			loaded,
+			writePath,
+			tomlSource: loaded.generation.kind === "content" ? loaded.generation.source : undefined,
 		};
-	}
-
-	async #writeSettingsTarget(
-		target: { writePath: string; tomlSource?: string; toml?: RawSettings },
-		settings: RawSettings,
-		source: string | undefined,
-		mutations: readonly YamlPathMutation[],
-	): Promise<void> {
-		if (target.tomlSource === undefined) {
-			await this.#writeYamlAtomically(
-				target.writePath,
-				settings,
-				source,
-				source === undefined ? undefined : mutations,
-			);
-			return;
-		}
-		const overlay = { ...target.toml };
-		for (const mutation of mutations) {
-			const key = mutation.path[0];
-			if (key === undefined) throw new Error("Cannot replace the TOML document root");
-			// Top-level TOML keys replace YAML wholesale. Copy the effective table
-			// when first editing a nested key, and mask a removed root with null.
-			overlay[key] = structuredClone(settings[key] ?? null);
-		}
-		const content = patchSettingsToml(target.tomlSource, overlay);
-		if (content !== target.tomlSource) await writeFileAtomically(target.writePath, content);
-		target.toml = overlay;
 	}
 
 	#queueSave(): void {
@@ -4629,17 +4513,11 @@ export class Settings {
 				// Re-read to preserve external changes. If this instance moved a
 				// malformed file aside, recover from its last in-memory state
 				// rather than recreating the config from only the pending path.
-				const target = await this.#settingsWriteTarget(configPath, writePath, this.#globalTomlPath);
+				const target = await this.#settingsWriteTarget(configPath, writePath);
 				const { loaded } = target;
-				const migrationMutations =
-					target.tomlSource !== undefined || loaded.generation.kind === "missing"
-						? []
-						: loaded.settings !== null && loaded.generation.kind === "content"
-							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
-							: null;
-				const canPatchLoadedDocument = !this.#quarantinedYamlTargets.has(configPath) && migrationMutations !== null;
 				const current =
-					loaded.settings ?? (this.#quarantinedYamlTargets.has(configPath) ? structuredClone(this.#global) : {});
+					loaded.settings ??
+					(this.#quarantinedSettingsTargets.has(configPath) ? structuredClone(this.#global) : {});
 				let shouldWrite = false;
 				const writtenPaths: (readonly string[])[] = [];
 
@@ -4674,7 +4552,6 @@ export class Settings {
 				for (const [modKey, segments] of modifiedPaths) {
 					const mutation = modifiedPathMutations.get(modKey);
 					if (
-						!target.sourceMatches ||
 						blockedFallbackPaths.has(modKey) ||
 						(receipts.has(modKey) && !Bun.deepEquals(getByPath(current, segments), mutation?.baseValue)) ||
 						(target.tomlSource !== undefined &&
@@ -4715,17 +4592,16 @@ export class Settings {
 				const currentEfforts = getByPath(current, cfgRoleEffortSelections.segments);
 				const currentEffortValues: Record<string, unknown> = isRecord(currentEfforts) ? currentEfforts : {};
 				const canApplyMutation = (
-					mutation: PendingYamlMutation | undefined,
+					mutation: PendingSettingsMutation | undefined,
 					value: unknown,
 					segments: readonly string[],
 				): boolean =>
-					target.sourceMatches &&
 					(target.tomlSource === undefined || Bun.deepEquals(value, mutation?.baseValue)) &&
 					mutation !== undefined &&
 					mutation.generation.kind !== "unreadable" &&
 					(receipts.has(JSON.stringify(segments))
 						? Bun.deepEquals(value, mutation.baseValue)
-						: yamlGenerationsMatch(mutation.generation, loaded.generation) ||
+						: settingsGenerationsMatch(mutation.generation, loaded.generation) ||
 							Bun.deepEquals(value, mutation.baseValue));
 				const pairCanApply = (role: string): boolean =>
 					!pairedRoles.has(role) ||
@@ -4809,31 +4685,14 @@ export class Settings {
 					if (this.#globalInFlightReceipts.get(key) === receipt) this.#globalInFlightReceipts.delete(key);
 				}
 				if (shouldWrite) {
-					const changedPaths = [
-						...writtenPaths,
-						...[...new Set([...rolesToApply, ...rolesToPreserve])].map(role => ["modelRoles", role]),
-						...[...new Set([...effortsToApply, ...effortsToPreserve])].map(role => [
-							"roleEffortSelections",
-							role,
-						]),
-					];
-					const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
-					for (const path of changedPaths) {
-						const value = getByPath(current, path);
-						mutations.push(
-							value === undefined ? { path, operation: "delete" } : { path, operation: "set", value },
-						);
-					}
-					const canPatchDocument = canPatchLoadedDocument;
-					const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
-					await this.#writeSettingsTarget(target, current, canPatchDocument ? source : undefined, mutations);
+					await writeTomlConfig(target.writePath, current, target.tomlSource);
 				}
-				this.#quarantinedYamlTargets.delete(configPath);
+				this.#quarantinedSettingsTargets.delete(configPath);
 				// This write changed the file only at `writtenPaths`. A change staged after this save's snapshot at
 				// an overlapping path (the same one, an entry of a record written whole, or the reverse) is dropped
 				// once the file holds its live value; otherwise, unless an external edit already conflicts with it,
 				// it is rebased onto the file just written, so the next save doesn't take this write for such an edit.
-				let writtenGeneration: YamlGeneration | undefined;
+				let writtenGeneration: SettingsGeneration | undefined;
 				for (const [modKey, segments] of this.#modified) {
 					const overlapping = writtenPaths.some(
 						other => isPathPrefix(other, segments) || isPathPrefix(segments, other),
@@ -4845,7 +4704,7 @@ export class Settings {
 						this.#modified.delete(modKey);
 						this.#modifiedPathMutations.delete(modKey);
 					} else if (pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)) {
-						writtenGeneration ??= this.#readYamlGeneration(target.writePath);
+						writtenGeneration ??= this.#readSettingsGeneration(target.writePath);
 						this.#modifiedPathMutations.set(modKey, {
 							generation: writtenGeneration,
 							baseValue: structuredClone(written),
@@ -4867,7 +4726,7 @@ export class Settings {
 					for (const segments of paths) {
 						const modKey = JSON.stringify(segments);
 						if (this.#modified.has(modKey)) continue;
-						writtenGeneration ??= this.#readYamlGeneration(target.writePath);
+						writtenGeneration ??= this.#readSettingsGeneration(target.writePath);
 						this.#modified.set(modKey, segments);
 						this.#modifiedPathMutations.set(modKey, {
 							generation: writtenGeneration,
@@ -4875,7 +4734,6 @@ export class Settings {
 						});
 					}
 				}
-				this.#globalToml = target.toml ?? {};
 				this.#adoptSavedGlobal(current, configPath);
 				// These pending roles were included in this write. Remove each
 				// only if no newer local change arrived while the write was in flight.
@@ -4904,8 +4762,8 @@ export class Settings {
 			logger.warn("Settings: save failed", { error: String(error) });
 			// A quarantined file is now missing by our own action, not because
 			// another writer superseded the mutation. Retry against that state.
-			const retryGeneration = this.#quarantinedYamlTargets.has(configPath)
-				? this.#readYamlGeneration(configPath)
+			const retryGeneration = this.#quarantinedSettingsTargets.has(configPath)
+				? this.#readSettingsGeneration(configPath)
 				: undefined;
 			for (const role of pairedFallbacks) this.#pairedGlobalFallbackMutations.add(role);
 			// Re-add failed paths for retry, retaining any newer mutation's generation.
@@ -4954,7 +4812,7 @@ export class Settings {
 	}
 
 	/**
-	 * Adopts `saved` (config.yml as a save just wrote it) as the live global layer, first
+	 * Adopts `saved` (config.toml as a save just wrote it) as the live global layer, first
 	 * re-applying every global write still pending — made after that save's snapshot, since saves
 	 * never overlap ({@link #chainSave}) — so a live value never regresses to its on-disk one. An
 	 * invalid result keeps the live layer, which is last good and already holds the save's writes,
@@ -5049,7 +4907,7 @@ export class Settings {
 		)
 			return;
 
-		const projectConfigPath = path.join(getProjectAgentDir(this.#cwd), "config.yml");
+		const projectConfigPath = path.join(getProjectAgentDir(this.#cwd), CONFIG_TOML);
 		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
 		const modifiedRoleEfforts = [...this.#modifiedProjectRoleEfforts];
 		const modifiedValues = new Map(this.#modifiedProjectValues);
@@ -5068,27 +4926,17 @@ export class Settings {
 		try {
 			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
 			await this.#withSettingsWriteLock(projectConfigPath, async writePath => {
-				const target = await this.#settingsWriteTarget(projectConfigPath, writePath, this.#projectTomlPath);
+				const target = await this.#settingsWriteTarget(projectConfigPath, writePath);
 				const { loaded } = target;
-				const migrationMutations =
-					target.tomlSource !== undefined || loaded.generation.kind === "missing"
-						? []
-						: loaded.settings !== null && loaded.generation.kind === "content"
-							? yamlMigrationMutations(loaded.generation.source, loaded.settings)
-							: null;
-				const canPatchLoadedDocument =
-					!this.#quarantinedYamlTargets.has(projectConfigPath) && migrationMutations !== null;
 				const projectSettings =
 					loaded.settings ??
-					(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {});
+					(this.#quarantinedSettingsTargets.has(projectConfigPath)
+						? structuredClone(this.#projectFileSettings)
+						: {});
 
 				const applies = (segments: readonly string[]): boolean => {
 					const pending = pendingMutations.get(JSON.stringify(segments));
-					return (
-						target.sourceMatches &&
-						pending !== undefined &&
-						Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue)
-					);
+					return pending !== undefined && Bun.deepEquals(getByPath(projectSettings, segments), pending.baseValue);
 				};
 				const blockedRoles = new Set(
 					[...pairedRoles].filter(
@@ -5109,17 +4957,14 @@ export class Settings {
 					return true;
 				};
 				const projectRoles = getByPath(projectValues, ["modelRoles"]);
-				const mutations: YamlPathMutation[] = [...(migrationMutations ?? [])];
 				for (const role of modifiedModelRoles) {
 					const path = ["modelRoles", role];
 					if (!accept(path, role)) continue;
 					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
-						mutations.push({ path, operation: "delete" });
 					} else {
 						setByPath(projectSettings, path, value);
-						mutations.push({ path, operation: "set", value });
 					}
 				}
 				const roleEfforts = getByPath(projectValues, ["roleEffortSelections"]);
@@ -5129,10 +4974,8 @@ export class Settings {
 					const value = isRecord(roleEfforts) ? roleEfforts[role] : undefined;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
-						mutations.push({ path, operation: "delete" });
 					} else {
 						setByPath(projectSettings, path, value);
-						mutations.push({ path, operation: "set", value });
 					}
 				}
 				for (const segments of modifiedValues.values()) {
@@ -5141,21 +4984,16 @@ export class Settings {
 					if (!accept(path)) continue;
 					if (value === undefined) {
 						deleteByPath(projectSettings, path);
-						mutations.push({ path, operation: "delete" });
 					} else {
 						setByPath(projectSettings, path, value);
-						mutations.push({ path, operation: "set", value });
 					}
 				}
 
-				const canPatchDocument = canPatchLoadedDocument;
-				const source = loaded.generation.kind === "content" ? loaded.generation.source : "";
 				for (const [key, receipt] of receipts) {
 					if (this.#projectInFlightReceipts.get(key) === receipt) this.#projectInFlightReceipts.delete(key);
 				}
-				await this.#writeSettingsTarget(target, projectSettings, canPatchDocument ? source : undefined, mutations);
+				await writeTomlConfig(target.writePath, projectSettings, target.tomlSource);
 				this.#projectFileSettings = structuredClone(projectSettings);
-				this.#projectToml = target.toml ?? {};
 				for (const [key, pending] of this.#modifiedProjectMutations) {
 					if (appliedPaths.has(key)) {
 						this.#modifiedProjectMutations.set(key, {
@@ -5164,7 +5002,7 @@ export class Settings {
 						});
 					}
 				}
-				this.#quarantinedYamlTargets.delete(projectConfigPath);
+				this.#quarantinedSettingsTargets.delete(projectConfigPath);
 			});
 			invalidateCapabilityFsCache(projectConfigPath);
 		} catch (error) {
@@ -5218,8 +5056,6 @@ export class Settings {
 		return {
 			global: this.#global,
 			project: this.#project,
-			globalToml: this.#globalToml,
-			projectToml: this.#projectToml,
 			configOverlay: this.#configOverlay,
 			overrides: this.#overrides,
 			session: this.#session,

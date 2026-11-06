@@ -48,7 +48,7 @@ export function supportsAnthropicCompaction(model: Model<"anthropic-messages">, 
 			? resolveDirectAnthropicBaseUrl(model)
 			: normalizeAnthropicBaseUrl(model.baseUrl));
 	// Bedrock's Anthropic Messages API implements on-demand compaction. The flag is detected
-	// from a Bedrock `/anthropic` baseUrl, or set in models.yml for a proxy or a reroute; it
+	// from a Bedrock `/anthropic` baseUrl, or set in models.toml for a proxy or a reroute; it
 	// applies to the model's own endpoint or a Bedrock `/anthropic` route it reaches.
 	if (
 		model.compat.bedrockMessagesApi === true &&

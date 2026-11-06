@@ -5,9 +5,9 @@
  * of the server through `sdk()` / `feature()` here.
  *
  * Selection (W12 extends this into the switch state machine):
- *   1. `NPI_DECK_BACKEND` pins the launch: a backend id from config.yml or an
+ *   1. `NPI_DECK_BACKEND` pins the launch: a backend id from config.toml or an
  *      absolute tree path.
- *   2. Otherwise `activeBackend` in `<NPI_DECK_HOME|~/.npi-deck>/config.yml`,
+ *   2. Otherwise `activeBackend` in `<NPI_DECK_HOME|~/.npi-deck>/config.toml`,
  *      looked up in its `backends` list.
  *
  * Loading imports each manifest module once, checks every export, and
@@ -17,9 +17,9 @@
  * (dotenv merge, native addon, router registrations), so this runs once per
  * process; probing a candidate belongs in a child process (plan C3).
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { parse as parseYaml, parseDocument } from "yaml";
+import { readBackendDocument, updateBackendDocument } from "./config.ts";
 
 import { getDataDir } from "../env-store.ts";
 import { spawnOwnedSync } from "../owned-process.ts";
@@ -34,7 +34,7 @@ import {
 } from "./manifest.ts";
 
 export interface BackendSelection {
-	/** Id from config.yml, or null for an env-pinned raw path. */
+	/** Id from config.toml, or null for an env-pinned raw path. */
 	id: string | null;
 	/** Absolute tree root. */
 	path: string;
@@ -101,13 +101,11 @@ export interface BackendEntry { id: string; kind: "source" | "gateway"; path: st
 interface BackendConfig { backends?: BackendEntry[]; activeBackend?: string | null }
 
 export function readBackendConfig(home = getDataDir()): BackendConfig {
-	const file = path.join(home, "config.yml");
-	if (!existsSync(file)) return {};
-	let parsed: unknown;
-	try { parsed = parseYaml(readFileSync(file, "utf8")); }
-	catch (err) { throw new BackendConfigError(`invalid ${file}: ${String(err)}`); }
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new BackendConfigError(`${file} is not a YAML mapping`);
-	return parsed as BackendConfig;
+	try {
+		return readBackendDocument(home).data as BackendConfig;
+	} catch {
+		throw new BackendConfigError(`invalid backend configuration: ${path.join(home, "config.toml")}`);
+	}
 }
 
 export function listBackends(home = getDataDir()): BackendEntry[] {
@@ -116,21 +114,16 @@ export function listBackends(home = getDataDir()): BackendEntry[] {
 	if (!Array.isArray(config.backends)) throw new BackendConfigError("backends must be a list");
 	return config.backends.map((entry) => {
 		if (!entry || typeof entry.id !== "string" || !entry.id || typeof entry.path !== "string" || !["source", "gateway"].includes(entry.kind))
-			throw new BackendConfigError(`invalid backend entry in ${path.join(home, "config.yml")}`);
+			throw new BackendConfigError(`invalid backend entry in ${path.join(home, "config.toml")}`);
 		return entry;
 	});
 }
 
 export function writeActiveBackend(id: string | null, home = getDataDir()): void {
-	mkdirSync(home, { recursive: true });
-	const file = path.join(home, "config.yml");
-	const doc = parseDocument(existsSync(file) ? readFileSync(file, "utf8") : "{}");
-	if (doc.errors.length) throw new BackendConfigError(`invalid ${file}: ${doc.errors[0]?.message}`);
-	if (id === null) doc.delete("activeBackend");
-	else doc.set("activeBackend", id);
-	const tmp = `${file}.${process.pid}.tmp`;
-	writeFileSync(tmp, doc.toString(), { mode: 0o600 });
-	renameSync(tmp, file);
+	updateBackendDocument(home, data => {
+		if (id === null) delete data.activeBackend;
+		else data.activeBackend = id;
+	});
 }
 
 export function resolveBackendSelection(env: NodeJS.ProcessEnv = process.env): BackendSelection | undefined {
@@ -140,7 +133,7 @@ export function resolveBackendSelection(env: NodeJS.ProcessEnv = process.env): B
 	const id = pinned || readBackendConfig(home).activeBackend;
 	if (!id) return undefined;
 	const entry = listBackends(home).find((b) => b.id === id);
-	if (!entry) throw new BackendConfigError(`backend "${id}" is not listed under backends in ${path.join(home, "config.yml")}`);
+	if (!entry) throw new BackendConfigError(`backend "${id}" is not listed under backends in ${path.join(home, "config.toml")}`);
 	if (entry.kind === "gateway") throw new BackendConfigError(`backend "${id}" has reserved kind gateway; only source backends are supported`);
 	return { id, path: path.resolve(entry.path), source: pinned ? "env" : "config" };
 }

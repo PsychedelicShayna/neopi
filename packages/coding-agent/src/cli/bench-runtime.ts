@@ -42,7 +42,7 @@ export interface BenchModelRegistry {
 	hasConfiguredAuth?(model: Model<Api>): boolean;
 	/**
 	 * Discovery-backed providers the catalog may still need to fetch
-	 * (models.yml discovery, ollama, llama.cpp, lm-studio). Absent on
+	 * (models.toml discovery, ollama, llama.cpp, lm-studio). Absent on
 	 * hand-rolled test registries, which opt out of the fallback pass.
 	 */
 	getDiscoverableProviders?(): string[];
@@ -134,7 +134,7 @@ function resolveAuthenticatedAlternative(
  * stderr when a selector was redirected to an authenticated provider. When any
  * selector misses the hydrated catalog, awaits one cache-aware discovery pass
  * and re-resolves every selector from the refreshed catalog before failing:
- * discovery-backed providers (models.yml discovery, ollama, llama.cpp,
+ * discovery-backed providers (models.toml discovery, ollama, llama.cpp,
  * lm-studio) ship no static models, and cached rows whose `Authorization`
  * header cannot be re-derived from config (#5780) drop every model of that
  * provider until a live probe runs. A refresh replaces the rows of every

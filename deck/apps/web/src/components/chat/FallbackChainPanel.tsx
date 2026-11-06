@@ -21,7 +21,7 @@ export interface FallbackChain {
 	loading: boolean;
 	error?: string;
 	info?: SessionFallbackChainResponse;
-	/** The chain configured under `info.key` in config.yml; what the editor changes. */
+	/** The chain configured under `info.key` in config.toml; what the editor changes. */
 	chain: string[];
 	/** Why the chain cannot be edited here; undefined when it can. */
 	readOnly?: string;
@@ -38,7 +38,7 @@ export interface FallbackChain {
  * The active model's fallback chain (#31). Reads come from the chat's live
  * resolution and the NeoPi config registry; writes are single-key `entries`
  * edits of `retry.fallbackChains` through the Settings write path, which
- * validates, writes config.yml and reloads open chats.
+ * validates, writes config.toml and reloads open chats.
  */
 export function useFallbackChain(open: boolean, sessionId: string): FallbackChain {
 	const [loading, setLoading] = useState(false);
@@ -76,7 +76,7 @@ export function useFallbackChain(open: boolean, sessionId: string): FallbackChai
 	const chain = info && setting ? chainAt(setting.value, info.key) : [];
 	const readOnly = setting?.lockedReason
 		?? (setting?.invalidGlobalValue
-			? `config.yml holds a ${SETTING_ID} value NeoPi rejects; fix or reset it in Settings → NeoPi.`
+			? `config.toml holds a ${SETTING_ID} value NeoPi rejects; fix or reset it in Settings → NeoPi.`
 			: undefined);
 
 	const save = useCallback(

@@ -12,7 +12,7 @@ Related references:
 - [Provider endpoint constraints](./provider-endpoint-constraints.md) — where a new constraint should live
 - [Provider streaming internals](./provider-streaming-internals.md) — stream event normalization
 - [Provider quirks](./provider-quirks.md) — per-provider special casings, stream behavior, auth/usage, catalog handling
-- [Model and Provider Configuration](./models.md) — `models.yml` and user-facing `compat` overrides
+- [Model and Provider Configuration](./models.md) — `models.toml` and user-facing `compat` overrides
 
 ## 1. OpenAI compat flags
 
@@ -150,7 +150,7 @@ Types: `OpenAICompat` / `ResolvedOpenAISharedCompat` in `packages/catalog/src/ty
 | `requiresReasoningOffJuiceInstruction` | GPT-5.6+ class rule                                                 | Forced-off requests add a developer `# Juice: … !important` instruction                                                                                                                                                                                                               |
 | `officialEndpoint`                     | Provider `openai` on its official endpoint                          | Gates default-on stateful `previous_response_id` chaining and `text.verbosity`                                                                                                                                                                                                        |
 | `harmonyLeakMitigation`                | Codex provider                                                      | Enables Harmony-protocol leak detection/mitigation                                                                                                                                                                                                                                    |
-| `supportsConfigurationUpdate`          | `true` for `gpt-6-astra` (class rule, any host); `false` otherwise  | Pins request-level `reasoning.effort` to the session baseline and carries later changes as `configuration_update` input items; set `false` in `models.yml` for custom proxies that 400 on the item type — the changed effort is then sent at the request level and no item is emitted |
+| `supportsConfigurationUpdate`          | `true` for `gpt-6-astra` (class rule, any host); `false` otherwise  | Pins request-level `reasoning.effort` to the session baseline and carries later changes as `configuration_update` input items; set `false` in `models.toml` for custom proxies that 400 on the item type — the changed effort is then sent at the request level and no item is emitted |
 | `supportsSteering`                     | `true` for GPT-6+ (class rule, any host); `false` otherwise         | Codex WebSocket turns send queued user steering as `response.steer` into the streaming response; the next request reads the server's automatic continuation or sends only the pending tool output                                                                                     |
 | `supportsObfuscationOptOut`            | Official OpenAI                                                     | Allows `stream_options: { include_obfuscation: false }`                                                                                                                                                                                                                               |
 

@@ -1,3 +1,7 @@
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
+import { stringifySpec } from "../../../web/src/components/routines/spec-toml.ts";
+import { importLegacyRoutineYaml } from "./legacy-yaml.ts";
+import { migrateRoutines } from "./graph-migration.ts";
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -70,7 +74,7 @@ test("native save/load and metadata updates keep JSON as the only source and rej
 	const api = buildRoutinesRouter(run);
 	const source = graph();
 	source.layout = { nodes: { source: { x: 12, y: 34 } } };
-	for (const legacy of [{ specYaml: "version: 1" }, { cron: "* * * * *" }, { actionKind: "bash" }, { actionBody: "echo wrong" }, { actionCwd: home }]) {
+	for (const legacy of [{ specToml: 'name = "wrong"' }, { cron: "* * * * *" }, { actionKind: "bash" }, { actionBody: "echo wrong" }, { actionCwd: home }]) {
 		expect((await api.request("/routines", request({ name: "mixed", graph: source, ...legacy }))).status).toBe(400);
 	}
 	const response = await api.request("/routines", request({ name: "native", graph: source }));
@@ -78,15 +82,15 @@ test("native save/load and metadata updates keep JSON as the only source and rej
 	const saved = await response.json() as Routine;
 	expect(saved.specVersion).toBe(2);
 	expect(getRoutine(saved.id)?.graph).toEqual(source);
-	const row = getDb().query<{ graph_json: string; spec_yaml: string | null }, [string]>(
-		"SELECT graph_json, spec_yaml FROM routines WHERE id = ?",
+	const row = getDb().query<{ graph_json: string; spec_toml: string | null }, [string]>(
+		"SELECT graph_json, spec_toml FROM routines WHERE id = ?",
 	).get(saved.id)!;
 	expect(JSON.parse(row.graph_json)).toEqual(source);
-	expect(row.spec_yaml).toBeNull();
+	expect(row.spec_toml).toBeNull();
 	closeDb();
 	openDb({ path: path.join(home, "deck.db") });
 	expect(getRoutine(saved.id)?.graph).toEqual(source);
-	for (const patch of [{ specYaml: "version: 1" }, { cron: "* * * * *" }, { actionKind: "bash" }, { actionBody: "echo wrong" }, { actionCwd: home }]) {
+	for (const patch of [{ specToml: 'name = "wrong"' }, { cron: "* * * * *" }, { actionKind: "bash" }, { actionBody: "echo wrong" }, { actionCwd: home }]) {
 		expect((await api.request(`/routines/${saved.id}`, request(patch, "PATCH"))).status).toBe(400);
 		expect(getRoutine(saved.id)?.graph).toEqual(source);
 	}
@@ -471,8 +475,8 @@ test("legacy V0 and V1 still execute their own stored source without graph trace
 	const run = setup();
 	const legacy = createRoutine({ name: "legacy", cron: "0 0 1 1 *", actionKind: "bash", actionBody: "printf legacy-output", actionCwd: home });
 	const spec: RoutineSpec = { name: "pipeline", trigger: [{ manual: {} }], steps: [{ id: "print", type: "run", command: "printf pipeline-output" }] };
-	const yaml = JSON.stringify(spec);
-	const pipeline = createV1Routine({ name: spec.name, spec, specYaml: yaml });
+	const toml = stringifyToml(spec);
+	const pipeline = createV1Routine({ name: spec.name, spec, specToml: toml });
 	const api = buildRoutinesRouter(run);
 	for (const saved of [legacy, pipeline]) expect((await api.request(`/routines/${saved.id}`, request({ graph: graph() }, "PATCH"))).status).toBe(400);
 	await run.fire(legacy.id);
@@ -482,7 +486,7 @@ test("legacy V0 and V1 still execute their own stored source without graph trace
 	expect(legacyRun).toMatchObject({ exitCode: 0, stdoutExcerpt: "legacy-output" });
 	expect(pipelineRun.exitCode).toBe(0);
 	expect(listStepRuns(pipelineRun.id)[0]).toMatchObject({ status: "success", stdoutExcerpt: "pipeline-output" });
-	expect(getRoutine(pipeline.id)?.specYaml).toBe(yaml);
+	expect(getRoutine(pipeline.id)?.specToml).toBe(toml);
 	expect(getGraphRun(legacyRun.id)).toBeUndefined();
 	expect(getGraphRun(pipelineRun.id)).toBeUndefined();
 });
@@ -807,4 +811,82 @@ test("requested historical run lookup is independent of summary limits and check
 	expect(await response.json()).toEqual(oldest);
 	expect((await api.request(`/routines/${other.id}/runs/${oldest.id}`)).status).toBe(404);
 	expect((await api.request(`/routines/${saved.id}/runs/missing`)).status).toBe(404);
+});
+
+test("builder TOML creates an API routine that executes natively with explicit null state", async () => {
+	const run = setup();
+	const api = buildRoutinesRouter(run);
+	const spec: RoutineSpec = {
+		name: "builder-toml-acceptance",
+		trigger: [{ manual: {} }],
+		steps: [
+			{ id: "state", type: "set_state", state: { cleared: null, nested: [null, false, 0, ""] } },
+			{ id: "answer", type: "transform", body: "return { answer: 42, enabled: false, empty: '', state: context.state };" },
+		],
+	};
+	const specToml = stringifySpec(spec);
+	expect(specToml).toContain("__npi");
+	const response = await api.request("/routines", request({ name: spec.name, specToml, enabled: false }));
+	expect(response.status).toBe(201);
+	const saved = await response.json() as Routine;
+	expect(saved.specToml).toBe(specToml);
+	await run.fire(saved.id);
+	const record = listRuns(saved.id)[0]!;
+	expect(record.exitCode).toBe(0);
+	const output = listStepRuns(record.id)[1]!;
+	expect(output.status).toBe("success");
+	expect(JSON.parse(output.outputJson!)).toEqual({
+		answer: 42, enabled: false, empty: "", state: { cleared: null, nested: [null, false, 0, ""] },
+	});
+	const stored = getDb().query<{ spec_yaml: string | null; spec_toml: string }, [string]>(
+		"SELECT spec_yaml, spec_toml FROM routines WHERE id = ?",
+	).get(saved.id)!;
+	expect(stored).toEqual({ spec_yaml: null, spec_toml: specToml });
+});
+
+test("legacy YAML imports once, runs as TOML and retains exact original through API re-save and graph conversion", async () => {
+	const run = setup();
+	const api = buildRoutinesRouter(run);
+	const original = "# untouched legacy provenance\nname: imported-routine # routine slug comment\ntrigger:\n  - manual: {}\nsteps:\n  - id: state\n    type: set_state\n    state: {cleared: null, nested: [null, false, 0, '']} # nested state comment\n  - id: answer\n    type: transform\n    body: 'return context.state;'\n";
+	const legacy = createRoutine({ name: "imported-routine", cron: "", actionKind: "script", actionBody: "", enabled: false });
+	getDb().query("UPDATE routines SET spec_version = 1, spec_yaml = ? WHERE id = ?").run(original, legacy.id);
+	// Reopening exercises the boot importer, not just the normalized read path.
+	closeDb();
+	openDb({ path: path.join(home, "deck.db") });
+	const imported = getRoutine(legacy.id)!;
+	expect(imported.specToml).toBe(importLegacyRoutineYaml(original));
+	for (const comment of ["# untouched legacy provenance", "# routine slug comment", "# nested state comment"]) expect(imported.specToml).toContain(comment);
+	const edited = `${imported.specToml}\n# native source edit\n`;
+	expect((await api.request(`/routines/${legacy.id}`, request({ specToml: edited }, "PATCH"))).status).toBe(200);
+	await run.fire(legacy.id);
+	const output = listStepRuns(listRuns(legacy.id)[0]!.id)[1]!;
+	expect(output.status).toBe("success");
+	expect(JSON.parse(output.outputJson!)).toEqual({ cleared: null, nested: [null, false, 0, ""] });
+	const row = getDb().query<{ spec_yaml: string; spec_toml: string }, [string]>(
+		"SELECT spec_yaml, spec_toml FROM routines WHERE id = ?",
+	).get(legacy.id)!;
+	expect(row).toEqual({ spec_yaml: original, spec_toml: edited });
+	closeDb();
+	openDb({ path: path.join(home, "deck.db") });
+	expect(getRoutine(legacy.id)?.specToml).toBe(edited);
+	expect(migrateRoutines(run.graphRegistry, { routineId: legacy.id, backupDirectory: path.join(home, "backups") }).reports[0]?.status).toBe("migrated");
+	expect(getDb().query<{ spec_yaml: string }, [string]>("SELECT spec_yaml FROM routines WHERE id = ?").get(legacy.id)?.spec_yaml).toBe(original);
+});
+
+test("unsupported legacy values fail explicitly without overwriting original or canonical TOML", () => {
+	setup();
+	for (const unsupported of [
+		"name: bad\nname: duplicate\ntrigger: [{manual: {}}]\nsteps: []\n",
+		"name: bad\ntrigger: [{manual: {}}]\nsteps: [{id: answer, type: transform, body: 'return 42;'}]\nunknown: do-not-drop\n",
+	]) {
+		const legacy = createRoutine({ name: "unsupported", cron: "", actionKind: "script", actionBody: "", enabled: false });
+		getDb().query("UPDATE routines SET spec_version = 1, spec_yaml = ? WHERE id = ?").run(unsupported, legacy.id);
+		closeDb();
+		openDb({ path: path.join(home, "deck.db") });
+		expect(() => getRoutine(legacy.id)).toThrow("Legacy routine");
+		const row = getDb().query<{ spec_yaml: string; spec_toml: string | null }, [string]>(
+			"SELECT spec_yaml, spec_toml FROM routines WHERE id = ?",
+		).get(legacy.id)!;
+		expect(row).toEqual({ spec_yaml: unsupported, spec_toml: null });
+	}
 });

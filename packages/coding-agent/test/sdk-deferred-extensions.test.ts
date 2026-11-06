@@ -100,7 +100,7 @@ describe("startup-deferred extensions", () => {
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
 			sessionManager: SessionManager.inMemory(),
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			settings: Settings.isolated(),
 			eventBus,
 			preloadedExtensions: preloaded,

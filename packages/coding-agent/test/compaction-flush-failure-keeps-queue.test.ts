@@ -68,7 +68,7 @@ describe("flushCompactionQueue failure", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
-			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 		});
 		session = live;
 		const running = live.prompt("first task");

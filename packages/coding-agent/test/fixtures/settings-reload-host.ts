@@ -18,7 +18,7 @@ const session = new AgentSession({
 	}),
 	sessionManager: SessionManager.inMemory(process.cwd()),
 	settings,
-	modelRegistry: new ModelRegistry(auth, `${process.env.PI_CODING_AGENT_DIR}/models.yml`),
+	modelRegistry: new ModelRegistry(auth, `${process.env.PI_CODING_AGENT_DIR}/models.toml`),
 });
 const host = new ControlHost({ session, role: "rpc" });
 await host.start();

@@ -52,7 +52,7 @@ async function withGuardedSession(run: (session: AgentSession, settings: Setting
 		agentDir: tempDir.path(),
 		sessionManager: SessionManager.inMemory(tempDir.path()),
 		authStorage,
-		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+		modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 		settings,
 		model: buildLocalModel(),
 		disableExtensionDiscovery: true,

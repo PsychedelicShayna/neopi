@@ -9,7 +9,7 @@ const log = logger("routes:fallback-chain");
 /**
  * #31: the fallback chain that covers a live chat's active model, for the
  * model picker. Edits go through `PATCH /api/npi-config` (`retry.fallbackChains`
- * with `entries`), which validates, writes config.yml and reloads live chats.
+ * with `entries`), which validates, writes config.toml and reloads live chats.
  */
 export function buildFallbackChainRouter(bridge: AgentBridge): Hono {
 	const app = new Hono();

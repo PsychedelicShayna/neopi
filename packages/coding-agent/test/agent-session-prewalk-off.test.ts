@@ -28,7 +28,7 @@ describe("AgentSession /prewalk off", () => {
 		tempDir = TempDir.createSync("@pi-prewalk-off-");
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterEach(async () => {

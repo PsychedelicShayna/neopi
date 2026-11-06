@@ -1,5 +1,11 @@
 # Routines Visual Canvas Builder
 
+> Historical canvas design proposal. The implemented builder now uses
+> `spec-toml.ts` and direct `RoutineSpec` TOML in `spec_toml`; its source editor,
+> save preview and bundled templates are native TOML. YAML snippets below
+> describe the original proposal, not the current authoring contract. See
+> [the current tutorial](../routines-v1-tutorial.md).
+
 ## Problem
 
 The current V1 routines builder is correct but not ambitious enough: it is a schema-driven form editor for a linear YAML pipeline. That gets users off raw YAML, but it still feels like editing blocks in a narrow admin form. It does not match the interaction model people expect from an automation builder: visual nodes, handles, connections, branches, and clear data flow.

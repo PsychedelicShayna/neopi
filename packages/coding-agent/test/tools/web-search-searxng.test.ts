@@ -8,6 +8,7 @@ import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { searchSearXNG } from "@oh-my-pi/pi-coding-agent/web/search/providers/searxng";
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {
@@ -126,10 +127,10 @@ describe("SearXNG web search provider", () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-filters-"));
 		try {
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				["searxng:", "  endpoint: https://searx.example.org", "  categories: news", "  safesearch: 2", ""].join(
-					"\n",
-				),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({
+					searxng: { endpoint: "https://searx.example.org", categories: "news", safesearch: 2 },
+				}),
 			);
 			await Settings.init({ agentDir });
 
@@ -167,18 +168,14 @@ describe("SearXNG web search provider", () => {
 		}
 	});
 
-	it("reads Basic auth credentials from nested config.yml settings", async () => {
+	it("reads Basic auth credentials from nested config.toml settings", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-settings-"));
 		try {
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				[
-					"searxng:",
-					"  endpoint: https://searx.example.org",
-					"  basicUsername: alice",
-					"  basicPassword: s3cret",
-					"",
-				].join("\n"),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({
+					searxng: { endpoint: "https://searx.example.org", basicUsername: "alice", basicPassword: "s3cret" },
+				}),
 			);
 			await Settings.init({ agentDir });
 
@@ -340,10 +337,13 @@ describe("SearXNG web search provider", () => {
 		expect(captured.headers?.get("Authorization")).toBe("Bearer bearer-token");
 	});
 
-	it("falls back to SEARXNG_ENDPOINT/SEARXNG_TOKEN when config.yml leaves them blank or null", async () => {
+	it("falls back to SEARXNG_ENDPOINT/SEARXNG_TOKEN when config.toml leaves them blank or null", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-blank-"));
 		try {
-			await Bun.write(path.join(agentDir, "config.yml"), ["searxng:", '  endpoint: ""', "  token:", ""].join("\n"));
+			await Bun.write(
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({ searxng: { endpoint: "", token: null } }),
+			);
 			await Settings.init({ agentDir });
 			process.env.SEARXNG_ENDPOINT = "https://searx-env.example.org";
 			process.env.SEARXNG_TOKEN = "env-token";
@@ -374,13 +374,10 @@ describe("SearXNG web search provider", () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-engines-"));
 		try {
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				[
-					"searxng:",
-					"  endpoint: https://searx-shortcuts.example.org",
-					'  engines: "ddg, Brave, unknown"',
-					"",
-				].join("\n"),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({
+					searxng: { endpoint: "https://searx-shortcuts.example.org", engines: "ddg, Brave, unknown" },
+				}),
 			);
 			await Settings.init({ agentDir });
 
@@ -423,8 +420,10 @@ describe("SearXNG web search provider", () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "searxng-engines-fallback-"));
 		try {
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				["searxng:", "  endpoint: https://searx-noconfig.example.org", '  engines: "ddg,brave"', ""].join("\n"),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({
+					searxng: { endpoint: "https://searx-noconfig.example.org", engines: "ddg,brave" },
+				}),
 			);
 			await Settings.init({ agentDir });
 

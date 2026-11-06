@@ -12,6 +12,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { Model, Usage } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText, formatSubagentDumpText } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { parseSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 const ZERO_USAGE: Usage = {
 	input: 0,
@@ -143,7 +144,12 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 							type: "toolCall",
 							id: "c1",
 							name: "read",
-							arguments: { [INTENT_FIELD]: "Reading the file", path: "src/foo.ts" },
+							arguments: {
+								[INTENT_FIELD]: "Reading the file",
+								path: "src/foo.ts",
+								nested: { absent: null },
+								list: [null, "kept"],
+							},
 						},
 					],
 					api: "mock",
@@ -169,11 +175,14 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 		expect(out).toContain("## Assistant");
 		expect(out).toContain("### Tool Result: read");
 		expect(out).toContain("### Tool Call: read");
-		expect(out).toContain("path: src/foo.ts");
-		// The `i` intent renders as a `//` comment under the heading, never inside the YAML args.
+		expect(out).toContain('path = "src/foo.ts"');
+		const args = /```toml\n([\s\S]*?)\n```/.exec(out)?.[1];
+		expect(args).toBeDefined();
+		expect(parseSettingsToml(args!)).toEqual({ path: "src/foo.ts", nested: { absent: null }, list: [null, "kept"] });
+		// The `i` intent renders as a `//` comment under the heading, never inside the TOML args.
 		expect(out).toContain("// Reading the file");
-		expect(out).not.toContain(`${INTENT_FIELD}:`);
-		// Tool calls render as a readable heading + YAML, never the <invoke>/<parameter> XML.
+		expect(parseSettingsToml(args!)).not.toHaveProperty(INTENT_FIELD);
+		// Tool calls render as a readable heading + TOML, never the <invoke>/<parameter> XML.
 		expect(out).not.toContain("<invoke ");
 		expect(out).not.toContain("<parameter ");
 		expect(out).toContain("file body");

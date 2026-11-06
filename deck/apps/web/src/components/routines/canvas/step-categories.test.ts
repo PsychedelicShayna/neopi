@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { STEP_TYPE_DESCRIPTIONS } from "../spec-yaml";
+import { STEP_TYPE_DESCRIPTIONS } from "../spec-toml";
 
 import { STEP_CATEGORIES } from "./step-categories";
 

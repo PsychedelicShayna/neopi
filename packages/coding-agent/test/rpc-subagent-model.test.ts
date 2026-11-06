@@ -118,7 +118,7 @@ describe("RPC set_subagent_model", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage, path.join(root, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(root, "models.toml")),
 			thinkingLevel: ThinkingLevel.Low,
 		});
 		AgentRegistry.global().register({

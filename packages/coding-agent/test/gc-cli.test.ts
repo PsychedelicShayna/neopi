@@ -27,6 +27,7 @@ import {
 	hashPath,
 	setAgentDir,
 	setProjectDir,
+	stringifySettingsToml,
 } from "@oh-my-pi/pi-utils";
 import { runCli } from "../src/cli";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -120,15 +121,15 @@ async function agePath(file: string, ageDays = 1): Promise<void> {
 	await fs.utimes(file, ts, ts);
 }
 
-async function writeConfig(agentDir: string, body: string): Promise<void> {
+async function writeConfig(agentDir: string, body: Record<string, unknown>): Promise<void> {
 	await fs.mkdir(agentDir, { recursive: true });
-	await Bun.write(path.join(agentDir, "config.yml"), body);
+	await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml(body));
 }
 
-async function writeProjectConfig(projectDir: string, body: string): Promise<void> {
+async function writeProjectConfig(projectDir: string, body: Record<string, unknown>): Promise<void> {
 	const configDir = path.join(projectDir, ".omp");
 	await fs.mkdir(configDir, { recursive: true });
-	await Bun.write(path.join(configDir, "config.yml"), body);
+	await Bun.write(path.join(configDir, "config.toml"), stringifySettingsToml(body));
 }
 
 describe("runGcCommand blob sweep", () => {
@@ -512,19 +513,16 @@ describe("runGcCommand blob sweep", () => {
 	test("uses configured gc selectors and retention defaults", async () => {
 		await agePath(await writeBlob(root, hashFor("orphan"), "orphan"));
 		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
-		await writeConfig(
-			root,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: true",
-				"  wal: false",
-				"  coldArchiveAfterDays: 7",
-				"  retainNewestGlobal: 0",
-				"  retainNewestPerCwd: 0",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(root, {
+			gc: {
+				blobs: false,
+				archive: true,
+				wal: false,
+				coldArchiveAfterDays: 7,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+			},
+		});
 
 		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
 
@@ -539,25 +537,19 @@ describe("runGcCommand blob sweep", () => {
 	test("--apply loads gc config from each requested agent dir", async () => {
 		const initializedAgentDir = path.join(root, "initialized-agent");
 		const targetAgentDir = path.join(root, "target-agent");
-		await writeConfig(
-			initializedAgentDir,
-			["gc:", "  blobs: false", "  archive: false", "  wal: false", ""].join("\n"),
-		);
+		await writeConfig(initializedAgentDir, { gc: { blobs: false, archive: false, wal: false } });
 		await Settings.init({ agentDir: initializedAgentDir });
 		await writeSession(targetAgentDir, "project", "archive-me", "complete", { ageDays: 10 });
-		await writeConfig(
-			targetAgentDir,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: true",
-				"  wal: false",
-				"  coldArchiveAfterDays: 7",
-				"  retainNewestGlobal: 0",
-				"  retainNewestPerCwd: 0",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(targetAgentDir, {
+			gc: {
+				blobs: false,
+				archive: true,
+				wal: false,
+				coldArchiveAfterDays: 7,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+			},
+		});
 
 		const result = await runGcCommand({ flags: { agentDir: targetAgentDir, apply: true } });
 
@@ -571,19 +563,16 @@ describe("runGcCommand blob sweep", () => {
 
 	test("invalid configured archive age falls back to schema default", async () => {
 		const session = await writeSession(root, "project", "too-new", "complete", { ageDays: 1 });
-		await writeConfig(
-			root,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: true",
-				"  wal: false",
-				"  coldArchiveAfterDays: nope",
-				"  retainNewestGlobal: 0",
-				"  retainNewestPerCwd: 0",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(root, {
+			gc: {
+				blobs: false,
+				archive: true,
+				wal: false,
+				coldArchiveAfterDays: "nope",
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+			},
+		});
 
 		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
 
@@ -594,19 +583,16 @@ describe("runGcCommand blob sweep", () => {
 
 	test("invalid configured retention counts fall back to schema defaults", async () => {
 		const session = await writeSession(root, "project", "kept-by-default", "complete", { ageDays: 90 });
-		await writeConfig(
-			root,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: true",
-				"  wal: false",
-				"  coldArchiveAfterDays: 0",
-				"  retainNewestGlobal: nope",
-				"  retainNewestPerCwd: nope",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(root, {
+			gc: {
+				blobs: false,
+				archive: true,
+				wal: false,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: "nope",
+				retainNewestPerCwd: "nope",
+			},
+		});
 
 		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
 
@@ -618,7 +604,7 @@ describe("runGcCommand blob sweep", () => {
 	test("explicit selectors override disabled gc config", async () => {
 		const blob = await writeBlob(root, hashFor("orphan"), "orphan");
 		await agePath(blob);
-		await writeConfig(root, ["gc:", "  blobs: false", "  archive: false", "  wal: false", ""].join("\n"));
+		await writeConfig(root, { gc: { blobs: false, archive: false, wal: false } });
 
 		const result = await runGcCommand({ flags: { agentDir: root, blobs: true, apply: true } });
 
@@ -630,19 +616,16 @@ describe("runGcCommand blob sweep", () => {
 
 	test("dry-run reads gc config without initializing settings storage", async () => {
 		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
-		await writeConfig(
-			root,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: true",
-				"  wal: false",
-				"  coldArchiveAfterDays: 7",
-				"  retainNewestGlobal: 0",
-				"  retainNewestPerCwd: 0",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(root, {
+			gc: {
+				blobs: false,
+				archive: true,
+				wal: false,
+				coldArchiveAfterDays: 7,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+			},
+		});
 
 		const result = await runGcCommand({ flags: { agentDir: root } });
 
@@ -659,30 +642,19 @@ describe("runGcCommand blob sweep", () => {
 		await fs.mkdir(projectRoot, { recursive: true });
 		setProjectDir(projectRoot);
 		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
-		await writeConfig(
-			root,
-			[
-				"gc:",
-				"  blobs: false",
-				"  archive: false",
-				"  wal: false",
-				"  coldArchiveAfterDays: 30",
-				"  retainNewestGlobal: 1",
-				"  retainNewestPerCwd: 1",
-				"",
-			].join("\n"),
-		);
-		await writeProjectConfig(
-			projectRoot,
-			[
-				"gc:",
-				"  archive: true",
-				"  coldArchiveAfterDays: 7",
-				"  retainNewestGlobal: 0",
-				"  retainNewestPerCwd: 0",
-				"",
-			].join("\n"),
-		);
+		await writeConfig(root, {
+			gc: {
+				blobs: false,
+				archive: false,
+				wal: false,
+				coldArchiveAfterDays: 30,
+				retainNewestGlobal: 1,
+				retainNewestPerCwd: 1,
+			},
+		});
+		await writeProjectConfig(projectRoot, {
+			gc: { archive: true, coldArchiveAfterDays: 7, retainNewestGlobal: 0, retainNewestPerCwd: 0 },
+		});
 
 		const dryRun = await runGcCommand({ flags: { agentDir: root } });
 
@@ -2525,15 +2497,12 @@ describe("runGcCommand stale state", () => {
 	});
 
 	test("an unqualified run leaves stale state alone unless gc.stale is enabled", async () => {
-		await writeConfig(root, ["gc:", "  blobs: false", "  archive: false", "  wal: false", ""].join("\n"));
+		await writeConfig(root, { gc: { blobs: false, archive: false, wal: false } });
 
 		const unqualified = await runGcCommand({ flags: { agentDir: root } });
 		expect(unqualified.stale).toBeUndefined();
 
-		await writeConfig(
-			root,
-			["gc:", "  blobs: false", "  archive: false", "  wal: false", "  stale: true", ""].join("\n"),
-		);
+		await writeConfig(root, { gc: { blobs: false, archive: false, wal: false, stale: true } });
 		const enabled = await runGcCommand({ flags: { agentDir: root } });
 		expect(enabled.stale?.wouldDelete).toBe(0);
 	});
@@ -2801,7 +2770,7 @@ describe("runGcCommand session compression", () => {
 
 	test("--compress-after-days overrides gc.compressAfterDays", async () => {
 		fakeCompressionBackend();
-		await writeConfig(root, ["gc:", "  compressAfterDays: 60", ""].join("\n"));
+		await writeConfig(root, { gc: { compressAfterDays: 60 } });
 		await writeIdleSession(Bun.randomUUIDv7(), "complete", 30);
 
 		const configured = await runGcCommand({ flags: { agentDir: root, compress: true } });

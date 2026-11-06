@@ -55,7 +55,7 @@ describe("POST /inbox/:id/promote", () => {
 	});
 	test("preserves card front matter and explicit project assignment on promotion", async () => {
 		const app = boot();
-		const metadata = "---\nread-only: true\nworktree: /linked\nmodel: provider/model\nrole: research\ncustom:\n  owner: Captain\n---\n\nInvestigate routing";
+		const metadata = "+++\nread-only = true\nworktree = '/linked'\nmodel = 'provider/model'\nrole = 'research'\n[custom]\nowner = 'Captain'\n+++\n\nInvestigate routing";
 		const item = createInbox({ kind: "ticket", title: "Routing", body: metadata, source: "telegram:-10:42:7" });
 		const res = await app.request(`/inbox/${item.id}/promote`, {
 			method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: "/project" }),

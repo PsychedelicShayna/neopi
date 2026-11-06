@@ -79,7 +79,7 @@ describe("session transitions while a tool runs", () => {
 		const sessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
 		const authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1 });
 		cfgCompactionAutoContinue.set(settings, false);
 		session = new AgentSession({

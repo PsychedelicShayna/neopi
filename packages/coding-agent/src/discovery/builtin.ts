@@ -12,7 +12,7 @@ import {
 	PRODUCT_NAME,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { settingsTomlSource } from "@oh-my-pi/pi-utils/settings-toml";
 import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
@@ -891,17 +891,6 @@ async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
 	const items: Settings[] = [];
 	const warnings: string[] = [];
 
-	const parseYamlSettings = (content: string, filePath: string): Record<string, unknown> | null => {
-		try {
-			const data = YAML.parse(content);
-			if (!data || typeof data !== "object" || Array.isArray(data)) return {};
-			return data as Record<string, unknown>;
-		} catch {
-			warnings.push(`Failed to parse ${filePath}`);
-			return null;
-		}
-	};
-
 	for (const { dir, level } of await getConfigDirs(ctx)) {
 		const settingsPath = path.join(dir, "settings.json");
 		const settingsContent = await readFile(settingsPath);
@@ -919,19 +908,19 @@ async function loadSettings(ctx: LoadContext): Promise<LoadResult<Settings>> {
 			}
 		}
 
-		const configPath = path.join(dir, "config.yml");
-		const configContent = await readFile(configPath);
-		if (!configContent) continue;
-
-		const data = parseYamlSettings(configContent, configPath);
-		if (!data) continue;
-
-		items.push({
-			path: configPath,
-			data,
-			level,
-			_source: createSourceMeta(PROVIDER_ID, configPath, level),
-		});
+		const configPath = path.join(dir, "config.toml");
+		try {
+			const source = await settingsTomlSource(dir);
+			if (!source) continue;
+			items.push({
+				path: source.filePath,
+				data: source.data,
+				level,
+				_source: createSourceMeta(PROVIDER_ID, source.filePath, level),
+			});
+		} catch {
+			warnings.push(`Failed to load ${configPath}`);
+		}
 	}
 
 	return { items, warnings };

@@ -370,7 +370,7 @@ export function resolveOpenAIRequestSetup(
 		setHeaderIfAbsent(headers, "User-Agent", USER_AGENT);
 	}
 	const requestHeaders = { ...headers };
-	// A keyless provider (`auth: none` in models.yml) resolves to the `N/A`
+	// A keyless provider (`auth = "none"` in models.toml) resolves to the `N/A`
 	// sentinel rather than a real key. Injecting `Authorization: Bearer N/A`
 	// breaks custom endpoints that authenticate via their own headers (e.g.
 	// `headers.x-api-key`) and reject the bogus bearer — mirror the sentinel

@@ -4,7 +4,7 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { discoverAdvisorConfigs, type DiscoveredAdvisors } from "./config";
 import { configCandidatePaths } from "./watchdog";
 
-const ROSTER_FILES = ["WATCHDOG.yml", "WATCHDOG.yaml"];
+const ROSTER_FILES = ["WATCHDOG.toml", "WATCHDOG.yml", "WATCHDOG.yaml"];
 const RELOAD_DELAY_MS = 100;
 
 /** Watch candidate directories so creation, deletion and atomic replacement all trigger discovery. */

@@ -56,11 +56,11 @@ Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
-Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.ts`):
+Native definitions use strict `+++` TOML frontmatter followed by the Markdown system prompt. Parsing normalizes metadata via `parseAgentFields()` (`src/discovery/helpers.ts`):
 
 - missing/non-string `name` or `description` => invalid (`null`), caller treats as parse failure
 - `main` and `sub` are reserved names (checked after trimming and lowercasing); definitions using them are invalid
-- `tools` accepts CSV or array; legacy tool aliases are normalized and mixed arrays retain their string entries. Omitted or YAML-null `tools` selects the default built-in toolset. Any other declaration with no tool names (including `tools: []`, empty CSV, or malformed scalar/array values) selects no built-ins. Structured children still receive the required `yield` tool; MCP, extension, and custom tools remain additive.
+- `tools` accepts CSV or array; legacy tool aliases are normalized and mixed arrays retain their string entries. Omitted `tools` selects the default built-in toolset. Any other declaration with no tool names (including `tools = []`, empty CSV, or malformed scalar/array values) selects no built-ins. Structured children still receive the required `yield` tool; MCP, extension, and custom tools remain additive. Imported YAML-null tools retain the default-toolset meaning through the native codec.
 - `spawns` accepts `*`, CSV, or array
 - backward-compat behavior: if `spawns` missing but `tools` includes `task`, `spawns` becomes `*`
 - `output` is passed through as opaque schema data
@@ -75,9 +75,11 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 ### Rich definition editing
 
-Use **Edit definition** (Ctrl-G) in `/agents` for an existing definition, or **New agent** to start an empty draft. Both open the same editor. Every supported field appears even when absent. Existing files are edited in place; new definitions and copies of bundled agents can be saved in Project or User scope.
+Use **Edit definition** (Ctrl-G) in `/agents` for an existing definition, or **New agent** to start an empty draft. Both open the same editor. Every supported field appears even when absent. The scope selector is available for existing definitions as well as new definitions and copies of bundled agents. Native definitions save to the selected Project or User scope as `<name>.toml.md`; editing an external definition creates a native `.omp` override instead of changing its original source.
 
-The Tools page lists built-ins, hidden structured-output tools and registered extension tools as checkboxes. Default selection remains distinct from an explicit empty allowlist. Structured output has an enable toggle, a JSON Schema / JSON Type Definition selector, nested field rows, required switches and descriptions. Its typed keyword forms support constraints, enums, lists, tagged unions, references and other schema metadata without editing YAML.
+The Tools page lists built-ins, hidden structured-output tools and registered extension tools as checkboxes. Default selection remains distinct from an explicit empty allowlist. Structured output has an enable toggle, a JSON Schema / JSON Type Definition selector, nested field rows, required switches and descriptions. Its typed keyword forms support constraints, enums, lists, tagged unions, references and other schema metadata without editing TOML.
+
+Raw authoring requires strict `+++` TOML frontmatter. Rich edits preserve native comments and unknown metadata instead of rebuilding only the recognized fields.
 
 **Edit definition file contents** opens the Markdown/front-matter document directly. Rich and raw edits share one draft and write only when saved. Ctrl-G inside a text field opens the configured external editor. With a field row selected, `r` generates that field from the current draft; `R` or Ctrl-R first asks for a comment. **Generate everything** fills the full definition, and **Generate from existing definitions** mixes only the selected bases while preserving pre-set fields. Comment-driven generation retains its conversation for `task.definitionGenerationConversationTtlMs` (one hour by default). Esc leaves every editor page and cancels active generation.
 
@@ -85,28 +87,28 @@ The Tools page lists built-ins, hidden structured-output tools and registered ex
 
 In addition to the unchanged boolean and model-selector forms, `advisor` accepts a named reference:
 
-```yaml
-advisor:
-  ref: velvet
-  scope: project-omp
+```toml
+[advisor]
+ref = "velvet"
+scope = "project-omp"
 ```
 
-`scope` is optional; accepted sources are `user`, `project` (project root), `project-omp` (`.omp/WATCHDOG.yml`) and `session`. An explicit scope selects that source even when another file shadows the same advisor name. A missing reference fails the spawn rather than silently substituting another advisor.
+`scope` is optional; accepted sources are `user`, `project` (project root), `project-omp` (`.omp/WATCHDOG.toml`) and `session`. An explicit scope selects that source even when another file shadows the same advisor name. A missing reference fails the spawn rather than silently substituting another advisor.
 
 Or attach a private definition:
 
-```yaml
-advisor:
-  inline:
-    name: careful-review
-    model: "@advisor"
-    instructions: Check the proposed change and explain concrete concerns.
-    reviewMode: turn
-    includeThinking: true
-    delivery:
-      nit: on-yield
-      concern: next-tool-call
-      blocker: next-tool-call
+```toml
+[advisor.inline]
+name = "careful-review"
+model = "@advisor"
+instructions = "Check the proposed change and explain concrete concerns."
+reviewMode = "turn"
+includeThinking = true
+
+[advisor.inline.delivery]
+nit = "on-yield"
+concern = "next-tool-call"
+blocker = "next-tool-call"
 ```
 
 Inline definitions support the same model, tools, instructions, base prompt override, enablement, thinking visibility, note budget, review cadence, backlog and session-kind scope as `/advisor configure`. Delivery can be set independently per severity to `on-yield` or `next-tool-call`. Omitted model uses the advisor role. The watched agent and advisory target are implicitly the definition being edited; no ingest-source configuration is introduced. The resolved private roster is passed only to the spawned session and retained for revival, never added to a WATCHDOG catalog.
@@ -114,32 +116,32 @@ Inline definitions support the same model, tools, instructions, base prompt over
 
 ## Role-backed custom agents
 
-OMP discovers user agents from `~/.omp/agent/agents/*.md` and project agents from `.omp/agents/*.md`.
+OMP discovers user agents from `~/.omp/agent/agents/*.toml.md` and project agents from `.omp/agents/*.toml.md`. Existing YAML-frontmatter `.md` definitions are imported once to a same-permission `.toml.md` sibling without changing the original bytes. An existing native sibling wins, and discovery returns only one definition for the pair.
 
 Give the agent a role alias in frontmatter, then dispatch it by name. For model routing, task dispatch sets only `agent`; it does not set a worker model:
 
-`~/.omp/agent/agents/reviewer.md`:
+`~/.omp/agent/agents/reviewer.toml.md`:
 
 ```md
----
-name: reviewer
-description: Review a change for correctness.
-model: "@review"
----
++++
+name = "reviewer"
+description = "Review a change for correctness."
+model = "@review"
++++
 
 Review the assigned change and report concrete findings.
 ```
 
-Set the role mapping in `~/.omp/agent/config.yml`:
+Set the role mapping in `~/.omp/agent/config.toml`:
 
-```yaml
-modelRoles:
-   review: openai/gpt-5.4:high
+```toml
+[modelRoles]
+review = "openai/gpt-5.4:high"
 ```
 
 `@review` resolves through `modelRoles.review`. Each `modelRoles.<role>` value stores a concrete model selector and may append a thinking suffix such as `:high` (`src/config/model-resolver.ts`). Changing that mapping affects subsequent task resolutions without editing agent definitions. Task/eval preflight reloads the current global, project, and explicit overlay settings before rediscovering agents, so agent files and their role aliases added during a live session resolve from one refreshed configuration state.
 
-With `modelRoleStorage: project`, role effort metadata in `roleEffortSelections.<role>` can be set separately in project `.omp/config.yml` or global `~/.omp/agent/config.yml`; absent project entries inherit the global entry. `fixed` and `auto` role choices remain implicit and obey matching global `effort.rules`; `inherit` leaves provider effort unspecified. `retry.fallbackEffortSelections.<chain-key>.<configured-selector>` stores separate fixed/Auto/Inherit effort choices for fallback entries in global settings. The fallback selector's explicit concrete suffix, when deliberately supplied by a caller, remains an explicit override; an explicit `:auto` is still restricted by the new model's rule. The configured Auto set is model-bound and is not carried to a different fallback model.
+With `modelRoleStorage = "project"`, role effort metadata in `roleEffortSelections.<role>` can be set separately in project `.omp/config.toml` or global `~/.omp/agent/config.toml`; absent project entries inherit the global entry. `fixed` and `auto` role choices remain implicit and obey matching global `effort.rules`; `inherit` leaves provider effort unspecified. `retry.fallbackEffortSelections.<chain-key>.<configured-selector>` stores separate fixed/Auto/Inherit effort choices for fallback entries in global settings. The fallback selector's explicit concrete suffix, when deliberately supplied by a caller, remains an explicit override; an explicit `:auto` is still restricted by the new model's rule. The configured Auto set is model-bound and is not carried to a different fallback model.
 
 With the default batched task schema, supply shared `context` and per-item `task` and `solutionSpace`. `solutionSpace` describes how open-ended the assignment is, rather than its size. Set `agent` only when choosing a non-default agent:
 
@@ -160,24 +162,23 @@ With the default batched task schema, supply shared `context` and per-item `task
 
 ## Named routing policies
 
-Declare workflow routing once in user `config.yml` or project `.omp/config.yml`:
+Declare workflow routing once in user `config.toml` or project `.omp/config.toml`:
 
-```yaml
-routingPolicies:
-  issue-funnel:
-    slots:
-      scout:
-        agent: scout
-        model: "@smol:medium"
-        boundary: Investigate and report evidence only; never edit or publish.
-      authority:
-        model: xai-oauth/grok-4.6
-        effort: medium
-        boundary: Own final issue publication; do not implement repository changes.
-      fallback:
-        model: anthropic/claude-sonnet-5
-        effort: medium
-        boundary: Take over publication only when explicitly assigned.
+```toml
+[routingPolicies.issue-funnel.slots.scout]
+agent = "scout"
+model = "@smol:medium"
+boundary = "Investigate and report evidence only; never edit or publish."
+
+[routingPolicies.issue-funnel.slots.authority]
+model = "xai-oauth/grok-4.6"
+effort = "medium"
+boundary = "Own final issue publication; do not implement repository changes."
+
+[routingPolicies.issue-funnel.slots.fallback]
+model = "anthropic/claude-sonnet-5"
+effort = "medium"
+boundary = "Take over publication only when explicitly assigned."
 ```
 
 Use `agent: "policy:issue-funnel/scout"` in task items or Eval `agent()`.
@@ -227,14 +228,14 @@ After dispatch, press `Alt+A` to open [Agent Hub](./agent-hub.md). Its live rost
 
 Route these tiers through roles by keeping aliases in `task.agentModelOverrides` and concrete selectors only in `modelRoles`:
 
-```yaml
-task:
-   agentModelOverrides:
-      sonic: "@fast_worker"
-      task: "@good_worker"
-modelRoles:
-   fast_worker: openai/gpt-5-mini
-   good_worker: openai/gpt-5.4:high
+```toml
+[task.agentModelOverrides]
+sonic = "@fast_worker"
+task = "@good_worker"
+
+[modelRoles]
+fast_worker = "openai/gpt-5-mini"
+good_worker = "openai/gpt-5.4:high"
 ```
 
 The `vibe_spawn` `cli` remains `fast` or `good`; update `modelRoles` to change the worker model.
@@ -250,11 +251,11 @@ Bundled agents are embedded at build time (`src/task/agents.ts`) using text impo
 
 Loading path:
 
-1. `loadBundledAgents()` parses embedded markdown with `parseAgent(..., "bundled", "fatal")`
+1. `loadBundledAgents()` parses embedded Markdown with strict native `parseAgent(..., "bundled")`
 2. results are cached in-memory (`bundledAgentsCache`)
 3. `clearBundledAgentsCache()` is test-only cache reset
 
-Because bundled parsing uses `level: "fatal"`, unrecoverable YAML errors or invalid required fields throw and can fail discovery entirely.
+Bundled parsing uses strict native frontmatter, so invalid TOML or required fields throw and can fail discovery entirely. `npi agents unpack` writes these definitions as `<name>.toml.md` with `+++` TOML frontmatter. By default it skips agents with an existing native or legacy `.md` definition, reporting the existing path rather than shadowing legacy customizations. `--force` writes the native file; retained legacy YAML originals are never overwritten.
 
 ## Filesystem and plugin discovery
 
@@ -290,7 +291,7 @@ Implications:
 - Earlier extension roots override later extension roots, Claude marketplace plugins, and bundled agents.
 - Non-bundled agents override bundled agents with the same name.
 - Name matching is case-sensitive (`Task` and `task` are distinct).
-- Within one directory, markdown files are read in lexicographic filename order before dedup.
+- Within one native directory, an existing `<name>.toml.md` wins over `<name>.md`; the pair is loaded once. Remaining Markdown files are read in lexicographic filename order before name dedup.
 
 ## Invalid/missing agent file behavior
 
@@ -298,14 +299,15 @@ Per directory (`loadAgentsFromDir`):
 
 - unreadable/missing directory: treated as empty (`readdir(...).catch(() => [])`)
 - file read or parse failure: warning logged, file skipped
-- parse path uses `parseAgent(..., level: "warn")`
+- native definitions use strict `parseAgent`; external harness contracts use the explicit YAML `parseExternalAgent` adapter
 
-Frontmatter failure behavior comes from `parseFrontmatter`:
+Native frontmatter uses `parseAgent` and the shared native Markdown codec:
 
-- the default lenient parser normalizes line endings and kebab-case keys, replaces tabs in YAML, and can repair ambiguous plain scalars before reporting failure
-- an unrecovered parse error at `warn` level logs a warning, then falls back to top-level `key: value` lines
-- fallback values are individually parsed as YAML when possible, preserving scalar/array types
-- if required fields remain invalid, `parseAgentFields` fails, then `AgentParsingError` is thrown and caught by the directory loader (file skipped)
+- a legacy YAML document is imported to its canonical `.toml.md` sibling once; the original bytes and permissions are retained, and YAML metadata comments are carried into a TOML preamble with a notice that their original key associations could not be retained
+- an existing canonical sibling is authoritative, even when the legacy document differs
+- invalid TOML is not repaired or reinterpreted as YAML
+- invalid required fields fail parsing and the directory loader logs a warning and skips the definition
+- external Claude and Agent Plugins standard contracts continue to use the explicit YAML import adapter; their source documents are not migrated
 
 Net effect: one bad custom agent file does not abort discovery of other files.
 
@@ -378,7 +380,7 @@ lists them). For each listed provider the child authenticates
 only with those accounts: ranking, the parent's copied account affinity, restored pins, fallback
 passes, credential rotation, and saved-reset restores stay inside the pool, and runtime,
 environment, and stored API keys
-are not used; a `models.yml` `apiKey` for the provider fails the request instead of sending a pooled
+are not used; a `models.toml` `apiKey` for the provider fails the request instead of sending a pooled
 token to that endpoint. When no pooled account can serve, the request fails with `No API key for
 provider: … restricted to its OAuth account pool` instead of borrowing another account; an empty
 list allows no account. Saved resets about to expire are still salvaged on every account, because

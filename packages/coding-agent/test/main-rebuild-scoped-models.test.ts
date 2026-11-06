@@ -244,7 +244,7 @@ describe("buildSessionOptions --models scope selection", () => {
 	});
 
 	function registry(): ModelRegistry {
-		return new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		return new ModelRegistry(authStorage, tempDir.join("models.toml"));
 	}
 
 	it("defers a --models scope that resolved empty to the SDK modelPattern path", async () => {

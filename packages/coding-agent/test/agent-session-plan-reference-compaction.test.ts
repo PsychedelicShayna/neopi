@@ -120,7 +120,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		fixtureDir = TempDir.createSync("@pi-agent-session-plan-ref-compaction-fixture-");
 		authStorage = await AuthStorage.create(path.join(fixtureDir.path(), "testauth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(fixtureDir.path(), "models.toml"));
 	});
 
 	beforeEach(() => {

@@ -1,3 +1,4 @@
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -81,7 +82,7 @@ if (process.platform === "win32") test("Windows local runs refuse to spawn witho
 			const shell = createShellFixture(home);
 			const spec = { name: "no native ownership", trigger: [{ manual: {} }], concurrency: "skip" as const,
 				steps: [{ id: "local", type: "run" as const, cwd: shell.cwd, command: shell.command("write", { marker }) }] };
-			const routine = createV1Routine({ name: spec.name, spec, specYaml: JSON.stringify(spec), enabled: true });
+			const routine = createV1Routine({ name: spec.name, spec, specToml: stringifyToml(spec), enabled: true });
 			await runner.fire(routine.id);
 			const run = listRuns(routine.id)[0]!;
 			expect(listStepRuns(run.id)[0]?.error).toContain("owned Windows processes require a configured NeoPi native backend");

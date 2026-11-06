@@ -200,13 +200,13 @@ Each setting is declared once with `register({ id, type, default, env?, protocol
 - `cfgX.get(scope)` — effective value; `scope` is a `Settings` instance or anything carrying one (`AgentSession`, `ToolSession`). Reads are memoized per scope.
 - `cfgX.set(scope, v)` — writes the **global** layer and queues a background save; values the definition's type rejects throw.
 - `cfgX.unset(scope)` — removes the key from the global layer (what `omp config reset` and clearing a settings-panel text field do), so later default changes still apply.
-- `cfgX.setEntry(scope, key, v)` / `cfgX.setMember(scope, item, { member })` — write one entry of a record setting (`undefined` removes it) or add/remove one item of a list setting in the global layer; the save changes only that entry or item in `config.yml`, so entries another layer (a `--config` overlay) supplies never land there.
+- `cfgX.setEntry(scope, key, v)` / `cfgX.setMember(scope, item, { member })` — write one entry of a record setting (`undefined` removes it) or add/remove one item of a list setting in the global layer; the save changes only that entry or item in `config.toml`, so entries another layer (a `--config` overlay) supplies never land there.
 - `cfgX.override(scope, v)` / `cfgX.clearOverride(scope)` — runtime-only override, never persisted.
 - `cfgX.map(fn)` / `combine({...}, fn)` — memoized derived values; `.listen(scope, cb)` observes changes of a handle or derivation.
 - `cfgX.provenance(scope)` — layer supplying the value: `"env" | "runtime" | "overlay" | "project" | "global" | "default"`.
 - `cfgX.layered(scope)` — the value from the settings layers alone, ignoring the environment variable (what the settings panel shows and edits).
 
-A configured value that does not fit the declared type (or enum values) is ignored with a warning and the default is used; a definition's `validate` rejects malformed values on load, on every reload, and before every write. A keep-last-good watcher reload, and a save that merges external edits to `config.yml`, keep only the invalid file's layer at its last good values (the warning names the file) while the other layers still refresh. A configured `null` generally counts as unset. Record entries such as model roles and model presets can use `null` in runtime or overlay layers as tombstones that hide lower-layer entries; project/global null entries remain unset.
+A configured value that does not fit the declared type (or enum values) is ignored with a warning and the default is used; a definition's `validate` rejects malformed values on load, on every reload, and before every write. A keep-last-good watcher reload, and a save that merges external edits to `config.toml`, keep only the invalid file's layer at its last good values (the warning names the file) while the other layers still refresh. A configured `null` generally counts as unset. Record entries such as model roles and model presets can use `null` in runtime or overlay layers as tombstones that hide lower-layer entries; project/global null entries remain unset.
 
 ### Layers (`src/config/settings.ts`)
 
@@ -214,34 +214,34 @@ Effective precedence, highest first:
 
 1. Environment variable declared on the definition (`env: "NAME"`), parsed by the setting's type; unparseable text counts as unset. Booleans follow `parseFlag`: empty is unset, `1`/`y`/`true`/`yes`/`on` (lower or upper case) is true, any other text is false
 2. Runtime overrides: in-memory, non-persistent
-3. Config overlays: `PI_CONFIG_FILES` (platform path-list), followed by repeated `omp --config <path>` files; all are loaded as `config.yml`-style YAML for this process only
-4. Project settings: discovered via the settings capability (`settings.json` and `config.yml` from providers)
-5. Global settings: the first present file among `~/.omp/agent/config.yml` and `config.yaml`
+3. Config overlays: `PI_CONFIG_FILES` (platform path-list), followed by repeated `omp --config <path>` TOML files for this process only. Explicit legacy YAML paths import once to their sibling `.toml`; existing TOML wins.
+4. Project settings: discovered via the settings capability (native `.omp/config.toml`, plus external providers' settings)
+5. Global settings: `~/.omp/agent/config.toml`
 6. Definition default
 
 A definition may instead declare `env: { name, fallback: true }`: that variable only replaces the default, and any layer configuring a non-null value wins over it (used by `SEARXNG_BASIC_*`). `fallback: "blank"` also lets the variable win over a configured empty or whitespace string (used by `SEARXNG_ENDPOINT`, `SEARXNG_TOKEN`, and `MNEMOPI_EMBEDDING_MODEL`).
 
 Within the overlay list, later files override earlier files (`PI_CONFIG_FILES` entries load before `--config` files). Overlay paths are resolved relative to the active project directory (after `~` expansion).
 
-Definitions with `protocolDefault: ["rpc", "acp"]` make RPC/ACP hosts start from the definition default: at startup `applyProtocolDefaults` (`src/main.ts`) pins the default as a soft runtime override unless the value is already configured. The pin is released by a `cfgX.set`/`cfgX.unset`/`cfgX.setEntry`/`cfgX.setMember` of that setting (settings panel, agents hub, `cfg://`), by a reload that finds a persisted layer configuring it (a `config.yml` edit picked up by the RPC file watcher), and by a re-scope or clone into a project that configures it (an ACP session's own project config).
+Definitions with `protocolDefault: ["rpc", "acp"]` make RPC/ACP hosts start from the definition default: at startup `applyProtocolDefaults` (`src/main.ts`) pins the default as a soft runtime override unless the value is already configured. The pin is released by a `cfgX.set`/`cfgX.unset`/`cfgX.setEntry`/`cfgX.setMember` of that setting (settings panel, agents hub, `cfg://`), by a reload that finds a persisted layer configuring it (a `config.toml` edit picked up by the RPC file watcher), and by a re-scope or clone into a project that configures it (an ACP session's own project config).
 
 Subagents receive `parent.overlay(overrides)`: reads fall through to the parent live, while the overrides and any later writes stay in the child and are never persisted.
 
-Generic setting-handle writes target the global layer; config overlays are read-only. Model roles have explicit project-write APIs: `setProjectModelRole()` / `clearProjectModelRole()` update the project layer and persist only the changed roles to `<cwd>/.omp/config.yml`. If an existing runtime override would shadow the role, setting a project role temporarily replaces it; clearing removes that runtime slot. The original override is captured for restoration when changing project scope.
+Generic setting-handle writes target the global layer; config overlays are read-only. Model roles have explicit project-write APIs: `setProjectModelRole()` / `clearProjectModelRole()` update the project layer and persist only the changed roles to `<cwd>/.omp/config.toml`. If an existing runtime override would shadow the role, setting a project role temporarily replaces it; clearing removes that runtime slot. The original override is captured for restoration when changing project scope.
 
 ### Settings load failures
 
-- Missing global/project YAML is treated as empty configuration.
-- Invalid global or native-project YAML is moved to a unique `.broken-<timestamp>-<pid>-<uuid>` sibling under a file lock, then startup fails with the original and backup paths. An unreadable file fails without being moved.
-- Every `PI_CONFIG_FILES` / `--config` overlay is strict: missing files, invalid YAML, and non-mapping document roots are hard errors. Overlay files are not quarantined.
+- Missing global/project TOML is treated as empty configuration after eligible legacy import.
+- Invalid canonical TOML fails closed; stale YAML is never used to repair or supplement it.
+- Every `PI_CONFIG_FILES` / `--config` overlay is strict: missing files, invalid TOML, and non-mapping legacy roots are hard errors. Overlay files are not quarantined.
 
 ## Migration behavior still active
 
-On startup, if neither global `config.yml` nor `config.yaml` exists:
+Native settings use `config.toml` exclusively. When it is absent, the shared migration helper imports the first eligible legacy source (`config.yml` before `config.yaml`) atomically without overwriting a concurrently created TOML file. The YAML source is never rewritten or deleted. Once TOML exists, the whole document wins: omitted keys do not fall back to YAML.
 
-1. Migrate from `~/.omp/agent/settings.json` (renamed to `.bak` on success)
-2. Merge with legacy DB settings from `agent.db` (DB values win conflicts)
-3. Write merged result to `config.yml`
+The earlier `settings.toml` filename is a one-time migration source for `config.toml`. Legacy global `settings.json` and DB settings remain eligible only when no main settings document exists; their migrated result is saved as TOML.
+
+Writes use the shared TOML codec, preserving unrelated comments. Since TOML has no null literal, `[__npi]` with `version = 1` and JSON-pointer `null_paths` preserves explicit nulls; this metadata is not a user setting.
 
 Field-level migrations in `#migrateRawSettings`:
 
@@ -338,7 +338,7 @@ Native provider (`id: native`) reads native config from:
 - Tools: `tools/*.{json,md,ts,js,sh,bash,py}` and `tools/<name>/index.ts`
 - Extension modules: discovered under `extensions/` (+ legacy `settings.json.extensions` string array)
 - Extensions: `extensions/<name>/gemini-extension.json`
-- Settings capability: `settings.json`, then `config.yml`
+- Settings capability: legacy `settings.json`, then canonical `config.toml` (one-time YAML import when absent)
 - Context files: `.omp/AGENTS.md`; standalone ancestor `AGENTS.md` files are loaded separately by the low-priority `agents-md` provider
 
 ### Nearest-project lookup nuance
@@ -363,7 +363,7 @@ switch gates all skills, and `disabledProviders` can disable provider `agents`.
 
 ## Settings subsystem
 
-- `Settings.init()` loads the global YAML file, discovered project settings, `PI_CONFIG_FILES` / `--config` overlays, and runtime overrides in the precedence described above.
+- `Settings.init()` loads global TOML, discovered project settings, `PI_CONFIG_FILES` / `--config` TOML overlays, and runtime overrides in the precedence described above.
 - Only capability items with `level === "project"` are merged into the project layer.
 
 ### Session title prompt override
@@ -415,14 +415,14 @@ Use this mental model:
 
 ### Settings-specific caveat
 
-Settings capability items are not deduplicated; `Settings.#loadProjectSettings()` deep-merges project items in returned order, so later items override earlier ones. Providers are visited from highest to lowest priority, which means lower-priority provider settings can override higher-priority settings. Within the native provider, project `config.yml` follows and overrides `settings.json`. Native `.omp/config.yml` model roles are then reapplied as the authoritative project model-role layer.
+Settings capability items are not deduplicated; `Settings.#loadProjectSettings()` deep-merges project items in returned order, so later items override earlier ones. Providers are visited from highest to lowest priority, which means lower-priority provider settings can override higher-priority settings. Within the native provider, project `config.toml` follows and overrides legacy `settings.json`. Native `.omp/config.toml` model roles are then reapplied as the authoritative project model-role layer.
 
 ---
 
 ## 9) Legacy/compatibility behaviors still present
 
-- `ConfigFile` JSON -> YAML migration for YAML-targeted files.
-- Settings migration from `settings.json` and `agent.db` to `config.yml`.
+- `ConfigFile` imports explicitly eligible legacy documents into canonical TOML without rewriting their sources.
+- Settings migration from `settings.json` and `agent.db` to `config.toml`.
 - Field migrations cover renamed/removed settings and value-shape changes, including `queueMode`, changelog settings, flat `theme`, retired image-tool settings, task isolation/eager settings, removed edit and compaction modes, `inlineToolDescriptors`, status-line segments, provider/search settings, memories/hindsight settings, and nested-leaf renames. Consult `Settings.#migrateRawSettings()` for the current exhaustive list.
 - Legacy setting names `skills.enablePiUser` / `skills.enablePiProject` are still active gates for native skill source.
 

@@ -1,6 +1,6 @@
 /**
  * Fullscreen `/advisor configure` overlay: a mouse- and keyboard-driven editor
- * for the `WATCHDOG.yml` advisor roster at project or user level.
+ * for the `WATCHDOG.toml` advisor roster at project or user level.
  *
  * It paints the entire alternate screen from row 0 (so SGR mouse rows index
  * directly into the rendered frame) using the shared {@link ./overlay-box} chrome.
@@ -73,7 +73,7 @@ export const ADVISOR_SESSION_SCOPES = ["main", "subagent", "all"] as const;
 export type AdvisorReviewMode = (typeof ADVISOR_REVIEW_MODES)[number];
 export type AdvisorSyncBacklog = (typeof ADVISOR_SYNC_BACKLOG_MODES)[number];
 export type AdvisorSessionScope = (typeof ADVISOR_SESSION_SCOPES)[number];
-/** One advisor declared in `WATCHDOG.yml`; its instructions specialize the shared baseline. */
+/** One advisor declared in `WATCHDOG.toml`; its instructions specialize the shared baseline. */
 export interface AdvisorConfig {
 	/** Hidden persistent identity. Legacy rows receive one on their first save. */
 	id?: string;
@@ -103,7 +103,7 @@ export interface AdvisorConfig {
 /** The exact storage layer of an advisor roster. */
 export type AdvisorConfigScope = "project" | "project-omp" | "user" | "session";
 
-/** Editable raw contents of one `WATCHDOG.yml`, without cross-level merging or `@import` expansion, for exact round trips. */
+/** Editable raw contents of one `WATCHDOG.toml`, without cross-level merging or `@import` expansion, for exact round trips. */
 export interface WatchdogConfigDoc {
 	/** False disables the entire file without changing its advisor entries. */
 	enabled?: boolean;
@@ -135,7 +135,7 @@ export interface AdvisorConfigStat {
 
 /** Host callbacks: all disk + live-runtime effects flow through these. */
 export interface AdvisorConfigCallbacks {
-	/** Load a scope's `WATCHDOG.yml` into an editable doc (empty when absent). */
+	/** Load a scope's `WATCHDOG.toml` into an editable doc (empty when absent). */
 	loadDoc: (scope: AdvisorConfigScope) => Promise<WatchdogConfigDoc>;
 	/** Open the selected scope's backing file externally and resolve when editing finishes. */
 	openConfigFile?: (scope: AdvisorConfigScope) => Promise<void>;
@@ -187,7 +187,7 @@ export interface AdvisorConfigDeps {
 	effectiveRoster?: readonly EffectiveAdvisorConfig[];
 	/** Exact file selected by the scope-first parent; disables the old two-scope switch. */
 	filePath?: string;
-	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
+	/** Resolved canonical TOML files edited by each scope. */
 	configFiles?: Partial<Record<AdvisorConfigScope, string>>;
 }
 
@@ -751,11 +751,23 @@ export class AdvisorConfigOverlayComponent implements Component {
 					control: { k: "action", label: "Edit…", act: "edit" },
 				},
 			];
-			rows.push({ id: "duplicate", label: "Duplicate advisor", control: { k: "action", label: "Duplicate", act: "edit" } });
+			rows.push({
+				id: "duplicate",
+				label: "Duplicate advisor",
+				control: { k: "action", label: "Duplicate", act: "edit" },
+			});
 			if (this.#cb.copyAdvisor && this.#cb.getSources)
-				rows.push({ id: "copy", label: "Copy to another scope", control: { k: "action", label: "Choose file…", act: "edit" } });
+				rows.push({
+					id: "copy",
+					label: "Copy to another scope",
+					control: { k: "action", label: "Choose file…", act: "edit" },
+				});
 			if (this.#cb.copyPrompt)
-				rows.push({ id: "copyPrompt", label: "Copy full prompt", control: { k: "action", label: "Copy", act: "edit" } });
+				rows.push({
+					id: "copyPrompt",
+					label: "Copy full prompt",
+					control: { k: "action", label: "Copy", act: "edit" },
+				});
 			sections.push({ id: "advisor", title: advisor.name || "Advisor", rows });
 		} else {
 			sections.push({
@@ -773,7 +785,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		}
 		sections.push({
 			id: "file",
-			title: sanitizeDisplayLine(this.#deps.filePath ?? `WATCHDOG.yml · ${this.#scope}`),
+			title: sanitizeDisplayLine(this.#deps.filePath ?? `WATCHDOG.toml · ${this.#scope}`),
 			rows: [
 				{
 					id: "save",
@@ -792,8 +804,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 		});
 		if (this.#cb.generateAdvisor && this.#cb.getSources)
 			sections.push({
-				id: "generation", title: "Authoring",
-				rows: [{ id: "generate", label: "New advisor from existing definitions", control: { k: "action", label: "Choose advisors…", act: "generate" } }],
+				id: "generation",
+				title: "Authoring",
+				rows: [
+					{
+						id: "generate",
+						label: "New advisor from existing definitions",
+						control: { k: "action", label: "Choose advisors…", act: "generate" },
+					},
+				],
 			});
 
 		// Name editing shows its draft in the row; the other editors sit over the page.
@@ -1169,11 +1188,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 			const help =
 				value === "add"
 					? "Create a new advisor entry, then edit its model, tools, and instructions."
-						: value === "save"
-							? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
-							: value === "close"
-								? "Close the editor. Unsaved changes are discarded."
-								: "";
+					: value === "save"
+						? "Write this scope's WATCHDOG.toml and reload the live advisors without a restart."
+						: value === "close"
+							? "Close the editor. Unsaved changes are discarded."
+							: "";
 			if (help) children.push(text([span(help, "muted")], { wrap: "word" }));
 		}
 		const candidate = node("col", { gap: "sm", grow: 1 }, children, "preview");
@@ -1455,11 +1474,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const help =
 			value === "add"
 				? "Create a new advisor entry, then edit its model, tools, and instructions."
-					: value === "save"
-						? "Write this scope's WATCHDOG.yml and reload the live advisors without a restart."
-						: value === "close"
-							? "Close the editor. Unsaved changes are discarded."
-							: "";
+				: value === "save"
+					? "Write this scope's WATCHDOG.toml and reload the live advisors without a restart."
+					: value === "close"
+						? "Close the editor. Unsaved changes are discarded."
+						: "";
 		return [...warnings, ...wrap(help, bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth))];
 	}
 
@@ -1574,7 +1593,6 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#pageKey(context: AdvisorNavigationContext, scope: AdvisorConfigScope): string {
 		return `${scope}:${context.screen}:${context.index}:${context.thinking?.selector ?? ""}`;
 	}
-
 
 	#ensureRosterVisible(): void {
 		if (this.#doc.advisors.length === 0) this.#doc.advisors.push({ id: crypto.randomUUID(), name: "default" });
@@ -1763,7 +1781,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			if (roster) this.#effectiveRoster = roster;
 			this.#pendingApply = true;
 			if (doc.warnings?.length) {
-				const message = `WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
+				const message = `WATCHDOG.toml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`;
 				if (this.#cb.warn) this.#cb.warn(message);
 				else this.#cb.notify(message);
 			}
@@ -1839,9 +1857,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 					advisor.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(advisor.systemPrompt),
 			},
 			{ value: "duplicate", label: "Duplicate advisor", description: "New name and identity in this file" },
-			...(this.#cb.copyAdvisor && this.#cb.getSources
-				? [{ value: "copy", label: "Copy to another scope…" }]
-				: []),
+			...(this.#cb.copyAdvisor && this.#cb.getSources ? [{ value: "copy", label: "Copy to another scope…" }] : []),
 			...(this.#cb.copyPrompt ? [{ value: "copyPrompt", label: "Copy full prompt" }] : []),
 			{ value: "back", label: "Back" },
 		);
@@ -1885,7 +1901,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		if (!advisor) return;
 		const fromList = this.#screen === "list";
 		const cancel = () => (fromList ? this.#showList(`advisor:${index}`) : this.#showDetail(index));
-		const file = this.#deps.filePath ?? this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.yml`;
+		const file = this.#deps.filePath ?? this.#deps.configFiles?.[this.#scope] ?? `${this.#scope} WATCHDOG.toml`;
 		const title = `Delete "${sanitizeDisplayLine(advisor.name)}"?`;
 		const subtitle = `From ${sanitizeDisplayLine(shortenPath(file))}. Save to persist; apply to update live advisors.`;
 		const list = new SelectList(
@@ -1926,7 +1942,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 					advisor.systemPrompt ?? this.#deps.getDefaultSystemPrompt(advisor, this.#doc),
 					this.#doc.instructions,
 					advisor.instructions,
-				].filter(Boolean).join("\n\n");
+				]
+					.filter(Boolean)
+					.join("\n\n");
 				void Promise.resolve(this.#cb.copyPrompt?.(prompt)).then(
 					() => this.#cb.notify(`Copied ${advisor.name}'s prompt`),
 					error => this.#cb.notify(`Could not copy prompt: ${String(error)}`),
@@ -1985,11 +2003,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const revision = this.#viewRevision;
 		const sources = await this.#cb.getSources?.();
 		if (!sources || revision !== this.#viewRevision) return;
-		const items: SelectItem[] = sources.filter(source => source.path !== this.#deps.filePath).map(source => ({
-			value: source.path,
-			label: source.scope,
-			description: shortenPath(source.path),
-		}));
+		const items: SelectItem[] = sources
+			.filter(source => source.path !== this.#deps.filePath)
+			.map(source => ({
+				value: source.path,
+				label: source.scope,
+				description: shortenPath(source.path),
+			}));
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.onSelect = item => {
 			const copyRevision = this.#viewRevision;
@@ -2012,7 +2032,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const sources = await this.#cb.getSources?.();
 		if (!sources || revision !== this.#viewRevision) return;
 		const bases = sources.flatMap(source =>
-			(source.path === this.#deps.filePath ? this.#doc : source.doc).advisors.map(config => ({ path: source.path, config })));
+			(source.path === this.#deps.filePath ? this.#doc : source.doc).advisors.map(config => ({
+				path: source.path,
+				config,
+			})),
+		);
 		const selected = new Set<number>();
 		const show = (cursor = 0): void => {
 			const items: SelectItem[] = bases.map((base, index) => ({
@@ -2025,12 +2049,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 			list.setSelectedIndex(cursor);
 			list.onSelect = item => {
 				if (item.value === "generate") {
-					if (!selected.size) { this.#cb.notify("Choose at least one advisor"); return; }
+					if (!selected.size) {
+						this.#cb.notify("Choose at least one advisor");
+						return;
+					}
 					this.#showGenerationComment([...selected].map(index => bases[index].config));
 					return;
 				}
 				const index = Number(item.value);
-				if (selected.has(index)) selected.delete(index); else selected.add(index);
+				if (selected.has(index)) selected.delete(index);
+				else selected.add(index);
 				show(index);
 			};
 			list.onCancel = () => this.#showList("generate");
@@ -2041,7 +2069,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#showGenerationComment(bases: readonly AdvisorConfig[]): void {
 		const editor = new HookEditorComponent(
-			this.#tui, "Describe the new advisor", "",
+			this.#tui,
+			"Describe the new advisor",
+			"",
 			comment => this.#generateAdvisor(bases, comment),
 			() => this.#showList("generate"),
 			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
@@ -2053,15 +2083,26 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#generationAbort?.abort();
 		const abort = new AbortController();
 		this.#generationAbort = abort;
-		const cancel = new SelectList([{ value: "cancel", label: "Generating advisor… Esc cancels" }], 1, getSelectListTheme());
-		cancel.onCancel = cancel.onSelect = () => { abort.abort(); this.#showList("generate"); };
+		const cancel = new SelectList(
+			[{ value: "cancel", label: "Generating advisor… Esc cancels" }],
+			1,
+			getSelectListTheme(),
+		);
+		cancel.onCancel = cancel.onSelect = () => {
+			abort.abort();
+			this.#showList("generate");
+		};
 		this.#setScreen("generating", cancel, "Esc cancel");
 		void this.#cb.generateAdvisor?.(bases, comment, abort.signal).then(
 			advisor => {
 				if (abort.signal.aborted) return;
 				advisor.id = crypto.randomUUID();
 				const baseName = advisor.name;
-				for (let suffix = 2; this.#doc.advisors.some(entry => slugifyAdvisorName(entry.name) === slugifyAdvisorName(advisor.name)); suffix++)
+				for (
+					let suffix = 2;
+					this.#doc.advisors.some(entry => slugifyAdvisorName(entry.name) === slugifyAdvisorName(advisor.name));
+					suffix++
+				)
 					advisor.name = `${baseName} ${suffix}`;
 				this.#doc.advisors.push(advisor);
 				this.#dirty = true;
@@ -2429,7 +2470,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 	restoreNavigation(snapshot: unknown): void {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as AdvisorNavigationSnapshot;
-		if (!state.context || !state.doc || !state.docOwner || !["project", "project-omp", "user", "session"].includes(state.scope))
+		if (
+			!state.context ||
+			!state.doc ||
+			!state.docOwner ||
+			!["project", "project-omp", "user", "session"].includes(state.scope)
+		)
 			return;
 		this.#restoringNavigation = true;
 		this.#scopeLoadRevision++;

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { cfgRoleSettings } from "../src/config/role-settings";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
@@ -27,7 +27,10 @@ async function fixture() {
 	const agentDir = path.join(root, "agent");
 	const cwd = path.join(root, "project");
 	await fs.mkdir(cwd);
-	await Bun.write(path.join(agentDir, "config.yml"), "compaction:\n  thresholdTokens: 100000\n");
+	await Bun.write(
+		path.join(agentDir, "config.toml"),
+		stringifySettingsToml({ compaction: { thresholdTokens: 100000 } }),
+	);
 	return { agentDir, cwd };
 }
 
@@ -44,7 +47,7 @@ describe("role context budgets", () => {
 
 	it("initializes an empty config with no role settings or token limit", async () => {
 		const options = await fixture();
-		await Bun.write(path.join(options.agentDir, "config.yml"), "{}\n");
+		await Bun.write(path.join(options.agentDir, "config.toml"), stringifySettingsToml({}));
 		const settings = await Settings.init(options);
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(-1);
 	});
@@ -78,7 +81,7 @@ describe("role context budgets", () => {
 		settings.setModelRole("slow", "provider/second");
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(120000);
 		await settings.flush();
-		const saved = YAML.parse(await Bun.file(path.join(options.agentDir, "config.yml")).text());
+		const saved = parseSettingsToml(await Bun.file(path.join(options.agentDir, "config.toml")).text());
 		expect(saved).toMatchObject({
 			compaction: { thresholdTokens: 100000 },
 			roleSettings: { slow: { "compaction.thresholdTokens": 120000 } },

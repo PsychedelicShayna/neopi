@@ -1,3 +1,4 @@
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -75,7 +76,7 @@ isolatedTest("fixture bytes, rendered values, cwd and exit 7 round-trip through 
 				{ id: "rendered", type: "run", cwd: shell.cwd, command: command({ append: true, newline: true, exitCode: 7 }, "{{ trigger.tag }}") },
 			],
 		};
-		const routine = createV1Routine({ name: "shell round trip", spec, specYaml: JSON.stringify(spec), enabled: true });
+		const routine = createV1Routine({ name: "shell round trip", spec, specToml: stringifyToml(spec), enabled: true });
 		await runner.fire(routine.id, "manual", { tag: "tail-marker" });
 		const run = listRuns(routine.id)[0]!;
 		expect(listStepRuns(run.id).map(step => [step.status, step.error])).toEqual([

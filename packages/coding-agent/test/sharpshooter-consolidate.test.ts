@@ -35,7 +35,7 @@ function createHarness(root: string): Harness {
 	const cwd = path.join(root, "project");
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("anthropic", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
+	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.toml"));
 	if (!modelRegistry.find("anthropic", "claude-haiku-4-5")) {
 		throw new Error("Expected bundled anthropic/claude-haiku-4-5 model");
 	}

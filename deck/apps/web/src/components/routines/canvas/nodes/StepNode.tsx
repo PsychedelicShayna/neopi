@@ -16,7 +16,7 @@ import type { RoutineStep, RoutineStepRun } from "@npi-deck/protocol";
 
 import type { StepNode as StepNodeType } from "../legacy-graph-types";
 import { actionLabel, STEP_ICON, stepIconTone, stepTitle } from "../../step-form-render";
-import { cardBodyParts } from "../../spec-yaml";
+import { cardBodyParts } from "../../../../lib/card-frontmatter";
 
 interface Summary {
 	text: string;

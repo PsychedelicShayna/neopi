@@ -47,7 +47,7 @@ export interface OpenAICodexModelManagerConfig {
 	 */
 	resolveAccounts?: () => Promise<readonly OpenAICodexAccount[] | null>;
 	/**
-	 * Codex backend base URL (e.g. a Codex-compatible gateway from `models.yml`).
+	 * Codex backend base URL (e.g. a Codex-compatible gateway from `models.toml`).
 	 * Defaults to the official ChatGPT backend. Also scopes the discovery cache,
 	 * so a gateway roster never serves the official endpoint and vice versa.
 	 */

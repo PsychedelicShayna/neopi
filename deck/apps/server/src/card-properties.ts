@@ -1,36 +1,35 @@
-import { parseDocument, isMap, isScalar, stringify } from "yaml";
+import { importLegacyYaml, parseSettingsToml, patchSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
+import { preserveLegacyYamlComments } from "@oh-my-pi/pi-utils/legacy-yaml-import";
 
-/** Card.body is the canonical property store. Routing never comes from YAML. */
+/** Card.body is the canonical property store. Routing never comes from metadata. */
 export function cardFrontmatter(body: string): { properties: Record<string, unknown>; content: string; header?: string } {
-	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(body);
-	if (!match) return { properties: {}, content: body };
-	const doc = parseDocument(match[1]!);
-	if (doc.errors.length || (doc.contents && !isMap(doc.contents))) throw new Error("Card front matter must be a valid YAML mapping");
-	return { properties: (doc.toJSON() ?? {}) as Record<string, unknown>, content: body.slice(match[0].length), header: match[1] };
+	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(body);
+	if (/^---\r?\n/.test(body)) throw new Error("Legacy card metadata must be imported before use.");
+	if (!match) {
+		if (/^\+\+\+(?:\r?\n|$)/.test(body)) throw new Error("Close card front matter with a +++ line.");
+		return { properties: {}, content: body };
+	}
+	return { properties: parseSettingsToml(match[1]!), content: body.slice(match[0].length), header: match[1] };
 }
 
-/** No properties supplied means raw leading YAML (including comments) is untouched. */
+/** One-way import only. Callers must retain the original before persisting this result. */
+export function importLegacyCardBody(body: string, filePath?: string): string {
+	if (!/^---\r?\n/.test(body)) return body;
+	const match = /^---\r?\n((?:[\s\S]*?\r?\n)?)---(?:\r?\n|$)/.exec(body);
+	if (!match) throw new Error("Close legacy card front matter with a --- line.");
+	const properties = importLegacyYaml(match[1]!, filePath);
+	const header = preserveLegacyYamlComments(match[1]!, stringifySettingsToml(properties));
+	return `+++\n${header.trimEnd()}\n+++\n${body.slice(match[0].length)}`;
+}
+
+/** Raw native TOML is untouched unless a property patch is supplied. */
 export function withCardProperties(body: string, properties?: Record<string, unknown>): string {
 	if (properties === undefined) return body;
 	if (!properties || typeof properties !== "object" || Array.isArray(properties)) throw new Error("properties must be an object");
-	const entries = Object.entries(properties);
-	if (!entries.length) return body;
+	if (!Object.keys(properties).length) return body;
 	const parsed = cardFrontmatter(body);
-	let header = parsed.header === undefined ? "" : parsed.header + "\n";
-	const doc = parseDocument(header);
-	const replacements: Array<{ start: number; end: number; text: string }> = [];
-	for (const [key, value] of entries) {
-		const pair = isMap(doc.contents) ? doc.contents.items.find(item => isScalar(item.key) && item.key.value === key) : undefined;
-		const start = isScalar(pair?.key) ? pair.key.range?.[0] : undefined;
-		const end = pair?.value && "range" in pair.value ? pair.value.range?.[2] : undefined;
-		const replacement = stringify({ [key]: value });
-		if (start !== undefined && end !== undefined) replacements.push({ start, end, text: replacement });
-		else header += replacement;
-	}
-	for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
-		header = header.slice(0, replacement.start) + replacement.text + header.slice(replacement.end);
-	}
-	return `---\n${header}---\n${parsed.content}`;
+	const header = patchSettingsToml(parsed.header ?? "", { ...parsed.properties, ...properties });
+	return `+++\n${header.trimEnd()}\n+++\n${parsed.content}`;
 }
 
 export function cardExecutionProperties(body: string): { readOnly: boolean; worktree?: string; model?: string; role?: string } {

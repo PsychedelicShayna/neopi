@@ -3,8 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { getProjectAgentDir, stringifySettingsToml, TempDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 import { cfgAutocompleteMaxVisible } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -36,8 +35,8 @@ describe("autocompleteMaxVisible setting", () => {
 		}
 	});
 
-	it("should read from config.yml", async () => {
-		await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ autocompleteMaxVisible: 15 }, null, 2));
+	it("should read from config.toml", async () => {
+		await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml({ autocompleteMaxVisible: 15 }));
 		const settings = await Settings.init({ cwd: projectDir, agentDir });
 		expect(cfgAutocompleteMaxVisible.get(settings)).toBe(15);
 	});

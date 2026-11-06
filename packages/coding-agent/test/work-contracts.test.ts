@@ -8,7 +8,7 @@ import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { createAgentSession } from "../src/sdk";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -97,7 +97,7 @@ describe("session work contracts", () => {
 			cwd: root,
 			agentDir: root,
 			sessionManager: manager,
-			modelRegistry: new ModelRegistry(auth, path.join(root, "models.json")),
+			modelRegistry: new ModelRegistry(auth, path.join(root, "models.toml")),
 			settings: Settings.isolated({}),
 			model: { ...model, contextWindow: 200_000 },
 			disableExtensionDiscovery: true,
@@ -146,7 +146,7 @@ describe("session work contracts", () => {
 			const root = await temp();
 			try {
 				const agentDir = path.join(root, "agent");
-				await Bun.write(path.join(agentDir, "config.yml"), JSON.stringify(configuration));
+				await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml(configuration));
 				const settings = await Settings.init({ agentDir, cwd: root });
 				await settings.reloadFromDisk();
 				const manager = SessionManager.inMemory(root);

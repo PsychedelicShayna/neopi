@@ -3201,7 +3201,7 @@ export class AgentSession implements SettingsScope {
 		// construction can be premature: background discovery is started
 		// fire-and-forget (before the session in the SDK path, right after it in
 		// the CLI path), so discovery-backed providers (e.g. GitHub Copilot, or a
-		// models.yml LiteLLM provider with a cold cache) may not be populated yet.
+		// models.toml LiteLLM provider with a cold cache) may not be populated yet.
 		// Reactivate a `no_model` advisor (#9010), retract stale
 		// retry.fallbackChains warnings (#10048), rebind the active model to
 		// its refreshed same-selector entry (#10488), and surface registry
@@ -8216,7 +8216,7 @@ export class AgentSession implements SettingsScope {
 		await this.#inLogContext(() => this.#maintenance.runIdleCompaction());
 	}
 
-	/** Override cache warming for this session only, never writing config.yml; returns the effective mode. */
+	/** Override cache warming for this session only, never writing config.toml; returns the effective mode. */
 	setCacheWarmingMode(mode: CacheWarmingMode): CacheWarmingMode {
 		cfgProvidersCacheWarming.override(this.settings, mode);
 		return cfgProvidersCacheWarming.get(this.settings);
@@ -16737,7 +16737,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * Replace the live advisor roster from an edited `WATCHDOG.yml` (the `/advisor
+	 * Replace the live advisor roster from an edited `WATCHDOG.toml` (the `/advisor
 	 * configure` save path). Swaps the configs + shared baseline, then rebuilds the
 	 * runtimes in place so the change applies without a restart. When the advisor is
 	 * disabled the new configs are simply stored for the next enable.
@@ -16819,7 +16819,7 @@ export class AgentSession implements SettingsScope {
 		return this.#advisors.onLiveAdvisorsChange(listener);
 	}
 
-	/** WATCHDOG.yml problems from startup discovery; shown by the UI once it is ready. */
+	/** WATCHDOG.toml problems from startup discovery; shown by the UI once it is ready. */
 	getAdvisorConfigWarnings(): readonly string[] {
 		return this.#advisors.configWarnings;
 	}

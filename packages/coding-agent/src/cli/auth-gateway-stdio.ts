@@ -4,7 +4,7 @@
  * inference without an HTTP listener or a bearer token.
  *
  * Unlike `serve` it runs on this omp's own credentials (the broker when one is
- * configured, else the local store), models (`models.yml` and extension
+ * configured, else the local store), models (`models.toml` and extension
  * providers included) and settings. A request's `model` is an omp model
  * selector, as `--model` takes it ({@link selectorCandidates}); an attempt
  * that fails before its reply starts moves on to the next candidate. Serving

@@ -14,7 +14,6 @@ import asset4 from "./advisor/memory-context.md" with { type: "text" };
 import asset5 from "./advisor/system.md" with { type: "text" };
 import asset6 from "../../../agent/src/prompts/dsml-tool-call-leak.md" with { type: "text" };
 import asset7 from "./agents/claude-parent-context.md" with { type: "text" };
-import asset8 from "./agents/frontmatter.md" with { type: "text" };
 import asset9 from "./agents/init.md" with { type: "text" };
 import asset10 from "./agents/model-mention.md" with { type: "text" };
 import asset11 from "./agents/reviewer.md" with { type: "text" };
@@ -540,44 +539,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/prompts/agents/claude-parent-context.md",
 			"packages/coding-agent/src/task/external-harness/claude.ts",
-		],
-	},
-	{
-		id: "agents/frontmatter.md",
-		relPath: "agents/frontmatter.md",
-		bundled: asset8,
-		scope: "agent-frontmatter",
-		group: "core",
-		keys: [
-			{ path: "body", type: "string", resolution: "session-dependent" },
-			{ path: "name", type: "string", resolution: "session-dependent" },
-			{ path: "description", type: "string", resolution: "session-dependent" },
-			{ path: "spawns", type: "string", resolution: "session-dependent" },
-			{ path: "model", type: "string", resolution: "session-dependent" },
-			{ path: "harness", type: "string", resolution: "session-dependent" },
-			{ path: "thinkingLevel", type: "string", resolution: "session-dependent" },
-			{ path: "blocking", type: "string", resolution: "session-dependent" },
-			{ path: "prewalk", type: "string", resolution: "session-dependent" },
-			{ path: "advisor", type: "string", resolution: "session-dependent" },
-			{ path: "autoloadSkills", type: "string", resolution: "session-dependent" },
-		],
-		fixture: {
-			body: "Example body",
-			name: "Example name",
-			description: "Example description",
-			spawns: "Example spawns",
-			model: "Example model",
-			harness: "Example harness",
-			thinkingLevel: "Example thinkingLevel",
-			blocking: "Example blocking",
-			prewalk: "Example prewalk",
-			advisor: "Example advisor",
-			autoloadSkills: "Example autoloadSkills",
-		},
-		inspectionOnly: true,
-		consumerHints: [
-			"packages/coding-agent/src/prompts/agents/frontmatter.md",
-			"packages/coding-agent/src/task/agents.ts",
 		],
 	},
 	{
@@ -5043,8 +5004,26 @@ export const promptAssets: readonly PromptAsset[] = [
 		group: "core",
 		keys: [
 			{ path: "fieldSchema", type: "string", required: true, resolution: "runtime-only" },
-			{ path: "tools", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "description", type: "string" }] },
-			{ path: "advisors", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "scope", type: "string" }] },
+			{
+				path: "tools",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+				],
+			},
+			{
+				path: "advisors",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "scope", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
@@ -5066,7 +5045,15 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "comment", type: "string", resolution: "session-dependent" },
-			{ path: "baseDefinitions", type: "array", resolution: "session-dependent", children: [{ path: "name", type: "string" }, { path: "definition", type: "string" }] },
+			{
+				path: "baseDefinitions",
+				type: "array",
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "definition", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			target: "description",

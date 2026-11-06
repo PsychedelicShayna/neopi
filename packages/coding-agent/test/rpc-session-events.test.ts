@@ -430,7 +430,7 @@ describe("delta message updates over a real session run", () => {
 				agent,
 				sessionManager: SessionManager.inMemory(),
 				settings: Settings.isolated(),
-				modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+				modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 			});
 
 			// Frames are serialized when emitted, as on the wire: the provider keeps mutating its partial afterwards.

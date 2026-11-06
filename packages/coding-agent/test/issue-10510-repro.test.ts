@@ -30,7 +30,7 @@ describe("issue #10510: prewalk + eager-todo conflict", () => {
 		tempDir = TempDir.createSync("@pi-issue-10510-");
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterAll(() => {

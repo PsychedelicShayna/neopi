@@ -116,7 +116,7 @@ describe("AgentStorage model perf aggregates", () => {
 		const settings = Settings.isolated({ "tier.openai": "ultrafast" }, { storage });
 		const auth = await AuthStorage.create(":memory:");
 		try {
-			const registry = new ModelRegistry(auth, path.join(tempDir.path(), "models.yml"));
+			const registry = new ModelRegistry(auth, path.join(tempDir.path(), "models.toml"));
 			registry.getApiKey = async () => "test-key";
 			const model = buildModel({
 				provider: "openai-codex",

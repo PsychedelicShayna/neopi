@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 interface HeapSnapshot {
 	nodes: number[];
@@ -37,7 +37,7 @@ async function measureMissing(): Promise<ProbeResult> {
 	{
 		const authStorage = await AuthStorage.create(":memory:");
 		try {
-			const registry = new ModelRegistry(authStorage, path.join(root, "missing", "models.yml"));
+			const registry = new ModelRegistry(authStorage, path.join(root, "missing", "models.toml"));
 			const found = registry.find("anthropic", "claude-sonnet-4-5");
 			model = found && {
 				provider: found.provider,
@@ -54,35 +54,31 @@ async function measureMissing(): Promise<ProbeResult> {
 }
 
 async function writeCustomConfig(): Promise<string> {
-	const configPath = path.join(root, "custom", "models.yml");
+	const configPath = path.join(root, "custom", "models.toml");
 	await Bun.write(
 		configPath,
-		YAML.stringify(
-			{
-				providers: {
-					"lazy-models": {
-						baseUrl: "https://lazy.example/v1",
-						api: "openai-responses",
-						auth: "none",
-						models: [
-							{
-								id: "lazy-model",
-								reasoning: true,
-								thinking: {
-									mode: "effort",
-									minLevel: "low",
-									maxLevel: "high",
-									defaultLevel: "medium",
-									requiresEffort: false,
-								},
+		stringifySettingsToml({
+			providers: {
+				"lazy-models": {
+					baseUrl: "https://lazy.example/v1",
+					api: "openai-responses",
+					auth: "none",
+					models: [
+						{
+							id: "lazy-model",
+							reasoning: true,
+							thinking: {
+								mode: "effort",
+								minLevel: "low",
+								maxLevel: "high",
+								defaultLevel: "medium",
+								requiresEffort: false,
 							},
-						],
-					},
+						},
+					],
 				},
 			},
-			null,
-			2,
-		),
+		}),
 	);
 	return configPath;
 }
@@ -103,7 +99,7 @@ async function measureCustom(configPath: string): Promise<ProbeResult> {
 				thinking: found.thinking,
 			};
 			const firstSchema = ModelsConfigFile.relocate(configPath).schema;
-			const secondSchema = ModelsConfigFile.relocate(path.join(root, "second", "models.yml")).schema;
+			const secondSchema = ModelsConfigFile.relocate(path.join(root, "second", "models.toml")).schema;
 			schemaIdentityStable = firstSchema === secondSchema;
 		} finally {
 			authStorage.close();

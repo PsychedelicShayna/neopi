@@ -72,7 +72,7 @@ describe("AgentSession magic keyword settings", () => {
 		authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-magic-keywords-auth-"));
 		authStorage = await AuthStorage.create(path.join(authRoot, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(authRoot, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(authRoot, "models.toml"));
 	});
 
 	afterAll(async () => {

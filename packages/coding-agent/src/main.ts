@@ -316,7 +316,7 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 // Protocol hosts inherit NeoPi's neutral defaults for settings declaring `protocolDefault`
 // instead of the local user's interactive preferences. The pin holds only while nothing
 // configures the setting — caller `Settings.isolated` overrides, project `.claude/settings.yml`,
-// `--config` overlays, or global `config.yml` always win (#2598, #3207), including a config
+// `--config` overlays, or global `config.toml` always win (#2598, #3207), including a config
 // edit the RPC file watcher picks up later and an ACP session's own project config.
 function applyProtocolDefaults(host: ProtocolHost, targetSettings: Settings = settings): void {
 	for (const setting of all()) {
@@ -785,7 +785,7 @@ async function runInteractiveMode(
 		if (advisorConfigWarnings.length > 0) {
 			// Pulled here, not pushed from SessionAdvisors: the constructor-time
 			// `emitNotice` fired before the UI subscribed and was silently lost.
-			mode.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(advisorConfigWarnings).join("; ")}`);
+			mode.showWarning(`WATCHDOG.toml: ${sanitizeDisplayWarnings(advisorConfigWarnings).join("; ")}`);
 		}
 
 		for (const notify of notifs) {
@@ -1165,7 +1165,7 @@ function notifyResumeCwdFallback(
  * gets one cache-aware discovery pass before session construction: otherwise an
  * all-discovery `--models` launch can select an unrelated static model before the
  * later background rebuild activates the requested scope. The pass only helps
- * providers already known to be discoverable (models.yml `discovery:`, runtime
+ * providers already known to be discoverable (models.toml `discovery:`, runtime
  * managers); a scope naming only extension-supplied models stays empty here
  * because those providers register during `createAgentSession` — that case is
  * covered by deferring to the SDK's `modelPattern` resolution in
@@ -2992,7 +2992,7 @@ export async function runRootCommand(
 				);
 				if (rebuilt) scopedModels = rebuilt;
 			}
-			// Runtime provider discovery (opencode-go, models.yml `discovery:`, proxies)
+			// Runtime provider discovery (opencode-go, models.toml `discovery:`, proxies)
 			// populates the registry AFTER the scope was snapshotted at startup; re-resolve
 			// once it settles so newly-discovered configured models join the scoped
 			// /models list and Ctrl+P cycle, including scopes that initially resolved
@@ -3088,7 +3088,7 @@ export async function runRootCommand(
 			}
 
 			if (mode === "rpc" || mode === "rpc-ui" || isInteractive) {
-				// Long-lived hosts apply on-disk config edits (config.yml, project
+				// Long-lived hosts apply on-disk config edits (config.toml, project
 				// settings, `--config` overlays) live. No-op unless this is the
 				// persisting process-global instance.
 				settingsInstance.startWatching();

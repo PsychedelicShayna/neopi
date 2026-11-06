@@ -590,7 +590,7 @@ function detectOpenAICompat(
 		streamFirstEventTimeoutMs: d.isLocalServingBackend ? 0 : undefined,
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens: false,
-		// Present as a key so models.yml `compat` can set it; unset unless a rule assigns it.
+		// Present as a key so models.toml `compat` can set it; unset unless a rule assigns it.
 		stripThinkingHistory: undefined,
 		// URL-derived like the Responses field; unset off the official OpenAI API.
 		officialEndpoint: isOfficialOpenAIEndpoint(spec.provider, baseUrl) || undefined,
@@ -909,7 +909,7 @@ function resolveAnthropicPolicy(
 		honorsClaudeCodeBetaKillSwitch: false,
 		supportsOutputEffort: true,
 		disableStrictTools: rejectsStrictTools,
-		// Present as a key so models.yml `compat` can set it; unset unless detected.
+		// Present as a key so models.toml `compat` can set it; unset unless detected.
 		bedrockMessagesApi: bedrockMessagesApi || undefined,
 		disableAdaptiveThinking: false,
 		allowAnthropicHeaderOverrides: false,
@@ -937,7 +937,7 @@ function resolveAnthropicPolicy(
 		maxImageDimension: undefined,
 		maxImagePayloadBytes: undefined,
 		thinkingLoopGuard: undefined,
-		// Present as keys so models.yml `compat` can set them; unset unless a rule assigns them.
+		// Present as keys so models.toml `compat` can set them; unset unless a rule assigns them.
 		stripThinkingHistory: undefined,
 		fastMode: undefined,
 		streamIdleTimeoutMs: spec.compat?.streamIdleTimeoutMs,
@@ -960,7 +960,7 @@ function resolveBedrockPolicy(spec: ModelSpec<"bedrock-converse-stream">, axes: 
 		promptCacheMaximumCheckpoints: 0,
 		supportsForcedToolChoice: true,
 		// Opt-out: every prefix-bound Claude line on Converse takes the controls,
-		// including custom Bedrock-wire providers; KDL or models.yml sets `false`.
+		// including custom Bedrock-wire providers; KDL or models.toml sets `false`.
 		supportsThinkingBindingControls: true,
 	};
 	// Reasoning capability is a mechanism gate; adaptive-lineage duration is rule-owned.

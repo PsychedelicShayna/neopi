@@ -430,7 +430,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
-			`\`${APP_NAME} auth-gateway serve\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.yml). The gateway is itself a broker client.`,
+			`\`${APP_NAME} auth-gateway serve\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.toml). The gateway is itself a broker client.`,
 		);
 	}
 	if (flags.clients !== undefined && flags.noAuth) {
@@ -481,7 +481,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// `getAll()` is a superset of the bundled catalog (bundled first, then
 	// cached + broker-discovered), so the discovery-only models NeoPi itself
 	// reaches become routable through the gateway instead of freezing on the
-	// compiled snapshot. `ignoreLocalModelConfig` keeps the host's `models.yml`
+	// compiled snapshot. `ignoreLocalModelConfig` keeps the host's `models.toml`
 	// out of the picture: client-side provider overrides (baseUrl/apiKey/headers/
 	// transport) and custom models must never route a broker-backed gateway or
 	// shadow broker credentials. Format handlers ask `resolveModel` to translate
@@ -779,7 +779,7 @@ async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 			}
 			if (!brokerConfigured) {
 				process.stderr.write(
-					`\`serve\` needs a broker: set OMP_AUTH_BROKER_URL (or \`auth.broker.url\` in config.yml) first.\n`,
+					`\`serve\` needs a broker: set OMP_AUTH_BROKER_URL (or \`auth.broker.url\` in config.toml) first.\n`,
 				);
 			}
 		}
@@ -1041,7 +1041,7 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
-			`\`${APP_NAME} auth-gateway check\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.yml). It probes the same credentials the gateway would serve.`,
+			`\`${APP_NAME} auth-gateway check\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.toml). It probes the same credentials the gateway would serve.`,
 		);
 	}
 

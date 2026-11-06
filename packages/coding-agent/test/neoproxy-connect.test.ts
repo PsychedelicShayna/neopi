@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { X509Certificate } from "node:crypto";
 import * as path from "node:path";
@@ -60,8 +61,8 @@ describe("NeoProxy assigned-key connection", () => {
 	beforeEach(async () => {
 		previousProvider = getOAuthProvider("neoproxy");
 		tempDir = await TempDir.create("@neoproxy-connect-");
-		configPath = path.join(tempDir.path(), "models.yml");
-		originalConfig = JSON.stringify(initialConfig);
+		configPath = path.join(tempDir.path(), "models.toml");
+		originalConfig = stringifySettingsToml(initialConfig);
 		await Bun.write(configPath, originalConfig);
 		storage = await openLoadedAuthStorage(":memory:");
 		await storage.credentials.set("neoproxy", { type: "api_key", key: "old-working-key", source: "login" });
@@ -271,8 +272,8 @@ describe("NeoProxy credential-local private CA", () => {
 		previousProvider = getOAuthProvider("neoproxy");
 		tempDir = await TempDir.create("@neoproxy-private-ca-");
 		authPath = tempDir.join("auth.db");
-		configPath = tempDir.join("models.yml");
-		await Bun.write(configPath, JSON.stringify({ providers: {} }));
+		configPath = tempDir.join("models.toml");
+		await Bun.write(configPath, stringifySettingsToml({ providers: {} }));
 		storage = await openLoadedAuthStorage(authPath);
 		caPem = await Bun.file(new URL("./fixtures/neoproxy-tls/ca.pem", import.meta.url)).text();
 		leafPem = await Bun.file(new URL("./fixtures/neoproxy-tls/server.pem", import.meta.url)).text();
@@ -988,7 +989,7 @@ describe("NeoProxy credential-local private CA", () => {
 			},
 		});
 		const oldOrigin = `http://127.0.0.1:${oldServer.port}`;
-		const previousConfig = JSON.stringify({
+		const previousConfig = stringifySettingsToml({
 			providers: { neoproxy: { baseUrl: `${oldOrigin}/v1`, auth: "apiKey", discovery: { type: "proxy" } } },
 		});
 		await Bun.write(configPath, previousConfig);
@@ -1035,7 +1036,7 @@ describe("NeoProxy credential-local private CA", () => {
 		const concurrent = {
 			providers: { neoproxy: { ...previous.providers.neoproxy, baseUrl: `${oldOrigin}/moved/v1` } },
 		};
-		await Bun.write(configPath, JSON.stringify(previous));
+		await Bun.write(configPath, stringifySettingsToml(previous));
 		await storage.credentials.set("neoproxy", { type: "api_key", key: "previous-key", source: "login" });
 		const priorId = storage.credentials.list("neoproxy")[0].id;
 		const newServer = Bun.serve({
@@ -1045,7 +1046,7 @@ describe("NeoProxy credential-local private CA", () => {
 				if (request.headers.get("authorization") !== `Bearer ${assignedKey}`)
 					return new Response("Unauthorized", { status: 401 });
 				// An actual conflicting concurrent edit makes the normal config writer refuse activation.
-				await Bun.write(configPath, JSON.stringify(concurrent));
+				await Bun.write(configPath, stringifySettingsToml(concurrent));
 				return Response.json({ data: [] });
 			},
 		});
@@ -1069,7 +1070,7 @@ describe("NeoProxy credential-local private CA", () => {
 					fetch: ownFetch,
 				}),
 			).rejects.toThrow("credential was stored");
-			expect(await Bun.file(configPath).text()).toBe(JSON.stringify(concurrent));
+			expect(await Bun.file(configPath).text()).toBe(stringifySettingsToml(concurrent));
 			expect(storage.credentials.get("neoproxy")).toEqual({
 				type: "api_key",
 				key: assignedKey,

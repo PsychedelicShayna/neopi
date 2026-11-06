@@ -1,21 +1,28 @@
 /**
- * `CHAINS.yml` discovery, editing, and serialization for post-processing
- * chains. Chains live beside advisors' `WATCHDOG.yml`: the project root and the
+ * `CHAINS.toml` discovery, editing, and serialization for post-processing
+ * chains. Chains live beside advisors' `WATCHDOG.toml`: the project root and the
  * user agent dir, found on the same search path. A project chain shadows a user
  * chain with the same name.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
+import {
+	parseSettingsToml,
+	patchSettingsToml,
+	readTomlConfig,
+	stringifySettingsToml,
+	type TomlConfigSource,
+} from "@oh-my-pi/pi-utils/settings-toml";
 import type { ChainConfig, ChainConfigScope, ChainStep, ChainsConfigDoc } from "@oh-my-pi/pi-tui/overlays/chain-types";
-import { appendYamlString } from "../advisor/config";
-import { collectConfigCandidates } from "../advisor/watchdog";
+import { collectTomlConfigCandidates } from "../advisor/watchdog";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
+import { writeFileAtomically } from "../utils/atomic-file";
 
-export const CHAINS_FILE_NAME = "CHAINS.yml";
+export const CHAINS_FILE_NAME = "CHAINS.toml";
 
 const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
+const chainRepairDocs = new WeakSet<ChainsConfigDoc>();
 
 function stringField(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value : undefined;
@@ -61,7 +68,7 @@ function parseStep(raw: unknown, where: string, warnings: string[]): ChainStep |
 	return step;
 }
 
-/** Validate one parsed `CHAINS.yml` mapping entry by entry, keeping every valid chain. */
+/** Validate one parsed `CHAINS.toml` mapping entry by entry, keeping every valid chain. */
 function parseChainsDoc(doc: Record<string, unknown>, filePath: string): ChainsConfigDoc {
 	const warnings: string[] = [];
 	const chains: ChainConfig[] = [];
@@ -100,13 +107,13 @@ function parseChainsDoc(doc: Record<string, unknown>, filePath: string): ChainsC
 function parseChainsText(text: string, filePath: string): ChainsConfigDoc {
 	let parsed: unknown;
 	try {
-		parsed = YAML.parse(text);
+		parsed = parseSettingsToml(text, filePath);
 	} catch (err) {
-		return { chains: [], warnings: [`${filePath}: failed to parse YAML (${String(err)})`] };
+		return { chains: [], warnings: [`${filePath}: failed to parse TOML (${String(err)})`] };
 	}
 	if (parsed === null || parsed === undefined) return { chains: [] };
 	if (typeof parsed !== "object" || Array.isArray(parsed)) {
-		return { chains: [], warnings: [`${filePath}: expected a YAML mapping — file skipped`] };
+		return { chains: [], warnings: [`${filePath}: expected a TOML table — file skipped`] };
 	}
 	return parseChainsDoc(parsed as Record<string, unknown>, filePath);
 }
@@ -117,11 +124,14 @@ export interface DiscoveredChains {
 	warnings: string[];
 }
 
-/** Discover chains from every `CHAINS.yml` on the user + project search path. */
+/** Discover chains from every `CHAINS.toml` on the user + project search path. */
 export async function discoverChains(cwd: string, agentDir?: string): Promise<DiscoveredChains> {
-	const items = await collectConfigCandidates(cwd, agentDir, [CHAINS_FILE_NAME]);
-	const chains = new Map<string, ChainConfig>();
 	const warnings: string[] = [];
+	const items = await collectTomlConfigCandidates(cwd, agentDir, CHAINS_FILE_NAME, {
+		onReadError: filePath => warnings.push(`${filePath}: failed to read or import configuration — file skipped`),
+		onRejected: filePath => warnings.push(`${filePath}: configuration is not a readable regular file — file skipped`),
+	});
+	const chains = new Map<string, ChainConfig>();
 	// Candidates arrive user first, then project, so later files shadow earlier ones.
 	for (const item of items) {
 		const doc = parseChainsText(item.content, item.path);
@@ -134,53 +144,73 @@ export async function discoverChains(cwd: string, agentDir?: string): Promise<Di
 	return { chains: [...chains.values()], warnings };
 }
 
-/** `project` → `<projectDir>/CHAINS.yml`, `user` → `<agentDir>/CHAINS.yml`. */
+/** `project` → `<projectDir>/CHAINS.toml`, `user` → `<agentDir>/CHAINS.toml`. */
 export function chainsConfigFilePath(scope: ChainConfigScope, dirs: { projectDir: string; agentDir: string }): string {
 	return path.join(scope === "user" ? dirs.agentDir : dirs.projectDir, CHAINS_FILE_NAME);
 }
 
-/** Load one `CHAINS.yml` for editing, raw and un-merged. A missing file is an empty doc. */
+/** Load one canonical TOML file for editing, importing legacy YAML once. */
 export async function loadChainsConfigFile(filePath: string): Promise<ChainsConfigDoc> {
-	let text: string;
 	try {
-		text = await Bun.file(filePath).text();
+		const base = filePath.replace(/\.(?:toml|yml|yaml)$/, "");
+		const loaded = await readTomlConfig(`${base}.toml`, { legacyPaths: [`${base}.yml`, `${base}.yaml`] });
+		return loaded ? parseChainsDoc(loaded.data, loaded.filePath) : { chains: [] };
 	} catch (err) {
-		if (!isEnoent(err)) logger.warn("Chain config: failed to read for edit", { path: filePath, error: String(err) });
-		return { chains: [] };
+		if (!isEnoent(err)) logger.warn("Chain config: failed to read for edit", { path: filePath });
+		const doc: ChainsConfigDoc = { chains: [], warnings: [`${filePath}: failed to read or parse TOML`] };
+		chainRepairDocs.add(doc);
+		return doc;
 	}
-	return parseChainsText(text, filePath);
 }
 
-/** Serialize a doc to canonical, hand-editable `CHAINS.yml`; `""` for an empty doc. */
+/** Serialize a doc with the shared TOML codec. */
 export function serializeChainsConfig(doc: ChainsConfigDoc): string {
-	if (doc.chains.length === 0) return "";
-	const lines = ["chains:"];
-	for (const chain of doc.chains) {
-		lines.push(`  - name: ${YAML.stringify(chain.name)}`);
-		if (chain.description?.trim()) appendYamlString(lines, "    ", "description", chain.description);
-		lines.push("    steps:");
-		for (const step of chain.steps) {
-			lines.push(`      - name: ${YAML.stringify(step.name)}`);
-			if (step.enabled === false) lines.push("        enabled: false");
-			if (step.model?.trim()) lines.push(`        model: ${YAML.stringify(step.model)}`);
-			if (step.context) lines.push("        context: true");
-			if (step.tools && step.tools.length > 0) {
-				lines.push("        tools:");
-				for (const tool of step.tools) lines.push(`          - ${YAML.stringify(tool)}`);
-			}
-			if (step.systemPrompt !== undefined) appendYamlString(lines, "        ", "systemPrompt", step.systemPrompt);
-			appendYamlString(lines, "        ", "prompt", step.prompt);
-		}
-	}
-	return `${lines.join("\n")}\n`;
+	return doc.chains.length === 0 ? "" : stringifySettingsToml({ chains: doc.chains });
 }
 
-/** Write a doc to `CHAINS.yml`; an empty doc removes the file. */
+/** Patch known editor fields while preserving comments and future fields. */
 export async function saveChainsConfigFile(filePath: string, doc: ChainsConfigDoc): Promise<void> {
-	const content = serializeChainsConfig(doc);
-	if (!content) {
-		await fs.rm(filePath, { force: true });
-		return;
+	filePath = filePath.replace(/\.(?:yml|yaml)$/, ".toml");
+	const base = filePath.slice(0, -".toml".length);
+	let loaded: TomlConfigSource | undefined;
+	try {
+		loaded = await readTomlConfig(filePath, { legacyPaths: [`${base}.yml`, `${base}.yaml`] });
+	} catch (error) {
+		if (!chainRepairDocs.has(doc)) throw error;
 	}
-	await Bun.write(filePath, content);
+	const data = loaded?.data ?? {};
+	const existing = Array.isArray(data.chains) ? data.chains.filter(isRecord) : [];
+	data.chains = doc.chains.map(chain => {
+		const prior: Record<string, unknown> = existing.find(item => item.name === chain.name) ?? {};
+		const priorSteps = Array.isArray(prior.steps) ? prior.steps.filter(isRecord) : [];
+		const steps = chain.steps.map(step => {
+			const previous = priorSteps.find(item => item.name === step.name) ?? {};
+			const merged: Record<string, unknown> = { ...previous };
+			for (const key of ["name", "enabled", "model", "context", "tools", "systemPrompt", "prompt"] as const) {
+				if (step[key] === undefined) delete merged[key];
+				else merged[key] = step[key];
+			}
+			return merged;
+		});
+		const merged: Record<string, unknown> = { ...prior, name: chain.name, steps };
+		if (chain.description === undefined) delete merged.description;
+		else merged.description = chain.description;
+		return merged;
+	});
+	if (doc.chains.length === 0) delete data.chains;
+	const source = loaded?.content ?? "";
+	const content = patchSettingsToml(source, data);
+	if (!content.trim()) {
+		await fs.rm(filePath, { force: true });
+	} else {
+		const mode = await fs
+			.stat(filePath)
+			.then(stat => stat.mode & 0o7777)
+			.catch(error => {
+				if (!isEnoent(error)) throw error;
+				return 0o600;
+			});
+		await writeFileAtomically(filePath, content, { mode });
+	}
+	chainRepairDocs.delete(doc);
 }

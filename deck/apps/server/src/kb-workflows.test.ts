@@ -12,7 +12,7 @@ import { closeDb, openDb } from "./db/index.ts";
 import { createInbox, getInbox, listInbox } from "./db/inbox.ts";
 import { createV1Routine } from "./db/routines.ts";
 import { RoutinesRunner } from "./routines-runner.ts";
-import YAML from "yaml";
+import { stringifySettingsToml as stringifyToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 let root: string;
 let vault: string;
@@ -30,7 +30,7 @@ beforeEach(async () => {
 	root = await mkdtemp(path.join(os.tmpdir(), "deck-kb-workflow-"));
 	vault = path.join(root, "vault"); project = path.join(root, "neodeck");
 	await mkdir(path.join(project, ".git"), { recursive: true });
-	await note("broad.md", "---\nname: Broad topic\ntags: [entry]\n---\n[[middle]]\n");
+	await note("broad.md", "+++\nname = 'Broad topic'\ntags = ['entry']\n+++\n[[middle]]\n");
 	await note("middle.md", "# Middle\n[[target]]\n");
 	await note("target.md", "# Target\nDecision: use narrow traversal.\n");
 	await note("projects/neodeck/learned.md", "# Project learning\n[[broad]]\n");
@@ -158,7 +158,7 @@ test("neighbour edge writes require a parsed, resolved link rather than code or 
 		"[[projects/neodeck/missing]]",
 		"`[[projects/neodeck/learned]]`",
 		"```md\n[[projects/neodeck/learned]]\n```",
-		"---\nexample: '[[projects/neodeck/learned]]'\n---\nNo body link",
+		"+++\nexample = '[[projects/neodeck/learned]]'\n+++\nNo body link",
 	]) {
 		await expect(writeKb(kb, identity, { path: target, content, mode: "create", kind: "edge" })).rejects.toThrow("indexed owning project note");
 		expect(await kb.getFile(target)).toBeUndefined();
@@ -230,7 +230,7 @@ test("explicit capture chat command and wired routine KB input work through pers
 		{ id: "knowledge", type: "deck", action: "kb_read", path: "target.md" },
 		{ id: "result", type: "deck", action: "create_inbox_item", kind: "investigation", title: "Requested knowledge", body: "{{ steps.knowledge.json.body }}" },
 	] } as any;
-	const routine = createV1Routine({ name: spec.name, description: "", specYaml: YAML.stringify(spec), spec, enabled: false });
+	const routine = createV1Routine({ name: spec.name, description: "", specToml: stringifyToml(spec), spec, enabled: false });
 	const runner = new RoutinesRunner();
 	try { await runner.fire(routine.id, "manual"); }
 	finally { await runner.dispose(); }

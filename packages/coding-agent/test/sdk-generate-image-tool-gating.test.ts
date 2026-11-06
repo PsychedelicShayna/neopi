@@ -29,7 +29,7 @@ describe("generate_image tool gating", () => {
 		registryDir = path.join(os.tmpdir(), `pi-generate-image-gating-${Snowflake.next()}`);
 		fs.mkdirSync(registryDir, { recursive: true });
 		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(registryDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(registryDir, "models.toml"));
 	});
 
 	afterEach(async () => {

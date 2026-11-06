@@ -63,7 +63,7 @@ export default class Share extends Command {
 		const settings = await Settings.loadReadOnly({ cwd: sm.getCwd() });
 		// Same leak boundary as /share: a share blob leaves the machine, so honor
 		// share.redactSecrets with the full obfuscator built against the session's
-		// own project directory (its secrets.yml, not the invoking cwd's).
+		// own project directory (its secrets.toml, not the invoking cwd's).
 		const obfuscator =
 			cfgShareRedactSecrets.get(settings) && cfgSecretsEnabled.get(settings)
 				? await buildSecretObfuscator(sm.getCwd(), getAgentDir())

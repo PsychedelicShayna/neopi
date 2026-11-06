@@ -105,7 +105,7 @@ describe("issue #12247 mid-turn transcript rebuild", () => {
 			}),
 			sessionManager,
 			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false, "todo.enabled": false }),
-			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.toml")),
 			toolRegistry: new Map([[probe.name, probe]]),
 		});
 		session = live;

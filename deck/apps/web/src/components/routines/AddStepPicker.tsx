@@ -3,7 +3,7 @@ import { Plus } from "lucide-react";
 
 import type { RoutineDeckAction, RoutineStep } from "@npi-deck/protocol";
 
-import { STEP_TYPE_DESCRIPTIONS } from "./spec-yaml";
+import { STEP_TYPE_DESCRIPTIONS } from "./spec-toml";
 import { actionLabel, STEP_ICON, stepIconTone } from "./step-form-render";
 
 interface Props {

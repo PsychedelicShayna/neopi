@@ -8,7 +8,7 @@
  * `application/vnd.amazon.eventstream`; no AWS SDK, Smithy, or proxy-agent
  * dependency is required. Bun's native `HTTPS_PROXY` support is honored.
  *
- * A `models.yml` `baseUrl` is the request origin verbatim (VPC endpoint, gateway, …);
+ * A `models.toml` `baseUrl` is the request origin verbatim (VPC endpoint, gateway, …);
  * only AWS's own regional host is re-pointed at the resolved region. SigV4 unaffected.
  */
 

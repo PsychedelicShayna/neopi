@@ -43,7 +43,7 @@ describe("ExtensionContext.agent", () => {
 			cwd: tempDir,
 			agentDir: tempDir,
 			authStorage,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.toml")),
 			settings: Settings.isolated(),
 			sessionManager: SessionManager.inMemory(),
 			disableExtensionDiscovery: true,

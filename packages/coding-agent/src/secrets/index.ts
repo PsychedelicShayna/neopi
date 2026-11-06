@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { importLegacyYamlValue, readTomlConfig } from "@oh-my-pi/pi-utils/settings-toml";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
 import { CREDENTIAL_PATTERNS } from "./patterns";
 import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
@@ -160,12 +160,12 @@ export * from "./patterns";
 export { secretEntriesNeedPlaceholderKey, secretEntryNeedsPlaceholderKey } from "./placeholder";
 
 /**
- * Load secrets from project-local and global secrets.yml files.
+ * Load secrets from project-local and global secrets.toml files.
  * Project-local entries override global entries with matching content.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const projectPath = path.join(cwd, ".omp", "secrets.yml");
-	const globalPath = path.join(agentDir, "secrets.yml");
+	const projectPath = path.join(cwd, ".omp", "secrets.toml");
+	const globalPath = path.join(agentDir, "secrets.toml");
 
 	const globalEntries = await loadSecretsFile(globalPath);
 	const projectEntries = await loadSecretsFile(projectPath);
@@ -235,7 +235,7 @@ export function collectEnvSecrets(): SecretEntry[] {
 /**
  * Built-in entries covering the credential-shaped tokens declared in
  * `patterns.ts` (GitHub/GitLab/OpenAI-style API keys and other vendor-prefixed
- * credentials) that are NOT configured via secrets.yml or the environment. Without
+ * credentials) that are NOT configured via secrets.toml or the environment. Without
  * these, such a token in a tool result falls through to pi-ai's irreversible
  * provider-boundary redaction (`[openai_token_redacted]`); the model then echoes
  * that placeholder into edit-tool `old_string`, which can never match the real
@@ -258,7 +258,7 @@ export function builtinCredentialSecretEntries(): SecretEntry[] {
 }
 
 /**
- * Build the session secret obfuscator from every configured source: secrets.yml
+ * Build the session secret obfuscator from every configured source: secrets.toml
  * (project + global), secret-shaped environment variables, and the built-in
  * credential patterns. Callers gate on `secrets.enabled`.
  *
@@ -304,10 +304,15 @@ export async function buildSecretObfuscator(
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 	try {
-		const text = await Bun.file(filePath).text();
-		const raw = YAML.parse(text);
+		const base = filePath.slice(0, -".toml".length);
+		const loaded = await readTomlConfig(filePath, {
+			legacyPaths: [`${base}.yml`, `${base}.yaml`],
+			parseLegacy: (content, legacyPath) => ({ secrets: importLegacyYamlValue(content, legacyPath) }),
+		});
+		if (!loaded) return [];
+		const raw = loaded.data.secrets;
 		if (!Array.isArray(raw)) {
-			logger.warn("secrets.yml must be a YAML array", { path: filePath });
+			logger.warn("secrets.toml must contain a secrets array", { path: filePath });
 			return [];
 		}
 		const entries: SecretEntry[] = [];
@@ -327,7 +332,7 @@ async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 		return entries;
 	} catch (err) {
 		if (isEnoent(err)) return [];
-		logger.warn("Failed to load secrets.yml", { path: filePath, error: String(err) });
+		logger.warn("Failed to load secrets.toml", { path: filePath });
 		return [];
 	}
 }
@@ -338,15 +343,15 @@ async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 // case-sensitive/punctuated regex pattern (e.g. `tok_[a-z0-9]+`) only matches
 // the label as it was actually written, not an already-uppercased,
 // separator-stripped rendering of it. Pre-sanitizing here would silently
-// defeat that check for every `secrets.yml`-loaded entry.
+// defeat that check for every `secrets.toml`-loaded entry.
 function loadFriendlyName(entry: RawSecretEntry, filePath: string, index: number): string | undefined {
 	if (entry.friendlyName === undefined) return undefined;
 	if (typeof entry.friendlyName !== "string") {
-		logger.warn(`secrets.yml[${index}]: friendlyName must be a string`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: friendlyName must be a string`, { path: filePath });
 		return undefined;
 	}
 	if (sanitizeSecretFriendlyName(entry.friendlyName) === undefined) {
-		logger.warn(`secrets.yml[${index}]: friendlyName must contain at least one letter or digit`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: friendlyName must contain at least one letter or digit`, { path: filePath });
 		return undefined;
 	}
 	return entry.friendlyName;
@@ -354,47 +359,43 @@ function loadFriendlyName(entry: RawSecretEntry, filePath: string, index: number
 
 function validateEntry(entry: unknown, filePath: string, index: number): entry is RawSecretEntry {
 	if (entry === null || typeof entry !== "object") {
-		logger.warn(`secrets.yml[${index}]: entry must be an object`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: entry must be an object`, { path: filePath });
 		return false;
 	}
 	const e = entry as Record<string, unknown>;
 	if (e.type !== "plain" && e.type !== "regex") {
-		logger.warn(`secrets.yml[${index}]: type must be "plain" or "regex"`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: type must be "plain" or "regex"`, { path: filePath });
 		return false;
 	}
 	if (typeof e.content !== "string" || e.content.length === 0) {
-		logger.warn(`secrets.yml[${index}]: content must be a non-empty string`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: content must be a non-empty string`, { path: filePath });
 		return false;
 	}
 	if (e.mode !== undefined && e.mode !== "obfuscate" && e.mode !== "replace") {
-		logger.warn(`secrets.yml[${index}]: mode must be "obfuscate" or "replace"`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: mode must be "obfuscate" or "replace"`, { path: filePath });
 		return false;
 	}
 	if (e.replacement !== undefined && typeof e.replacement !== "string") {
-		logger.warn(`secrets.yml[${index}]: replacement must be a string`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: replacement must be a string`, { path: filePath });
 		return false;
 	}
 	if (e.flags !== undefined && typeof e.flags !== "string") {
-		logger.warn(`secrets.yml[${index}]: flags must be a string`, { path: filePath });
+		logger.warn(`secrets.toml[${index}]: flags must be a string`, { path: filePath });
 		return false;
 	}
 	if (e.type === "regex") {
 		let regex: RegExp;
 		try {
 			regex = compileSecretRegex(e.content as string, e.flags as string | undefined);
-		} catch (error) {
-			logger.warn(`secrets.yml[${index}]: invalid regex pattern`, {
-				path: filePath,
-				pattern: e.content,
-				error: String(error),
-			});
+		} catch {
+			logger.warn(`secrets.toml[${index}]: invalid regex pattern`, { path: filePath });
 			return false;
 		}
 		const mode = (e.mode as "obfuscate" | "replace" | undefined) ?? "obfuscate";
 		if (mode === "replace" && e.replacement === undefined && regexHasUnresolvableShortMatchFallback(regex)) {
 			logger.warn(
-				`secrets.yml[${index}]: regex matches every 1-2 character candidate with no custom replacement, so a match can never be redacted distinctly from itself`,
-				{ path: filePath, pattern: e.content },
+				`secrets.toml[${index}]: regex matches every 1-2 character candidate with no custom replacement, so a match can never be redacted distinctly from itself`,
+				{ path: filePath },
 			);
 			return false;
 		}

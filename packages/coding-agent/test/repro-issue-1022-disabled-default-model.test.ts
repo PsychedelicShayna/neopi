@@ -67,7 +67,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 		// only openai-codex, so no anthropic model should be selected.
 		authStorage.keys.setRuntime("anthropic", "test-anthropic-key");
 
-		const modelRegistry = new ModelRegistry(authStorage, path.join(testDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(testDir, "models.toml"));
 
 		try {
 			const { session, modelFallbackMessage } = await createAgentSession({

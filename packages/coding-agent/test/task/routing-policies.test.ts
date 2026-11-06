@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { YAML } from "bun";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { cfgRetryFallbackChains } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -65,10 +65,10 @@ describe("named routing policies", () => {
 		try {
 			const agentDir = path.join(dir, "agent");
 			const cwd = path.join(dir, "project");
-			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ routingPolicies: policies }));
+			await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml({ routingPolicies: policies }));
 			await Bun.write(
-				path.join(cwd, ".omp", "config.yml"),
-				YAML.stringify({
+				path.join(cwd, ".omp", "config.toml"),
+				stringifySettingsToml({
 					routingPolicies: {
 						local: {
 							slots: {

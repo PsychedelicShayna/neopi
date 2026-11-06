@@ -72,7 +72,7 @@ describe("issue #3569 fresh launch default role from extension provider", () => 
 		// bundled provider whose `pickDefaultAvailableModel` entry would otherwise
 		// win the startup fallback.
 		authStorage.keys.setRuntime("openai", "test-openai-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"));
 
 		const settings = Settings.isolated();
 		settings.setModelRole("default", "runtime-provider/runtime-model");

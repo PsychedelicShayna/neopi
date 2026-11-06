@@ -32,7 +32,7 @@ function setup(options: { responses?: MockResponseSource; beforeVisionReply?: ()
 	const tempDir = TempDir.createSync("@skill-image-");
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("zai", "test-key");
-	const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+	const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	const settings = Settings.isolated({
 		"compaction.enabled": false,
 		modelRoles: { vision: "zai/glm-5.3-flash:max", default: "zai/glm-5.3:max" },

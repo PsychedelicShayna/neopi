@@ -59,7 +59,7 @@ describe("createAgentSession skills option", () => {
 	beforeAll(async () => {
 		sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-skills-shared-"));
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir, "models.yml"));
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir, "models.toml"));
 	});
 
 	afterAll(() => {

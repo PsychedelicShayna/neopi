@@ -65,7 +65,7 @@ describe("AgentSession bash session ownership", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [] },
 			streamFn: mock.stream,
 		});
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 		session = new AgentSession({
 			agent,
 			sessionManager,

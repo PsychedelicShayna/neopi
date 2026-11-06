@@ -993,7 +993,7 @@ export class SelectorController {
 		const cwd = this.ctx.sessionManager.getCwd();
 		const agentDir = getAgentDir() ?? getProjectDir();
 		void (async () => {
-			// "Project" scope edits the repo-root WATCHDOG.yml (the project-level file
+			// "Project" scope edits the repo-root WATCHDOG.toml (the project-level file
 			// discovery walks), not the launch subdir — `getProjectDir()` is only cwd.
 			let projectDir = cwd;
 			try {
@@ -1004,7 +1004,12 @@ export class SelectorController {
 			const sessionDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
 			const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 			const candidates = [...discovered.files];
-			const scopes: AdvisorConfigScope[] = ["user", "project", "project-omp", ...(sessionDir ? ["session" as const] : [])];
+			const scopes: AdvisorConfigScope[] = [
+				"user",
+				"project",
+				"project-omp",
+				...(sessionDir ? ["session" as const] : []),
+			];
 			for (const scope of scopes) {
 				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir, sessionDir });
 				if (!candidates.some(file => file.path === filePath)) candidates.push({ path: filePath, scope });
@@ -1089,7 +1094,11 @@ export class SelectorController {
 					// Re-discover the merged roster (project + user) so the live advisors
 					// reflect cross-level precedence, not just the edited file. Only
 					// advisors whose effective configuration changed restart.
-					const discovered = await discoverAdvisorConfigs(cwd, agentDir, this.ctx.sessionManager.getArtifactsDir() ?? undefined);
+					const discovered = await discoverAdvisorConfigs(
+						cwd,
+						agentDir,
+						this.ctx.sessionManager.getArtifactsDir() ?? undefined,
+					);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
@@ -1097,12 +1106,12 @@ export class SelectorController {
 					);
 					this.ctx.statusLine.invalidate();
 					if (discovered.warnings.length > 0) {
-						this.ctx.showWarning(`WATCHDOG.yml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
+						this.ctx.showWarning(`WATCHDOG.toml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
 					}
 					this.ctx.showStatus(
 						count > 0
-							? `Applied WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.`
-							: "Applied WATCHDOG.yml. Run /advisor on to activate the configured advisors.",
+							? `Applied WATCHDOG.toml — ${count} advisor${count === 1 ? "" : "s"} active.`
+							: "Applied WATCHDOG.toml. Run /advisor on to activate the configured advisors.",
 					);
 					this.ctx.ui.requestRender();
 				},
@@ -1267,7 +1276,7 @@ export class SelectorController {
 		const agentDir = getAgentDir() ?? getProjectDir();
 		const initialScope: ChainConfigScope = "project";
 		void (async () => {
-			// Project scope edits the repo-root CHAINS.yml, beside WATCHDOG.yml.
+			// Project scope edits the repo-root CHAINS.toml, beside WATCHDOG.toml.
 			let projectDir = cwd;
 			try {
 				projectDir = vcs.repo(cwd)?.root() ?? cwd;
@@ -1278,7 +1287,7 @@ export class SelectorController {
 			const initialDoc = await loadChainsConfigFile(chainsConfigFilePath(initialScope, dirs));
 			if (this.#openMenus.get(menu.kind) !== menu) return;
 			if (initialDoc.warnings?.length) {
-				this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
+				this.ctx.showWarning(`CHAINS.toml: ${sanitizeDisplayWarnings(initialDoc.warnings).join("; ")}`);
 			}
 			const done = () => {
 				this.#releaseMenu(menu.kind, menu);
@@ -1310,11 +1319,11 @@ export class SelectorController {
 					await saveChainsConfigFile(chainsConfigFilePath(scope, dirs), doc);
 					const discovered = await discoverChains(cwd, agentDir);
 					if (discovered.warnings.length > 0) {
-						this.ctx.showWarning(`CHAINS.yml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
+						this.ctx.showWarning(`CHAINS.toml: ${sanitizeDisplayWarnings(discovered.warnings).join("; ")}`);
 					}
 					const count = discovered.chains.length;
 					this.ctx.showStatus(
-						`Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C sends through the active chain.`,
+						`Saved ${scope} CHAINS.toml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C sends through the active chain.`,
 					);
 					this.ctx.ui.requestRender();
 				},

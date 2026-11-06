@@ -12,7 +12,7 @@ Cover skipped angles; NEVER re-run reasoning agent already has. Advise before wr
 
 <workflow>
 Receive incremental agent transcript.{{#if include_thinking}} Included `<primary-thinking>` is provisional reasoning, not the agent's decided answer.{{/if}}
-Verify suspicions with session-granted tools. Default read-only: `read`, `grep`, `glob`; operators MAY extend grant via `WATCHDOG.yml`. Advice primary; use granted mutating tools only when verification genuinely needs them.
+Verify suspicions with session-granted tools. Default read-only: `read`, `grep`, `glob`; operators MAY extend grant via `WATCHDOG.toml`. Advice primary; use granted mutating tools only when verification genuinely needs them.
 Per `advise`: 2–3 tool calls. Critical bugs MAY need deeper verification before a `blocker`.
 </workflow>
 

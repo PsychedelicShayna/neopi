@@ -29,7 +29,7 @@ async function defaultConfigValueResolver(config: string): Promise<string | unde
 	return envValue || config;
 }
 
-/** Runtime (--api-key) and config (models.yml) key overrides plus the config-value resolver. */
+/** Runtime (--api-key) and config (models.toml) key overrides plus the config-value resolver. */
 export class KeyOverrides {
 	#runtimeOverrides: Map<string, string> = new Map();
 	#configOverrides: Map<string, string> = new Map();
@@ -90,7 +90,7 @@ export class KeyOverrides {
 
 	/**
 	 * Register a per-provider API key sourced from user configuration
-	 * (e.g. `models.yml` `providers.<name>.apiKey`). Higher priority than
+	 * (e.g. `models.toml` `providers.<name>.apiKey`). Higher priority than
 	 * stored credentials and OAuth tokens — when the user pins a key in
 	 * config, that key is what authenticates outbound requests, regardless
 	 * of whatever the broker happens to have loaded for that provider.
@@ -123,7 +123,7 @@ export class KeyOverrides {
 
 	/**
 	 * Drop every config-sourced API key. Called by `ModelRegistry` before
-	 * re-parsing `models.yml` so removed entries actually disappear.
+	 * re-parsing `models.toml` so removed entries actually disappear.
 	 */
 	clearConfig(): void {
 		this.#configOverrides.clear();
@@ -445,7 +445,7 @@ export class KeyCascade implements KeysApi {
 	 * login API key, environment variable, then another stored API key.
 	 * A session restricted by `sessions.restrict` resolves only its allowed
 	 * OAuth accounts and throws {@link AIError.MissingApiKeyError} when none
-	 * can serve or a config key (a models.yml `apiKey`, often for a proxy
+	 * can serve or a config key (a models.toml `apiKey`, often for a proxy
 	 * `baseUrl`) owns the provider, rather than using any other credential.
 	 * A transient OAuth refresh failure resolves `undefined`, so availability
 	 * probes move on to their next candidate; request paths use
@@ -486,7 +486,7 @@ export class KeyCascade implements KeysApi {
 			return runtimeKey;
 		}
 
-		// Config override: explicit apiKey pinned in models.yml beats the broker's
+		// Config override: explicit apiKey pinned in models.toml beats the broker's
 		// OAuth credentials. The user redirected a provider at a custom baseUrl
 		// (e.g. an auth-gateway) and supplied the bearer for that endpoint —
 		// honor it instead of forwarding an upstream OAuth token that the proxy
@@ -494,7 +494,7 @@ export class KeyCascade implements KeysApi {
 		if (restricted && this.#deps.overrides.configKey(provider) !== undefined) {
 			throw new AIError.MissingApiKeyError(
 				provider,
-				`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool, but models.yml configures an apiKey for this provider, and pooled OAuth tokens are never sent past it)`,
+				`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool, but models.toml configures an apiKey for this provider, and pooled OAuth tokens are never sent past it)`,
 			);
 		}
 		const configKey = restricted ? undefined : this.#deps.overrides.configKey(provider);
@@ -636,7 +636,7 @@ export class KeyCascade implements KeysApi {
 	 *
 	 * Mirrors {@link KeyCascade.get} precedence, highest first:
 	 *   1. Runtime override (`--api-key`).
-	 *   2. Config override (`models.yml` `providers.<name>.apiKey`).
+	 *   2. Config override (`models.toml` `providers.<name>.apiKey`).
 	 *   3. Stored OAuth credential.
 	 *   4. API key persisted by a successful `/login`.
 	 *   5. Env var — overrides a stored static api_key (e.g. a stale broker copy).
@@ -649,7 +649,7 @@ export class KeyCascade implements KeysApi {
 			return "runtime override (--api-key)";
 		}
 		if (this.#deps.overrides.configKey(provider) !== undefined) {
-			return "config override (models.yml)";
+			return "config override (models.toml)";
 		}
 
 		const baseLabel = this.#deps.sourceLabel ?? "local store";

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as piUtils from "@oh-my-pi/pi-utils";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import {
 	getAdapterConfigs,
 	type LaunchAdapterSelection,
@@ -34,7 +35,7 @@ async function writeExecutable(filePath: string): Promise<void> {
 }
 
 async function writeDlvOverride(cwd: string, command: string): Promise<void> {
-	await fs.writeFile(path.join(cwd, "dap.json"), JSON.stringify({ adapters: { dlv: { command } } }));
+	await fs.writeFile(path.join(cwd, "dap.toml"), stringifySettingsToml({ adapters: { dlv: { command } } }));
 }
 
 async function setupMissingDlvProject(cwd: string): Promise<string> {
@@ -78,14 +79,14 @@ afterEach(async () => {
 });
 
 describe("DAP adapter configuration", () => {
-	it("loads a custom adapter from dap.json and selects it by file extension", async () => {
-		const cwd = await makeTempDir("omp-dap-config-json-");
+	it("loads a custom adapter from dap.toml and selects it by file extension", async () => {
+		const cwd = await makeTempDir("omp-dap-config-toml-");
 		await fs.writeFile(path.join(cwd, "pom.xml"), "<project />\n");
 		await fs.mkdir(path.join(cwd, "src"), { recursive: true });
 		await fs.writeFile(path.join(cwd, "src", "Main.java"), "class Main {}\n");
 		await fs.writeFile(
-			path.join(cwd, "dap.json"),
-			JSON.stringify({
+			path.join(cwd, "dap.toml"),
+			stringifySettingsToml({
 				adapters: {
 					"custom-jvm": {
 						command: "bun",
@@ -117,8 +118,8 @@ describe("DAP adapter configuration", () => {
 		const cwd = await makeTempDir("omp-dap-config-override-");
 		await fs.writeFile(path.join(cwd, "script.py"), "print('hi')\n");
 		await fs.writeFile(
-			path.join(cwd, "dap.json"),
-			JSON.stringify({
+			path.join(cwd, "dap.toml"),
+			stringifySettingsToml({
 				adapters: {
 					debugpy: {
 						args: ["-m", "debugpy.adapter", "--log-dir", ".debugpy-logs"],
@@ -135,7 +136,7 @@ describe("DAP adapter configuration", () => {
 		expect(config.launchDefaults).toMatchObject({ request: "launch", justMyCode: false });
 	});
 
-	it("loads adapter config from project config directories and YAML", async () => {
+	it("imports legacy YAML adapter config from project config directories", async () => {
 		const cwd = await makeTempDir("omp-dap-config-yaml-");
 		await fs.mkdir(path.join(cwd, ".omp"), { recursive: true });
 		await fs.writeFile(path.join(cwd, "build.gradle.kts"), "plugins {}\n");
@@ -162,9 +163,14 @@ describe("DAP adapter configuration", () => {
 			].join("\n"),
 		);
 
+		const legacySource = await Bun.file(path.join(cwd, ".omp", "dap.yaml")).text();
 		const selected = requireSelectedAdapter(selectLaunchAdapter("Main.kt", cwd));
 		expect(selected.name).toBe("yaml-kotlin");
 		expect(selected.launchDefaults).toEqual({ request: "launch", projectRoot: "." });
+		expect(parseSettingsToml(await Bun.file(path.join(cwd, ".omp", "dap.toml")).text())).toHaveProperty(
+			"adapters.yaml-kotlin",
+		);
+		expect(await Bun.file(path.join(cwd, ".omp", "dap.yaml")).text()).toBe(legacySource);
 	});
 
 	it("resolves relative adapter commands from the debug cwd", async () => {
@@ -174,8 +180,8 @@ describe("DAP adapter configuration", () => {
 		await fs.writeFile(command, "");
 		await fs.chmod(command, 0o755);
 		await fs.writeFile(
-			path.join(cwd, "dap.json"),
-			JSON.stringify({
+			path.join(cwd, "dap.toml"),
+			stringifySettingsToml({
 				adapters: {
 					relative: {
 						command: process.platform === "win32" ? ".\\tools\\debug-adapter.cmd" : "./tools/debug-adapter",
@@ -202,8 +208,8 @@ describe("DAP adapter configuration", () => {
 			JSON.stringify({ name: "acme-debug" }),
 		);
 		await fs.writeFile(
-			path.join(pluginRoot, ".dap.json"),
-			JSON.stringify({
+			path.join(pluginRoot, ".dap.toml"),
+			stringifySettingsToml({
 				adapters: {
 					"acme-ruby": {
 						command: "ruby-debug-adapter",
@@ -222,8 +228,8 @@ describe("DAP adapter configuration", () => {
 	it("ignores invalid custom adapters without discarding valid configs", async () => {
 		const cwd = await makeTempDir("omp-dap-config-invalid-");
 		await fs.writeFile(
-			path.join(cwd, "dap.json"),
-			JSON.stringify({
+			path.join(cwd, "dap.toml"),
+			stringifySettingsToml({
 				adapters: {
 					"missing-command": {
 						fileTypes: [".bad"],

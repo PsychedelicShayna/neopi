@@ -41,7 +41,7 @@ describe("env-redirected implicit provider discovery warning", () => {
 		Bun.env.OLLAMA_BASE_URL = "http://ollama.typo:11434";
 		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
 		authStorage.keys.setRuntime("openai", "test-openai-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), {
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), {
 			fetch: async () => {
 				throw new Error("EHOSTUNREACH: connect failed");
 			},

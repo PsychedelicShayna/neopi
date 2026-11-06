@@ -10,7 +10,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { importLegacyYaml, readTomlConfig, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
+import { JSONC } from "bun";
 import { expandTilde } from "../../../tools/path-utils";
 import { linkPluginDirectory } from "../directory-link";
 import { normalizePluginRuntimeConfig, writePluginRuntimeConfig } from "../runtime-config";
@@ -447,9 +449,13 @@ export class MarketplaceManager {
 					? [targetReg, await readInstalledPluginsRegistry(otherRegistryPath)]
 					: [targetReg];
 			this.#assertCachePathAvailable(prospectiveCachePath, pluginId, registriesToCheck);
+			// Decode and serialize before replacing an active cache: malformed imported
+			// configuration must not destroy the previous same-version installation.
+			const lspConfig = await this.#embeddedConfigContent(pluginEntry, sourcePath, "lspServers");
+			const dapConfig = await this.#embeddedConfigContent(pluginEntry, sourcePath, "dapAdapters");
 			cachePath = await cachePlugin(sourcePath, this.#opts.pluginsCacheDir, marketplace, name, version);
-			await this.#writeEmbeddedLspConfig(pluginEntry, cachePath);
-			await this.#writeEmbeddedDapConfig(pluginEntry, cachePath);
+			if (lspConfig !== undefined) await Bun.write(path.join(cachePath, ".lsp.toml"), lspConfig);
+			if (dapConfig !== undefined) await Bun.write(path.join(cachePath, ".dap.toml"), dapConfig);
 		} finally {
 			// Clean up temp clone dirs created by resolvePluginSource; leave user-supplied local dirs alone
 			if (tempCloneRoot) {
@@ -553,43 +559,46 @@ export class MarketplaceManager {
 		}
 	}
 
-	async #writeEmbeddedLspConfig(entry: MarketplacePluginEntry, cachePath: string): Promise<void> {
-		const lspServers = entry.lspServers;
-		if (!lspServers) return;
-
-		const targetPath = path.join(cachePath, ".lsp.json");
-		if (typeof lspServers === "string") {
-			const sourcePath = path.resolve(cachePath, lspServers);
-			if (!pathIsWithin(cachePath, sourcePath)) {
-				throw new Error(`Plugin "${entry.name}" lspServers path escapes the plugin directory`);
-			}
-			const content = await Bun.file(sourcePath).text();
-			await Bun.write(targetPath, content);
-			return;
+	/**
+	 * Marketplace catalogs and referenced JSON files are third-party input formats,
+	 * not owned configuration. Import them (and legacy YAML) without editing the
+	 * originals; only the generated runtime configuration is encoded as TOML.
+	 */
+	async #embeddedConfigContent(
+		entry: MarketplacePluginEntry,
+		pluginPath: string,
+		field: "lspServers" | "dapAdapters",
+	): Promise<string | undefined> {
+		const value = entry[field];
+		if (!value) return undefined;
+		if (typeof value !== "string") {
+			return stringifySettingsToml({ [field === "lspServers" ? "servers" : "adapters"]: value });
 		}
 
-		await Bun.write(targetPath, `${JSON.stringify({ servers: lspServers }, null, 2)}\n`);
-	}
-
-	async #writeEmbeddedDapConfig(entry: MarketplacePluginEntry, cachePath: string): Promise<void> {
-		const dapAdapters = entry.dapAdapters;
-		if (!dapAdapters) return;
-
-		if (typeof dapAdapters === "string") {
-			const sourcePath = path.resolve(cachePath, dapAdapters);
-			if (!pathIsWithin(cachePath, sourcePath)) {
-				throw new Error(`Plugin "${entry.name}" dapAdapters path escapes the plugin directory`);
-			}
-			const extension = path.extname(sourcePath).toLowerCase();
-			const targetFilename = extension === ".yaml" || extension === ".yml" ? `.dap${extension}` : ".dap.json";
-			const targetPath = path.join(cachePath, targetFilename);
-			const content = await Bun.file(sourcePath).text();
-			await Bun.write(targetPath, content);
-			return;
+		const sourcePath = path.resolve(pluginPath, value);
+		if (!pathIsWithin(pluginPath, sourcePath)) {
+			throw new Error(`Plugin "${entry.name}" ${field} path escapes the plugin directory`);
 		}
-
-		const targetPath = path.join(cachePath, ".dap.json");
-		await Bun.write(targetPath, `${JSON.stringify({ adapters: dapAdapters }, null, 2)}\n`);
+		const extension = path.extname(sourcePath);
+		const nativePath =
+			extension.toLowerCase() === ".toml"
+				? sourcePath
+				: path.join(path.dirname(sourcePath), `${path.basename(sourcePath, extension)}.toml`);
+		const source = await readTomlConfig(nativePath, {
+			legacyPaths: nativePath === sourcePath ? [] : [sourcePath],
+			migrate: false,
+			parseLegacy: (content, filePath) => {
+				const legacyExtension = path.extname(filePath).toLowerCase();
+				if (legacyExtension === ".yaml" || legacyExtension === ".yml") {
+					return importLegacyYaml(content, filePath);
+				}
+				const data: unknown = JSONC.parse(content);
+				if (!isRecord(data)) throw new Error(`Configuration must contain a mapping: ${filePath}`);
+				return data;
+			},
+		});
+		if (!source) throw new Error(`Plugin "${entry.name}" ${field} file does not exist`);
+		return stringifySettingsToml(source.data);
 	}
 
 	/**

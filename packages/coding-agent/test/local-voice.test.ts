@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import * as runtimeDirs from "@oh-my-pi/pi-utils/dirs";
 import { Settings } from "../src/config/settings";
 import { LocalVoiceMode } from "../src/stt/local-voice";
@@ -108,9 +109,8 @@ describe("session local voice", () => {
 	}
 
 	it("off by default opens nothing and never changes shared profile bytes", async () => {
-		const config = "stt:\n  wake:\n    enabled: false\nspeech:\n  enabled: false\n";
-		await Bun.write(path.join(directory, "config.yml"), config);
-		await Bun.write(path.join(directory, "config.toml"), "# saved preferences\n");
+		const config = `# saved preferences\n${stringifySettingsToml({ stt: { wake: { enabled: false } }, speech: { enabled: false } })}`;
+		await Bun.write(path.join(directory, "config.toml"), config);
 		const profile = await Settings.loadReadOnly({ agentDir: directory, cwd: directory });
 		const first = setup(profile);
 		const second = setup(profile);
@@ -128,8 +128,7 @@ describe("session local voice", () => {
 		first.mode.disable();
 		expect(await second.mode.enable()).toBe(true);
 		second.mode.disable();
-		expect(await Bun.file(path.join(directory, "config.yml")).text()).toBe(config);
-		expect(await Bun.file(path.join(directory, "config.toml")).text()).toBe("# saved preferences\n");
+		expect(await Bun.file(path.join(directory, "config.toml")).text()).toBe(config);
 	});
 
 	it.each(["verbatim", "processed", "failure"])(

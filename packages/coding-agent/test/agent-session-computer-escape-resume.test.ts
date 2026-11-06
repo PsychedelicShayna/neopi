@@ -23,7 +23,7 @@ describe("AgentSession computer use after the user's Escape", () => {
 		tempDir = TempDir.createSync("@pi-computer-escape-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterEach(async () => {

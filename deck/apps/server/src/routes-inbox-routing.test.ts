@@ -34,7 +34,7 @@ test("live proposals preserve the chosen kind without inventing a project or mod
 
 test("filing is atomic, replays after reopen, retains Markdown and records origin", async () => {
 	const app = boot();
-	const item = createInbox({ title: "Keep the notes", kind: "idea", body: "---\ncustom: kept\n---\n\nLine one\nLine two\n\n![image](/uploads/notes.png)", source: "deck" });
+	const item = createInbox({ title: "Keep the notes", kind: "idea", body: "+++\ncustom = 'kept'\n+++\n\nLine one\nLine two\n\n![image](/uploads/notes.png)", source: "deck" });
 	const before = listTasks().length;
 	const destination = { kind: "card", project: "/explicit/project", column: "active" };
 	const first = await app.request(`/inbox/${item.id}/file`, json({ destination }));
@@ -65,7 +65,7 @@ test("invalid and unavailable destinations leave the item and board unchanged", 
 	}
 	expect(listTasks()).toHaveLength(before);
 	expect(getInbox(item.id)?.processedAt).toBeUndefined();
-	const malformed = createInbox({ title: "Bad YAML", kind: "capture", body: "---\n[broken\n---\nbody" });
+	const malformed = createInbox({ title: "Bad TOML", kind: "capture", body: "+++\ncustom = [broken\n+++\nbody" });
 	expect((await app.request(`/inbox/${malformed.id}/file`, json({ destination: { kind: "card", project: "", column: "s_backlog" } }))).status).toBe(400);
 	expect(listTasks()).toHaveLength(before);
 	expect(getInbox(malformed.id)?.processedAt).toBeUndefined();

@@ -4,18 +4,18 @@ Redacts sensitive values (API keys, tokens, passwords) in conversation messages 
 
 ## Enabling
 
-Disabled by default. Toggle via `/settings` UI or directly in `config.yml`:
+Disabled by default. Toggle via `/settings` UI or directly in `config.toml`:
 
-```yaml
-secrets:
-   enabled: true
+```toml
+[secrets]
+enabled = true
 ```
 
 ## How it works
 
 1. On session startup, secrets are collected from:
    - **Environment variables** whose names match common secret patterns (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `OAUTH`) with values at least 8 characters long
-   - **`secrets.yml` files** (see below)
+   - **`secrets.toml` files** (see below)
    - Built-in reversible regexes for common credential shapes that appear only in session content or tool results: GitHub, GitLab, OpenAI, and Anthropic tokens, AWS access keys, Google API keys, Slack tokens, npm tokens, Stripe secret and restricted keys and webhook secrets, Hugging Face tokens, SendGrid keys, JWTs, Bearer header tokens, and PEM private key blocks
    - Passwords embedded in connection-URL environment values — any variable holding a `scheme://user:password@host`-style value (for example `DATABASE_URL`) has its password registered regardless of the variable name when it is at least 8 characters long. Both raw and percent-decoded forms are collected when they meet that limit.
 
@@ -32,16 +32,20 @@ Two modes control what happens to each secret:
 
 Obfuscate-mode plain values and regex matches shorter than 8 characters are ignored to avoid redacting ordinary short words. Replace mode can handle short values; a replace-mode regex with no custom replacement is rejected only when every possible 1–2 character match would be impossible to redact to a distinct stable value.
 
-## secrets.yml
+## secrets.toml
 
-Define custom secret entries in YAML. Two locations are checked:
+Define custom secret entries as TOML `[[secrets]]` tables. Two locations are checked:
 
 | Level   | Path                                                                   | Purpose                                            |
 | ------- | ---------------------------------------------------------------------- | -------------------------------------------------- |
-| Global  | `<active-agent-dir>/secrets.yml` (normally `~/.omp/agent/secrets.yml`) | Secrets across projects using that agent directory |
-| Project | `<cwd>/.omp/secrets.yml`                                               | Project-specific secrets                           |
+| Global  | `<active-agent-dir>/secrets.toml` (normally `~/.omp/agent/secrets.toml`) | Secrets across projects using that agent directory |
+| Project | `<cwd>/.omp/secrets.toml`                                               | Project-specific secrets                           |
 
 Project entries override global entries with matching `content`. The global location follows the session's agent directory, including named profiles and explicit SDK agent-directory overrides.
+
+Legacy `secrets.yml` / `secrets.yaml` root arrays are imported once into a sibling TOML file, atomically and with the same permissions. The YAML remains unchanged. When both exist, TOML wins with a paths-only warning; secret values are not logged by import.
+
+YAML comment text is retained in a labelled TOML preamble with an explicit notice that the original field associations are lost.
 
 ### Schema
 
@@ -60,26 +64,29 @@ Each entry in the array has these fields:
 
 #### Plain secrets
 
-```yaml
+```toml
 # Obfuscate a specific API key (default mode)
-- type: plain
-  content: sk-proj-abc123def456
+[[secrets]]
+type = "plain"
+content = "sk-proj-abc123def456"
 
 # Replace a database password with a fixed string
-- type: plain
-  content: hunter2
-  mode: replace
-  replacement: "********"
+[[secrets]]
+type = "plain"
+content = "hunter2"
+mode = "replace"
+replacement = "********"
 ```
 
 #### Friendly names
 
 `friendlyName` adds semantic context to reversible obfuscation placeholders without exposing the secret value:
 
-```yaml
-- type: plain
-  content: github_pat_abc123def456
-  friendlyName: GitHub Token
+```toml
+[[secrets]]
+type = "plain"
+content = "github_pat_abc123def456"
+friendlyName = "GitHub Token"
 ```
 
 This produces placeholders shaped like `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$`. The friendly name is sanitized to uppercase letters and digits, capped at 32 characters, and omitted if it sanitizes to an empty value. Invalid optional `friendlyName` metadata does not disable the secret entry; the secret still obfuscates with an unlabeled placeholder. A label is also dropped for a particular placeholder if it would expose a configured literal secret or match a configured secret regex.
@@ -101,37 +108,41 @@ The 12-character hash base is an HMAC of the exact secret under a private per-in
 
 #### Regex secrets
 
-```yaml
+```toml
 # Obfuscate any AWS-style key
-- type: regex
-  content: "AKIA[0-9A-Z]{16}"
+[[secrets]]
+type = "regex"
+content = 'AKIA[0-9A-Z]{16}'
 
 # Case-insensitive match with explicit flags
-- type: regex
-  content: "api[_-]?key\\s*=\\s*\\w+"
-  flags: "i"
+[[secrets]]
+type = "regex"
+content = 'api[_-]?key\s*=\s*\w+'
+flags = "i"
 
 # Regex literal syntax (pattern and flags in one string)
-- type: regex
-  content: "/bearer\\s+[a-zA-Z0-9._~+\\/=-]+/i"
+[[secrets]]
+type = "regex"
+content = '/bearer\s+[a-zA-Z0-9._~+\/=-]+/i'
 ```
 
 Regex entries always scan globally (the `g` flag is enforced automatically). The regex literal syntax `/pattern/flags` is supported as an alternative to separate `content` + `flags` fields. Escaped slashes within the pattern (`\\/`) are handled correctly.
 
 #### Replace mode with regex
 
-```yaml
+```toml
 # One-way replace connection strings (not reversible)
-- type: regex
-  content: "postgres://[^\\s]+"
-  mode: replace
-  replacement: "postgres://***"
+[[secrets]]
+type = "regex"
+content = 'postgres://[^\s]+'
+mode = "replace"
+replacement = "postgres://***"
 ```
 
 ## Invalid entries and files
 
-- A missing `secrets.yml` is treated as no entries.
-- A parse failure or non-array document is ignored with a warning.
+- A missing `secrets.toml` with no legacy sibling is treated as no entries.
+- A parse failure or missing/non-array `secrets` field is ignored with a warning.
 - Invalid entries are skipped individually with a warning. `type` must be `plain` or `regex`; `content` must be a non-empty string; `mode`, `replacement`, `flags`, and regex syntax are validated as shown above.
 - Invalid optional `friendlyName` metadata is dropped without dropping an otherwise valid entry.
 

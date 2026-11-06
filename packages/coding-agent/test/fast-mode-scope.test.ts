@@ -23,7 +23,7 @@ describe("/fast targets the current model's service-tier family", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-fast-mode-scope-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml"));
 	});
 
 	afterEach(async () => {

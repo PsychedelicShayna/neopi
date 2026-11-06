@@ -47,7 +47,7 @@ describe("/slow", () => {
 			agent: new Agent({ initialState: { model, systemPrompt: ["test"], tools: [] } }),
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings,
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 		});
 	}
 

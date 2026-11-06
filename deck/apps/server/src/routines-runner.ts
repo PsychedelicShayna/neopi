@@ -13,7 +13,7 @@
  */
 
 import { Cron } from "croner";
-import { parse as parseYaml } from "yaml";
+import { parseSettingsToml as parseToml } from "@oh-my-pi/pi-utils/settings-toml";
 import * as path from "node:path";
 
 import { INBOX_CARD_ADDED_EVENT, type GraphActivation, type GraphExecutionResult, type GraphObject, type Routine, type RoutineGraph, type RoutineRun, type RoutineSpec, type RoutineTrigger } from "@npi-deck/protocol";
@@ -176,7 +176,7 @@ export class RoutinesRunner {
 				...(options.operationId ? { operationId: options.operationId } : {}),
 				...(options.sourceNodeId ? { sourceNodeId: options.sourceNodeId } : {}),
 			}, nativeTrigger, options);
-		} else if (routine.specVersion === 1 && routine.specYaml) {
+		} else if (routine.specVersion === 1) {
 			await this.fireV1(routine, trigger, payload);
 		} else {
 			await this.fireV0(routine, trigger === "cron" || trigger === "manual" ? trigger : "manual", payload);
@@ -348,15 +348,15 @@ export class RoutinesRunner {
 	): Promise<void> {
 		let spec: RoutineSpec;
 		try {
-			spec = parseYaml(routine.specYaml!) as RoutineSpec;
+			spec = parseToml(routine.specToml!) as unknown as RoutineSpec;
 		} catch (err) {
-			log.warn(`V1 routine ${routine.id} has malformed spec_yaml`, err);
+			log.warn(`V1 routine ${routine.id} has malformed spec_toml`);
 			insertAbortedRun({
 				routineId: routine.id,
 				triggerKind: trigger,
 				triggerPayload: payload,
 				abortReason: "failure",
-				error: `spec_yaml parse failure: ${String(err)}`,
+				error: "spec_toml parse failure",
 			});
 			return;
 		}
@@ -415,9 +415,9 @@ function collectCronExpressions(routine: Routine): Array<{ expression: string; a
 				activation: { eventType: node.config.eventType as string, sourceNodeId: node.id, event: {} },
 			}));
 	}
-	if (routine.specVersion === 1 && routine.specYaml) {
+	if (routine.specVersion === 1 && routine.specToml) {
 		try {
-			const spec = parseYaml(routine.specYaml) as RoutineSpec;
+			const spec = parseToml(routine.specToml) as unknown as RoutineSpec;
 			const out: Array<{ expression: string }> = [];
 			for (const t of spec.trigger ?? []) {
 				if ("cron" in t && typeof (t as { cron?: unknown }).cron === "string") {

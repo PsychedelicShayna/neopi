@@ -35,8 +35,9 @@ export const CONFIG_DIR_NAME: string = ".omp";
 /** Stable XDG directory name; branding must not move existing state. */
 export const XDG_DIR_NAME: string = "omp";
 
-/** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
-export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
+/** Native main settings filename. Legacy inputs are imported, never saved. */
+export const MAIN_CONFIG_FILENAMES = ["config.toml"] as const;
+export const LEGACY_MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;

@@ -12,6 +12,7 @@ import { CacheWarmer } from "@oh-my-pi/pi-coding-agent/session/cache-warmer";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { parseSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import {
@@ -45,7 +46,7 @@ function makeConverseModel(): Model {
 /**
  * Regression guard for #11431: `set_auto_compaction`/`set_auto_retry` (which drive
  * `AgentSession.setAutoCompactionEnabled`/`setAutoRetryEnabled`) must configure only
- * the calling session by default, never write the machine-global `config.yml`. The
+ * the calling session by default, never write the machine-global `config.toml`. The
  * explicit `persist` flag — used by the TUI settings panel — is the only path that
  * mutates durable global state.
  */
@@ -62,7 +63,7 @@ describe("AgentSession auto-maintenance controls and cache-warming retention", (
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-auto-scope-");
 		const agentDir = tempDir.path();
-		configPath = path.join(agentDir, "config.yml");
+		configPath = path.join(agentDir, "config.toml");
 
 		authStorage = await AuthStorage.create(path.join(agentDir, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
@@ -121,7 +122,7 @@ describe("AgentSession auto-maintenance controls and cache-warming retention", (
 		} catch {}
 	});
 
-	it("applies the change in-session without persisting to global config.yml", async () => {
+	it("applies the change in-session without persisting to global config.toml", async () => {
 		session.setAutoCompactionEnabled(false);
 		session.setAutoRetryEnabled(false);
 		session.setCacheWarmingMode("off");
@@ -137,7 +138,7 @@ describe("AgentSession auto-maintenance controls and cache-warming retention", (
 		expect(await Bun.file(configPath).exists()).toBe(false);
 	});
 
-	it("persists to global config.yml when persist=true (settings panel path)", async () => {
+	it("persists to global config.toml when persist=true (settings panel path)", async () => {
 		session.setAutoCompactionEnabled(false);
 		session.setAutoRetryEnabled(false);
 		session.setAutoCompactionEnabled(true, true);
@@ -151,7 +152,7 @@ describe("AgentSession auto-maintenance controls and cache-warming retention", (
 			retry: { enabled: true },
 		});
 		const onDisk = await Bun.file(configPath).text();
-		expect(onDisk).toContain("enabled: true");
+		expect(parseSettingsToml(onDisk)).toMatchObject({ compaction: { enabled: true }, retry: { enabled: true } });
 	});
 
 	it("schedules Converse warming from configured long retention", () => {

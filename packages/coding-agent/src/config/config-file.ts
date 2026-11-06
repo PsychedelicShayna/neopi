@@ -1,61 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { OmpErrors, type Type } from "@oh-my-pi/omptype";
-import { getAgentDir, isEnoent, isRecord, logger, stringifyYamlConfig } from "@oh-my-pi/pi-utils";
-import { JSONC, YAML } from "bun";
-import { writeFileAtomically } from "../utils/atomic-file";
+import { getAgentDir, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
-import { writeFileAtomicallySync } from "../utils/atomic-file";
+import {
+	importLegacyYaml,
+	patchSettingsToml,
+	readTomlConfigSync,
+	type TomlConfigSource,
+} from "@oh-my-pi/pi-utils/settings-toml";
+import { JSONC } from "bun";
+import { writeFileAtomically } from "../utils/atomic-file";
 
 /** Minimal subset of the AJV ConfigSchemaError shape this module actually relies on. */
 interface ConfigSchemaError {
 	instancePath: string;
 	message: string | undefined;
-}
-
-/**
- * Module-private cache of JSON → YAML migrations this process already ran.
- * Prevents `ConfigFile.relocate()` / repeated `tryLoad()` calls from re-running
- * the migration over and over on the boot path.
- */
-const migratedPaths = new Set<string>();
-
-function migrationKey(jsonPath: string, ymlPath: string): string {
-	return `${jsonPath}\u0000${ymlPath}`;
-}
-
-/**
- * Synchronous JSON → YAML migration kept for callers that still want the
- * eager path (settings init, tests that observe migration completion).
- * Idempotent — re-running is a no-op.
- */
-function migrateJsonToYml(jsonPath: string, ymlPath: string) {
-	const key = migrationKey(jsonPath, ymlPath);
-	if (migratedPaths.has(key)) return;
-	try {
-		if (fs.existsSync(ymlPath)) {
-			migratedPaths.add(key);
-			return;
-		}
-		if (!fs.existsSync(jsonPath)) {
-			migratedPaths.add(key);
-			return;
-		}
-
-		const content = fs.readFileSync(jsonPath, "utf-8");
-		const parsed = JSONC.parse(content);
-		if (!parsed) {
-			logger.warn("migrateJsonToYml: invalid json structure", { path: jsonPath });
-			migratedPaths.add(key);
-			return;
-		}
-		// The migrated config can carry inline API keys: publish it with
-		// owner-only permissions and never leave a half-written file behind.
-		writeFileAtomicallySync(ymlPath, stringifyYamlConfig(parsed));
-		migratedPaths.add(key);
-	} catch (error) {
-		logger.warn("migrateJsonToYml: migration failed", { error: String(error) });
-	}
 }
 
 export type ConfigSchemaSource =
@@ -148,8 +108,7 @@ function mergeConfigEdit(current: unknown, expected: unknown, next: unknown, key
 
 export class ConfigFile<T> implements IConfigFile<T> {
 	readonly #basePath: string;
-	readonly #yamlFallbackPath: string | null;
-	readonly #jsonMigrationPath: string | null;
+	readonly #legacyPaths: readonly string[];
 	readonly #schemaSource: ConfigSchemaSource;
 	#resolvedSchema?: Type;
 	#cache?: LoadResult<T>;
@@ -158,24 +117,15 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	constructor(
 		readonly id: string,
 		schema: Type | ConfigSchemaSource,
-		configPath: string = path.join(getAgentDir(), `${id}.yml`),
+		configPath: string = path.join(getAgentDir(), `${id}.toml`),
 	) {
 		this.#schemaSource = typeof schema === "function" ? { kind: "eager", schema } : schema;
-		this.#basePath = configPath;
-		if (configPath.endsWith(".yml")) {
-			this.#yamlFallbackPath = `${configPath.slice(0, -4)}.yaml`;
-			this.#jsonMigrationPath = `${configPath.slice(0, -4)}.json`;
-		} else if (configPath.endsWith(".yaml")) {
-			this.#yamlFallbackPath = null;
-			this.#jsonMigrationPath = `${configPath.slice(0, -5)}.json`;
-		} else if (configPath.endsWith(".json") || configPath.endsWith(".jsonc")) {
-			this.#yamlFallbackPath = null;
-			// JSON configs are still supported without migration.
-			this.#jsonMigrationPath = null;
-		} else {
-			this.#yamlFallbackPath = null;
+		if (!/\.(?:toml|yml|yaml|json|jsonc)$/.test(configPath)) {
 			throw new Error(`Invalid config file path: ${configPath}`);
 		}
+		const stem = configPath.replace(/\.(?:toml|yml|yaml|json|jsonc)$/, "");
+		this.#basePath = `${stem}.toml`;
+		this.#legacyPaths = [".yml", ".yaml", ".json", ".jsonc"].map(extension => `${stem}${extension}`);
 	}
 
 	get schema(): Type {
@@ -184,16 +134,17 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return this.#resolvedSchema;
 	}
 
-	/**
-	 * Run the JSON → YAML migration synchronously, if applicable. Idempotent.
-	 * Sync callers (tests, settings init) hit this implicitly via {@link tryLoad}.
-	 */
-	#ensureMigrated(): void {
-		if (!this.#jsonMigrationPath) return;
-		if (this.#yamlFallbackPath && !fs.existsSync(this.#basePath) && fs.existsSync(this.#yamlFallbackPath)) {
-			return;
-		}
-		migrateJsonToYml(this.#jsonMigrationPath, this.#basePath);
+	/** Legacy formats are read only by the one-time, non-destructive import. */
+	#readConfig(): TomlConfigSource | undefined {
+		return readTomlConfigSync(this.#basePath, {
+			legacyPaths: this.#legacyPaths,
+			parseLegacy: (content, filePath) => {
+				if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) return importLegacyYaml(content, filePath);
+				const value: unknown = JSONC.parse(content);
+				if (!isRecord(value)) throw new Error(`Configuration must contain a mapping: ${filePath}`);
+				return value;
+			},
+		});
 	}
 
 	relocate(configPath?: string): ConfigFile<T> {
@@ -201,27 +152,18 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		const result = new ConfigFile<T>(this.id, this.#schemaSource, configPath);
 		result.#auxValidate = this.#auxValidate;
 		result.#resolvedSchema = this.#resolvedSchema;
-		result.#ensureMigrated();
 		return result;
 	}
 
-	#resolveReadPath(): string {
-		if (fs.existsSync(this.#basePath)) {
-			return this.#basePath;
-		}
-		if (this.#yamlFallbackPath && fs.existsSync(this.#yamlFallbackPath)) {
-			return this.#yamlFallbackPath;
-		}
-		return this.#basePath;
-	}
-
 	getMtimeMs(): number | null {
-		try {
-			return fs.statSync(this.#resolveReadPath()).mtimeMs;
-		} catch (err) {
-			if (isEnoent(err)) return null;
-			throw err;
+		for (const filePath of [this.#basePath, ...this.#legacyPaths]) {
+			try {
+				return fs.statSync(filePath).mtimeMs;
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
 		}
+		return null;
 	}
 
 	withValidation(name: string, validate: (value: T) => void): this {
@@ -253,18 +195,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		return result;
 	}
 
-	#parseContent(content: string, preserveInput = false): LoadResult<T> {
+	#validateContent(parsed: unknown, preserveInput = false): LoadResult<T> {
 		try {
-			let parsed: unknown;
-			const readPath = this.#resolveReadPath();
-			if (readPath.endsWith(".json") || readPath.endsWith(".jsonc")) {
-				parsed = JSONC.parse(content);
-			} else if (readPath.endsWith(".yml") || readPath.endsWith(".yaml")) {
-				parsed = YAML.parse(content);
-			} else {
-				throw new Error(`Invalid config file path: ${readPath}`);
-			}
-
 			const checked = this.schema(parsed);
 			if (checked instanceof OmpErrors) {
 				const schemaErrors: ConfigSchemaError[] = checked.map(error => ({
@@ -272,7 +204,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 					message: error.problem,
 				}));
 				const error = new ConfigError(this.id, schemaErrors);
-				logger.warn("Failed to parse config file", { path: this.path(), error });
+				logger.warn("Failed to parse config file", { path: this.#basePath, error });
 				return { error, status: "error" };
 			}
 			const value = checked as T;
@@ -287,7 +219,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			}
 			return { value: preserveInput ? (parsed as T) : value, status: "ok" };
 		} catch (error) {
-			logger.warn("Failed to parse config file", { path: this.path(), error });
+			logger.warn("Failed to parse config file", { path: this.#basePath, error });
 			return {
 				error: new ConfigError(this.id, undefined, { err: error, stage: "Unexpected" }),
 				status: "error",
@@ -298,22 +230,19 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	/** Editors request validated input, before schema morphs normalize or remove fields. */
 	tryLoad(preserveInput = false): LoadResult<T> {
 		if (!preserveInput && this.#cache) return this.#cache;
-		this.#ensureMigrated();
 
-		let content: string;
+		let source: TomlConfigSource | undefined;
 		try {
-			content = fs.readFileSync(this.#resolveReadPath(), "utf-8").trim();
+			source = this.#readConfig();
+			if (!source) return this.#storeCache({ status: "not-found" });
 		} catch (error) {
-			if (isEnoent(error)) {
-				return this.#storeCache({ status: "not-found" });
-			}
-			logger.warn("Failed to read config file", { path: this.path(), error });
+			logger.warn("Failed to read config file", { path: this.#basePath });
 			return this.#storeCache({
 				error: new ConfigError(this.id, undefined, { err: error, stage: "Read" }),
 				status: "error",
 			});
 		}
-		const result = this.#parseContent(content, preserveInput);
+		const result = this.#validateContent(source.data, preserveInput);
 		return preserveInput ? result : this.#storeCache(result);
 	}
 
@@ -326,7 +255,8 @@ export class ConfigFile<T> implements IConfigFile<T> {
 	}
 
 	path(): string {
-		return this.#resolveReadPath();
+		if (!fs.existsSync(this.#basePath)) this.#readConfig();
+		return this.#basePath;
 	}
 
 	/** Validate and save under the same lock as Settings, preserving disjoint external edits. */
@@ -347,10 +277,13 @@ export class ConfigFile<T> implements IConfigFile<T> {
 				);
 			this.#auxValidate?.(checked as T);
 			const filePath = this.path();
-			const content =
-				filePath.endsWith(".json") || filePath.endsWith(".jsonc")
-					? `${JSON.stringify(merged, null, 2)}\n`
-					: stringifyYamlConfig(merged);
+			let source = "";
+			try {
+				source = await Bun.file(filePath).text();
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			const content = patchSettingsToml(source, merged as Record<string, unknown>);
 			await writeFileAtomically(filePath, content);
 			this.invalidate();
 		});

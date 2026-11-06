@@ -7,6 +7,7 @@
  * isolated agent dir carrying a custom vision provider and asserts it reaches
  * the completion attempt instead of the registry guard.
  */
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -19,25 +20,30 @@ const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8B
 // available; its baseUrl points at a dead local port, so the completion attempt
 // fails fast with a connection error — never the registry guard, and never a
 // real network call.
-const MODELS_YML = `providers:
-  testvision:
-    api: openai-completions
-    baseUrl: http://127.0.0.1:1/v1
-    apiKey: "test-key"
-    models:
-      - id: vmodel
-        name: Vision Test
-        input:
-          - text
-          - image
-        contextWindow: 128000
-        maxTokens: 4096
-        cost:
-          input: 0
-          output: 0
-          cacheRead: 0
-          cacheWrite: 0
-`;
+const MODELS_TOML = stringifySettingsToml({
+	providers: {
+		testvision: {
+			api: "openai-completions",
+			baseUrl: "http://127.0.0.1:1/v1",
+			apiKey: "test-key",
+			models: [
+				{
+					id: "vmodel",
+					name: "Vision Test",
+					input: ["text", "image"],
+					contextWindow: 128000,
+					maxTokens: 4096,
+					cost: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+					},
+				},
+			],
+		},
+	},
+});
 
 const READ_CLI_URL = new URL("../src/cli/read-cli.ts", import.meta.url).href;
 
@@ -53,8 +59,11 @@ describe("omp read <image>?q=", () => {
 			fs.mkdirSync(path.join(project, ".omp"), { recursive: true });
 			// Bound the completion attempt so a dead endpoint aborts quickly instead
 			// of running the provider SDK's full connection backoff.
-			fs.writeFileSync(path.join(project, ".omp", "config.yml"), "images:\n  questionTimeoutMs: 3000\n");
-			fs.writeFileSync(path.join(agentDir, "models.yml"), MODELS_YML);
+			fs.writeFileSync(
+				path.join(project, ".omp", "config.toml"),
+				stringifySettingsToml({ images: { questionTimeoutMs: 3000 } }),
+			);
+			fs.writeFileSync(path.join(agentDir, "models.toml"), MODELS_TOML);
 			const pngPath = path.join(project, "test.png");
 			fs.writeFileSync(pngPath, Buffer.from(PNG_1X1, "base64"));
 

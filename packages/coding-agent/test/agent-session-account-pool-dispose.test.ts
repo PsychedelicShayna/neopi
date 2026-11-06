@@ -67,7 +67,7 @@ describe("AgentSession account pools after a dispose deadline", () => {
 			PROVIDER_SESSION_ID,
 		);
 		const modelRegistry = accountPoolScope.registry(
-			new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 		);
 		const reached = Promise.withResolvers<void>();
 		let extensionRunner: ExtensionRunner | undefined;

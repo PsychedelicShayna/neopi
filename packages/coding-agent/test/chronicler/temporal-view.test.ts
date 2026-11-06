@@ -339,7 +339,7 @@ describe("chronicle temporal view", () => {
 		const removed = corpus.atoms.find(entry => entry.id === written.atomIds[1])!;
 		const corrupted = corpus.atoms.find(entry => entry.id === written.atomIds[2])!;
 		await fs.rm(path.dirname(removed.beatFile), { recursive: true });
-		await Bun.write(corrupted.beatFile, (await Bun.file(corrupted.beatFile).text()).replace(/^title: .*$/m, ""));
+		await Bun.write(corrupted.beatFile, (await Bun.file(corrupted.beatFile).text()).replace(/^title = .*$/m, ""));
 		const transcript = await Bun.file(written.transcriptPath).text();
 		await Bun.write(
 			written.transcriptPath,

@@ -3,14 +3,17 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
-import { YAML } from "bun";
-import { type Document, isMap, isNode, isSeq, type ParsedNode, type YAMLMap, type YAMLSeq } from "yaml";
+import {
+	parseSettingsToml,
+	patchSettingsToml,
+	readTomlConfig,
+	stringifySettingsToml,
+} from "@oh-my-pi/pi-utils/settings-toml";
 import { expandAtImports } from "../discovery/at-imports";
 import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
-import { collectConfigCandidates, readBoundedText } from "./watchdog";
-import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
+import { collectTomlConfigCandidates, readBoundedTomlConfig } from "./watchdog";
 
 import {
 	ADVISOR_SESSION_SCOPES,
@@ -28,7 +31,11 @@ export {
 	ADVISOR_SYNC_BACKLOG_MODES,
 	slugifyAdvisorName,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-export type { AdvisorReviewMode, AdvisorSessionScope, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type {
+	AdvisorReviewMode,
+	AdvisorSessionScope,
+	AdvisorSyncBacklog,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"id",
@@ -78,7 +85,7 @@ const watchdogRepairDocs = new WeakSet<WatchdogConfigDoc>();
 export type AdvisorRuntimeStatus = "running" | "paused" | "quota_exhausted" | "error" | "no_model";
 
 /**
- * The result of walking the `WATCHDOG.yml`/`WATCHDOG.yaml` search path: the
+ * The result of walking the `WATCHDOG.toml` search path: the
  * deduped advisor roster plus the concatenated top-level `instructions` baseline
  * that is prepended (alongside `WATCHDOG.md`) to every advisor.
  */
@@ -123,6 +130,7 @@ function normalizeSyncBacklog(
 function assertAdvisorCadence(advisor: AdvisorConfig): void {
 	if (advisor.reviewInterval !== undefined) reviewIntervalSchema.assert(advisor.reviewInterval);
 	if (advisor.syncBacklog !== undefined) syncBacklogSchema.assert(advisor.syncBacklog);
+	if (advisor.scope !== undefined) sessionScopeSchema.assert(advisor.scope);
 }
 
 const advisorEntrySchema = type({
@@ -141,7 +149,7 @@ const advisorEntrySchema = type({
 	"scope?": sessionScopeSchema,
 });
 
-type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
+type AdvisorEntry = typeof advisorEntrySchema.infer;
 
 /** Validate inline/generated definitions through the same schema as WATCHDOG entries. */
 export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
@@ -151,7 +159,7 @@ export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
 export function advisorDefinitionJsonSchema(): Record<string, unknown> {
 	return advisorEntrySchema.toJsonSchema();
 }
-function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
+function editableAdvisorConfig(entry: AdvisorEntry): AdvisorConfig {
 	const advisor: AdvisorConfig = { name: entry.name };
 	if (entry.id !== undefined) advisor.id = entry.id;
 	if (entry.model?.trim()) advisor.model = entry.model;
@@ -175,7 +183,7 @@ function editableAdvisorConfig(entry: AdvisorYamlEntry): AdvisorConfig {
 }
 
 /**
- * Validate one parsed `WATCHDOG.yml` document per entry instead of as a whole:
+ * Validate one parsed `WATCHDOG.toml` document per entry instead of as a whole:
  * a single malformed advisor drops out with a warning naming it, while the
  * healthy entries still load. Also reports non-string `instructions` and a
  * non-list `advisors` key — both previously failed the whole file silently.
@@ -186,7 +194,7 @@ function parseWatchdogDoc(
 ): {
 	enabled: boolean | undefined;
 	instructions: string | undefined;
-	entries: AdvisorYamlEntry[];
+	entries: AdvisorEntry[];
 	sharedMaxNotesPerUpdate: number | undefined;
 	warnings: string[];
 } {
@@ -209,7 +217,7 @@ function parseWatchdogDoc(
 	if (rawAdvisors !== undefined && !Array.isArray(rawAdvisors)) {
 		warnings.push(`${path}: advisors must be a list — ignored`);
 	}
-	const entries: AdvisorYamlEntry[] = [];
+	const entries: AdvisorEntry[] = [];
 	const ids = new Set<string>();
 	for (const [index, rawEntry] of (Array.isArray(rawAdvisors) ? rawAdvisors : []).entries()) {
 		const result = advisorEntrySchema(rawEntry);
@@ -296,7 +304,7 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
 }
 
 /**
- * Discover advisor configs from `WATCHDOG.yml`/`WATCHDOG.yaml` files on the same
+ * Discover advisor configs from `WATCHDOG.toml` files on the same
  * user + project search path as `WATCHDOG.md`. Persisted IDs distinguish even
  * identically named advisors; legacy entries retain name-slug precedence until
  * first save. More-specific files replace an earlier entry with the same key.
@@ -309,12 +317,15 @@ export async function discoverAdvisorConfigs(
 	sessionDir?: string,
 ): Promise<DiscoveredAdvisors> {
 	let unsafeToReconcile = false;
-	const candidates = await collectConfigCandidates(cwd, agentDir, ["WATCHDOG.yml", "WATCHDOG.yaml"], {
-		onReadError: () => {
+	const warnings: string[] = [];
+	const candidates = await collectTomlConfigCandidates(cwd, agentDir, "WATCHDOG.toml", {
+		onReadError: filePath => {
 			unsafeToReconcile = true;
+			warnings.push(`${filePath}: failed to read or import configuration — file skipped`);
 		},
 		onRejected: (filePath, rejection) => {
 			unsafeToReconcile = true;
+			warnings.push(`${filePath}: configuration is not a readable regular file — file skipped`);
 			logger.warn("Skipped config candidate", { path: filePath, ...rejection });
 		},
 	});
@@ -325,17 +336,16 @@ export async function discoverAdvisorConfigs(
 	// The transcript artifact directory is also where scoped settings (#622) live.
 	// Session sources are last, so they override project/user legacy names and IDs.
 	if (sessionDir) {
-		for (const filename of ["WATCHDOG.yml", "WATCHDOG.yaml"]) {
-			const filePath = path.join(sessionDir, filename);
-			try {
-				const result = await readBoundedText(filePath, undefined);
-				if ("content" in result) items.push({ path: filePath, content: result.content, level: "session" });
-				else unsafeToReconcile = true;
-			} catch (error) {
-				if (!isEnoent(error)) {
-					unsafeToReconcile = true;
-					logger.warn("Cannot read session advisor configuration", { path: filePath, error: String(error) });
-				}
+		const filePath = path.join(sessionDir, "WATCHDOG.toml");
+		try {
+			const result = await readBoundedTomlConfig(filePath, undefined);
+			if ("content" in result) items.push({ path: filePath, content: result.content, level: "session" });
+			else unsafeToReconcile = true;
+		} catch (error) {
+			if (!isEnoent(error)) {
+				unsafeToReconcile = true;
+				warnings.push(`${filePath}: failed to read or import configuration — file skipped`);
+				logger.warn("Cannot read session advisor configuration", { path: filePath });
 			}
 		}
 	}
@@ -344,7 +354,6 @@ export async function discoverAdvisorConfigs(
 	const sources = new Map<string, { path: string; scope: AdvisorConfigScope }>();
 	const sharedParts: string[] = [];
 	let sharedMaxNotesPerUpdate: number | undefined;
-	const warnings: string[] = [];
 	const warn = (message: string, context?: Record<string, unknown>): void => {
 		warnings.push(message);
 		logger.warn("Advisor config", { ...context, error: message });
@@ -353,14 +362,14 @@ export async function discoverAdvisorConfigs(
 	for (const [index, item] of items.entries()) {
 		let parsed: unknown;
 		try {
-			parsed = YAML.parse(item.content);
+			parsed = parseSettingsToml(item.content, item.path);
 		} catch (err) {
-			warn(`${item.path}: failed to parse YAML (${String(err)}) — file skipped`, { path: item.path });
+			warn(`${item.path}: failed to parse TOML (${String(err)}) — file skipped`, { path: item.path });
 			unsafeToReconcile = true;
 			continue;
 		}
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			warn(`${item.path}: expected a YAML mapping — file skipped`, { path: item.path });
+			warn(`${item.path}: expected a TOML table — file skipped`, { path: item.path });
 			unsafeToReconcile = true;
 			continue;
 		}
@@ -437,11 +446,7 @@ export interface NamedAdvisor {
  * load order (later entries win for references without an exact scope).
  * Instructions and tools match runtime discovery; sourcePath stays exact for UI labels.
  */
-export async function listNamedAdvisors(
-	cwd: string,
-	agentDir?: string,
-	sessionDir?: string,
-): Promise<NamedAdvisor[]> {
+export async function listNamedAdvisors(cwd: string, agentDir?: string, sessionDir?: string): Promise<NamedAdvisor[]> {
 	const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 	const result: NamedAdvisor[] = [];
 	for (const file of discovered.files) {
@@ -462,7 +467,7 @@ export function advisorConfigFilePath(
 	scope: AdvisorConfigScope,
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): string {
-	return path.join(advisorConfigDirectory(scope, dirs), "WATCHDOG.yml");
+	return path.join(advisorConfigDirectory(scope, dirs), "WATCHDOG.toml");
 }
 
 function advisorConfigDirectory(
@@ -470,30 +475,31 @@ function advisorConfigDirectory(
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): string {
 	switch (scope) {
-		case "user": return dirs.agentDir;
-		case "project": return dirs.projectDir;
-		case "project-omp": return path.join(dirs.projectDir, ".omp");
+		case "user":
+			return dirs.agentDir;
+		case "project":
+			return dirs.projectDir;
+		case "project-omp":
+			return path.join(dirs.projectDir, ".omp");
 		case "session":
 			if (!dirs.sessionDir) throw new Error("This session has no persistent artifact directory");
 			return dirs.sessionDir;
 	}
 }
 
-/**
- * Resolve which `WATCHDOG.{yml,yaml}` to edit for a scope: prefer the canonical
- * `.yml`, but when only a `.yaml` exists for that scope, edit it in place so an
- * existing `.yaml` user isn't shown a blank editor and left with two files at the
- * same precedence. Falls back to `.yml` when neither exists.
- */
+/** Resolve the canonical edit target, importing sibling YAML once when needed. */
 export async function resolveAdvisorConfigEditPath(
 	scope: AdvisorConfigScope,
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): Promise<string> {
-	const dir = advisorConfigDirectory(scope, dirs);
-	const yml = path.join(dir, "WATCHDOG.yml");
-	const yaml = path.join(dir, "WATCHDOG.yaml");
-	if (!(await Bun.file(yml).exists()) && (await Bun.file(yaml).exists())) return yaml;
-	return yml;
+	const target = advisorConfigFilePath(scope, dirs);
+	const base = target.slice(0, -".toml".length);
+	try {
+		await readTomlConfig(target, { legacyPaths: [`${base}.yml`, `${base}.yaml`] });
+	} catch {
+		// The editor reports and can repair a malformed canonical document.
+	}
+	return target;
 }
 
 function watchdogAdvisorFingerprint(value: unknown): string | undefined {
@@ -506,7 +512,7 @@ function watchdogAdvisorFingerprint(value: unknown): string | undefined {
 
 function watchdogAdvisorFingerprints(source: string): (string | undefined)[] {
 	try {
-		const parsed: unknown = YAML.parse(source);
+		const parsed: unknown = parseSettingsToml(source);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
 		const rawAdvisors = (parsed as Record<string, unknown>).advisors;
 		if (!Array.isArray(rawAdvisors)) return [];
@@ -544,40 +550,38 @@ function rememberWatchdogBaseline(
 }
 
 /**
- * Load one `WATCHDOG.yml` file for editing — raw, un-merged, un-expanded. Missing
+ * Load one `WATCHDOG.toml` file for editing — raw, un-merged, un-expanded. Missing
  * or unparseable files yield an empty doc (never throws) so the editor opens
  * cleanly on a fresh or broken file. Validation is per entry, matching
  * discovery: malformed entries drop out of `advisors` and land in `warnings`
  * instead of blanking the whole editor.
  */
 export async function loadWatchdogConfigFile(filePath: string): Promise<WatchdogConfigDoc> {
-	let text: string;
-	try {
-		text = await Bun.file(filePath).text();
-	} catch (err) {
-		if (!isEnoent(err)) {
-			logger.warn("Advisor config: failed to read for edit", { path: filePath, error: String(err) });
-			return { advisors: [] };
-		}
-		const doc: WatchdogConfigDoc = { advisors: [] };
-		rememberWatchdogBaseline(doc, filePath, false);
-		return doc;
-	}
+	filePath = filePath.replace(/\.(?:yml|yaml)$/, ".toml");
+	let text = "";
 	let parsed: unknown;
 	try {
-		parsed = YAML.parse(text);
+		const base = filePath.slice(0, -".toml".length);
+		const loaded = await readTomlConfig(filePath, { legacyPaths: [`${base}.yml`, `${base}.yaml`] });
+		if (!loaded) {
+			const doc: WatchdogConfigDoc = { advisors: [] };
+			rememberWatchdogBaseline(doc, filePath, false);
+			return doc;
+		}
+		text = loaded.content;
+		parsed = loaded.data;
 	} catch (err) {
 		logger.warn("Advisor config: failed to parse for edit", { path: filePath, error: String(err) });
 		const doc: WatchdogConfigDoc = {
 			advisors: [],
-			warnings: [`${filePath}: failed to parse YAML (${String(err)})`],
+			warnings: [`${filePath}: failed to parse TOML (${String(err)})`],
 		};
 		watchdogRepairDocs.add(doc);
 		return doc;
 	}
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		// Parity with discovery: a non-mapping document is reported, not silently blanked.
-		const message = `${filePath}: expected a YAML mapping — file skipped`;
+		const message = `${filePath}: expected a TOML table — file skipped`;
 		logger.warn("Advisor config", { path: filePath, error: message });
 		const doc: WatchdogConfigDoc = { advisors: [], warnings: [message] };
 		watchdogRepairDocs.add(doc);
@@ -598,94 +602,35 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 	return doc;
 }
 
-/**
- * Serialize an editable doc back to canonical, hand-editable `WATCHDOG.yml`.
- * Multiline instruction fields use literal block scalars while scalar quoting
- * delegates to Bun's YAML encoder. Round-trips through {@link loadWatchdogConfigFile}.
- * Returns `""` for an empty doc.
- */
-
-/** Append `key: value`, using a literal block scalar for multiline text. Shared with chain config. */
-export function appendYamlString(lines: string[], indent: string, key: string, value: string): void {
-	const hasSignificantLeadingWhitespace = value.split("\n").some(line => /^[ \t]/.test(line));
-	if (!value.includes("\n") || hasSignificantLeadingWhitespace) {
-		lines.push(`${indent}${key}: ${YAML.stringify(value)}`);
-		return;
+/** Serialize the editable, known fields through the shared TOML codec. */
+export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
+	ensureAdvisorIds(doc);
+	const data = watchdogTopLevelValues(doc);
+	if (doc.advisors.length > 0) {
+		data.advisors = doc.advisors.map(advisor => {
+			assertAdvisorCadence(advisor);
+			return definedWatchdogAdvisorValues(advisor);
+		});
 	}
-	const normalized = value.replaceAll("\r\n", "\n");
-	let trailingNewlines = 0;
-	for (let index = normalized.length - 1; index >= 0 && normalized[index] === "\n"; index--) {
-		trailingNewlines++;
-	}
-	const chomp = trailingNewlines === 0 ? "|2-" : trailingNewlines === 1 ? "|2" : "|2+";
-	const body = trailingNewlines === 0 ? normalized : normalized.slice(0, -trailingNewlines);
-	lines.push(`${indent}${key}: ${chomp}`);
-	for (const line of body.split("\n")) {
-		lines.push(`${indent}  ${line}`);
-	}
-	for (let index = 1; index < trailingNewlines; index++) {
-		lines.push(`${indent}  `);
-	}
+	return Object.keys(data).length === 0 ? "" : stringifySettingsToml(data);
 }
 
-export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
-	const lines: string[] = [];
-	ensureAdvisorIds(doc);
-	if (doc.enabled !== undefined) lines.push(`enabled: ${doc.enabled}`);
-	if (doc.instructions?.trim()) appendYamlString(lines, "", "instructions", doc.instructions);
+function watchdogTopLevelValues(doc: WatchdogConfigDoc): Record<string, unknown> {
+	const data: Record<string, unknown> = {};
+	if (doc.enabled !== undefined) data.enabled = doc.enabled;
+	if (doc.instructions?.trim()) data.instructions = doc.instructions;
 	if (
 		typeof doc.maxNotesPerUpdate === "number" &&
 		Number.isFinite(doc.maxNotesPerUpdate) &&
 		doc.maxNotesPerUpdate >= 1
 	) {
-		lines.push(`maxNotesPerUpdate: ${Math.trunc(doc.maxNotesPerUpdate)}`);
+		data.maxNotesPerUpdate = Math.trunc(doc.maxNotesPerUpdate);
 	}
-	if (doc.advisors.length > 0) {
-		lines.push("advisors:");
-		for (const advisor of doc.advisors) {
-			assertAdvisorCadence(advisor);
-			lines.push(`  - name: ${YAML.stringify(advisor.name)}`);
-			lines.push(`    id: ${YAML.stringify(advisor.id!)}`);
-			if (advisor.model?.trim()) lines.push(`    model: ${YAML.stringify(advisor.model)}`);
-			if (advisor.tools !== undefined) {
-				if (advisor.tools.length === 0) {
-					lines.push("    tools: []");
-				} else {
-					lines.push("    tools:");
-					for (const tool of advisor.tools) {
-						lines.push(`      - ${YAML.stringify(tool)}`);
-					}
-				}
-			}
-			if (advisor.reviewMode !== undefined) lines.push(`    reviewMode: ${YAML.stringify(advisor.reviewMode)}`);
-			if (advisor.syncBacklog !== undefined) {
-				lines.push(`    syncBacklog: ${YAML.stringify(advisor.syncBacklog)}`);
-			}
-			if (advisor.instructions?.trim()) {
-				appendYamlString(lines, "    ", "instructions", advisor.instructions);
-			}
-			if (advisor.systemPrompt !== undefined) {
-				appendYamlString(lines, "    ", "systemPrompt", advisor.systemPrompt);
-			}
-			if (advisor.enabled !== undefined) lines.push(`    enabled: ${advisor.enabled}`);
-			if (advisor.includeThinking !== undefined) lines.push(`    includeThinking: ${advisor.includeThinking}`);
-			if (
-				typeof advisor.maxNotesPerUpdate === "number" &&
-				Number.isFinite(advisor.maxNotesPerUpdate) &&
-				advisor.maxNotesPerUpdate >= 1
-			) {
-				lines.push(`    maxNotesPerUpdate: ${Math.trunc(advisor.maxNotesPerUpdate)}`);
-			}
-			if (advisor.reviewInterval !== undefined) {
-				lines.push(`    reviewInterval: ${advisor.reviewInterval}`);
-			}
-			if (advisor.scope !== undefined) {
-				sessionScopeSchema.assert(advisor.scope);
-				lines.push(`    scope: ${YAML.stringify(advisor.scope)}`);
-			}
-		}
-	}
-	return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+	return data;
+}
+
+function definedWatchdogAdvisorValues(advisor: AdvisorConfig): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(watchdogAdvisorValues(advisor)).filter(([, value]) => value !== undefined));
 }
 
 function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> {
@@ -711,267 +656,136 @@ function watchdogAdvisorValues(advisor: AdvisorConfig): Record<(typeof WATCHDOG_
 	};
 }
 
-function findWatchdogAdvisor(
-	document: Document.Parsed<ParsedNode>,
-	sequence: YAMLSeq<unknown>,
-	name: string,
-	occurrence: number,
-): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
-	let seen = 0;
-	for (const [index, item] of sequence.items.entries()) {
-		if (!isMap(item) || watchdogAdvisorMapValues(document, item)?.name !== name) continue;
-		if (seen === occurrence) return { index, map: item };
-		seen++;
-	}
-	return undefined;
-}
-
-function removeMalformedWatchdogAdvisors(document: Document.Parsed<ParsedNode>, sequence: YAMLSeq<unknown>): void {
-	for (let index = sequence.items.length - 1; index >= 0; index--) {
-		const item = sequence.items[index];
-		const value: unknown = isNode(item) ? item.toJS(document) : item;
-		if (!(advisorEntrySchema(value) instanceof type.errors)) continue;
-		sequence.delete(index);
-	}
+function validWatchdogAdvisor(value: unknown): value is Record<string, unknown> {
+	return !(advisorEntrySchema(value) instanceof type.errors);
 }
 
 function resolveWatchdogAdvisorOrigin(
-	document: Document.Parsed<ParsedNode>,
-	sequence: YAMLSeq<unknown>,
+	sequence: Record<string, unknown>[],
 	origin: WatchdogAdvisorOrigin,
 	origins: readonly WatchdogAdvisorOrigin[],
-): { index: number; map: YAMLMap<unknown, unknown> } | undefined {
-	const candidates: { index: number; map: YAMLMap<unknown, unknown> }[] = [];
+): Record<string, unknown> | undefined {
 	if (origin.base.id && origins.filter(candidate => candidate.base.id === origin.base.id).length === 1) {
-		for (const [index, item] of sequence.items.entries()) {
-			if (isMap(item) && item.get("id") === origin.base.id) candidates.push({ index, map: item });
-		}
+		const candidates = sequence.filter(item => item.id === origin.base.id);
 		return candidates.length === 1 ? candidates[0] : undefined;
 	}
 	const sameNameOrigins = origins.filter(
 		candidate => candidate.name === origin.name && candidate.base.id === origin.base.id,
 	);
-	const occurrence = sameNameOrigins.indexOf(origin);
-	for (const [index, item] of sequence.items.entries()) {
-		if (
-			isMap(item) &&
-			watchdogAdvisorMapValues(document, item)?.name === origin.name &&
-			(origin.base.id === undefined || item.get("id") === origin.base.id)
-		)
-			candidates.push({ index, map: item });
-	}
+	const candidates = sequence.filter(
+		item => item.name === origin.name && (origin.base.id === undefined || item.id === origin.base.id),
+	);
 	if (origin.fingerprint !== undefined) {
-		const exact = candidates.filter(
-			candidate => watchdogAdvisorFingerprint(candidate.map.toJS(document)) === origin.fingerprint,
-		);
+		const exact = candidates.filter(item => watchdogAdvisorFingerprint(item) === origin.fingerprint);
 		if (exact.length === 1) return exact[0];
 		if (exact.length > 1) {
-			// Identical rows are safe only while their baseline order is unchanged.
 			const unchangedOrder =
 				candidates.length === sameNameOrigins.length &&
-				candidates.every(
-					(candidate, index) =>
-						watchdogAdvisorFingerprint(candidate.map.toJS(document)) === sameNameOrigins[index].fingerprint,
-				);
-			return unchangedOrder ? candidates[occurrence] : undefined;
+				candidates.every((item, index) => watchdogAdvisorFingerprint(item) === sameNameOrigins[index].fingerprint);
+			return unchangedOrder ? candidates[sameNameOrigins.indexOf(origin)] : undefined;
 		}
 	}
-	if (candidates.length !== sameNameOrigins.length) return undefined;
-	return candidates[occurrence];
+	return candidates.length === sameNameOrigins.length ? candidates[sameNameOrigins.indexOf(origin)] : undefined;
 }
 
-function watchdogAdvisorMapValues(
-	document: Document.Parsed<ParsedNode>,
-	map: YAMLMap<unknown, unknown>,
-): Record<(typeof WATCHDOG_ADVISOR_KEYS)[number], unknown> | undefined {
-	const parsed = advisorEntrySchema(map.toJS(document));
-	return parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
-}
-
-function watchdogAdvisorOriginUnchanged(
-	document: Document.Parsed<ParsedNode>,
-	map: YAMLMap<unknown, unknown>,
-	origin: WatchdogAdvisorOrigin,
-): boolean {
-	if (origin.fingerprint !== undefined) {
-		return watchdogAdvisorFingerprint(map.toJS(document)) === origin.fingerprint;
-	}
-	const currentValues = watchdogAdvisorMapValues(document, map);
-	if (!currentValues) return false;
-	const expectedValues = watchdogAdvisorValues(origin.base);
-	return WATCHDOG_ADVISOR_KEYS.every(key => Bun.deepEquals(currentValues[key], expectedValues[key]));
-}
-
-function patchWatchdogAdvisor(
-	document: Document.Parsed<ParsedNode>,
-	map: YAMLMap<unknown, unknown>,
-	advisor: AdvisorConfig,
-	base?: AdvisorConfig,
-): void {
+function patchWatchdogAdvisor(current: Record<string, unknown>, advisor: AdvisorConfig, base?: AdvisorConfig): void {
 	const values = watchdogAdvisorValues(advisor);
 	const baseValues = base ? watchdogAdvisorValues(base) : undefined;
-	const currentValues = baseValues ? watchdogAdvisorMapValues(document, map) : undefined;
+	const parsed = advisorEntrySchema(current);
+	const currentValues =
+		parsed instanceof type.errors ? undefined : watchdogAdvisorValues(editableAdvisorConfig(parsed));
 	for (const key of WATCHDOG_ADVISOR_KEYS) {
 		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
 		if (baseValues && currentValues && !Bun.deepEquals(currentValues[key], baseValues[key])) continue;
-		const value = values[key];
-		if (value === undefined) map.delete(key);
-		else map.set(key, value);
+		if (values[key] === undefined) delete current[key];
+		else current[key] = values[key];
 	}
 }
 
 function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
 	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
 	for (const advisor of doc.advisors) assertAdvisorCadence(advisor);
-	const document = parseYamlMappingDocument(source);
-	const root = yamlDocumentRoot(document);
-	const topLevelValues = {
-		enabled: doc.enabled,
-		instructions: doc.instructions?.trim() ? doc.instructions : undefined,
-		maxNotesPerUpdate:
-			typeof doc.maxNotesPerUpdate === "number" &&
-			Number.isFinite(doc.maxNotesPerUpdate) &&
-			doc.maxNotesPerUpdate >= 1
-				? Math.trunc(doc.maxNotesPerUpdate)
-				: undefined,
-	};
-	const baseTopLevelValues = baseline
-		? {
-				enabled: baseline.doc.enabled,
-				instructions: baseline.doc.instructions?.trim() ? baseline.doc.instructions : undefined,
-				maxNotesPerUpdate: baseline.doc.maxNotesPerUpdate,
-			}
-		: undefined;
-	const currentInstructions = root.get("instructions");
-	const currentMaxNotesPerUpdate = root.get("maxNotesPerUpdate");
-	const currentTopLevelValues = {
-		enabled: typeof root.get("enabled") === "boolean" ? (root.get("enabled") as boolean) : undefined,
-		instructions:
-			typeof currentInstructions === "string" && currentInstructions.trim() ? currentInstructions : undefined,
-		maxNotesPerUpdate:
-			typeof currentMaxNotesPerUpdate === "number" &&
-			Number.isFinite(currentMaxNotesPerUpdate) &&
-			currentMaxNotesPerUpdate >= 1
-				? Math.trunc(currentMaxNotesPerUpdate)
-				: undefined,
-	};
-	for (const key of ["enabled", "instructions", "maxNotesPerUpdate"] as const) {
-		if (baseTopLevelValues && Bun.deepEquals(topLevelValues[key], baseTopLevelValues[key])) continue;
-		if (baseTopLevelValues && !Bun.deepEquals(currentTopLevelValues[key], baseTopLevelValues[key])) {
-			continue;
-		}
-		const value = topLevelValues[key];
-		if (value === undefined) root.delete(key);
-		else root.set(key, value);
+	const data = parseSettingsToml(source);
+	const values = watchdogTopLevelValues(doc);
+	const baseValues = baseline ? watchdogTopLevelValues(baseline.doc) : undefined;
+	for (const key of ["enabled", "instructions", "maxNotesPerUpdate"]) {
+		if (baseValues && Bun.deepEquals(values[key], baseValues[key])) continue;
+		if (baseValues && !Bun.deepEquals(data[key], baseValues[key])) continue;
+		if (values[key] === undefined) delete data[key];
+		else data[key] = values[key];
 	}
-
+	const sequence = (Array.isArray(data.advisors) ? data.advisors : []).filter(validWatchdogAdvisor);
 	if (!baseline) {
-		if (doc.advisors.length === 0) {
-			root.delete("advisors");
-		} else {
-			let existingNode = materializeYamlAlias(document, ["advisors"]);
-			if (!isSeq(existingNode)) existingNode = document.createNode([]);
-			if (!isSeq(existingNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
-			const existingSequence = existingNode as YAMLSeq<unknown>;
-			const occurrences = new Map<string, number>();
-			const items: unknown[] = [];
-			for (const advisor of doc.advisors) {
-				const occurrence = occurrences.get(advisor.name) ?? 0;
-				occurrences.set(advisor.name, occurrence + 1);
-				const existing = findWatchdogAdvisor(document, existingSequence, advisor.name, occurrence);
-				if (existing) {
-					patchWatchdogAdvisor(document, existing.map, advisor);
-					items.push(existing.map);
-				} else {
-					items.push(document.createNode(watchdogAdvisorValues(advisor)));
-				}
+		const claimed = new Set<Record<string, unknown>>();
+		data.advisors = doc.advisors.map(advisor => {
+			const existing = sequence.find(
+				item => !claimed.has(item) && (advisor.id ? item.id === advisor.id : item.name === advisor.name),
+			);
+			if (!existing) return definedWatchdogAdvisorValues(advisor);
+			claimed.add(existing);
+			patchWatchdogAdvisor(existing, advisor);
+			return existing;
+		});
+	} else {
+		const resolvedOrigins = baseline.origins.map(origin => ({
+			origin,
+			existing: resolveWatchdogAdvisorOrigin(sequence, origin, baseline.origins),
+		}));
+		const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
+		const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
+		for (const advisor of doc.advisors) {
+			const resolved = resolvedOrigins.find(candidate => candidate.origin.advisor === advisor);
+			if (resolved) {
+				matches.set(advisor, resolved);
+				claimedOrigins.add(resolved.origin);
 			}
-			existingSequence.items = items;
-			root.set("advisors", existingSequence);
 		}
-		return document.toString({ lineWidth: 0 });
-	}
-
-	let advisorNode = materializeYamlAlias(document, ["advisors"]);
-	if (!isSeq(advisorNode)) {
-		root.set("advisors", document.createNode([]));
-		advisorNode = root.get("advisors");
-	}
-	if (!isSeq(advisorNode)) throw new Error("WATCHDOG.yml advisors must be a sequence");
-	const sequence = advisorNode as YAMLSeq<unknown>;
-	for (let index = 0; index < sequence.items.length; index++) {
-		materializeYamlAlias(document, ["advisors", index]);
-	}
-	removeMalformedWatchdogAdvisors(document, sequence);
-
-	const resolvedOrigins = baseline.origins.map(origin => ({
-		origin,
-		existing: resolveWatchdogAdvisorOrigin(document, sequence, origin, baseline.origins),
-	}));
-	const matches = new Map<AdvisorConfig, (typeof resolvedOrigins)[number]>();
-	const claimedOrigins = new Set<WatchdogAdvisorOrigin>();
-
-	// Preserve object identity when the editor mutates the loaded doc in place.
-	for (const advisor of doc.advisors) {
-		const resolved = resolvedOrigins.find(candidate => candidate.origin.advisor === advisor);
-		if (!resolved) continue;
-		matches.set(advisor, resolved);
-		claimedOrigins.add(resolved.origin);
-	}
-	// Editors may clone rows. Match those copies by stable name/occurrence order,
-	// then by unchanged position for a renamed clone.
-	for (const [index, advisor] of doc.advisors.entries()) {
-		if (matches.has(advisor)) continue;
-		const resolved =
-			resolvedOrigins.find(
-				candidate =>
-					!claimedOrigins.has(candidate.origin) &&
-					advisor.id !== undefined &&
-					candidate.origin.base.id === advisor.id,
-			) ??
-			resolvedOrigins.find(
-				candidate =>
-					!claimedOrigins.has(candidate.origin) &&
-					candidate.origin.base.id === undefined &&
-					candidate.origin.name === advisor.name,
-			) ??
-			(() => {
-				const positional = resolvedOrigins[index];
-				return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin)
-					? positional
-					: undefined;
-			})();
-		if (!resolved) continue;
-		matches.set(advisor, resolved);
-		claimedOrigins.add(resolved.origin);
-	}
-
-	const advisorsToAppend: AdvisorConfig[] = [];
-	for (const advisor of doc.advisors) {
-		const resolved = matches.get(advisor);
-		if (!resolved) {
-			advisorsToAppend.push(advisor);
-			continue;
+		for (const [index, advisor] of doc.advisors.entries()) {
+			if (matches.has(advisor)) continue;
+			const resolved =
+				resolvedOrigins.find(
+					candidate =>
+						!claimedOrigins.has(candidate.origin) &&
+						advisor.id !== undefined &&
+						candidate.origin.base.id === advisor.id,
+				) ??
+				resolvedOrigins.find(
+					candidate =>
+						!claimedOrigins.has(candidate.origin) &&
+						candidate.origin.base.id === undefined &&
+						candidate.origin.name === advisor.name,
+				) ??
+				(() => {
+					const positional = resolvedOrigins[index];
+					return positional && positional.origin.base.id === undefined && !claimedOrigins.has(positional.origin)
+						? positional
+						: undefined;
+				})();
+			if (resolved) {
+				matches.set(advisor, resolved);
+				claimedOrigins.add(resolved.origin);
+			}
 		}
-		if (!resolved.existing) continue;
-		patchWatchdogAdvisor(document, resolved.existing.map, advisor, resolved.origin.base);
+		const additions: Record<string, unknown>[] = [];
+		for (const advisor of doc.advisors) {
+			const resolved = matches.get(advisor);
+			if (!resolved) additions.push(definedWatchdogAdvisorValues(advisor));
+			else if (resolved.existing) patchWatchdogAdvisor(resolved.existing, advisor, resolved.origin.base);
+		}
+		const removals = new Set(
+			resolvedOrigins
+				.filter(
+					resolved =>
+						!claimedOrigins.has(resolved.origin) &&
+						resolved.existing &&
+						watchdogAdvisorFingerprint(resolved.existing) === resolved.origin.fingerprint,
+				)
+				.map(resolved => resolved.existing),
+		);
+		data.advisors = [...sequence.filter(item => !removals.has(item)), ...additions];
 	}
-
-	const removals = resolvedOrigins
-		.filter(
-			resolved =>
-				!claimedOrigins.has(resolved.origin) &&
-				resolved.existing &&
-				watchdogAdvisorOriginUnchanged(document, resolved.existing.map, resolved.origin),
-		)
-		.map(resolved => resolved.existing!)
-		.sort((left, right) => right.index - left.index);
-	for (const removal of removals) sequence.delete(removal.index);
-	for (const advisor of advisorsToAppend) {
-		sequence.add(document.createNode(watchdogAdvisorValues(advisor)));
-	}
-	if (sequence.items.length === 0) root.delete("advisors");
-	return document.toString({ lineWidth: 0 });
+	if ((data.advisors as unknown[]).length === 0) delete data.advisors;
+	return patchSettingsToml(source, data);
 }
 
 function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
@@ -988,9 +802,16 @@ function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
  * file is removed only when the resulting document is empty.
  */
 export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
+	filePath = filePath.replace(/\.(?:yml|yaml)$/, ".toml");
 	const storedBaseline = watchdogBaselines.get(doc);
 	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
 	ensureAdvisorIds(doc);
+	try {
+		const base = filePath.slice(0, -".toml".length);
+		await readTomlConfig(filePath, { legacyPaths: [`${base}.yml`, `${base}.yaml`] });
+	} catch (error) {
+		if (!watchdogRepairDocs.has(doc)) throw error;
+	}
 	await withFileLock(filePath, async () => {
 		let source = "";
 		try {
@@ -1005,10 +826,16 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 			if (!watchdogRepairDocs.has(doc)) throw error;
 			content = serializeWatchdogConfig(doc);
 		}
-		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
-		const wroteFile = root.items.length > 0;
+		const wroteFile = Object.keys(parseSettingsToml(content)).length > 0 || content.trim().length > 0;
 		if (wroteFile) {
-			await writeFileAtomically(filePath, content);
+			const mode = await fs
+				.stat(filePath)
+				.then(stat => stat.mode & 0o7777)
+				.catch(error => {
+					if (!isEnoent(error)) throw error;
+					return 0o600;
+				});
+			await writeFileAtomically(filePath, content, { mode });
 		} else {
 			await fs.rm(filePath, { force: true });
 		}

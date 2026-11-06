@@ -77,7 +77,7 @@ describe("Editor component", () => {
 	});
 
 	describe("Word delete keybindings", () => {
-		it("honors a keybindings.yml remap of deleteWordBackward in the multi-line editor", () => {
+		it("honors a keybindings.toml remap of deleteWordBackward in the multi-line editor", () => {
 			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.deleteWordBackward": "alt+g" }));
 			const editor = new Editor(defaultEditorTheme);
 			editor.setText("alfa beta gamma");

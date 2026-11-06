@@ -443,17 +443,17 @@ export interface AgentSessionConfig {
 	chatModeBlockedReason?: string;
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
-	/** Shared advisor instructions loaded from WATCHDOG.yml. */
+	/** Shared advisor instructions loaded from WATCHDOG.toml. */
 	advisorSharedInstructions?: string;
-	/** Shared non-blocker budget from top-level WATCHDOG.yml maxNotesPerUpdate. */
+	/** Shared non-blocker budget from top-level WATCHDOG.toml maxNotesPerUpdate. */
 	advisorSharedMaxNotesPerUpdate?: number;
 	/** Project context rendered for advisor sessions. */
 	advisorContextPrompt?: string;
 	/** Memory backend developer instructions rendered for advisor sessions. */
 	advisorMemoryPrompt?: string;
-	/** Advisors discovered from WATCHDOG.yml. */
+	/** Advisors discovered from WATCHDOG.toml. */
 	advisorConfigs?: AdvisorConfig[];
-	/** Config problems collected during WATCHDOG.yml discovery. */
+	/** Config problems collected during WATCHDOG.toml discovery. */
 	advisorConfigWarnings?: string[];
 	/** Disconnect the MCP manager owned by this session during disposal. */
 	disconnectOwnedMcpManager?: () => Promise<void>;

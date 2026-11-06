@@ -670,7 +670,7 @@ export interface AnthropicCompat {
 	 * bedrock-runtime or bedrock-mantle). Requests drop tool `strict`, fit
 	 * `metadata.user_id` to Bedrock's request-metadata pattern, and may use
 	 * on-demand compaction. Detected from the model `baseUrl`; set it in
-	 * models.yml `compat` for a route the URL check cannot see (a proxy, an
+	 * models.toml `compat` for a route the URL check cannot see (a proxy, an
 	 * `ANTHROPIC_BASE_URL` reroute) or to `false` to opt out.
 	 */
 	bedrockMessagesApi?: boolean;
@@ -1580,7 +1580,7 @@ export interface Model<TApi extends Api = Api> {
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;
 	/**
-	 * Verbatim configured kind (models.yml, `modelOverrides`, runtime
+	 * Verbatim configured kind (models.toml, `modelOverrides`, runtime
 	 * registrations). `buildModel` applies it over catalog `kind` rules on every
 	 * rebuild, so a configured runner keeps its role.
 	 */
@@ -1733,11 +1733,11 @@ export interface Model<TApi extends Api = Api> {
 	 * for providers whose cache-expiry and replay behavior has been validated
 	 * for cache warming (direct Anthropic: 5m / 1h). A missing entry means the
 	 * provider's cache behavior is unknown — such models are never warmed.
-	 * Custom models and provider overrides opt in via models.yml `promptCache`.
+	 * Custom models and provider overrides opt in via models.toml `promptCache`.
 	 */
 	promptCache?: ModelPromptCache;
 	/**
-	 * Verbatim configured lifetimes (models.yml, `modelOverrides`, runtime
+	 * Verbatim configured lifetimes (models.toml, `modelOverrides`, runtime
 	 * registrations). `buildModel` applies them over catalog `prompt-cache`
 	 * rules on every rebuild; `{}` keeps warming disabled.
 	 */

@@ -57,7 +57,7 @@ describe("AgentSession concurrent disposal", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(tempDir.path()),
 			settings: Settings.isolated(),
-			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.toml")),
 			ownedAsyncJobManager,
 			asyncJobManager: options?.asyncJobManager,
 			agentId: options?.agentId ?? "Main",

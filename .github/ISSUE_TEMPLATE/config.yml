@@ -2,7 +2,7 @@ blank_issues_enabled: true
 contact_links:
   - name: Model Configuration
     url: https://github.com/can1357/oh-my-pi/blob/main/docs/models.md
-    about: How to add custom providers and models via models.yml
+    about: How to add custom providers and models via models.toml
   - name: Extensions Guide
     url: https://github.com/can1357/oh-my-pi/blob/main/docs/extensions.md
     about: Build custom tools, commands, and integrations

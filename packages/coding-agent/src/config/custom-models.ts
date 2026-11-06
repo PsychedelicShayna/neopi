@@ -200,7 +200,7 @@ export function normalizeSuppressedSelector(
 
 /**
  * Look up a model's override, falling back to entries keyed by retired
- * effort-tier variant ids (models.yml authored before collapsing). A raw key
+ * effort-tier variant ids (models.toml authored before collapsing). A raw key
  * only re-binds when no live model holds that id.
  */
 export function resolveModelOverrideWithAliases(

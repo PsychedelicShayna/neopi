@@ -1,6 +1,6 @@
 /**
  * Broker-aware auth-storage discovery used by both the coding-agent runtime and
- * the catalog model generator. Keeps the precedence logic (env → config.yml/config.yaml →
+ * the catalog model generator. Keeps the precedence logic (env → config.toml →
  * token file → local SQLite) in one place so build-time tooling sees the same
  * credentials as the TUI.
  */
@@ -14,10 +14,8 @@ import {
 	getConfigRootDir,
 	isEnoent,
 	logger,
-	MAIN_CONFIG_FILENAMES,
 } from "@oh-my-pi/pi-utils";
-import { overlaySettingsToml, readSettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
-import { YAML } from "bun";
+import { settingsTomlSource } from "@oh-my-pi/pi-utils/settings-toml";
 import {
 	type AuthAccountPolicies,
 	type AuthCredentialStore,
@@ -89,8 +87,8 @@ interface ConfigSnapshot {
 }
 
 /**
- * Resolve a dotted config key (e.g. `auth.broker.url`) against a parsed YAML
- * record, accepting both nested form (`auth: { broker: { url } }`) and the
+ * Resolve a dotted config key (e.g. `auth.broker.url`) against a parsed config
+ * record, accepting both nested form and the
  * legacy flat literal-dot key (`"auth.broker.url": ...`). Nested wins when both
  * are present. Returns the value only when it is a string.
  */
@@ -208,50 +206,14 @@ function parseUsageReservePct(value: unknown): number {
 }
 
 async function readMainConfig(agentDir: string): Promise<ConfigSnapshot> {
-	let yaml: Record<string, unknown> = {};
-	for (const filename of MAIN_CONFIG_FILENAMES) {
-		const configPath = path.join(agentDir, filename);
-		let raw: string;
-		try {
-			raw = await fs.readFile(configPath, "utf8");
-		} catch (error) {
-			if (isEnoent(error)) continue;
-			throw new AIError.ConfigurationError(`Unable to read ${configPath}: ${String(error)}`);
-		}
-
-		let parsed: unknown;
-		try {
-			parsed = YAML.parse(raw);
-		} catch (error) {
-			throw new AIError.ConfigurationError(`${configPath} contains invalid YAML: ${String(error)}`);
-		}
-		// An empty or comment-only file parses to null: no settings, not a malformed config.
-		if (parsed === null || parsed === undefined) break;
-		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new AIError.ConfigurationError(`${configPath} must contain a YAML object`);
-		}
-		yaml = parsed as Record<string, unknown>;
-		break;
-	}
 	let record: Record<string, unknown>;
-	let toml: Record<string, unknown>;
 	try {
-		toml = await readSettingsToml(agentDir);
-		// Legacy literal-dot YAML keys belong to the same top-level setting.
-		// A replacement TOML table must not fall back to those stale aliases.
-		const base = Object.keys(toml).length
-			? Object.fromEntries(
-					Object.entries(yaml).filter(([key]) => !key.includes(".") || !Object.hasOwn(toml, key.split(".")[0])),
-				)
-			: yaml;
-		record = overlaySettingsToml(base, toml);
-	} catch (error) {
-		throw new AIError.ConfigurationError(String(error));
+		const source = await settingsTomlSource(agentDir);
+		record = source?.data ?? {};
+	} catch {
+		throw new AIError.ConfigurationError(`Unable to load ${path.join(agentDir, "config.toml")}`);
 	}
-	const policyValue = (key: string) => {
-		const value = readDottedValue(record, key);
-		return value === null && Object.hasOwn(toml, key.split(".")[0]) ? undefined : value;
-	};
+	const policyValue = (key: string) => readDottedValue(record, key) ?? undefined;
 	return {
 		url: readDottedString(record, "auth.broker.url"),
 		token: readDottedString(record, "auth.broker.token"),
@@ -393,7 +355,7 @@ function resolveSnapshotTtlMs(): number {
  * Resolve broker connection configuration using the same precedence as the TUI:
  *
  * 1. `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN` env vars.
- * 2. `auth.broker.url` / `auth.broker.token` in `<agentDir>/config.yml` or `<agentDir>/config.yaml`.
+ * 2. `auth.broker.url` / `auth.broker.token` in `<agentDir>/config.toml` (legacy YAML imported once).
  * 3. `<config-root>/auth-broker.token` file (paired with a URL from env/config).
  *
  * Returns `null` when no broker URL is configured — callers should fall back to

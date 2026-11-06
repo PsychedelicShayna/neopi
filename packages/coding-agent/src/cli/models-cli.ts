@@ -42,7 +42,7 @@ export interface ModelsCommandArgs {
 		extensions?: string[];
 		/** Skip extension discovery; only load explicit `extensions`. */
 		noExtensions?: boolean;
-		/** Extra `config.yml` overlays to apply for this invocation. */
+		/** Extra `config.toml` overlays to apply for this invocation. */
 		config?: string[];
 	};
 }
@@ -96,7 +96,7 @@ function writeLine(line = ""): void {
 }
 
 function writeModelsConfigError(error: Error): void {
-	writeLine(chalk.yellow("Warning: models.yml validation failed — custom providers disabled"));
+	writeLine(chalk.yellow("Warning: models.toml validation failed — custom providers disabled"));
 	for (const line of error.message.split("\n")) {
 		writeLine(`  ${line}`);
 	}
@@ -229,7 +229,7 @@ export function renderProviderModels(
 	if (json) {
 		if (configError) {
 			process.stderr.write(
-				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
+				`Warning: models.toml validation failed — custom providers disabled\n${configError.message}\n`,
 			);
 		}
 		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };

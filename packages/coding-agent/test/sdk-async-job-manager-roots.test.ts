@@ -26,7 +26,7 @@ describe("AsyncJobManager ownership across concurrent top-level roots", () => {
 	beforeAll(async () => {
 		sharedTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-async-roots-shared-"));
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedTempDir, "auth.db"));
-		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedTempDir, "models.yml"));
+		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedTempDir, "models.toml"));
 	});
 
 	afterAll(() => {

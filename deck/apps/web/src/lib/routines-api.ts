@@ -81,10 +81,10 @@ export const routinesApi = {
 	get(id: string): Promise<Routine> {
 		return req<Routine>(`/routines/${encodeURIComponent(id)}`);
 	},
-	create(body: CreateRoutineRequest & { specYaml?: string }): Promise<Routine> {
+	create(body: CreateRoutineRequest): Promise<Routine> {
 		return req<Routine>("/routines", { method: "POST", body: JSON.stringify(body) });
 	},
-	update(id: string, body: UpdateRoutineRequest & { specYaml?: string }): Promise<Routine> {
+	update(id: string, body: UpdateRoutineRequest): Promise<Routine> {
 		return req<Routine>(`/routines/${encodeURIComponent(id)}`, {
 			method: "PATCH",
 			body: JSON.stringify(body),

@@ -1,3 +1,4 @@
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -19,7 +20,7 @@ async function until(predicate: () => boolean, timeoutMs = 3000): Promise<void> 
 	}
 }
 
-describe("live WATCHDOG.yml roster", () => {
+describe("live WATCHDOG.toml roster", () => {
 	let temp: TempDir;
 	let session: AgentSession;
 	let auth: AuthStorage;
@@ -40,7 +41,7 @@ describe("live WATCHDOG.yml roster", () => {
 			agentDir: temp.join("user-agent"),
 			sessionManager: SessionManager.inMemory(cwd),
 			authStorage: auth,
-			modelRegistry: new ModelRegistry(auth, temp.join("models.yml")),
+			modelRegistry: new ModelRegistry(auth, temp.join("models.toml")),
 			settings,
 			model,
 			disableExtensionDiscovery: true,
@@ -68,8 +69,8 @@ describe("live WATCHDOG.yml roster", () => {
 		await start(true);
 		const alpha = session.getAdvisorAgent();
 		if (!alpha) throw new Error("Expected default advisor");
-		const file = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Alpha\n  - name: Beta\n");
+		const file = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Alpha" }, { name: "Beta" }] }));
 		await until(() => names().some(([name]) => name === "Beta"));
 		const configuredAlpha = session.getAdvisorAgent();
 		expect(configuredAlpha).not.toBe(alpha);
@@ -78,13 +79,21 @@ describe("live WATCHDOG.yml roster", () => {
 			["Beta", "running"],
 		]);
 
-		await Bun.write(file, "advisors:\n  - name: Alpha\n  - name: Beta\n  - name: Gamma\n");
+		await Bun.write(
+			file,
+			stringifySettingsToml({ advisors: [{ name: "Alpha" }, { name: "Beta" }, { name: "Gamma" }] }),
+		);
 		await until(() => names().length === 3);
 		expect(session.getAdvisorAgent()).toBe(configuredAlpha);
 
 		await Bun.write(
 			file,
-			"advisors:\n  - name: Alpha\n    instructions: Check diffs.\n  - name: Beta\n    enabled: false\n",
+			stringifySettingsToml({
+				advisors: [
+					{ name: "Alpha", instructions: "Check diffs." },
+					{ name: "Beta", enabled: false },
+				],
+			}),
 		);
 		await until(() => names().some(([name, status]) => name === "Beta" && status === "paused"));
 		expect(session.getAdvisorAgent()).not.toBe(configuredAlpha);
@@ -98,25 +107,28 @@ describe("live WATCHDOG.yml roster", () => {
 		expect(session.getAdvisorAgent()).not.toBe(configuredAlpha);
 	});
 
-	it("keeps a valid live roster on invalid YAML then detects atomic rename and new .omp directory", async () => {
+	it("keeps a valid live roster on invalid TOML then detects atomic rename and new .omp directory", async () => {
 		await start(true);
-		const file = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Alpha\n");
+		const file = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Alpha" }] }));
 		await until(() => names().some(([name]) => name === "Alpha"));
 		const alpha = session.getAdvisorAgent();
 		const warn = vi.spyOn(logger, "warn");
-		await Bun.write(file, "advisors: [not closed\n");
+		await Bun.write(file, "advisors = [not closed\n");
 		await until(() => warn.mock.calls.some(([message]) => message === "Advisor config"));
 		expect(session.getAdvisorAgent()).toBe(alpha);
 		expect(names()).toEqual([["Alpha", "running"]]);
 
-		const staged = path.join(cwd, "WATCHDOG.yml.tmp");
-		await Bun.write(staged, "advisors:\n  - name: Alpha\n  - name: Atomic\n");
+		const staged = path.join(cwd, "WATCHDOG.toml.tmp");
+		await Bun.write(staged, stringifySettingsToml({ advisors: [{ name: "Alpha" }, { name: "Atomic" }] }));
 		await fs.rename(staged, file);
 		await until(() => names().some(([name]) => name === "Atomic"));
 		expect(session.getAdvisorAgent()).toBe(alpha);
 
-		await Bun.write(file, "advisors:\n  - name: Alpha\n  - name: Invalid\n    enabled: yes\n");
+		await Bun.write(
+			file,
+			stringifySettingsToml({ advisors: [{ name: "Alpha" }, { name: "Invalid", enabled: "yes" }] }),
+		);
 		await until(() =>
 			warn.mock.calls.some(([, context]) => typeof context?.error === "string" && context.error.includes("Invalid")),
 		);
@@ -126,20 +138,23 @@ describe("live WATCHDOG.yml roster", () => {
 		await fs.rm(file);
 		const nested = path.join(cwd, ".omp");
 		await fs.mkdir(nested);
-		await Bun.write(path.join(nested, "WATCHDOG.yaml"), "advisors:\n  - name: Native\n");
+		await Bun.write(path.join(nested, "WATCHDOG.toml"), stringifySettingsToml({ advisors: [{ name: "Native" }] }));
 		await until(() => names().some(([name]) => name === "Native"));
 		expect(names()).toEqual([["Native", "running"]]);
 	});
 
 	it("watches the user roster and preserves project overrides when a user entry changes", async () => {
 		await start(true);
-		const userFile = temp.join("user-agent", "WATCHDOG.yaml");
-		await Bun.write(userFile, "advisors:\n  - name: Shared\n    instructions: User version.\n");
+		const userFile = temp.join("user-agent", "WATCHDOG.toml");
+		await Bun.write(
+			userFile,
+			stringifySettingsToml({ advisors: [{ name: "Shared", instructions: "User version." }] }),
+		);
 		await until(() => names().some(([name]) => name === "Shared"));
 
 		await Bun.write(
-			path.join(cwd, "WATCHDOG.yml"),
-			"advisors:\n  - name: Shared\n    instructions: Project version.\n",
+			path.join(cwd, "WATCHDOG.toml"),
+			stringifySettingsToml({ advisors: [{ name: "Shared", instructions: "Project version." }] }),
 		);
 		await until(() => session.getAdvisorAgent() !== undefined && names().length === 1);
 		// Let the project override complete before asserting identity across a
@@ -149,7 +164,9 @@ describe("live WATCHDOG.yml roster", () => {
 
 		await Bun.write(
 			userFile,
-			"advisors:\n  - name: Shared\n    instructions: Changed user version.\n  - name: UserOnly\n",
+			stringifySettingsToml({
+				advisors: [{ name: "Shared", instructions: "Changed user version." }, { name: "UserOnly" }],
+			}),
 		);
 		await until(() => names().some(([name]) => name === "UserOnly"));
 		expect(session.getAdvisorAgent()).toBe(projectAdvisor);
@@ -161,12 +178,12 @@ describe("live WATCHDOG.yml roster", () => {
 
 	it("stores changes while disabled and starts the discovered roster only after enable", async () => {
 		await start(false);
-		const file = path.join(cwd, "WATCHDOG.yml");
-		await Bun.write(file, "advisors:\n  - name: Off\n");
+		const file = path.join(cwd, "WATCHDOG.toml");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Off" }] }));
 		await Bun.sleep(250);
 		expect(session.isAdvisorEnabled()).toBe(false);
 		expect(session.isAdvisorActive()).toBe(false);
-		await Bun.write(file, "advisors:\n  - name: Later\n");
+		await Bun.write(file, stringifySettingsToml({ advisors: [{ name: "Later" }] }));
 		await Bun.sleep(250);
 		expect(session.isAdvisorActive()).toBe(false);
 		session.toggleAdvisorEnabled();

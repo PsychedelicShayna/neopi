@@ -3,13 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
-import { parseSettingsToml } from "@oh-my-pi/pi-coding-agent/config/settings-toml";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { YAML } from "bun";
+import { parseSettingsToml, stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 import { cfgSearxngEndpoint } from "@oh-my-pi/pi-coding-agent/web/settings";
@@ -38,48 +37,41 @@ afterEach(() => {
 	tempDir.removeSync();
 });
 
-it.each(["yaml", "toml"])(
-	"clearing a settings-panel text field persists in %s so its env fallback applies again",
-	async format => {
-		Bun.env.SEARXNG_ENDPOINT = "https://env.example";
-		Bun.env.HINDSIGHT_API_TOKEN = "env-secret";
-		const configPath = path.join(agentDir, "config.yml");
-		await Bun.write(configPath, YAML.stringify({ searxng: { endpoint: "https://cfg.example" }, temperature: 0.4 }));
-		const yaml = await Bun.file(configPath).text();
-		const tomlPath = path.join(agentDir, "config.toml");
-		if (format === "toml") await Bun.write(tomlPath, "# user preferences\n");
-		await Settings.init({ cwd: projectDir, agentDir });
-		const host = createSettingsHost();
-		// The panel edits the configured layers: env values are never shown or pre-filled.
-		expect(host.get("hindsight.apiToken")).toBeUndefined();
+it("clearing a settings-panel text field persists in TOML so its env fallback applies again", async () => {
+	Bun.env.SEARXNG_ENDPOINT = "https://env.example";
+	Bun.env.HINDSIGHT_API_TOKEN = "env-secret";
+	const configPath = path.join(agentDir, "config.toml");
+	await Bun.write(
+		configPath,
+		stringifySettingsToml({ searxng: { endpoint: "https://cfg.example" }, temperature: 0.4 }),
+	);
+	await Settings.init({ cwd: projectDir, agentDir });
+	const host = createSettingsHost();
+	// The panel edits the configured layers: env values are never shown or pre-filled.
+	expect(host.get("hindsight.apiToken")).toBeUndefined();
 
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: ["dark"],
-				providers: [],
-				settings: host,
-				plugins: createPluginSettingsHost(projectDir),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+	const selector = new SettingsSelectorComponent(
+		{
+			availableThinkingLevels: [],
+			thinkingLevel: undefined,
+			availableThemes: ["dark"],
+			providers: [],
+			settings: host,
+			plugins: createPluginSettingsHost(projectDir),
+		},
+		{ onChange: () => {}, onCancel: () => {} },
+	);
 
-		selector.handleInput("/");
-		for (const ch of "searxng endpoint") selector.handleInput(ch);
-		selector.handleInput("\n"); // confirm search
-		selector.handleInput("\n"); // open the text field
-		selector.handleInput("\x15"); // clear it
-		selector.handleInput("\n"); // submit
+	selector.handleInput("/");
+	for (const ch of "searxng endpoint") selector.handleInput(ch);
+	selector.handleInput("\n"); // confirm search
+	selector.handleInput("\n"); // open the text field
+	selector.handleInput("\x15"); // clear it
+	selector.handleInput("\n"); // submit
 
-		expect(cfgSearxngEndpoint.get(settings)).toBe("https://env.example");
-		await settings.flush();
-		if (format === "yaml") expect(YAML.parse(await Bun.file(configPath).text())).toEqual({ temperature: 0.4 });
-		else {
-			expect(await Bun.file(configPath).text()).toBe(yaml);
-			expect(parseSettingsToml(await Bun.file(tomlPath).text()).searxng).toBeNull();
-		}
-		await settings.reloadFromDisk();
-		expect(cfgSearxngEndpoint.get(settings)).toBe("https://env.example");
-	},
-);
+	expect(cfgSearxngEndpoint.get(settings)).toBe("https://env.example");
+	await settings.flush();
+	expect(parseSettingsToml(await Bun.file(configPath).text())).toEqual({ temperature: 0.4 });
+	await settings.reloadFromDisk();
+	expect(cfgSearxngEndpoint.get(settings)).toBe("https://env.example");
+});

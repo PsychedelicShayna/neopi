@@ -15,11 +15,11 @@ import { getOAuthProviders, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oau
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { logger, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { logger, removeSyncWithRetries, Snowflake, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 
 describe("ModelRegistry runtime provider registration", () => {
 	let tempDir: string;
-	let modelsJsonPath: string;
+	let modelsTomlPath: string;
 	let authStorage: AuthStorage;
 	let registry: ModelRegistry;
 	let fetchRequests: string[];
@@ -39,9 +39,9 @@ describe("ModelRegistry runtime provider registration", () => {
 		fetchRequests = [];
 		tempDir = path.join(os.tmpdir(), `pi-test-model-registry-runtime-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
-		modelsJsonPath = path.join(tempDir, "models.json");
+		modelsTomlPath = path.join(tempDir, "models.toml");
 		authStorage = await AuthStorage.create(":memory:");
-		registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
+		registry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: offlineFetch });
 	});
 
 	afterEach(() => {
@@ -390,8 +390,8 @@ describe("ModelRegistry runtime provider registration", () => {
 	test("configured discovery suppresses extension fetchDynamicModels for the same provider", async () => {
 		const providerName = "runtime-configured-provider";
 		fs.writeFileSync(
-			modelsJsonPath,
-			JSON.stringify({
+			modelsTomlPath,
+			stringifySettingsToml({
 				providers: {
 					[providerName]: {
 						baseUrl: "http://127.0.0.1:4893",
@@ -411,7 +411,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		};
-		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: configuredFetch });
+		const configuredRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: configuredFetch });
 		let runtimeFetchCalls = 0;
 		configuredRegistry.registerProvider(
 			providerName,
@@ -439,7 +439,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			catalogFetches++;
 			throw new Error(`Unexpected built-in catalog fetch: ${String(input)}`);
 		};
-		const overrideRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: catalogFetch });
+		const overrideRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: catalogFetch });
 		let runtimeFetches = 0;
 		overrideRegistry.registerProvider(
 			"anthropic",
@@ -491,7 +491,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			}
 			return promise;
 		};
-		const stalledRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: stalledFetch });
+		const stalledRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: stalledFetch });
 
 		const firstRefresh = stalledRegistry.refreshProvider("anthropic", "online");
 		await drainMicrotasksUntil(() => catalogFetches === 1, "first shared-catalog fetch did not start");
@@ -692,15 +692,15 @@ describe("ModelRegistry runtime provider registration", () => {
 		const runtimeHeaderValue = "runtime-header";
 
 		fs.writeFileSync(
-			modelsJsonPath,
-			JSON.stringify({
+			modelsTomlPath,
+			stringifySettingsToml({
 				providers: {
 					anthropic: { modelOverrides: { [modelId]: { headers: { [sharedHeader]: configHeaderValue } } } },
 				},
 			}),
 		);
 
-		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
+		const configuredRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: offlineFetch });
 		const configuredModel = configuredRegistry.find("anthropic", modelId);
 		expect(configuredModel && (await configuredRegistry.resolveModelHeaders(configuredModel))?.[sharedHeader]).toBe(
 			configHeaderValue,
@@ -726,8 +726,8 @@ describe("ModelRegistry runtime provider registration", () => {
 		const guardrailIdentifier = "arn:aws:bedrock:eu-west-2:123456789012:guardrail/abcd1234";
 
 		fs.writeFileSync(
-			modelsJsonPath,
-			JSON.stringify({
+			modelsTomlPath,
+			stringifySettingsToml({
 				providers: {
 					[providerName]: {
 						guardrailIdentifier,
@@ -737,7 +737,7 @@ describe("ModelRegistry runtime provider registration", () => {
 				},
 			}),
 		);
-		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
+		const configuredRegistry = new ModelRegistry(authStorage, modelsTomlPath, { fetch: offlineFetch });
 
 		configuredRegistry.registerProvider(
 			providerName,
@@ -1501,10 +1501,10 @@ describe("ModelRegistry runtime provider registration", () => {
 		// provider's canonical host.
 		const providerName = "charm-hyper";
 		fs.writeFileSync(
-			modelsJsonPath,
-			JSON.stringify({ providers: { [providerName]: { baseUrl: "https://gateway.internal" } } }),
+			modelsTomlPath,
+			stringifySettingsToml({ providers: { [providerName]: { baseUrl: "https://gateway.internal" } } }),
 		);
-		const configured = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
+		const configured = new ModelRegistry(authStorage, modelsTomlPath, { fetch: offlineFetch });
 
 		// Cache-cold by construction: this provider bundles no rows.
 		expect(configured.getAll().some(model => model.provider === providerName)).toBe(false);
@@ -1519,8 +1519,8 @@ describe("ModelRegistry runtime provider registration", () => {
 		// must not answer with some model's own baseUrl.
 		const providerName = "charm-hyper";
 		fs.writeFileSync(
-			modelsJsonPath,
-			JSON.stringify({
+			modelsTomlPath,
+			stringifySettingsToml({
 				providers: {
 					[providerName]: {
 						baseUrl: "https://gateway.internal",
@@ -1531,7 +1531,7 @@ describe("ModelRegistry runtime provider registration", () => {
 				},
 			}),
 		);
-		const configured = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
+		const configured = new ModelRegistry(authStorage, modelsTomlPath, { fetch: offlineFetch });
 
 		// The model really does carry a different baseUrl, so this is a genuine
 		// conflict rather than a vacuous assertion.

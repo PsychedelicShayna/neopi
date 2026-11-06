@@ -1,6 +1,7 @@
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
+import { importLegacyYaml, readTomlConfigSync } from "@oh-my-pi/pi-utils/settings-toml";
 import { getConfigDirPaths } from "../config";
 import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
 
@@ -12,17 +13,23 @@ export interface ConfigFileSource<T> {
 	read(): T | null;
 }
 
-/**
- * Read one JSON/YAML config file through `adapt`. Reading, parsing and rejecting
- * all happen inside one guard so an unreadable, malformed, or irrelevant file is
- * skipped instead of thrown. `adapt` receives the raw content because the YAML/JSON
- * split lives with the config files that consume this walk, not here.
- */
+/** Read canonical TOML, importing a legacy sibling once without modifying it. */
 export function readConfigFile<T>(filePath: string, adapt: ConfigFileAdapter<T>): T | null {
+	const target = filePath.replace(/\.(?:json|yaml|yml)$/, ".toml");
+	const base = target.slice(0, -".toml".length);
 	try {
-		const content = fs.readFileSync(filePath, "utf-8");
-		return adapt(content, filePath);
+		const loaded = readTomlConfigSync(target, {
+			legacyPaths: [`${base}.json`, `${base}.yaml`, `${base}.yml`],
+			parseLegacy(content, legacyPath) {
+				if (!legacyPath.endsWith(".json")) return importLegacyYaml(content, legacyPath);
+				const parsed: unknown = JSON.parse(content);
+				if (!isRecord(parsed)) throw new Error("Expected a configuration mapping");
+				return parsed;
+			},
+		});
+		return loaded ? adapt(loaded.content, target) : null;
 	} catch {
+		logger.warn("Failed to load TOML configuration", { path: target });
 		return null;
 	}
 }
@@ -33,10 +40,10 @@ export interface ConfigFileSourcesOptions<T> {
 }
 
 /**
- * Config sources for base name `base` — `"lsp"` covers `lsp.json`/`.lsp.json`/`lsp.yaml`/`.lsp.yaml`/
- * `lsp.yml`/`.lsp.yml` — in priority order: cwd files, project config dirs, user config dirs,
- * plugin roots (plus {@link ConfigFileSourcesOptions.pluginRootSource} per root), then home-directory
- * files. Lowest priority comes last, so callers merge over a reversed list.
+ * TOML config sources for `base` (`lsp.toml` / `.lsp.toml`) in priority order:
+ * cwd files, project config dirs, user config dirs, plugin roots, then home.
+ * JSON/YAML siblings are considered only for one-time import. Lowest priority
+ * comes last, so callers merge over a reversed list.
  */
 export function configFileSources<T>(
 	base: string,
@@ -44,7 +51,7 @@ export function configFileSources<T>(
 	adapt: ConfigFileAdapter<T>,
 	options: ConfigFileSourcesOptions<T> = {},
 ): ConfigFileSource<T>[] {
-	const filenames = [`${base}.json`, `.${base}.json`, `${base}.yaml`, `.${base}.yaml`, `${base}.yml`, `.${base}.yml`];
+	const filenames = [`${base}.toml`, `.${base}.toml`];
 	const sources: ConfigFileSource<T>[] = [];
 	const addDir = (dir: string): void => {
 		for (const filename of filenames) {

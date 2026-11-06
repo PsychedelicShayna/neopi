@@ -11,7 +11,7 @@ import {
 	cfgUsageNoticesQuotaPercent,
 	cfgUsageNoticesRemainingPercent,
 } from "@oh-my-pi/pi-coding-agent/telemetry-settings";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { TempDir, stringifySettingsToml } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState } from "./helpers/settings-test-state";
 
 describe("local agent telemetry settings", () => {
@@ -69,7 +69,7 @@ describe("usage notice settings through production initialization", () => {
 			try {
 				const agentDir = path.join(temp.path(), "agent");
 				const cwd = path.join(temp.path(), "project");
-				await Bun.write(path.join(agentDir, "config.yml"), JSON.stringify(configuration));
+				await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml(configuration));
 				const settings = await Settings.init({ agentDir, cwd });
 				expect(cfgUsageNoticesEnabled.get(settings)).toBe(false);
 				expect(cfgUsageNoticesQuotaPercent.get(settings)).toBe(80);
@@ -91,10 +91,8 @@ describe("usage notice settings through production initialization", () => {
 		try {
 			const agentDir = path.join(temp.path(), "agent");
 			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				JSON.stringify({
-					usageNotices: { enabled: false, quotaPercent: 101 },
-				}),
+				path.join(agentDir, "config.toml"),
+				stringifySettingsToml({ usageNotices: { enabled: false, quotaPercent: 101 } }),
 			);
 			await expect(Settings.init({ agentDir, cwd: temp.path() })).rejects.toThrow(
 				"Notice thresholds must be between 0 and 100 percent",

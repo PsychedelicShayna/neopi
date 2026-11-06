@@ -5,7 +5,7 @@ import { DeckClient, SessionNotActiveError } from "./deck.ts";
 import { nowIso, TelegramBridgeStore, type ChatSessionMapping } from "./store.ts";
 import { TelegramApi, type TelegramMessage, type TelegramUpdate } from "./telegram.ts";
 import { conversationKey, decomposeTask, effectiveThreadId, HELP, invokedText, parseCommand, parseProperties, retainedSessions, selectRetainedSession, unsupportedAttachments, type BotIdentity, type RetainedSession } from "./commands.ts";
-import { stringify } from "yaml";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 
 const TELEGRAM_TEXT_LIMIT = 3900;
 
@@ -217,7 +217,7 @@ export class TelegramBridge {
 					decomposeTask("validation", properties);
 					this.store.setProperties(key, properties);
 				}
-				return this.say(message, `Default card properties for ${key}:\n${stringify(this.store.getProperties(key))}`);
+				return this.say(message, `Default card properties for ${key}:\n${stringifySettingsToml(this.store.getProperties(key))}`);
 			case "capture":
 				if (!args) throw new Error("Usage: /capture <text>");
 				const item = await this.deck.capture(args.split("\n")[0]!.slice(0, 200), args, `telegram:${key}:${message.message_id}`);

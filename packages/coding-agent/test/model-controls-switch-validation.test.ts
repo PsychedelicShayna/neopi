@@ -27,7 +27,7 @@ describe("model switch effort preflight", () => {
 		dir = TempDir.createSync("@pi-model-switch-validation-");
 		auth = await AuthStorage.create(path.join(dir.path(), "auth.db"));
 		auth.keys.setRuntime("anthropic", "test-key");
-		registry = new ModelRegistry(auth, path.join(dir.path(), "models.yml"));
+		registry = new ModelRegistry(auth, path.join(dir.path(), "models.toml"));
 		storage = await AgentStorage.open(path.join(dir.path(), "agent.db"));
 	});
 

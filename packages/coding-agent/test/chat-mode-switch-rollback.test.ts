@@ -29,7 +29,7 @@ describe("AgentSession.setChatMode rollback", () => {
 	beforeAll(async () => {
 		sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-chat-rollback-shared-"));
 		authStorage = await AuthStorage.create(path.join(sharedDir, "auth.db"));
-		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.yml"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir, "models.toml"));
 	});
 
 	afterAll(() => {

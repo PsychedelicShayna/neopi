@@ -730,8 +730,8 @@ function isProviderLockedCrossMatch(pattern: string, matchedModel: Model<Api>): 
 		return false;
 	}
 	// A cross-provider exact-id match on a provider that has no bundled
-	// catalog at all is a user-configured custom provider (models.json /
-	// models.yml): the user wrote this literal id explicitly, so resolving
+	// catalog at all is a user-configured custom provider (models.toml):
+	// the user wrote this literal id explicitly, so resolving
 	// it is stated intent rather than an aggregator shadow, and the lock
 	// must not fire (#8800). Bundled providers (e.g. OpenRouter) keep the
 	// lock below unchanged.
@@ -1477,7 +1477,10 @@ export function resolveAgentAdvisorSelection(
 	if (override) {
 		const lowered = override.toLowerCase();
 		if (lowered === "off" || lowered === "false") return undefined;
-		if (lowered === "on" || lowered === "true") return typeof options.agentAdvisor === "object" ? { definition: options.agentAdvisor } : { model: agentPattern };
+		if (lowered === "on" || lowered === "true")
+			return typeof options.agentAdvisor === "object"
+				? { definition: options.agentAdvisor }
+				: { model: agentPattern };
 		return { model: override };
 	}
 	if (options.agentAdvisor === true) return {};
@@ -1778,7 +1781,7 @@ export function resolveSessionModelSelector(
 }
 
 /**
- * Discovery-backed providers (models.yml `discovery:` or extension
+ * Discovery-backed providers (models.toml `discovery:` or extension
  * `fetchDynamicModels`) that could still supply one of the saved selectors
  * after a provider-scoped refresh. Disabled providers are skipped.
  */
@@ -2357,7 +2360,7 @@ function resolveCliModelInScope(
 			model: undefined,
 			selector: undefined,
 			warning: undefined,
-			error: "No models available. Check your installation or add models to models.json.",
+			error: "No models available. Check your installation or add models to models.toml.",
 		};
 	}
 

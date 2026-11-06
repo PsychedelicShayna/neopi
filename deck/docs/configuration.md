@@ -32,7 +32,7 @@ The managed `.env` is `<data dir>/.env`. The same directory holds:
   Values are never logged.
 - `telegram-bridge.db` — chat→session map (only when the bridge runs).
 - `deck.db` and `uploads/` — kanban, routines, inbox, pasted images.
-- `config.yml` and `neopi/<sha>/` — backend trees and the active backend.
+- `config.toml` and `neopi/<sha>/` — backend trees and the active backend.
 - `run/` — launcher lock, generation and owned-process journals.
 
 ## Variable reference
@@ -85,13 +85,13 @@ authenticated, creating a new chat reports an error instead of silently
 switching to an unrelated model.
 
 This policy applies only to new deck chats. It does not rewrite NeoPi's
-`config.yml`, affect CLI sessions or resumed chats, or replace an explicit
+`config.toml`, affect CLI sessions or resumed chats, or replace an explicit
 model selection in the chat header. `OMP_MODEL` and NeoPi's global default
 model do not override the deck's new-chat default.
 
 The Sol fallback is a session-local override on top of the chat's configured
 `retry.fallbackChains`, re-applied after every settings reload so later
-config.yml edits reach the chat. Once config.yml has a chain keyed by the
+config.toml edits reach the chat. Once config.toml has a chain keyed by the
 chat's Opus model (`provider/id`, with or without an effort suffix), that
 chain replaces the deck's for this model. The deck's `default` chain stays in
 force for other models the chat switches to. Edit the active model's chain
@@ -100,7 +100,7 @@ from the model picker's **Fallbacks** row, or in Settings → NeoPi.
 ### Model configuration and picker visibility
 
 Open **Models** at `/models` for the connected NeoPi catalogue, global role
-assignments and validated custom `models.yml` definitions. The conversation's
+assignments and validated custom `models.toml` definitions. The conversation's
 quick switcher selects a model; opening the Models workspace does not.
 Role selectors such as `@default` stay selectors rather than being replaced
 by whichever concrete model currently resolves them.
@@ -111,6 +111,19 @@ stale save. Reload before trying again. Custom model documents retain their
 existing revision check and server-side validation. Project-scope role writes
 and effort-rule editing require the newer native Models configuration API;
 the pinned SDK does not expose them yet, and Deck leaves native rules intact.
+
+NeoPi settings and custom models are native `config.toml` and `models.toml`.
+Legacy YAML is read only for a one-time sibling import: it is never rewritten
+or deleted, its permissions are retained on the new TOML file, and existing
+TOML always takes precedence. The models document API uses `raw` for TOML text.
+Settings GUI saves patch the existing TOML so unrelated top-level and nested
+comments survive. The models raw editor preserves the document's untouched
+source, but masks **all** comments as well as credentials: unchanged whole
+comment placeholders restore the original comment verbatim; deleting one
+deletes that comment, and newly written comments are saved as typed. Editing
+part of a comment placeholder is rejected rather than risking disclosure.
+Credential placeholders restore only as whole credential values (and URL
+placeholders only as whole URLs); ambiguous masking withholds the document.
 
 **Settings / Inference providers / Deck picker visibility** hides a provider
 from Deck model pickers in this browser. It does not disable inference,
@@ -136,19 +149,19 @@ column. The card modal exposes cancellation and the persisted run result.
 | `NPI_DECK_CARD_AGENT_DONE_STATE` | `s_done` | yes | Done/review column id entered on successful completion. |
 | `NPI_DECK_CARD_AGENT_FAILURE_STATE` | `s_blocked` | yes | Column id entered on failure or cancellation. |
 
-Card properties are leading YAML in the card body, not a separate metadata
-store. All card-creating API requests accept a `properties` mapping; it merges
-into existing front matter without replacing unrelated entries or comments.
-The UI quick-add and modal raw-body editor also accept YAML directly:
+Card properties are leading TOML between `+++` lines in the card body, not a
+separate metadata store. All card-creating API requests accept a `properties`
+mapping; it merges into existing front matter with the shared comment-preserving
+TOML codec. The UI quick-add and modal raw-body editor accept native TOML:
 
-```yaml
----
-read-only: true
-worktree: /absolute/path/to/an/existing/git-worktree
-role: researcher
-custom:
-  tags: [investigation, routing]
----
+```text
++++
+read-only = true
+worktree = "/absolute/path/to/an/existing/git-worktree"
+role = "researcher"
+[custom]
+tags = ["investigation", "routing"]
++++
 Research the linked source and report the result.
 ```
 
@@ -163,10 +176,29 @@ Without `worktree`, execution creates a fresh detached temporary worktree from
 the card's explicit project `cwd`, or the configured default working directory
 when the card is Unassigned. Cleanup removes only worktrees owned by that run,
 never a linked user worktree. Routing remains separate: a linked worktree or
-YAML property does not infer project filing; omitted API `cwd` means Unassigned.
-Inbox provenance stays after the leading YAML. Routines accept both `body`
-and typed `properties`; chat `/task add` accepts multiline YAML or a JSON
+TOML property does not infer project filing; omitted API `cwd` means Unassigned.
+Inbox provenance stays after the leading TOML. Routines accept both `body`
+and typed `properties`; chat `/task add` accepts multiline TOML or a JSON
 card-creation object.
+
+At database startup, existing YAML card bodies import once to canonical TOML.
+The exact original Markdown, including YAML comments, is retained in the
+immutable `card_legacy_originals` table before the body is changed; card deletion
+does not delete that backup. Legacy API input goes through the same transactional
+import seam. Subsequent reads and property edits use TOML only. Malformed legacy
+metadata is retained for repair and cannot execute as an unannotated card.
+Imports also carry YAML comment text into a TOML comment preamble. The preamble
+explicitly notes that original comment-to-key placement is not retained; exact
+placement and original syntax remain available in the immutable source backup.
+
+KB notes use the same `+++` TOML frontmatter. On first indexing, a legacy
+`note.md` imports to a same-permission `note.toml.md` sibling without changing
+the YAML original. If both exist, the TOML sibling wins (including parse errors)
+and the warning identifies paths only. The tree, graph, search and wikilinks
+retain the logical `note.md` identity, indexing only the canonical content.
+Raw edits update the TOML sibling, never the original. Explicit null properties
+round-trip through the shared version-1 `__npi.null_paths` metadata.
+External `SKILL.md` frontmatter remains YAML and is not migrated or re-encoded.
 
 Card workers use `kb_read` and `kb_write` through a run-scoped bearer capability.
 The server derives project identity and read-only policy from the active run;

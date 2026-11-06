@@ -19,11 +19,11 @@
 import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { logger, parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { logger } from "@oh-my-pi/pi-utils";
 import { writeArtifact } from "../session/artifacts";
 import type { ScopeLike } from "../config/registry";
 import { cfgChroniclerCaptureCarryChars, cfgChroniclerCaptureIndexSourceIds } from "./capture-settings";
+import { readNativeMarkdown, renderNativeMarkdown, type NativeMarkdownDocument } from "../utils/native-frontmatter";
 
 /** Keep staged-file writes and directory publication separately observable. */
 export const chroniclerStoreIO = {
@@ -744,8 +744,7 @@ export class ChroniclerStore {
 		];
 		if (record.supersedes) fields.push(["supersedes", record.supersedes]);
 		if (record.uncertainty) fields.push(["uncertainty", record.uncertainty]);
-		const frontmatter = fields.map(([key, value]) => `${key}: ${YAML.stringify(value)}`).join("\n");
-		return `---\n${frontmatter}\n---\n\n# ${record.title}\n\n${record.body}\n`;
+		return renderNativeMarkdown(Object.fromEntries(fields), `\n# ${record.title}\n\n${record.body}\n`);
 	}
 
 	async #loadBatch(batchId: string): Promise<LoadedBatch> {
@@ -859,17 +858,13 @@ export class ChroniclerStore {
 		listed: { id: string; file: string },
 		file: string,
 	): Promise<BeatRecord> {
-		let content: string;
+		let document: ChroniclerDocument & { filePath: string };
 		try {
-			content = await Bun.file(file).text();
+			document = await readNativeMarkdown(file, { readOnly: this.#readOnlySnapshot });
 		} catch (error) {
-			throw this.#halt(`referenced beat ${listed.id} is missing or unreadable (${String(error)})`, file);
+			throw this.#halt(`referenced beat ${listed.id} is missing, unreadable, or malformed (${String(error)})`, file);
 		}
-		const { frontmatter, body } = parseFrontmatter(content, {
-			rawKeys: true,
-			repair: false,
-			level: "off",
-		});
+		const { frontmatter, body } = document;
 
 		if (frontmatter.schema !== BEAT_SCHEMA_VERSION) {
 			throw this.#halt(`beat ${listed.id} has unknown schema ${String(frontmatter.schema)}`, file);
@@ -926,7 +921,7 @@ export class ChroniclerStore {
 
 		return freezeRecord({
 			id: listed.id,
-			path: `beats/${checkpoint.batchId}/${listed.file}`,
+			path: `beats/${checkpoint.batchId}/${path.basename(document.filePath)}`,
 			sessionId: frontmatter.session.trim(),
 			capturedAt,
 			model: frontmatter.model.trim(),

@@ -5,9 +5,9 @@
  */
 import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import { type NativeMarkdownDocument, parseNativeMarkdown, renderNativeMarkdown } from "../utils/native-frontmatter";
 import { parseAgentFields } from "../discovery/helpers";
 // Embed agent markdown files at build time
-import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
@@ -40,7 +40,7 @@ interface EmbeddedAgentDef {
 function buildAgentContent(def: EmbeddedAgentDef): string {
 	const body = prompt.render(def.template);
 	if (!def.frontmatter) return body;
-	return prompt.render(agentFrontmatterTemplate, { ...def.frontmatter, body });
+	return renderNativeMarkdown({ ...def.frontmatter }, body);
 }
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
@@ -105,24 +105,28 @@ export class AgentParsingError extends Error {
  */
 export function parseAgent(
 	filePath: string,
-	content: string,
+	content: string | NativeMarkdownDocument,
 	source: AgentSource,
-	level: "fatal" | "warn" | "off" = "fatal",
 ): AgentDefinition {
-	const { frontmatter, body } = parseFrontmatter(content, {
-		location: filePath,
-		level,
-	});
+	const { frontmatter, body } = typeof content === "string" ? parseNativeMarkdown(content, filePath) : content;
 	const fields = parseAgentFields(frontmatter);
 	if (!fields) {
-		throw new AgentParsingError(new Error(`Invalid agent field: ${filePath}\n${content}`), filePath);
+		throw new AgentParsingError(new Error(`Invalid agent fields: ${filePath}`), filePath);
 	}
 	return {
 		...fields,
-		systemPrompt: body,
+		systemPrompt: body.trim(),
 		source,
 		filePath,
 	};
+}
+
+/** Claude/Agent-Plugins definitions remain YAML because their manifests are shared with external harnesses. */
+export function parseExternalAgent(filePath: string, content: string, source: AgentSource): AgentDefinition {
+	const { frontmatter, body } = parseFrontmatter(content, { location: filePath, level: "warn" });
+	const fields = parseAgentFields(frontmatter);
+	if (!fields) throw new AgentParsingError(new Error(`Invalid external agent fields: ${filePath}`), filePath);
+	return { ...fields, systemPrompt: body, source, filePath };
 }
 
 /** Cache for bundled agents */

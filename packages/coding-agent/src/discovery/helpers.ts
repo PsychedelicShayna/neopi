@@ -378,18 +378,14 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	}
 
 	const output = frontmatter.output !== undefined ? frontmatter.output : undefined;
-	const rawThinkingLevel =
-		typeof frontmatter.thinkingLevel === "string"
-			? frontmatter.thinkingLevel
-			: typeof frontmatter.thinking === "string"
-				? frontmatter.thinking
-				: undefined;
+	const declaredThinking = frontmatter.thinkingLevel ?? frontmatter["thinking-level"] ?? frontmatter.thinking;
+	const rawThinkingLevel = typeof declaredThinking === "string" ? declaredThinking : undefined;
 
 	const thinkingLevel = parseConfiguredThinkingLevel(rawThinkingLevel);
 	const model = parseModelList(frontmatter.model);
 	const blocking = parseBoolean(frontmatter.blocking);
 	const structured = parseBoolean(frontmatter.structured);
-	const readSummarize = parseBoolean(frontmatter.readSummarize);
+	const readSummarize = parseBoolean(frontmatter.readSummarize ?? frontmatter["read-summarize"]);
 	// prewalk: true → hand off to the default prewalk target; "<pattern>" → custom target.
 	let prewalk: boolean | string | undefined = parseBoolean(frontmatter.prewalk);
 	if (prewalk === undefined && typeof frontmatter.prewalk === "string") {
@@ -397,7 +393,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		if (trimmed) prewalk = trimmed;
 	}
 	const advisor = parseAgentAdvisor(frontmatter.advisor);
-	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills)
+	const autoloadSkills = parseArrayOrCSV(frontmatter.autoloadSkills ?? frontmatter["autoload-skills"])
 		?.map(s => s.trim())
 		.filter(Boolean);
 	return {

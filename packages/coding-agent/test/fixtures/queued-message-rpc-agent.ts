@@ -12,7 +12,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 // Real RPC dispatch and session queues; only the external model response is scripted.
 const authStorage = await AuthStorage.create(path.join(process.cwd(), "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
-const modelRegistry = new ModelRegistry(authStorage, path.join(process.cwd(), "models.yml"));
+const modelRegistry = new ModelRegistry(authStorage, path.join(process.cwd(), "models.toml"));
 const started: MockResponse = { content: ["Started"] };
 // Streams until the test aborts the turn; the delay only bounds a leaked process.
 const held: MockResponse = { content: ["Started"], delayMs: 600_000 };

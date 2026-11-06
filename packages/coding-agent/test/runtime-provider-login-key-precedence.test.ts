@@ -27,7 +27,7 @@ describe("runtime provider apiKey vs /login credential", () => {
 		tempDir = path.join(os.tmpdir(), `pi-test-login-key-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		authStorage = await AuthStorage.create(":memory:");
-		registry = new ModelRegistry(authStorage, path.join(tempDir, "models.json"), { fetch: offlineFetch });
+		registry = new ModelRegistry(authStorage, path.join(tempDir, "models.toml"), { fetch: offlineFetch });
 		discoveryKeys = [];
 		delete process.env[envName];
 	});

@@ -6,6 +6,7 @@ import { Effort, type Api, type Model, type ModelSpec } from "@oh-my-pi/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { applyChatCompletionsCompatPolicy, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../src/config/model-facts";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
@@ -44,13 +45,11 @@ describe("registry model fact projection", () => {
 	let dir: string;
 	let auth: AuthStorage;
 	beforeEach(async () => {
-		const scratch = path.join(os.homedir(), ".cache/npi-canary");
-		await fs.mkdir(scratch, { recursive: true });
-		dir = await fs.mkdtemp(path.join(scratch, "model-facts-"));
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "model-facts-"));
 		auth = await AuthStorage.create(":memory:");
 		await Bun.write(
-			path.join(dir, "models.yml"),
-			JSON.stringify({
+			path.join(dir, "models.toml"),
+			stringifySettingsToml({
 				providers: {
 					"fact-target": {
 						api: "openai-completions",
@@ -72,7 +71,7 @@ describe("registry model fact projection", () => {
 		const scope = Settings.isolated();
 		cfgModelFactsEnabled.set(scope, enabled);
 		cfgModelFactsSources.set(scope, ["fact-source"]);
-		const registry = new ModelRegistry(auth, path.join(dir, "models.yml"), {
+		const registry = new ModelRegistry(auth, path.join(dir, "models.toml"), {
 			settings: scope,
 			fetch: async input => {
 				requests.push(String(input));
@@ -134,8 +133,8 @@ describe("registry model fact projection", () => {
 		test(`preserves paired nightly compat snapshots without resolved facts, reasoning ${reasoning}`, async () => {
 			const id = "unknown-hunt-model";
 			await Bun.write(
-				path.join(dir, "models.yml"),
-				JSON.stringify({
+				path.join(dir, "models.toml"),
+				stringifySettingsToml({
 					providers: {
 						"hunt-neutral": {
 							api: "openai-completions",
@@ -162,7 +161,7 @@ describe("registry model fact projection", () => {
 				const scope = Settings.isolated();
 				cfgModelFactsEnabled.set(scope, enabled);
 				cfgModelFactsSources.set(scope, []);
-				const registry = new ModelRegistry(auth, path.join(dir, "models.yml"), {
+				const registry = new ModelRegistry(auth, path.join(dir, "models.toml"), {
 					settings: scope,
 					fetch: async () => Response.json({ data: [{ id }] }),
 				});
@@ -185,8 +184,8 @@ describe("registry model fact projection", () => {
 		test(`preserves the operator's ${level}-level effort policy when source facts resolve`, async () => {
 			const compat = { supportsReasoningEffort: false };
 			await Bun.write(
-				path.join(dir, "models.yml"),
-				JSON.stringify({
+				path.join(dir, "models.toml"),
+				stringifySettingsToml({
 					providers: {
 						"fact-target": {
 							api: "openai-completions",
@@ -233,10 +232,10 @@ describe("registry model fact projection", () => {
 		);
 	});
 
-	test("preserves existing models.yml fact pins instead of treating them as discovery placeholders", async () => {
+	test("preserves existing models.toml fact pins instead of treating them as discovery placeholders", async () => {
 		await Bun.write(
-			path.join(dir, "models.yml"),
-			JSON.stringify({
+			path.join(dir, "models.toml"),
+			stringifySettingsToml({
 				providers: {
 					"fact-target": {
 						api: "openai-completions",

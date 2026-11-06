@@ -5,6 +5,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { stringifySettingsToml } from "@oh-my-pi/pi-utils/settings-toml";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Issue #13326: 18.3 removed `settings.override(path, value)`. Extensions reach the
@@ -39,12 +40,12 @@ describe("extension runtime setting overrides", () => {
 		tempDir = undefined;
 	});
 
-	async function loadOverrideExtension(globalConfig?: string): Promise<Settings> {
+	async function loadOverrideExtension(globalConfig?: Record<string, unknown>): Promise<Settings> {
 		const cwd = tempDir!.path();
 		const agentDir = path.join(cwd, "agent");
 		const extensionPath = path.join(cwd, "extension.ts");
 		await Bun.write(extensionPath, EXTENSION_SOURCE);
-		if (globalConfig) await Bun.write(path.join(agentDir, "config.yml"), globalConfig);
+		if (globalConfig) await Bun.write(path.join(agentDir, "config.toml"), stringifySettingsToml(globalConfig));
 		const settings = await Settings.init({ cwd, agentDir });
 		const result = await loadExtensions([extensionPath], cwd);
 		expect(result.errors).toEqual([]);
@@ -60,7 +61,7 @@ describe("extension runtime setting overrides", () => {
 	});
 
 	it("sees the user's configured value and leaves it in place", async () => {
-		const settings = await loadOverrideExtension("recap:\n  enabled: true\n");
+		const settings = await loadOverrideExtension({ recap: { enabled: true } });
 		const recap = lookup("recap.enabled")!;
 
 		expect(recap.get(settings)).toBe(true);

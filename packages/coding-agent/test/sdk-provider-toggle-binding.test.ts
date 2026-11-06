@@ -46,7 +46,7 @@ describe("discovery provider toggles with subagents and helper sessions", () => 
 	const starter = async (tempDir: TempDir) => {
 		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime(model.provider, "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.toml"));
 		const start = async (
 			settings: Settings,
 			extra: Pick<CreateAgentSessionOptions, "parentTaskPrefix" | "taskDepth" | "agentId" | "bindProcessState"> = {},

@@ -48,3 +48,5 @@ server.out.log
 # it never lands in the public repo. Author shipped templates without the
 # `local.` prefix or under any other name.
 apps/server/src/templates/paper-trading-*.yaml
+apps/server/src/templates/paper-trading-*.yml
+apps/server/src/templates/paper-trading-*.toml
