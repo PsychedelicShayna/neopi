@@ -5,6 +5,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnOwnedSync } from "../../owned-process.ts";
 
 export const FAKE_VERSION = "18.3.2";
 export const FAKE_SENTINEL = "__piNativesV18_3_2";
@@ -34,7 +35,7 @@ const GIT_ENV = {
 };
 
 export function git(root: string, ...args: string[]): string {
-	const proc = Bun.spawnSync(["git", "-C", root, ...args], { env: GIT_ENV, stdout: "pipe", stderr: "pipe" });
+	const proc = spawnOwnedSync(["git", "-C", root, ...args], { env: GIT_ENV, stdout: "pipe", stderr: "pipe" });
 	if (proc.exitCode !== 0) throw new Error(`git ${args.join(" ")} failed: ${proc.stderr.toString()}`);
 	return proc.stdout.toString().trim();
 }
@@ -55,18 +56,22 @@ function put(root: string, file: string, content: string): void {
 
 /** Addon bytes carrying a release identity, plus a label that makes each build distinct. */
 export function fakeAddon(label: string, format: "legacy" | "stamp" = "legacy", version = FAKE_VERSION): string {
-	const identity = format === "stamp"
-		? `PI_NATIVES_VERSION_STAMP:${version}`.padEnd(64, "\0")
-		: `__piNativesV${version.replace(/[^A-Za-z0-9]/g, "_")}`;
+	const identity =
+		format === "stamp"
+			? `PI_NATIVES_VERSION_STAMP:${version}`.padEnd(64, "\0")
+			: `__piNativesV${version.replace(/[^A-Za-z0-9]/g, "_")}`;
 	return `\0${identity}\0${label}\0`;
 }
-
 
 export function fakeNeoPiTree(root: string, options: FakeTreeOptions = {}): string {
 	const variant = options.variant ?? "modern";
 	const names =
 		variant === "modern"
-			? [`pi_natives.${FAKE_PLATFORM}-modern.node`, `pi_natives.${FAKE_PLATFORM}-baseline.node`, `pi_natives.${FAKE_PLATFORM}.node`]
+			? [
+					`pi_natives.${FAKE_PLATFORM}-modern.node`,
+					`pi_natives.${FAKE_PLATFORM}-baseline.node`,
+					`pi_natives.${FAKE_PLATFORM}.node`,
+				]
 			: [`pi_natives.${FAKE_PLATFORM}-baseline.node`, `pi_natives.${FAKE_PLATFORM}.node`];
 	mkdirSync(root, { recursive: true });
 	put(root, ".gitignore", "node_modules\n*.node\n");
@@ -80,7 +85,11 @@ export function fakeNeoPiTree(root: string, options: FakeTreeOptions = {}): stri
 		}),
 	);
 	put(root, "packages/coding-agent/package.json", JSON.stringify({ name: "@oh-my-pi/pi-coding-agent" }));
-	put(root, "packages/utils/package.json", JSON.stringify({ name: "@oh-my-pi/pi-utils", engines: { bun: options.bunEngine ?? ">=1.3.14" } }));
+	put(
+		root,
+		"packages/utils/package.json",
+		JSON.stringify({ name: "@oh-my-pi/pi-utils", engines: { bun: options.bunEngine ?? ">=1.3.14" } }),
+	);
 	put(root, "packages/natives/package.json", JSON.stringify({ name: "@oh-my-pi/pi-natives", version: FAKE_VERSION }));
 	put(
 		root,
@@ -106,7 +115,11 @@ export function nativeAddonStatus() {
 }
 `,
 	);
-	put(root, "packages/natives/native/index.js", 'import { loadNative } from "./loader-state.js";\nexport const bindings = loadNative();\n');
+	put(
+		root,
+		"packages/natives/native/index.js",
+		'import { loadNative } from "./loader-state.js";\nexport const bindings = loadNative();\n',
+	);
 	put(root, "packages/natives/native/index.d.ts", "// generated bindings\n");
 	put(root, "scripts/bazel-natives.ts", "// native build driver\n");
 	put(root, "scripts/host-detect.ts", "export const avx2 = true;\n");
@@ -114,9 +127,9 @@ export function nativeAddonStatus() {
 	put(root, "BUILD.bazel", "# natives targets\n");
 	put(root, ".bazelversion", "8.0.0\n");
 	put(root, "crates/pi-natives/src/lib.rs", options.crate ?? "pub fn natives() {}\n");
-	put(root, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+	put(root, "Cargo.toml", '[workspace]\nmembers = ["crates/*"]\n');
 	put(root, "Cargo.lock", "version = 4\n");
-	put(root, "rust-toolchain.toml", "[toolchain]\nchannel = \"1.0.0\"\n");
+	put(root, "rust-toolchain.toml", '[toolchain]\nchannel = "1.0.0"\n');
 	mkdirSync(path.join(root, "node_modules/@oh-my-pi"), { recursive: true });
 	symlinkSync(path.join(root, "packages/coding-agent"), path.join(root, "node_modules/@oh-my-pi/pi-coding-agent"));
 	git(root, "init", "-q");
