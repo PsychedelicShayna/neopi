@@ -128,7 +128,7 @@ The short version: **Claude Code** is the polished vendor experience for Claude.
 
 ## Docs
 
-- [Install](./docs/install.md) covers native addons, `config.yml` and the `npi-deck` launcher.
+- [Install](./docs/install.md) covers native addons, `config.toml` and the `npi-deck` launcher.
 - [Configuration](./docs/configuration.md) — full env reference + restart semantics.
 - [Deployment](./docs/deployment.md) — Tailscale, SSH-tunnel, hardening checklist.
 - [Slash commands](./docs/slash-commands.md) — deck `/task` + `/plan`, SDK builtins, user/project markdown commands.

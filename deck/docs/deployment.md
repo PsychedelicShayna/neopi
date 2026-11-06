@@ -7,7 +7,7 @@ interface without one of these.
 
 Deploy from a NeoPi checkout with `deck/` and a recorded native addon.
 Select the repository root with `NPI_DECK_BACKEND` or register it in
-`~/.npi-deck/config.yml`, then start the `npi-deck` launcher.
+`~/.npi-deck/config.toml`, then start the `npi-deck` launcher.
 See [install.md](./install.md). There is no npm package or container image.
 
 ## Patterns

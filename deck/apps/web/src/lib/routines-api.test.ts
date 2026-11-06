@@ -57,3 +57,24 @@ test("historical run and trace fetch directly by both escaped identifiers", asyn
  await routinesApi.graphRun("routine/id", "old/run");
  expect(requests).toEqual(["/api/routines/routine%2Fid/runs/old%2Frun", "/api/routines/routine%2Fid/runs/old%2Frun/graph"]);
 });
+
+test("routine source creation sends specToml verbatim without a YAML field", async () => {
+ const specToml = 'name = "Source"\nsteps = []\n\n[[trigger]]\n[trigger.manual]\n';
+ const request = { name: "Source", enabled: false, specToml };
+ respond({ id: "created", ...request }, 201, (url, init) => {
+  expect(url).toBe("/api/routines");
+  expect(init?.method).toBe("POST");
+  expect(JSON.parse(String(init?.body))).toEqual(request);
+ });
+ expect((await routinesApi.create(request)).specToml).toBe(specToml);
+});
+
+test("routine source updates send specToml and preserve returned source", async () => {
+ const specToml = '# Authored source\nname = "Updated"\nsteps = []\n\n[[trigger]]\n[trigger.manual]\n';
+ respond({ id: "routine/id", specToml }, 200, (url, init) => {
+  expect(url).toBe("/api/routines/routine%2Fid");
+  expect(init?.method).toBe("PATCH");
+  expect(JSON.parse(String(init?.body))).toEqual({ specToml });
+ });
+ expect((await routinesApi.update("routine/id", { specToml })).specToml).toBe(specToml);
+});

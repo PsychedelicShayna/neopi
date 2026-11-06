@@ -136,10 +136,11 @@ triggers. Nested `.kbignore` files below the root are not read.
 
 ### 4. Frontmatter parser
 
-Use a lightweight YAML parser (likely `yaml` npm package, ~30kb) for
-safety — the kb has real YAML (arrays, nested objects, multi-line). The
-header-grep approach from `routes-slash-commands.ts` is insufficient for
-this scale.
+Owned notes use native TOML frontmatter between `+++` fences, parsed with the
+shared lossless TOML codec. A legacy YAML note imports once to an atomic
+`name.toml.md` sibling with the same permissions; its original remains untouched.
+The index retains logical `name.md` paths for links and searches. External
+`SKILL.md` frontmatter remains YAML for Markdown skill-ecosystem interoperability.
 
 ### 5. Graph library: `react-force-graph-2d`
 

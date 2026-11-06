@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://npi-deck.app/schemas/routine-layout.json",
 	"title": "RoutineLayout (V1)",
-	"description": "Canvas-mode metadata for a routine: per-step node positions plus the edge graph between them. Carried inline in spec_yaml so canvas mode is fully round-trippable without a separate persistence layer. The V1 runtime engine ignores `layout` entirely.",
+	"description": "Canvas-mode metadata for a routine: per-step node positions plus the edge graph between them. Carried inline in spec_toml so canvas mode is fully round-trippable without a separate persistence layer. The V1 runtime engine ignores `layout` entirely.",
 	"type": "object",
 	"required": ["version"],
 	"properties": {

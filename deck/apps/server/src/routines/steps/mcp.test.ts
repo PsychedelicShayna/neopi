@@ -1,3 +1,4 @@
+import { stringify as stringifyToml } from "../spec-toml.ts";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -194,8 +195,8 @@ function routineIn(cwd: string, steps: RoutineSpec["steps"]) {
 	openDb({ path: path.join(home, "deck.db") });
 	initializeOwnedGeneration();
 	runner = new RoutinesRunner();
-	const spec = { version: 1, name: "mcp", trigger: [{ manual: {} }], steps, concurrency: "skip" } as RoutineSpec;
-	const created = createV1Routine({ name: `mcp-${crypto.randomUUID()}`, spec, specYaml: JSON.stringify(spec) });
+	const spec = { name: "mcp", trigger: [{ manual: {} }], steps, concurrency: "skip" } as RoutineSpec;
+	const created = createV1Routine({ name: `mcp-${crypto.randomUUID()}`, spec, specToml: stringifyToml(spec) });
 	updateRoutine(created.id, { actionCwd: cwd });
 	return created;
 }

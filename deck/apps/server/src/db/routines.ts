@@ -18,6 +18,8 @@ import type {
 } from "@npi-deck/protocol";
 
 import { getDb, id, nowIso } from "./index.ts";
+import { importLegacyRoutineYaml } from "../routines/legacy-yaml.ts";
+import { logger } from "../log.ts";
 import { encodeTriggerPayload } from "./trigger-payload.ts";
 import { finalizeRun } from "./routine-step-runs.ts";
 import { getGraphEffect, redactGraphActionField } from "./graph-actions.ts";
@@ -38,6 +40,7 @@ interface RoutineRow {
 	next_run_at: string | null;
 	// V1 columns (003-routines-v1)
 	spec_yaml: string | null;
+	spec_toml: string | null;
 	concurrency: string;
 	budget_json: string | null;
 	tags: string | null;
@@ -69,6 +72,18 @@ interface RunRow {
 	backend_version: string | null;
 }
 
+function routineToml(row: RoutineRow): string | undefined {
+	if (row.spec_toml !== null) return row.spec_toml;
+	if (row.spec_yaml === null) return undefined;
+	let toml: string;
+	try { toml = importLegacyRoutineYaml(row.spec_yaml); } catch {
+		throw new Error(`Legacy routine ${row.id} cannot be imported losslessly; original spec_yaml is unchanged`);
+	}
+	getDb().query("UPDATE routines SET spec_toml = ? WHERE id = ? AND spec_toml IS NULL").run(toml, row.id);
+	logger("routine-toml-import").info(`Imported legacy routine ${row.id} to spec_toml; spec_yaml preserved`);
+	return toml;
+}
+
 function rowToRoutine(r: RoutineRow): Routine {
 	const specVersion = r.spec_version === 2 ? 2 : r.spec_version === 1 ? 1 : 0;
 	const out: Routine = {
@@ -88,7 +103,7 @@ function rowToRoutine(r: RoutineRow): Routine {
 	if (r.action_cwd !== null) out.actionCwd = r.action_cwd;
 	if (r.last_run_at !== null) out.lastRunAt = r.last_run_at;
 	if (r.next_run_at !== null) out.nextRunAt = r.next_run_at;
-	if (r.spec_yaml !== null) out.specYaml = r.spec_yaml;
+	if (specVersion === 1) out.specToml = routineToml(r);
 	if (r.graph_json !== null) out.graph = JSON.parse(r.graph_json) as RoutineGraph;
 	if (r.timezone !== null) out.timezone = r.timezone;
 	if (r.budget_json !== null) {
@@ -132,7 +147,7 @@ export function listRoutines(): Routine[] {
 		.query<RoutineRow, []>(
 			`SELECT id, name, description, cron, action_kind, action_body, action_cwd, enabled,
 			        created_at, updated_at, last_run_at, next_run_at,
-			        spec_yaml, concurrency, budget_json, tags, timezone, spec_version, graph_json
+			        spec_yaml, spec_toml, concurrency, budget_json, tags, timezone, spec_version, graph_json
 			 FROM routines ORDER BY name ASC`,
 		)
 		.all() as RoutineRow[];
@@ -144,7 +159,7 @@ export function getRoutine(routineId: string): Routine | undefined {
 		.query<RoutineRow, [string]>(
 			`SELECT id, name, description, cron, action_kind, action_body, action_cwd, enabled,
 			        created_at, updated_at, last_run_at, next_run_at,
-			        spec_yaml, concurrency, budget_json, tags, timezone, spec_version, graph_json
+			        spec_yaml, spec_toml, concurrency, budget_json, tags, timezone, spec_version, graph_json
 			 FROM routines WHERE id = ?`,
 		)
 		.get(routineId) as RoutineRow | null;
@@ -189,7 +204,7 @@ export function createRoutine(input: {
 }
 
 /**
- * Create a V1 (multi-step) routine. Stores spec_yaml as the source of truth;
+ * Create a V1 (multi-step) routine. Stores spec_toml as the source of truth;
  * derives `cron` from the first cron trigger (for V0-style queries that look
  * at the column directly), and stuffs concurrency/budget/timezone/tags into
  * their dedicated columns.
@@ -197,7 +212,7 @@ export function createRoutine(input: {
 export function createV1Routine(input: {
 	name: string;
 	description?: string;
-	specYaml: string;
+	specToml: string;
 	spec: import("@npi-deck/protocol").RoutineSpec;
 	enabled?: boolean;
 }): Routine {
@@ -232,7 +247,7 @@ export function createV1Routine(input: {
 		>(
 			`INSERT INTO routines
 			   (id, name, description, cron, action_kind, action_body, enabled, created_at, updated_at,
-			    spec_yaml, concurrency, budget_json, tags, timezone, spec_version)
+			    spec_toml, concurrency, budget_json, tags, timezone, spec_version)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 		.run(
@@ -247,7 +262,7 @@ export function createV1Routine(input: {
 			input.enabled === false ? 0 : 1,
 			now,
 			now,
-			input.specYaml,
+			input.specToml,
 			concurrency,
 			budgetJson,
 			tags,
@@ -260,7 +275,7 @@ export function createV1Routine(input: {
 }
 
 /**
- * Update a V1 (multi-step) routine. Replaces spec_yaml + derived columns
+ * Update a V1 (multi-step) routine. Replaces spec_toml + derived columns
  * (cron mirror, concurrency, budget_json, tags, timezone) atomically. The
  * `enabled` flag may be patched independently of the spec.
  */
@@ -269,7 +284,7 @@ export function updateV1Routine(
 	patch: {
 		name?: string;
 		description?: string;
-		specYaml?: string;
+		specToml?: string;
 		spec?: import("@npi-deck/protocol").RoutineSpec;
 		enabled?: boolean;
 	},
@@ -278,7 +293,7 @@ export function updateV1Routine(
 	if (!existing) return undefined;
 	if (existing.specVersion !== 1) return undefined;
 	const now = nowIso();
-	if (patch.specYaml !== undefined && patch.spec !== undefined) {
+	if (patch.specToml !== undefined && patch.spec !== undefined) {
 		const spec = patch.spec;
 		const firstCron = spec.trigger.find((t) => "cron" in t) as { cron: string } | undefined;
 		const cron = firstCron?.cron ?? "";
@@ -294,7 +309,7 @@ export function updateV1Routine(
 				unknown,
 				[string, string, string, string, string, string | null, string | null, string | null, number, string, string]
 			>(
-				`UPDATE routines SET name = ?, description = ?, cron = ?, spec_yaml = ?, concurrency = ?,
+				`UPDATE routines SET name = ?, description = ?, cron = ?, spec_toml = ?, concurrency = ?,
 				        budget_json = ?, tags = ?, timezone = ?, enabled = ?, updated_at = ?
 				 WHERE id = ?`,
 			)
@@ -302,7 +317,7 @@ export function updateV1Routine(
 				name,
 				description,
 				cron,
-				patch.specYaml,
+				patch.specToml,
 				concurrency,
 				budgetJson,
 				tags,

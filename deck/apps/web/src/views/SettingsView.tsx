@@ -374,7 +374,7 @@ function MessagingSection() {
 					Use /capture to keep an item unprocessed, /chat for agent conversation, /bind to reuse an existing session,
 					and /sessions search or /resume by title, number or ID for retained chat/topic bindings. /title shows the current title.
 					/new clears only the binding, not the running NeoPi instance.</p>
-				<p className="mt-2">Card properties accept leading YAML front matter or /properties defaults:
+				<p className="mt-2">Card properties accept leading TOML front matter between +++ lines or /properties defaults:
 					read-only, worktree, model, role and custom keys are retained on every decomposed card.
 					Card creation does not itself execute the card. /help lists all commands.</p>
 				<p className="mt-2">Unsupported attachments are not downloaded or processed; captions can still become tasks or explicit chat,
