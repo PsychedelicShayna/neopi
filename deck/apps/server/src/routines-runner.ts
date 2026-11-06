@@ -167,6 +167,7 @@ export class RoutinesRunner {
 			log.warn(`fire: routine ${routineId} not found`);
 			return;
 		}
+		if (routine.specImportError) throw new Error(routine.specImportError);
 		if (!routine.enabled && (trigger === "cron" || trigger === "webhook" || trigger === "event")) return;
 
 		if (routine.specVersion === 2) {
@@ -407,6 +408,7 @@ export class RoutinesRunner {
 
 /** V2 schedules native event sources only; legacy cron discovery remains unchanged. */
 function collectCronExpressions(routine: Routine): Array<{ expression: string; activation?: GraphActivation }> {
+	if (routine.specImportError) return [];
 	if (routine.specVersion === 2) {
 		return (routine.graph?.nodes ?? [])
 			.filter((node) => node.type === "event.source" && typeof node.config.cron === "string")

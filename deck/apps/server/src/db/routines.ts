@@ -77,7 +77,7 @@ function routineToml(row: RoutineRow): string | undefined {
 	if (row.spec_yaml === null) return undefined;
 	let toml: string;
 	try { toml = importLegacyRoutineYaml(row.spec_yaml); } catch {
-		throw new Error(`Legacy routine ${row.id} cannot be imported losslessly; original spec_yaml is unchanged`);
+		return undefined;
 	}
 	getDb().query("UPDATE routines SET spec_toml = ? WHERE id = ? AND spec_toml IS NULL").run(toml, row.id);
 	logger("routine-toml-import").info(`Imported legacy routine ${row.id} to spec_toml; spec_yaml preserved`);
@@ -103,7 +103,12 @@ function rowToRoutine(r: RoutineRow): Routine {
 	if (r.action_cwd !== null) out.actionCwd = r.action_cwd;
 	if (r.last_run_at !== null) out.lastRunAt = r.last_run_at;
 	if (r.next_run_at !== null) out.nextRunAt = r.next_run_at;
-	if (specVersion === 1) out.specToml = routineToml(r);
+	if (specVersion === 1) {
+		out.specToml = routineToml(r);
+		if (out.specToml === undefined && r.spec_yaml !== null) {
+			out.specImportError = `Legacy routine ${r.id} cannot be imported losslessly; original spec_yaml is unchanged. Replace its source with valid TOML to repair it.`;
+		}
+	}
 	if (r.graph_json !== null) out.graph = JSON.parse(r.graph_json) as RoutineGraph;
 	if (r.timezone !== null) out.timezone = r.timezone;
 	if (r.budget_json !== null) {

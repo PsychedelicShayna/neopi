@@ -322,6 +322,7 @@ export function buildRoutinesRouter(runner: RoutinesRunner): Hono {
 		const id = c.req.param("id");
 		const r = getRoutine(id);
 		if (!r) return c.json({ error: "not found" }, 404);
+		if (r.specImportError) return c.json({ error: r.specImportError }, 409);
 		if (r.specVersion === 2) {
 			const validation = runner.graphRegistry.validate(r.graph);
 			if (!validation.valid) return c.json({ error: "invalid graph", details: validation.errors }, 400);

@@ -881,10 +881,41 @@ test("unsupported legacy values fail explicitly without overwriting original or 
 		getDb().query("UPDATE routines SET spec_version = 1, spec_yaml = ? WHERE id = ?").run(unsupported, legacy.id);
 		closeDb();
 		openDb({ path: path.join(home, "deck.db") });
-		expect(() => getRoutine(legacy.id)).toThrow("Legacy routine");
+		expect(getRoutine(legacy.id)?.specImportError).toContain("cannot be imported losslessly");
 		const row = getDb().query<{ spec_yaml: string; spec_toml: string | null }, [string]>(
 			"SELECT spec_yaml, spec_toml FROM routines WHERE id = ?",
 		).get(legacy.id)!;
 		expect(row).toEqual({ spec_yaml: unsupported, spec_toml: null });
 	}
+});
+
+test("unimportable legacy routines stay visible and isolated from listing, startup and inbox transactions", async () => {
+	const run = setup();
+	const bad = createRoutine({ name: "blocked", cron: "* * * * *", actionKind: "script", actionBody: "", enabled: true });
+	const original = 'name: blocked\ntrigger: [{manual: {}}]\nsteps: [{id: blocked, type: transform, body: "\\f"}]\n';
+	getDb().query("UPDATE routines SET spec_version = 1, spec_yaml = ? WHERE id = ?").run(original, bad.id);
+	const spec: RoutineSpec = { name: "healthy", trigger: [{ manual: {} }], steps: [{ id: "answer", type: "transform", body: "return 42;" }] };
+	const healthy = createV1Routine({ name: spec.name, description: "", specToml: stringifySpec(spec), spec, enabled: true });
+	const api = buildRoutinesRouter(run);
+	const response = await api.request("/routines");
+	expect(response.status).toBe(200);
+	const listing = await response.text();
+	expect(listing).toContain(bad.id);
+	expect(listing).toContain("specImportError");
+	expect(getRoutine(bad.id)?.specImportError).toContain("cannot be imported losslessly");
+	expect(() => run.start()).not.toThrow();
+	const inbox = createInbox({ kind: "capture", title: "unrelated write" });
+	expect(getInbox(inbox.id)?.title).toBe("unrelated write");
+	await expect(run.fire(bad.id)).rejects.toThrow("cannot be imported losslessly");
+	expect((await api.request(`/routines/${bad.id}/run`, { method: "POST" })).status).toBe(409);
+	expect(listRuns(bad.id)).toEqual([]);
+	await run.fire(healthy.id);
+	expect(listRuns(healthy.id)[0]?.exitCode).toBe(0);
+	expect(getDb().query<{ spec_yaml: string; spec_toml: string | null }, [string]>("SELECT spec_yaml, spec_toml FROM routines WHERE id = ?").get(bad.id)).toEqual({ spec_yaml: original, spec_toml: null });
+	const repaired = await api.request(`/routines/${bad.id}`, request({ specToml: stringifySpec({ ...spec, name: "blocked" }) }, "PATCH"));
+	expect(repaired.status).toBe(200);
+	expect(getRoutine(bad.id)?.specImportError).toBeUndefined();
+	await run.fire(bad.id);
+	expect(listRuns(bad.id)[0]?.exitCode).toBe(0);
+	expect(getDb().query<{ spec_yaml: string }, [string]>("SELECT spec_yaml FROM routines WHERE id = ?").get(bad.id)?.spec_yaml).toBe(original);
 });

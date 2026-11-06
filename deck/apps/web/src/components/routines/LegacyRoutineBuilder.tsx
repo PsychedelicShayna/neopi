@@ -55,7 +55,44 @@ import type { RoutineBuilderProps } from "./RoutineBuilder";
 
 type Tab = "steps" | "canvas" | "triggers" | "settings" | "spec";
 
-export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view, editorRef, onStateChange }: RoutineBuilderProps) {
+export function LegacyRoutineBuilder(props: RoutineBuilderProps) {
+	if (props.routine?.specImportError) return <RoutineImportRepair key={props.routine.id} {...props} routine={props.routine} />;
+	return <EditableLegacyRoutineBuilder {...props} />;
+}
+
+function RoutineImportRepair({ routine, onSaved, onError, editorRef, onStateChange }: RoutineBuilderProps & { routine: Routine }) {
+	const [source, setSource] = useState("");
+	const [busy, setBusy] = useState(false);
+	const validation = useMemo(() => parseSpec(source), [source]);
+	async function save() {
+		if (!validation.ok || !validation.spec) return;
+		setBusy(true);
+		try {
+			onSaved(await routinesApi.update(routine.id, { name: validation.spec.name, specToml: source }));
+		} catch (error) {
+			onError(String(error));
+		} finally {
+			setBusy(false);
+		}
+	}
+	useImperativeHandle(editorRef, () => ({
+		save,
+		updateSpec: spec => setSource(stringifySpec(spec)),
+		updateMetadata: value => { if (validation.ok && validation.spec) setSource(stringifySpec({ ...validation.spec, ...value })); },
+	}));
+	useEffect(() => {
+		onStateChange?.({ name: validation.spec?.name ?? routine.name, spec: validation.spec, dirty: source.length > 0, canSave: !busy && validation.ok });
+	}, [source, busy, validation, routine.name, onStateChange]);
+	return <section className="flex min-h-0 flex-1 flex-col gap-3">
+		<div role="alert" className="neo-source-problems">{routine.specImportError}</div>
+		<p>Execution and form editing are unavailable. Enter a complete TOML replacement to repair this routine. Its original YAML remains stored unchanged.</p>
+		<textarea aria-label="Routine TOML repair source" className="field neo-mono min-h-64 flex-1" value={source} onChange={event => setSource(event.target.value)} />
+		{source && !validation.ok ? <div role="status">{validation.tomlError?.message ?? validation.schemaErrors?.map(error => `${error.path}: ${error.message}`).join("; ")}</div> : null}
+		<button type="button" className="neo-btn" disabled={busy || !validation.ok} onClick={() => void save()}>Save TOML replacement</button>
+	</section>;
+}
+
+function EditableLegacyRoutineBuilder({ routine, onSaved, onError, embedded, view, editorRef, onStateChange }: RoutineBuilderProps) {
 	const legacy = routine?.specVersion === 0;
 	const initialSpec = useMemo<RoutineSpec>(() => {
 		if (routine?.specVersion === 0) {
@@ -411,6 +448,7 @@ export function LegacyRoutineBuilder({ routine, onSaved, onError, embedded, view
 					: "mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden"
 			}
 		>
+			{routine?.specImportError ? <div role="alert" className="neo-source-problems">{routine.specImportError}</div> : null}
 			{!embedded ? <div className="flex shrink-0 flex-wrap items-start gap-3 px-1 pb-3">
 				<div className="min-w-0 flex-1">
 					<Field label="Name" error={nameError}>

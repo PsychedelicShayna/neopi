@@ -1828,6 +1828,8 @@ export interface Routine {
 	concurrency: RoutineConcurrency;
 	/** Full V1 spec source-of-truth. NULL/undefined for V0 routines. */
 	specToml?: string;
+	/** Isolated legacy conversion failure; visible but never executable. Original source remains stored. */
+	specImportError?: string;
 	/** Native V2 source of truth; never derived from or rendered into TOML. */
 	graph?: RoutineGraph;
 	/** Optional runtime budget caps. */
