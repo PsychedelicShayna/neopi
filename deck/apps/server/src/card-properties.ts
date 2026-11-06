@@ -1,15 +1,12 @@
 import { importLegacyYaml, parseSettingsToml, patchSettingsToml, stringifySettingsToml } from "./settings-toml.ts";
 import { preserveLegacyYamlComments } from "./legacy-yaml-import.ts";
+import { renderTomlFrontmatter, splitTomlFrontmatter } from "@npi-deck/protocol/toml-frontmatter";
 
 /** Card.body is the canonical property store. Routing never comes from metadata. */
 export function cardFrontmatter(body: string): { properties: Record<string, unknown>; content: string; header?: string } {
-	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(body);
 	if (/^---\r?\n/.test(body)) throw new Error("Legacy card metadata must be imported before use.");
-	if (!match) {
-		if (/^\+\+\+(?:\r?\n|$)/.test(body)) throw new Error("Close card front matter with a +++ line.");
-		return { properties: {}, content: body };
-	}
-	return { properties: parseSettingsToml(match[1]!), content: body.slice(match[0].length), header: match[1] };
+	const parsed = splitTomlFrontmatter(body, parseSettingsToml);
+	return parsed ?? { properties: {}, content: body };
 }
 
 /** One-way import only. Callers must retain the original before persisting this result. */
@@ -18,7 +15,8 @@ export function importLegacyCardBody(body: string, filePath?: string): string {
 	const match = /^---\r?\n((?:[\s\S]*?\r?\n)?)---(?:\r?\n|$)/.exec(body);
 	if (!match) throw new Error("Close legacy card front matter with a --- line.");
 	const properties = importLegacyYaml(match[1]!, filePath);
-	return `+++\n${preserveLegacyYamlComments(match[1]!, stringifySettingsToml(properties)).trimEnd()}\n+++\n${body.slice(match[0].length)}`;
+	const header = preserveLegacyYamlComments(match[1]!, stringifySettingsToml(properties));
+	return renderTomlFrontmatter(header, body.slice(match[0].length), parseSettingsToml);
 }
 
 /** Raw native TOML is untouched unless a property patch is supplied. */
@@ -28,7 +26,7 @@ export function withCardProperties(body: string, properties?: Record<string, unk
 	if (!Object.keys(properties).length) return body;
 	const parsed = cardFrontmatter(body);
 	const header = patchSettingsToml(parsed.header ?? "", { ...parsed.properties, ...properties });
-	return `+++\n${header.trimEnd()}\n+++\n${parsed.content}`;
+	return renderTomlFrontmatter(header, parsed.content, parseSettingsToml);
 }
 
 export function cardExecutionProperties(body: string): { readOnly: boolean; worktree?: string; model?: string; role?: string } {

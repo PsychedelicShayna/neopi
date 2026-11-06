@@ -1,5 +1,6 @@
 import { createSettingsTomlCodec } from "@npi-deck/protocol/settings-toml-codec";
 import { parse } from "smol-toml";
+import { renderTomlFrontmatter, splitTomlFrontmatter } from "@npi-deck/protocol/toml-frontmatter";
 
 const { parseSettingsToml, patchSettingsToml } = createSettingsTomlCodec(parse);
 
@@ -8,16 +9,13 @@ export interface CardPropertyDocument extends CardBodyParts { properties: Record
 
 /** Owned card metadata is TOML. Legacy YAML is imported by the server, never the browser. */
 export function cardBodyParts(body: string): CardBodyParts {
-	if (/^---\r?\n/.test(body)) throw new Error("Legacy card metadata must be imported by the server before editing.");
-	if (!/^\+\+\+\r?\n/.test(body)) return { header: "", content: body };
-	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(body);
-	if (!match) throw new Error("The card TOML frontmatter has no closing +++ delimiter.");
-	return { header: match[1]!, content: body.slice(match[0].length) };
+	const { header, content } = cardPropertyDocument(body);
+	return { header, content };
 }
 
 export function cardPropertyDocument(body: string): CardPropertyDocument {
-	const parts = cardBodyParts(body);
-	return { ...parts, properties: parseSettingsToml(parts.header) };
+	if (/^---\r?\n/.test(body)) throw new Error("Legacy card metadata must be imported by the server before editing.");
+	return splitTomlFrontmatter(body, parseSettingsToml) ?? { header: "", content: body, properties: {} };
 }
 
 export function setCardBodyContent(body: string, content: string): string {
@@ -32,5 +30,5 @@ export function setCardBodyProperty(body: string, key: string, value: string | b
 	if (value === undefined) delete next[key];
 	else Object.defineProperty(next, key, { value, enumerable: true, writable: true, configurable: true });
 	const patched = patchSettingsToml(header, next);
-	return `+++\n${patched.trimEnd()}\n+++\n${content}`;
+	return renderTomlFrontmatter(patched, content, parseSettingsToml);
 }

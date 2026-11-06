@@ -5,6 +5,7 @@ import * as path from "node:path";
 
 import { broadcastBus, type BroadcastFrame } from "./broadcast-bus.ts";
 import { KbService } from "./kb-service.ts";
+import { withCardProperties } from "./card-properties.ts";
 import { startKbWatcher } from "./kb-watcher.ts";
 
 let root: string;
@@ -333,4 +334,32 @@ describe("native TOML frontmatter and non-destructive YAML import", () => {
 		expect(readFileSync(path.join(root, "notes/example/SKILL.md"), "utf8")).toBe(raw);
 		expect(existsSync(path.join(root, "notes/example/SKILL.toml.md"))).toBe(false);
 	});
+});
+
+test("raw and rich KB writes retain multiline +++ metadata and exact Markdown boundaries", async () => {
+	const raw = "+++\n# preserve exact comment  \nname = \"\"\"Human\n+++\nTitle\"\"\"\nnotes = '''first\n+++\nlast'''\n+++\nBody\n+++\nProse fence\n";
+	const kb = new KbService({ root });
+	expect((await kb.saveFile("notes/multiline.md", raw, "create")).kind).toBe("ok");
+	const note = (await kb.getFile("notes/multiline.md"))!;
+	expect(note.rawContent).toBe(raw);
+	expect(note.body).toBe("Body\n+++\nProse fence\n");
+	expect(note.frontmatter).toEqual({ name: "Human\n+++\nTitle", notes: "first\n+++\nlast" });
+	expect((await kb.getGraph()).nodes.find(node => node.path === "notes/multiline.md")?.title).toBe("Human\n+++\nTitle");
+	const edited = raw.replace("Prose fence", "Edited prose");
+	expect((await kb.saveFile("notes/multiline.md", edited, "update")).kind).toBe("ok");
+	expect((await kb.getFile("notes/multiline.md"))?.rawContent).toBe(edited);
+	const rich = withCardProperties("Rich body\n", { notes: "before\n+++\nafter", custom: { details: "first\n+++\nlast" } });
+	expect((await kb.saveFile("notes/rich.md", rich, "create")).kind).toBe("ok");
+	expect((await kb.getFile("notes/rich.md"))?.frontmatter).toEqual({ notes: "before\n+++\nafter", custom: { details: "first\n+++\nlast" } });
+});
+
+test("legacy KB multiline values containing +++ publish a fully valid native sibling", async () => {
+	const original = "---\nlabel: |-\n  first\n  +++\n  last\n---\noriginal body\n";
+	put("notes/fence.md", original);
+	const kb = new KbService({ root });
+	const imported = (await kb.getFile("notes/fence.md"))!;
+	expect(imported.frontmatter.label).toBe("first\n+++\nlast");
+	expect(imported.body).toBe("original body\n");
+	expect(imported.absolutePath).toBe(path.join(root, "notes/fence.toml.md"));
+	expect(readFileSync(path.join(root, "notes/fence.md"), "utf8")).toBe(original);
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { splitTomlFrontmatter } from "@npi-deck/protocol/toml-frontmatter";
 import { conversationKey, decomposeTask, invokedText, parseCommand, parseProperties, retainedSessions, selectRetainedSession } from "./commands.ts";
 import type { TelegramBridgeConfig } from "./config.ts";
 import type { TelegramMessage } from "./telegram.ts";
@@ -119,4 +120,15 @@ describe("retained session selection", () => {
 		expect(() => selectRetainedSession(sessions, "3")).toThrow("retained");
 		expect(() => selectRetainedSession([{ ...sessions[0]! }, { ...sessions[1]!, title: "Routing" }], "Routing")).toThrow("More than one");
 	});
+});
+
+test("Telegram raw and default properties retain multiline fence-shaped string data", () => {
+	const raw = "+++\n# retained\nnotes = \"\"\"before\n+++\nafter\"\"\"\n+++\nInvestigate\n";
+	const card = decomposeTask(raw)[0]!;
+	const parsed = splitTomlFrontmatter(card.body, parseProperties)!;
+	expect(parsed.properties.notes).toBe("before\n+++\nafter");
+	expect(parsed.header).toContain("# retained\n");
+	expect(parsed.content.trim()).toBe("Investigate");
+	const rich = decomposeTask("Investigate", { notes: "before\n+++\nafter" })[0]!;
+	expect(splitTomlFrontmatter(rich.body, parseProperties)?.properties.notes).toBe("before\n+++\nafter");
 });

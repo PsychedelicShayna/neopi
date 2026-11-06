@@ -105,7 +105,7 @@ function tomlString(value: string, multiline = true): string {
 			.split("\t")
 			.map(part => JSON.stringify(part).slice(1, -1))
 			.join("\t")}"`;
-	if (multiline && value.includes("\n") && !value.startsWith("\n")) {
+	if (multiline && value.includes("\n") && !value.startsWith("\n") && !/^\+\+\+\r?$/m.test(value)) {
 		return `"""${value
 			.split("\n")
 			.map(line => quote(line).slice(1, -1))
@@ -501,6 +501,7 @@ function* tomlStatements(source: string): Generator<string> {
 	}
 	if (start < source.length) yield source.slice(start);
 }
+
 
 
 return { parseSettingsToml, stringifySettingsToml, patchSettingsToml, stringifyTomlValue };

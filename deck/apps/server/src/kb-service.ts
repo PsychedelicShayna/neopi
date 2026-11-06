@@ -31,6 +31,7 @@ import { createInterface } from "node:readline";
 
 import { importLegacyYaml, parseSettingsToml, publishTomlImport } from "./settings-toml.ts";
 import { importLegacyCardBody } from "./card-properties.ts";
+import { splitTomlFrontmatter } from "@npi-deck/protocol/toml-frontmatter";
 
 import type {
 	KbBacklink,
@@ -1203,7 +1204,17 @@ async function readHeader(abs: string): Promise<{ frontmatter: Record<string, un
 			} else if (line === fence) {
 				if (fence === "---" && isExternalSkill(abs)) return { frontmatter: parseFrontmatter(`${header.join("\n")}\n---\n`, abs).frontmatter, absPath: abs };
 				if (/\.toml\.md$/i.test(abs) && fence === "---") return { frontmatter: {}, absPath: abs };
-				if (fence === "+++") return { frontmatter: parseFrontmatter(`${header.join("\n")}\n+++\n`).frontmatter, absPath: abs };
+				if (fence === "+++") {
+					try {
+						const parsed = splitTomlFrontmatter(`${header.join("\n")}\n+++\n`, parseSettingsToml)!;
+						return { frontmatter: parsed.properties, absPath: abs };
+					} catch {
+						// A fence-shaped line inside a multiline value leaves an incomplete
+						// TOML prefix. Keep reading until an actual complete header closes.
+						header.push(line);
+						continue;
+					}
+				}
 				// Publish a complete same-mode sibling without ever replacing a winner.
 				const canonical = abs.replace(/(\.md)$/i, ".toml$1");
 				const raw = await readFile(abs, "utf8");
@@ -1245,13 +1256,11 @@ function parseFrontmatter(text: string, filePath?: string): {
 		catch (err) { return { frontmatter: { _raw: legacy[1]! }, frontmatterError: (err as Error).message, body }; }
 	}
 	if (!/^\+\+\+\r?\n/.test(text)) return { frontmatter: {}, body: text };
-	const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(text);
-	if (!match) return { frontmatter: {}, frontmatterError: "Close TOML frontmatter with a +++ line.", body: text };
-	const body = text.slice(match[0].length);
 	try {
-		return { frontmatter: parseSettingsToml(match[1]!), body };
+		const parsed = splitTomlFrontmatter(text, parseSettingsToml)!;
+		return { frontmatter: parsed.properties, body: parsed.content };
 	} catch (err) {
-		return { frontmatter: { _raw: match[1]! }, frontmatterError: (err as Error).message, body };
+		return { frontmatter: { _raw: text }, frontmatterError: (err as Error).message, body: text };
 	}
 }
 

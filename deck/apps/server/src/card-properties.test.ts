@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { Task } from "@npi-deck/protocol";
-import { cardExecutionProperties, cardFrontmatter, withCardProperties } from "./card-properties.ts";
+import { cardExecutionProperties, cardFrontmatter, importLegacyCardBody, withCardProperties } from "./card-properties.ts";
 import { closeDb, getDb, openDb } from "./db/index.ts";
 import { createInbox } from "./db/inbox.ts";
 import { createTask, deleteTask, getTask, listTasks, updateTask } from "./db/tasks.ts";
@@ -114,4 +114,33 @@ test("malformed legacy DB metadata retains its original and cannot execute", () 
  expect(getTask(task.id)?.body).toBe(original);
  expect(() => cardExecutionProperties(original)).toThrow("imported");
  expect(getDb().query<{ body: string }, [string]>("SELECT body FROM card_legacy_originals WHERE task_id = ?").get(task.id)?.body).toBe(original);
+});
+
+test("raw multiline TOML fence-shaped lines remain metadata across loading and property patches", () => {
+ const raw = "+++\n# keep exact comment  \nnotes = \"\"\"before\n+++\nafter\"\"\"\nliteral = '''first\n+++\nlast'''\n+++\nBody\n+++\nBody fence\n";
+ const parsed = cardFrontmatter(raw);
+ expect(parsed.properties).toEqual({ notes: "before\n+++\nafter", literal: "first\n+++\nlast" });
+ expect(parsed.content).toBe("Body\n+++\nBody fence\n");
+ expect(withCardProperties(raw)).toBe(raw);
+ const patched = withCardProperties(raw, { "read-only": true });
+ expect(patched).toContain("# keep exact comment  \n");
+ expect(cardFrontmatter(patched).properties).toEqual({ ...parsed.properties, "read-only": true });
+ expect(cardFrontmatter(patched).content).toBe(parsed.content);
+});
+
+test("rich property writes and raw database saves round-trip multiline fence data", () => {
+ boot();
+ const text = "before\n+++\nafter\n";
+ const created = createTask({ title: "rich fences", body: "Instructions\n", properties: { custom: { text } } });
+ expect(cardFrontmatter(created.body).properties).toEqual({ custom: { text } });
+ expect(cardFrontmatter(created.body).content).toBe("Instructions\n");
+ const raw = "+++\r\n# retained\r\ntext = \"\"\"before\r\n+++\r\nafter\"\"\"\r\n+++\r\nInstructions\r\n";
+ updateTask(created.id, { body: raw });
+ expect(getTask(created.id)?.body).toBe(raw);
+ expect(cardFrontmatter(raw).content).toBe("Instructions\r\n");
+});
+
+test("legacy card imports safely frame standalone +++ value lines", () => {
+	const legacy = "---\nlabel: |-\n  first\n  +++\n  last\n---\noriginal body\n";
+	expect(cardFrontmatter(importLegacyCardBody(legacy))).toMatchObject({ properties: { label: "first\n+++\nlast" }, content: "original body\n" });
 });

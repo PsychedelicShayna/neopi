@@ -1,4 +1,5 @@
 import { parseSettingsToml, patchSettingsToml } from "../../../server/src/settings-toml.ts";
+import { renderTomlFrontmatter, splitTomlFrontmatter } from "@npi-deck/protocol/toml-frontmatter";
 import type { TelegramMessage } from "./telegram.ts";
 import type { TelegramBridgeConfig } from "./config.ts";
 import type { SessionSummary } from "@npi-deck/protocol";
@@ -87,11 +88,10 @@ export function decomposeTask(text: string, defaults: Record<string, unknown> = 
 	let sourceHeader = "";
 	if (/^---\r?\n/.test(body)) throw new Error("Use +++ TOML front matter for card properties.");
 	if (/^\+\+\+\r?\n/.test(body)) {
-		const match = /^\+\+\+\r?\n((?:[\s\S]*?\r?\n)?)\+\+\+(?:\r?\n|$)/.exec(body);
-		if (!match) throw new Error("Close card front matter with a +++ line.");
-		sourceHeader = match[1]!;
-		properties = { ...defaults, ...parseProperties(sourceHeader) };
-		body = body.slice(match[0].length).trim();
+		const parsed = splitTomlFrontmatter(body, parseProperties)!;
+		sourceHeader = parsed.header;
+		properties = { ...defaults, ...parsed.properties };
+		body = parsed.content.trim();
 	}
 	if (!body) throw new Error("Send a task description after the card properties.");
 	if (properties["read-only"] !== undefined && typeof properties["read-only"] !== "boolean") throw new Error("read-only must be true or false.");
@@ -108,7 +108,7 @@ export function decomposeTask(text: string, defaults: Record<string, unknown> = 
 		body: [...lines.slice(0, list[0]!.index), item.text, ...lines.slice(item.index + 1, list[i + 1]?.index ?? lines.length)].join("\n").trim(),
 	})) : [{ title: body.split("\n")[0]!, body }];
 	const { cwd, stateId, ...metadata } = properties;
-	const header = Object.keys(metadata).length || sourceHeader ? `+++\n${patchSettingsToml(sourceHeader, metadata).trimEnd()}\n+++\n\n` : "";
+	const header = Object.keys(metadata).length || sourceHeader ? renderTomlFrontmatter(patchSettingsToml(sourceHeader, metadata), "\n", parseSettingsToml) : "";
 	return parts.map((part) => ({
 		title: part.title.slice(0, 200), body: `${header}${part.body}`,
 		...(typeof cwd === "string" ? { cwd } : {}),
