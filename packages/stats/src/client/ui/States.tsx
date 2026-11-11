@@ -1,24 +1,27 @@
 import { Inbox, RotateCw, TriangleAlert } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import { useTranslation } from "../i18n";
 
-export function EmptyState({ title = "Nothing here yet", hint }: { title?: ReactNode; hint?: ReactNode }) {
+export function EmptyState({ title, hint }: { title?: ReactNode; hint?: ReactNode }) {
+	const tr = useTranslation();
 	return (
 		<div className="empty">
 			<Inbox size={20} />
-			<div className="empty-title">{title}</div>
+			<div className="empty-title">{title === undefined ? tr("common.empty", "Nothing here yet") : title}</div>
 			{hint !== undefined && <div className="empty-hint">{hint}</div>}
 		</div>
 	);
 }
 
 export function ErrorState({ error, onRetry }: { error: Error | string; onRetry?: () => void }) {
+	const tr = useTranslation();
 	return (
 		<div className="error-state" role="alert">
 			<TriangleAlert size={15} />
 			<span className="error-state-message">{typeof error === "string" ? error : error.message}</span>
 			{onRetry && (
 				<button type="button" className="btn" data-size="sm" data-variant="ghost" onClick={onRetry}>
-					<RotateCw size={13} /> Retry
+					<RotateCw size={13} /> {tr("common.retry", "Retry")}
 				</button>
 			)}
 		</div>
