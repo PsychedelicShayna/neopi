@@ -325,7 +325,9 @@ export function renderRootHelp(
 		lines.push(translate("cli.help.commands", "COMMANDS"));
 		const maxLen = Math.max(...visible.map(([n]) => n.length));
 		for (const [name, command] of visible.sort((a, b) => a[0].localeCompare(b[0]))) {
-			lines.push(`  ${name.padEnd(maxLen + 2)}${command.description ?? ""}`);
+			lines.push(
+				`  ${name.padEnd(maxLen + 2)}${translate(`cli.command.${name}.description`, command.description ?? "")}`,
+			);
 		}
 		lines.push("");
 	}
@@ -386,7 +388,7 @@ function renderCommandBody(
 		const maxLen = Math.max(...argEntries.map(([n]) => n.length));
 		for (const [name, desc] of argEntries) {
 			const parts = [name.toUpperCase().padEnd(maxLen + 2)];
-			if (desc.description) parts.push(desc.description);
+			if (desc.description) parts.push(translate(`cli.argument.${name}.description`, desc.description));
 			if (desc.options) parts.push(`(${[...desc.options].join("|")})`);
 			if (desc.suggestions) parts.push(`(e.g. ${desc.suggestions.join("|")})`);
 			lines.push(`  ${parts.join(" ")}`);
@@ -403,7 +405,10 @@ function renderCommandBody(
 			const charPart = desc.char ? `-${desc.char}, ` : "    ";
 			const namePart = `--${name}`;
 			const typePart = desc.kind === "boolean" ? "" : desc.kind === "integer" ? "=<int>" : "=<value>";
-			formatted.push([`  ${charPart}${namePart}${typePart}`, desc.description ?? ""]);
+			formatted.push([
+				`  ${charPart}${namePart}${typePart}`,
+				translate(`cli.flag.${name}.description`, desc.description ?? ""),
+			]);
 		}
 		const maxLeft = Math.max(...formatted.map(([l]) => l.length));
 		for (const [left, right] of formatted) {
