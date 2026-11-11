@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { DescribeContext, NativeNode } from "../src/native/node";
@@ -84,6 +85,24 @@ describe("short-list native picker search", () => {
 		);
 		return { selector, log };
 	}
+
+	it("updates native picker actions when the language changes", () => {
+		const previous = getLocale();
+		try {
+			setLocale("en");
+			const { selector } = make();
+			expect(sheet(selector.describe(pickerCx)).props.actions?.map(a => a.label)).toEqual(["Select", "Close"]);
+			setLocale("es");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.map(a => a.label)).toEqual(["Seleccionar", "Cerrar"]);
+			selector.getSelectList().handleInput("/");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Volver a la lista");
+			selector.getSelectList().handleInput("h");
+			selector.getSelectList().handleInput("\r");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Borrar búsqueda");
+		} finally {
+			setLocale(previous);
+		}
+	});
 
 	it("shows a short-list filter and leaves it before native close cancels", () => {
 		const { selector, log } = make();
@@ -287,7 +306,7 @@ describe("oauth selector picker", () => {
 		keys: { source: (id: string) => (id === signedIn ? { kind: "oauth" } : undefined) } as never,
 	};
 
-	it("cards with auth-state dots and origin detail; typing keeps the catalogue", () => {
+	it("shows auth-state dots and filters the provider catalogue while typing", () => {
 		const selector = new OAuthSelectorComponent(
 			"login",
 			auth,
@@ -303,11 +322,11 @@ describe("oauth selector picker", () => {
 		expect(first.query).toBe("");
 		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name.slice(0, 3));
-		expect(sheet(selector.describe(pickerCx)).props.order).toEqual(first.order);
+		const live = sheet(selector.describe(pickerCx)).props;
+		expect(live.order).toContain(providers[1]!.id);
+		expect(live.order?.length).toBeLessThan(providers.length);
 		selector.handleInput("\r");
-		const typed = sheet(selector.describe(pickerCx)).props;
-		expect(typed.items).toBe(first.items);
-		expect(typed.order?.length).toBeLessThan(providers.length);
+		expect(sheet(selector.describe(pickerCx)).props.order).toEqual(live.order);
 	});
 
 	it("activate signs in with the clicked provider; close cancels", () => {
