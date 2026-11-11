@@ -2,14 +2,16 @@
  * Coarse-to-fine recall over the derived temporal view.
  *
  * Best-first search with a bounded frontier: each expansion ranks the node's
- * in-scope children and keeps the best `beam` of them (plus near-ties while
- * the frontier bound allows). Nothing already in the frontier is discarded
- * when a branch collapses, so moving to a retained runner-up — a backtrack —
- * falls out of the ordering and is recorded in the trace. Selected atoms are
+ * in-scope children and keeps the best `beam` of them (plus near-ties for
+ * model/lexical rankers while the frontier bound allows). Nothing already in
+ * the frontier is discarded when a branch collapses. Moving to a retained
+ * runner-up — a backtrack — falls out of the ordering and is recorded in the
+ * trace. Selected atoms are
  * resolved against their canonical committed batch before they are returned.
  */
 import * as path from "node:path";
 import { mapWithConcurrencyLimit, Semaphore } from "../../task/parallel";
+import { DEFAULT_RECALL_BRANCH_FLOORS } from "../recall-policy";
 import { localParts, localStamp, spanWithin, type TimeBound, type TimeSpan } from "./calendar";
 import { type CanonicalAtomResult, type ChronicleAtom, readCanonicalAtom } from "./corpus";
 import type { NodeRanker, RankCandidate } from "./rank";
@@ -31,6 +33,7 @@ export const DEFAULT_RECALL_POLICY = {
 	labelShare: 0.5,
 	adjacentShare: 0.5,
 	concurrency: 2,
+	branchFloor: DEFAULT_RECALL_BRANCH_FLOORS,
 };
 
 export type RecallPolicy = typeof DEFAULT_RECALL_POLICY;
@@ -72,6 +75,7 @@ export interface RecallOptions {
 
 export type TraceAction =
 	| "rank"
+	| "prune"
 	| "terminal"
 	| "collapse"
 	| "backtrack"
@@ -148,8 +152,8 @@ export interface RecallResult {
 	/** The one hint that would discriminate best, when ambiguous. */
 	ask?: "time-range" | "adjacent-event";
 	trace: TraceStep[];
-	ranker: "model" | "lexical";
-	/** At least one model-ranked hop fell back to lexical scoring (see trace). */
+	ranker: "model" | "lexical" | "judge";
+	/** At least one ranking or verification request fell back to lexical scoring (see trace). */
 	rankerFallback: boolean;
 	evidenceErrors: { id: string; reason: string }[];
 	view: { root: string; indexedAt?: string; complete: boolean; viewStale: boolean };
@@ -160,6 +164,8 @@ interface ScoredAtom {
 	entry: AtomEntry;
 	terminal: string;
 	score: number;
+	/** Canonical edition used by judge verification, separate from the view's fingerprint. */
+	verifiedFingerprint?: string;
 }
 
 interface SearchState {
@@ -241,6 +247,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 	const budget = Math.max(1, Math.floor(options.budget));
 	const beam = Math.max(1, Math.floor(options.beam));
 	const policy = { ...DEFAULT_RECALL_POLICY, ...options.policy };
+	if (options.ranker.kind === "judge" && !options.ranker.verify) {
+		throw new Error("Chronicle judge recall requires canonical atom verification");
+	}
 
 	const inScopeSpan = (span: TimeSpan): boolean => spanWithin(span, options.from, options.to);
 	const inScopeRef = (ref: ViewChildRef): boolean =>
@@ -453,15 +462,29 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			}
 
 			if (node.atoms) {
-				const entries = node.atoms.filter(inScopeAtom);
-				const scores = await rank(
-					query,
-					entries.map(entry => ({ key: entry.id, label: entry.localTime, text: entry.route })),
-					search,
-					hops,
-					node.key,
-					signal,
-				);
+				const scoped = node.atoms.filter(inScopeAtom);
+				const verified =
+					options.ranker.kind === "judge"
+						? await verifyAtoms(
+								query,
+								scoped.map(entry => ({ entry, terminal: node.key, score: 0 })),
+								search,
+								hops,
+								node.key,
+								signal,
+							)
+						: undefined;
+				const entries = verified ? verified.map(atom => atom.entry) : scoped;
+				const scores = verified
+					? verified.map(atom => atom.score)
+					: await rank(
+							query,
+							entries.map(entry => ({ key: entry.id, label: entry.localTime, text: entry.route })),
+							search,
+							hops,
+							node.key,
+							signal,
+						);
 				trace.push({
 					search,
 					hop: hops,
@@ -478,7 +501,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 					const score = scores[index]!;
 					best = Math.max(best, score);
 					const previous = state.atoms.get(entry.id);
-					if (!previous || previous.score < score) state.atoms.set(entry.id, { entry, terminal: node.key, score });
+					if (!previous || previous.score < score) {
+						state.atoms.set(entry.id, verified?.[index] ?? { entry, terminal: node.key, score });
+					}
 				});
 				if (best < policy.dropRatio * item.score && best < policy.confidence) {
 					lastCollapsed = true;
@@ -517,21 +542,43 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			const ranked = children
 				.map((child, index) => ({ child, score: scores[index]! }))
 				.sort((a, b) => b.score - a.score);
-			for (const { child, score } of ranked) {
+			const eligible =
+				options.ranker.kind === "judge"
+					? ranked.filter(({ child, score }) => score >= policy.branchFloor[child.level])
+					: ranked;
+			if (eligible.length !== ranked.length) {
+				const pruned = ranked.filter(({ child, score }) => score < policy.branchFloor[child.level]);
+				trace.push({
+					search,
+					hop: hops,
+					node: node.key,
+					action: "prune",
+					candidates: pruned.map(({ child, score }) => ({ key: child.key, label: child.label, score })),
+					note: pruned
+						.map(
+							({ child }) => `${child.key}: ${child.level} floor ${policy.branchFloor[child.level].toFixed(2)}`,
+						)
+						.join("; "),
+				});
+			}
+			for (const { child, score } of eligible) {
 				if (child.level !== "group" && search === "query") state.pool.set(child.key, toPeriod(child, score));
 			}
-			const best = ranked[0]!.score;
-			if (best < policy.dropRatio * item.score && best < policy.confidence) {
+			const best = eligible[0]?.score ?? 0;
+			if (eligible.length === 0 || (best < policy.dropRatio * item.score && best < policy.confidence)) {
 				lastCollapsed = true;
 				trace.push({
 					search,
 					hop: hops,
 					node: node.key,
 					action: "collapse",
-					note: `best child ${best.toFixed(2)}`,
+					note: eligible.length === 0 ? "all children below their branch floors" : `best child ${best.toFixed(2)}`,
 				});
 			}
-			const kept = ranked.filter((entry, index) => index < beam || best - entry.score <= policy.tieMargin);
+			const kept =
+				options.ranker.kind === "judge"
+					? eligible.slice(0, beam)
+					: eligible.filter((entry, index) => index < beam || best - entry.score <= policy.tieMargin);
 			for (const { child, score } of kept) frontier.push({ key: child.key, score, parent: node.key, ref: child });
 			frontier.sort((a, b) => b.score - a.score);
 			const bound = beam * policy.frontierFactor;
@@ -587,18 +634,20 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		entry: AtomEntry,
 		terminal: string,
 		search: "query" | "hint",
+		signal = options.signal,
 	): Promise<ChronicleAtom | null> => {
 		let resolved: CanonicalAtomResult;
 		try {
-			options.signal?.throwIfAborted();
+			signal?.throwIfAborted();
 			resolved = await readCanonicalAtom(entry);
-			options.signal?.throwIfAborted();
+			signal?.throwIfAborted();
 		} catch (error) {
 			resolved = { ok: false, reason: error instanceof Error ? error.message : String(error) };
 		}
-		options.signal?.throwIfAborted();
+		signal?.throwIfAborted();
 		if (!resolved.ok) {
 			viewStale = true;
+			if (options.ranker.kind === "judge") evidenceErrors.push({ id: entry.id, reason: resolved.reason });
 			trace.push({
 				search,
 				hop: 0,
@@ -618,6 +667,47 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 			return null;
 		}
 		return current;
+	};
+	/**
+	 * Full canonical evidence never goes through the hop-clipping route ranker.
+	 * Bound the full-text wave and share slots with both concurrent descents.
+	 */
+	const verifyAtoms = async (
+		query: string,
+		atoms: ScoredAtom[],
+		search: "query" | "hint",
+		hop: number,
+		key: string,
+		signal = options.signal,
+	): Promise<ScoredAtom[]> => {
+		const verified = await mapWithConcurrencyLimit(
+			atoms,
+			policy.concurrency,
+			async (atom, _index, signal) => {
+				await rankSlots.acquire(signal);
+				try {
+					const current = await revalidate(atom.entry, atom.terminal, search, signal);
+					if (!current) return null;
+					signal.throwIfAborted();
+					const outcome = await options.ranker.verify!(
+						query,
+						[{ key: current.id, label: current.title, text: current.body }],
+						signal,
+					);
+					signal.throwIfAborted();
+					if (outcome.fallback) {
+						rankerFallback = true;
+						trace.push({ search, hop, node: key, action: "ranker-fallback", note: outcome.fallback });
+					}
+					return { ...atom, score: outcome.scores[0] ?? 0, verifiedFingerprint: current.fingerprint };
+				} finally {
+					rankSlots.release();
+				}
+			},
+			signal,
+		);
+		signal?.throwIfAborted();
+		return verified.results.filter((atom): atom is ScoredAtom & { verifiedFingerprint: string } => atom != null);
 	};
 	const query = boundQuery(options.query, "query");
 	const searches: { query: string; search: "query" | "hint" }[] = [{ query, search: "query" }];
@@ -642,8 +732,9 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		let anchorTime = anchor ? Date.parse(anchor.entry.eventTime) : 0;
 		if (anchor && anchor.score >= policy.atomMin) {
 			const current = await revalidate(anchor.entry, anchor.terminal, "hint");
-			if (current) anchorTime = Date.parse(current.eventTime);
-			else anchor = undefined;
+			if (current && (options.ranker.kind !== "judge" || current.fingerprint === anchor.verifiedFingerprint)) {
+				anchorTime = Date.parse(current.eventTime);
+			} else anchor = undefined;
 		}
 		if (anchor && anchor.score >= policy.atomMin) {
 			trace.push({
@@ -660,24 +751,29 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 				.sort(
 					(a, b) => Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
 				);
-			const scores = await rank(
-				query,
-				nearby.map(candidate => ({
-					key: candidate.entry.id,
-					label: candidate.entry.localTime,
-					text: candidate.entry.route,
-				})),
-				"hint",
-				0,
-				anchor.terminal,
-			);
-			adjacent = nearby
-				.map((candidate, index) => ({ ...candidate, score: scores[index]! }))
-				.sort(
-					(a, b) =>
-						b.score - a.score ||
-						Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
+			if (options.ranker.kind === "judge") {
+				adjacent = (await verifyAtoms(query, nearby, "hint", 0, anchor.terminal)).filter(
+					candidate => candidate.score >= policy.atomMin,
 				);
+			} else {
+				const scores = await rank(
+					query,
+					nearby.map(candidate => ({
+						key: candidate.entry.id,
+						label: candidate.entry.localTime,
+						text: candidate.entry.route,
+					})),
+					"hint",
+					0,
+					anchor.terminal,
+				);
+				adjacent = nearby.map((candidate, index) => ({ ...candidate, score: scores[index]! }));
+			}
+			adjacent.sort(
+				(a, b) =>
+					b.score - a.score ||
+					Math.abs(Date.parse(a.entry.eventTime) - at) - Math.abs(Date.parse(b.entry.eventTime) - at),
+			);
 			trace.push({
 				search: "hint",
 				hop: 0,
@@ -755,6 +851,19 @@ export async function recallChronicle(options: RecallOptions): Promise<RecallRes
 		const leftWindow = via === "adjacent" && anchor !== undefined && Math.abs(at - anchorWindowCenter) > windowMs;
 		if (!inScopeAtom({ ...current, localTime }) || leftWindow) {
 			trace.push({ search: "query", hop: 0, node: atom.terminal, action: "moved-out-of-scope", note: entry.id });
+			continue;
+		}
+		if (options.ranker.kind === "judge" && current.fingerprint !== atom.verifiedFingerprint) {
+			const reason = "canonical atom changed after judge verification; stale score discarded";
+			viewStale = true;
+			evidenceErrors.push({ id: entry.id, reason });
+			trace.push({
+				search: "query",
+				hop: 0,
+				node: atom.terminal,
+				action: "stale-atom",
+				note: `${entry.id}: ${reason}`,
+			});
 			continue;
 		}
 		const neighbors: RecallNeighbor[] = [];

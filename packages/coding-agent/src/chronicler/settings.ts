@@ -1,5 +1,6 @@
 /** Chronicler settings, in settings-panel order. */
 import { register } from "../config/registry";
+import { DEFAULT_RECALL_BRANCH_FLOORS } from "./recall-policy";
 
 export * from "./capture-settings";
 export * from "./backfill-settings";
@@ -190,14 +191,38 @@ export const cfgChroniclerRecallResults = numberSetting(
 export const cfgChroniclerRecallRanker = register({
 	id: "chronicler.recall.ranker",
 	type: "enum",
-	values: ["model", "lexical"] as const,
+	values: ["model", "lexical", "judge"] as const,
 	default: "model",
 	ui: {
 		tab: "memory",
 		group: "Chronicler",
 		label: "Recall ranker",
 		description:
-			"Rank branches with the chronicler-recall model or deterministic lexical coverage. Model ranking falls back to lexical when unavailable.",
+			"Rank with the chronicler-recall model, judge-role probabilities (including Jev), or lexical coverage. Unavailable ranking falls back to lexical.",
+	},
+});
+export const cfgChroniclerRecallBranchFloor = register({
+	id: "chronicler.recall.branchFloor",
+	type: "record",
+	default: DEFAULT_RECALL_BRANCH_FLOORS,
+	validate(raw) {
+		if (raw === undefined) return;
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+			throw new Error("chronicler.recall.branchFloor must map temporal levels to probabilities");
+		}
+		for (const [level, value] of Object.entries(raw)) {
+			if (
+				!Object.hasOwn(DEFAULT_RECALL_BRANCH_FLOORS, level) ||
+				typeof value !== "number" ||
+				!Number.isFinite(value) ||
+				value < 0 ||
+				value > 1
+			) {
+				throw new Error(
+					"chronicler.recall.branchFloor values must be probabilities from 0 to 1 for known temporal levels",
+				);
+			}
+		}
 	},
 });
 export const cfgChroniclerRecallNeighborhoodMinutes = numberSetting(

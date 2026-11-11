@@ -69,6 +69,7 @@
 			"chronicler.recall.adjacentShare",
 			"chronicler.recall.atomMin",
 			"chronicler.recall.beam",
+			"chronicler.recall.branchFloor",
 			"chronicler.recall.candidatePeriods",
 			"chronicler.recall.cliTraceLimit",
 			"chronicler.recall.concurrency",

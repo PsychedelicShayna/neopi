@@ -10,6 +10,7 @@
 
 ### Added
 
+- Select the `judge` Chronicler recall ranker for Jev-style probability routing, configurable per-level branch floors and complete-atom verification, with explicit lexical fallback and the existing bounded search budgets ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - Run `/chron index` to refresh the current session's captured atoms without replacing other sessions' shared view, or `/chron recall "question"` to dispatch historical recall across sessions; results arrive as background jobs ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - Control Luna with `/chron pause`, `resume`, `blind`, `unblind`, `off`, `on` and `status`; pauses retain her context and catch up, blind spans stay excluded across restarts and backfill, and off requires confirmation. Transition notices default on and can be disabled with `chronicler.notices` ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - `--exit-with-parent` now works for `--mode rpc` / `rpc-ui` (capability `exit_with_parent`): a host-owned process aborts and exits within seconds when its host dies or closes stdin, instead of draining accepted work; the default drain is unchanged ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).
