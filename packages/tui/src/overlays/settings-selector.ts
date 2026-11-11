@@ -225,7 +225,7 @@ class NumericSettingsField extends Container {
 					Number(currentValue) > 0 ? currentValue : "",
 					false,
 					input => {
-						if (input.trim() && !Number.isFinite(Number(input))) throw new Error("Enter a finite number.");
+						if (input.trim() && !Number.isFinite(Number(input))) throw new Error(t("settings.selector.finite_number_error"));
 						onSubmit(input.trim());
 					},
 					onCancel,
@@ -592,13 +592,13 @@ class ProviderLimitsSubmenu extends Container {
 			return {
 				value: provider,
 				label: provider,
-				description: limit === undefined ? "Unlimited" : `Limit: ${limit}`,
+				description: limit === undefined ? t("settings.selector.unlimited") : t("settings.selector.limit", { limit }),
 			};
 		});
 		const clearItem: SelectItem[] =
 			Object.keys(limits).length === 0
 				? []
-				: [{ value: "__clear_all", label: "Clear all limits", description: "Make every provider unlimited" }];
+				: [{ value: "__clear_all", label: t("settings.selector.clear_limits.label"), description: "Make every provider unlimited" }];
 		const items = [...providerItems, ...clearItem];
 		this.#listField = new SelectFormField({
 			theme: formTheme,
@@ -642,11 +642,14 @@ class ProviderLimitsSubmenu extends Container {
 					"Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
 				initialValue: limits[provider]?.toString() ?? undefined,
 				empty: "submit",
-				hint: `  ${editorKey("tui.input.submit")} to save · ${editorKey("tui.select.cancel")} to cancel · Clear field to unset`,
+				hint: t("settings.selector.text_hint", {
+					submit_key: editorKey("tui.input.submit"),
+					cancel_key: editorKey("tui.select.cancel"),
+				}),
 				validate: value => {
 					if (value.trim() === "") return undefined;
 					const limit = Number(value.trim());
-					if (!Number.isFinite(limit) || limit <= 0) return "Limit must be a positive number.";
+					if (!Number.isFinite(limit) || limit <= 0) return t("settings.selector.provider_limit.error");
 					return undefined;
 				},
 				onSubmit: value => {
@@ -656,7 +659,7 @@ class ProviderLimitsSubmenu extends Container {
 						delete next[provider];
 					} else {
 						const limit = Number(trimmed);
-						if (!Number.isFinite(limit) || limit <= 0) throw new Error("Limit must be a positive number.");
+						if (!Number.isFinite(limit) || limit <= 0) throw new Error(t("settings.selector.provider_limit.error"));
 						next[provider] = Math.max(1, Math.floor(limit));
 					}
 					const normalized = this.#settings.validateProviderLimits(next);
@@ -1961,7 +1964,7 @@ export class SettingsSelectorComponent implements Component {
 		if (def.path === "composer.shape") return getComposerShapeOptions();
 		if (def.customInput)
 			return [
-				{ value: CUSTOM_NUMBER_OPTION, label: "Custom...", description: "Type an arbitrary number" },
+				{ value: CUSTOM_NUMBER_OPTION, label: t("settings.selector.custom.label"), description: t("settings.selector.custom.description") },
 				...def.options,
 			];
 		return def.options;
@@ -2136,7 +2139,7 @@ export class SettingsSelectorComponent implements Component {
 	#formatProviderLimitsValue(value: unknown): string {
 		const limits = this.#context.settings.normalizeProviderLimits(value);
 		const entries = Object.entries(limits).sort(([a], [b]) => a.localeCompare(b));
-		if (entries.length === 0) return "Unlimited";
+		if (entries.length === 0) return t("settings.selector.unlimited");
 		return entries.map(([provider, limit]) => `${provider}: ${limit}`).join(", ");
 	}
 
@@ -2306,7 +2309,7 @@ export class SettingsSelectorComponent implements Component {
 		if (this.#callbacks.getStatusLinePreview) {
 			return this.#callbacks.getStatusLinePreview();
 		}
-		return theme.fg("dim", "(preview not available)");
+		return theme.fg("dim", t("settings.selector.preview_unavailable"));
 	}
 
 	/**

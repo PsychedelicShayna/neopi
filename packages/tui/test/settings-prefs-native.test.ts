@@ -411,6 +411,40 @@ describe("settings as a native prefs page", () => {
 		},
 	);
 
+	it("shows localized numeric validation without accepting an invalid setting", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const path = "compaction.thresholdTokens";
+			const entry: SettingsDisplayEntry = {
+				path,
+				type: "number",
+				defaultValue: -1,
+				ui: {
+					tab: "context",
+					label: "Token budget",
+					description: "Fixed token budget",
+					customInput: true,
+					options: [{ value: "default", label: "Default" }],
+				},
+			};
+			const { selector, values } = harness({}, { entries: [entry] });
+			send(selector, { type: "action", key: "", act: "page", value: "context", mods: [] });
+			send(selector, { type: "change", key: "", item: path, value: "__custom_number__" });
+			selector.handleInput("invalid");
+			selector.handleInput(ENTER);
+			expect(Bun.stripANSI(selector.render(180).join("\n"))).toContain("Ingresa un número finito.");
+			expect(values.get(path)).toBe(-1);
+			selector.handleInput("\x01");
+			selector.handleInput("\x0b");
+			selector.handleInput("120000");
+			selector.handleInput(ENTER);
+			expect(values.get(path)).toBe(120000);
+		} finally {
+			setLocale(previous);
+		}
+	});
+
 	it("shows the text editor's draft and cursor while the keys edit it, and submits a pointer change", () => {
 		const { selector, values } = harness();
 		send(selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });
