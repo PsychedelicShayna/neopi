@@ -1,6 +1,26 @@
 import "@oh-my-pi/pi-utils/env";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { logger } from "@oh-my-pi/pi-utils";
 import { APP_NAME, CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { setLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { Settings } from "../config/settings";
+import { cfgLanguage } from "../modes/settings";
+
+/** Load the configured language without initializing the interactive session or writing settings. */
+export async function initializeHelpLanguage(): Promise<void> {
+	try {
+		const settings = await Settings.loadReadOnly();
+		setLocale(cfgLanguage.get(settings));
+	} catch (error) {
+		logger.warn("Could not load language for CLI help; using English", { error: String(error) });
+		setLocale("en");
+	}
+}
+
+export function translateHelpHeading(key: string, fallback: string): string {
+	const translated = t(key);
+	return translated === key ? fallback : translated;
+}
 
 export function getExtraHelpText(): string {
 	return `${chalk.bold("NeoProxy connection:")}

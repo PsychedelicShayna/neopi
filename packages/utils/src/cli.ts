@@ -302,24 +302,27 @@ export abstract class Command {
 // ---------------------------------------------------------------------------
 
 /** Render full root help: header, default command details, subcommand list. */
-export function renderRootHelp(config: CliConfig<CommandMetadata>): void {
+export function renderRootHelp(
+	config: CliConfig<CommandMetadata>,
+	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
+): void {
 	const { bin, version, commands } = config;
 	const lines: string[] = [];
 	lines.push(`${bin} v${version}\n`);
-	lines.push("USAGE");
+	lines.push(translate("cli.help.usage", "USAGE"));
 	lines.push(`  $ ${bin} [COMMAND]\n`);
 
 	// Show the default command's flags/args/examples inline.
 	// The default command is the one marked hidden (it's the implicit entry point).
 	const defaultCmd = [...commands.values()].find(command => command.hidden);
 	if (defaultCmd) {
-		renderCommandBody(lines, defaultCmd);
+		renderCommandBody(lines, defaultCmd, translate);
 	}
 
 	// List visible subcommands
 	const visible = [...commands.entries()].filter(([, C]) => !C.hidden);
 	if (visible.length > 0) {
-		lines.push("COMMANDS");
+		lines.push(translate("cli.help.commands", "COMMANDS"));
 		const maxLen = Math.max(...visible.map(([n]) => n.length));
 		for (const [name, command] of visible.sort((a, b) => a[0].localeCompare(b[0]))) {
 			lines.push(`  ${name.padEnd(maxLen + 2)}${command.description ?? ""}`);
@@ -368,14 +371,18 @@ export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor): vo
 	process.stdout.write(lines.join("\n"));
 }
 
-function renderCommandBody(lines: string[], command: CommandMetadata): void {
+function renderCommandBody(
+	lines: string[],
+	command: CommandMetadata,
+	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
+): void {
 	const argDefs = command.args ?? {};
 	const flagDefs = command.flags ?? {};
 
 	// Arguments
 	const argEntries = Object.entries(argDefs);
 	if (argEntries.length > 0) {
-		lines.push("ARGUMENTS");
+		lines.push(translate("cli.help.arguments", "ARGUMENTS"));
 		const maxLen = Math.max(...argEntries.map(([n]) => n.length));
 		for (const [name, desc] of argEntries) {
 			const parts = [name.toUpperCase().padEnd(maxLen + 2)];
@@ -390,7 +397,7 @@ function renderCommandBody(lines: string[], command: CommandMetadata): void {
 	// Flags
 	const flagEntries = Object.entries(flagDefs);
 	if (flagEntries.length > 0) {
-		lines.push("FLAGS");
+		lines.push(translate("cli.help.flags", "FLAGS"));
 		const formatted: [string, string][] = [];
 		for (const [name, desc] of flagEntries) {
 			const charPart = desc.char ? `-${desc.char}, ` : "    ";
@@ -407,7 +414,7 @@ function renderCommandBody(lines: string[], command: CommandMetadata): void {
 
 	// Examples
 	if (command.examples && command.examples.length > 0) {
-		lines.push("EXAMPLES");
+		lines.push(translate("cli.help.examples", "EXAMPLES"));
 		for (const ex of command.examples) {
 			for (const line of ex.split("\n")) {
 				lines.push(`  ${line}`);
