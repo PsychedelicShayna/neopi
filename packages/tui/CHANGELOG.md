@@ -4,7 +4,7 @@
 
 ### Added
 
-- Spanish language selection now covers supported settings labels, shared menu messages, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
+- Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
 
 - Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
