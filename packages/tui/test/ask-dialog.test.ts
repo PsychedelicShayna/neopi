@@ -441,6 +441,32 @@ describe("AskDialogComponent", () => {
 		expect(onSubmit.mock.calls[0][0].results[1].selectedOptions).toEqual([]);
 	});
 
+	it("warns in Spanish before submitting unanswered questions without changing the answers", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const onSubmit = vi.fn();
+			const component = new AskDialogComponent(
+				[
+					{ id: "q1", question: "First?", options: [{ label: "Original A" }] },
+					{ id: "q2", question: "Second?", options: [{ label: "Original B" }] },
+				],
+				{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() },
+			);
+			component.handleInput(ENTER);
+			component.handleInput(TAB);
+			expect(render(component)).toContain("1 pregunta sin responder");
+			const cx: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+			const native = JSON.stringify(component.describe(cx));
+			expect(native).toContain("1 sin responder");
+			expect(native).toContain("Enviar seguirá enviando el resto");
+			component.handleInput(ENTER);
+			expect(onSubmit.mock.calls[0][0].results.map(result => result.selectedOptions)).toEqual([["Original A"], []]);
+		} finally {
+			setLocale(previous);
+		}
+	});
+
 	it("Esc/cancel fires onCancel", () => {
 		const onCancel = vi.fn();
 		const questions: ExtensionAskDialogQuestion[] = [

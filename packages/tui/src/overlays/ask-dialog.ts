@@ -969,7 +969,7 @@ export class AskDialogComponent implements Component {
 				style: "ring",
 				size: "sm",
 				label: `${Math.ceil(left / 1000)}s`,
-				title: "Answers the recommended option when the time runs out",
+				title: t("tui.ask.timer_recommended"),
 			},
 			undefined,
 			"timer",
@@ -979,7 +979,7 @@ export class AskDialogComponent implements Component {
 	/** Hidden: one row in the composer's place — the countdown, the question clipped to a line, Skip and Show. */
 	#describeHidden(ring: boolean): NativeNode {
 		const question = this.#questions[this.#currentQuestionIndex()];
-		const more = this.#questions.length > 1 ? `  +${this.#questions.length - 1} more` : "";
+		const more = this.#questions.length > 1 ? `  ${t("tui.ask.more", { count: this.#questions.length - 1 })}` : "";
 		const summary = text(
 			[
 				span(`${t("tui.ask.question")}  `, "muted"),
@@ -1081,10 +1081,10 @@ export class AskDialogComponent implements Component {
 		const notice =
 			unanswered > 0
 				? [
-						span(`${unanswered} unanswered`, "warning"),
-						span(` · Submit still sends ${unanswered === this.#questions.length ? "the questions" : "the rest"}`),
+						span(t("tui.ask.unanswered_count", { count: unanswered }), "warning"),
+						span(t(unanswered === this.#questions.length ? "tui.ask.submit_questions" : "tui.ask.submit_rest")),
 					]
-				: [span("All answered · Submit sends them")];
+				: [span(t("tui.ask.all_answered"))];
 		children.push(node("text", { spans: notice, role: "omp.ask.notice" }, undefined, "notice"));
 		const answers: { k: string; v: readonly TspSpan[] }[] = [];
 		for (let index = 0; index < this.#questions.length; index++) {
@@ -1380,7 +1380,7 @@ export class AskDialogComponent implements Component {
 	}
 
 	#guardHint(inputGuard: AskDialogInputGuard): string {
-		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
+		return `${editorKeys("tui.select.up", "tui.select.down")} ${t("tui.ask.hint.answer")} · ${inputGuard.hint}`;
 	}
 
 	/** Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to bring it back. */
@@ -1393,13 +1393,13 @@ export class AskDialogComponent implements Component {
 		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
 		const hints: string[] = [];
 		if (blocked && inputGuard) hints.push(this.#guardHint(inputGuard));
-		else if (inputGuard) hints.push("type to write a message");
-		if (show) hints.push(`${show} show`);
-		hints.push(`${editorKey("tui.select.cancel")} cancel`);
+		else if (inputGuard) hints.push(t("tui.ask.hint.type_message"));
+		if (show) hints.push(`${show} ${t("tui.ask.hint.show")}`);
+		hints.push(`${editorKey("tui.select.cancel")} ${t("tui.ask.hint.cancel")}`);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
-		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
+		const label = theme.fg("accent", `${this.#titleText()} ${t("tui.ask.hidden")}`);
 		const question = this.#questions[this.#currentQuestionIndex()];
-		const more = this.#questions.length > 1 ? theme.fg("dim", ` (+${this.#questions.length - 1} more)`) : "";
+		const more = this.#questions.length > 1 ? theme.fg("dim", ` (${t("tui.ask.more", { count: this.#questions.length - 1 })})`) : "";
 		const summary = normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""));
 		const summaryWidth = Math.max(1, width - visibleWidth(label) - visibleWidth(more) - visibleWidth(hint) - 1);
 		const clipped = truncateToWidth(summary, summaryWidth, Ellipsis.Unicode);
@@ -1887,7 +1887,10 @@ export class AskDialogComponent implements Component {
 			allLines.push(
 				theme.fg(
 					"warning",
-					`${unanswered} unanswered question${unanswered === 1 ? "" : "s"}; ${formatKeyHint("enter")} still submits.`,
+					t(unanswered === 1 ? "tui.ask.unanswered_one" : "tui.ask.unanswered_many", {
+						count: unanswered,
+						enter: formatKeyHint("enter"),
+					}),
 				),
 			);
 			allLines.push("");
@@ -1903,7 +1906,7 @@ export class AskDialogComponent implements Component {
 			if (submittedNote?.trim()) {
 				const note = normalizedInlineInput(submittedNote);
 				allLines.push(
-					theme.fg("muted", `   Note: ${truncateToWidth(note, Math.max(1, width - 9), Ellipsis.Unicode)}`),
+					theme.fg("muted", `   ${t("tui.ask.review_note")} ${truncateToWidth(note, Math.max(1, width - 9), Ellipsis.Unicode)}`),
 				);
 			}
 			for (const entry of state.optionNotes) {
