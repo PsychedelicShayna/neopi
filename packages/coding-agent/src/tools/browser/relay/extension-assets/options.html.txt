@@ -16,7 +16,8 @@
 				margin: 1rem 0 0.25rem;
 				font-weight: 600;
 			}
-			input {
+			input,
+			select {
 				width: 100%;
 				padding: 0.4rem 0.5rem;
 				font: inherit;
@@ -40,12 +41,17 @@
 	<body>
 		<h1>NeoPi Browser Relay</h1>
 		<p class="hint">
-			The extension connects to a local <code>npi browser-relay</code> process. Values here must match the flags the
-			relay was started with.
+			<span id="intro-before">The extension connects to a local</span> <code>npi browser-relay</code>
+			<span id="intro-after">process. Values here must match the flags the relay was started with.</span>
 		</p>
-		<label for="port">Relay port</label>
+		<label for="language" id="language-label">Language</label>
+		<select id="language" disabled>
+			<option value="en">English</option>
+			<option value="es">Español</option>
+		</select>
+		<label for="port" id="port-label">Relay port</label>
 		<input id="port" type="number" min="1" max="65535" />
-		<label for="token">Token (optional)</label>
+		<label for="token" id="token-label">Token (optional)</label>
 		<input id="token" type="text" autocomplete="off" />
 		<button id="save">Save</button><span id="status"></span>
 		<script src="options.js"></script>

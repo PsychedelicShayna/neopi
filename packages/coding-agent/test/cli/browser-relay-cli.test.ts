@@ -11,7 +11,12 @@ import { type RelayServer, startRelayServer } from "@oh-my-pi/pi-coding-agent/to
  * Run an installed `background.js` as Chrome would, against the relay on `port`, with `manifest` as what
  * `chrome.runtime.getManifest()` returns. Returns a stop function that keeps the worker from dialing again.
  */
-function runExtensionWorker(script: string, port: number, manifest: object): () => void {
+function runExtensionWorker(
+	script: string,
+	port: number,
+	manifest: object,
+	onStorageListener?: (listener: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void) => void,
+): () => void {
 	let stopped = false;
 	const event = { addListener() {} };
 	const chrome = {
@@ -22,7 +27,7 @@ function runExtensionWorker(script: string, port: number, manifest: object): () 
 				set: () => Promise.resolve(),
 			},
 			session: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
-			onChanged: event,
+			onChanged: { addListener: onStorageListener ?? (() => {}) },
 		},
 		tabs: {
 			query: () => Promise.resolve([]),
@@ -96,5 +101,33 @@ describe("omp browser-relay install", () => {
 		expect(await relayExtensionNotice(`http://127.0.0.1:${port}`)).toContain(
 			`installed by omp 18.6.1; this is omp ${VERSION}`,
 		);
+	});
+
+	it("keeps the relay connected when only the options language changes", async () => {
+		const port = await findFreeCdpPort();
+		const hello = Promise.withResolvers<void>();
+		relay = startRelayServer({
+			port,
+			group: false,
+			log: message => {
+				if (message === "extension connected") hello.resolve();
+			},
+		});
+		let storageChanged: ((changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void) | undefined;
+		stopWorker = runExtensionWorker(
+			relayExtensionFiles(VERSION)["background.js"]!,
+			port,
+			JSON.parse(relayExtensionFiles(VERSION)["manifest.json"]!),
+			listener => {
+				storageChanged = listener;
+			},
+		);
+		await hello.promise;
+		const close = spyOn(WebSocket.prototype, "close");
+		if (!storageChanged) throw new Error("extension did not register its storage listener");
+		storageChanged({ language: { oldValue: "en", newValue: "es" } }, "local");
+		expect(close).not.toHaveBeenCalled();
+		storageChanged({ port: { oldValue: port, newValue: port + 1 } }, "local");
+		expect(close).toHaveBeenCalledTimes(1);
 	});
 });

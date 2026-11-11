@@ -40,6 +40,8 @@ The stats browser client cannot execute Bun's TOML parser. Its initial browser-s
 
 Collaboration guests select English or Spanish independently in their own browser, before or during a session. The preference is stored locally when browser storage is available and is not sent to the host or included in join links; English is the default. Only selected connection and theme controls are translated so far.
 
+The Browser Relay extension has its own English/Spanish choice on its options page because it runs independently of the terminal process. The extension stores this preference locally; connection options and their values are unchanged.
+
 TOML catalogs should be checked at startup/build boundaries for structural validity, but avoid adding runtime parsing per lookup. Any proposed build-time embedding/compiled artifact must be verified against the actual Bun/bundler packaging path before treating it as an implementation constraint.
 
 

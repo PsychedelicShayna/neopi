@@ -318,8 +318,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "omp-relay-keepalive")
     connect();
 });
-chrome.storage.onChanged.addListener((_changes, areaName) => {
-  if (areaName !== "local")
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !changes.port && !changes.token)
     return;
   ws?.close();
   connect();
