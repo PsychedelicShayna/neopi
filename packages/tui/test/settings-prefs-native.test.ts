@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
@@ -265,6 +266,24 @@ describe("settings as a native prefs page", () => {
 		});
 		expect(row(props, "display.risky").warning).toBe("Can get you flagged");
 		expect(props.focus).toBe("theme.dark");
+	});
+
+	it("localizes section labels without changing native focus or setting identities", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const { selector, changes } = harness();
+			expect(prefs(selector).props.sections[0]).toMatchObject({ id: "theme", title: "Tema" });
+			expect(Bun.stripANSI(selector.render(180).join("\n"))).toContain("Tema");
+			selector.handleInput("\t");
+			expect(prefs(selector).props.focus).toBe("theme");
+			selector.handleInput("j");
+			expect(prefs(selector).props.focus).toBe("status-line");
+			send(selector, { type: "change", key: "", item: "display.colorBlind", value: true });
+			expect(changes).toContainEqual(["display.colorBlind", true]);
+		} finally {
+			setLocale(previous);
+		}
 	});
 
 	it("puts the status-line preview after its section on Appearance only", () => {

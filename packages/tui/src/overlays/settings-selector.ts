@@ -734,12 +734,19 @@ class ProviderLimitsSubmenu extends Container {
 	}
 }
 
+/** Translate known section labels without changing the identity used for ordering and history. */
+function settingsGroupLabel(group: string): string {
+	const key = `settings.group.${group}`;
+	const translated = t(key);
+	return translated === key ? group : translated;
+}
+
 /** Stable sidebar width derived from the host's complete schema. */
 function settingsSidebarWidth(entries: readonly SettingsDisplayEntry[]): number {
 	let nameWidth = 0;
 	for (const tab of SETTING_TABS) {
 		for (const def of getSettingsForTab(entries, tab)) {
-			if (def.group) nameWidth = Math.max(nameWidth, visibleWidth(def.group));
+			if (def.group) nameWidth = Math.max(nameWidth, visibleWidth(settingsGroupLabel(def.group)));
 		}
 	}
 	return Math.min(22, nameWidth) + 4;
@@ -1163,12 +1170,15 @@ export class SettingsSelectorComponent implements Component {
 					const def = getSettingDef(entries, item.id);
 					const group = def?.group ?? "General";
 					const id = prefsSectionId(group);
-					return searching && def ? { id: `${def.tab}/${id}`, title: group, page: def.tab } : { id, title: group };
+					const title = settingsGroupLabel(group);
+					return searching && def ? { id: `${def.tab}/${id}`, title, page: def.tab } : { id, title };
 				},
 				item => this.#prefsControl(item.id, item.currentValue),
 			);
 			const at = list.prefsFocus();
-			focus = at.row ?? (at.section ? prefsSectionId(at.section) : null);
+			const focusedDef = at.section ? getSettingDef(entries, list.getSelectedItem()?.id ?? "") : undefined;
+			const focusedGroup = prefsSectionId(focusedDef?.group ?? "General");
+			focus = at.row ?? (at.section ? (searching && focusedDef ? `${focusedDef.tab}/${focusedGroup}` : focusedGroup) : null);
 			editing = list.prefsEditing(id => this.#inlineMenu(id));
 			const open = list.openSubmenu;
 			if (open && !editing) {
@@ -2274,7 +2284,7 @@ export class SettingsSelectorComponent implements Component {
 			const item = this.#defToItem(def);
 			if (!item) continue;
 			if (def.group && def.group !== lastGroup) {
-				items.push({ id: `__heading:${def.group}`, label: def.group, currentValue: "", heading: true });
+				items.push({ id: `__heading:${def.group}`, label: settingsGroupLabel(def.group), currentValue: "", heading: true });
 				lastGroup = def.group;
 			}
 			items.push(item);
