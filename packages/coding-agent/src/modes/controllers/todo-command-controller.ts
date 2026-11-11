@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
@@ -410,7 +411,7 @@ export class TodoCommandController {
 		const env = this.ctx.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.ctx.showWarning(t("interactive.editor.unconfigured"));
 			return;
 		}
 

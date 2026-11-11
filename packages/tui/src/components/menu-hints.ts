@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { matchesKey } from "../keys";
 import { col, node, span } from "../native/describe";
 import type { NativeNode } from "../native/node";
@@ -79,23 +80,24 @@ export class MenuHelp {
 	}
 
 	describe(): NativeNode {
-		return node("card", { head: "Vim navigation", role: "omp.menu.vim-help" }, [
+		return node("card", { head: t("tui.components.vim_help.title"), role: "omp.menu.vim-help" }, [
 			col(this.#explanations().map(line => node("text", { spans: [span(line)] }))),
 		]);
 	}
 
 	#explanations(): string[] {
-		const explanations = ["Vim navigation", ""];
+		const explanations = [t("tui.components.vim_help.title"), ""];
 		if (this.vim.includes("j") || this.vim.includes("k"))
-			explanations.push("j / k: next / previous row (also arrow keys)");
+			explanations.push(t("tui.components.vim_help.rows"));
 		if (this.vim.includes("h") || this.vim.includes("l"))
-			explanations.push("h / l: left / right (pane, branch or value)");
-		if (this.vim.includes("gg")) explanations.push("gg / G: first / last item (also Home / End)");
-		if (this.vim.includes("u") || this.vim.includes("d")) explanations.push("Ctrl-u / Ctrl-d: half page up / down");
-		if (this.vim.includes("e") || this.vim.includes("y")) explanations.push("Ctrl-e / Ctrl-y: scroll view down / up");
-		if (this.vim.includes("Pg") || this.vim.includes("gg")) explanations.push("PgUp / PgDn: full page up / down");
+			explanations.push(t("tui.components.vim_help.horizontal"));
+		if (this.vim.includes("gg")) explanations.push(t("tui.components.vim_help.boundaries"));
+		if (this.vim.includes("u") || this.vim.includes("d"))
+			explanations.push(t("tui.components.vim_help.half_page"));
+		if (this.vim.includes("e") || this.vim.includes("y")) explanations.push(t("tui.components.vim_help.scroll"));
+		if (this.vim.includes("Pg") || this.vim.includes("gg")) explanations.push(t("tui.components.vim_help.page"));
 		if (this.extra) explanations.push(this.extra);
-		explanations.push("", "? / Enter / Esc: return to menu");
+		explanations.push("", t("tui.components.vim_help.return"));
 		return explanations;
 	}
 

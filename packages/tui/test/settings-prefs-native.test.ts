@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
@@ -267,6 +268,24 @@ describe("settings as a native prefs page", () => {
 		expect(props.focus).toBe("theme.dark");
 	});
 
+	it("localizes section labels without changing native focus or setting identities", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const { selector, changes } = harness();
+			expect(prefs(selector).props.sections[0]).toMatchObject({ id: "theme", title: "Tema" });
+			expect(Bun.stripANSI(selector.render(180).join("\n"))).toContain("Tema");
+			selector.handleInput("\t");
+			expect(prefs(selector).props.focus).toBe("theme");
+			selector.handleInput("j");
+			expect(prefs(selector).props.focus).toBe("status-line");
+			send(selector, { type: "change", key: "", item: "display.colorBlind", value: true });
+			expect(changes).toContainEqual(["display.colorBlind", true]);
+		} finally {
+			setLocale(previous);
+		}
+	});
+
 	it("puts the status-line preview after its section on Appearance only", () => {
 		const { selector } = harness();
 		const roles = (n: NativeNode) => (n.c ?? []).map(c => ("k" in c && c.p && "role" in c.p ? c.p.role : undefined));
@@ -391,6 +410,40 @@ describe("settings as a native prefs page", () => {
 			expect(row(prefs(selector).props, path).control).toMatchObject({ value: "default" });
 		},
 	);
+
+	it("shows localized numeric validation without accepting an invalid setting", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const path = "compaction.thresholdTokens";
+			const entry: SettingsDisplayEntry = {
+				path,
+				type: "number",
+				defaultValue: -1,
+				ui: {
+					tab: "context",
+					label: "Token budget",
+					description: "Fixed token budget",
+					customInput: true,
+					options: [{ value: "default", label: "Default" }],
+				},
+			};
+			const { selector, values } = harness({}, { entries: [entry] });
+			send(selector, { type: "action", key: "", act: "page", value: "context", mods: [] });
+			send(selector, { type: "change", key: "", item: path, value: "__custom_number__" });
+			selector.handleInput("invalid");
+			selector.handleInput(ENTER);
+			expect(Bun.stripANSI(selector.render(180).join("\n"))).toContain("Ingresa un número finito.");
+			expect(values.get(path)).toBe(-1);
+			selector.handleInput("\x01");
+			selector.handleInput("\x0b");
+			selector.handleInput("120000");
+			selector.handleInput(ENTER);
+			expect(values.get(path)).toBe(120000);
+		} finally {
+			setLocale(previous);
+		}
+	});
 
 	it("shows the text editor's draft and cursor while the keys edit it, and submits a pointer change", () => {
 		const { selector, values } = harness();

@@ -17,6 +17,7 @@ import { useQuery } from "../data/query";
 import { bucketAxis, rangeMeta } from "../data/range";
 import { densify } from "../data/series";
 import { buildAgentTokenShare, sumConversationTokens } from "../data/view-models";
+import { useTranslation } from "../i18n";
 import type { AgentType, MessageStats, TimeRange } from "../types";
 import {
 	Badge,
@@ -62,6 +63,7 @@ const TOKEN_MIX = [
 ] as const;
 
 export function OverviewRoute({ active, range, onRequestClick }: OverviewRouteProps) {
+	const tr = useTranslation();
 	const overview = useQuery(["overview", range], ({ signal }) => getOverviewStats(range, signal), { enabled: active });
 	const recent = useQuery(["recent-requests"], ({ signal }) => getRecentRequests(12, signal), { enabled: active });
 	const [metric, setMetric] = useState<ActivityMetric>("requests");
@@ -95,7 +97,10 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 
 	return (
 		<div className="page">
-			<PageHeader title="Overview" description={`Everything omp did across your sessions in ${meta.windowLabel}.`} />
+			<PageHeader
+				title={tr("nav.overview", "Overview")}
+				description={`Everything omp did across your sessions in ${meta.windowLabel}.`}
+			/>
 
 			<QueryView query={overview} skeleton={<ChartSkeleton height={112} />}>
 				{({ overall }) => (
@@ -114,7 +119,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 								sparkColor="var(--chart-secondary)"
 							/>
 							<Stat
-								label="Requests"
+								label={tr("nav.requests", "Requests")}
 								value={formatInteger(overall.totalRequests)}
 								hint={`${formatInteger(overall.failedRequests)} failed`}
 								spark={series.all}
@@ -161,7 +166,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title="Activity"
+					title={tr("nav.activity", "Activity")}
 					description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}`}
 					actions={<Segmented size="sm" options={ACTIVITY_OPTIONS} value={metric} onChange={setMetric} />}
 					stale={overview.stale}

@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { theme } from "../theme/theme";
 import { padding, truncateToWidth, visibleWidth } from "../utils";
 
@@ -24,7 +25,7 @@ export function renderClassicWelcome(
 	const preferredLeftCol = 26;
 	const minLeftCol = 12; // logo width
 	const minRightCol = 20;
-	const leftMinContentWidth = Math.max(minLeftCol, visibleWidth("Welcome back!"));
+	const leftMinContentWidth = Math.max(minLeftCol, visibleWidth(t("tui.welcome.greeting")));
 	const desiredLeftCol = Math.max(
 		Math.min(preferredLeftCol, Math.max(minLeftCol, Math.floor(dualContentWidth * 0.35))),
 		leftMinContentWidth,
@@ -41,7 +42,7 @@ export function renderClassicWelcome(
 	// Left column - centered content
 	const leftLines = [
 		"",
-		centerText(theme.bold("Welcome back!"), leftCol),
+		centerText(theme.bold(t("tui.welcome.greeting")), leftCol),
 		"",
 		...logoColored.map(l => centerText(l, leftCol)),
 		"",
@@ -49,11 +50,11 @@ export function renderClassicWelcome(
 
 	// Right column
 	const rightLines = [
-		` ${theme.bold(theme.fg("accent", "Tips"))}`,
+		` ${theme.bold(theme.fg("accent", t("tui.welcome.tips")))}`,
 		` ${theme.fg("dim", "#")}${theme.fg("muted", " for prompt actions")}`,
 		` ${theme.fg("dim", "/")}${theme.fg("muted", " for commands")}`,
-		` ${theme.fg("dim", "!")}${theme.fg("muted", " to run bash")}`,
-		` ${theme.fg("dim", "$")}${theme.fg("muted", " to run python")}`,
+		` ${theme.fg("dim", "!")}${theme.fg("muted", t("tui.welcome.bash_suffix"))}`,
+		` ${theme.fg("dim", "$")}${theme.fg("muted", t("tui.welcome.python_suffix"))}`,
 	];
 
 	// Border characters (dim)

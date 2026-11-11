@@ -410,7 +410,7 @@ describe("stats scheduled response costs", () => {
 		const requests = [
 			["peak", "2026-09-10T03:00:00Z"],
 			["off-peak", "2026-09-10T04:00:00Z"],
-			["new-rate", "2026-09-14T04:00:00Z"],
+			["later", "2026-09-14T04:00:00Z"],
 		].map(([entryId, timestamp]) => {
 			const stats = createCodexGptStats(entryId);
 			stats.provider = "deepseek";
@@ -433,17 +433,17 @@ describe("stats scheduled response costs", () => {
 		const stored = getRecentRequests(3);
 		expect(stored.find(request => request.entryId === "peak")?.usage.cost.total).toBeCloseTo(0.044, 8);
 		expect(stored.find(request => request.entryId === "off-peak")?.usage.cost.total).toBeCloseTo(0.022, 8);
-		expect(stored.find(request => request.entryId === "new-rate")?.usage.cost.total).toBeCloseTo(0.003, 8);
-		expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
-		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
+		expect(stored.find(request => request.entryId === "later")?.usage.cost.total).toBeCloseTo(0.022, 8);
+		expect(getOverallStats().totalCost).toBeCloseTo(0.088, 8);
+		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.088 / 2.64, 8);
 
 		// Simulate a database predating the no-cache estimate column's backfill.
 		database.run("UPDATE messages SET cost_no_cache_input = NULL");
 		database.run("DELETE FROM meta WHERE key = 'cost_no_cache_input_v1'");
 		closeDb();
 		await initDb();
-		expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
-		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
+		expect(getOverallStats().totalCost).toBeCloseTo(0.088, 8);
+		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.088 / 2.64, 8);
 	});
 
 	it("reprices recorded zeros on a dated rate card at the card in force for each request", async () => {

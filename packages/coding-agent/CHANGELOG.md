@@ -9,6 +9,9 @@
 
 ### Added
 
+- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
+
 - `--exit-with-parent` now works for `--mode rpc` / `rpc-ui` (capability `exit_with_parent`): a host-owned process aborts and exits within seconds when its host dies or closes stdin, instead of draining accepted work; the default drain is unchanged ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).
 - The `abort_and_restore_queue` capability is advertised in the RPC and control `ready` frames, so hosts can gate the atomic Esc queue restore and fall back to `abort` on older NeoPi ([#685](https://github.com/PsychedelicShayna/neopi/issues/685)).
 - `get_job_output` takes and returns a `revision`, so a host reading a running job's rolling output tail resets to a full snapshot when the text was replaced instead of keeping stale or spliced output ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).

@@ -1,0 +1,8 @@
+"cli.help.usage" = "USAGE"
+"cli.help.arguments" = "ARGUMENTS"
+"cli.help.flags" = "FLAGS"
+"cli.help.examples" = "EXAMPLES"
+"cli.help.commands" = "COMMANDS"
+"cli.file.not_found" = "Error: File not found: {path}"
+"cli.file.read_failed" = "Error: Could not read file {path}: {message}"
+"cli.file.too_large" = "Warning: Skipping file contents (too large: {size}): {path}"

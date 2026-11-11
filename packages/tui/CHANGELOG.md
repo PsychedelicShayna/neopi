@@ -4,6 +4,8 @@
 
 ### Added
 
+- Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
+
 - Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
@@ -43,6 +45,10 @@
 - `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
+
+- Untranslated settings retain their current host-provided labels and descriptions in Spanish mode.
+- Leaving settings search restores the confirmed filter instead of retaining an unconfirmed preview.
+- Ask dialogs keep a stable, bounded height when footer hints wrap or questions expand.
 
 - Model hub Roles searches show only matching fallback entries while retaining their parent headers and original edit targets.
 - Settings restores its normal section headings as soon as the search pattern is empty, while Escape leaves the search field before closing Settings ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).

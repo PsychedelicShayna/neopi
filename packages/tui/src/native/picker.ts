@@ -17,6 +17,7 @@
  * `scope`/`tab`/`strip`). {@link pickerEvent} folds them into one shape.
  */
 import type { TspPickerAction, TspPickerItem, TspPickerProps, TspProps } from "@oh-my-pi/pi-wire";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { KeyName } from "../key-hint-format";
 import { getKeybindings, type Keybinding } from "../keybindings";
 import type { Input } from "../components/input";
@@ -223,7 +224,7 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		title: o.title,
 		...(o.subtitle ? { subtitle: o.subtitle } : {}),
 		...(o.icon ? { icon: o.icon } : {}),
-		noun: o.noun ?? "options",
+		noun: o.noun ?? t("tui.picker.options"),
 		size: "md",
 		layout: "rows",
 		preview: "none",
@@ -235,11 +236,20 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		...(o.current ? { current: o.current } : {}),
 		...(o.columns ? { columns: o.columns } : {}),
 		actions: [
-			pickerAction("confirm", o.confirm ?? "Select", "enter", { primary: true }),
-			{ ...CLOSE_ACTION, label: list.filterFocused ? "Back to list" : view.query ? "Clear search" : "Close" },
+			pickerAction("confirm", o.confirm ?? t("tui.picker.select"), "enter", { primary: true }),
+			{
+				...CLOSE_ACTION,
+				label: list.filterFocused
+					? t("tui.picker.back_to_list")
+					: view.query
+						? t("tui.picker.clear_search")
+						: t("tui.picker.close"),
+			},
 		],
 		confirm:
-			pending?.confirmation !== undefined ? { text: pending.confirmation, act: "confirm", label: "Confirm" } : null,
+			pending?.confirmation !== undefined
+				? { text: pending.confirmation, act: "confirm", label: t("tui.picker.confirm") }
+				: null,
 	};
 }
 
@@ -293,6 +303,7 @@ export class SelectListSheet {
 				readonly query: string;
 				readonly cursor: number;
 				readonly focused: boolean;
+				readonly locale: Locale;
 				readonly node: NativeNode;
 		  }
 		| undefined;
@@ -325,13 +336,14 @@ export class SelectListSheet {
 			memo.pending === view.pending &&
 			memo.query === view.query &&
 			memo.cursor === view.cursor &&
+			memo.locale === getLocale() &&
 			memo.focused === this.list.filterFocused
 		) {
 			return memo.node;
 		}
 		const props = selectListPicker(this.list, this.#options());
 		const result = this.#docked ? dockedPicker(props) : picker(props);
-		this.#memo = { ...view, focused: this.list.filterFocused, node: result };
+		this.#memo = { ...view, focused: this.list.filterFocused, locale: getLocale(), node: result };
 		return result;
 	}
 

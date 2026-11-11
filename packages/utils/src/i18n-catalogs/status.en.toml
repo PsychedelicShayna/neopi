@@ -1,0 +1,7 @@
+"status.chrome.unknown_error" = "Unknown error"
+"status.chrome.warning" = "Warning"
+"status.chrome.error" = "Error"
+"status.session.new" = "new"
+"status.duration.left" = "{time} left"
+"status.chrome.more_one" = "… +{count} more line ({key} to expand)"
+"status.chrome.more_many" = "… +{count} more lines ({key} to expand)"

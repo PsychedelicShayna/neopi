@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { APP_NAME, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getLocale, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import { $, type Server } from "bun";
 import {
 	getCostDashboardStats,
@@ -173,6 +174,10 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	// Stats reads are DB-only; ingest runs in the background (see `live.ts`).
 	const range = url.searchParams.get("range");
+
+	if (path === "/api/locale") {
+		return Response.json({ locale: getLocale() }, { headers: { "Cache-Control": "no-store" } });
+	}
 
 	if (path === "/api/status") {
 		return Response.json(statsLive().status());
@@ -362,10 +367,11 @@ async function handleStatic(requestPath: string): Promise<Response> {
 	return new Response("Not Found", { status: 404 });
 }
 
-/** Format a dashboard origin, including brackets required by IPv6 literals. */
-export function formatStatsDashboardUrl(hostname: string, port: number): string {
+/** Format a dashboard URL, including brackets required by IPv6 literals. */
+export function formatStatsDashboardUrl(hostname: string, port: number, locale?: Locale): string {
 	const urlHostname = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
-	return `http://${urlHostname}:${port}`;
+	const origin = `http://${urlHostname}:${port}`;
+	return locale === undefined ? origin : `${origin}/?lang=${locale}`;
 }
 
 function createDashboardServer(port: number, hostname: string, hostToken?: string): Server<undefined> {

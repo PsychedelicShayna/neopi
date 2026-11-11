@@ -4,6 +4,7 @@
 
 ### Added
 
+- The stats dashboard follows the selected language for supported navigation, cost estimates and empty states, live status, theme controls, table pagination, JSON copy actions, and shared messages; untranslated terms remain in English.
 - Embed the full native stats dashboard in an authenticated host, including live indexing, sessions and traces, without sharing credentials with the dashboard ([#520](https://github.com/PsychedelicShayna/neopi/issues/520)).
 
 ## [18.14.0] - 2026-10-29

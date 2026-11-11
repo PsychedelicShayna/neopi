@@ -92,6 +92,7 @@ import { formatModelString, type ResolvedModelRoleValue } from "../config/model-
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
 import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
@@ -2770,9 +2771,9 @@ export class InteractiveMode implements InteractiveModeContext {
 					return;
 				case "copy":
 					copyToClipboard(action.text).then(
-						() => this.showStatus("Copied to clipboard"),
+						() => this.showStatus(t("interactive.copy.success")),
 						(error: unknown) =>
-							this.showWarning(`Copy failed: ${error instanceof Error ? error.message : String(error)}`),
+							this.showWarning(t("interactive.copy.error", { error: error instanceof Error ? error.message : String(error) })),
 					);
 			}
 		});
@@ -4980,15 +4981,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
 	#composerHint(): string | undefined {
-		return resolveComposerHint({
-			runningAgents: this.#runningSubagentCount,
-			focusedOnAgent: this.focusedAgentId !== undefined,
-			conversationStarted: this.viewSession.messages.length > 0,
-			keybindings: this.keybindings,
-			uses: id => hintUsage.get(id),
-		});
+		return (
+			resolveComposerHint({
+				runningAgents: this.#runningSubagentCount,
+				focusedOnAgent: this.focusedAgentId !== undefined,
+				conversationStarted: this.viewSession.messages.length > 0,
+				keybindings: this.keybindings,
+				uses: id => hintUsage.get(id),
+			}) ?? t("composer.placeholder")
+		);
 	}
-
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {
 		this.#extensionLinkRebuildPending = false;
 		// Mid-stream rebuilds (e.g. `/shake`, theme/setting changes that touch the
@@ -6709,7 +6711,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const env = this.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(t("interactive.editor.unconfigured"));
 			return;
 		}
 
@@ -6750,7 +6752,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const env = this.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(t("interactive.editor.unconfigured"));
 			return;
 		}
 

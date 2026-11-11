@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { rangeMeta, TIME_RANGES } from "../data/range";
 import { useLiveStatus } from "../data/live";
 import type { TimeRange } from "../types";
+import { useTranslation } from "../i18n";
 import { Segmented } from "../ui";
 import { LiveChip } from "./LiveChip";
 import { type DashboardSection, NAV } from "./nav";
@@ -28,6 +29,7 @@ const RANGE_OPTIONS = TIME_RANGES.map((range, i) => ({
  * to a page.
  */
 export function Shell({ section, onSectionChange, range, onRangeChange, children }: ShellProps) {
+	const tr = useTranslation();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const scrolled = useScrolled();
 	const { sync } = useLiveStatus();
@@ -51,7 +53,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					data-variant="ghost"
 					data-icon="true"
 					onClick={() => setMenuOpen(true)}
-					aria-label="Open navigation"
+					aria-label={tr("shell.open_navigation", "Open navigation")}
 				>
 					<Menu size={16} />
 				</button>
@@ -75,7 +77,14 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					<span className="topbar-hide-narrow">
 						<LiveChip />
 					</span>
-					<Segmented options={RANGE_OPTIONS} value={range} onChange={onRangeChange} aria-label="Time range" />
+					<Segmented
+						options={RANGE_OPTIONS.map(option =>
+							option.value === "all" ? { ...option, label: tr("range.all", option.label) } : option,
+						)}
+						value={range}
+						onChange={onRangeChange}
+						aria-label={tr("shell.time_range", "Time range")}
+					/>
 					<ThemeToggle />
 				</div>
 				{progress !== undefined && (
@@ -90,10 +99,10 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 			</header>
 
 			{menuOpen && <div className="drawer-scrim" onClick={() => setMenuOpen(false)} role="presentation" />}
-			<nav className="sidebar" data-open={menuOpen} aria-label="Pages">
+			<nav className="sidebar" data-open={menuOpen} aria-label={tr("shell.pages", "Pages")}>
 				{NAV.map(group => (
 					<div key={group.heading} className="nav-group">
-						<div className="nav-heading">{group.heading}</div>
+						<div className="nav-heading">{tr(`nav.${group.heading.toLowerCase()}`, group.heading)}</div>
 						{group.items.map(item => (
 							<button
 								key={item.id}
@@ -104,7 +113,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 								onClick={() => go(item.id)}
 							>
 								<item.icon size={15} />
-								<span className="nav-row-label">{item.label}</span>
+								<span className="nav-row-label">{tr(`nav.${item.id}`, item.label)}</span>
 								<kbd>G {item.hotkey.toUpperCase()}</kbd>
 							</button>
 						))}
@@ -112,10 +121,10 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 				))}
 				<div className="sidebar-foot micro">
 					<span>
-						<span className="kbd">1</span>–<span className="kbd">6</span> range
+						<span className="kbd">1</span>–<span className="kbd">6</span> {tr("shell.range", "range")}
 					</span>
 					<span>
-						<span className="kbd">G</span> then letter to jump
+						<span className="kbd">G</span> {tr("shell.jump", "then letter to jump")}
 					</span>
 				</div>
 			</nav>

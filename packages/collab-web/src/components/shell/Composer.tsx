@@ -3,6 +3,7 @@ import { SendHorizontal, Square } from "lucide-react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { memo, useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { ConnectionPhase, GuestClient } from "../../lib/client";
+import { useTranslation } from "../../lib/i18n";
 
 export interface ComposerProps {
 	client: GuestClient;
@@ -73,6 +74,7 @@ interface AskEditorProps {
  * draft. Submits verbatim — whitespace-only responses are intentional.
  */
 function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
+	const tr = useTranslation();
 	const [draft, setDraft] = useState(prefill ?? "");
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
@@ -98,7 +100,7 @@ function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
 				onKeyDown={onKeyDown}
 				onCompositionStart={onCompositionStart}
 				onCompositionEnd={onCompositionEnd}
-				placeholder="type your response…"
+				placeholder={tr("composer.response", "type your response…")}
 				rows={1}
 				spellCheck={false}
 			/>
@@ -107,9 +109,9 @@ function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
 					type="button"
 					className="sh-btn sh-btn-primary"
 					onClick={() => onSubmit(draft)}
-					title="submit response"
+					title={tr("composer.submit_response", "submit response")}
 				>
-					<SendHorizontal size={12} /> <span className="sh-btn-label">Submit</span>
+					<SendHorizontal size={12} /> <span className="sh-btn-label">{tr("composer.submit", "Submit")}</span>
 				</button>
 			</div>
 		</div>
@@ -125,6 +127,7 @@ export const Composer = memo(function Composer({
 	working,
 	queuedMessageCount,
 }: ComposerProps): ReactNode {
+	const tr = useTranslation();
 	const [text, setText] = useState("");
 	const taRef = useRef<HTMLTextAreaElement | null>(null);
 	const { composingRef, onCompositionStart, onCompositionEnd } = useCompositionGuard();
@@ -191,7 +194,7 @@ export const Composer = memo(function Composer({
 				)}
 				<div className="sh-composer-actions sh-ask-actions">
 					<button type="button" className="sh-btn" onClick={() => client.sendUiResponse(uiRequest.reqId)}>
-						Cancel
+						{tr("composer.cancel", "Cancel")}
 					</button>
 					{busy && (
 						<button
@@ -199,9 +202,9 @@ export const Composer = memo(function Composer({
 							className="sh-btn sh-btn-stop"
 							onClick={() => client.sendAbort()}
 							disabled={!live}
-							title="stop the current turn"
+							title={tr("composer.stop_turn", "stop the current turn")}
 						>
-							<Square size={11} /> <span className="sh-btn-label">Stop</span>
+							<Square size={11} /> <span className="sh-btn-label">{tr("composer.stop", "Stop")}</span>
 						</button>
 					)}
 				</div>
@@ -234,7 +237,7 @@ export const Composer = memo(function Composer({
 				<div className="sh-composer-actions">
 					{busy && queued > 0 && (
 						<span className="sh-queued">
-							<span className="sh-queued-label">queued </span>×{queued}
+							<span className="sh-queued-label">{tr("composer.queued", "queued")} </span>×{queued}
 						</span>
 					)}
 					{busy && !readOnly && (
@@ -243,9 +246,9 @@ export const Composer = memo(function Composer({
 							className="sh-btn sh-btn-stop"
 							onClick={() => client.sendAbort()}
 							disabled={!live}
-							title="stop the current turn"
+							title={tr("composer.stop_turn", "stop the current turn")}
 						>
-							<Square size={11} /> <span className="sh-btn-label">Stop</span>
+							<Square size={11} /> <span className="sh-btn-label">{tr("composer.stop", "Stop")}</span>
 						</button>
 					)}
 					<button
@@ -253,9 +256,9 @@ export const Composer = memo(function Composer({
 						className="sh-btn sh-btn-primary"
 						onClick={send}
 						disabled={!canSend}
-						title="send (Enter)"
+						title={tr("composer.send_enter", "send (Enter)")}
 					>
-						<SendHorizontal size={12} /> <span className="sh-btn-label">Send</span>
+						<SendHorizontal size={12} /> <span className="sh-btn-label">{tr("composer.send", "Send")}</span>
 					</button>
 				</div>
 			</div>

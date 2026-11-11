@@ -23,6 +23,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { formatDuration, logger, PRODUCT_NAME, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
 import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
+import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
@@ -378,7 +379,7 @@ export class CommandController {
 			// matching src/cli/stats-cli.ts, to keep CLI startup fast.
 			const { formatStatsDashboardUrl, startServer } = await import("@oh-my-pi/omp-stats");
 			const { hostname, port } = await startServer();
-			const url = `${formatStatsDashboardUrl(hostname, port)}/#/traces?s=${encodeURIComponent(sessionFile)}`;
+			const url = `${formatStatsDashboardUrl(hostname, port, getLocale())}#/traces?s=${encodeURIComponent(sessionFile)}`;
 			this.openInBrowser(url);
 			this.ctx.showStatus(`Trace: ${url}`);
 		} catch (error: unknown) {

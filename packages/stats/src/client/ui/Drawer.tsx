@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "../i18n";
 
 export interface DrawerProps {
 	open: boolean;
@@ -19,6 +20,7 @@ export interface DrawerProps {
  * scrim clicks close it; focus returns to the opener.
  */
 export function Drawer({ open, onClose, title, subtitle, actions, width, children }: DrawerProps) {
+	const tr = useTranslation();
 	const onCloseRef = useRef(onClose);
 	onCloseRef.current = onClose;
 	const panelRef = useRef<HTMLDivElement>(null);
@@ -64,7 +66,7 @@ export function Drawer({ open, onClose, title, subtitle, actions, width, childre
 						data-variant="ghost"
 						data-icon="true"
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={tr("common.close", "Close")}
 					>
 						<X size={16} />
 					</button>

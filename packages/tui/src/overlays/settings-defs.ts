@@ -1,4 +1,5 @@
 /** Schema-independent display definitions for the settings overlay. */
+import { getCatalogOverrides, getLocale, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { SymbolKey } from "../theme/symbols";
 import type { EntryProvenance } from "../theme/provenance";
 
@@ -245,13 +246,14 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 
 	const schemaType = entry.type;
 	const condition = entry.condition;
+	const catalog = getLocale() === "es" ? getCatalogOverrides("es") : undefined;
 	const base = {
 		path,
 		defaultValue: entry.defaultValue,
 		schemaType,
-		label: ui.label,
+		label: catalog?.[`settings.setting.${path}.label`] ?? ui.label,
 		provenance: ui.provenance,
-		description: ui.description,
+		description: catalog?.[`settings.setting.${path}.description`] ?? ui.description,
 		warning: ui.warning,
 		tab: ui.tab,
 		group: ui.group,
@@ -309,18 +311,24 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 	return null;
 }
 
-const definitions = new WeakMap<readonly SettingsDisplayEntry[], SettingDef[]>();
+const definitions = new WeakMap<readonly SettingsDisplayEntry[], Map<Locale, SettingDef[]>>();
 
 /** Get all setting definitions with UI, retaining live host visibility predicates. */
 export function getAllSettingDefs(entries: readonly SettingsDisplayEntry[]): SettingDef[] {
-	let defs = definitions.get(entries);
+	const locale = getLocale();
+	let localized = definitions.get(entries);
+	if (!localized) {
+		localized = new Map();
+		definitions.set(entries, localized);
+	}
+	let defs = localized.get(locale);
 	if (!defs) {
 		defs = [];
 		for (const entry of entries) {
 			const def = entryToSettingDef(entry);
 			if (def) defs.push(def);
 		}
-		definitions.set(entries, defs);
+		localized.set(locale, defs);
 	}
 	return defs;
 }

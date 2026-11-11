@@ -378,9 +378,9 @@ chrome.alarms.onAlarm.addListener(alarm => {
 	if (alarm.name === "omp-relay-keepalive") void connect();
 });
 
-chrome.storage.onChanged.addListener((_changes, areaName) => {
-	if (areaName !== "local") return;
-	// Settings changed: drop the current connection and re-dial with new ones.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+	if (areaName !== "local" || (!changes.port && !changes.token)) return;
+	// Connection settings changed: drop the current connection and re-dial with new ones.
 	ws?.close();
 	void connect();
 });

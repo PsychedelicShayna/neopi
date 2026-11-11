@@ -8,6 +8,7 @@ import { Check, Copy, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { getSessionEntryDetail } from "../api";
 import { formatDurationMs, formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type { TraceSpan, TraceTrack } from "../types";
 import { Badge, Drawer, type DrawerProps, ErrorState, JsonBlock, KeyValues, Skeleton } from "../ui";
 
@@ -92,6 +93,7 @@ export function SpanDrawer({
 	inline = false,
 	onNavigate,
 }: SpanDrawerProps) {
+	const tr = useTranslation();
 	const [entry, setEntry] = useState<unknown>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<Error | null>(null);
@@ -203,8 +205,8 @@ export function SpanDrawer({
 					data-variant="ghost"
 					data-icon="true"
 					onClick={handleCopy}
-					aria-label="Copy raw JSON"
-					title="Copy raw JSON"
+					aria-label={tr("common.copy_raw_json", "Copy raw JSON")}
+					title={tr("common.copy_raw_json", "Copy raw JSON")}
 				>
 					{copied ? <Check size={15} /> : <Copy size={15} />}
 				</button>

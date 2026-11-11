@@ -1,4 +1,5 @@
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { MenuSelection } from "./menu-selection";
 import {
 	applyMenuMotion,
@@ -382,8 +383,8 @@ export class SelectList implements Component, MouseRoutable {
 			filter: this.#nativeMark === undefined ? query.trim() || undefined : undefined,
 			empty:
 				query.trim().length > 0
-					? (this.layout.noMatchText ?? "No matching items")
-					: (this.layout.emptyText ?? "No items"),
+					? (this.layout.noMatchText ?? t("tui.components.search.no_matching_items"))
+					: (this.layout.emptyText ?? t("tui.components.search.no_items")),
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -472,8 +473,8 @@ export class SelectList implements Component, MouseRoutable {
 			}
 			const message =
 				this.#selection.query.trim().length > 0
-					? (this.layout.noMatchText ?? "No matching items")
-					: (this.layout.emptyText ?? "No items");
+					? (this.layout.noMatchText ?? t("tui.components.search.no_matching_items"))
+					: (this.layout.emptyText ?? t("tui.components.search.no_items"));
 			lines.push(this.theme.noMatch(`  ${message}`));
 			return lines;
 		}
@@ -816,7 +817,7 @@ export class SelectList implements Component, MouseRoutable {
 
 	#statusText(): string {
 		const error = compileMenuRegex(this.#selection.query)?.error;
-		if (error) return `Invalid regex: ${error}`;
+		if (error) return t("tui.components.search.invalid_regex", { error });
 		const pendingItem =
 			this.#selection.pendingKey === undefined
 				? undefined
@@ -833,11 +834,11 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}`
+						? t(this.#search.focused ? "tui.components.search.list_focused" : "tui.components.search.list_idle", {
+								query,
+							})
 						: this.#canEditSearch()
-							? this.#search.focused
-								? "  Search: type to narrow · Enter confirm · Esc clear"
-								: "  / search"
+							? t(this.#search.focused ? "tui.components.search.list_empty_focused" : "tui.components.search.list_empty_idle")
 							: ""));
 	}
 
