@@ -1,5 +1,13 @@
-import englishSource from "./catalogs/en.toml" with { type: "text" };
-import spanishSource from "./catalogs/es.toml" with { type: "text" };
+import baseEn from "./i18n-catalogs/base.en.toml" with { type: "text" };
+import baseEs from "./i18n-catalogs/base.es.toml" with { type: "text" };
+import settingsEn from "./i18n-catalogs/settings.en.toml" with { type: "text" };
+import settingsEs from "./i18n-catalogs/settings.es.toml" with { type: "text" };
+import statusEn from "./i18n-catalogs/status.en.toml" with { type: "text" };
+import statusEs from "./i18n-catalogs/status.es.toml" with { type: "text" };
+import tuiEn from "./i18n-catalogs/tui.en.toml" with { type: "text" };
+import tuiEs from "./i18n-catalogs/tui.es.toml" with { type: "text" };
+import cliEn from "./i18n-catalogs/cli.en.toml" with { type: "text" };
+import cliEs from "./i18n-catalogs/cli.es.toml" with { type: "text" };
 
 export type Locale = "en" | "es";
 export type TranslationValues = Readonly<Record<string, string | number>>;
@@ -17,14 +25,17 @@ function flattenCatalog(value: unknown, prefix = "", catalog: Record<string, str
 	return catalog;
 }
 
-const catalogs: Readonly<Record<Locale, Catalog>> = {
-	en: flattenCatalog(Bun.TOML.parse(englishSource)),
-	es: flattenCatalog(Bun.TOML.parse(spanishSource)),
-};
+function loadCatalog(sources: readonly string[]): Catalog {
+	const catalog: Record<string, string> = {};
+	for (const source of sources) Object.assign(catalog, flattenCatalog(Bun.TOML.parse(source)));
+	return catalog;
+}
 
+const english = loadCatalog([baseEn, settingsEn, statusEn, tuiEn, cliEn]);
+const spanish = loadCatalog([baseEs, settingsEs, statusEs, tuiEs, cliEs]);
 const effectiveCatalogs: Readonly<Record<Locale, Catalog>> = {
-	en: catalogs.en,
-	es: { ...catalogs.en, ...catalogs.es },
+	en: english,
+	es: { ...english, ...Object.fromEntries(Object.entries(spanish).filter(([, value]) => value !== "")) },
 };
 
 let activeLocale: Locale = "en";

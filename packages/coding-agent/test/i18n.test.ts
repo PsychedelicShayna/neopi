@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { getCatalog, getLocale, setLocale, t } from "../src/i18n";
+import { getCatalog, getLocale, setLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { getSettingDef, type SettingsDisplayEntry } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { cfgLanguage } from "../src/modes/settings";
 
 afterEach(() => setLocale("en"));
@@ -27,5 +28,21 @@ describe("localization catalogs", () => {
 		setLocale("es");
 		expect(getLocale()).toBe("es");
 		expect(t("composer.placeholder")).toBe("Escribe un mensaje…");
+	});
+
+	test("updates cached setting labels when the language changes without changing the setting path", () => {
+		const entries: SettingsDisplayEntry[] = [
+			{
+				path: "language",
+				type: "enum",
+				defaultValue: "en",
+				ui: { tab: "interaction", label: "Language", description: "Language used for translated interface text" },
+			},
+		];
+		expect(getSettingDef(entries, "language")?.label).toBe("Language");
+		setLocale("es");
+		expect(getSettingDef(entries, "language")?.label).toBe("Idioma");
+		setLocale("en");
+		expect(getSettingDef(entries, "language")?.label).toBe("Language");
 	});
 });

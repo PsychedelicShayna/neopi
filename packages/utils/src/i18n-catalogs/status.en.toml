@@ -1,0 +1,5 @@
+"status.chrome.unknown_error" = "Unknown error"
+"status.chrome.warning" = "Warning"
+"status.chrome.error" = "Error"
+"status.session.new" = "new"
+"status.duration.left" = "{time} left"

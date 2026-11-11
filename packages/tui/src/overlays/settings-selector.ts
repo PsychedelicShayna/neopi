@@ -1,4 +1,5 @@
 import { provenanceSuffix } from "../theme/provenance";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -34,7 +35,6 @@ import {
 	numericOption,
 	SETTING_TABS,
 	type SubmenuOption,
-	TAB_LEADS,
 	TAB_METADATA,
 	type SettingTab,
 	type SettingsHost,
@@ -114,24 +114,24 @@ function settingsTabsNode(tabs: readonly Tab[], active: string | undefined): Nat
 /** Footer hints for `mode`, mirroring the ANSI footer line. */
 function settingsHintsNode(mode: SettingsHintMode): NativeNode {
 	const confirmKeys: readonly KeyName[] = actionHint("tui.select.confirm", "")?.keys ?? [];
-	const close = actionHint("tui.select.cancel", "close");
-	const switchTabs: NativeHint = { keys: ["left", "right"], label: "switch tabs" };
+	const close = actionHint("tui.select.cancel", t("settings.selector.close"));
+	const switchTabs: NativeHint = { keys: ["left", "right"], label: t("settings.selector.switch_tabs") };
 	let hints: (NativeHint | undefined)[];
 	switch (mode) {
 		case "search":
 			hints = [
-				actionHint("tui.select.confirm", "change"),
-				{ keys: ["tab"], label: "jump tabs" },
-				actionHint("tui.select.cancel", "exit search"),
+				actionHint("tui.select.confirm", t("settings.selector.change")),
+				{ keys: ["tab"], label: t("settings.selector.jump_tabs") },
+				actionHint("tui.select.cancel", t("settings.selector.exit_search")),
 			];
 			break;
 		case "plugins":
-			hints = [{ keys: ["tab"], label: "switch tabs" }, close];
+			hints = [{ keys: ["tab"], label: t("settings.selector.switch_tabs") }, close];
 			break;
 		case "sections":
 			hints = [
-				actionHint(["tui.select.up", "tui.select.down"], "jump sections"),
-				{ keys: ["tab", ...confirmKeys], label: "to settings" },
+				actionHint(["tui.select.up", "tui.select.down"], t("settings.selector.jump_sections")),
+				{ keys: ["tab", ...confirmKeys], label: t("settings.selector.to_settings") },
 				switchTabs,
 				close,
 			];
@@ -139,11 +139,11 @@ function settingsHintsNode(mode: SettingsHintMode): NativeNode {
 		case "rows":
 		case "rows-sections":
 			hints = [
-				{ keys: [...confirmKeys, "space"], label: "change" },
+				{ keys: [...confirmKeys, "space"], label: t("settings.selector.change") },
 				...(mode === "rows-sections"
-					? [{ keys: ["tab"], label: "jump sections" } satisfies NativeHint, switchTabs]
-					: [{ keys: ["tab"], label: "switch tabs" } satisfies NativeHint]),
-				{ keys: [], label: "type to search" },
+					? [{ keys: ["tab"], label: t("settings.selector.jump_sections") } satisfies NativeHint, switchTabs]
+					: [{ keys: ["tab"], label: t("settings.selector.switch_tabs") } satisfies NativeHint]),
+				{ keys: [], label: t("settings.selector.type_to_search") },
 				close,
 			];
 			break;
@@ -152,6 +152,7 @@ function settingsHintsNode(mode: SettingsHintMode): NativeNode {
 }
 
 interface SettingsNativeMemo {
+	locale?: Locale;
 	prefs?: { signature: string; children: readonly NativeChild[]; node: NativeNode };
 	prefsPreview?: { source: string; node: NativeNode };
 	tabs?: { tabs: readonly Tab[]; active: string | undefined; node: NativeNode };
@@ -182,7 +183,7 @@ function createSettingsTextField(
 		secret,
 		initialValue: currentValue || undefined,
 		empty: "submit",
-		hint: `  ${editorKey("tui.input.submit")} to save · ${editorKey("tui.select.cancel")} to cancel · Clear field to unset`,
+		hint: t("settings.selector.text_hint", { submit_key: editorKey("tui.input.submit"), cancel_key: editorKey("tui.select.cancel") }),
 		onSubmit,
 		onCancel,
 		requestRender,
@@ -743,7 +744,7 @@ function getSettingsTabs(): Tab[] {
 		...SETTING_TABS.map(id => {
 			const meta = TAB_METADATA[id];
 			const icon = theme.symbol(meta.icon);
-			return { id, label: `${icon} ${meta.label}`, short: icon };
+			return { id, label: `${icon} ${t(`settings.tab.${id}.label`)}`, short: icon };
 		}),
 		{ id: "plugins", label: `${theme.icon.package} Plugins`, short: theme.icon.package },
 	];
@@ -1126,7 +1127,7 @@ export class SettingsSelectorComponent implements Component {
 
 		const pages: TspPrefsProps["pages"][number][] = SETTING_TABS.map(id => {
 			const changed = this.#changedCount(id);
-			return { id, label: TAB_METADATA[id].label, icon: id, changed: changed > 0 ? changed : undefined };
+			return { id, label: t(`settings.tab.${id}.label`), icon: id, changed: changed > 0 ? changed : undefined };
 		});
 		pages.push({ id: PLUGINS_PAGE, label: "Installed", icon: "plugins", group: "Plugins" });
 
@@ -1192,7 +1193,7 @@ export class SettingsSelectorComponent implements Component {
 					? `Invalid regex: ${searchError}`
 					: searching
 						? undefined
-						: (pluginPage?.lead ?? (tab ? TAB_LEADS[tab] : undefined)),
+						: (pluginPage?.lead ?? (tab ? t(`settings.tab.${tab}.lead`) : undefined)),
 				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
 				this.#applyFeedback,
 				this.#getReloadConflict(),
@@ -1472,6 +1473,10 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#describeCard(): NativeNode {
 		const memo = this.#native;
+		if (memo.locale !== getLocale()) {
+			memo.locale = getLocale();
+			memo.hints = {};
+		}
 		const searching = this.#hasSearchResults;
 		const children: NativeChild[] = [];
 
@@ -1644,7 +1649,7 @@ export class SettingsSelectorComponent implements Component {
 			{
 				layout: "flat",
 				typeToSearch: false,
-				emptyText: "No matching settings",
+				emptyText: t("settings.selector.no_matches"),
 				hint: "",
 			},
 		);
@@ -1702,7 +1707,7 @@ export class SettingsSelectorComponent implements Component {
 			const meta = TAB_METADATA[result.tab];
 			items.push({
 				id: `__tab:${result.tab}`,
-				label: `${theme.symbol(meta.icon)} ${meta.label}`,
+				label: `${theme.symbol(meta.icon)} ${t(`settings.tab.${result.tab}.label`)}`,
 				currentValue: "",
 				heading: true,
 			});
@@ -1763,14 +1768,14 @@ export class SettingsSelectorComponent implements Component {
 			const icon = theme.symbol(meta.icon);
 			const count = counts.get(id) ?? 0;
 			if (count > 0) {
-				matched.push({ id, label: `${icon} ${meta.label} (${count})`, short: `${icon} ${count}` });
+				matched.push({ id, label: `${icon} ${t(`settings.tab.${id}.label`)} (${count})`, short: `${icon} ${count}` });
 			}
 		}
 		for (const id of SETTING_TABS) {
 			if (matchedIds.has(id)) continue;
 			const meta = TAB_METADATA[id];
 			const icon = theme.symbol(meta.icon);
-			empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
+			empty.push({ id, label: `${icon} ${t(`settings.tab.${id}.label`)}`, short: icon, muted: true });
 		}
 		// Plugins hosts its own UI; it is not part of the schema-backed search.
 		empty.push({
@@ -2223,7 +2228,7 @@ export class SettingsSelectorComponent implements Component {
 				// definition-to-item mapping so condition-gated settings (e.g. the
 				// Hindsight cluster guarded by memory.backend) appear/disappear
 				// immediately instead of waiting for the next tab switch.
-				this.#refreshCurrentTabItems(defs);
+				this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, tabId));
 			},
 			() => this.#callbacks.onCancel(),
 			// The selector owns type-to-search and the footer hint; pin the

@@ -1,7 +1,7 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
-import { setLocale } from "../i18n";
+import { setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";

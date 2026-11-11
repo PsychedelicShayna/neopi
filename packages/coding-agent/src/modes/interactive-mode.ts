@@ -92,7 +92,7 @@ import { formatModelString, type ResolvedModelRoleValue } from "../config/model-
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
 import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
-import { t } from "../i18n";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
