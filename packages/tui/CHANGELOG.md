@@ -46,6 +46,10 @@
 
 ### Fixed
 
+- Untranslated settings retain their current host-provided labels and descriptions in Spanish mode.
+- Leaving settings search restores the confirmed filter instead of retaining an unconfirmed preview.
+- Ask dialogs keep a stable, bounded height when footer hints wrap or questions expand.
+
 - Model hub Roles searches show only matching fallback entries while retaining their parent headers and original edit targets.
 - Settings restores its normal section headings as soon as the search pattern is empty, while Escape leaves the search field before closing Settings ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Menu search applies patterns only after Enter, keeps navigation keys in the field while typing, and preserves punctuation with working `/pattern/` regex searches ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).

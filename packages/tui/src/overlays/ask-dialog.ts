@@ -838,27 +838,45 @@ export class AskDialogComponent implements Component {
 		// available within the existing height cap.
 		const totalRows = this.#dialogHeight(innerWidth, process.stdout.rows || 40);
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
-		const maxTitleRows = Math.max(1, totalRows - 5 - MIN_BODY_ROWS - tabBarRows);
-		const headerLines = this.#renderHeader(innerWidth, maxTitleRows);
-		// top border (1) + header(N) + two dividers + footer(1) + bottom
-		// border (1) = N + 5 fixed rows outside the body. Without the bottom
-		// border term the dialog overflowed the viewport by one row
-		// (PRRT_kwDOQxs0bc6OFbDY).
-		const hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
-		const fixedRows = 1 + headerLines.length + 1 + 1 + hintRows + 1;
-		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
-		this.#bodyRows = bodyRows;
-		const bodyLines = this.#isSubmitTab()
-			? this.#renderSubmitBody(innerWidth, bodyRows)
-			: this.#renderQuestionBody(innerWidth, bodyRows);
-		const footer = this.#footerHintText(bodyLines.indicator);
+		let maxTitleRows = Math.max(1, totalRows - 5 - MIN_BODY_ROWS - tabBarRows);
+		let headerLines = this.#renderHeader(innerWidth, maxTitleRows);
+		let bodyRows = Math.max(
+			1,
+			totalRows -
+				4 -
+				headerLines.length -
+				menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length,
+		);
+		let bodyLines: RenderedList;
+		let footerLines: string[];
+		let reservedFooterRows = 0;
+		for (;;) {
+			this.#bodyRows = bodyRows;
+			bodyLines = this.#isSubmitTab()
+				? this.#renderSubmitBody(innerWidth, bodyRows)
+				: this.#renderQuestionBody(innerWidth, bodyRows);
+			footerLines = menuHintLines(
+				this.#footerHintText(bodyLines.indicator),
+				innerWidth,
+				this.#guardBlocks() ? "" : undefined,
+			);
+			reservedFooterRows = Math.max(reservedFooterRows, footerLines.length);
+			const available = totalRows - 4 - headerLines.length - reservedFooterRows;
+			if (available < MIN_BODY_ROWS && maxTitleRows > 1 && this.#expanded && !this.#isSubmitTab()) {
+				maxTitleRows = Math.max(1, maxTitleRows - (MIN_BODY_ROWS - available));
+				headerLines = this.#renderHeader(innerWidth, maxTitleRows);
+				continue;
+			}
+			const nextRows = Math.max(1, available);
+			if (nextRows === bodyRows) break;
+			bodyRows = nextRows;
+		}
+		while (footerLines.length < reservedFooterRows) footerLines.push("");
 		this.#panel.title = this.#titleText();
 		this.#headerRegion.setLines(headerLines);
 		this.#bodyRegion.setLines(bodyLines.lines);
 		this.#bodyRegion.setHeight(bodyRows);
-		this.#footerRegion.setLines(
-			menuHintLines(footer, innerWidth, this.#guardBlocks() ? "" : undefined).map(line => theme.fg("dim", line)),
-		);
+		this.#footerRegion.setLines(footerLines.map(line => theme.fg("dim", line)));
 		return this.#help.render(this.#panel.render(width), width);
 	}
 
