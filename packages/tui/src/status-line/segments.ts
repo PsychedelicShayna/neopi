@@ -12,6 +12,7 @@ import {
 	normalizePathForComparison,
 	relativePathWithinNormalizedRoot,
 } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SymbolKey, type Theme, type ThemeColor, theme } from "../theme";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { fileHyperlink } from "../render/hyperlink";
@@ -527,9 +528,9 @@ function formatLoopLimit(
 	const hours = Math.floor(totalSeconds / 3_600);
 	const minutes = Math.floor((totalSeconds % 3_600) / 60);
 	const seconds = totalSeconds % 60;
-	if (hours > 0) return `${hours}h${minutes > 0 ? `${minutes}m` : ""} left`;
-	if (minutes > 0) return `${minutes}m${seconds > 0 ? `${seconds}s` : ""} left`;
-	return `${seconds}s left`;
+	if (hours > 0) return t("status.duration.left", { time: `${hours}h${minutes > 0 ? `${minutes}m` : ""}` });
+	if (minutes > 0) return t("status.duration.left", { time: `${minutes}m${seconds > 0 ? `${seconds}s` : ""}` });
+	return t("status.duration.left", { time: `${seconds}s` });
 }
 
 const modeSegment: StatusLineSegment = {
@@ -1002,13 +1003,13 @@ const sessionSegment: StatusLineSegment = {
 	render(ctx) {
 		const sessionManager = ctx.session.sessionManager;
 		const sessionId = sessionManager?.getSessionId?.();
-		const display = sessionId?.slice(0, 8) || "new";
+		const display = sessionId?.slice(0, 8) || t("status.session.new");
 
 		return { content: withIcon(theme.icon.session, display), visible: true };
 	},
 	describe(ctx) {
 		const sessionId = ctx.session.sessionManager?.getSessionId?.();
-		return segView([span(sessionId?.slice(0, 8) || "new")], "session");
+		return segView([span(sessionId?.slice(0, 8) || t("status.session.new"))], "session");
 	},
 };
 

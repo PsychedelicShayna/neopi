@@ -17,6 +17,7 @@
  * (`app.tools.expand`) swaps it in, wrapped.
  */
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHints, formatTooltipKey } from "../app-keybindings";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -43,8 +44,6 @@ import { CountdownTimer } from "../chrome/countdown-timer";
 const MAX_DETAIL_ROWS: number = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 /** Enter and the approve key are ignored this long after mount, so a key sent as the prompt appears cannot answer it. */
 export const APPROVE_ARM_MS = 500;
-/** The Deny row while a composer draft holds Enter: sending it denies the call and steers the turn. */
-const DENY_AND_SEND_LABEL = "Deny and send message";
 
 /** `grant<N>` takes the Nth of {@link ApprovalDialogOptions.grants}; `remember` toggles their lifetime. */
 type ApprovalAnswer = "once" | "session" | "deny" | "remember" | `grant${number}`;
@@ -168,14 +167,14 @@ export class ApprovalDialogComponent implements Component {
 		const grants = this.options.grants ?? [];
 		const glyph = this.#rememberAlways ? theme.checkbox.checked : theme.checkbox.unchecked;
 		return [
-			...(grants.length > 0 ? [{ label: `${glyph} Remember across sessions`, answer: "remember" as const }] : []),
+			...(grants.length > 0 ? [{ label: `${glyph} ${t("tui.approval.remember")}`, answer: "remember" as const }] : []),
 			...grants.map((grant, index) => ({
 				label: this.#rememberAlways ? grant.alwaysLabel : grant.label,
 				answer: `grant${index}` as const,
 			})),
-			{ label: grants.length > 0 ? "Approve Once" : "Approve", answer: "once" },
+			{ label: t(grants.length > 0 ? "tui.approval.approve_once" : "tui.approval.approve"), answer: "once" },
 			...(this.options.session ? [{ label: this.options.session.label, answer: "session" as const }] : []),
-			{ label: "Deny", answer: "deny" },
+			{ label: t("tui.approval.deny"), answer: "deny" },
 		];
 	}
 
@@ -309,7 +308,7 @@ export class ApprovalDialogComponent implements Component {
 		const shown = drafting ? this.#choices.length - 1 : this.#choice;
 		this.#choiceRows.setLines(
 			this.#choices.map((choice, index) => {
-				const label = drafting && choice.answer === "deny" ? DENY_AND_SEND_LABEL : choice.label;
+				const label = drafting && choice.answer === "deny" ? t("tui.approval.deny_send") : choice.label;
 				if (index !== shown) return truncateToWidth(`  ${label}`, innerWidth, Ellipsis.Unicode);
 				const color = choice.answer === "deny" ? "error" : "accent";
 				const row = truncateToWidth(`${theme.nav.cursor} ${label}`, innerWidth, Ellipsis.Unicode);
@@ -332,22 +331,22 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#native && this.#nativeDrafting === drafting) return this.#native;
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
 		const approveKey = appApproveKeys()[0];
-		const deny = actionButton("Deny", "deny", {
+		const deny = actionButton(t("tui.approval.deny"), "deny", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			tone: "error",
-			title: `Deny this call${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
+			title: `${t("tui.approval.deny_call")}${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
-		const approve = actionButton(this.options.grants?.length ? "Approve Once" : "Approve", "approve", {
+		const approve = actionButton(t(this.options.grants?.length ? "tui.approval.approve_once" : "tui.approval.approve"), "approve", {
 			...(approveKey ? { keys: approveKey } : {}),
 			tone: "accent",
-			title: `Approve this call${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
+			title: `${t("tui.approval.approve_call")}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
 		});
 		const expandKey = appToolsExpandKey();
 		const expand = this.#full
 			? [
-					actionButton(this.#expanded ? "Less" : "Details", "expand", {
+					actionButton(t(this.#expanded ? "tui.approval.less" : "tui.approval.details"), "expand", {
 						keys: expandKey,
-						title: `${this.#expanded ? "Summarize" : "Show every detail of"} this call  ${formatTooltipKey(expandKey)}`,
+						title: `${t(this.#expanded ? "tui.approval.summarize_call" : "tui.approval.show_details")}  ${formatTooltipKey(expandKey)}`,
 					}),
 				]
 			: [];

@@ -1,4 +1,5 @@
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
 import { compileMenuRegex } from "../menu-search";
@@ -253,11 +254,12 @@ export class MenuSearchField {
 
 	render(width: number, theme: MenuSearchTheme): string {
 		const columns = Math.max(0, Math.trunc(width));
-		if (!this.focused && this.value.length === 0) return theme.muted(truncateToWidth("/ search", columns));
-		const prefix = "Search: ";
+		if (!this.focused && this.value.length === 0)
+			return theme.muted(truncateToWidth(t("tui.components.search.placeholder"), columns));
+		const prefix = t("tui.components.search.prefix");
 		const error = compileMenuRegex(this.value)?.error;
 		const hint = error
-			? ` · Invalid regex: ${error}`
+			? ` · ${t("tui.components.search.invalid_regex", { error })}`
 			: this.focused
 				? ` · ${menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : ""}Enter confirm · Esc ${menuSearchVimMode && this.vimMode === "insert" ? "normal" : "cancel"} · Ctrl-c clear`
 				: " · / search · ? help";
