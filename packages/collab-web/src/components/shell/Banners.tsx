@@ -19,7 +19,7 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 				<span className="sh-banner-dot" />
 				{phase === "connecting"
 					? tr("connection.connecting_relay", "Connecting to relay…")
-					: `Joining session…${progress}`}
+					: tr("connection.joining_progress", "Joining session…{progress}").replace("{progress}", progress)}
 			</div>
 		);
 	}
@@ -33,9 +33,9 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 	}
 	if (phase === "ended") {
 		return (
-			<div className="sh-ended" role="alertdialog" aria-label="session ended">
+			<div className="sh-ended" role="alertdialog" aria-label={tr("connection.session_ended_aria", "session ended")}>
 				<div className="sh-ended-card">
-					<div className="sh-ended-title">Session ended</div>
+					<div className="sh-ended-title">{tr("connection.session_ended", "Session ended")}</div>
 					{endedReason && <div className="sh-ended-reason">{endedReason}</div>}
 					<div className="sh-ended-actions">
 						<button type="button" className="sh-btn sh-btn-primary" onClick={onRejoin}>
