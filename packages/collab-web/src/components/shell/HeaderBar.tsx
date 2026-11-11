@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { memo } from "react";
 import type { ConnectionPhase } from "../../lib/client";
 import { fmtPercent, shortenPath } from "../../lib/format";
+import { LanguagePicker } from "./LanguagePicker";
 import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -100,6 +101,7 @@ export const HeaderBar = memo(function HeaderBar({
 						))}
 					</span>
 				)}
+				<LanguagePicker />
 				<ThemeToggle />
 				<button
 					type="button"

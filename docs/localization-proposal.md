@@ -38,6 +38,8 @@ The runtime lives in `packages/utils/src/i18n.ts` so the coding agent and TUI sh
 
 The stats browser client cannot execute Bun's TOML parser. Its initial browser-safe, keyed Spanish dictionary lives in `packages/stats/src/client/i18n.tsx`; English source text remains the fallback. NeoPi dashboard and trace launch URLs carry the active `language` as `lang=en` or `lang=es`, so clients opening the same reused server can use different languages. A direct dashboard visit without that parameter obtains the server's language from `/api/locale`; the hosted dashboard uses that endpoint through its existing authenticated host bridge. The `npi stats` command, including headless mode, initializes NeoPi's read-only language setting before launching a dashboard. Only selected navigation and overview labels are translated so far; the rest remain English.
 
+Collaboration guests select English or Spanish independently in their own browser, before or during a session. The preference is stored locally when browser storage is available and is not sent to the host or included in join links; English is the default. Only selected connection and theme controls are translated so far.
+
 TOML catalogs should be checked at startup/build boundaries for structural validity, but avoid adding runtime parsing per lookup. Any proposed build-time embedding/compiled artifact must be verified against the actual Bun/bundler packaging path before treating it as an implementation constraint.
 
 
