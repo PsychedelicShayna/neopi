@@ -56,7 +56,6 @@
 "tui.picker.confirm" = "Confirmar"
 "tui.ask.review" = "Revisar"
 "tui.ask.review_answers" = "Revisar respuestas"
-"tui.ask.recommended" = "Recomendado"
 "tui.ask.custom_answer" = "Respuesta personalizada"
 "tui.ask.note_for" = "Nota para {option}"
 "tui.ask.hint.cancel" = "cancelar"

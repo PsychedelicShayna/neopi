@@ -75,7 +75,6 @@ describe("AskDialogComponent", () => {
 			setLocale("es");
 			const native = JSON.stringify(component.describe(cx));
 			expect(native).toContain("Revisar");
-			expect(native).toContain("Recomendado");
 			expect(render(component)).toContain("seleccionar");
 			component.handleInput(ENTER);
 			component.handleInput(ENTER);
