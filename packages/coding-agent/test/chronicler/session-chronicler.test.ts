@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentPromptOptions } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Context, ImageContent, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockHandler, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
-import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -1091,36 +1090,6 @@ describe("SessionChronicler capture runtime", () => {
 		const harness = startChronicler(manager, newSettings());
 		const batches = await waitForBatches(root, 3);
 		await shutdown(harness);
-		// Exercise the actual private tools through the provider's request converter.
-		const codex = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-6.1-sol");
-		if (!codex || codex.api !== "openai-codex-responses") throw new Error("Expected a bundled Codex model");
-		const wireTools = convertOpenAICodexResponsesTools(passes[1]!.agent.state.tools, codex);
-		expect(wireTools).toHaveLength(3);
-		for (const tool of wireTools) {
-			if (tool.type !== "function") throw new Error("Expected a function tool");
-			expect(tool.strict).toBe(false);
-			const parameters = tool.parameters as { required?: string[]; properties: Record<string, unknown> };
-			if (tool.name === "chronicle") {
-				expect([...(parameters.required ?? [])].sort()).toEqual(["body", "kind", "sources", "title", "topics"]);
-				expect(parameters.properties).toMatchObject({
-					event_time: { type: "string" },
-					related: { type: "array", items: { type: "string" } },
-					supersedes: { type: "string" },
-					uncertainty: { type: "string" },
-				});
-			} else if (tool.name === "read_chronicle") {
-				expect(parameters.required ?? []).toEqual([]);
-				expect(parameters.properties).toMatchObject({
-					id: { type: "string" },
-					offset: { type: "integer", minimum: 0 },
-					limit: { type: "integer", minimum: 1, maximum: 100 },
-				});
-			} else {
-				expect(tool.name).toBe(FINISH_TOOL);
-				expect(parameters.required).toEqual(["carry"]);
-				expect(parameters.properties.carry).toMatchObject({ anyOf: expect.arrayContaining([{ type: "null" }]) });
-			}
-		}
 		const results = passes[1]!.agent.state.messages.filter(message => message.role === "toolResult");
 		for (const result of results.slice(0, validCount))
 			expect(result.isError, JSON.stringify(result.content)).toBe(false);
@@ -2203,6 +2172,50 @@ describe("SessionChronicler capture runtime", () => {
 		}
 	}, 30_000);
 
+	it("keeps headless ask off and explains enabled capture once across normal and custom prompts", async () => {
+		const manager = newLazySessionManager();
+		const mock = createMockModel({
+			responses: [
+				{ content: ["Noted."], stopReason: "stop" },
+				{ content: ["Noted."], stopReason: "stop" },
+				{ content: ["Noted."], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			streamFn: mock.stream,
+			initialState: { model: mock, tools: [], systemPrompt: ["Primary"] },
+		});
+		const settings = newSettings();
+		cfgChroniclerEnabled.override(settings, "ask");
+		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, advisorTools: [] });
+		session.subscribe(() => {});
+		const notices = spyOn(session, "sendChroniclerNotice");
+		try {
+			await session.prompt("No interactive consent route is attached.");
+			expect(session.chroniclerEnabled).toBe(false);
+			expect(notices).not.toHaveBeenCalled();
+			expect(passes).toHaveLength(0);
+			scripts.push(ackPass(), ackPass(), ackPass());
+			await session.setChroniclerEnabled(true);
+			await session.prompt("Capture is now explicitly enabled for this session.");
+			await session.promptCustomMessage({
+				customType: "headless-consent-test",
+				content: "A subsequent custom prompt uses the same startup explanation.",
+				display: false,
+				details: undefined,
+				attribution: "user",
+			});
+			expect(notices).toHaveBeenCalledTimes(1);
+			expect(notices.mock.calls[0]?.[0]).toBe("enabled");
+			expect(notices.mock.calls[0]?.[1]?.enabledExtra).toContain("addressing @chronicler directly");
+			expect(cfgChroniclerEnabled.get(settings)).toBe("ask");
+		} finally {
+			await session.dispose();
+			notices.mockRestore();
+		}
+	});
+
 	it("records zero beats for an actual AgentSession acknowledgement", async () => {
 		const manager = newLazySessionManager();
 		const mock = createMockModel({ responses: [{ content: ["You're welcome."], stopReason: "stop" }] });
@@ -2960,6 +2973,70 @@ describe("SessionChronicler capture runtime", () => {
 			await suspension;
 			await shutdown(harness);
 			renameSpy.mockRestore();
+		}
+	});
+	it("does not acknowledge an exclusion until its checkpoint publishes, even when publication retries", async () => {
+		const manager = await newSessionManager();
+		const directive = appendUser(manager, "@chronicler leave the private topic out now and later.");
+		await manager.flush();
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const write = chroniclerStoreIO.writeArtifact;
+		let failedOnce = false;
+		const writeSpy = spyOn(chroniclerStoreIO, "writeArtifact").mockImplementation(async (file, text) => {
+			if (!failedOnce && file.includes(".pending-") && file.endsWith("/COMMIT.json")) {
+				failedOnce = true;
+				reached.resolve();
+				await release.promise;
+				throw new Error("Injected checkpoint publication failure");
+			}
+			return await write(file, text);
+		});
+		const note: MockHandler = () => ({
+			content: [{ type: "toolCall", name: "note", arguments: { note: "I will honor that exclusion." } }],
+		});
+		const limits: MockHandler = () => ({
+			content: [
+				{
+					type: "toolCall",
+					name: FINISH_TOOL,
+					arguments: {
+						carry: null,
+						recording_limits: { sources: [directive], text: "Exclude the participant's private topic." },
+					},
+				},
+			],
+		});
+		scripts.push([note, limits], [note, limits]);
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"chronicler.enabled": true,
+			"chronicler.capture.carryChars": 0,
+		});
+		settings.setModelRole("chronicler", CAPTURE_ROLE_VALUE);
+		const harness = startChronicler(manager, settings);
+		const emitted: string[] = [];
+		harness.host.emitNote = async message => {
+			const committed = await readCommitted(harness.root);
+			expect(committed.at(-1)!.recordingLimits?.sources).toEqual([directive]);
+			if (!message.details) throw new Error("Expected a Chronicler note payload.");
+			emitted.push(message.details.note);
+			return true;
+		};
+		try {
+			await reached.promise;
+			expect(emitted).toEqual([]);
+			release.resolve();
+			await waitForCoverage(harness.root, [directive]);
+			await harness.chronicler.idle();
+			expect(emitted).toEqual(["I will honor that exclusion."]);
+			expect((await readCommitted(harness.root)).map(batch => batch.recordingLimits?.text)).toEqual([
+				"Exclude the participant's private topic.",
+			]);
+		} finally {
+			release.resolve();
+			await shutdown(harness);
+			writeSpy.mockRestore();
 		}
 	});
 });

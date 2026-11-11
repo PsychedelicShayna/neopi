@@ -29,13 +29,14 @@ function numberSetting(id: string, value: number, label: string, description: st
 export const cfgChroniclerEnabled = register({
 	id: "chronicler.enabled",
 	type: "boolean",
+	allowAsk: true,
 	default: false,
 	ui: {
 		tab: "memory",
 		group: "Chronicler",
 		label: "Chronicler capture",
 		description:
-			"Continuously capture semantic beats using the @chronicler role. Independent of Memory Backend; both may be on.",
+			"Continuously capture semantic beats using the @chronicler role. Ask requests consent for each session. Independent of Memory Backend; both may be on.",
 	},
 });
 export const cfgChroniclerNotices = register({

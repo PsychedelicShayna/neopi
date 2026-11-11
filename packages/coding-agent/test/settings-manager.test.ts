@@ -175,6 +175,16 @@ describe("Settings", () => {
 		expect(cfgChroniclerEnabled.get(reloaded)).toBe(true);
 	});
 
+	it("persists the Chronicler ask preference without enabling subagents", async () => {
+		const settings = await Settings.init({ cwd: projectDir, agentDir });
+		cfgChroniclerEnabled.set(settings, "ask");
+		await settings.flush();
+		resetSettingsForTest();
+		const reloaded = await Settings.init({ cwd: projectDir, agentDir });
+		expect(cfgChroniclerEnabled.get(reloaded)).toBe("ask");
+		expect(cfgChroniclerEnabled.get(createSubagentSettings(reloaded))).toBe(false);
+	});
+
 	describe("effective values", () => {
 		it("bumps the effective revision when cwd re-resolves scoped arrays", async () => {
 			const otherProject = tempDir.join("other-project");

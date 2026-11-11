@@ -6,6 +6,19 @@ Atoms stay the only source of truth. The view is a cache: deleting it loses noth
 
 Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
 
+## Luna's recording limits and notes (canary)
+
+Luna is the Chronicler. `chronicler.enabled` accepts `true` (On), `false` (Off), or `"ask"`. Interactive Ask mode asks **Enable the Chronicler for this session? Yes/No** before capture starts; the choice applies only to that session. Noninteractive Ask mode stays off until the host explicitly enables capture. When enabled, the primary agent receives a session-start explanation of the record and how to set limits, unless `chronicler.notices` is off.
+
+Either participant can address Luna as `@chronicler` to pause or resume recording, exclude details or a subject now and later, or include nothing at all. A directive has to be coherently **to** her: ordinary mentions of "chronicler", explanations quoting `@chronicler`, and tool output remain transcript evidence. Luna acknowledges every accepted directive with her single `note` tool. Notes carry Chronicler-specific framing in the main transcript and a blue border in the terminal; they are not advisor messages. Her default is silence, but she can also raise a recording-consent reminder, refuse, or object.
+
+Active semantic limits are committed as `recordingLimits` in `chronicler/beats/<batch>/COMMIT.json`, alongside capture publication. They are separate from pending-beat carry, so `chronicler.capture.carryChars: 0` does not discard consent. `finish_chronicle.recording_limits` can replace the active limits, omit the field to retain them, or use null after they are lifted. They survive context rebuilding and resuming the session. For a semantic pause, Luna retains paused source IDs there and can reread them through `read_chronicle.source` to catch up after resume; replay uses only the same frozen, blind-filtered transcript visible to that capture pass. A subject exclusion remains in force after resume. This is not retroactive deletion of already published atoms.
+
+An atom can optionally carry `chronicler_note` in its YAML front matter: Luna's reservations, feelings, or editorial decisions, separate from the beat body. She can also qualify attribution within a beat. An ordinary atom omits the field entirely, and old atoms remain readable without conversion. Note-tool messages are staged with their pass and delivered only after publication succeeds; a failed or revoked pass does not send a successful acknowledgement.
+
+These amendments are canary-only pending Shayna's review of Luna's actual output. An agent walk does not authorize folding this batch into nightly.
+
+
 ## Session controls: `/chron`
 
 `/chron` (or `/chron status`) shows Luna's effective state for the current session.
@@ -22,7 +35,6 @@ Capture automatically catches up the current session when enabled, including whe
 These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
 
 Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
-
 ## The hierarchy
 
 ```
@@ -96,6 +108,7 @@ Backfill command flags override their matching settings. Its `pollMs` setting on
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `chronicler.enabled` | `false` | On (`true`), Off (`false`), or interactive session consent (`"ask"`). |
 | `chronicler.notices` | `true` | Tell the primary agent when Luna's capture state changes. |
 | `chronicler.recall.enabled` | `false` | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
 | `chronicler.index.dir` | `<agentDir>/chronicle` | View root. |

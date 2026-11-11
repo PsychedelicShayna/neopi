@@ -12,6 +12,8 @@ import { InternalUrlRouter } from "../../internal-urls";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import { ChroniclerMessageCard } from "@oh-my-pi/pi-tui/chat/chronicler-message";
+import type { ChroniclerMessageDetails } from "@oh-my-pi/pi-tui/chat/messages";
 import { createMixtureTraceCard } from "@oh-my-pi/pi-tui/chat/mixture-trace";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { cfgMoaShowTraceCards } from "../../moa/settings";
@@ -368,6 +370,12 @@ export class UiHelpers {
 						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					if (message.customType === "chronicler") {
+						this.ctx.chatContainer.addChild(
+							new ChroniclerMessageCard(message as CustomMessage<ChroniclerMessageDetails>, theme),
+						);
+						break;
 					}
 					if (message.customType === "advisor") {
 						const details = (message as CustomMessage<AdvisorMessageDetails>).details;
@@ -1281,11 +1289,22 @@ export class UiHelpers {
 		const title = "Update Available";
 		const prefix = `New version ${newVersion} is available. Run: `;
 		const command = `${APP_NAME} update`;
-		const native = noticeRow("info", [span("Update available", "strong"), span(` · New version ${newVersion} is available. Run `), span(command, "code")], { icon: "download" });
+		const native = noticeRow(
+			"info",
+			[
+				span("Update available", "strong"),
+				span(` · New version ${newVersion} is available. Run `),
+				span(command, "code"),
+			],
+			{ icon: "download" },
+		);
 		this.ctx.present(
 			new TranscriptNotice(native, [
 				new DynamicBorder(text => theme.fg("warning", text)),
-				new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(() => `${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${theme.fg("accent", command)}`),
+				new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(
+					() =>
+						`${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${theme.fg("accent", command)}`,
+				),
 				new DynamicBorder(text => theme.fg("warning", text)),
 			]),
 		);

@@ -81,6 +81,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { chatModeLabel } from "../chat/chat-mode";
+import { cfgChroniclerEnabled } from "../chronicler/settings";
 import { pickTableChart } from "../auto-graph/planner";
 import { restartArgv } from "../cli/flag-tables";
 import type { CollabGuestLink } from "../collab/guest";
@@ -1483,6 +1484,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#modeChangeAwaitsSessionTransition = false;
 	/** False until init() has restored the journaled modes; before that the state is not yet the session's. */
 	#modesRestored = false;
+	readonly #chroniclerConsent = new Map<string, Promise<boolean>>();
 	readonly sessionModes: ExtensionSessionModes = {
 		getState: () => this.#getSessionModeState(),
 		set: request => this.#setSessionMode(request),
@@ -2557,6 +2559,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.composer.playWelcomeIntro();
 	}
 
+	async #ensureChroniclerSessionConsent(): Promise<void> {
+		const sessionId = this.session.sessionId;
+		const preference = cfgChroniclerEnabled.get(this.settings);
+		let enabled = preference === true;
+		if (preference === "ask") {
+			let decision = this.#chroniclerConsent.get(sessionId);
+			if (!decision) {
+				// The runtime treats ask as off until this session-only decision settles.
+				decision = this.showHookConfirm("Enable the Chronicler for this session?", "");
+				this.#chroniclerConsent.set(sessionId, decision);
+			}
+			enabled = await decision;
+			if (this.session.sessionId !== sessionId) return;
+			await this.session.setChroniclerEnabled(enabled);
+		}
+		if (enabled) await this.session.ensureChroniclerStartupNotice();
+	}
+
 	async init(options: InteractiveModeInitOptions = {}): Promise<void> {
 		if (this.isInitialized) return;
 		this.#idleMaintenanceActivity.scheduledTurn = target =>
@@ -2931,6 +2951,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The owning caller keeps guest mutations gated through its full outer
 		// startup; early dialog answers do not require that readiness signal.
 		if (options.autoStartCollab === true) this.collabController.autoStart();
+		await this.#ensureChroniclerSessionConsent();
 
 		// Initialize hooks with TUI-based UI context
 		await logger.time("InteractiveMode.init:hooks", () => this.initHooksAndCustomTools());
@@ -2952,7 +2973,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#liveCommandController.stop();
 			await this.#quiesceVibeForSessionSwitch();
 		});
-		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
+		this.session.setSessionSwitchReconciler?.(async () => {
+			await this.#ensureChroniclerSessionConsent();
+			await this.#reconcileModeFromSession({ preserveActiveGoal: true });
+		});
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
 		this.#modesRestored = true;
 
