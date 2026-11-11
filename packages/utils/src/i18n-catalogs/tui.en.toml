@@ -44,3 +44,7 @@
 "tui.welcome.tip_prefix" = "Tip: "
 "tui.welcome.bash_suffix" = " to run bash"
 "tui.welcome.python_suffix" = " to run python"
+"tui.theme.title" = "Theme"
+"tui.theme.noun" = "themes"
+"tui.theme.apply" = "Apply"
+"tui.theme.current" = "(current)"

@@ -289,7 +289,10 @@ function createSettingsSelectField(
 		onSubmit: onSelect,
 		onCancel,
 		onLeaveMenu,
-		hint: `  ${editorKey("tui.select.confirm")} to select · ${editorKey("tui.select.cancel")} to go back`,
+		hint: t("settings.selector.select_hint", {
+			confirm_key: editorKey("tui.select.confirm"),
+			cancel_key: editorKey("tui.select.cancel"),
+		}),
 		footer,
 		requestRender,
 		picker,
@@ -1058,7 +1061,7 @@ export class SettingsSelectorComponent implements Component {
 		const searching = this.#hasSearchResults;
 		const showSearch = searching || this.#search.focused;
 		const showPreview = !searching && this.#currentTabId === "appearance";
-		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
+		const previewLines = showPreview ? ["", theme.fg("muted", t("settings.selector.preview")), this.#getStatusPreviewString()] : [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
 		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + hints.length + 1;
@@ -1490,6 +1493,7 @@ export class SettingsSelectorComponent implements Component {
 		if (memo.locale !== getLocale()) {
 			memo.locale = getLocale();
 			memo.hints = {};
+			memo.preview = undefined;
 		}
 		const searching = this.#hasSearchResults;
 		const children: NativeChild[] = [];
@@ -1536,7 +1540,7 @@ export class SettingsSelectorComponent implements Component {
 						"col",
 						{ gap: "xs" },
 						[
-							text([span("Preview:", "muted")]),
+							text([span(t("settings.selector.preview"), "muted")]),
 							this.#callbacks.describeStatusLinePreview?.() ??
 								text(styledSpans(source), { wrap: "none", truncate: "end" }),
 						],

@@ -42,3 +42,5 @@
 "settings.selector.feedback" = " · {feedback}"
 "settings.selector.match_one" = "1 coincidencia"
 "settings.selector.match_many" = "{count} coincidencias"
+"settings.selector.select_hint" = "  {confirm_key} seleccionar · {cancel_key} volver"
+"settings.selector.preview" = "Vista previa:"
