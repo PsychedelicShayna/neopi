@@ -405,10 +405,10 @@ export class ApprovalDialogComponent implements Component {
 	#footerHint(overflows: boolean, drafting: boolean): string {
 		const approve = formatKeyHints(appApproveKeys());
 		const expand = this.#full
-			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
+			? ` · ${formatKeyHints([appToolsExpandKey()])} ${t(this.#expanded ? "tui.approval.hint.less" : "tui.approval.hint.details")}`
 			: "";
-		const keys = `${approve} approve · ${editorKey("tui.select.cancel")} deny${expand}`;
-		if (drafting) return `${editorKey("tui.input.submit")} deny and send · ${keys}`;
+		const keys = `${approve} ${t("tui.approval.hint.approve")} · ${editorKey("tui.select.cancel")} ${t("tui.approval.hint.deny")}${expand}`;
+		if (drafting) return `${editorKey("tui.input.submit")} ${t("tui.approval.hint.deny_send")} · ${keys}`;
 		const choose = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${editorKey("tui.select.confirm")} select`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
 		return `${choose} · ${keys}${scroll}${this.options.draft ? " · type to deny and steer" : ""}`;

@@ -73,3 +73,8 @@
 "tui.ask.hint.move" = "move"
 "tui.ask.hint.expand" = "expand"
 "tui.ask.hint.collapse" = "collapse"
+"tui.approval.hint.approve" = "approve"
+"tui.approval.hint.deny" = "deny"
+"tui.approval.hint.deny_send" = "deny and send"
+"tui.approval.hint.less" = "less"
+"tui.approval.hint.details" = "details"

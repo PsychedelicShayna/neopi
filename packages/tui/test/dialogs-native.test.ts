@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { setKeybindings, type Component, type TerminalFrameProvider, type TUI } from "@oh-my-pi/pi-tui";
 import { stripVTControlCharacters } from "node:util";
@@ -252,6 +253,24 @@ describe("dialogs under a native surface", () => {
 		expect(line()).toContain("/⏎ show");
 		dialog.handleInput("\x1bh");
 		expect(dialog.render(200).length).toBeGreaterThan(1);
+	});
+
+	it("approval: Spanish hints keep the supplied prompt and denial action intact", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /sample", callbacks);
+			const text = stripVTControlCharacters(dialog.render(160).join("\n"));
+			expect(text).toContain("Allow tool: write");
+			expect(text).toContain("aprobar");
+			expect(text).toContain("rechazar");
+			dialog.handleNativeEvent({ type: "action", key: "actions/deny", act: "deny", mods: [] });
+			expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+		} finally {
+			setLocale(previous);
+		}
 	});
 
 	it("approval: Enter and the follow-up chord are ignored until armed; then Enter takes the highlighted choice", () => {
@@ -522,8 +541,8 @@ describe("dialogs under a native surface", () => {
 		);
 		const body = () => stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
 		expect(body()).not.toContain("rm-rf~");
-		// Ctrl+O belongs to the dialog, not the draft that holds the other keys.
-		dialog.handleInput("\x0f");
+		// The expand binding belongs to the dialog, not the draft that holds the other keys.
+		dialog.handleInput("\x1be");
 		expect(routed).toEqual([]);
 		expect(body()).toContain("rm-rf~");
 		expect(body()).toContain("secondline");
