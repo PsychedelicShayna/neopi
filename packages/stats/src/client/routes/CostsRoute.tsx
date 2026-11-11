@@ -83,7 +83,10 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 		<div className="page">
 			<PageHeader
 				title={tr("costs.title", "Costs")}
-				description={`What ${meta.windowLabel} of usage would cost at public API rates. Subscription usage without a public price is counted as unpriced, not free.`}
+				description={tr(
+					"costs.description",
+					"What {window} of usage would cost at public API rates. Subscription usage without a public price is counted as unpriced, not free.",
+				).replace("{window}", tr(`costs.window.${range}`, meta.windowLabel))}
 			/>
 
 			<QueryView
