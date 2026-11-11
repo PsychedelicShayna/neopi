@@ -27,6 +27,19 @@ const spanish: Record<string, string> = {
 	"theme.light": "Tema claro",
 	"theme.dark": "Tema oscuro",
 	"theme.switch": "haz clic para cambiar",
+	"range.all": "Todo",
+	"live.reconnecting": "Reconectando",
+	"live.disconnected": "Se perdió la conexión en vivo con el servidor de stats; reintentando",
+	"live.syncing": "Sincronizando",
+	"live.sync_failed": "Error de sincronización",
+	"live.retry": "{error} — haz clic para reintentar",
+	"live.indexing": "Indexando",
+	"live.hours_left": "quedan {hours} h",
+	"live.live": "En vivo",
+	"live.just_now": "ahora mismo",
+	"live.minutes_ago": "hace {count} min",
+	"live.hours_ago": "hace {count} h",
+	"live.days_ago": "hace {count} d",
 };
 
 const LocaleContext = createContext<Locale>("en");

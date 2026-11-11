@@ -78,7 +78,9 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 						<LiveChip />
 					</span>
 					<Segmented
-						options={RANGE_OPTIONS}
+						options={RANGE_OPTIONS.map(option =>
+							option.value === "all" ? { ...option, label: tr("range.all", option.label) } : option,
+						)}
 						value={range}
 						onChange={onRangeChange}
 						aria-label={tr("shell.time_range", "Time range")}
