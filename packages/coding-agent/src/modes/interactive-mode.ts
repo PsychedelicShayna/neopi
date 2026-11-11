@@ -92,6 +92,7 @@ import { formatModelString, type ResolvedModelRoleValue } from "../config/model-
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
 import { settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
+import { t } from "../i18n";
 import type {
 	AutocompleteProviderFactory,
 	ContextUsage,
@@ -4980,15 +4981,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
 	#composerHint(): string | undefined {
-		return resolveComposerHint({
-			runningAgents: this.#runningSubagentCount,
-			focusedOnAgent: this.focusedAgentId !== undefined,
-			conversationStarted: this.viewSession.messages.length > 0,
-			keybindings: this.keybindings,
-			uses: id => hintUsage.get(id),
-		});
+		return (
+			resolveComposerHint({
+				runningAgents: this.#runningSubagentCount,
+				focusedOnAgent: this.focusedAgentId !== undefined,
+				conversationStarted: this.viewSession.messages.length > 0,
+				keybindings: this.keybindings,
+				uses: id => hintUsage.get(id),
+			}) ?? t("composer.placeholder")
+		);
 	}
-
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {
 		this.#extensionLinkRebuildPending = false;
 		// Mid-stream rebuilds (e.g. `/shake`, theme/setting changes that touch the

@@ -1,0 +1,5 @@
+[composer]
+placeholder = "Write a message…"
+
+[settings.language]
+description = "Language used for translated interface text"

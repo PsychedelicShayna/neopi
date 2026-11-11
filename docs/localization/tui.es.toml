@@ -1,0 +1,432 @@
+# Borrador para revisión; no está conectado a la localización en ejecución.
+# Las expresiones ${...} se conservan literalmente; no definen una API de interpolación.
+# REVIEW indica vocabulario pendiente de discusión con la persona usuaria.
+# Cobertura parcial: quedan mensajes condicionales, compuestos dinámicamente y
+# relacionados con comandos en interactive-mode y sus controladores; la búsqueda
+# tuvo un límite por archivo. Pueden faltar textos en minúsculas, generados, de
+# accesibilidad nativa o suministrados por callbacks en componentes, chrome y status-line.
+# Las expresiones de plural en inglés requieren revisión con la implementación.
+
+# packages/tui/src/components/form.ts
+[components.form]
+preview = "Vista previa:"
+select = "Seleccionar"
+
+# packages/tui/src/components/loader.ts
+[components.loader]
+cancel = "Cancelar"
+stop = "Detener"
+loading = "Cargando..."
+
+# packages/tui/src/components/menu-hints.ts
+[components.vim_help]
+title = "Navegación de Vim"
+rows = "j / k: fila siguiente / anterior (también las flechas)"
+horizontal = "h / l: izquierda / derecha (panel, rama o valor)"
+boundaries = "gg / G: primer / último elemento (también Home / End)"
+half_page = "Ctrl-u / Ctrl-d: media página arriba / abajo"
+scroll = "Ctrl-e / Ctrl-y: desplazar la vista abajo / arriba"
+page = "PgUp / PgDn: página completa arriba / abajo"
+return = "? / Enter / Esc: volver al menú"
+
+# packages/tui/src/components/menu-navigation.ts, select-list.ts, settings-list.ts
+[components.search]
+placeholder = "/ buscar"
+prefix = "Buscar: "
+invalid_regex = 'Expresión regular no válida: ${error}'
+no_matching_items = "No hay elementos coincidentes"
+no_items = "No hay elementos"
+no_settings = "No hay ajustes disponibles"
+no_matching_settings = "No hay ajustes coincidentes"
+other = "Otros"
+
+# packages/tui/src/chrome/context-view-model.ts
+# REVIEW: instrucciones del sistema, habilidades, razonamiento, llamadas y salida de herramientas.
+[chrome.context]
+system_prompt = "Instrucciones del sistema"
+system_prompt_excluding_skills = "Instrucciones del sistema (sin habilidades)"
+skills = "Habilidades"
+builtin_tools = "Herramientas integradas"
+custom_tools = "Herramientas personalizadas"
+user_developer_messages = "Mensajes de usuario / desarrollador"
+assistant_messages = "Mensajes del asistente"
+assistant_thinking = "Razonamiento del asistente"
+tool_calls = "Llamadas a herramientas"
+tool_output = "Salida de herramientas"
+
+# packages/tui/src/chrome/error-block.ts, transcript-notice.ts, side-panel-fullscreen.ts
+[chrome.notices]
+unknown_error = "Error desconocido"
+warning = "Advertencia"
+error = "Error"
+side_panel = "Panel lateral"
+
+# packages/tui/src/status-line/component.ts
+# REVIEW: contexto, tokens, compactación.
+[status.context]
+unknown = "Uso de contexto desconocido"
+used = 'Contexto utilizado: ${Math.round(pct)}%'
+tokens = '${formatNumber(ctx.contextTokens)} de ${formatNumber(window)} tokens'
+no_window = "Sin ventana de contexto"
+auto_compact = 'Compactación automática al ${Math.round(boundaries.thresholdPercent)}%'
+summary_running = "Resumen de compactación en curso"
+summary_ready = "Resumen de compactación listo"
+summary_starts = 'El resumen de compactación comienza al ${Math.round(speculationAt * 100)}%'
+session_cost = 'Costo de la sesión: ${cost}'
+
+# packages/tui/src/status-line/context-usage.ts
+# REVIEW: instrucciones del sistema, herramientas, contexto, habilidades.
+[status.categories]
+system_prompt = "Instrucciones del sistema"
+system_tools = "Herramientas del sistema"
+system_context = "Contexto del sistema"
+skills = "Habilidades"
+messages = "Mensajes"
+
+# packages/tui/src/status-line/segments.ts
+# REVIEW: nombres de modos y etiquetas de Vim, que pueden ser convenciones reconocibles.
+[status.modes]
+plan = "Plan"
+plan_paused = "Plan (en pausa)"
+prewalk = "Prewalk"
+loop_waiting = "se repite el siguiente prompt"
+vim_insert = "INSERCIÓN"
+vim_normal = "NORMAL"
+vim_visual = "VISUAL"
+vim_visual_line = "LÍNEA VISUAL"
+vim_replace = "REEMPLAZAR"
+
+# packages/coding-agent/src/modes/interactive-mode.ts
+# REVIEW: agente, centro, prompt, extensión, backend.
+[interactive.notices]
+agent_gone = "Ese agente ya no está — abre el centro para ver los agentes activos"
+history_not_saved = "No se pudo guardar el historial de prompts; es posible que este prompt no esté disponible después de reiniciar."
+copied = "Copiado al portapapeles"
+no_extension_links = "No hay enlaces de extensiones en pantalla"
+too_many_extension_links = "Hay demasiados enlaces de extensiones en una fila para marcarlos; amplía la terminal"
+no_editor = 'No hay un editor configurado. Define la variable de entorno $VISUAL o $EDITOR.'
+closing = "Cerrando sesión…"
+still_closing = "Aún se está cerrando… (vaciando el backend de memoria / la red)"
+no_async_jobs = "Los trabajos asíncronos en segundo plano no están disponibles en esta sesión."
+control_recording = "Un cliente de control está grabando con el micrófono"
+dictation_latched = "Dictado continuo activado: suelta Space y luego pulsa Space o Backspace para detenerlo"
+finish_xai_recording = "Termina la grabación de xAI antes de usar el dictado configurado."
+stt_disabled = "La conversión de voz a texto está desactivada. Actívala en ajustes: stt.enabled"
+
+# REVIEW: terminología de plan, objetivo, vibe y prompt; no se traducen comandos.
+[interactive.modes]
+exit_goal = "Primero sal del modo objetivo."
+exit_vibe = "Primero sal del modo vibe."
+exit_plan = "Primero sal del modo plan."
+plan_paused = "Modo plan en pausa."
+plan_disabled = "Modo plan desactivado."
+plan_not_active = "El modo plan no está activo."
+plan_setting_disabled = "El modo plan está desactivado. Actívalo en ajustes (plan.enabled)."
+plan_copied = "Plan copiado al portapapeles"
+plan_updated = "Plan actualizado en el editor externo."
+plan_refine = "Refinar plan: introduce un prompt de seguimiento."
+goal_resumed = "Modo objetivo reanudado."
+goal_enabled = "Modo objetivo activado."
+goal_completed = "Modo objetivo completado."
+goal_dropped = "Objetivo descartado."
+goal_paused = "Modo objetivo en pausa."
+goal_disabled = "Modo objetivo desactivado."
+no_active_goal = "No hay un objetivo activo."
+goal_already_complete = "El objetivo ya está completado."
+goal_budget_invalid = 'El presupuesto del objetivo debe ser un entero positivo o `off`.'
+goal_budget_cleared = "Presupuesto del objetivo eliminado."
+goal_setting_disabled = "El modo objetivo está desactivado. Actívalo en ajustes (goal.enabled)."
+goal_resume_or_drop = "Primero reanuda el objetivo actual o descártalo antes de establecer uno nuevo."
+goal_resume_for_budget = "Reanuda el objetivo antes de ajustar el presupuesto."
+no_goal_set = "No hay un objetivo establecido."
+no_goal_to_pause = "No hay un objetivo activo que pausar."
+no_goal_to_resume = "No hay un objetivo en pausa que reanudar."
+no_goal_to_drop = "No hay un objetivo que descartar."
+
+# packages/tui/src/components/settings-list.ts, tab-bar.ts, menu-navigation.ts
+[components.navigation]
+edit_search = '${editKey} para editar la búsqueda · ${cancelKey} para cancelar'
+tabs_hint = '(h/l pestañas · ${formatKeyHint("tab")} cambiar)'
+search_hint = " · / buscar · ? ayuda"
+
+# packages/tui/src/status-line/segments.ts; REVIEW: nombre del modo.
+[status.extra]
+vibe = "Vibe"
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts
+# REVIEW: shake, handoff, snapcompact, compactación y alternativa.
+[interactive.events]
+auto_shake_completed = "Auto-shake completado"
+auto_handoff_completed = "Auto-handoff completado"
+snapcompact_failed = "Falló el mantenimiento automático de snapcompact; se continuará sin mantenimiento"
+server_compaction_failed = "Falló la compactación automática del servidor; se continuará sin mantenimiento"
+context_full_failed = "Falló el mantenimiento automático por contexto lleno; se continuará sin mantenimiento"
+retry_failed = 'El reintento falló después de ${event.attempt} intentos: ${event.finalError || "Unknown error"}'
+fallback = 'Alternativa: ${event.from} -> ${event.to}${reason}'
+fallback_succeeded = 'La alternativa funcionó con ${event.model}'
+
+# packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+# REVIEW: ramificación y colaboración.
+[interactive.extensions]
+reloaded = "Sesión recargada"
+branched = "Se creó una rama en una nueva sesión"
+navigated = "Se navegó al punto seleccionado"
+host_only_turns = "Los turnos iniciados por extensiones solo están disponibles para el anfitrión durante una sesión colaborativa"
+send_message_failed = 'Falló sendMessage de la extensión: ${err instanceof Error ? err.message : String(err)}'
+send_user_message_failed = 'Falló sendUserMessage de la extensión: ${err instanceof Error ? err.message : String(err)}'
+backed_off = '⌁ ${actor.label}#${actor.connectionId} se retiró (estabas interactuando)'
+
+# packages/coding-agent/src/modes/controllers/input-controller.ts
+# REVIEW: subagente, centro, compositor, cadena, colaboración y prompt.
+[interactive.input]
+side_panel = 'Panel lateral (${prefix}): t tareas · a agentes · i IRC · esc cancelar'
+subagent_gone = "Ese subagente ya no está — abre el centro para ver los agentes activos"
+composer_locked = "El compositor está bloqueado mientras se ejecuta una cadena"
+local_execution_host_only = "La ejecución local solo está disponible para el anfitrión durante una sesión colaborativa"
+collab_read_only = "Este enlace de colaboración es de solo lectura — el envío de prompts está desactivado"
+bash_running = "Ya hay un comando de bash en ejecución. Presiona Esc para cancelarlo primero."
+kernel_busy = 'El kernel ${target} está ocupado. Presiona Esc para cancelarlo primero.'
+submit_text_saved = "El texto escrito durante el envío se guardó en el historial (Up)"
+chain_skipping = 'Cadena ${chainName}: omitiendo "${currentStep}"…'
+chain_skipped = 'Cadena ${chain.name}: se omitió "${step.name}"'
+chain_aborted = "Cadena interrumpida; borrador restaurado"
+chain_failed = 'La cadena ${chain.name} falló en el paso "${currentStep}"; el compositor conserva la última salida completada: ${error instanceof Error ? error.message : String(error)}'
+suspend_failed = 'No se pudo suspender: ${reason}'
+no_queued_messages = "No hay mensajes en cola para restaurar"
+
+# packages/coding-agent/src/modes/controllers/command-controller.ts
+# REVIEW: asesor, traza y transcripción.
+[interactive.session]
+exported = 'Sesión exportada a: ${filePath}'
+no_session_file = "Aún no hay archivo de sesión — envía primero un mensaje."
+no_messages = "Aún no hay mensajes para volcar."
+advisor_inactive = "El asesor no está activo en esta sesión."
+advisor_no_history = "El asesor aún no tiene historial."
+advisor_copied = "Historial del asesor copiado al portapapeles"
+share_cancelled = "Se canceló el uso compartido"
+shared = "Sesión compartida"
+share_url = 'URL para compartir: ${result}'
+
+# packages/coding-agent/src/modes/controllers/todo-command-controller.ts
+# REVIEW: terminología de tareas.
+[interactive.todos]
+no_copy = "No hay tareas para copiar."
+copied = "Tareas copiadas al portapapeles como Markdown."
+no_export = "No hay tareas para exportar."
+cleared = "Se eliminaron todas las tareas."
+wrote = 'Tareas escritas en ${target}'
+
+# packages/tui/src/components/form.ts
+[components.validation]
+required = "Se requiere un valor."
+
+# packages/tui/src/chrome/side-panel.ts, side-panel-fullscreen.ts y collab-qrcode.ts.
+# Son fragmentos que se muestran por separado, incluidas las alternativas condicionales.
+[chrome.panel]
+empty = "nada que mostrar"
+views = ' · ${prefix} t/a/i vista'
+footer = 'esc cerrar${views} · clic derecho cambiar · ↑↓ desplazar'
+
+[chrome.collab_qr]
+join = "Unirse"
+terminal_width = 'ancho de la terminal ${width}; se necesita ${this.#minWidth}'
+viewport_height = 'altura de la vista ${this.#allocatedRows}; se necesita ${this.#lines.length}'
+transcript_pressure = "espacio insuficiente en la transcripción"
+hidden = 'Código QR oculto: ${reason}.'
+
+# packages/coding-agent/src/modes/interactive-mode.ts.
+# REVIEW: transcripción, centro, prompt y LSP.
+[interactive.errors]
+readonly_transcript = '${id} es una transcripción de solo lectura; se muestra el centro de agentes'
+copy_failed = 'No se pudo copiar: ${error instanceof Error ? error.message : String(error)}'
+persistence_failed = 'No se pudo guardar la sesión: ${detail}. Las entradas sin guardar permanecen en memoria; se volverá a intentar al registrar la siguiente entrada.'
+cwd_failed = 'No se pudo cambiar el directorio de trabajo a ${newCwd}: ${error instanceof Error ? error.message : String(error)}'
+model_after_stream_failed = 'No se pudo cambiar de modelo después de la transmisión: ${error instanceof Error ? error.message : String(error)}'
+plan_model_failed = 'No se pudo cambiar al modelo de plan para el modo plan: ${error instanceof Error ? error.message : String(error)}'
+plan_file_missing = 'No se encontró el archivo del plan en ${planFilePath}'
+plan_save_failed = 'No se pudo guardar el plan: ${error instanceof Error ? error.message : String(error)}'
+plan_review_failed = 'Falló la revisión del plan: ${message}'
+plan_review_open_failed = 'No se pudo abrir la revisión del plan: ${message}'
+plan_refine_failed = 'No se pudo refinar el plan: ${error instanceof Error ? error.message : String(error)}'
+shutdown_failed = 'Falló el cierre: ${error instanceof Error ? error.message : String(error)}'
+recording_failed = 'No se pudo iniciar la grabación: ${error instanceof Error ? error.message : String(error)}'
+lsp_failed = 'Falló el inicio de LSP: ${event.error}. Se volverá a intentar al escribir.'
+lsp_failed_many = 'Falló el inicio de LSP para ${failedNames}. Se volverá a intentar al escribir.'
+
+# packages/coding-agent/src/modes/controllers/live-command-controller.ts,
+# selector-controller.ts, session-focus-controller.ts y modes/local-file-editor.ts.
+# REVIEW: compositor, cadena, prompt, agente y asesor.
+[interactive.controller_notices]
+voice_not_received = "El agente de voz no recibió tu mensaje; volvió al compositor"
+speech_ignored = "Se ignoró la voz mientras una cadena reescribe el borrador"
+close_view = "Primero cierra esta vista (Esc)"
+finish_prompt = "Primero termina o cancela el prompt"
+no_backing_file = "Esta configuración integrada no tiene un archivo asociado."
+editor_exit = 'El editor externo terminó con el código ${code}. Se recargaron los cambios guardados.'
+no_personality = "El ajuste de personalidad no está disponible."
+no_usage_data = "No hay datos de uso disponibles."
+main_session = "Se volvió a la sesión principal"
+agent_returned = 'El agente ${event.ref.id} está en estado ${gone ? "gone" : event.ref.status}; se volvió a la sesión principal'
+no_local_files = "Aún no hay archivos local:// en esta sesión."
+list_local_failed = 'No se pudieron listar los archivos local://: ${showErrorMessage(error)}'
+
+# packages/coding-agent/src/modes/controllers/mcp-command-controller.ts.
+[interactive.mcp]
+add_cancelled = 'Se canceló la adición de "${parsed.initialName}"'
+add_failed = 'No se pudo agregar el servidor: ${errorMsg}${helpText}'
+list_failed = 'No se pudieron listar los servidores: ${error instanceof Error ? error.message : String(error)}'
+remove_failed = 'No se pudo eliminar el servidor: ${error instanceof Error ? error.message : String(error)}'
+test_finished = 'La prueba MCP de "${name}" ya terminó'
+test_cancelled = 'Se canceló la prueba MCP de "${name}"'
+connect_failed = 'No se pudo conectar a "${name}": ${errorMsg}${helpText}'
+server_not_found = 'No se encontró el servidor "${name}".'
+auth_clear_failed = 'No se pudo borrar la autenticación: ${error instanceof Error ? error.message : String(error)}'
+
+# packages/coding-agent/src/modes/controllers/selector-controller.ts.
+# REVIEW: modelo, rol, alternativa, compactación, rama y retroceso.
+[interactive.selector]
+advisor_saved = 'Se guardó ${shortenPath(filePath)}. Presiona a para aplicarlo a los asesores activos.'
+advisor_applied = 'Se aplicó WATCHDOG.yml — ${count} asesor${count === 1 ? "" : "s"} activo(s).'
+chain_saved = 'Se guardó CHAINS.yml de ${scope} — ${count} cadena${count === 1 ? "" : "s"} disponible(s). Alt+C envía por la cadena activa.'
+agent_model = 'Modelo del agente ${focusedAgentId}: ${selector}'
+effort_rules = 'Reglas de esfuerzo implícito: ${rules.length}'
+context_rules = 'Reglas de contexto: ${rules.length}'
+default_model = 'Modelo predeterminado: ${fallbackModel.provider}/${fallbackModel.id}'
+cycle_cleared = "Se borró el ciclo de cambio rápido"
+model_facts_saved = "Datos del modelo guardados"
+uninstalling = 'Desinstalando ${pluginId}...'
+uninstalled = 'Se desinstaló ${pluginId}'
+uninstall_failed = 'Falló la desinstalación: ${err}'
+installing = 'Instalando ${name} desde ${marketplace}...'
+installed = 'Se instaló ${name} desde ${marketplace}'
+install_failed = 'Falló la instalación: ${err}'
+no_branch_messages = "No hay mensajes a partir de los cuales crear una rama"
+already_at_point = "Ya estás en este punto"
+navigation_cancelled = "Navegación cancelada"
+rewound = "Se retrocedió al punto seleccionado"
+nothing_to_copy = "Aún no hay nada que copiar."
+nothing_in_item = "No hay nada que copiar en ese elemento"
+copied_item = 'Se copió ${label} al portapapeles'
+opening = 'Abriendo ${label}: ${href}'
+no_session_entries = "No hay entradas en la sesión"
+reanswer_cancelled = "Se canceló la nueva respuesta"
+branch_summary_cancelled = "Se canceló el resumen de la rama"
+ask_not_ready = "La interfaz de la herramienta Ask no está lista"
+login_failed = 'Falló el inicio de sesión: ${error instanceof Error ? error.message : String(error)}'
+logout_failed = 'Falló el cierre de sesión: ${error instanceof Error ? error.message : String(error)}'
+account_pin_streaming = "No se puede fijar una cuenta mientras la sesión está transmitiendo."
+loading_accounts = "Cargando cuentas del proveedor…"
+select_model_for_pin = "Selecciona un modelo antes de fijar una cuenta del proveedor."
+checking_resets = "Consultando los reinicios de límite de solicitudes guardados…"
+no_saved_resets = "No hay reinicios de límite de solicitudes guardados para usar en este momento."
+irc_viewer_disabled = "El visor de IRC está desactivado (irc.operator.viewerEnabled)."
+
+# packages/tui/src/components/settings-list.ts:864-865; este texto también
+# aparece en la descripción nativa (settings-list.ts:769-781).
+[components.accessible_hints]
+settings = '${editorKey("tui.select.confirm")} editar · ${formatKeyHint("space")} cambiar · Tab secciones · / buscar · ${editorKey("tui.select.cancel")} cerrar · ? ayuda'
+
+# packages/tui/src/chrome/error-block.ts:58. REVIEW: interpolación de plural.
+[chrome.error_details]
+hidden_lines = '${CONTINUATION_INDENT}… +${hidden} línea${hidden === 1 ? "" : "s"} más (${expandKeyHint()} para expandir)'
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts:2752-2762.
+[interactive.maintenance_cancelled]
+handoff = "Auto-handoff cancelado"
+server = "Compactación automática del servidor cancelada"
+shake = "Auto-shake cancelado"
+snapcompact = "Auto-snapcompact cancelado"
+context_full = "Mantenimiento automático por contexto lleno cancelado"
+
+# packages/coding-agent/src/modes/controllers/input-controller.ts.
+# REVIEW: cola, compactación, ceder, razonamiento y ficha.
+[interactive.input_more]
+bash_running_bound = 'Ya hay un comando de bash en ejecución. Presiona ${appKey(this.ctx.keybindings, "app.interrupt")} para cancelarlo primero.'
+kernel_busy_bound = 'El kernel ${evalCommand.language} está ocupado. Presiona ${appKey(this.ctx.keybindings, "app.interrupt")} para cancelarlo primero.'
+chain_step = 'Cadena ${chain.name} · paso ${index + 1}/${total} "${step.name}" · preprocesando… (Esc Esc omitir · Esc Esc Esc interrumpir · Ctrl+C interrumpir)'
+suspend_unsupported = 'La suspensión (${appKey(this.ctx.keybindings, "app.suspend")}) no está disponible en esta plataforma'
+queue_restored = "Se restauró el último mensaje en cola al editor"
+nothing_to_retry = "No hay nada que reintentar"
+queued_compaction_one = "Mensaje en cola para después de la compactación"
+queued_compaction_many = '${messages.length} mensajes en cola para después de la compactación'
+sent_one = "Se envió el mensaje en cola"
+sent_first = 'Se envió el primer mensaje; ${queuedCount - 1} quedaron en cola para próximas cesiones'
+queued_yield_one = "Mensaje en cola para cuando el agente ceda"
+queued_yield_many = '${queuedCount} mensajes en cola para cuando el agente ceda'
+image_unsupported = "No se pueden pegar imágenes en este prompt"
+video_unsupported = "No se pueden pegar videos en este prompt"
+image_path_unsupported = "La ruta pegada no es una imagen compatible"
+image_missing = 'No se encontró la imagen en ${displayPath}'
+image_path_failed = "No se pudo leer la ruta de la imagen pegada"
+clipboard_empty = "El portapapeles está vacío"
+clipboard_read_failed = "No se pudo leer el portapapeles"
+clipboard_no_text = "No hay texto en el portapapeles para pegar sin procesar"
+clipboard_paste_failed = "No se pudo pegar el texto sin procesar del portapapeles"
+paste_saved = 'Se guardaron ${lineCount} líneas pegadas en local://${name}'
+paste_save_failed = "No se pudo guardar el contenido pegado en un archivo — se adjuntó como una ficha de texto"
+nothing_to_copy = "No hay nada que copiar"
+copy_failed = "No se pudo copiar al portapapeles"
+copied_line = 'Línea copiada: ${preview}'
+copied = 'Copiado: ${preview}'
+thinking_unsupported = "El modelo actual no admite razonamiento"
+one_role_model = "Solo hay un modelo de rol disponible"
+thinking_off = "El razonamiento está desactivado — actívalo para mostrar los bloques"
+editor_context_removed = "Se quitó el marcador de contexto del editor externo; el borrador no cambió."
+
+# packages/coding-agent/src/modes/local-file-editor.ts, skill-command.ts.
+# REVIEW: terminología de skill.
+[interactive.local_editor]
+closed = 'Se cerró ${sanitizeText(chosen.url)} en el editor.'
+editor_exit = 'El editor terminó con el código ${exitCode}; ${sanitizeText(chosen.url)} conserva lo que se haya guardado.'
+skill_load_failed = 'No se pudo cargar la habilidad: ${err instanceof Error ? err.message : String(err)}'
+
+# packages/tui/src/components/select-list.ts:817-840; estado compartido con la interfaz nativa.
+[components.select_status]
+query = '  Buscar: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}'
+type_to_narrow = "  Buscar: escribe para filtrar · Enter confirmar · Esc borrar"
+search = "  / buscar"
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts:186-191,2695-2712,3013-3038.
+# REVIEW: la composición contextual puede requerir un orden gramatical distinto.
+[interactive.working]
+background = "Esperando trabajo en segundo plano"
+background_one = 'Esperando el trabajo en segundo plano ${jobIds[0]}'
+background_many = 'Esperando ${jobIds.length} trabajos en segundo plano: ${listed}${more}'
+overflow = "Se detectó un desbordamiento de contexto, "
+incomplete = "Respuesta incompleta, "
+idle = "Inactividad: "
+server_compaction = "compactación automática del servidor"
+handoff = "auto-handoff"
+shake = "auto-shake"
+snapcompact = "auto-snapcompact"
+context_full = "mantenimiento automático por contexto lleno"
+stopped_error = "Se detuvo con un error"
+complete = "Completado"
+
+# packages/coding-agent/src/modes/controllers/command-controller.ts.
+# REVIEW: contexto, memoria, backend, instrucciones del sistema, compactación y handoff.
+[interactive.session_operations]
+usage_unconfigured = "Los informes de uso no están configurados para esta sesión."
+usage_failed = 'No se pudieron obtener los datos de uso: ${error instanceof Error ? error.message : String(error)}'
+context_no_model = "El uso de contexto no está disponible: no hay un modelo seleccionado para esta sesión."
+context_unknown_window = "El uso de contexto no está disponible: la ventana de contexto del modelo es desconocida o no válida."
+memory_empty = "El contenido de memoria está vacío (backend de memoria apagado, desactivado o sin memoria disponible)."
+memory_cleared = "Se borraron los datos de memoria y se actualizaron las instrucciones del sistema."
+memory_queued = "Se puso en cola la consolidación de memoria."
+memory_ran = "Se ejecutó la consolidación de memoria."
+memory_queue_unavailable = 'La cola de memoria no está disponible para el backend ${backend.id}.'
+wait_refresh = "Espera a que termine la respuesta actual o interrúmpela antes de actualizar el estado del proveedor."
+wait_reset = "Espera a que termine la respuesta actual o interrúmpela antes de restablecer el contexto."
+name_empty = "El nombre de la sesión no puede estar vacío."
+renamed = 'Se cambió el nombre de la sesión a "${name}".'
+wait_worktree = "Espera a que termine la respuesta actual o interrúmpela antes de crear un árbol de trabajo."
+wait_directory = "Espera a que termine la respuesta actual o interrúmpela antes de cambiar de directorio."
+nothing_compact = "No hay nada que compactar (aún no hay mensajes)"
+compaction_cancelled = "Compactación cancelada"
+compaction_failed = 'Falló la compactación: ${message}'
+wait_handoff_response = "Espera a que termine la respuesta actual o interrúmpela antes de hacer el handoff."
+wait_handoff_compaction = "Espera a que termine la compactación de contexto o cancélala antes de hacer el handoff."
+nothing_handoff = "No hay nada que entregar (aún no hay mensajes)"
+handoff_cancelled = "Handoff cancelado"
+handoff_saved = 'Documento de handoff guardado en: ${result.savedPath}'
+handoff_failed = 'Falló el handoff: ${message}'
