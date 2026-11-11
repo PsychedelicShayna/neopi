@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { SelectList, type SelectListTheme } from "@oh-my-pi/pi-tui/components/select-list";
 import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
@@ -60,6 +61,23 @@ describe("SelectList", () => {
 
 	afterEach(() => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+	});
+
+	it("localizes search feedback without changing selectable values", () => {
+		const previousLocale = getLocale();
+		try {
+			setLocale("es");
+			const list = new SelectList([{ value: "original-id", label: "Original" }], 3, testTheme, { search: "always" });
+			list.handleInput("/");
+			list.handleInput("sin coincidencias");
+			const output = list.render(100).join("\n");
+			expect(output).toContain("Buscar:");
+			expect(output).toContain("No hay elementos coincidentes");
+			list.handleInput("\x1b");
+			expect(list.getSelectedItem()?.value).toBe("original-id");
+		} finally {
+			setLocale(previousLocale);
+		}
 	});
 
 	it("lets a parent own gg prefixes while applying decoded list actions", () => {

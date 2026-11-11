@@ -261,8 +261,11 @@ export class MenuSearchField {
 		const hint = error
 			? ` · ${t("tui.components.search.invalid_regex", { error })}`
 			: this.focused
-				? ` · ${menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : ""}Enter confirm · Esc ${menuSearchVimMode && this.vimMode === "insert" ? "normal" : "cancel"} · Ctrl-c clear`
-				: " · / search · ? help";
+				? t("tui.components.search.focused_hint", {
+						vim: menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : "",
+						escape: t(menuSearchVimMode && this.vimMode === "insert" ? "tui.components.search.normal" : "tui.components.search.cancel"),
+					})
+				: t("tui.components.search.idle_hint");
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")

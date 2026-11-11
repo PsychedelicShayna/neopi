@@ -834,11 +834,11 @@ export class SelectList implements Component, MouseRoutable {
 			? (custom ?? "")
 			: (pendingItem?.confirmation ??
 					(query
-						? `  Search: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}`
+						? t(this.#search.focused ? "tui.components.search.list_focused" : "tui.components.search.list_idle", {
+								query,
+							})
 						: this.#canEditSearch()
-							? this.#search.focused
-								? "  Search: type to narrow · Enter confirm · Esc clear"
-								: "  / search"
+							? t(this.#search.focused ? "tui.components.search.list_empty_focused" : "tui.components.search.list_empty_idle")
 							: ""));
 	}
 

@@ -40,3 +40,5 @@
 "settings.selector.apply_hint" = " · F6 Aplicar"
 "settings.selector.config_hint" = " · Ctrl+G config file"
 "settings.selector.feedback" = " · {feedback}"
+"settings.selector.match_one" = "1 coincidencia"
+"settings.selector.match_many" = "{count} coincidencias"

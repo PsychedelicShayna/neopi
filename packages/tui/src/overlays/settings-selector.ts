@@ -156,7 +156,7 @@ interface SettingsNativeMemo {
 	prefs?: { signature: string; children: readonly NativeChild[]; node: NativeNode };
 	prefsPreview?: { source: string; node: NativeNode };
 	tabs?: { tabs: readonly Tab[]; active: string | undefined; node: NativeNode };
-	search?: { input: Input; count: number; node: NativeNode };
+	search?: { input: Input; count: number; locale: Locale; node: NativeNode };
 	preview?: { source: string; node: NativeNode };
 	hints: Partial<Record<SettingsHintMode, NativeNode>>;
 	root?: { children: readonly NativeChild[]; node: NativeNode };
@@ -1020,7 +1020,9 @@ export class SettingsSelectorComponent implements Component {
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
 	#renderSearchBanner(width: number): string {
 		const icon = theme.symbol("icon.search");
-		const countText = this.#searchMatchCount === 1 ? "1 match" : `${this.#searchMatchCount} matches`;
+		const countText = this.#searchMatchCount === 1
+			? t("settings.selector.match_one")
+			: t("settings.selector.match_many", { count: this.#searchMatchCount });
 		const rightWidth = visibleWidth(countText) + 1; // trailing margin
 		const prefix = ` ${theme.fg("accent", icon)} `;
 		// The input pads itself to exactly this width and keeps the cursor in view.
@@ -1500,11 +1502,13 @@ export class SettingsSelectorComponent implements Component {
 
 		if (searching || this.#search.focused) {
 			const count = this.#searchMatchCount;
-			if (memo.search?.input !== this.#search.input || memo.search.count !== count) {
-				const countText = count === 1 ? "1 match" : `${count} matches`;
+			const locale = getLocale();
+			if (memo.search?.input !== this.#search.input || memo.search.count !== count || memo.search.locale !== locale) {
+				const countText = count === 1 ? t("settings.selector.match_one") : t("settings.selector.match_many", { count });
 				memo.search = {
 					input: this.#search.input,
 					count,
+					locale,
 					node: node(
 						"row",
 						{ gap: "xs", align: "center", role: "omp.settings.search" },
