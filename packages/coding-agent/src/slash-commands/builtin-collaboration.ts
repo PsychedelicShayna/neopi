@@ -1,6 +1,7 @@
 import { clearSubmittedText } from "./helpers/draft";
 import { Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
+import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { discoverChains } from "../chains/config";
 import { discoverMixtures } from "../moa/config";
@@ -440,7 +441,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				// matching src/cli/stats-cli.ts, to keep CLI startup fast.
 				const { formatStatsDashboardUrl, startServer } = await import("@oh-my-pi/omp-stats");
 				const { hostname, port } = await startServer();
-				const url = `${formatStatsDashboardUrl(hostname, port)}/#/traces?s=${encodeURIComponent(sessionFile)}`;
+				const url = `${formatStatsDashboardUrl(hostname, port, getLocale())}#/traces?s=${encodeURIComponent(sessionFile)}`;
 				await runtime.output(url);
 				return commandConsumed();
 			} catch (err) {

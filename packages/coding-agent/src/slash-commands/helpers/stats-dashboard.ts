@@ -1,4 +1,5 @@
 import * as stats from "@oh-my-pi/omp-stats";
+import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import * as openUtils from "../../utils/open";
 
 export const DEFAULT_STATS_DASHBOARD_PORT = 3847;
@@ -89,7 +90,7 @@ export async function launchStatsDashboard(
 		if (judge) await stats.startServer(activeStatsServer.port, activeStatsServer.hostname, { judge });
 	}
 
-	const url = stats.formatStatsDashboardUrl(activeStatsServer.hostname, activeStatsServer.port);
+	const url = stats.formatStatsDashboardUrl(activeStatsServer.hostname, activeStatsServer.port, getLocale());
 	openUtils.openPath(url);
 
 	const serverLine = requestedAddressIgnored

@@ -128,11 +128,11 @@ async function installNetworkBootstrap(): Promise<void> {
 async function showHelp(config: CliConfig<CommandMetadata>): Promise<void> {
 	// Root help historically loads the selected profile's environment. The
 	// lazily loaded help module imports it statically after profile bootstrap.
-	const [{ renderRootHelp }, { getExtraHelpText, initializeHelpLanguage, translateHelpHeading }] = await Promise.all([
+	const [{ renderRootHelp }, { getExtraHelpText, initializeCliLanguage, translateHelpHeading }] = await Promise.all([
 		import("@oh-my-pi/pi-utils/cli"),
 		import("./cli/help-extra"),
 	]);
-	await initializeHelpLanguage();
+	await initializeCliLanguage();
 	renderRootHelp(config, translateHelpHeading);
 	const extra = getExtraHelpText();
 	if (extra.trim().length > 0) {

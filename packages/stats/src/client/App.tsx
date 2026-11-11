@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { DashboardSection } from "./app/nav";
 import { Shell } from "./app/Shell";
 import { LiveProvider } from "./data/live";
+import { LocaleProvider } from "./i18n";
 import { useHashRoute } from "./data/useHashRoute";
 import {
 	CostsRoute,
@@ -20,9 +21,11 @@ import { RequestDrawer } from "./ui/RequestDrawer";
 
 export default function App() {
 	return (
-		<LiveProvider>
-			<Dashboard />
-		</LiveProvider>
+		<LocaleProvider>
+			<LiveProvider>
+				<Dashboard />
+			</LiveProvider>
+		</LocaleProvider>
 	);
 }
 

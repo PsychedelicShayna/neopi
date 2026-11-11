@@ -7,12 +7,12 @@ import { Settings } from "../config/settings";
 import { cfgLanguage } from "../modes/settings";
 
 /** Load the configured language without initializing the interactive session or writing settings. */
-export async function initializeHelpLanguage(): Promise<void> {
+export async function initializeCliLanguage(): Promise<void> {
 	try {
 		const settings = await Settings.loadReadOnly();
 		setLocale(cfgLanguage.get(settings));
 	} catch (error) {
-		logger.warn("Could not load language for CLI help; using English", { error: String(error) });
+		logger.warn("Could not load language for CLI; using English", { error: String(error) });
 		setLocale("en");
 	}
 }

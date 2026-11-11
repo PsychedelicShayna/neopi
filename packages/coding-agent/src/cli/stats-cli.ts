@@ -7,6 +7,8 @@
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { getLocale } from "@oh-my-pi/pi-utils/i18n";
+import { initializeCliLanguage } from "./help-extra";
 import { openStandaloneJudge } from "../judgment/standalone";
 import { openPath } from "../utils/open";
 import { runHostedStats } from "./stats-host";
@@ -70,6 +72,7 @@ export interface StatsCommandArgs {
 // =============================================================================
 
 export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
+	if (!cmd.json && !cmd.summary) await initializeCliLanguage();
 	if (cmd.headless) {
 		if (cmd.json || cmd.summary) throw new Error("--headless cannot be combined with --json or --summary");
 		await runHostedStats();
@@ -111,7 +114,7 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	const { hostname, port } = await startServer(cmd.port, cmd.host, {
 		judge: async () => (await openStandaloneJudge(cwd, "stats_frustration")).judge,
 	});
-	const url = formatStatsDashboardUrl(hostname, port);
+	const url = formatStatsDashboardUrl(hostname, port, getLocale());
 	console.log(chalk.green(`Dashboard available at: ${url}`));
 
 	// Open browser
