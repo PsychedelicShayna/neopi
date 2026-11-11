@@ -131,11 +131,11 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 										height={280}
 										format={v => formatCost(v, Number.isInteger(v) ? 0 : 2)}
 										formatTooltip={v => formatCost(v)}
-										emptyLabel="No priced usage in this range"
+										emptyLabel={tr("costs.no_priced_usage", "No priced usage in this range")}
 										tooltipExtra={i =>
 											view.unpricedPerDay[i] > 0 ? (
 												<div className="chart-tooltip-row chart-tooltip-total">
-													<span className="chart-tooltip-label">Unpriced requests</span>
+													<span className="chart-tooltip-label">{tr("costs.unpriced_requests", "Unpriced requests")}</span>
 													<span className="chart-tooltip-value">
 														{formatInteger(view.unpricedPerDay[i])}
 													</span>
@@ -250,6 +250,7 @@ function buildCostsView(data: CostDashboardStats, range: TimeRange): CostsView {
 }
 
 function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
+	const tr = useTranslation();
 	const { summary } = view;
 	const pricedRequests = summary.requests - summary.unpricedRequests;
 	const top = summary.topModel;
@@ -257,18 +258,24 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 		<div data-stale={stale}>
 			<StatGrid min={180}>
 				<Stat
-					label="API-equivalent estimate"
-					title="What this usage would cost at public API rates"
+					label={tr("costs.estimate", "API-equivalent estimate")}
+					title={tr("costs.estimate_title", "What this usage would cost at public API rates")}
 					value={formatEstimatedCost(summary.totalCost, summary.unpricedRequests)}
-					hint={`${formatInteger(summary.requests)} requests`}
+					hint={tr(
+						summary.requests === 1 ? "costs.request_one" : "costs.request_many",
+						"{count} requests",
+					).replace("{count}", formatInteger(summary.requests))}
 					spark={view.dailyTotals}
 					sparkColor="var(--chart-secondary)"
 				/>
 				<Stat
-					label="Average per day"
-					title="Estimate ÷ days with any usage"
+					label={tr("costs.average_daily", "Average per day")}
+					title={tr("costs.average_daily_title", "Estimate ÷ days with any usage")}
 					value={formatEstimatedCost(summary.avgDailyCost, summary.unpricedRequests)}
-					hint={`over ${formatInteger(summary.activeDays)} active day${summary.activeDays === 1 ? "" : "s"}`}
+					hint={tr(
+						summary.activeDays === 1 ? "costs.active_day_one" : "costs.active_day_many",
+						summary.activeDays === 1 ? "over {count} active day" : "over {count} active days",
+					).replace("{count}", formatInteger(summary.activeDays))}
 				/>
 				<Stat
 					label="Top model"
@@ -277,16 +284,20 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 					hint={top ? `${formatCost(top.cost)} · ${formatPercent(top.share)} of estimate` : "Nothing priced yet"}
 				/>
 				<Stat
-					label="Per priced request"
-					title="Estimate ÷ requests that have a public price"
+					label={tr("costs.per_priced", "Per priced request")}
+					title={tr("costs.per_priced_title", "Estimate ÷ requests that have a public price")}
 					value={pricedRequests > 0 ? formatUnitCost(summary.totalCost / pricedRequests) : "–"}
-					hint={`${formatInteger(pricedRequests)} priced`}
+					hint={tr("costs.priced_count", "{count} priced").replace("{count}", formatInteger(pricedRequests))}
 				/>
 				<Stat
-					label="Unpriced requests"
-					title="Subscription usage with no public-equivalent price; excluded from the estimate"
+					label={tr("costs.unpriced_requests", "Unpriced requests")}
+					title={tr("costs.unpriced_title", "Subscription usage with no public-equivalent price; excluded from the estimate")}
 					value={formatInteger(summary.unpricedRequests)}
-					hint={summary.unpricedRequests > 0 ? "excluded from the estimate" : "all usage priced"}
+					hint={
+						summary.unpricedRequests > 0
+							? tr("costs.excluded", "excluded from the estimate")
+							: tr("costs.all_priced", "all usage priced")
+					}
 				/>
 			</StatGrid>
 		</div>
