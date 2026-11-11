@@ -315,7 +315,7 @@ describe("SelectList", () => {
 		list.handleInput("/");
 		for (const key of "og/hjkl") list.handleInput(key);
 		expect(list.navigationState().filterDraft).toBe("og/hjkl");
-		expect(list.debugState().filterText).toBe("");
+		expect(list.debugState().filterText).toBe("og/hjkl");
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(0);
 		expect(list.debugState()).toMatchObject({ filterText: "", filterFocused: false });
@@ -472,6 +472,9 @@ describe("SelectList", () => {
 		list.handleInput("j");
 		expect(list.getSelectedItem()?.value).toBe("Voice");
 		list.handleInput("/");
+		list.handleInput("\x1b");
+		expect(list.navigationState().filter).toBe("/<live>|<voice>");
+		expect(list.render(120).join("\n")).not.toContain("Revoice");
 		list.handleInput("\x1b");
 		expect(list.navigationState().filter).toBe("");
 		expect(list.render(120).join("\n")).toContain("Revoice");

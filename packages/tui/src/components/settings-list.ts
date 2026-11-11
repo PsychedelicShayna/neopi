@@ -291,6 +291,7 @@ export class SettingsList implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		this.#setFilter(this.#search.query);
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 

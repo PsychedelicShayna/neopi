@@ -187,8 +187,8 @@ describe("SettingsList", () => {
 		expect(list.hasSearchQuery()).toBe(false);
 		list.handleInput("/");
 		list.handleInput("b");
-		expect(list.getSearchQuery()).toBe("");
-		expect(list.render(80).join("\n")).toContain("Theme");
+		expect(list.getSearchQuery()).toBe("b");
+		expect(list.render(80).join("\n")).not.toContain("Theme");
 		list.handleInput("\r");
 
 		const output = list.render(80).join("\n");
@@ -752,7 +752,7 @@ describe("SettingsList", () => {
 		expect(changes).toBe(1);
 		expect(visits.map(visit => visit.page)).toEqual(["name", ""]);
 	});
-	it("confirms raw patterns before filtering and consumes every search-mode navigation key", () => {
+	it("previews raw patterns while consuming search-mode navigation keys", () => {
 		let changes = 0;
 		let cancelled = 0;
 		const list = new SettingsList(
@@ -766,10 +766,10 @@ describe("SettingsList", () => {
 		const output = () => list.render(120).join("\n");
 		list.handleInput("/");
 		for (const key of ".{1000}") list.handleInput(key);
-		expect(list.navigationSnapshot()).toMatchObject({ filter: "", filterDraft: ".{1000}", filterFocused: true });
-		expect(output()).toContain("Count 1000");
+		expect(list.navigationSnapshot()).toMatchObject({ filter: ".{1000}", filterDraft: ".{1000}", filterFocused: true });
+		expect(output()).toContain("No matching settings");
 		for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x0e"]) list.handleInput(key);
-		expect(list.getSelectedItem()?.id).toBe("claude");
+		expect(list.getSelectedItem()).toBeUndefined();
 		expect(list.sectionFocused).toBe(false);
 		expect(list.navigationSnapshot()).toMatchObject({ filterCursor: 7, filterFocused: true });
 		list.handleInput("\r");
@@ -781,7 +781,7 @@ describe("SettingsList", () => {
 		expect(output()).toContain("Count 1000");
 		list.handleInput("/");
 		for (const key of "/^claude/") list.handleInput(key);
-		expect(output()).toContain("GPT model");
+		expect(output()).not.toContain("GPT model");
 		list.handleInput("\r");
 		expect(output()).toContain("Claude model");
 		expect(output()).not.toContain("GPT model");
@@ -789,9 +789,12 @@ describe("SettingsList", () => {
 		list.handleInput("/");
 		list.handleInput("unconfirmed");
 		list.handleInput("\x1b");
+		expect(list.getSearchQuery()).toBe("/^claude/");
+		expect(output()).not.toContain("GPT model");
+		expect(list.debugState().filterFocused).toBe(false);
+		list.handleInput("\x1b");
 		expect(list.getSearchQuery()).toBe("");
 		expect(output()).toContain("GPT model");
-		expect(list.debugState().filterFocused).toBe(false);
 		expect(cancelled).toBe(0);
 	});
 
