@@ -187,6 +187,7 @@ describe("global --profile flag", () => {
 			expect(exitCode, stderr).toBe(0);
 			expect(stdout).toContain("\nUSO\n");
 			expect(stdout).toMatch(/--no-title\s+Desactivar la generación automática del título/);
+			expect(stdout).toMatch(/--mode=<value>\s+Modo de salida: text \(predeterminado\), json, rpc o rpc-ui/);
 			expect(stdout).toContain("--cwd=<value>");
 		} finally {
 			await removeWithRetries(root);

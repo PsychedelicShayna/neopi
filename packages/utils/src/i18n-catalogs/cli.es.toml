@@ -5,3 +5,6 @@
 "cli.flag.cwd.description" = "Directorio de inicio (prevalece sobre el directorio de inicio de ejecución)"
 "cli.flag.allow-home.description" = "Permitir iniciar en ~ sin cambiar automáticamente a un directorio temporal"
 "cli.flag.no-title.description" = "Desactivar la generación automática del título"
+"cli.flag.mode.description" = "Modo de salida: text (predeterminado), json, rpc o rpc-ui"
+"cli.flag.api-key.description" = "Clave de API (por defecto, usa variables de entorno)"
+"cli.flag.no-pty.description" = "Desactivar la ejecución interactiva de bash mediante PTY"
