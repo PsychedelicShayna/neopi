@@ -40,6 +40,15 @@ TUI text is distributed across implementation and not a separate locale resource
 - `packages/collab-web` and its `src/`, `public/`, `index.html`: distinct browser-facing text if included in “entire harness”; browser extension/client surfaces may have their own rendering/code path.
 - Native Rust builtins in `crates/pi-builtins/src/` expose CLI help and error output. Examples include `crates/pi-builtins/src/rsync/usage.rs` (`--help`/version/daemon help) and builtin modules such as `read.rs`, `rg.rs`, `rm.rs`, `date.rs`. These emulate standard Unix tools; translate only NeoPi-authored messages where compatibility permits, not replicated upstream utility output blindly.
 
+### Additional inspected surfaces
+
+- Root CLI help is assembled by `packages/utils/src/cli.ts:304-330` from command metadata, with command-specific headings and flag/argument descriptions at `:358-417`. Root descriptions live in `packages/coding-agent/src/cli/command-help.ts:4-85`; launch flags and interpolation-bearing descriptions live in `packages/coding-agent/src/commands/launch-help.ts:7-80`. Literal command names, examples, flag names, environment variables and argument values must remain executable.
+- The stats dashboard is a separate browser surface, not only terminal output: `packages/stats/src/client/app/Shell.tsx:19-22,48-78` contains dynamically derived range labels and accessibility labels, while `packages/stats/src/client/routes/` owns route-specific text. It needs browser-compatible locale delivery rather than assuming Bun's TOML runtime is present in the browser.
+- Collaboration's guest browser is another separate surface: `packages/collab-web/src/components/shell/ConnectScreen.tsx:18-26,43-86` mixes validation errors, labels, a literal `/collab` command, guest-supplied values and connection text. `src/components/` and `src/tool-render/` contain further interface-owned text; protocol and user content must remain unchanged.
+- The Browser Relay extension's `packages/browser-relay/extension/options.html:40-50` has a standalone options page with labels, a save action and a literal `npi browser-relay` command. Its plain JavaScript is shipped separately (`extension/options.js`); it does not automatically receive the terminal process's locale.
+- Provider-originated errors can mix interface-owned wrappers with remote text: `packages/ai/src/providers/ollama.ts:620-638` combines HTTP status, URL and an upstream error string. Preserve upstream content and structured error/protocol semantics; translation of such shared errors needs a presentation boundary rather than rewriting wire payloads.
+- Dynamic terminal messages require full-message catalogs rather than fragments: settings hints interpolate key names (`packages/tui/src/overlays/settings-selector.ts:169-189`), and context status combines usage, thresholds and counts (`packages/tui/src/status-line/component.ts:3765-3775,3783-3797`). Unsettled terminology remains a review placeholder. These examples do not constitute an exhaustive extraction.
+
 ## Exclusions / review constraints
 
 - `deck/` was not inspected and must remain untouched.
