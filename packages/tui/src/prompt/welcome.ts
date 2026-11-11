@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatDoubleTap, formatKeyHint, formatKeyHints, type KeyName } from "../app-keybindings";
 import { editorKey } from "../chrome/keybinding-hints";
@@ -150,7 +151,7 @@ function tipSpans(tip: string): TspSpan[] {
  * `[]` when `width` leaves no room for a useful line.
  */
 export function renderWelcomeTip(tip: string, width: number, phase = 0): string[] {
-	const label = "Tip: ";
+	const label = t("tui.welcome.tip_prefix");
 	if (width - visibleWidth(label) < 8) return [];
 
 	const isNew = NEW_TIP_MARKER.test(tip);
@@ -212,7 +213,8 @@ export class WelcomeComponent implements Component {
 	// Bypassed while the intro animation runs (every frame differs).
 	#cachedWidth = -1;
 	#cachedLines: string[] | undefined;
-	#native: { tip: string | undefined; node: NativeNode } | undefined;
+	#cachedLocale: Locale = "en";
+	#native: { tip: string | undefined; locale: Locale; node: NativeNode } | undefined;
 
 	constructor(
 		private version: string,
@@ -240,14 +242,15 @@ export class WelcomeComponent implements Component {
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		const tip = this.tip;
-		if (this.#native && this.#native.tip === tip) return this.#native.node;
+		const locale = getLocale();
+		if (this.#native && this.#native.tip === tip && this.#native.locale === locale) return this.#native.node;
 		// Brand lines are short and fixed; never wrap or truncate them.
 		const art = (spans: readonly TspSpan[], role: string): NativeNode =>
 			keyed(text(spans, { wrap: "none", role }), role);
 		if (this.branding === "classic") {
 			const brand = col(
 				[
-					art([span("Welcome back!", "strong")], "omp.welcome.greeting"),
+					art([span(t("tui.welcome.greeting"), "strong")], "omp.welcome.greeting"),
 					...PI_LOGO.map((line, index) => art([span(line, "accent")], `omp.welcome.logo.${index}`)),
 				],
 				{ align: "center", role: "omp.welcome.brand" },
@@ -255,8 +258,8 @@ export class WelcomeComponent implements Component {
 			const info = col(
 				[
 					art([span(`${PRODUCT_NAME} v${this.version}`, "dim mono")], "omp.welcome.version"),
-					art([span("Tips", "strong")], "omp.welcome.heading"),
-					...["# for prompt actions", "/ for commands", "! to run bash", "$ to run python"].map(
+					art([span(t("tui.welcome.tips"), "strong")], "omp.welcome.heading"),
+					...["# for prompt actions", "/ for commands", `!${t("tui.welcome.bash_suffix")}`, `$${t("tui.welcome.python_suffix")}`].map(
 						(shortcut, index) => art([span(shortcut, "muted")], `omp.welcome.shortcut.${index}`),
 					),
 				],
@@ -267,14 +270,14 @@ export class WelcomeComponent implements Component {
 			];
 			this.#appendNativeTip(body, tip);
 			const described = card({ role: "omp.welcome" }, body);
-			this.#native = { tip, node: described };
+			this.#native = { tip, locale, node: described };
 			return described;
 		}
 		const body: NativeChild[] = [lockupNode(this.version)];
 		this.#appendNativeTip(body, tip);
 		// No head row or chevron: the card is the hero; the version sits under the wordmark.
 		const described = card({ role: "omp.welcome" }, body);
-		this.#native = { tip, node: described };
+		this.#native = { tip, locale, node: described };
 		return described;
 	}
 
@@ -364,7 +367,7 @@ export class WelcomeComponent implements Component {
 
 	render(termWidth: number): readonly string[] {
 		const animating = this.#animStart != null;
-		if (!animating && this.#cachedLines && this.#cachedWidth === termWidth) {
+		if (!animating && this.#cachedLines && this.#cachedWidth === termWidth && this.#cachedLocale === getLocale()) {
 			return this.#cachedLines;
 		}
 		const lines = this.#renderLines(termWidth);
@@ -374,6 +377,7 @@ export class WelcomeComponent implements Component {
 		} else {
 			this.#cachedLines = lines;
 			this.#cachedWidth = termWidth;
+			this.#cachedLocale = getLocale();
 		}
 		return lines;
 	}

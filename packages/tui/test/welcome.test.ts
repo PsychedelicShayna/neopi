@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { pickWeightedTip, WelcomeComponent } from "@oh-my-pi/pi-tui/prompt/welcome";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
@@ -54,6 +55,23 @@ describe("WelcomeComponent", () => {
 		welcome.setBranding("new");
 		expect(welcome.render(140)).toEqual(initial);
 		expect(welcome.describe({} as never)).toEqual(initialNative);
+	});
+
+	it("updates classic welcome text on a language change without overflowing the terminal", () => {
+		const previousLocale = getLocale();
+		try {
+			vi.spyOn(Math, "random").mockReturnValue(0.5);
+			setLocale("en");
+			const welcome = new WelcomeComponent("1.0.0", "classic");
+			expect(Bun.stripANSI(welcome.render(80).join("\n"))).toContain("Welcome back!");
+			setLocale("es");
+			const lines = welcome.render(80);
+			expect(Bun.stripANSI(lines.join("\n"))).toContain("¡Te damos la bienvenida!");
+			expect(lines.every(line => visibleWidth(line) <= 80)).toBe(true);
+			expect(JSON.stringify(welcome.describe({} as never))).toContain("¡Te damos la bienvenida!");
+		} finally {
+			setLocale(previousLocale);
+		}
 	});
 
 	it("keeps classic branding inside narrow terminal widths", () => {

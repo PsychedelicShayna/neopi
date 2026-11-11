@@ -39,3 +39,8 @@
 "tui.ask.next" = "Next"
 "tui.ask.type_answer" = "Type your own answer"
 "tui.ask.unanswered" = "unanswered"
+"tui.welcome.greeting" = "Welcome back!"
+"tui.welcome.tips" = "Tips"
+"tui.welcome.tip_prefix" = "Tip: "
+"tui.welcome.bash_suffix" = " to run bash"
+"tui.welcome.python_suffix" = " to run python"
