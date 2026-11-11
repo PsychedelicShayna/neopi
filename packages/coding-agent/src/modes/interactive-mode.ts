@@ -2771,9 +2771,9 @@ export class InteractiveMode implements InteractiveModeContext {
 					return;
 				case "copy":
 					copyToClipboard(action.text).then(
-						() => this.showStatus("Copied to clipboard"),
+						() => this.showStatus(t("interactive.copy.success")),
 						(error: unknown) =>
-							this.showWarning(`Copy failed: ${error instanceof Error ? error.message : String(error)}`),
+							this.showWarning(t("interactive.copy.error", { error: error instanceof Error ? error.message : String(error) })),
 					);
 			}
 		});

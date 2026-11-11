@@ -1,4 +1,10 @@
 "interactive.editor.unconfigured" = "No hay un editor configurado. Define la variable de entorno $VISUAL o $EDITOR."
+"interactive.copy.empty" = "No hay nada que copiar"
+"interactive.copy.line" = "Línea copiada: {preview}"
+"interactive.copy.preview" = "Copiado: {preview}"
+"interactive.copy.failed" = "No se pudo copiar al portapapeles"
+"interactive.copy.success" = "Copiado al portapapeles"
+"interactive.copy.error" = "No se pudo copiar: {error}"
 
 [composer]
 placeholder = "Escribe un mensaje…"
