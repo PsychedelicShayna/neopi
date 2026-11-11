@@ -8,3 +8,6 @@
 "cli.flag.mode.description" = "Modo de salida: text (predeterminado), json, rpc o rpc-ui"
 "cli.flag.api-key.description" = "Clave de API (por defecto, usa variables de entorno)"
 "cli.flag.no-pty.description" = "Desactivar la ejecución interactiva de bash mediante PTY"
+"cli.file.not_found" = "Error: no se encontró el archivo: {path}"
+"cli.file.read_failed" = "Error: no se pudo leer el archivo {path}: {message}"
+"cli.file.too_large" = "Advertencia: se omitió el contenido del archivo (demasiado grande: {size}): {path}"
