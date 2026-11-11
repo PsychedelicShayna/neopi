@@ -2,9 +2,12 @@
 import * as path from "node:path";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
+import type { JudgeDeps } from "../../judgment";
+import { DEFAULT_RECALL_BRANCH_FLOORS } from "../recall-policy";
 import * as cfg from "../settings";
 import { resolveTimeZone } from "./calendar";
 import { resolveChronicleModelClient } from "./model";
+import { createJudgeRanker } from "./judge-rank";
 import { createModelRanker, lexicalRanker, type NodeRanker, type RankResponsePolicy } from "./rank";
 import type { RecallPolicy } from "./recall";
 import type { SummaryPolicy } from "./summarize";
@@ -80,6 +83,7 @@ export function recallDefaultsFromSettings(settings: Settings): RecallDefaults {
 			labelShare: cfg.cfgChroniclerRecallLabelShare.get(settings)!,
 			adjacentShare: cfg.cfgChroniclerRecallAdjacentShare.get(settings)!,
 			concurrency: positive(cfg.cfgChroniclerRecallConcurrency.get(settings), 2),
+			branchFloor: { ...DEFAULT_RECALL_BRANCH_FLOORS, ...cfg.cfgChroniclerRecallBranchFloor.get(settings) },
 		},
 	};
 }
@@ -103,13 +107,30 @@ export function rankResponsePolicyFromSettings(settings: Settings): RankResponse
 	};
 }
 
-/** Model ranking falls back to lexical scoring when no recall model resolves. */
-export function resolveRanker(
+/** Resolve explicit ranking policy; unavailable judges fall back visibly on each request. */
+export async function resolveRanker(
 	settings: Settings,
 	modelRegistry: ModelRegistry | undefined,
-	override?: "model" | "lexical",
-): NodeRanker {
+	override?: "model" | "lexical" | "judge",
+	context?: Pick<JudgeDeps, "sessionId" | "onUsage" | "telemetry" | "costGate">,
+): Promise<NodeRanker> {
 	const kind = override ?? cfg.cfgChroniclerRecallRanker.get(settings);
+	if (kind === "judge") {
+		if (!modelRegistry) return createJudgeRanker(undefined);
+		// The judge resolver's dependency graph must not load during CLI discovery.
+		const { judgeRoleChain, resolveJudge, sharedJudgmentCache } = await import("../../judgment");
+		const judge =
+			judgeRoleChain(settings, modelRegistry).length > 0
+				? resolveJudge({
+						settings,
+						registry: modelRegistry,
+						...context,
+						purpose: "chronicle-recall",
+						cache: sharedJudgmentCache(),
+					})
+				: undefined;
+		return createJudgeRanker(judge);
+	}
 	if (kind === "lexical" || !modelRegistry) return lexicalRanker;
 	const client = resolveChronicleModelClient(settings, modelRegistry, "chronicler-recall");
 	return client ? createModelRanker(client, rankResponsePolicyFromSettings(settings)) : lexicalRanker;

@@ -28,7 +28,9 @@ export default class ChronicleRecall extends Command {
 		node: Flags.string({ description: "Search inside this candidate period key" }),
 		budget: Flags.integer({ description: "Maximum atoms to return" }),
 		beam: Flags.integer({ description: "Branches kept per expansion" }),
-		ranker: Flags.string({ description: "model (chronicler-summary role) or lexical (no model calls)" }),
+		ranker: Flags.string({
+			description: "model (chronicler-recall role), judge (judge-role probabilities) or lexical (no model calls)",
+		}),
 		json: Flags.boolean({ char: "j", description: "Emit the full result as JSON", default: false }),
 		"agent-dir": Flags.string({ description: "Agent directory whose view to use" }),
 	};

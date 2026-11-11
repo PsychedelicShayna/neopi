@@ -22,8 +22,10 @@ export interface RankOutcome {
 }
 
 export interface NodeRanker {
-	readonly kind: "model" | "lexical";
+	readonly kind: "model" | "lexical" | "judge";
 	score(query: string, candidates: readonly RankCandidate[], signal?: AbortSignal): Promise<RankOutcome>;
+	/** Recheck complete canonical bodies, not routing summaries. */
+	verify?(query: string, candidates: readonly RankCandidate[], signal?: AbortSignal): Promise<RankOutcome>;
 }
 
 const STOPWORDS = new Set(

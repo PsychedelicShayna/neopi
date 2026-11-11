@@ -110,8 +110,13 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 	if (flags.resolution !== undefined && !(RESOLUTION_LEVELS as readonly string[]).includes(flags.resolution)) {
 		throw new CliUsageError(`--resolution must be one of ${RESOLUTION_LEVELS.join(", ")}`);
 	}
-	if (flags.ranker !== undefined && flags.ranker !== "model" && flags.ranker !== "lexical") {
-		throw new CliUsageError("--ranker must be model or lexical");
+	if (
+		flags.ranker !== undefined &&
+		flags.ranker !== "model" &&
+		flags.ranker !== "lexical" &&
+		flags.ranker !== "judge"
+	) {
+		throw new CliUsageError("--ranker must be model, lexical or judge");
 	}
 	const agentDir = flags.agentDir ?? getAgentDir();
 	const settings = await Settings.init({ cwd: getProjectDir(), agentDir });
@@ -142,10 +147,10 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 			beam: flags.beam ?? defaults.beam,
 			neighborhoodMinutes: defaults.neighborhoodMinutes,
 			policy: defaults.policy,
-			ranker: resolveRanker(settings, registry, flags.ranker as "model" | "lexical" | undefined),
+			ranker: await resolveRanker(settings, registry, flags.ranker as "model" | "lexical" | "judge" | undefined),
 		});
-	const wantsModel = (flags.ranker ?? cfgChroniclerRecallRanker.get(settings)) === "model";
-	const result = wantsModel ? await withRegistry(settings, agentDir, run) : await run(undefined);
+	const wantsRegistry = (flags.ranker ?? cfgChroniclerRecallRanker.get(settings)) !== "lexical";
+	const result = wantsRegistry ? await withRegistry(settings, agentDir, run) : await run(undefined);
 	process.stdout.write(
 		`${flags.json ? JSON.stringify(result, null, 2) : formatRecallResult(result, recallFormatFromSettings(settings, true))}\n`,
 	);

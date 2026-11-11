@@ -16,6 +16,7 @@ import { indexChronicle } from "../../src/chronicler/temporal/indexer";
 import { createModelRanker, lexicalRanker, lexicalScore, type NodeRanker } from "../../src/chronicler/temporal/rank";
 import {
 	ChronicleViewMissingError,
+	DEFAULT_RECALL_POLICY,
 	rankPayloadTokens,
 	type RecallOptions,
 	recallChronicle,
@@ -501,6 +502,504 @@ describe("chronicle recall", () => {
 		expect(collapse).toBeGreaterThanOrEqual(0);
 		expect(backtrack).toBeGreaterThan(collapse);
 		expect(found).toBeGreaterThan(backtrack);
+	});
+
+	describe("judge traversal and canonical verification", () => {
+		it("prunes a misleading deep branch at its child-level floor and backtracks to a retained alternative", async () => {
+			const written = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [
+					[
+						{ ...BILLING, eventTime: "2026-09-08T10:00:00.000Z" },
+						{ ...TARGET, eventTime: "2026-09-15T10:00:00.000Z" },
+					],
+				],
+			});
+			await index();
+			const verified: string[] = [];
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return {
+						scores: candidates.map(candidate =>
+							candidate.key === "2026/09/w2"
+								? 0.95
+								: candidate.key === "2026/09/w3"
+									? 0.8
+									: candidate.key === "2026/09/w2/08"
+										? 0.3
+										: 0.9,
+						),
+					};
+				},
+				async verify(_query, candidates) {
+					verified.push(...candidates.map(candidate => candidate.key));
+					return { scores: candidates.map(() => 0.9) };
+				},
+			};
+			const result = await recall({
+				query: "signin redirect cycle repaired",
+				ranker,
+				budget: 1,
+				beam: 2,
+				policy: { branchFloor: { ...DEFAULT_RECALL_POLICY.branchFloor, day: 0.5 } },
+			});
+			expect(result.ranker).toBe("judge");
+			expect(result.results.map(atom => atom.id)).toEqual([written.atomIds[1]!]);
+			expect(verified).toEqual([written.atomIds[1]!]);
+			const pruned = result.trace.findIndex(step => step.action === "prune" && step.node === "2026/09/w2");
+			expect(pruned).toBeGreaterThanOrEqual(0);
+			expect(result.trace[pruned]!.note).toContain("day floor 0.50");
+			expect(result.trace[pruned]!.candidates).toEqual([
+				{ key: "2026/09/w2/08", label: expect.any(String), score: 0.3 },
+			]);
+			const collapsed = result.trace.findIndex(step => step.action === "collapse" && step.node === "2026/09/w2");
+			const backtracked = result.trace.findIndex(step => step.action === "backtrack" && step.node === "2026/09/w3");
+			expect(collapsed).toBeGreaterThan(pruned);
+			expect(backtracked).toBeGreaterThan(collapsed);
+		});
+
+		it("uses full canonical contrary evidence before a false-positive branch can occupy a slot or stop search", async () => {
+			const decoy: FixtureAtom = {
+				title: "OAuth refresh loop repaired",
+				eventTime: TARGET.eventTime,
+				body: `The OAuth refresh loop was repaired. ${repeat("apparently relevant detail", 1200)} FINAL CORRECTION: this was only a simulation, not the remembered repair.`,
+			};
+			const written = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [[decoy, { ...TARGET, eventTime: "2026-09-16T10:00:00.000Z" }]],
+			});
+			await index();
+			const bodies = new Map<string, string>();
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					expect(candidates.some(candidate => written.atomIds.includes(candidate.key))).toBe(false);
+					return { scores: candidates.map(candidate => (candidate.key === "2026/09/w3" ? 0.7 : 0.95)) };
+				},
+				async verify(_query, candidates) {
+					for (const candidate of candidates) bodies.set(candidate.key, candidate.text);
+					return {
+						scores: candidates.map(candidate => (candidate.text.includes("FINAL CORRECTION") ? 0.05 : 0.86)),
+					};
+				},
+			};
+			const result = await recall({
+				query: "signin redirect cycle repaired",
+				ranker,
+				budget: 1,
+				beam: 2,
+				policy: { evidenceChars: 40 },
+			});
+			expect(bodies.get(written.atomIds[0]!)).toBe(decoy.body);
+			expect(bodies.get(written.atomIds[1]!)).toBe(TARGET.body);
+			expect(result.results).toHaveLength(1);
+			expect(result.results[0]).toMatchObject({
+				id: written.atomIds[1],
+				score: 0.86,
+				confident: true,
+				bodyTruncated: true,
+			});
+			expect(result.trace.some(step => step.action === "collapse" && step.node.startsWith("2026/09/w1"))).toBe(true);
+			expect(result.trace.some(step => step.action === "backtrack" && step.node === "2026/09/w3")).toBe(true);
+		});
+
+		it("selects slots and confidence by verified scores rather than route prefixes", async () => {
+			const written = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [[TARGET, { ...BILLING, eventTime: "2026-09-02T10:01:00.000Z" }]],
+			});
+			await index();
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.99) };
+				},
+				async verify(_query, candidates) {
+					return { scores: candidates.map(candidate => (candidate.key === written.atomIds[1] ? 0.55 : 0.3)) };
+				},
+			};
+			const result = await recall({ query: "remembered event", ranker, budget: 1 });
+			expect(result.results).toHaveLength(1);
+			expect(result.results[0]).toMatchObject({ id: written.atomIds[1], score: 0.55, confident: false });
+			expect(result.ambiguous).toBe(true);
+		});
+
+		it("verifies hinted anchors and adjacent candidates before reserving result slots", async () => {
+			const atoms: FixtureAtom[] = [
+				{
+					title: "False anchor",
+					eventTime: "2026-09-15T14:00:00.000Z",
+					body: "False anchor. CONTRARY anchor evidence.",
+				},
+				{ title: "True anchor", eventTime: "2026-09-15T14:01:00.000Z", body: "Confirmed remembered anchor." },
+				{
+					title: "False nearby target",
+					eventTime: "2026-09-15T14:02:00.000Z",
+					body: "Target-looking route. CONTRARY target evidence.",
+				},
+				{
+					title: "True nearby target",
+					eventTime: "2026-09-15T14:03:00.000Z",
+					body: `Confirmed requested target. ${repeat("full evidence", 500)} LAST canonical word.`,
+				},
+			];
+			const written = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [atoms],
+			});
+			await index();
+			const calls: { query: string; id: string; body: string }[] = [];
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.95) };
+				},
+				async verify(query, candidates) {
+					for (const candidate of candidates) calls.push({ query, id: candidate.key, body: candidate.text });
+					return {
+						scores: candidates.map(candidate =>
+							query === "remembered anchor"
+								? candidate.key === written.atomIds[1]
+									? 0.95
+									: 0.05
+								: candidate.key === written.atomIds[3]
+									? 0.9
+									: 0.05,
+						),
+					};
+				},
+			};
+			const result = await recall({ query: "requested target", hint: "remembered anchor", ranker, budget: 1 });
+			expect(result.results).toHaveLength(1);
+			expect(result.results[0]).toMatchObject({
+				id: written.atomIds[3],
+				anchor: written.atomIds[1],
+				via: "adjacent",
+				score: 0.9,
+				confident: true,
+			});
+			const anchor = result.trace.find(step => step.action === "anchor" && step.candidates);
+			expect(anchor?.candidates?.[0]?.key).toBe(written.atomIds[1]);
+			const adjacent = result.trace.find(step => step.action === "adjacent");
+			expect(adjacent?.candidates?.map(candidate => candidate.key)).toEqual([written.atomIds[3]!]);
+			expect(
+				calls
+					.filter(call => call.query === "remembered anchor")
+					.map(call => call.id)
+					.sort(),
+			).toEqual([...written.atomIds].sort());
+			expect(calls.filter(call => call.id === written.atomIds[3]).every(call => call.body === atoms[3]!.body)).toBe(
+				true,
+			);
+			expect(calls.filter(call => call.query === "requested target" && call.id === written.atomIds[3])).toHaveLength(
+				2,
+			);
+		});
+
+		it("does not expand judge ties past beam and retains the existing hop and frontier bounds", async () => {
+			await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [
+					[
+						{ ...TARGET, eventTime: "2026-09-01T10:00:00.000Z" },
+						{ ...TARGET, eventTime: "2026-09-02T10:00:00.000Z" },
+						{ ...TARGET, eventTime: "2026-09-08T10:00:00.000Z" },
+						{ ...TARGET, eventTime: "2026-09-09T10:00:00.000Z" },
+						{ ...TARGET, eventTime: "2026-09-15T10:00:00.000Z" },
+					],
+				],
+			});
+			await index();
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.5) };
+				},
+				async verify(_query, candidates) {
+					return { scores: candidates.map(() => 0.4) };
+				},
+			};
+			const narrow = await recall({ query: "target", ranker, beam: 1, budget: 5 });
+			expect(narrow.trace.filter(step => step.action === "terminal")).toHaveLength(1);
+			expect(narrow.results).toHaveLength(1);
+			const bounded = await recall({ query: "target", ranker, beam: 2, budget: 5, policy: { frontierFactor: 1 } });
+			expect(bounded.trace.some(step => step.action === "evict")).toBe(true);
+			expect(bounded.trace.some(step => step.node.startsWith("2026/09/w3"))).toBe(false);
+			expect(bounded.results.length).toBeLessThanOrEqual(5);
+			const short = await recall({ query: "target", ranker, beam: 2, policy: { maxHops: 4 } });
+			expect(short.trace.filter(step => step.action === "rank")).toHaveLength(4);
+			expect(short.trace.every(step => step.hop <= 4)).toBe(true);
+			expect(short.results).toEqual([]);
+		});
+
+		for (const kind of ["model", "lexical"] as const) {
+			it(`leaves ${kind} floor and verification behavior unchanged`, async () => {
+				await writeParaphraseCorpus();
+				const ranker: NodeRanker = {
+					kind,
+					async score(_query, candidates) {
+						return { scores: candidates.map(() => 0.4) };
+					},
+					async verify() {
+						throw new Error("non-judge verification must not run");
+					},
+				};
+				const result = await recall({
+					query: "event",
+					ranker,
+					beam: 1,
+					policy: {
+						branchFloor: Object.fromEntries(
+							Object.keys(DEFAULT_RECALL_POLICY.branchFloor).map(level => [level, 1]),
+						) as typeof DEFAULT_RECALL_POLICY.branchFloor,
+					},
+				});
+				expect(result.results).toHaveLength(2);
+				expect(result.trace.some(step => step.action === "prune")).toBe(false);
+			});
+		}
+
+		it("bounds full-text verification and concurrent query/hint work by the shared concurrency setting", async () => {
+			const written = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: ALPHA,
+				batches: [
+					Array.from({ length: 8 }, (_, index) => ({
+						title: `Canonical atom ${index}`,
+						eventTime: `2026-09-02T10:00:0${index}.000Z`,
+						body: `Canonical body ${index}. ${repeat("unclipped detail", 200)} LAST ${index}`,
+					})),
+				],
+			});
+			await index();
+			const fullBodies = new Map((await loadChronicleCorpus(sessionsDir)).atoms.map(atom => [atom.id, atom.body]));
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let active = 0;
+			let maxActive = 0;
+			let verificationCalls = 0;
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					active++;
+					maxActive = Math.max(maxActive, active);
+					await Bun.sleep(1);
+					active--;
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates, signal) {
+					active++;
+					maxActive = Math.max(maxActive, active);
+					verificationCalls++;
+					if (verificationCalls === 2) started.resolve();
+					try {
+						for (const candidate of candidates) {
+							const expected = fullBodies.get(candidate.key);
+							if (expected === undefined) throw new Error("Fixture body missing for verification candidate");
+							expect(candidate.text).toBe(expected);
+						}
+						await release.promise;
+						signal?.throwIfAborted();
+						return { scores: candidates.map(() => 0.9) };
+					} finally {
+						active--;
+					}
+				},
+			};
+			const pending = recall({
+				query: "query",
+				hint: "hint",
+				ranker,
+				budget: 2,
+				policy: { concurrency: 2 },
+			});
+			const overlapped = await Promise.race([started.promise.then(() => true), Bun.sleep(1000).then(() => false)]);
+			release.resolve();
+			const result = await pending;
+			expect(overlapped).toBe(true);
+			expect(maxActive).toBe(2);
+			expect(verificationCalls).toBeGreaterThanOrEqual(written.atomIds.length * 2);
+			expect(result.results).toHaveLength(2);
+		});
+
+		it("discards a verified score if the canonical body changes before delivery", async () => {
+			const written = await writeParaphraseCorpus();
+			const corpus = await loadChronicleCorpus(sessionsDir);
+			const target = corpus.atoms.find(atom => atom.id === written.atomIds[0])!;
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates) {
+					if (candidates.some(candidate => candidate.key === target.id)) {
+						await Bun.write(
+							target.beatFile,
+							(await Bun.file(target.beatFile).text()).replace(
+								"one token exchange.",
+								"one token exchange. Contrary revision.",
+							),
+						);
+					}
+					return { scores: candidates.map(candidate => (candidate.key === target.id ? 0.95 : 0.05)) };
+				},
+			};
+			const result = await recall({ query: "OAuth", ranker, budget: 1 });
+			expect(result.results).toEqual([]);
+			expect(result.view.viewStale).toBe(true);
+			expect(result.evidenceErrors).toContainEqual({
+				id: target.id,
+				reason: "canonical atom changed after judge verification; stale score discarded",
+			});
+		});
+
+		it("revalidates canonical scope before full-text verification and again after asynchronous verification", async () => {
+			const written = await writeParaphraseCorpus();
+			const target = (await loadChronicleCorpus(sessionsDir)).atoms.find(atom => atom.id === written.atomIds[0])!;
+			const original = await Bun.file(target.beatFile).text();
+			const moved = original.replace(/^event_time: .*$/m, "event_time: 2026-10-20T10:00:00.000Z");
+			let movedBeforeVerification = false;
+			const verified = new Set<string>();
+			const before: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					if (!movedBeforeVerification) {
+						movedBeforeVerification = true;
+						await Bun.write(target.beatFile, moved);
+					}
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates) {
+					for (const candidate of candidates) verified.add(candidate.key);
+					return { scores: candidates.map(() => 0.9) };
+				},
+			};
+			const beforeResult = await recall({
+				query: "OAuth",
+				ranker: before,
+				to: { kind: "local", prefix: "2026-09" },
+			});
+			expect(verified.has(target.id)).toBe(false);
+			expect(beforeResult.results.map(atom => atom.id)).not.toContain(target.id);
+			expect(beforeResult.trace.some(step => step.action === "moved-out-of-scope" && step.note === target.id)).toBe(
+				true,
+			);
+			await Bun.write(target.beatFile, original);
+			const after: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates) {
+					if (candidates.some(candidate => candidate.key === target.id)) {
+						await Bun.write(target.beatFile, moved);
+					}
+					return { scores: candidates.map(candidate => (candidate.key === target.id ? 0.95 : 0.05)) };
+				},
+			};
+			const afterResult = await recall({
+				query: "OAuth",
+				ranker: after,
+				to: { kind: "local", prefix: "2026-09" },
+			});
+			expect(afterResult.results).toEqual([]);
+			expect(afterResult.trace.some(step => step.action === "moved-out-of-scope" && step.note === target.id)).toBe(
+				true,
+			);
+		});
+
+		it("uses a current canonical body rather than the stale indexed route and discloses missing evidence", async () => {
+			const written = await writeParaphraseCorpus();
+			const corpus = await loadChronicleCorpus(sessionsDir);
+			const target = corpus.atoms.find(atom => atom.id === written.atomIds[0])!;
+			const billing = corpus.atoms.find(atom => atom.id === written.atomIds[1])!;
+			await Bun.write(
+				target.beatFile,
+				(await Bun.file(target.beatFile).text()).replace(
+					"one token exchange.",
+					"one token exchange. New canonical contrary evidence.",
+				),
+			);
+			await fs.rm(path.dirname(billing.beatFile), { recursive: true });
+			const verified: string[] = [];
+			const ranker: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates) {
+					for (const candidate of candidates) {
+						verified.push(candidate.key);
+						expect(candidate.text).toContain("New canonical contrary evidence.");
+					}
+					return { scores: candidates.map(() => 0.1) };
+				},
+			};
+			const result = await recall({ query: "OAuth", ranker });
+			expect(verified).toEqual([target.id]);
+			expect(result.results).toEqual([]);
+			expect(result.view.viewStale).toBe(true);
+			expect(result.evidenceErrors.some(error => error.id === billing.id)).toBe(true);
+		});
+
+		it("reports verification fallback and propagates verification failure and cancellation", async () => {
+			await writeParaphraseCorpus();
+			const fallback: NodeRanker = {
+				kind: "judge",
+				async score(_query, candidates) {
+					return { scores: candidates.map(() => 0.9) };
+				},
+				async verify(_query, candidates) {
+					return { scores: candidates.map(() => 0.7), fallback: "scripted verification lexical fallback" };
+				},
+			};
+			const result = await recall({ query: "OAuth", ranker: fallback });
+			expect(result.rankerFallback).toBe(true);
+			expect(
+				result.trace.some(
+					step => step.action === "ranker-fallback" && step.note === "scripted verification lexical fallback",
+				),
+			).toBe(true);
+			const failure = new Error("scripted verifier failed");
+			await expect(
+				recall({
+					query: "OAuth",
+					ranker: {
+						...fallback,
+						async verify() {
+							throw failure;
+						},
+					},
+				}),
+			).rejects.toBe(failure);
+			const started = Promise.withResolvers<void>();
+			const controller = new AbortController();
+			const pending = recall({
+				query: "OAuth",
+				signal: controller.signal,
+				ranker: {
+					...fallback,
+					async verify(_query, _candidates, signal) {
+						started.resolve();
+						if (!signal) throw new Error("expected verification signal");
+						return new Promise<never>((_resolve, reject) => {
+							if (signal.aborted) reject(signal.reason);
+							else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+						});
+					},
+				},
+			});
+			await started.promise;
+			const cancelled = new Error("cancel full-text verification");
+			controller.abort(cancelled);
+			await expect(pending).rejects.toBe(cancelled);
+		});
 	});
 
 	describe("adjacency and scope", () => {
