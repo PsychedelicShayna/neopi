@@ -1466,35 +1466,35 @@ export class AskDialogComponent implements Component {
 
 	#expandHint(): string {
 		if (!this.#headerExpandable && !this.#descExpandable) return "";
-		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
+		return ` · ${expandKeyHint()} ${t(this.#expanded ? "tui.ask.hint.collapse" : "tui.ask.hint.expand")}`;
 	}
 
 	#footerHintText(indicator: string): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
-		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
+		const cancel = `${editorKey("tui.select.cancel")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
 		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
 		if (this.#isSubmitTab()) {
-			const scroll = indicator ? ` ${indicator} scroll ·` : "";
-			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
+			const scroll = indicator ? ` ${indicator} ${t("tui.ask.hint.scroll")} ·` : "";
+			return `${enter} ${t("tui.ask.hint.submit")} · ${cancel} · ${upDown} ${t("tui.ask.hint.scroll")} ·${scroll} PgUp/Dn ${t("tui.ask.hint.page")} · ? ${t("tui.ask.hint.help")}`;
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
-		const enterAction = this.#questions.length > 1 ? "next" : "submit";
+		const enterAction = t(this.#questions.length > 1 ? "tui.ask.hint.next" : "tui.ask.hint.submit");
 		const action = question?.multi
-			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
-			: `${enter} select · ${formatKeyHint("n")} note`;
-		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
+			? `${formatKeyHint("space")} ${t("tui.ask.hint.toggle")} · ${enter} ${enterAction}`
+			: `${enter} ${t("tui.ask.hint.select")} · ${formatKeyHint("n")} ${t("tui.ask.hint.note")}`;
+		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} ${t("tui.ask.hint.question")}` : "";
 		const expand = this.#expandHint();
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
-			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
+			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? ${t("tui.ask.hint.help")}`;
 		}
-		const scroll = indicator ? ` ${indicator} scroll ·` : "";
-		return `${action} · ${upDown} move${tabs} ·${scroll} ${cancel}${expand} · ? help`;
+		const scroll = indicator ? ` ${indicator} ${t("tui.ask.hint.scroll")} ·` : "";
+		return `${action} · ${upDown} ${t("tui.ask.hint.move")}${tabs} ·${scroll} ${cancel}${expand} · ? ${t("tui.ask.hint.help")}`;
 	}
 
 	#questionRows(question: ExtensionAskDialogQuestion): QuestionRow[] {

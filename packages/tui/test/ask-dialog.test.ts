@@ -76,9 +76,11 @@ describe("AskDialogComponent", () => {
 			const native = JSON.stringify(component.describe(cx));
 			expect(native).toContain("Revisar");
 			expect(native).toContain("Recomendado");
+			expect(render(component)).toContain("seleccionar");
 			component.handleInput(ENTER);
 			component.handleInput(ENTER);
 			expect(render(component)).toContain("Revisar respuestas");
+			expect(render(component)).toContain("cancelar");
 			component.handleInput(ENTER);
 			expect(onSubmit.mock.calls[0][0].results.map(result => result.selectedOptions)).toEqual([
 				["Allow once"],
