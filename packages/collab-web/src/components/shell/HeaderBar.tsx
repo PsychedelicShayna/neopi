@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { memo } from "react";
 import type { ConnectionPhase } from "../../lib/client";
 import { fmtPercent, shortenPath } from "../../lib/format";
+import { useTranslation } from "../../lib/i18n";
 import { LanguagePicker } from "./LanguagePicker";
 import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
@@ -38,6 +39,8 @@ export const HeaderBar = memo(function HeaderBar({
 	onToggleRail,
 	onLeave,
 }: HeaderBarProps): ReactNode {
+	const tr = useTranslation();
+	const phaseLabel = tr(`connection.${phase}`, PHASE_LABEL[phase]);
 	const title = header?.title ?? state?.sessionName ?? "session";
 	const usage = state?.contextUsage;
 	let pct: number | null = null;
@@ -66,9 +69,15 @@ export const HeaderBar = memo(function HeaderBar({
 				)}
 			</div>
 			<div className="sh-header-right">
-				<span className={`sh-status sh-status-${phase}`} title={`connection: ${phase}`}>
+				<span
+					className={`sh-status sh-status-${phase}`}
+					title={tr("connection.label", "connection: {phase}").replace(
+						"{phase}",
+						tr(`connection.${phase}`, phase),
+					)}
+				>
 					<span className={`sh-dot sh-dot-${phase}`} />
-					{PHASE_LABEL[phase]}
+					{phaseLabel}
 				</span>
 				{readOnly && (
 					<span className="sh-chip" title="you joined with a read-only link — watching only">

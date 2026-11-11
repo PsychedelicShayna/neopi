@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ConnectionPhase, GuestSnapshot } from "../../lib/client";
+import { useTranslation } from "../../lib/i18n";
 
 export interface BannersProps {
 	phase: ConnectionPhase;
@@ -10,12 +11,15 @@ export interface BannersProps {
 }
 
 export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: BannersProps): ReactNode {
+	const tr = useTranslation();
 	const progress = loading && loading.total > 0 ? ` ${Math.floor((loading.received / loading.total) * 100)}%` : "";
 	if (phase === "connecting" || phase === "waiting") {
 		return (
 			<div className="sh-banner" role="status">
 				<span className="sh-banner-dot" />
-				{phase === "connecting" ? "Connecting to relay…" : `Joining session…${progress}`}
+				{phase === "connecting"
+					? tr("connection.connecting_relay", "Connecting to relay…")
+					: `Joining session…${progress}`}
 			</div>
 		);
 	}
@@ -23,7 +27,7 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 		return (
 			<div className="sh-banner" role="status">
 				<span className="sh-banner-dot" />
-				{`Reconnecting…${progress}`}
+				{tr("connection.reconnecting_progress", "Reconnecting…{progress}").replace("{progress}", progress)}
 			</div>
 		);
 	}
@@ -35,10 +39,10 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 					{endedReason && <div className="sh-ended-reason">{endedReason}</div>}
 					<div className="sh-ended-actions">
 						<button type="button" className="sh-btn sh-btn-primary" onClick={onRejoin}>
-							Rejoin
+							{tr("connection.rejoin", "Rejoin")}
 						</button>
 						<button type="button" className="sh-btn" onClick={onNewLink}>
-							New link
+							{tr("connection.new_link", "New link")}
 						</button>
 					</div>
 				</div>
