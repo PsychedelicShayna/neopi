@@ -1,6 +1,12 @@
 "cli.help.usage" = "USO"
 "cli.help.arguments" = "ARGUMENTOS"
 "cli.help.examples" = "EJEMPLOS"
+"cli.help.subcommands" = "Ejecuta `{bin} {id} <subcommand> --help` para ver las opciones de cada subcomando."
+"cli.command.stats.description" = "Ver estadísticas de uso"
+"cli.command.stats.flag.port.description" = "Puerto del servidor del panel"
+"cli.command.stats.flag.host.description" = "Dirección a la que se vincula el servidor"
+"cli.command.stats.flag.json.description" = "Mostrar estadísticas en formato JSON"
+"cli.command.stats.flag.summary.description" = "Mostrar el resumen en la consola"
 # FLAGS and COMMANDS remain English pending glossary and completion review.
 "cli.argument.messages.description" = "Mensajes para enviar (antepón @ a los archivos)"
 "cli.flag.cwd.description" = "Directorio de inicio (prevalece sobre el directorio de inicio de ejecución)"

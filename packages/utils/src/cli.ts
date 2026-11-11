@@ -162,6 +162,8 @@ export interface CliConfig<TCommand extends CommandMetadata = CommandCtor> {
 	version: string;
 	/** All registered commands keyed by their canonical name. */
 	commands: Map<string, TCommand>;
+	/** Optional host renderer for command help, including implicit help from a command. */
+	commandHelp?: (bin: string, id: string, command: CommandCtor) => Promise<void> | void;
 }
 
 /** Minimal Command base matching the oclif surface we use. */
@@ -175,6 +177,12 @@ export abstract class Command {
 	}
 
 	abstract run(): Promise<void>;
+
+	/** Render this command's help through the host when it supplies a localized renderer. */
+	async showHelp(id: string, command: CommandCtor): Promise<void> {
+		if (this.config.commandHelp) await this.config.commandHelp(this.config.bin, id, command);
+		else renderCommandHelp(this.config.bin, id, command);
+	}
 
 	/**
 	 * Parse argv against the static `flags` and `args` declared on the
@@ -361,15 +369,24 @@ export function commandUsageLine(bin: string, id: string, Cmd: CommandCtor): str
 }
 
 /** Render help for a single command. */
-export function renderCommandHelp(bin: string, id: string, Cmd: CommandCtor): void {
+export function renderCommandHelp(
+	bin: string,
+	id: string,
+	Cmd: CommandCtor,
+	translate: (key: string, fallback: string) => string = (_key, fallback) => fallback,
+): void {
 	const lines: string[] = [];
-	if (Cmd.description) lines.push(`${Cmd.description}\n`);
-	lines.push("USAGE");
+	if (Cmd.description) lines.push(`${translate(`cli.command.${id}.description`, Cmd.description)}\n`);
+	lines.push(translate("cli.help.usage", "USAGE"));
 	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
 	if (Object.keys(Cmd.subcommands ?? {}).length) {
-		lines.push(`Run \`${bin} ${id} <subcommand> --help\` for subcommand flags.\n`);
+		lines.push(`${translate("cli.help.subcommands", "Run `{bin} {id} <subcommand> --help` for subcommand flags.")
+			.replace("{bin}", bin)
+			.replace("{id}", id)}\n`);
 	}
-	renderCommandBody(lines, Cmd);
+	renderCommandBody(lines, Cmd, (key, fallback) =>
+		translate(key.startsWith("cli.flag.") || key.startsWith("cli.argument.") ? `cli.command.${id}.${key.slice(4)}` : key, fallback),
+	);
 	process.stdout.write(lines.join("\n"));
 }
 
@@ -450,6 +467,8 @@ export interface RunOptions {
 	help?: (config: CliConfig) => Promise<void> | void;
 	/** Lightweight help renderer backed by static command metadata. */
 	metadataHelp?: (config: CliConfig<CommandMetadata>) => Promise<void> | void;
+	/** Host renderer for explicit and implicit subcommand help. */
+	commandHelp?: (bin: string, id: string, command: CommandCtor) => Promise<void> | void;
 }
 
 /** Find a command entry by exact name or alias. */
@@ -497,7 +516,8 @@ export async function run(opts: RunOptions): Promise<void> {
 		const entry = findEntry(opts.commands, commandId);
 		if (entry) {
 			const target = await resolveTarget(entry, commandArgv);
-			renderCommandHelp(bin, target.id, target.Cmd);
+			if (opts.commandHelp) await opts.commandHelp(bin, target.id, target.Cmd);
+			else renderCommandHelp(bin, target.id, target.Cmd);
 		} else {
 			process.stderr.write(`Unknown command: ${commandId}\n`);
 		}
@@ -514,7 +534,12 @@ export async function run(opts: RunOptions): Promise<void> {
 	}
 
 	const target = await resolveTarget(entry, commandArgv);
-	const config: CliConfig = { bin, version, commands: new Map([[target.id, target.Cmd]]) };
+	const config: CliConfig = {
+		bin,
+		version,
+		commands: new Map([[target.id, target.Cmd]]),
+		commandHelp: opts.commandHelp,
+	};
 	const instance = new target.Cmd(target.argv, config);
 	try {
 		await instance.run();

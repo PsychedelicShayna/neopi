@@ -16,7 +16,7 @@ try {
  */
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
-import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
+import type { CliConfig, CommandCtor, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
 import type * as Postmortem from "@oh-my-pi/pi-utils/postmortem";
 // First evaluated import: records the launching parent's pid before startup
 // work, so a host that dies mid-startup is still recognized (print/json modes
@@ -126,14 +126,27 @@ async function installNetworkBootstrap(): Promise<void> {
 // import time, so it must not be imported before `setProfile` runs.
 
 async function showHelp(config: CliConfig<CommandMetadata>): Promise<void> {
-	// Root help historically loads the selected profile's environment. The
-	// lazily loaded help module imports it statically after profile bootstrap.
-	const [{ renderRootHelp }, { getExtraHelpText, initializeCliLanguage, translateHelpHeading }] = await Promise.all([
-		import("@oh-my-pi/pi-utils/cli"),
-		import("./cli/help-extra"),
-	]);
+	await renderLocalizedHelp({ kind: "root", config });
+}
+
+async function showCommandHelp(bin: string, id: string, command: CommandCtor): Promise<void> {
+	await renderLocalizedHelp({ kind: "command", bin, id, command });
+}
+
+async function renderLocalizedHelp(
+	target:
+		| { kind: "root"; config: CliConfig<CommandMetadata> }
+		| { kind: "command"; bin: string; id: string; command: CommandCtor },
+): Promise<void> {
+	// Help loads the selected profile's environment only after profile bootstrap.
+	const [{ renderRootHelp, renderCommandHelp }, { getExtraHelpText, initializeCliLanguage, translateHelpHeading }] =
+		await Promise.all([import("@oh-my-pi/pi-utils/cli"), import("./cli/help-extra")]);
 	await initializeCliLanguage();
-	renderRootHelp(config, translateHelpHeading);
+	if (target.kind === "command") {
+		renderCommandHelp(target.bin, target.id, target.command, translateHelpHeading);
+		return;
+	}
+	renderRootHelp(target.config, translateHelpHeading);
 	const extra = getExtraHelpText();
 	if (extra.trim().length > 0) {
 		process.stdout.write(`\n${extra}\n`);
@@ -580,7 +593,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			return;
 		}
 		runningCommand = resolved.argv[0];
-		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp });
+		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp, commandHelp: showCommandHelp });
 	} finally {
 		stopStartupComposer?.();
 	}
