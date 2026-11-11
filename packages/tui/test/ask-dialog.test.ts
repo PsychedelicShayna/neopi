@@ -1,5 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { stripVTControlCharacters } from "node:util";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { ExtensionAskDialogQuestion } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
@@ -55,6 +56,37 @@ describe("AskDialogComponent", () => {
 		const footer = lines.find(line => line.includes("select"));
 		expect(footer).toContain("⇥/←/→ question · ");
 		expect(footer).toContain("cancel");
+	});
+
+	it("localizes review controls without changing offered or submitted answers", () => {
+		const previous = getLocale();
+		try {
+			setLocale("en");
+			const onSubmit = vi.fn();
+			const component = new AskDialogComponent(
+				[
+					{ id: "q1", question: "First?", options: [{ label: "Allow once" }], recommended: 0 },
+					{ id: "q2", question: "Second?", options: [{ label: "Keep original" }] },
+				],
+				{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() },
+			);
+			const cx: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
+			expect(JSON.stringify(component.describe(cx))).toContain("Review");
+			setLocale("es");
+			const native = JSON.stringify(component.describe(cx));
+			expect(native).toContain("Revisar");
+			expect(native).toContain("Recomendado");
+			component.handleInput(ENTER);
+			component.handleInput(ENTER);
+			expect(render(component)).toContain("Revisar respuestas");
+			component.handleInput(ENTER);
+			expect(onSubmit.mock.calls[0][0].results.map(result => result.selectedOptions)).toEqual([
+				["Allow once"],
+				["Keep original"],
+			]);
+		} finally {
+			setLocale(previous);
+		}
 	});
 
 	it("single-question, single-select: Enter on option submits immediately", () => {

@@ -1,5 +1,5 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { t } from "@oh-my-pi/pi-utils/i18n";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Ellipsis,
@@ -104,11 +104,9 @@ import { getKeybindings } from "../keybindings";
 import { plainText } from "../native/spans";
 
 const OTHER_OPTION = "Other (type your own)";
-const SUBMIT_OPTION = "Submit";
 const RECOMMENDED_SUFFIX = " (Recommended)";
-/** Native labels: the free-text row and the answers-review tab. */
+/** Native label for the free-text row. */
 const OTHER_LABEL = "Other…";
-const REVIEW_TAB = "Review";
 
 // Action rows appended by the guest race participant. An option sanitizing
 // to one of these must disambiguate identically on both sides, or the same
@@ -637,6 +635,7 @@ export class AskDialogComponent implements Component {
 	#hidden = false;
 	/** Memoized native description; dropped whenever dialog state may have changed. */
 	#native: NativeNode | undefined;
+	#nativeLocale: Locale = "en";
 	/** Input-guard blocked state {@link #native} was described with (the guard flips outside this dialog). */
 	#nativeBlocked = false;
 	/** Set once the user explicitly takes the dialog (up/down, or a pointer action) while a draft held input. */
@@ -906,7 +905,8 @@ export class AskDialogComponent implements Component {
 		this.options.inputGuard?.syncPresentation?.(blocked);
 		const ring = this.#countdown !== undefined && cx.supports("meter");
 		if (ring) this.#startRingTick();
-		if (this.#native && this.#nativeBlocked === blocked) return this.#native;
+		if (this.#native && this.#nativeBlocked === blocked && this.#nativeLocale === getLocale()) return this.#native;
+		this.#nativeLocale = getLocale();
 		if (this.#hidden) {
 			this.#native = this.#describeHidden(ring);
 			this.#nativeBlocked = blocked;
@@ -934,7 +934,7 @@ export class AskDialogComponent implements Component {
 				label: state && isAnswered(state) ? [span("✓ ", "success"), span(name)] : [span(name)],
 			};
 		});
-		items.push({ id: "submit", label: [span(REVIEW_TAB)] });
+		items.push({ id: "submit", label: [span(t("tui.ask.review"))] });
 		const active = this.#isSubmitTab() ? "submit" : String(this.#activeTabIndex);
 		return node(
 			"row",
@@ -1048,7 +1048,7 @@ export class AskDialogComponent implements Component {
 							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
 					role,
 					...(detail ? { detail } : {}),
-					...(recommended ? { value: [span("Recommended")] } : {}),
+					...(recommended ? { value: [span(t("tui.ask.recommended"))] } : {}),
 					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
 				},
 				undefined,
@@ -1437,7 +1437,7 @@ export class AskDialogComponent implements Component {
 					id: String(index),
 					label: questionTabLabel(question, index),
 				})),
-				{ id: "submit", label: "Submit" },
+				{ id: "submit", label: t("tui.ask.submit") },
 			];
 			this.#tabBar = new TabBar("", tabs, getTabBarTheme(), this.#activeTabIndex);
 			this.#tabBar.showHint = false;
@@ -1446,7 +1446,7 @@ export class AskDialogComponent implements Component {
 		if (this.#isSubmitTab()) {
 			this.#headerExpandable = false;
 			this.#descExpandable = false;
-			lines.push(theme.bold(theme.fg("accent", "Review answers")));
+			lines.push(theme.bold(theme.fg("accent", t("tui.ask.review_answers"))));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
@@ -1708,7 +1708,7 @@ export class AskDialogComponent implements Component {
 		try {
 			const prefill =
 				state.customInput === undefined ? undefined : { text: state.customInput, images: state.customInputImages };
-			const result = await this.#openPrompt({ title: "Custom answer", question: question.question }, prefill);
+			const result = await this.#openPrompt({ title: t("tui.ask.custom_answer"), question: question.question }, prefill);
 			if (result === undefined || this.#closed) return;
 			const input = splitPromptInput(result);
 			if (input.text.trim() === "") {
@@ -1751,7 +1751,7 @@ export class AskDialogComponent implements Component {
 			const prefill =
 				isReedit && state.note !== undefined ? { text: state.note, images: state.noteImages } : undefined;
 			const result = await this.#openPrompt(
-				{ title: `Note for ${rowItem.label}`, question: question.question },
+				{ title: t("tui.ask.note_for", { option: rowItem.label }), question: question.question },
 				prefill,
 			);
 			if (result === undefined || this.#closed) return;
@@ -1912,7 +1912,7 @@ export class AskDialogComponent implements Component {
 			}
 		}
 		allLines.push("");
-		allLines.push(theme.fg("accent", `${theme.nav.cursor} ${SUBMIT_OPTION}`));
+		allLines.push(theme.fg("accent", `${theme.nav.cursor} ${t("tui.ask.submit")}`));
 		let scrollView = this.#submitView;
 		if (!scrollView) {
 			scrollView = new ScrollView(allLines, {

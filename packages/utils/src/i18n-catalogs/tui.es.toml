@@ -54,3 +54,8 @@
 "tui.picker.back_to_list" = "Volver a la lista"
 "tui.picker.clear_search" = "Borrar búsqueda"
 "tui.picker.confirm" = "Confirmar"
+"tui.ask.review" = "Revisar"
+"tui.ask.review_answers" = "Revisar respuestas"
+"tui.ask.recommended" = "Recomendado"
+"tui.ask.custom_answer" = "Respuesta personalizada"
+"tui.ask.note_for" = "Nota para {option}"
