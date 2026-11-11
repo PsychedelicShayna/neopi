@@ -1,4 +1,5 @@
 import type { TspText } from "@oh-my-pi/pi-wire";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { node, text } from "../native/describe";
@@ -19,13 +20,6 @@ const ICONS: Readonly<Record<NoticeTone, string>> = {
 	error: "error",
 };
 
-/**
- * The word a warning or error leads with: a text terminal writes it
- * (`Warning: …`); a native row leaves it to the icon, whose name it becomes
- * for screen readers.
- */
-const LABELS = { warning: "Warning", error: "Error" } as const;
-
 /** Optional parts of a {@link noticeRow}. */
 export interface NoticeRowOptions {
 	/** Icon name in place of the tone's own (`read` for a file read, `download` for an update). */
@@ -44,7 +38,7 @@ export function noticeRow(tone: NoticeTone, message: TspText, options: NoticeRow
 	const icon = node("icon", {
 		name: options.icon ?? ICONS[tone],
 		tone: tone === "info" ? undefined : tone,
-		aria: tone === "warning" || tone === "error" ? LABELS[tone] : undefined,
+		aria: tone === "warning" || tone === "error" ? t(`status.chrome.${tone}`) : undefined,
 	});
 	return node(
 		"row",
@@ -73,7 +67,7 @@ export class TranscriptNotice extends TranscriptBlock {
 	 * message, the label left to the icon.
 	 */
 	static line(tone: "warning" | "error", message: string): TranscriptNotice {
-		const line = new Text(`${LABELS[tone]}: ${message}`, 1, 0).setStyleFn(t => theme.fg(tone, t));
+		const line = new Text(`${t(`status.chrome.${tone}`)}: ${message}`, 1, 0).setStyleFn(t => theme.fg(tone, t));
 		return new TranscriptNotice(noticeRow(tone, styledSpans(message)), [new Spacer(1), line]);
 	}
 

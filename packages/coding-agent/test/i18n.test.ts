@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getCatalog, getLocale, setLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import { getSettingDef, type SettingsDisplayEntry } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { cfgLanguage } from "../src/modes/settings";
 
@@ -60,5 +61,11 @@ describe("localization catalogs", () => {
 			label: "Git integration",
 			description: "Current host description",
 		});
+	});
+
+	test("localizes the empty error fallback without translating provider error text", () => {
+		setLocale("es");
+		expect(sanitizeErrorLine("  ")).toBe("Error desconocido");
+		expect(sanitizeErrorLine("Provider timeout 42")).toBe("Provider timeout 42");
 	});
 });

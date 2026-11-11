@@ -3,3 +3,5 @@
 "status.chrome.error" = "Error"
 "status.session.new" = "nueva"
 "status.duration.left" = "{time} restantes"
+"status.chrome.more_one" = "… +{count} línea más ({key} para expandir)"
+"status.chrome.more_many" = "… +{count} líneas más ({key} para expandir)"
