@@ -8,6 +8,7 @@ import { useQuery } from "../data/query";
 import { bucketAxis, rangeMeta } from "../data/range";
 import { densify, pivotSeries } from "../data/series";
 import { buildCostSummary, type CostComponents, type CostModelRow, type CostSummaryView } from "../data/view-models";
+import { useTranslation } from "../i18n";
 import type { CostDashboardStats, TimeRange } from "../types";
 import {
 	Card,
@@ -62,6 +63,7 @@ const UTC_DAY_LONG = new Intl.DateTimeFormat(undefined, {
 });
 
 export function CostsRoute({ active, range }: CostsRouteProps) {
+	const tr = useTranslation();
 	const query = useQuery(["costs", range], ({ signal }) => getCostDashboardStats(range, signal), { enabled: active });
 	const meta = rangeMeta(range);
 	const [split, setSplit] = useState<SplitMode>("model");
@@ -70,12 +72,17 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 	// Stable columns: a fresh array would make Table re-sort on every render.
 	const columns = useMemo(() => (view ? buildCostColumns(view) : []), [view]);
 	const isEmpty = (data: CostDashboardStats) => data.costSeries.length === 0;
-	const empty = <EmptyState title="No usage in this range" hint="Pick a wider range in the top bar." />;
+	const empty = (
+		<EmptyState
+			title={tr("costs.empty", "No usage in this range")}
+			hint={tr("costs.empty_hint", "Pick a wider range in the top bar.")}
+		/>
+	);
 
 	return (
 		<div className="page">
 			<PageHeader
-				title="Costs"
+				title={tr("costs.title", "Costs")}
 				description={`What ${meta.windowLabel} of usage would cost at public API rates. Subscription usage without a public price is counted as unpriced, not free.`}
 			/>
 
@@ -91,7 +98,7 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title="Daily estimate"
+					title={tr("costs.daily", "Daily estimate")}
 					description={
 						split === "model" ? "Per UTC day, stacked by model" : "Per UTC day, stacked by billing component"
 					}
