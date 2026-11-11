@@ -4,7 +4,7 @@
 
 ### Added
 
-- Collaboration guests can choose English or Spanish independently, with selected connection and theme controls translated.
+- Collaboration guests can choose English or Spanish independently, with selected connection, composer, and theme controls translated.
 
 ## [18.13.3] - 2026-10-28
 
