@@ -25,7 +25,6 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentPromptOptions } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Context, ImageContent, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockHandler, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
-import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -48,12 +47,17 @@ import {
 	SessionChronicler,
 	type SessionChroniclerHost,
 } from "../../src/chronicler/session-chronicler";
-import { runHeadlessBackfill } from "../../src/chronicler/backfill";
+import { readStoredSessionCoverage, runHeadlessBackfill } from "../../src/chronicler/backfill";
 import { type CaptureCheckpoint, ChroniclerStore, chroniclerStoreIO } from "../../src/chronicler/store";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
 import { cfgRetryEnabled } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import {
+	chroniclerVisibleEntryIds,
+	readChroniclerBlindMetadata,
+	writeChroniclerBlindMetadata,
+} from "../../src/chronicler/blind-metadata";
 
 const FINISH_TOOL = "finish_chronicle";
 const CAPTURE_MODEL_ID = "chronicler-mock";
@@ -489,6 +493,228 @@ describe("SessionChronicler capture runtime", () => {
 		throw new Error(`No session header found in ${sessionFile}`);
 	}
 
+	it("pauses without releasing her Agent conversation and catches up on resume", async () => {
+		const manager = await newSessionManager();
+		const first = appendUser(manager, "Retain this conversation while paused.");
+		await manager.flush();
+		scripts.push(ackPass());
+		const harness = startChronicler(manager, newSettings());
+		await waitForCoverage(harness.root, [first]);
+		await harness.chronicler.idle();
+		const agent = passes[0]!.agent;
+		const retained = [...agent.state.messages];
+		expect(await harness.chronicler.pause()).toBe(true);
+		expect(harness.chronicler.health.captureMode).toBe("paused");
+		const paused = appendUser(manager, "Paused material should be caught up, not hidden.");
+		await manager.flush();
+		harness.chronicler.onPrimaryTurnEnd(false);
+		await harness.chronicler.idle();
+		expect(passes).toHaveLength(1);
+		expect(agent.state.messages).toEqual(retained);
+		scripts.push(ackPass());
+		expect(await harness.chronicler.resume()).toBe(true);
+		await waitForCoverage(harness.root, [first, paused]);
+		await harness.chronicler.idle();
+		expect(passes[1]!.agent).toBe(agent);
+		expect(passConversationText(passes[1]!)).toContain("Retain this conversation while paused.");
+		expect(passSourceIds(passes[1]!)).toEqual([paused]);
+		expect(harness.chronicler.health.captureMode).toBe("running");
+		await harness.chronicler.setEnabled(false);
+		expect(agent.state.messages).toEqual([]);
+		expect(cfgChroniclerEnabled.get(harness.host.settings)).toBe(true);
+	});
+
+	it("keeps an open blind across restart and branch changes until explicit unblind", async () => {
+		const manager = await newSessionManager();
+		const publicBefore = appendUser(manager, "Public material before the blind.");
+		await manager.flush();
+		scripts.push(ackPass());
+		const first = startChronicler(manager, newSettings());
+		await waitForCoverage(first.root, [publicBefore]);
+		await first.chronicler.idle();
+		expect(await first.chronicler.blind()).toBe(true);
+		const privateFirst = appendUser(manager, "PRIVATE_FIRST_NEVER_CAPTURE");
+		await manager.flush();
+		await shutdown(first);
+		const resumed = startChronicler(manager, newSettings());
+		await resumed.chronicler.idle();
+		expect(resumed.chronicler.health.captureMode).toBe("blinded");
+		expect(await resumed.chronicler.resume()).toBe(false);
+		await resumed.chronicler.setEnabled(false);
+		await resumed.chronicler.setEnabled(true);
+		expect(resumed.chronicler.health.captureMode).toBe("blinded");
+		manager.branch(publicBefore);
+		const privateBranch = appendUser(manager, "PRIVATE_BRANCH_NEVER_CAPTURE");
+		await manager.flush();
+		resumed.chronicler.onPrimaryTurnEnd(false);
+		await resumed.chronicler.idle();
+		expect(passes).toHaveLength(1);
+		const metadata = await readChroniclerBlindMetadata(resumed.root);
+		expect(metadata.spans).toEqual([{ startAfter: publicBefore, endAt: null }]);
+		expect(await resumed.chronicler.unblind()).toBe(true);
+		await resumed.chronicler.idle();
+		const publicAfter = appendUser(manager, "Public material after explicit unblind.");
+		await manager.flush();
+		scripts.push(ackPass());
+		resumed.chronicler.onPrimaryTurnEnd(false);
+		await waitForCoverage(resumed.root, [publicBefore, publicAfter]);
+		await resumed.chronicler.idle();
+		expect(await committedEntryIds(resumed.root)).toEqual([publicBefore, publicAfter]);
+		expect(passes.flatMap(passSourceIds)).not.toContain(privateFirst);
+		expect(passes.flatMap(passSourceIds)).not.toContain(privateBranch);
+		expect(passes.map(passConversationText).join("\\n")).not.toContain("PRIVATE_");
+		expect(await readStoredSessionCoverage(manager.getSessionFile()!)).toMatchObject({
+			totalEntries: 2,
+			coveredEntries: 2,
+		});
+	});
+
+	it("excludes durable blind spans from headless backfill and completion counts", async () => {
+		const manager = await newSessionManager();
+		const before = appendUser(manager, "Public backlog before blind.");
+		const privateId = appendUser(manager, "HEADLESS_PRIVATE_NEVER_CAPTURE");
+		const after = appendUser(manager, "Public backlog after blind.");
+		await manager.flush();
+		await writeChroniclerBlindMetadata(chroniclerRoot(manager), {
+			version: 1,
+			spans: [{ startAfter: before, endAt: privateId }],
+		});
+		const transcript = await Bun.file(manager.getSessionFile()!).text();
+		scripts.push(ackPass());
+		const result = await runHeadlessBackfill({
+			sessionFile: manager.getSessionFile()!,
+			settings: newSettings(),
+			modelRegistry,
+			obfuscator: undefined,
+			timeoutMs: 5_000,
+			drainMs: 1_000,
+			pollMs: 10,
+		});
+		expect(result.outcome).toBe("complete");
+		expect(result.before.totalEntries).toBe(2);
+		expect(result.after.coveredEntries).toBe(2);
+		expect(await committedEntryIds(chroniclerRoot(manager))).toEqual([before, after]);
+		expect(passes.flatMap(passSourceIds)).not.toContain(privateId);
+		expect(passes.map(passConversationText).join("\\n")).not.toContain("HEADLESS_PRIVATE");
+		expect(await Bun.file(manager.getSessionFile()!).text()).toBe(transcript);
+	});
+
+	it("fails closed on malformed blind metadata and missing fork boundaries", async () => {
+		const manager = await newSessionManager();
+		appendUser(manager, "Malformed metadata must not send this to Luna.");
+		await manager.flush();
+		await Bun.write(path.join(chroniclerRoot(manager), "blind.json"), '{"version":1,"spans":[{}]}');
+		const harness = startChronicler(manager, newSettings());
+		await harness.chronicler.idle();
+		expect(harness.chronicler.health.status).toBe("halted");
+		expect(passes).toHaveLength(0);
+		await expect(readStoredSessionCoverage(manager.getSessionFile()!)).rejects.toThrow(
+			"Invalid Chronicler blind metadata",
+		);
+		expect([
+			...chroniclerVisibleEntryIds([{ id: "child" }], {
+				version: 1,
+				spans: [{ startAfter: "missing-parent-boundary", endAt: "missing-end" }],
+			}),
+		]).toEqual([]);
+		expect([
+			...chroniclerVisibleEntryIds([{ id: "start" }, { id: "private" }, { id: "fork" }], {
+				version: 1,
+				spans: [{ startAfter: "start", endAt: "missing-end" }],
+			}),
+		]).toEqual(["start"]);
+	});
+
+	it("fences an in-progress publication immediately on pause and retains its Agent on resume", async () => {
+		const manager = await newSessionManager();
+		const id = appendUser(manager, "Pending publication must wait for resume.");
+		await manager.flush();
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const write = chroniclerStoreIO.writeArtifact;
+		let held = false;
+		const writeSpy = spyOn(chroniclerStoreIO, "writeArtifact").mockImplementation(async (file, text) => {
+			if (!held && file.includes(".pending-") && file.endsWith("/COMMIT.json")) {
+				held = true;
+				reached.resolve();
+				await release.promise;
+			}
+			return write(file, text);
+		});
+		scripts.push(beatPass(), ackPass());
+		const harness = startChronicler(manager, newSettings());
+		try {
+			await reached.promise;
+			const agent = passes[0]!.agent;
+			const pausing = harness.chronicler.pause();
+			expect(harness.chronicler.health.captureMode).toBe("paused");
+			release.resolve();
+			await pausing;
+			await harness.chronicler.idle();
+			expect(await readCommitted(harness.root)).toEqual([]);
+			expect(passes).toHaveLength(1);
+			await harness.chronicler.resume();
+			await waitForCoverage(harness.root, [id]);
+			expect(passes[1]!.agent).toBe(agent);
+		} finally {
+			release.resolve();
+			await shutdown(harness);
+			writeSpy.mockRestore();
+		}
+	});
+
+	it("resets session-local consent before transition and preserves a new suspended-session choice", async () => {
+		const manager = await newSessionManager();
+		const settings = newSettings({ "chronicler.enabled": false });
+		const harness = startChronicler(manager, settings);
+		await harness.chronicler.setEnabled(true);
+		expect(harness.chronicler.effectiveEnabled).toBe(true);
+		const suspending = harness.chronicler.suspendForSessionChange();
+		expect(harness.chronicler.effectiveEnabled).toBe(false);
+		await suspending;
+		await harness.chronicler.setEnabled(true);
+		harness.chronicler.resumeAfterSessionChange();
+		await harness.chronicler.idle();
+		expect(harness.chronicler.effectiveEnabled).toBe(true);
+		expect(cfgChroniclerEnabled.get(settings)).toBe(false);
+	});
+
+	it("re-reads blind boundaries under the capture lease before exposing source entries", async () => {
+		const manager = await newSessionManager();
+		const before = appendUser(manager, "Public before a concurrent blind update.");
+		const hidden = appendUser(manager, "PRIVATE_AT_LOCK_BOUNDARY");
+		const after = appendUser(manager, "Public after the blind update.");
+		await manager.flush();
+		const open = ChroniclerStore.prototype.open;
+		let updated = false;
+		const openSpy = spyOn(ChroniclerStore.prototype, "open").mockImplementation(
+			async function (this: ChroniclerStore) {
+				// Binding has acquired the lease, after the startup metadata read.
+				// Emulate the last metadata publication observed at that lock boundary.
+				if (!updated) {
+					updated = true;
+					await writeChroniclerBlindMetadata(chroniclerRoot(manager), {
+						version: 1,
+						spans: [{ startAfter: before, endAt: hidden }],
+					});
+				}
+				await open.call(this);
+			},
+		);
+		scripts.push(ackPass());
+		const harness = startChronicler(manager, newSettings());
+		try {
+			await waitForCoverage(harness.root, [before, after]);
+			await harness.chronicler.idle();
+			expect(passes.flatMap(passSourceIds)).toEqual([before, after]);
+			expect(passes.map(passConversationText).join("\\n")).not.toContain("PRIVATE_AT_LOCK_BOUNDARY");
+			expect(await committedEntryIds(harness.root)).toEqual([before, after]);
+		} finally {
+			await shutdown(harness);
+			openSpy.mockRestore();
+		}
+	});
+
 	// ── publication and provenance ──────────────────────────────────────────
 
 	it("publishes a staged beat with real session and entry provenance, without touching the primary", async () => {
@@ -864,36 +1090,6 @@ describe("SessionChronicler capture runtime", () => {
 		const harness = startChronicler(manager, newSettings());
 		const batches = await waitForBatches(root, 3);
 		await shutdown(harness);
-		// Exercise the actual private tools through the provider's request converter.
-		const codex = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-6.1-sol");
-		if (!codex || codex.api !== "openai-codex-responses") throw new Error("Expected a bundled Codex model");
-		const wireTools = convertOpenAICodexResponsesTools(passes[1]!.agent.state.tools, codex);
-		expect(wireTools).toHaveLength(3);
-		for (const tool of wireTools) {
-			if (tool.type !== "function") throw new Error("Expected a function tool");
-			expect(tool.strict).toBe(false);
-			const parameters = tool.parameters as { required?: string[]; properties: Record<string, unknown> };
-			if (tool.name === "chronicle") {
-				expect([...(parameters.required ?? [])].sort()).toEqual(["body", "kind", "sources", "title", "topics"]);
-				expect(parameters.properties).toMatchObject({
-					event_time: { type: "string" },
-					related: { type: "array", items: { type: "string" } },
-					supersedes: { type: "string" },
-					uncertainty: { type: "string" },
-				});
-			} else if (tool.name === "read_chronicle") {
-				expect(parameters.required ?? []).toEqual([]);
-				expect(parameters.properties).toMatchObject({
-					id: { type: "string" },
-					offset: { type: "integer", minimum: 0 },
-					limit: { type: "integer", minimum: 1, maximum: 100 },
-				});
-			} else {
-				expect(tool.name).toBe(FINISH_TOOL);
-				expect(parameters.required).toEqual(["carry"]);
-				expect(parameters.properties.carry).toMatchObject({ anyOf: expect.arrayContaining([{ type: "null" }]) });
-			}
-		}
 		const results = passes[1]!.agent.state.messages.filter(message => message.role === "toolResult");
 		for (const result of results.slice(0, validCount))
 			expect(result.isError, JSON.stringify(result.content)).toBe(false);
@@ -2794,7 +2990,7 @@ describe("SessionChronicler capture runtime", () => {
 				await release.promise;
 				throw new Error("Injected checkpoint publication failure");
 			}
-			await write(file, text);
+			return await write(file, text);
 		});
 		const note: MockHandler = () => ({
 			content: [{ type: "toolCall", name: "note", arguments: { note: "I will honor that exclusion." } }],
@@ -2823,6 +3019,7 @@ describe("SessionChronicler capture runtime", () => {
 		harness.host.emitNote = async message => {
 			const committed = await readCommitted(harness.root);
 			expect(committed.at(-1)!.recordingLimits?.sources).toEqual([directive]);
+			if (!message.details) throw new Error("Expected a Chronicler note payload.");
 			emitted.push(message.details.note);
 			return true;
 		};

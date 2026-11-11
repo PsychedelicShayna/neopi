@@ -19,6 +19,22 @@ An atom can optionally carry `chronicler_note` in its YAML front matter: Luna's 
 These amendments are canary-only pending Shayna's review of Luna's actual output. An agent walk does not authorize folding this batch into nightly.
 
 
+## Session controls: `/chron`
+
+`/chron` (or `/chron status`) shows Luna's effective state for the current session.
+
+| Command | Effect |
+| --- | --- |
+| `/chron pause` | Stop ingest while retaining her context window. `/chron resume` catches up on the paused exchange. |
+| `/chron resume` | Resume paused ingest. Does not lift a blind span; use `/chron unblind` for that. |
+| `/chron blind` | Stop ingest and exclude the exchange until `/chron unblind`, including future catch-up and backfill. |
+| `/chron unblind` | Continue after the blind marker. The blinded exchange remains excluded. |
+| `/chron off` | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
+| `/chron on` | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded. |
+
+These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
+
+Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
 ## The hierarchy
 
 ```
@@ -93,6 +109,7 @@ Backfill command flags override their matching settings. Its `pollMs` setting on
 | Setting | Default | Meaning |
 |---|---|---|
 | `chronicler.enabled` | `false` | On (`true`), Off (`false`), or interactive session consent (`"ask"`). |
+| `chronicler.notices` | `true` | Tell the primary agent when Luna's capture state changes. |
 | `chronicler.recall.enabled` | `false` | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
 | `chronicler.index.dir` | `<agentDir>/chronicle` | View root. |
 | `chronicler.index.timezone` | system zone | IANA zone for calendar buckets. |

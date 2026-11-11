@@ -45,6 +45,13 @@ import { type ChroniclerNoteEmitter, NoteTool } from "./note-tool";
 import type { ChronicleEntry } from "./render";
 import { renderChronicleDelta } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
+import {
+	ChroniclerBlindMetadataError,
+	chroniclerVisibleEntryIds,
+	hasOpenBlind,
+	readChroniclerBlindMetadata,
+	writeChroniclerBlindMetadata,
+} from "./blind-metadata";
 
 /**
  * The slice of a session the runtime reads. {@link AgentSession} passes its
@@ -72,6 +79,8 @@ export interface SessionChroniclerHost {
 	preferWebsockets: boolean | undefined;
 	isDisposed(): boolean;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
+	/** Optional host seams; control notices remain the host's responsibility. */
+	onEnabledChange?(enabled: boolean): void;
 	emitNote?: ChroniclerNoteEmitter;
 	cwd(): string;
 	/** True only for a capturable top-level session (SDK taskDepth 0, no parentTaskPrefix). */
@@ -97,6 +106,7 @@ export interface ChroniclerHealth {
 	readonly lastCommittedAt?: string;
 	readonly error?: string;
 	readonly retryAt?: number;
+	readonly captureMode?: "running" | "paused" | "blinded";
 }
 
 interface RoleSelection {
@@ -119,6 +129,7 @@ interface ScheduledScan {
 	readonly descriptor: SessionDescriptor;
 	readonly entries: readonly ChronicleEntry[];
 	readonly entryIds: ReadonlySet<string>;
+	readonly orderedEntries: readonly { readonly id: string }[];
 	forceFlush: boolean;
 }
 
@@ -128,7 +139,9 @@ interface ScheduledScan {
  * attempt. Nothing here is re-derived from the live SessionManager.
  */
 interface ChroniclerBinding {
-	readonly gen: number;
+	gen: number;
+	/** Configuration/session revocation cannot be undone by a later pause fence. */
+	invalidated: boolean;
 	readonly descriptor: SessionDescriptor;
 	readonly store: ChroniclerStore;
 	readonly recorder: AdvisorTranscriptRecorder;
@@ -224,9 +237,18 @@ export class SessionChronicler {
 	/** Recent persisted-message identities: cloned assistants break object identity. */
 	#settled = new Map<string, AgentMessage[]>();
 	#pendingRendezvous: PendingRendezvous | undefined;
+	#enabledOverride: boolean | undefined;
+	#observedEnabled: boolean;
+	#paused = false;
+	#blinded = false;
+	#controlsPending = 0;
+	#controlSessionId: string;
 
 	constructor(host: SessionChroniclerHost) {
 		this.#host = host;
+		this.#observedEnabled = this.effectiveEnabled;
+		this.#controlSessionId = host.sessionManager.getSessionId();
+		this.#queuePrivacyRead();
 		// Synchronous (not the microtask-coalesced Setting.listen): a disable must revoke an
 		// in-flight publication before the caller's next await.
 		this.#settingsUnsub = host.settings.onEffectiveChange(
@@ -240,6 +262,163 @@ export class SessionChronicler {
 
 	get status(): ChroniclerStatus {
 		return this.#status;
+	}
+
+	get effectiveEnabled(): boolean {
+		return this.#enabledOverride ?? cfgChroniclerEnabled.get(this.#host.settings) === true;
+	}
+
+	#queuePrivacyRead(): void {
+		const manager = this.#host.sessionManager;
+		const artifactsDir = manager.getArtifactsDir();
+		const sessionId = manager.getSessionId();
+		const gen = this.#generation;
+		if (!artifactsDir) return;
+		// Also refresh disabled sessions: privacy outlives session-local consent.
+		this.#chain = this.#chain.then(async () => {
+			try {
+				const metadata = await readChroniclerBlindMetadata(`${artifactsDir}/chronicler`);
+				if (gen === this.#generation && sessionId === this.#host.sessionManager.getSessionId())
+					this.#blinded = hasOpenBlind(metadata);
+			} catch (error) {
+				if (gen !== this.#generation) return;
+				this.#handlePrivacyError(error);
+			}
+		});
+	}
+
+	/** Session-local consent; never changes persistent settings or durable blind spans. */
+	async setEnabled(enabled: boolean): Promise<void> {
+		this.#fenceSessionChange();
+		this.#enabledOverride = enabled;
+		this.#observedEnabled = enabled;
+		await this.#control(enabled ? "on" : "off");
+	}
+
+	pause(): Promise<boolean> {
+		return this.#control("pause");
+	}
+
+	resume(): Promise<boolean> {
+		return this.#control("resume");
+	}
+
+	blind(): Promise<boolean> {
+		return this.#control("blind");
+	}
+
+	unblind(): Promise<boolean> {
+		return this.#control("unblind");
+	}
+
+	/**
+	 * Revoke publication before the first await. Work and metadata changes then
+	 * settle on the existing capture chain, without releasing a paused binding.
+	 */
+	#control(action: "on" | "off" | "pause" | "resume" | "blind" | "unblind"): Promise<boolean> {
+		this.#fenceSessionChange();
+		if (this.#stopping || this.#cleanedUp || this.#suspended) return Promise.resolve(false);
+		if ((action === "pause" || action === "resume") && !this.effectiveEnabled) return Promise.resolve(false);
+		const manager = this.#host.sessionManager;
+		const sessionId = manager.getSessionId();
+		const sessionFile = manager.getSessionFile();
+		const artifactsDir = manager.getArtifactsDir();
+		const entries = manager.getEntries();
+		const boundary = entries.at(-1)?.id ?? null;
+		const wasPaused = this.#paused;
+		if (action === "pause" || action === "blind") this.#paused = true;
+		this.#controlsPending++;
+		this.#cancelTimers();
+		this.#resetRecovery();
+		this.#pendingScan = undefined;
+		this.#revokeNow(`chronicler ${action}`, false, true);
+		// Abort an active turn, but retain her Agent, messages, recorder and lease.
+		this.#binding?.agent.abort(`chronicler ${action}`);
+		const operation = this.#chain.then(async () => {
+			if (manager.getSessionId() !== sessionId || manager.getSessionFile() !== sessionFile || this.#suspended)
+				return false;
+			let changed = false;
+			let lease: FileLockHandle | undefined;
+			try {
+				if (!artifactsDir || !sessionFile) {
+					if (action === "blind" || action === "unblind")
+						throw new Error("Chronicler blind requires a session artifacts directory");
+				} else {
+					const root = `${artifactsDir}/chronicler`;
+					// Off/pause must remain usable even if metadata is corrupt. Neither lifts it.
+					if (action !== "off" && action !== "pause") {
+						if (action === "blind" || action === "unblind") {
+							if (!this.#binding || !this.#ownsLease(this.#binding))
+								lease = await acquireFileLock(root, { retries: 1, takeoverStoppedOwner: true });
+							await manager.ensureOnDisk();
+							await manager.flush();
+						}
+						const metadata = await readChroniclerBlindMetadata(root);
+						this.#blinded = hasOpenBlind(metadata);
+						if (action === "blind" && !this.#blinded) {
+							await writeChroniclerBlindMetadata(root, {
+								version: 1,
+								spans: [...metadata.spans, { startAfter: boundary, endAt: null }],
+							});
+							this.#blinded = true;
+							changed = true;
+						} else if (action === "unblind" && this.#blinded) {
+							const spans = metadata.spans.slice();
+							const open = spans.pop()!;
+							// No entries at either boundary means an empty private window.
+							if (boundary !== null) spans.push({ startAfter: open.startAfter, endAt: boundary });
+							await writeChroniclerBlindMetadata(root, { version: 1, spans });
+							this.#blinded = false;
+							changed = true;
+						}
+					}
+				}
+				switch (action) {
+					case "off":
+						await this.#disableBinding();
+						return true;
+					case "pause":
+						changed = !wasPaused && !this.#blinded;
+						this.#paused = true;
+						break;
+					case "resume":
+						changed = this.#paused && !this.#blinded;
+						if (!this.#blinded) this.#paused = false;
+						break;
+					case "on":
+						if (!this.#blinded) this.#paused = false;
+						changed = true;
+						break;
+					case "blind":
+						this.#paused = true;
+						break;
+					case "unblind":
+						if (changed) this.#paused = false;
+						break;
+				}
+				// A generation fence revokes the attempt, not this retained conversation.
+				// Hooks refer to binding.gen so resume can reuse this exact Agent.
+				if (this.#binding && !this.#binding.invalidated) this.#binding.gen = this.#generation;
+				return changed;
+			} finally {
+				lease?.release();
+			}
+		});
+		const settled = operation.finally(() => {
+			this.#controlsPending--;
+		});
+		this.#chain = settled
+			.then(() => {
+				if (this.#binding && !this.#paused && !this.#blinded) this.#watchOwnership(this.#binding);
+				this.#scheduleWake(true);
+			})
+			.catch(error => {
+				this.#paused = true;
+				this.#error = errorText(error);
+				this.#status = "halted";
+				this.#host.emitNotice("warning", `Chronicler control failed: ${this.#error}`, "chronicler");
+			});
+		return settled;
 	}
 
 	get health(): ChroniclerHealth {
@@ -266,6 +445,7 @@ export class SessionChronicler {
 			lastCommittedAt: sameHistory ? this.#lastCommittedAt : undefined,
 			error: this.#error,
 			retryAt: this.#retryAt,
+			captureMode: this.#blinded ? "blinded" : this.#paused ? "paused" : "running",
 		};
 	}
 
@@ -274,6 +454,9 @@ export class SessionChronicler {
 		if (this.#suspension) return this.#suspension;
 		if (this.#cleanedUp) return;
 		this.#suspended = true;
+		this.#enabledOverride = undefined;
+		this.#observedEnabled = this.effectiveEnabled;
+		this.#paused = false;
 		this.#cancelTimers();
 		this.#resetRecovery();
 		this.#pendingScan = undefined;
@@ -301,8 +484,12 @@ export class SessionChronicler {
 		if (this.#stopping || this.#cleanedUp) return;
 		this.#suspension = undefined;
 		this.#suspended = false;
+		this.#paused = false;
+		this.#blinded = false;
 		this.#status = "off";
 		this.#resetRecovery();
+		this.#fenceSessionChange();
+		this.#queuePrivacyRead();
 		this.#scheduleWake(true);
 	}
 
@@ -312,9 +499,9 @@ export class SessionChronicler {
 	 * frozen snapshot includes it. Model work is never awaited here.
 	 */
 	onPrimaryTurnEnd(willContinue: boolean | undefined, lastMessage?: AgentMessage): void {
-		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
 		if (this.#suspended || this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
 		this.#fenceSessionChange();
+		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
 		// A new turn end supersedes any earlier park: a stale generation's
 		// persistence may never notify, and a dangling park must not linger.
 		this.#pendingRendezvous = undefined;
@@ -341,9 +528,9 @@ export class SessionChronicler {
 	 * parked turn-end wake. Never scans or copies `getEntries()` on its own.
 	 */
 	onPrimaryMessagePersisted(message: AgentMessage): void {
-		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
 		if (this.#suspended || this.#stopping || this.#cleanedUp || this.#host.isDisposed()) return;
 		this.#fenceSessionChange();
+		if (!this.#enabled() || !this.#host.isCaptureEligible()) return;
 		this.#recordSettled(message);
 		if (message.role === "user") this.#maybeEnsureOnDisk();
 
@@ -434,7 +621,9 @@ export class SessionChronicler {
 	 * snapshot; nothing downstream re-reads the live manager for identity.
 	 */
 	#scheduleWake(forceFlush: boolean, bypassStop = false): void {
+		this.#fenceSessionChange();
 		if (this.#suspended || this.#deadlineExpired || this.#cleanedUp || this.#retryTimer !== undefined) return;
+		if (this.#paused || this.#blinded || this.#controlsPending > 0) return;
 		if ((this.#stopping || this.#host.isDisposed()) && !bypassStop) return;
 		if (!this.#enabled()) return;
 		if (!this.#host.isCaptureEligible()) return;
@@ -463,7 +652,8 @@ export class SessionChronicler {
 
 		const entries: ChronicleEntry[] = [];
 		const entryIds = new Set<string>();
-		for (const entry of manager.getEntries()) {
+		const orderedEntries = manager.getEntries();
+		for (const entry of orderedEntries) {
 			if (entry.type !== "message") continue;
 			const message = entry as SessionMessageEntry;
 			entries.push({
@@ -480,6 +670,7 @@ export class SessionChronicler {
 			descriptor,
 			entries,
 			entryIds,
+			orderedEntries,
 			forceFlush: forceFlush || (this.#pendingScan?.gen === this.#generation && this.#pendingScan.forceFlush),
 		};
 
@@ -494,6 +685,9 @@ export class SessionChronicler {
 
 	#onSettingChange(): void {
 		if (this.#cleanedUp || this.#deadlineExpired || this.#stopping) return;
+		const enabled = this.effectiveEnabled;
+		const enabledChanged = enabled !== this.#observedEnabled;
+		this.#observedEnabled = enabled;
 		this.#cancelTimers();
 		this.#resetRecovery();
 		this.#status = this.#suspended ? "suspended" : "off";
@@ -501,12 +695,16 @@ export class SessionChronicler {
 		if (!this.#enabled()) {
 			this.#pendingScan = undefined;
 			this.#chain = this.#chain
-				.then(() => {
-					if (!this.#enabled()) return this.#disableBinding();
+				.then(async () => {
+					await this.#disableBinding();
+					if (enabledChanged) this.#host.onEnabledChange?.(false);
 				})
 				.catch(error => {
 					logger.warn("Chronicler disable failed", { error: String(error) });
 				});
+		}
+		if (enabled && enabledChanged) {
+			this.#chain = this.#chain.then(() => this.#host.onEnabledChange?.(true));
 		}
 		this.#settled.clear();
 		this.#scheduleWake(true);
@@ -518,8 +716,9 @@ export class SessionChronicler {
 	 * check. Ordinary revocation owns the in-flight completion; transitions,
 	 * lost ownership and the terminal deadline detach its fenced Agent.
 	 */
-	#revokeNow(reason: string, detach = false): void {
+	#revokeNow(reason: string, detach = false, retainConversation = false): void {
 		this.#generation++;
+		if (this.#binding && !retainConversation) this.#binding.invalidated = true;
 		const batch = this.#activeBatch;
 		if (batch && !Object.isFrozen(batch)) batch.revoked = true;
 		if (detach) {
@@ -536,6 +735,17 @@ export class SessionChronicler {
 	#fenceSessionChange(): void {
 		const previous = this.#scheduledDescriptor;
 		const manager = this.#host.sessionManager;
+		if (this.#controlSessionId !== manager.getSessionId()) {
+			this.#revokeNow("chronicler session changed");
+			this.#pendingScan = undefined;
+			this.#settled.clear();
+			this.#status = "off";
+			this.#controlSessionId = manager.getSessionId();
+			this.#enabledOverride = undefined;
+			this.#observedEnabled = this.effectiveEnabled;
+			this.#paused = false;
+			this.#blinded = false;
+		}
 		if (
 			previous &&
 			(previous.sessionId !== manager.getSessionId() ||
@@ -621,17 +831,18 @@ export class SessionChronicler {
 	// ---- scan -------------------------------------------------------------
 
 	#enabled(): boolean {
-		return cfgChroniclerEnabled.get(this.#host.settings);
+		return this.effectiveEnabled;
 	}
 
 	async #runScan(): Promise<void> {
 		this.#scanQueued = false;
-		const scan = this.#pendingScan;
+		let scan = this.#pendingScan;
 		this.#pendingScan = undefined;
 		if (!scan) return;
 
 		const gen = scan.gen;
 		if (this.#suspended || this.#deadlineExpired || this.#cleanedUp || gen !== this.#generation) return;
+		if (this.#paused || this.#blinded || this.#controlsPending > 0) return;
 		// An already queued turn wake must not bypass an autonomous recovery backoff.
 		// Its source entries remain in the transcript for the timer's fresh snapshot.
 		if (this.#retryTimer !== undefined) return;
@@ -658,6 +869,23 @@ export class SessionChronicler {
 			return;
 		}
 		if (!binding || this.#generation !== binding.gen) return;
+		// Hold the same lease as blind writers across filtering and capture.
+		try {
+			const metadata = await readChroniclerBlindMetadata(`${scan.descriptor.artifactsDir}/chronicler`);
+			if (gen !== this.#generation) return;
+			this.#blinded = hasOpenBlind(metadata);
+			const visible = chroniclerVisibleEntryIds(scan.orderedEntries, metadata);
+			scan = {
+				...scan,
+				entries: scan.entries.filter(entry => visible.has(entry.id)),
+				entryIds: new Set([...scan.entryIds].filter(id => visible.has(id))),
+			};
+			if (this.#blinded) return;
+		} catch (error) {
+			if (gen !== this.#generation) return;
+			this.#handlePrivacyError(error);
+			return;
+		}
 		this.#status = "running";
 
 		await this.#drainBacklog(binding, scan);
@@ -1103,6 +1331,7 @@ export class SessionChronicler {
 		const rebind =
 			!current ||
 			reconcile ||
+			current.invalidated ||
 			current.gen !== this.#generation ||
 			!this.#sameDescriptor(current.descriptor, descriptor) ||
 			current.modelString !== selection.modelString ||
@@ -1195,6 +1424,7 @@ export class SessionChronicler {
 
 		const binding: ChroniclerBinding = {
 			gen,
+			invalidated: false,
 			descriptor,
 			store,
 			recorder,
@@ -1207,7 +1437,12 @@ export class SessionChronicler {
 			lease,
 		};
 		agent.addBeforeModelCallHook(() => {
-			if (this.#generation !== gen || this.#deadlineExpired || this.#cleanedUp || !this.#ownsLease(binding)) {
+			if (
+				this.#generation !== binding.gen ||
+				this.#deadlineExpired ||
+				this.#cleanedUp ||
+				!this.#ownsLease(binding)
+			) {
 				throw new Error("Chronicler binding was revoked");
 			}
 		});
@@ -1262,6 +1497,7 @@ export class SessionChronicler {
 		this.#status = "off";
 		this.#settled.clear();
 		if (this.#binding) {
+			this.#rebuildConversation(this.#binding);
 			await this.#teardownBinding(this.#binding);
 			this.#binding = undefined;
 		}
@@ -1269,6 +1505,19 @@ export class SessionChronicler {
 
 	#handleBindingError(error: unknown): void {
 		this.#requestRetry(errorText(error), isChroniclerCorruption(error) ? "halted" : "retrying");
+	}
+
+	#handlePrivacyError(error: unknown): void {
+		if (!(error instanceof ChroniclerBlindMetadataError)) {
+			// No metadata was trusted and no delta was sent. Keep capture fenced
+			// for this pass, but let existing recovery re-read after an IO repair.
+			this.#requestRetry(`Chronicler privacy metadata IO failed: ${errorText(error)}`);
+			return;
+		}
+		this.#paused = true;
+		this.#error = errorText(error);
+		this.#status = "halted";
+		this.#host.emitNotice("warning", `Chronicler privacy check failed: ${this.#error}`, "chronicler");
 	}
 
 	async #cleanup(): Promise<void> {
@@ -1303,6 +1552,9 @@ export class SessionChronicler {
 	#requestRetry(reason: string, status: ChroniclerStatus = "retrying", reconcile = true): void {
 		if (
 			this.#suspended ||
+			this.#paused ||
+			this.#blinded ||
+			this.#controlsPending > 0 ||
 			this.#stopping ||
 			this.#cleanedUp ||
 			this.#deadlineExpired ||

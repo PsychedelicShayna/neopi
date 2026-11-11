@@ -46,6 +46,7 @@
 			"chronicler.capture.streamStallMs",
 			"chronicler.capture.unseenFlushChars",
 			"chronicler.enabled",
+			"chronicler.notices",
 			"chronicler.index.concurrency",
 			"chronicler.index.diagnosticLimit",
 			"chronicler.index.dir",

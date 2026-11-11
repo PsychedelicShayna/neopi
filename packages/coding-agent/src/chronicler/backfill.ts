@@ -23,10 +23,11 @@ import { cfgChroniclerBackfillPollMs } from "./backfill-settings";
 import { type ChroniclerSessionView, SessionChronicler } from "./session-chronicler";
 import { cfgChroniclerEnabled } from "./settings";
 import { readCommittedChroniclerBatches } from "./store";
+import { chroniclerVisibleEntryIds, readChroniclerBlindMetadata } from "./blind-metadata";
 
 /** Committed capture state of one stored session. */
 export interface BackfillCoverage {
-	/** Message entries in the transcript: the units capture must cover. */
+	/** Capturable message entries, excluding durable blind spans. */
 	readonly totalEntries: number;
 	/** Message entries cited by a committed batch. */
 	readonly coveredEntries: number;
@@ -106,11 +107,18 @@ async function committedCoverage(sessionFile: string, messageIds: ReadonlySet<st
 async function readMessageIds(sessionFile: string): Promise<{ header: SessionHeader; ids: Set<string> }> {
 	let header: SessionHeader | undefined;
 	const ids = new Set<string>();
+	const orderedEntries: { id: string }[] = [];
 	await visitEntriesFromFile(sessionFile, entry => {
 		if (entry.type === "session") header ??= entry;
-		else if (entry.type === "message" && entry.id) ids.add(entry.id);
+		else if ("id" in entry && typeof entry.id === "string") {
+			orderedEntries.push({ id: entry.id });
+			if (entry.type === "message") ids.add(entry.id);
+		}
 	});
 	if (!header) throw new Error(`Session file has no valid header: ${sessionFile}`);
+	const metadata = await readChroniclerBlindMetadata(chroniclerRootFor(sessionFile));
+	const visible = chroniclerVisibleEntryIds(orderedEntries, metadata);
+	for (const id of ids) if (!visible.has(id)) ids.delete(id);
 	return { header, ids };
 }
 
@@ -163,8 +171,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 
 	const manager = await SessionManager.openReadOnly(sessionFile);
 	const artifactsDir = artifactsDirectoryFor(sessionFile);
-	const messageIds = new Set<string>();
-	for (const entry of manager.getEntries()) if (entry.type === "message") messageIds.add(entry.id);
+	const { ids: messageIds } = await readMessageIds(sessionFile);
 	// The read-only manager never persists, so the transcript bytes cannot
 	// change; the view reports the real file so the store lands beside it.
 	const view: ChroniclerSessionView = {
@@ -215,7 +222,12 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 			// A corrupt store halts the runtime itself; the final read reports it.
 			logger.debug("Chronicler backfill progress read failed", { error: String(error) });
 		}
-		if (chronicler.status === "halted" || chronicler.status === "no_model" || chronicler.status === "contended")
+		if (
+			chronicler.status === "halted" ||
+			chronicler.status === "no_model" ||
+			chronicler.status === "contended" ||
+			chronicler.health.captureMode === "blinded"
+		)
 			break;
 		if (done) {
 			const retryAt = chronicler.health.retryAt;

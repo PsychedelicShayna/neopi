@@ -39,6 +39,18 @@ export const cfgChroniclerEnabled = register({
 			"Continuously capture semantic beats using the @chronicler role. Ask requests consent for each session. Independent of Memory Backend; both may be on.",
 	},
 });
+export const cfgChroniclerNotices = register({
+	id: "chronicler.notices",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "memory",
+		group: "Chronicler",
+		label: "Tell the primary agent",
+		description:
+			"Send the primary agent a system notice when Luna is enabled, disabled, paused, resumed, blinded or unblinded.",
+	},
+});
 export const cfgChroniclerRecallEnabled = register({
 	id: "chronicler.recall.enabled",
 	type: "boolean",

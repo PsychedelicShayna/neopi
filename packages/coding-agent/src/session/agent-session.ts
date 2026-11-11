@@ -142,6 +142,12 @@ import {
 import { renderChatCompactionPrompt } from "../chat/chat-system-prompt";
 import { cfgChatInclude } from "../chat/settings";
 import { type ChroniclerHealth, SessionChronicler } from "../chronicler/session-chronicler";
+import {
+	type ChroniclerControl,
+	type ChroniclerNoticeOptions,
+	type ChroniclerTransition,
+	injectChroniclerNotice,
+} from "../chronicler/notices";
 import { clearSessionCompactionControls } from "./compaction-controls";
 import type { SessionAccountPoolScope } from "../config/account-pools";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
@@ -2986,6 +2992,16 @@ export class AgentSession implements SettingsScope {
 					() => this.#isDisposed || this.#sessionGeneration !== generation,
 				);
 				return accepted;
+			},
+			onEnabledChange: enabled => {
+				void this.sendChroniclerNotice(enabled ? "enabled" : "disabled").catch(error => {
+					logger.warn("Chronicler transition notice failed", { error: String(error) });
+					this.emitNotice(
+						"warning",
+						"The Chronicler changed state, but her system notice could not be delivered.",
+						"chronicler",
+					);
+				});
 			},
 			cwd: () => this.sessionManager.getCwd(),
 		});
@@ -8410,6 +8426,59 @@ export class AgentSession implements SettingsScope {
 	/** Current Chronicler binding and actionable capture/recovery state. */
 	get chroniclerHealth(): ChroniclerHealth {
 		return this.#chronicler?.health ?? { status: "off" };
+	}
+
+	/** Effective capture choice for this session, including a startup consent override. */
+	get chroniclerEnabled(): boolean {
+		return this.#chronicler.effectiveEnabled;
+	}
+
+	/** Apply startup consent without changing durable settings or emitting a duplicate notice. */
+	async setChroniclerEnabled(enabled: boolean): Promise<void> {
+		await this.#chronicler.setEnabled(enabled);
+	}
+
+	async sendChroniclerNotice(transition: ChroniclerTransition, options?: ChroniclerNoticeOptions): Promise<void> {
+		await injectChroniclerNotice(
+			this,
+			transition,
+			transition === "enabled" ? { enabledExtra: chroniclerStartupConsent.trim(), ...options } : options,
+		);
+	}
+
+	/** Explicit operator controls; blind entry IDs remain private to Luna's store. */
+	async chroniclerControl(action: ChroniclerControl): Promise<boolean> {
+		let changed: boolean;
+		let transition: ChroniclerTransition;
+		switch (action) {
+			case "on":
+			case "off": {
+				const enabled = action === "on";
+				changed = this.chroniclerEnabled !== enabled;
+				if (!changed) return false;
+				await this.setChroniclerEnabled(enabled);
+				transition = enabled ? "enabled" : "disabled";
+				break;
+			}
+			case "pause":
+				changed = await this.#chronicler.pause();
+				transition = "paused";
+				break;
+			case "resume":
+				changed = await this.#chronicler.resume();
+				transition = "resumed";
+				break;
+			case "blind":
+				changed = await this.#chronicler.blind();
+				transition = "blinded";
+				break;
+			case "unblind":
+				changed = await this.#chronicler.unblind();
+				transition = "unblinded";
+				break;
+		}
+		if (changed) await this.sendChroniclerNotice(transition);
+		return changed;
 	}
 
 	/** Current session ID */

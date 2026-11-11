@@ -235,14 +235,16 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 	readonly parameters: typeof readSchema;
 	readonly strict = false;
 	readonly intent = "omit" as const;
+	readonly #sourceEntries?: readonly ChronicleEntry[];
 
 	constructor(
 		private readonly store: ChroniclerStore,
 		private readonly batch: CaptureBatch,
 		private readonly obfuscator?: { obfuscate(text: string): string },
 		private readonly scope?: ScopeLike,
-		private readonly sourceEntries?: readonly ChronicleEntry[],
+		sourceEntries?: readonly ChronicleEntry[],
 	) {
+		this.#sourceEntries = sourceEntries;
 		const definition = getChroniclerToolSchemas(scope)[2];
 		this.description = definition.description;
 		this.parameters = definition.parameters;
@@ -266,7 +268,7 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 			) {
 				throw new ToolError(`Unknown source entry ID: ${args.source}`);
 			}
-			const entry = this.sourceEntries?.find(entry => entry.id === args.source);
+			const entry = this.#sourceEntries?.find(entry => entry.id === args.source);
 			if (!entry)
 				throw new ToolError(`Source entry is unavailable in this session's visible transcript: ${args.source}`);
 			const rendered = renderChronicleDelta([entry], { includeThinking: false })[0];
