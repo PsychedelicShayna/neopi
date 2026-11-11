@@ -158,7 +158,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 
 	if (before.legacy) return skip("legacy");
 	if (before.coveredEntries >= before.totalEntries) return skip("complete");
-	if (!cfgChroniclerEnabled.get(options.settings)) return skip("disabled");
+	if (cfgChroniclerEnabled.get(options.settings) !== true) return skip("disabled");
 	if (await leaseIsHeld(sessionFile)) return skip("leased");
 
 	const manager = await SessionManager.openReadOnly(sessionFile);

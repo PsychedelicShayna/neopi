@@ -129,8 +129,10 @@ interface DefinitionBase {
 
 export interface BooleanDefinition extends DefinitionBase {
 	type: "boolean";
-	default: boolean | undefined;
-	env?: SettingEnv<boolean>;
+	/** Offer session consent alongside persisted on/off values. */
+	allowAsk?: true;
+	default: boolean | "ask" | undefined;
+	env?: SettingEnv<boolean | "ask">;
 	ui?: UiBoolean;
 }
 
@@ -186,25 +188,27 @@ export type SettingDefinition =
 	| RecordDefinition;
 
 /** Value type a definition resolves to. */
-export type DefinitionValue<D> = D extends { type: "boolean"; default: undefined }
-	? boolean | undefined
-	: D extends { type: "boolean" }
-		? boolean
-		: D extends { type: "string"; default: infer V }
-			? undefined extends V
-				? string | undefined
-				: string
-			: D extends { type: "number"; default: undefined }
-				? number | undefined
-				: D extends { type: "number" }
-					? number
-					: D extends { type: "enum"; values: infer V }
-						? V extends readonly string[]
-							? V[number]
-							: never
-						: D extends { type: "array" | "record"; default: infer V }
-							? V
-							: never;
+export type DefinitionValue<D> = D extends { type: "boolean"; allowAsk: true }
+	? boolean | "ask"
+	: D extends { type: "boolean"; default: undefined }
+		? boolean | undefined
+		: D extends { type: "boolean" }
+			? boolean
+			: D extends { type: "string"; default: infer V }
+				? undefined extends V
+					? string | undefined
+					: string
+				: D extends { type: "number"; default: undefined }
+					? number | undefined
+					: D extends { type: "number" }
+						? number
+						: D extends { type: "enum"; values: infer V }
+							? V extends readonly string[]
+								? V[number]
+								: never
+							: D extends { type: "array" | "record"; default: infer V }
+								? V
+								: never;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Scopes
@@ -505,6 +509,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		return this.definition.type;
 	}
 
+	/** Whether this boolean also accepts a session-consent preference. */
+	get allowsAsk(): boolean {
+		return this.definition.type === "boolean" && this.definition.allowAsk === true;
+	}
+
 	/** Whether persistent model-role overrides are supported for this setting. */
 	get roleScoped(): boolean {
 		return this.definition.roleScoped === true;
@@ -578,9 +587,12 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		switch (this.definition.type) {
 			case "boolean": {
 				const lower = trimmed.toLowerCase();
+				if (this.allowsAsk && (lower === "ask" || lower === '"ask"')) return "ask" as T;
 				if (["true", "1", "yes", "on"].includes(lower)) return true as T;
 				if (["false", "0", "no", "off"].includes(lower)) return false as T;
-				throw new Error(`Invalid boolean value: ${text}. Use true/false, yes/no, on/off, or 1/0`);
+				throw new Error(
+					`Invalid boolean value: ${text}. Use true/false, yes/no, on/off, or 1/0${this.allowsAsk ? ", or ask" : ""}`,
+				);
 			}
 			case "number": {
 				const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
@@ -623,7 +635,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	accepts(value: unknown): boolean {
 		switch (this.definition.type) {
 			case "boolean":
-				return typeof value === "boolean";
+				return typeof value === "boolean" || (this.allowsAsk && value === "ask");
 			case "number":
 				return typeof value === "number" && Number.isFinite(value);
 			case "string":
@@ -638,7 +650,10 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	}
 
 	#parseEnvText(raw: string): unknown {
-		if (this.definition.type === "boolean") return raw === "" ? undefined : parseFlag(raw);
+		if (this.definition.type === "boolean") {
+			if (this.allowsAsk && raw.trim() === "ask") return "ask";
+			return raw === "" ? undefined : parseFlag(raw);
+		}
 		if (raw.trim() === "") return undefined;
 		try {
 			return this.parse(raw);

@@ -41,6 +41,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import { getChroniclerToolSchemas, ChronicleTool, FinishChronicleTool, ReadChronicleTool } from "./chronicle-tool";
 import * as captureSettings from "./capture-settings";
+import { type ChroniclerNoteEmitter, NoteTool } from "./note-tool";
 import type { ChronicleEntry } from "./render";
 import { renderChronicleDelta } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
@@ -71,6 +72,7 @@ export interface SessionChroniclerHost {
 	preferWebsockets: boolean | undefined;
 	isDisposed(): boolean;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
+	emitNote?: ChroniclerNoteEmitter;
 	cwd(): string;
 	/** True only for a capturable top-level session (SDK taskDepth 0, no parentTaskPrefix). */
 	isCaptureEligible(): boolean;
@@ -713,7 +715,7 @@ export class SessionChronicler {
 			)
 				return;
 
-			const outcome = await this.#capturePass(binding, unseen, scan.entryIds);
+			const outcome = await this.#capturePass(binding, unseen, scan.entryIds, scan.entries);
 			if (outcome !== "committed") return;
 		}
 	}
@@ -730,6 +732,7 @@ export class SessionChronicler {
 		binding: ChroniclerBinding,
 		unseen: readonly ChronicleEntry[],
 		ownedIds: ReadonlySet<string>,
+		sourceEntries: readonly ChronicleEntry[],
 	): Promise<"committed" | "revoked" | "halted"> {
 		const selected = this.#selectPrefix(binding, unseen, ownedIds);
 		if (selected.kind === "oversized") {
@@ -744,7 +747,7 @@ export class SessionChronicler {
 		while (true) {
 			if (this.#generation !== binding.gen || !this.#ownsLease(binding)) return "revoked";
 
-			const outcome = await this.#runAttempt(binding, selected.entries, selected.requestText);
+			const outcome = await this.#runAttempt(binding, selected.entries, selected.requestText, sourceEntries);
 			if (outcome.kind === "committed") return "committed";
 			if (outcome.kind === "revoked") return "revoked";
 			if (outcome.kind === "corruption") {
@@ -782,6 +785,7 @@ export class SessionChronicler {
 		binding: ChroniclerBinding,
 		entries: readonly ChronicleEntry[],
 		requestText: string,
+		sourceEntries: readonly ChronicleEntry[],
 	): Promise<AttemptOutcome> {
 		const sources: CaptureSource[] = entries.map(entry => ({
 			id: entry.id,
@@ -800,10 +804,20 @@ export class SessionChronicler {
 
 		try {
 			const knownSources = this.#buildKnownSources(binding, batch);
+			const noteTool = new NoteTool(
+				batch,
+				this.#host.emitNote
+					? message => {
+							if (binding.gen !== this.#generation || !this.#ownsLease(binding)) return false;
+							return this.#host.emitNote!(message);
+						}
+					: undefined,
+			);
 			binding.agent.setTools([
 				new ChronicleTool(binding.store, batch, knownSources),
 				new FinishChronicleTool(binding.store, batch, knownSources, this.#host.settings),
-				new ReadChronicleTool(binding.store, batch, this.#host.obfuscator, this.#host.settings),
+				new ReadChronicleTool(binding.store, batch, this.#host.obfuscator, this.#host.settings, sourceEntries),
+				noteTool,
 			]);
 
 			const request: AgentMessage = {
@@ -876,6 +890,16 @@ export class SessionChronicler {
 			if (binding.gen === this.#generation) {
 				this.#resetRecovery();
 				this.#status = "running";
+			}
+			if (binding.gen === this.#generation && this.#ownsLease(binding)) {
+				try {
+					await noteTool.publishNotes();
+				} catch (error) {
+					logger.warn("Chronicler notes could not all be delivered", {
+						sessionId: binding.descriptor.sessionId,
+						error: errorText(error),
+					});
+				}
 			}
 			return { kind: "committed" };
 		} finally {
@@ -1032,6 +1056,7 @@ export class SessionChronicler {
 				})),
 				omitted,
 				carry,
+				recordingLimits: binding.store.recordingLimits,
 				delta,
 			},
 			{ cwd: binding.descriptor.cwd },

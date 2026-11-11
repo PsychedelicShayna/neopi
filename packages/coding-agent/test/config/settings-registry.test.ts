@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { orderedSettings } from "@oh-my-pi/pi-coding-agent/config/all-settings";
 import { all, bindEffects, combine, effect, lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
+import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
+import { getSettingDef } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
@@ -43,6 +46,41 @@ function withEnv(vars: Record<string, string | undefined>, fn: () => void): void
 }
 
 describe("settings registry", () => {
+	it("accepts session consent without changing ordinary boolean settings", () => {
+		for (const value of [true, false, "ask"] as const) {
+			const settings = Settings.isolated({ "chronicler.enabled": value });
+			expect(cfgChroniclerEnabled.get(settings)).toBe(value);
+			expect(cfgChroniclerEnabled.accepts(value)).toBe(true);
+		}
+		expect(cfgChroniclerEnabled.parse("ask")).toBe("ask");
+		expect(cfgChroniclerEnabled.parse('"ask"')).toBe("ask");
+		expect(cfgChroniclerEnabled.parse("on")).toBe(true);
+		expect(cfgChroniclerEnabled.parse("off")).toBe(false);
+		expect(cfgEvalPy.accepts("ask")).toBe(false);
+		expect(() => cfgEvalPy.parse("ask")).toThrow("Invalid boolean");
+	});
+
+	it("shows On, Off and Ask while writing compatible boolean capture values", () => {
+		const settings = Settings.isolated();
+		const host = createSettingsHost(settings, "session");
+		host.set(cfgChroniclerEnabled.id, "ask");
+		const def = getSettingDef(host.entries, cfgChroniclerEnabled.id);
+		expect(def?.type).toBe("submenu");
+		if (def?.type !== "submenu") throw new Error("Expected Chronicler consent submenu");
+		expect(def.options).toEqual([
+			{ value: "true", label: "On" },
+			{ value: "false", label: "Off" },
+			{ value: "ask", label: "Ask" },
+		]);
+		expect(host.get(cfgChroniclerEnabled.id)).toBe("ask");
+		host.set(cfgChroniclerEnabled.id, "true");
+		expect(cfgChroniclerEnabled.get(settings)).toBe(true);
+		host.set(cfgChroniclerEnabled.id, "false");
+		expect(cfgChroniclerEnabled.get(settings)).toBe(false);
+		host.set(cfgChroniclerEnabled.id, "ask");
+		expect(cfgChroniclerEnabled.get(settings)).toBe("ask");
+	});
+
 	it("lets an override env beat every layer while a fallback env only replaces the default", () => {
 		withEnv({ PI_EDIT_FUZZY: "0", SEARXNG_ENDPOINT: "https://env.example" }, () => {
 			const configured = Settings.isolated({ "edit.fuzzyMatch": true, "searxng.endpoint": "https://cfg.example" });

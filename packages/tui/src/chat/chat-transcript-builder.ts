@@ -15,6 +15,7 @@ import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { type Component, Container, type TUI } from "../tui";
 import type { AdvisorMessageDetails } from "./messages";
+import type { ChroniclerMessageDetails } from "./messages";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "./messages";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import type { MessageRenderer } from "./extension-types";
@@ -46,6 +47,7 @@ import {
 	splitAssistantMessageToolTimeline,
 } from "./transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
+import { ChroniclerMessageCard } from "./chronicler-message";
 import { AssistantMessageComponent } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
@@ -837,6 +839,10 @@ export class ChatTranscriptBuilder {
 			message.customType === "irc:workpool"
 		) {
 			this.container.addChild(buildIrcMessageCard(message, () => this.#expanded));
+			return;
+		}
+		if (message.customType === "chronicler") {
+			this.container.addChild(new ChroniclerMessageCard(message as CustomMessage<ChroniclerMessageDetails>, theme));
 			return;
 		}
 		if (message.customType === "advisor") {

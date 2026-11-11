@@ -1,1 +1,3 @@
 Finalize a successfully completed capture pass, including a pass with no qualifying beat. Preserve unfinished material as carry of at most {{carryChars}} characters with its source entry IDs; otherwise use null. This MUST be the final tool call of the pass.
+
+Acknowledge each addressed directive with note before finishing. Active recording limits live separately in optional `recording_limits`, with their directive source entry IDs and text explaining the limits. Omit that field to retain the current limits, replace it when limits change, or set it to null only when no limit remains. The carry budget does not apply to recording limits.

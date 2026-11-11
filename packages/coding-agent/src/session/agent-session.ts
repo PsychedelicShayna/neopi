@@ -226,6 +226,7 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/appr
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
+import chroniclerStartupConsent from "../prompts/chronicler/startup-consent.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import bundledAnthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
@@ -1236,6 +1237,7 @@ export class AgentSession implements SettingsScope {
 	// Agent identity (registry id) used for IRC routing and job ownership.
 	#agentId: string | undefined;
 	#agentKind: "main" | "sub" = "main";
+	readonly #chroniclerStartupNotices = new Set<string>();
 	#scoutAllowedBySpawnPolicy = true;
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
@@ -2972,6 +2974,19 @@ export class AgentSession implements SettingsScope {
 			isCaptureEligible: () =>
 				this.#agentKind === "main" && (!this.#chatMode || chatModeIncludes(this.#chatMode, "memory")),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			emitNote: async message => {
+				const generation = this.#sessionGeneration;
+				let accepted = false;
+				await this.#sendCustomMessageWithAcceptance(
+					message,
+					{ triggerTurn: false, steeringInterruptMode: "wait" },
+					() => {
+						accepted = true;
+					},
+					() => this.#isDisposed || this.#sessionGeneration !== generation,
+				);
+				return accepted;
+			},
 			cwd: () => this.sessionManager.getCwd(),
 		});
 		this.subscribeMessagePersistenceSettled(message => this.#chronicler.onPrimaryMessagePersisted(message));
@@ -9111,6 +9126,20 @@ export class AgentSession implements SettingsScope {
 		this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 	}
 
+	/** Present the enabled explanation once per actual session, including headless callers. */
+	async ensureChroniclerStartupNotice(): Promise<void> {
+		if (
+			this.#agentKind !== "main" ||
+			(this.#chatMode && !chatModeIncludes(this.#chatMode, "memory")) ||
+			!this.chroniclerEnabled
+		)
+			return;
+		const sessionId = this.sessionId;
+		if (this.#chroniclerStartupNotices.has(sessionId)) return;
+		this.#chroniclerStartupNotices.add(sessionId);
+		await this.sendChroniclerNotice("enabled", { enabledExtra: chroniclerStartupConsent.trim() });
+	}
+
 	async #prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		if (!isDeferredSubmissionActive()) return false;
 		// Stamp the operator's submission instant before ANY async preprocessing —
@@ -9137,11 +9166,11 @@ export class AgentSession implements SettingsScope {
 			// Locally handled commands and failed dispatches release that claim.
 			const release = await this.#maintenance.waitForMaintenanceCleanup();
 			const outcome: PromptDispatchOutcome = { sessionClaimed: false };
-			if (!release) return await this.#dispatchPrompt(text, options, submittedAt, outcome);
 			try {
+				await this.ensureChroniclerStartupNotice();
 				return await this.#dispatchPrompt(text, options, submittedAt, outcome);
 			} finally {
-				release(outcome.sessionClaimed);
+				release?.(outcome.sessionClaimed);
 			}
 		} finally {
 			if (claimEpoch === this.#inFlightEpoch) {
@@ -9473,11 +9502,11 @@ export class AgentSession implements SettingsScope {
 		// compaction or before a handoff commits its history.
 		const release = await this.#maintenance.waitForMaintenanceCleanup();
 		const outcome: PromptDispatchOutcome = { sessionClaimed: false };
-		if (!release) return this.#dispatchCustomPrompt(message, options, outcome);
 		try {
+			await this.ensureChroniclerStartupNotice();
 			return await this.#dispatchCustomPrompt(message, options, outcome);
 		} finally {
-			release(outcome.sessionClaimed);
+			release?.(outcome.sessionClaimed);
 		}
 	}
 
@@ -16724,7 +16753,8 @@ export class AgentSession implements SettingsScope {
 			!refreshed ||
 			(refreshed.contextWindow === current.contextWindow &&
 				Bun.deepEquals(refreshed.serviceTiers, current.serviceTiers))
-		) return;
+		)
+			return;
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;

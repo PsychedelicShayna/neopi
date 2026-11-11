@@ -311,6 +311,11 @@ export interface AdvisorMessageDetails {
 	notes: AdvisorNote[];
 }
 
+/** Details persisted with a visible message from Chronicler Luna. */
+export interface ChroniclerMessageDetails {
+	note: string;
+}
+
 /** Custom message type for supervised process completions. */
 export const LAUNCH_COMPLETION_MESSAGE_TYPE = "launch-completion";
 
