@@ -183,7 +183,10 @@ function createSettingsTextField(
 		secret,
 		initialValue: currentValue || undefined,
 		empty: "submit",
-		hint: t("settings.selector.text_hint", { submit_key: editorKey("tui.input.submit"), cancel_key: editorKey("tui.select.cancel") }),
+		hint: t("settings.selector.text_hint", {
+			submit_key: editorKey("tui.input.submit"),
+			cancel_key: editorKey("tui.select.cancel"),
+		}),
 		onSubmit,
 		onCancel,
 		requestRender,
@@ -978,19 +981,28 @@ export class SettingsSelectorComponent implements Component {
 		const tab = formatKeyHint("tab");
 		if (this.#searchList) {
 			return this.#search.focused
-				? `${confirm} confirm search · ${cancel} clear search`
-				: `/ search · ${tab} jump tabs · ${cancel} clear search · ? help`;
+				? t("settings.selector.search_focused_hint", { confirm, cancel })
+				: t("settings.selector.search_hint", { tab, cancel });
 		}
 		if (this.#currentTabId === "plugins") {
-			return this.#pluginComponent?.atRoot
-				? `${tab} tabs · / search · ${cancel} close · ? help`
-				: `${tab} tabs · / search · ${cancel} back · ? help`;
+			return t(
+				this.#pluginComponent?.atRoot ? "settings.selector.plugins_root_hint" : "settings.selector.plugins_nested_hint",
+				{ tab, cancel },
+			);
 		}
 		if (this.#currentList?.sectionFocused) {
-			return `${tab}/${confirm} settings · ${cancel} close · ? help`;
+			return t("settings.selector.sections_hint", { tab, confirm, cancel });
 		}
-		const nav = this.#hasSectionJump ? `${tab} sections` : `${tab} tabs`;
-		return `${confirm}/${formatKeyHint("space")} change · ${nav} · Ctrl+S scope${this.#callbacks.onApply ? " · F6 Apply" : ""} · / search · ${cancel} close${this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : ""} · ? help${this.#applyFeedback ? ` · ${this.#applyFeedback}` : ""}`;
+		const nav = t(this.#hasSectionJump ? "settings.selector.nav_sections" : "settings.selector.nav_tabs", { tab });
+		return t("settings.selector.rows_hint", {
+			confirm,
+			space_key: formatKeyHint("space"),
+			nav,
+			apply_hint: this.#callbacks.onApply ? t("settings.selector.apply_hint") : "",
+			cancel,
+			config_hint: this.#callbacks.onOpenConfigFile ? t("settings.selector.config_hint") : "",
+			feedback: this.#applyFeedback ? t("settings.selector.feedback", { feedback: this.#applyFeedback }) : "",
+		});
 	}
 
 	#scopeTitle(styled = false): string {
@@ -1768,7 +1780,11 @@ export class SettingsSelectorComponent implements Component {
 			const icon = theme.symbol(meta.icon);
 			const count = counts.get(id) ?? 0;
 			if (count > 0) {
-				matched.push({ id, label: `${icon} ${t(`settings.tab.${id}.label`)} (${count})`, short: `${icon} ${count}` });
+				matched.push({
+					id,
+					label: `${icon} ${t(`settings.tab.${id}.label`)} (${count})`,
+					short: `${icon} ${count}`,
+				});
 			}
 		}
 		for (const id of SETTING_TABS) {
