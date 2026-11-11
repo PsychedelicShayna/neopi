@@ -45,4 +45,20 @@ describe("localization catalogs", () => {
 		setLocale("en");
 		expect(getSettingDef(entries, "language")?.label).toBe("Language");
 	});
+
+	test("preserves the host's current English copy when a setting has no Spanish translation", () => {
+		const entries: SettingsDisplayEntry[] = [
+			{
+				path: "git.enabled",
+				type: "boolean",
+				defaultValue: true,
+				ui: { tab: "interaction", label: "Git integration", description: "Current host description" },
+			},
+		];
+		setLocale("es");
+		expect(getSettingDef(entries, "git.enabled")).toMatchObject({
+			label: "Git integration",
+			description: "Current host description",
+		});
+	});
 });

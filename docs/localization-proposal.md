@@ -1,6 +1,6 @@
 # NeoPi Spanish localization proposal
 
-**Status:** proposal for discussion; no localization implementation or Spanish coverage is asserted here. This document is limited to NeoPi. NeoCode and NeoDeck are possible later consumers, not part of this proposal's implementation scope.
+**Status:** implementation in progress and vocabulary proposal for discussion; Spanish coverage remains partial. This document is limited to NeoPi. NeoCode and NeoDeck are possible later consumers, not part of this proposal's implementation scope.
 
 ## Decisions already in scope
 
@@ -34,7 +34,7 @@ The shape is illustrative, not a finalized schema. Keys must be stable identifie
 
 ### Initial infra API alignment
 
-Localization infrastructure has implemented the API in `packages/coding-agent/src/i18n/index.ts`: exports include `Locale`, `TranslationValues`, `Catalog`, `getCatalog(locale?)`, `getLocale()`, `setLocale(locale)`, and `t(key, values?)` / `t(locale, key, values?)`. Catalogs are `packages/coding-agent/src/i18n/catalogs/{en,es}.toml`, statically imported and parsed with `Bun.TOML.parse`; they use flat dotted keys and precomputed merged English fallback. Locale is `en` by default or `es`; `cfgLanguage` applies the setting live. Missing English keys return the key string. Interpolation replaces `{name}` only for supplied string/number values; pluralization is not supported. Catalogs contain display text only: slash names and argument values remain unchanged. The visible composer fallback uses `t("composer.placeholder")`.
+The runtime lives in `packages/utils/src/i18n.ts` so the coding agent and TUI share locale state. It exports `Locale`, `TranslationValues`, `Catalog`, `getCatalog(locale?)`, `getCatalogOverrides(locale?)`, `getLocale()`, `setLocale(locale)`, and `t(key, values?)` / `t(locale, key, values?)`. Catalogs in `packages/utils/src/i18n-catalogs/` are statically imported, parsed once with `Bun.TOML.parse`, and flattened into dotted keys; Spanish lookups use precomputed English fallback. `getCatalogOverrides` exposes only authored locale entries so a host can retain its current source text when an override is absent. Locale defaults to `en`, and `cfgLanguage` selects `es` through the settings lifecycle. Missing keys return the key string; `{name}` interpolation supports string/number values, not pluralization. The composer fallback, selected settings and TUI labels, and root CLI help use this runtime; most surfaces remain untranslated. Slash names and argument values remain unchanged.
 
 TOML catalogs should be checked at startup/build boundaries for structural validity, but avoid adding runtime parsing per lookup. Any proposed build-time embedding/compiled artifact must be verified against the actual Bun/bundler packaging path before treating it as an implementation constraint.
 

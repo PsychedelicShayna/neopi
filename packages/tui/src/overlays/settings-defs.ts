@@ -1,5 +1,5 @@
 /** Schema-independent display definitions for the settings overlay. */
-import { getCatalog, getLocale, type Locale } from "@oh-my-pi/pi-utils/i18n";
+import { getCatalogOverrides, getLocale, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { SymbolKey } from "../theme/symbols";
 import type { EntryProvenance } from "../theme/provenance";
 
@@ -246,7 +246,7 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 
 	const schemaType = entry.type;
 	const condition = entry.condition;
-	const catalog = getLocale() === "es" ? getCatalog("es") : undefined;
+	const catalog = getLocale() === "es" ? getCatalogOverrides("es") : undefined;
 	const base = {
 		path,
 		defaultValue: entry.defaultValue,

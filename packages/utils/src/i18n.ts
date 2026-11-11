@@ -32,10 +32,12 @@ function loadCatalog(sources: readonly string[]): Catalog {
 }
 
 const english = loadCatalog([baseEn, settingsEn, statusEn, tuiEn, cliEn]);
-const spanish = loadCatalog([baseEs, settingsEs, statusEs, tuiEs, cliEs]);
+const spanish = Object.fromEntries(
+	Object.entries(loadCatalog([baseEs, settingsEs, statusEs, tuiEs, cliEs])).filter(([, value]) => value !== ""),
+);
 const effectiveCatalogs: Readonly<Record<Locale, Catalog>> = {
 	en: english,
-	es: { ...english, ...Object.fromEntries(Object.entries(spanish).filter(([, value]) => value !== "")) },
+	es: { ...english, ...spanish },
 };
 
 let activeLocale: Locale = "en";
@@ -52,6 +54,11 @@ export function getLocale(): Locale {
 /** Return the selected catalog, with English entries available for incomplete translations. */
 export function getCatalog(locale: Locale = activeLocale): Catalog {
 	return effectiveCatalogs[locale];
+}
+
+/** Return only messages authored for a locale, without English fallback. */
+export function getCatalogOverrides(locale: Locale = activeLocale): Catalog {
+	return locale === "es" ? spanish : english;
 }
 
 export function t(key: string, values?: TranslationValues): string;
