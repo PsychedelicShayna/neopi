@@ -9,7 +9,7 @@
 
 ### Added
 
-- Choose English or Spanish for supported interface text, including help headings, selected root, stats and config command descriptions, and file argument errors, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Choose English or Spanish for supported interface text, including help, file and editor warnings, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
 
 - `--exit-with-parent` now works for `--mode rpc` / `rpc-ui` (capability `exit_with_parent`): a host-owned process aborts and exits within seconds when its host dies or closes stdin, instead of draining accepted work; the default drain is unchanged ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).

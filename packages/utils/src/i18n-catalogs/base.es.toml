@@ -1,2 +1,4 @@
+"interactive.editor.unconfigured" = "No hay un editor configurado. Define la variable de entorno $VISUAL o $EDITOR."
+
 [composer]
 placeholder = "Escribe un mensaje…"

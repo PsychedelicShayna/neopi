@@ -6711,7 +6711,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const env = this.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(t("interactive.editor.unconfigured"));
 			return;
 		}
 
@@ -6752,7 +6752,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const env = this.session.environment.snapshot();
 		const editorCmd = getEditorCommand(env);
 		if (!editorCmd) {
-			this.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.showWarning(t("interactive.editor.unconfigured"));
 			return;
 		}
 
