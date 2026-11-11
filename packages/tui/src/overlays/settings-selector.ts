@@ -1,4 +1,5 @@
 import { provenanceSuffix } from "../theme/provenance";
+import { slugify } from "@oh-my-pi/pi-utils";
 import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
@@ -736,7 +737,7 @@ class ProviderLimitsSubmenu extends Container {
 
 /** Translate known section labels without changing the identity used for ordering and history. */
 function settingsGroupLabel(group: string): string {
-	const key = `settings.group.${group}`;
+	const key = `settings.group.${slugify(group).replaceAll("-", "_")}`;
 	const translated = t(key);
 	return translated === key ? group : translated;
 }
