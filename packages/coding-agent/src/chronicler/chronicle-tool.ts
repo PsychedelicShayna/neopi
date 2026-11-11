@@ -6,6 +6,8 @@ import bundledFinishDescription from "../prompts/chronicler/finish-tool.md" with
 import bundledReadDescription from "../prompts/chronicler/read-tool.md" with { type: "text" };
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { ScopeLike } from "../config/registry";
+import { type ChronicleEntry, renderChronicleDelta } from "./render";
+import { chroniclerNoteDefinition } from "./note-tool";
 import {
 	cfgChroniclerCaptureCarryChars,
 	cfgChroniclerCaptureReadPageSize,
@@ -30,11 +32,16 @@ const chronicleSchema = type({
 	"related?": "string[]",
 	"supersedes?": "string",
 	"uncertainty?": "string",
+	"chronicler_note?": "string",
 });
-const finishSchema = type({ carry: type({ sources: "string[]", text: "string" }).or("null") });
+const finishSchema = type({
+	carry: type({ sources: "string[]", text: "string" }).or("null"),
+	"recording_limits?": type({ sources: "string[]", text: "string" }).or("null"),
+});
 function createReadSchema(maximum: number) {
 	return type({
 		"id?": "string",
+		"source?": "string",
 		"offset?": type("number.integer >= 0").describe("Metadata page offset; omit id to list beats."),
 		"limit?": type("number.integer >= 1")
 			.atMost(maximum)
@@ -69,6 +76,7 @@ export function getChroniclerToolSchemas(scope?: ScopeLike) {
 			description: renderPromptAsset("chronicler/read-tool.md", bundledReadDescription, { pageSize, pageMax }),
 			parameters: createReadSchema(pageMax),
 		},
+		chroniclerNoteDefinition,
 	] as const;
 }
 
@@ -78,9 +86,11 @@ export interface ChronicleDetails {
 }
 export interface FinishChronicleDetails {
 	carry: CaptureBatch["carry"];
+	recordingLimits?: CaptureBatch["recordingLimits"];
 }
 export type ReadChronicleDetails =
 	| { id: string; sources: string[] }
+	| { source: string }
 	| { offset: number; nextOffset: number | null; total: number };
 
 function assertMutable(batch: CaptureBatch, signal?: AbortSignal): void {
@@ -147,6 +157,7 @@ export class ChronicleTool implements AgentTool<typeof chronicleSchema, Chronicl
 				related: args.related ?? [],
 				supersedes: args.supersedes,
 				uncertainty: args.uncertainty,
+				chroniclerNote: args.chronicler_note,
 			});
 		} catch (error) {
 			throw new ToolError(error instanceof Error ? error.message : String(error));
@@ -197,10 +208,22 @@ export class FinishChronicleTool implements AgentTool<typeof finishSchema, Finis
 			}
 		}
 		this.batch.carry = carry;
+		if (args.recording_limits !== undefined) {
+			if (args.recording_limits === null) this.batch.recordingLimits = null;
+			else {
+				validateSources(args.recording_limits.sources, this.knownSources);
+				const text = args.recording_limits.text.trim();
+				if (!text) throw new ToolError("Active recording limits need nonblank text.");
+				this.batch.recordingLimits = {
+					sources: [...new Set(args.recording_limits.sources)],
+					text,
+				};
+			}
+		}
 		this.batch.finalized = true;
 		return {
 			content: [{ type: "text", text: "Capture pass prepared; publication follows successful completion." }],
-			details: { carry },
+			details: { carry, recordingLimits: this.batch.recordingLimits },
 		};
 	}
 }
@@ -212,13 +235,16 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 	readonly parameters: typeof readSchema;
 	readonly strict = false;
 	readonly intent = "omit" as const;
+	readonly #sourceEntries?: readonly ChronicleEntry[];
 
 	constructor(
 		private readonly store: ChroniclerStore,
 		private readonly batch: CaptureBatch,
 		private readonly obfuscator?: { obfuscate(text: string): string },
 		private readonly scope?: ScopeLike,
+		sourceEntries?: readonly ChronicleEntry[],
 	) {
+		this.#sourceEntries = sourceEntries;
 		const definition = getChroniclerToolSchemas(scope)[2];
 		this.description = definition.description;
 		this.parameters = definition.parameters;
@@ -232,7 +258,29 @@ export class ReadChronicleTool implements AgentTool<typeof readSchema, ReadChron
 		if (signal?.aborted || this.batch.revoked) throw new ToolError("This capture pass was revoked.");
 		let text: string;
 		let details: ReadChronicleDetails;
-		if (args.id !== undefined) {
+		if (args.source !== undefined) {
+			if (args.id !== undefined || args.offset !== undefined || args.limit !== undefined) {
+				throw new ToolError("Supply source alone to reread a transcript entry.");
+			}
+			if (
+				!this.store.sourceEntries.has(args.source) &&
+				!this.batch.entries.some(entry => entry.id === args.source)
+			) {
+				throw new ToolError(`Unknown source entry ID: ${args.source}`);
+			}
+			const entry = this.#sourceEntries?.find(entry => entry.id === args.source);
+			if (!entry)
+				throw new ToolError(`Source entry is unavailable in this session's visible transcript: ${args.source}`);
+			const rendered = renderChronicleDelta([entry], { includeThinking: false })[0];
+			text =
+				rendered?.role === "user" && Array.isArray(rendered.content)
+					? rendered.content
+							.filter(block => block.type === "text")
+							.map(block => block.text)
+							.join("\n")
+					: "";
+			details = { source: args.source };
+		} else if (args.id !== undefined) {
 			if (args.offset !== undefined || args.limit !== undefined)
 				throw new ToolError("Supply id alone to read a beat; omit id to list metadata.");
 			const beat =

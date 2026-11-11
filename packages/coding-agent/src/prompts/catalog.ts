@@ -399,9 +399,42 @@ import asset384 from "./tools/yield.md" with { type: "text" };
 import asset385 from "../work-contracts/block.md" with { type: "text" };
 import asset386 from "../work-contracts/tool.md" with { type: "text" };
 import chroniclerStatusNotice from "./chronicler/status-notice.md" with { type: "text" };
+import chroniclerNoteTool from "./chronicler/note-tool.md" with { type: "text" };
+import chroniclerNoteMessage from "./chronicler/note-message.md" with { type: "text" };
+import chroniclerStartupConsent from "./chronicler/startup-consent.md" with { type: "text" };
 
 /** Static embeds are the release source; agents remain inspectable without changing discovery. */
 export const promptAssets: readonly PromptAsset[] = [
+	{
+		id: "chronicler/note-tool.md",
+		relPath: "chronicler/note-tool.md",
+		bundled: chroniclerNoteTool,
+		scope: "feature:chronicler/note-tool",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: ["packages/coding-agent/src/chronicler/note-tool.ts"],
+	},
+	{
+		id: "chronicler/note-message.md",
+		relPath: "chronicler/note-message.md",
+		bundled: chroniclerNoteMessage,
+		scope: "feature:chronicler/note-message",
+		group: "core",
+		keys: [{ path: "note", type: "string", required: true, resolution: "session-dependent" }],
+		fixture: { note: "I will honor that recording limit." },
+		consumerHints: ["packages/coding-agent/src/chronicler/note-tool.ts"],
+	},
+	{
+		id: "chronicler/startup-consent.md",
+		relPath: "chronicler/startup-consent.md",
+		bundled: chroniclerStartupConsent,
+		scope: "feature:chronicler/startup-consent",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: ["packages/coding-agent/src/session/agent-session.ts"],
+	},
 	{
 		id: "chronicler/status-notice.md",
 		relPath: "chronicler/status-notice.md",
@@ -1237,6 +1270,15 @@ export const promptAssets: readonly PromptAsset[] = [
 					{ path: "text", type: "string" },
 				],
 			},
+			{
+				path: "recordingLimits",
+				type: "object",
+				resolution: "session-dependent",
+				children: [
+					{ path: "sources", type: "string[]" },
+					{ path: "text", type: "string" },
+				],
+			},
 			{ path: "delta", type: "string", required: true, resolution: "session-dependent" },
 		],
 		fixture: {
@@ -1246,6 +1288,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			beats: [{ id: "example-1", title: "Example title", kind: "Example kind", eventTime: "Example eventTime" }],
 			omitted: "Example omitted",
 			carry: [{ sources: "Example sources", text: "Example text" }],
+			recordingLimits: { sources: ["directive-1"], text: "Exclude the participant's private topic." },
 			delta: "Example delta",
 		},
 		consumerHints: [
@@ -5065,8 +5108,26 @@ export const promptAssets: readonly PromptAsset[] = [
 		group: "core",
 		keys: [
 			{ path: "fieldSchema", type: "string", required: true, resolution: "runtime-only" },
-			{ path: "tools", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "description", type: "string" }] },
-			{ path: "advisors", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "scope", type: "string" }] },
+			{
+				path: "tools",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+				],
+			},
+			{
+				path: "advisors",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "scope", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
@@ -5088,7 +5149,15 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "comment", type: "string", resolution: "session-dependent" },
-			{ path: "baseDefinitions", type: "array", resolution: "session-dependent", children: [{ path: "name", type: "string" }, { path: "definition", type: "string" }] },
+			{
+				path: "baseDefinitions",
+				type: "array",
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "definition", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			target: "description",

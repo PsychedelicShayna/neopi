@@ -63,9 +63,22 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			const note = envNote(setting);
 			entries.push({
 				path: setting.id,
-				type: setting.type,
-				defaultValue: setting.default,
-				ui: { ...ui, provenance: entryProvenance("settings", setting.id), description: `${ui.description}${note}` },
+				type: setting.allowsAsk ? "enum" : setting.type,
+				defaultValue: setting.allowsAsk ? String(setting.default) : setting.default,
+				ui: {
+					...ui,
+					...(setting.allowsAsk
+						? {
+								options: [
+									{ value: "true", label: "On" },
+									{ value: "false", label: "Off" },
+									{ value: "ask", label: "Ask" },
+								],
+							}
+						: {}),
+					provenance: entryProvenance("settings", setting.id),
+					description: `${ui.description}${note}`,
+				},
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
@@ -80,25 +93,37 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 	return {
 		entries,
 		onReload: listener => scope.onPersistedLayersChange(listener),
-		get scope() { return editingScope; },
+		get scope() {
+			return editingScope;
+		},
 		cycleScope: () => {
 			const scopes: SettingsScope[] = ["global", "project", "session"];
 			editingScope = scopes[(scopes.indexOf(editingScope) + 1) % scopes.length];
 		},
 		get: path => {
 			const setting = resolve(path);
-			return scope.readScopeValue(setting, editingScope) ?? setting.default;
+			const value = scope.readScopeValue(setting, editingScope) ?? setting.default;
+			return setting.allowsAsk ? String(value) : value;
 		},
 		details: path => {
 			const setting = resolve(path);
 			const details = scope.getScopeDetails(setting, editingScope);
-			const format = (value: unknown) => setting.isCredential ? (value === undefined ? "inherit" : "[redacted]") : (JSON.stringify(value) ?? "inherit");
+			const format = (value: unknown) =>
+				setting.isCredential
+					? value === undefined
+						? "inherit"
+						: "[redacted]"
+					: (JSON.stringify(value) ?? "inherit");
 			return {
 				shadowed: details.shadowed,
 				description: `${details.shadowed ? `󰈉 Shadowed by ${details.winner}: ${format(details.effective)}. ` : ""}Global: ${format(details.global)} · Project: ${format(details.project)} · Session: ${format(details.session)} · Effective: ${format(details.effective)} (${details.winner})`,
 			};
 		},
-		set: (path, value) => scope.writeScopeValue(resolve(path), value, editingScope),
+		set: (path, value) => {
+			const setting = resolve(path);
+			const configured = setting.allowsAsk && value !== "ask" ? setting.parse(String(value)) : value;
+			scope.writeScopeValue(setting, configured, editingScope);
+		},
 		unset: path => scope.writeScopeValue(resolve(path), undefined, editingScope),
 		normalizeProviderLimits: normalizeProviderMaxInFlightRequests,
 		validateProviderLimits: validateProviderMaxInFlightRequests,
