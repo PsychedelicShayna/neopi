@@ -9,6 +9,7 @@
 
 ### Added
 
+- The fullscreen session model picker repeats its picker shortcut to target a temporary Task-subagent override, with a red frame and an explicit session-only cue.
 - Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
 - Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
