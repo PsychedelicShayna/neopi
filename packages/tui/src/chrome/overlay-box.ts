@@ -66,33 +66,34 @@ export function splitBodyWidth(width: number, sidebarWidth: number): number {
 }
 
 /** Top border carrying the title, split by a `┬` over the column divider. */
-export function topBorderSplit(width: number, title: string, sidebarWidth: number): string {
+export function topBorderSplit(width: number, title: string, sidebarWidth: number, color?: ThemeColor): string {
 	const box = theme.boxRound;
 	const dividerCol = splitDividerCol(sidebarWidth);
 	const leftLen = Math.max(0, dividerCol - 1);
 	const rightLen = Math.max(0, width - 2 - dividerCol);
 	let left: string;
 	if (!title) {
-		left = paint(box.topLeft + box.horizontal.repeat(leftLen));
+		left = paint(box.topLeft + box.horizontal.repeat(leftLen), color);
 	} else {
 		const shown = truncateToWidth(` ${title} `, Math.max(0, leftLen - 1));
 		const fillWidth = Math.max(0, leftLen - 1 - visibleWidth(shown));
 		left =
-			paint(box.topLeft + box.horizontal) +
-			theme.bold(theme.fg("accent", shown)) +
-			paint(box.horizontal.repeat(fillWidth));
+			paint(box.topLeft + box.horizontal, color) +
+			theme.bold(theme.fg(color ?? "accent", shown)) +
+			paint(box.horizontal.repeat(fillWidth), color);
 	}
-	return left + paint(box.teeDown + box.horizontal.repeat(rightLen) + box.topRight);
+	return left + paint(box.teeDown + box.horizontal.repeat(rightLen) + box.topRight, color);
 }
 
 /** Section rule that closes the sidebar column with a `┴` over the divider. */
-export function dividerSplit(width: number, sidebarWidth: number): string {
+export function dividerSplit(width: number, sidebarWidth: number, color?: ThemeColor): string {
 	const box = theme.boxRound;
 	const dividerCol = splitDividerCol(sidebarWidth);
 	const leftLen = Math.max(0, dividerCol - 1);
 	const rightLen = Math.max(0, width - 2 - dividerCol);
 	return paint(
 		box.teeRight + box.horizontal.repeat(leftLen) + box.teeUp + box.horizontal.repeat(rightLen) + box.teeLeft,
+		color,
 	);
 }
 

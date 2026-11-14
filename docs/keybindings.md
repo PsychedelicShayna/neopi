@@ -73,6 +73,8 @@ app.history.search: []
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
 
+Inside either session-model picker, press the configured `app.model.selectTemporary` shortcut again (normally `Alt+P`) to switch between the session model and a temporary Task-subagent override. The Task target has a red frame and a session-only cue; it does not change saved role assignments.
+
 ## Menu navigation
 
 Vim navigation is **off by default**. Enable **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set `tui.vimMode: true`, to use the Vim motions below across menus, pickers, lists, overlays and viewers. The same setting enables [modal composer editing](#vim-editing-mode); there is no separate menu toggle. Changes apply to open menus as well as newly opened ones.
