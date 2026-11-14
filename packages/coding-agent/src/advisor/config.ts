@@ -347,7 +347,8 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
 
 /**
  * Discover advisor configs from `WATCHDOG.yml`/`WATCHDOG.yaml` files on the same
- * user + project search path as `WATCHDOG.md`. Persisted IDs distinguish even
+ * user + project search path as `WATCHDOG.md`, plus the current session's artifact
+ * directory. Persisted IDs distinguish even
  * identically named advisors; legacy entries retain name-slug precedence until
  * first save. More-specific files replace an earlier entry with the same key.
  * Top-level instructions concatenate into the shared baseline. Malformed files
@@ -503,7 +504,7 @@ export async function listNamedAdvisors(cwd: string, agentDir?: string, sessionD
 	return result;
 }
 
-/** Resolve a scope's canonical file beside its user, project, or session configuration. */
+/** Resolve the canonical user, project-root, project-.omp, or session roster file. */
 export function advisorConfigFilePath(
 	scope: AdvisorConfigScope,
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },

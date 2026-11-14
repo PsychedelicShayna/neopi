@@ -54,6 +54,7 @@
 
 ### Fixed
 
+- Role activation-set save notices acknowledge automatic WATCHDOG reloads in normal main sessions and direct manual reloads back to advisor configuration ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - `/advisor configure` bulk enable, disable, and invert affect only advisor entries in the selected scope, leaving whole-file switches unchanged ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 
 - `/status` search keeps unconfirmed drafts separate from confirmed filters and preserves Vim editing while filtering, matching other pickers.

@@ -1,6 +1,6 @@
 /**
  * Fullscreen `/advisor configure` overlay: a mouse- and keyboard-driven editor
- * for the `WATCHDOG.yml` advisor roster at project or user level.
+ * for an exact user, project-root, project-.omp, or session `WATCHDOG.yml` roster.
  *
  * It paints the entire alternate screen from row 0 (so SGR mouse rows index
  * directly into the rendered frame) using the shared {@link ./overlay-box} chrome.
@@ -187,7 +187,7 @@ export interface AdvisorConfigDeps {
 	/** Formatted advisor-role model shown on the seeded default row (e.g. "anthropic/claude-..."). */
 	defaultModelLabel?: string;
 	effectiveRoster?: readonly EffectiveAdvisorConfig[];
-	/** Exact file selected by the scope-first parent; disables the old two-scope switch. */
+	/** Exact file selected by the scope-first parent; saves stay bound to this source. */
 	filePath?: string;
 	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
 	configFiles?: Partial<Record<AdvisorConfigScope, string>>;
