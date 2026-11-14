@@ -1577,7 +1577,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen git UI on the alternate screen (the /models idiom): split
+	 * Fullscreen git UI on the alternate screen (the /roles idiom): split
 	 * diff viewer, staging sidebar, and commit composer. Resolves focus back
 	 * to the editor when the user closes it.
 	 */
@@ -1598,7 +1598,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen agents hub on the alternate screen (the /models idiom): scope
+	 * Fullscreen agents hub on the alternate screen (the /roles idiom): scope
 	 * sidebar, agent rows, and chip strips that dive into the model browser.
 	 */
 	async showAgentsDashboard(): Promise<void> {
@@ -1683,7 +1683,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Session-only model switch (`/switch <selector>`) for the viewed session:
+	 * Session-only model switch (`/model <selector>`) for the viewed session:
 	 * applies the resolved model without persisting it. Compacts first when the
 	 * transcript exceeds the target's context window, mirroring an over-context
 	 * pick in the alt+p picker. Failures surface as status errors.
@@ -1728,7 +1728,7 @@ export class SelectorController {
 				return;
 			}
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
-			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /models for roles.`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /roles for roles.`);
 		};
 		if (!compactFirst || focusedAgentId) {
 			await apply();
@@ -1748,7 +1748,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Compact session-only model picker (alt+p / `/switch`): a floating
+	 * Compact session-only model picker (alt+p / `/model`): a floating
 	 * bottom-anchored overlay over the transcript. The current model is
 	 * highlighted and preselected; a leading `@` searches ctrl+p quick roles.
 	 */

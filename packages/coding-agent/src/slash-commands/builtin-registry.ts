@@ -61,7 +61,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();
 for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 	BUILTIN_SLASH_COMMAND_LOOKUP.set(command.name, command);
-	for (const alias of command.aliases ?? []) {
+	for (const alias of [...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
 	}
 }
@@ -73,6 +73,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 	command => ({
 		name: command.name,
 		aliases: command.aliases,
+		hiddenAliases: command.hiddenAliases,
 		allowArgs: command.allowArgs === true,
 		// Getter: some descriptions name keys, formatted at read time (theme/preset may change).
 		get description() {
@@ -120,7 +121,7 @@ function materializeTuiBuiltinSlashCommand(
 	} else if (cmd.name === "local" && runtime) {
 		materialized.getArgumentCompletions = buildLocalFileArgumentCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
-	} else if (cmd.name === "switch" && runtime) {
+	} else if (cmd.name === "model" && runtime) {
 		materialized.getArgumentCompletions = buildModelSelectorCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.inlineHint) {

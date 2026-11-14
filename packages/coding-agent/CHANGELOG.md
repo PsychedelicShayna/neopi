@@ -8,6 +8,7 @@
 - Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 - Bare `npi update` now reports binary-update status; the preserved prompted source-fork integration workflow moves to `npi update source`.
+- Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, offered only when no visible completion candidate matches.
 
 ### Added
 

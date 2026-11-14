@@ -201,6 +201,8 @@ The unified built-in registry is checked before `AgentSession.prompt(...)` in TU
 
 Built-in parsing splits at the first whitespace or colon, so `/model:opus` is a built-in invocation. Extension/custom/file parsing instead splits only at the first literal space, preserving names such as `plugin:command`. In the TUI, a built-in with arguments falls through when its spec does not declare `allowArgs`; the ACP dispatcher leaves argument validation to the handler.
 
+Command metadata may declare `hiddenAliases` separately from visible `aliases`. Hidden aliases remain executable but are omitted from normal help and command listings; completion offers them only when no visible candidates match. For example, `/roles` retains `/models` as a hidden alias, and the compact session-only `/model` picker retains `/switch`.
+
 After that boundary, `AgentSession.prompt(...)` processes slash input in this order when `expandPromptTemplates !== false`:
 
 1. **Extension commands** (`#tryExecuteExtensionCommand`)  

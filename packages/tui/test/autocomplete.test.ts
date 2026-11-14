@@ -42,6 +42,54 @@ describe("CombinedAutocompleteProvider", () => {
 	});
 
 	describe("slash commands", () => {
+		it("reveals hidden aliases with descriptions only after every visible candidate is exhausted", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "roles", hiddenAliases: ["legacy"], description: "Configure assignments" },
+				{ name: "logs", aliases: ["ledger"], description: "Inspect events" },
+			]);
+			for (const [input, expected] of [
+				["/", ["roles", "logs"]],
+				["/leg", ["ledger"]],
+				["/legacy", ["legacy"]],
+			] as const) {
+				const asyncResult = await provider.getSuggestions([input], 0, input.length);
+				const syncResult = provider.trySyncSlashCompletion(input);
+				expect(asyncResult?.items.map(item => item.value)).toEqual([...expected]);
+				expect(syncResult).toEqual(asyncResult);
+			}
+			expect(provider.trySyncSlashCompletion("/legacy")?.items[0]?.description).toBe("Configure assignments");
+		});
+
+		it("lets visible descriptions and skills outrank hidden aliases in both completion paths", async () => {
+			for (const competitor of [
+				{ name: "other", description: "switch tasks" },
+				{ name: "skill:switch", description: "Change branches" },
+			]) {
+				const provider = new CombinedAutocompleteProvider([
+					{ name: "model", hiddenAliases: ["switch"], description: "Choose a model" },
+					competitor,
+				]);
+				const input = "/switch";
+				const result = await provider.getSuggestions([input], 0, input.length);
+				expect(result?.items.map(item => item.value)).toEqual([competitor.name]);
+				expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+			}
+		});
+
+		it("retains argument completion through a hidden alias", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{
+					name: "roles",
+					hiddenAliases: ["models"],
+					getArgumentCompletions: () => [{ value: "project", label: "project" }],
+				},
+			]);
+			const input = "/models pro";
+			expect((await provider.getSuggestions([input], 0, input.length))?.items.map(item => item.value)).toEqual([
+				"project",
+			]);
+		});
+
 		it("suggests only skill commands after prose", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[

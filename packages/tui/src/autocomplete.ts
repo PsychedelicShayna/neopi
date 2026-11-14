@@ -240,6 +240,8 @@ export interface AutocompleteItem {
 	 * user moved the selection onto it.
 	 */
 	descriptionMatch?: boolean;
+	/** An exact hidden alias is already typed; Enter submits it unless the user navigates the popup. */
+	preserveInputOnSubmit?: boolean;
 }
 
 type Awaitable<T> = T | Promise<T>;
@@ -256,6 +258,8 @@ export type ModelMentionCompletion =
 export interface SlashCommand {
 	name: string;
 	aliases?: string[];
+	/** Accepted aliases shown only after all visible completion candidates are exhausted. */
+	hiddenAliases?: string[];
 	description?: string;
 	/** Optional type-indicator glyph shown before the command name in autocomplete */
 	icon?: string;
@@ -391,7 +395,10 @@ function nativeCommandText(
 function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): boolean {
 	const name = getCommandName(cmd);
 	if (name === commandName) return true;
-	return getCommandAliases(cmd).includes(commandName);
+	return (
+		getCommandAliases(cmd).includes(commandName) ||
+		("hiddenAliases" in cmd && cmd.hiddenAliases?.includes(commandName) === true)
+	);
 }
 
 export function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
@@ -410,96 +417,128 @@ function buildSlashCommandCompletions(
 	lowerPrefix: string,
 	commandUsage?: (name: string) => number,
 ): AutocompleteItem[] {
-	return (
-		commands
-			.flatMap(cmd => {
-				const name = getCommandName(cmd);
-				if (!name) return [];
-				const usage = commandUsage?.(name) ?? 0;
-				const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
-				const staticDesc = getStaticCommandDescription(cmd);
-				let fullDescMemo: string | undefined;
-				let nativeTextMemo: Pick<AutocompleteItem, "nativeDetail" | "state"> = {};
-				let fullDescComputed = false;
-				// Resolve the (possibly live) display description lazily, only once a
-				// candidate actually matches — getAutocompleteDescription reads live
-				// session state and must not run for every command on each keystroke.
-				const resolveFullDesc = (): string | undefined => {
-					if (!fullDescComputed) {
-						const displayDesc = getAutocompleteCommandDescription(cmd);
-						fullDescMemo = hint ? (displayDesc ? `${hint} - ${displayDesc}` : hint) : displayDesc;
-						nativeTextMemo = nativeCommandText(displayDesc, staticDesc, hint);
-						fullDescComputed = true;
-					}
-					return fullDescMemo;
-				};
-				let best: (AutocompleteItem & { score: number; usage: number }) | undefined;
+	const matches = commands
+		.flatMap(cmd => {
+			const name = getCommandName(cmd);
+			if (!name) return [];
+			const usage = commandUsage?.(name) ?? 0;
+			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+			const staticDesc = getStaticCommandDescription(cmd);
+			let fullDescMemo: string | undefined;
+			let nativeTextMemo: Pick<AutocompleteItem, "nativeDetail" | "state"> = {};
+			let fullDescComputed = false;
+			// Resolve the (possibly live) display description lazily, only once a
+			// candidate actually matches — getAutocompleteDescription reads live
+			// session state and must not run for every command on each keystroke.
+			const resolveFullDesc = (): string | undefined => {
+				if (!fullDescComputed) {
+					const displayDesc = getAutocompleteCommandDescription(cmd);
+					fullDescMemo = hint ? (displayDesc ? `${hint} - ${displayDesc}` : hint) : displayDesc;
+					nativeTextMemo = nativeCommandText(displayDesc, staticDesc, hint);
+					fullDescComputed = true;
+				}
+				return fullDescMemo;
+			};
+			let best: (AutocompleteItem & { score: number; usage: number }) | undefined;
 
-				const isSkillCommand = name.startsWith(SKILL_NAMESPACE);
-				// Skills are matched by their bare name as well as the full
-				// `skill:` name so a broken-out or mid-prompt skill ranks at
-				// prefix strength (`/batch` → `skill:batch`) instead of a weak
-				// full-name fuzzy hit.
-				const nameScore =
-					lowerPrefix.length === 0 && isSkillCommand
-						? 950
-						: isSkillCommand
-							? Math.max(
-									scoreCommandTextMatch(lowerPrefix, name.toLowerCase()),
-									skillBareNameBreakoutTier(lowerPrefix, name.slice(SKILL_NAMESPACE.length).toLowerCase()),
-								)
-							: scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
-				const lowerDesc = staticDesc.toLowerCase();
-				const descScore =
-					lowerDesc && subsequenceMatch(lowerPrefix, lowerDesc)
-						? subsequenceScore(lowerPrefix, lowerDesc) * 0.5
-						: 0;
-				const primaryScore = Math.max(nameScore, descScore);
-				if (primaryScore > 0) {
+			const isSkillCommand = name.startsWith(SKILL_NAMESPACE);
+			// Skills are matched by their bare name as well as the full
+			// `skill:` name so a broken-out or mid-prompt skill ranks at
+			// prefix strength (`/batch` → `skill:batch`) instead of a weak
+			// full-name fuzzy hit.
+			const nameScore =
+				lowerPrefix.length === 0 && isSkillCommand
+					? 950
+					: isSkillCommand
+						? Math.max(
+								scoreCommandTextMatch(lowerPrefix, name.toLowerCase()),
+								skillBareNameBreakoutTier(lowerPrefix, name.slice(SKILL_NAMESPACE.length).toLowerCase()),
+							)
+						: scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
+			const lowerDesc = staticDesc.toLowerCase();
+			const descScore =
+				lowerDesc && subsequenceMatch(lowerPrefix, lowerDesc) ? subsequenceScore(lowerPrefix, lowerDesc) * 0.5 : 0;
+			const primaryScore = Math.max(nameScore, descScore);
+			if (primaryScore > 0) {
+				const fullDesc = resolveFullDesc();
+				best = {
+					value: name,
+					label: ("name" in cmd ? cmd.name : cmd.label) + provenanceSuffix(cmd.provenance),
+					score: primaryScore,
+					usage,
+					...(cmd.icon && { icon: cmd.icon }),
+					...(cmd.iconName && { iconName: cmd.iconName }),
+					...(fullDesc && { description: fullDesc }),
+					...nativeTextMemo,
+					...(nameScore === 0 && { descriptionMatch: true }),
+				};
+			}
+
+			if (lowerPrefix.length > 0) {
+				for (const alias of getCommandAliases(cmd)) {
+					if (alias === name) continue;
+					const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
+					if (aliasScore === 0) continue;
+					// An alias can match even when the description outranks it; Enter
+					// must still accept the command rather than submit the raw query.
+					if (best?.descriptionMatch) delete best.descriptionMatch;
+					if (best && aliasScore <= best.score) continue;
 					const fullDesc = resolveFullDesc();
 					best = {
-						value: name,
-						label: ("name" in cmd ? cmd.name : cmd.label) + provenanceSuffix(cmd.provenance),
-						score: primaryScore,
+						value: alias,
+						label: alias + provenanceSuffix(cmd.provenance),
+						score: aliasScore,
 						usage,
 						...(cmd.icon && { icon: cmd.icon }),
 						...(cmd.iconName && { iconName: cmd.iconName }),
 						...(fullDesc && { description: fullDesc }),
 						...nativeTextMemo,
-						...(nameScore === 0 && { descriptionMatch: true }),
 					};
 				}
+			}
 
-				if (lowerPrefix.length > 0) {
-					for (const alias of getCommandAliases(cmd)) {
-						if (alias === name) continue;
-						const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
-						if (aliasScore === 0) continue;
-						// An alias can match even when the description outranks it; Enter
-						// must still accept the command rather than submit the raw query.
-						if (best?.descriptionMatch) delete best.descriptionMatch;
-						if (best && aliasScore <= best.score) continue;
-						const fullDesc = resolveFullDesc();
-						best = {
-							value: alias,
-							label: alias + provenanceSuffix(cmd.provenance),
-							score: aliasScore,
-							usage,
-							...(cmd.icon && { icon: cmd.icon }),
-							...(cmd.iconName && { iconName: cmd.iconName }),
-							...(fullDesc && { description: fullDesc }),
-							...nativeTextMemo,
-						};
-					}
-				}
+			return best ? [best] : [];
+		})
+		// Equal text-match scores fall back to usage frequency, then to the
+		// stable registry order.
+		.sort((a, b) => b.score - a.score || b.usage - a.usage)
+		.map(({ score: _score, usage: _usage, ...rest }) => rest);
+	if (matches.length > 0) {
+		if (
+			lowerPrefix.length > 0 &&
+			commands.some(
+				cmd => "hiddenAliases" in cmd && cmd.hiddenAliases?.some(alias => alias.toLowerCase() === lowerPrefix),
+			)
+		) {
+			for (const match of matches) match.preserveInputOnSubmit = true;
+		}
+		return matches;
+	}
+	if (lowerPrefix.length === 0) return matches;
 
-				return best ? [best] : [];
-			})
-			// Equal text-match scores fall back to usage frequency, then to the
-			// stable registry order.
-			.sort((a, b) => b.score - a.score || b.usage - a.usage)
-			.map(({ score: _score, usage: _usage, ...rest }) => rest)
-	);
+	// Hidden aliases are a separate fallback pass: even a weak visible name,
+	// description, ordinary alias, or skill match takes precedence.
+	const hidden: Array<AutocompleteItem & { score: number; usage: number }> = [];
+	for (const cmd of commands) {
+		const name = getCommandName(cmd);
+		if (!name) continue;
+		for (const alias of ("hiddenAliases" in cmd ? cmd.hiddenAliases : undefined) ?? []) {
+			const score = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
+			if (score === 0) continue;
+			hidden.push({
+				value: alias,
+				label: alias + provenanceSuffix(cmd.provenance),
+				description: getStaticCommandDescription(cmd),
+				score,
+				usage: commandUsage?.(name) ?? 0,
+				...(cmd.icon && { icon: cmd.icon }),
+				...(cmd.iconName && { iconName: cmd.iconName }),
+			});
+		}
+	}
+	return hidden
+		.sort((a, b) => b.score - a.score || b.usage - a.usage)
+		.map(({ score: _score, usage: _usage, ...item }) => item);
 }
 
 function hasPromptTextBeforeSlash(

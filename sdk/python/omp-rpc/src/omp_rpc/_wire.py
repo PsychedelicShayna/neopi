@@ -5647,7 +5647,7 @@ class WireClient:
         return parse_themes_configuration(self._command("update_theme", params), "update_theme")
 
     def query_model_selector(self, query: str) -> ModelSelectorResult:
-        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        """Query native /model ordering, scoped candidates, role aliases and model facts without selecting."""
         params: dict[str, object] = {}
         params["query"] = query
         return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
