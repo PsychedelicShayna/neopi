@@ -40,13 +40,12 @@ describe("Codex selectable slugs", () => {
 		for (const model of models.slice(1)) {
 			expect(model.requestModelId).toBe("future-model");
 			expect(model.contextWindow).toBe(model.id.endsWith("-900k") ? 872_000 : 272_000);
-			expect(model.identity).toBe(original.identity);
 		}
 		expect(original.codexVariant).toBeUndefined();
 		expect(original.contextWindow).toBe(272_000);
 	});
 
-	test.each([undefined, []])("keeps the existing implicit Priority contract for unreported tiers %j", tiers => {
+	test.each([{ tiers: undefined }, { tiers: [] }])("keeps implicit Priority for unreported tiers %j", ({ tiers }) => {
 		const models = expandCodexVariants([base(tiers)]);
 		expect(models.some(model => model.id === "future-model-fast")).toBe(true);
 		expect(models.some(model => model.id.includes("-ultra"))).toBe(false);

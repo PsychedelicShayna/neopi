@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Model, ServiceTier } from "@oh-my-pi/pi-ai/types";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -43,7 +44,7 @@ test("plain Codex selectors keep tier/window policy through role resolution and 
 		const variant = chosen?.model;
 		if (!variant) throw new Error("Expected exact variant selector to resolve");
 		expect(variant.id).toBe("gpt-6-astra-fast-900k");
-		expect(chosen?.thinkingLevel).toBe("high");
+		expect(chosen?.thinkingLevel).toBe(Effort.High);
 		expect(variant.contextWindow).toBe(922_000);
 		expect(registry.fitContextWindow(variant, scope)).toBe(variant);
 		expect(primary.contextWindow).toBe(272_000);

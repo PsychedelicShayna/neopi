@@ -47,7 +47,7 @@ overlapping stale edits are rejected rather than overwritten.
 Codex models expose supported serving profiles as ordinary model slugs:
 `-fast` (Priority), `-ultra` (Ultrafast), `-900k` (extended context), and
 `-fast-900k` / `-ultra-900k`. For example,
-`-m openai-codex/gpt-6-astra-fast-900k:high` selects Priority with the extended
+`--model openai-codex/gpt-6-astra-fast-900k:high` selects Priority with the extended
 window and independently chooses high reasoning effort.
 
 Use these same selectors in roles, advisors, tasks, chains, and web-search roles;
