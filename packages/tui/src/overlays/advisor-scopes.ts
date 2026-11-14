@@ -50,7 +50,7 @@ export interface AdvisorConfigFile {
 
 export interface AdvisorScopeCallbacks extends Omit<AdvisorConfigCallbacks, "loadDoc" | "save" | "openConfigFile"> {
 	loadFile: (path: string) => Promise<WatchdogConfigDoc>;
-	saveFile: (path: string, doc: WatchdogConfigDoc) => Promise<void>;
+	saveFile: (path: string, doc: WatchdogConfigDoc, options?: { advisorEnabledOnly: boolean }) => Promise<void>;
 	/** Edit the exact discovered file, not a scope's default path. */
 	openFile?: (path: string) => Promise<void>;
 }
@@ -78,7 +78,9 @@ export class AdvisorScopeOverlayComponent implements Component {
 	#scopeFocused = true;
 	readonly #scopeStrip: StripState<StripChip<AdvisorConfigScope>> = {
 		chips: (["user", "project", "project-omp", "session"] as const).map(scope => ({
-			label: SCOPE_LABELS[scope], styled: SCOPE_LABELS[scope], action: scope,
+			label: SCOPE_LABELS[scope],
+			styled: SCOPE_LABELS[scope],
+			action: scope,
 		})),
 		index: 0,
 	};
@@ -117,7 +119,6 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#list = this.#buildList();
 	}
 
-
 	#scope(): AdvisorConfigScope {
 		return this.#scopeStrip.chips[this.#scopeStrip.index].action;
 	}
@@ -134,11 +135,13 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	#buildList(state?: SelectListNavigationState): SelectList {
-		const items: SelectItem[] = this.#files.filter(file => file.scope === this.#scope()).map(file => ({
-			value: file.path,
-			label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
-			description: sanitizeDisplayLine(shortenPath(file.path)),
-		}));
+		const items: SelectItem[] = this.#files
+			.filter(file => file.scope === this.#scope())
+			.map(file => ({
+				value: file.path,
+				label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
+				description: sanitizeDisplayLine(shortenPath(file.path)),
+			}));
 		items.push(
 			{ value: "divider", label: "────────────────", disabled: true },
 			{ value: "disable", label: "Disable all active advisors" },
@@ -166,7 +169,12 @@ export class AdvisorScopeOverlayComponent implements Component {
 	#preview(): string[] {
 		const file = this.#selectedFile();
 		if (!file)
-			return ["Select a file to preview its advisors.", "Space toggles a whole file. Enter edits that file."];
+			return [
+				`Bulk actions affect only ${SCOPE_LABELS[this.#scope()]} advisor entries.`,
+				"Whole-file switches stay unchanged.",
+				"Select a file to preview its advisors.",
+				"Space toggles a whole file. Enter edits that file.",
+			];
 		return [
 			sanitizeDisplayLine(shortenPath(file.path)),
 			file.doc.enabled === false ? "File disabled. Entries remain editable." : "File enabled",
@@ -193,8 +201,8 @@ export class AdvisorScopeOverlayComponent implements Component {
 			});
 	}
 
-	async #write(file: AdvisorConfigFile, doc: WatchdogConfigDoc): Promise<void> {
-		await this.#cb.saveFile(file.path, doc);
+	async #write(file: AdvisorConfigFile, doc: WatchdogConfigDoc, advisorEnabledOnly = false): Promise<void> {
+		await this.#cb.saveFile(file.path, doc, advisorEnabledOnly ? { advisorEnabledOnly: true } : undefined);
 		file.doc = await this.#cb.loadFile(file.path);
 		this.#pendingApply = true;
 	}
@@ -228,25 +236,28 @@ export class AdvisorScopeOverlayComponent implements Component {
 			return;
 		}
 		if (["enable", "disable", "invert"].includes(value)) {
+			const scope = this.#scope();
+			let changed = 0;
 			for (const file of this.#files) {
+				if (file.scope !== scope) continue;
 				const doc = await this.#cb.loadFile(file.path);
-				const fileEnabled = doc.enabled !== false;
-				doc.enabled =
-					value === "disable" || (value === "invert" && doc.advisors.length === 0 && fileEnabled)
-						? false
-						: undefined;
+				let fileChanges = 0;
 				for (const advisor of doc.advisors) {
-					advisor.enabled =
-						value === "disable"
-							? false
-							: value === "enable" || !fileEnabled || advisor.enabled === false
-								? undefined
-								: false;
+					const enabled = value === "disable" ? false : value === "enable" || advisor.enabled === false;
+					if ((advisor.enabled !== false) === enabled) continue;
+					advisor.enabled = enabled ? undefined : false;
+					fileChanges++;
 				}
-				await this.#write(file, doc);
+				if (fileChanges === 0) continue;
+				await this.#write(file, doc, true);
+				changed += fileChanges;
 			}
 			this.#list = this.#buildList(this.#list.navigationState());
-			this.#cb.notify("Saved advisor states. Press a to apply them to live advisors.");
+			this.#cb.notify(
+				changed > 0
+					? `Saved ${changed} ${SCOPE_LABELS[scope]} advisor entry states; file switches unchanged. Press a to apply.`
+					: `No ${SCOPE_LABELS[scope]} advisor entry states changed; file switches and implicit defaults unchanged.`,
+			);
 			return;
 		}
 		const file = this.#files.find(candidate => candidate.path === value);
@@ -262,9 +273,13 @@ export class AdvisorScopeOverlayComponent implements Component {
 			doc,
 			{
 				...this.#cb,
-				getSources: async () => Promise.all(this.#files.map(async source => ({
-					...source, doc: await this.#cb.loadFile(source.path),
-				}))),
+				getSources: async () =>
+					Promise.all(
+						this.#files.map(async source => ({
+							...source,
+							doc: await this.#cb.loadFile(source.path),
+						})),
+					),
 				copyAdvisor: async (advisor, targetPath) => {
 					const target = this.#files.find(source => source.path === targetPath);
 					if (!target) throw new Error("Advisor copy destination no longer exists");
@@ -322,7 +337,15 @@ export class AdvisorScopeOverlayComponent implements Component {
 		return this.#help.render(
 			[
 				topBorder(width, title),
-				row(renderHubChips(width - 4, `${this.#scopeFocused ? "›" : " "} Scope: `, this.#scopeStrip, this.#scopeRanges), width),
+				row(
+					renderHubChips(
+						width - 4,
+						`${this.#scopeFocused ? "›" : " "} Scope: `,
+						this.#scopeStrip,
+						this.#scopeRanges,
+					),
+					width,
+				),
 				divider(width),
 				...this.#split.render(width),
 				divider(width),
@@ -426,7 +449,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 		}
 		if (this.#scopeFocused) {
 			if (action?.kind === "horizontal") this.#setScope(this.#scopeStrip.index + action.delta);
-			else if ((action?.kind === "move" && action.delta > 0) || action?.kind === "confirm" || action?.kind === "context") {
+			else if (
+				(action?.kind === "move" && action.delta > 0) ||
+				action?.kind === "confirm" ||
+				action?.kind === "context"
+			) {
 				this.#scopeFocused = false;
 				this.#cb.requestRender();
 			} else if (action?.kind === "search") {
@@ -435,8 +462,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 			}
 			return;
 		}
-		if (action?.kind === "move" && action.delta < 0 &&
-			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value) {
+		if (
+			action?.kind === "move" &&
+			action.delta < 0 &&
+			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value
+		) {
 			this.#scopeFocused = true;
 			this.#cb.requestRender();
 			return;

@@ -1096,8 +1096,8 @@ export class SelectorController {
 				generateAdvisor: (bases, comment, signal) => generator.generate(bases, comment, signal),
 				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
 				loadFile: loadWatchdogConfigFile,
-				saveFile: async (filePath, doc) => {
-					await saveWatchdogConfigFile(filePath, doc);
+				saveFile: async (filePath, doc, options) => {
+					await saveWatchdogConfigFile(filePath, doc, options);
 					this.ctx.showStatus(`Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.`);
 					this.ctx.ui.requestRender();
 				},
@@ -1859,13 +1859,7 @@ export class SelectorController {
 				},
 				onPickTask: (_model, selector) => {
 					if (!isCurrent() || selectOnly) return;
-					// Session-only: layer the Task override onto the runtime settings
-					// layer so it is never persisted, mirroring the session-model pick.
-					cfgTaskAgentModelOverrides.override(this.ctx.settings, {
-						...cfgTaskAgentModelOverrides.get(this.ctx.settings),
-						task: selector,
-					});
-					this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
+					this.#applyTaskModel(selector);
 					done();
 				},
 				onCancel: done,
@@ -1900,6 +1894,15 @@ export class SelectorController {
 		});
 		tracked.close = closePicker;
 		this.ctx.ui.requestRender();
+	}
+
+	/** Both picker sizes apply the same runtime-only Task override. */
+	#applyTaskModel(selector: string): void {
+		cfgTaskAgentModelOverrides.override(this.ctx.settings, {
+			...cfgTaskAgentModelOverrides.get(this.ctx.settings),
+			task: selector,
+		});
+		this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
 	}
 
 	/**
@@ -1948,6 +1951,13 @@ export class SelectorController {
 						return false;
 					}
 				},
+				onPickTask: hubOptions.sessionOnly
+					? (_model, selector) => {
+							if (closed) return;
+							this.#applyTaskModel(selector);
+							done();
+						}
+					: undefined,
 				onEditFacts: hubOptions.sessionOnly
 					? undefined
 					: (provider, model) => {
@@ -2293,6 +2303,16 @@ export class SelectorController {
 			},
 			{
 				sessionOnly: hubOptions.sessionOnly,
+				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
+				taskSelector: (() => {
+					const override = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
+					return (
+						(Array.isArray(override) ? override[0] : override) ??
+						(this.ctx.session.model
+							? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
+							: undefined)
+					);
+				})(),
 				initialProviderId: hubOptions.initialProviderId,
 				currentSelector: this.ctx.session.model
 					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`

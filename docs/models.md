@@ -42,6 +42,43 @@ discovered entries. Saving uses the shared config writer and a local catalog
 refresh, without online discovery. Unrelated edits made on disk are retained;
 overlapping stale edits are rejected rather than overwritten.
 
+## Selectable Codex variants
+
+Codex models expose supported serving profiles as ordinary model slugs:
+`-fast` (Priority), `-ultra` (Ultrafast), `-900k` (extended context), and
+`-fast-900k` / `-ultra-900k`. For example,
+`--model openai-codex/gpt-6-astra-fast-900k:high` selects Priority with the extended
+window and independently chooses high reasoning effort.
+
+Use these same selectors in roles, advisors, tasks, chains, and web-search roles;
+no separate assignment settings are required. Catalog refresh derives combinations
+from the model's capabilities, not a list of model names. Ultrafast requires an
+advertised tier; an explicit nonempty tier list can also exclude Priority.
+Discovered account eligibility guides the existing credential resolver's preferred
+pool. Its partial-discovery fallback may still try another account if that pool
+cannot serve the request; an unsupported premium tier can then fail at the backend.
+The requested tier is not silently downgraded. This feature does not change the
+generic credential fallback policy.
+These are Codex-only profiles; they do not add Codex support to speech APIs.
+
+`900k` is the friendly name of the extended (~1M) profile, not a literal token
+limit or an invented upstream model ID. The selected row retains the exact
+provider-supported input budget (for example, Astra's 922,000 input tokens).
+Models without a larger supported window do not get extended siblings.
+
+An explicit variant pins both its tier and its context profile, taking precedence
+over ambient `/fast`, extended-context, and role context-tier defaults. A Fast or
+Ultra slug without `-900k` uses the standard window. A `-900k` slug without Fast or
+Ultra suppresses inherited premium tiers. The unsuffixed model keeps the existing
+`/fast` and `/extended-context` behavior. To change a pinned profile, select its
+matching sibling; these commands do not rewrite an explicit slug.
+
+Persistence stores the ordinary selected slug; resolution reconstructs its policy
+from the catalog, including offline startup. Fully qualified missing selectors
+are rejected instead of silently choosing a sibling. Each fallback resolves its
+own model policy. As with other catalog selections, capability changes can make
+a previously selected profile unavailable.
+
 
 ## What controls model behavior
 

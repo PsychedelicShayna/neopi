@@ -1541,6 +1541,8 @@ export interface ModelAccountAccess {
 	 * Absent when the backend reported no program metadata.
 	 */
 	cyberPrograms?: readonly string[];
+	/** Codex service tiers advertised by this account; absent when not reported. */
+	serviceTiers?: readonly string[];
 	/**
 	 * Antigravity request constants this account's `fetchAvailableModels`
 	 * roster advertised, keyed by upstream SKU id. Takes precedence over
@@ -1638,6 +1640,15 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * Fixed policy of a derived Codex catalog slug. Explicit slug policy wins
+	 * over ambient tier/context settings; the unsuffixed row retains legacy controls.
+	 */
+	codexVariant?: {
+		baseModelId: string;
+		serviceTier: "default" | "priority" | "ultrafast";
+		contextWindow: number;
+	};
 	/**
 	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
 	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
