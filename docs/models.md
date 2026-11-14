@@ -54,7 +54,11 @@ Use these same selectors in roles, advisors, tasks, chains, and web-search roles
 no separate assignment settings are required. Catalog refresh derives combinations
 from the model's capabilities, not a list of model names. Ultrafast requires an
 advertised tier; an explicit nonempty tier list can also exclude Priority.
-Discovered account eligibility restricts premium variants to eligible credentials.
+Discovered account eligibility guides the existing credential resolver's preferred
+pool. Its partial-discovery fallback may still try another account if that pool
+cannot serve the request; an unsupported premium tier can then fail at the backend.
+The requested tier is not silently downgraded. This feature does not change the
+generic credential fallback policy.
 These are Codex-only profiles; they do not add Codex support to speech APIs.
 
 `900k` is the friendly name of the extended (~1M) profile, not a literal token
