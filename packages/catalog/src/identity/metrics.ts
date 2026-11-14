@@ -151,8 +151,8 @@ export function applyCatalogMetrics<TApi extends Api>(
 		if (model.int != null && model.tps != null) continue;
 		const metrics = index.resolve(model);
 		if (!metrics) continue;
-		const int = metrics.int ?? model.int;
-		const tps = metrics.tps ?? model.tps;
+		const int = model.int ?? metrics.int;
+		const tps = model.tps ?? metrics.tps;
 		if (int === model.int && tps === model.tps) continue;
 		changed ??= [...models];
 		changed[position] = {

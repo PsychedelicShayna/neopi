@@ -4,12 +4,12 @@ import type { Model } from "../types";
  * Merge per-account discovery catalogs into one list, deduped by model id.
  *
  * The first catalog to list an id supplies its spec; {@link Model.accountAccess}
- * is merged from every catalog listing that id, so credential selection can
- * route account-gated models to the accounts that serve them. Used by
+ * and advertised service tiers are unioned from every catalog listing that id,
+ * so credential selection can route account-gated models to eligible accounts. Used by
  * multi-account discovery for Codex and Antigravity, and per-key discovery for
  * NeoProxy, whose rosters differ per account or key.
  */
-export function unionAccountCatalogs<TModel extends Pick<Model, "id" | "accountAccess">>(
+export function unionAccountCatalogs<TModel extends Pick<Model, "id" | "accountAccess" | "serviceTiers">>(
 	catalogs: readonly (readonly TModel[])[],
 ): TModel[] {
 	const byId = new Map<string, TModel>();
@@ -22,6 +22,9 @@ export function unionAccountCatalogs<TModel extends Pick<Model, "id" | "accountA
 				byId.set(model.id, {
 					...existing,
 					accountAccess: { ...existing.accountAccess, ...model.accountAccess },
+					...(existing.serviceTiers !== undefined || model.serviceTiers !== undefined
+						? { serviceTiers: [...new Set([...(existing.serviceTiers ?? []), ...(model.serviceTiers ?? [])])] }
+						: {}),
 				});
 			}
 		}

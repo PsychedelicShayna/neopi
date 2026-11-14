@@ -4,12 +4,18 @@
 
 ### Added
 
+- Added selectable Codex `-fast`, `-ultra`, `-900k`, and supported combined slugs derived from model capabilities, carrying their fixed tier and exact context budget ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
 - Declared NeoProxy's non-storing wire policy in KDL; virtual model names and routing remain server-owned rather than inventing a bundled/default model ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 
 - Added KDL selection of model-family behavioral presets, initially scoped to Opus 5 ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
 - Exposed native thinking choices, including `off` only when model metadata supports disabling reasoning ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Added Grok STT models to the xAI and xAI OAuth catalogs.
 - Added endpoint-specific sampling capability rules so first-party OpenAI models do not receive unsupported sampling extensions ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
+
+### Fixed
+
+- Preserved an existing intelligence or speed score when catalog enrichment fills the other missing metric.
+
 ## [18.18.8] - 2026-11-11
 
 ### Added

@@ -67,6 +67,18 @@ describe("CatalogMetricsIndex", () => {
 });
 
 describe("applyCatalogMetrics", () => {
+	test.each([
+		[{ int: 49 }, { int: 49, tps: 66.2 }],
+		[{ tps: 12 }, { int: 65.7, tps: 12 }],
+		[{ int: 0 }, { int: 0, tps: 66.2 }],
+	])("fills a missing metric without replacing an existing one: %j", (existing, expected) => {
+		const original = model("github-copilot", "claude-fable-5.1", existing);
+		const before = { int: original.int, tps: original.tps };
+		const [enriched] = applyCatalogMetrics([original], scored);
+		expect({ int: enriched.int, tps: enriched.tps }).toEqual(expected);
+		expect({ int: original.int, tps: original.tps }).toEqual(before);
+	});
+
 	test("fills only unscored models and preserves array identity when nothing changes", () => {
 		const already = model("openai", "gpt-5.5", { int: 1, tps: 2 });
 		const unknown = model("ollama", "lfm2.5:2.6b");

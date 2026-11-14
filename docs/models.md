@@ -42,6 +42,43 @@ discovered entries. Saving uses the shared config writer and a local catalog
 refresh, without online discovery. Unrelated edits made on disk are retained;
 overlapping stale edits are rejected rather than overwritten.
 
+## Selectable Codex variants
+
+Codex models expose supported serving profiles as ordinary model slugs:
+`-fast` (Priority), `-ultra` (Ultrafast), `-900k` (extended context), and
+`-fast-900k` / `-ultra-900k`. For example,
+`--model openai-codex/gpt-6-astra-fast-900k:high` selects Priority with the extended
+window and independently chooses high reasoning effort.
+
+Use these same selectors in roles, advisors, tasks, chains, and web-search roles;
+no separate assignment settings are required. Catalog refresh derives combinations
+from the model's capabilities, not a list of model names. Ultrafast requires an
+advertised tier; an explicit nonempty tier list can also exclude Priority.
+Discovered account eligibility guides the existing credential resolver's preferred
+pool. Its partial-discovery fallback may still try another account if that pool
+cannot serve the request; an unsupported premium tier can then fail at the backend.
+The requested tier is not silently downgraded. This feature does not change the
+generic credential fallback policy.
+These are Codex-only profiles; they do not add Codex support to speech APIs.
+
+`900k` is the friendly name of the extended (~1M) profile, not a literal token
+limit or an invented upstream model ID. The selected row retains the exact
+provider-supported input budget (for example, Astra's 922,000 input tokens).
+Models without a larger supported window do not get extended siblings.
+
+An explicit variant pins both its tier and its context profile, taking precedence
+over ambient `/fast`, extended-context, and role context-tier defaults. A Fast or
+Ultra slug without `-900k` uses the standard window. A `-900k` slug without Fast or
+Ultra suppresses inherited premium tiers. The unsuffixed model keeps the existing
+`/fast` and `/extended-context` behavior. To change a pinned profile, select its
+matching sibling; these commands do not rewrite an explicit slug.
+
+Persistence stores the ordinary selected slug; resolution reconstructs its policy
+from the catalog, including offline startup. Fully qualified missing selectors
+are rejected instead of silently choosing a sibling. Each fallback resolves its
+own model policy. As with other catalog selections, capability changes can make
+a previously selected profile unavailable.
+
 
 ## What controls model behavior
 
@@ -969,7 +1006,7 @@ Consumers add another role by registering a `deck-<name>` key through the existi
 
 Assigning a non-default role in `/roles` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
-`/model [selector]` opens the compact session-only picker, the same as Alt+P, or switches directly when given a selector. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. Selecting a model changes only the active conversation, not the saved default or role mappings. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` is a hidden alias for `/roles`; `/switch` is a hidden alias for `/model`. Hidden aliases appear in completion only when no visible candidates match.
+`/model [selector]` opens the fullscreen **Big Pickle** session-only picker by default, the same as Alt+P, or switches directly when given a selector. Choose **Small picker** in Settings → Model → **Session model picker** (`models.sessionPicker: small`) for the compact view. Both sizes support pressing Alt+P again to target the temporary Task-role override. Focused subagent selection continues to use its compact session-only picker. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. Selecting a model changes only the active conversation, not the saved default or role mappings. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` is a hidden alias for `/roles`; `/switch` is a hidden alias for `/model`. Hidden aliases appear in completion only when no visible candidates match.
 
 Vim navigation and editing are opt-in through `tui.vimMode: true` (default `false`; **Vim Navigation and Editing** in `/settings`). The Vim motions and yank/paste aliases described below require that setting. Ordinary arrows, paging, Home/End, Enter/Space, search focus, context switching and menu history remain available when it is off; text fields use literal editing.
 
@@ -1085,7 +1122,7 @@ String entries apply everywhere. Scoped entries apply when the current working d
 
 Both surfaces keep provider-prefixed concrete models visible and selectable.
 
-- `/model [selector]` and Alt+P use the compact session-only picker; a selector switches directly without editing saved roles. `/roles [session|project|global]` and Alt+M open the role-management hub. The old `/models` and `/switch` names remain hidden aliases, offered only when no visible completion candidates match.
+- `/model [selector]` and Alt+P use the fullscreen Big Pickle by default (`models.sessionPicker: small` selects the compact picker); a selector switches directly without editing saved roles. `/roles [session|project|global]` and Alt+M open the role-management hub. The old `/models` and `/switch` names remain hidden aliases, offered only when no visible completion candidates match.
 - `omp models` (default `ls` action) prints provider-grouped tables of available **chat** models; `--kind <kind>` selects another catalog kind and `--kind all` includes every kind.
 - `omp models find <substring>` filters by provider, id, or name; `omp models refresh` forces an online catalog re-fetch ignoring the model cache TTL; a provider name doubles as an `ls` filter (e.g. `omp models openai-codex`).
 - Other flags: `--json`, `-e <path>` / `--extension <path>` (repeatable), `--no-extensions` (skip ambient discovery; explicit `-e` still loads), and `--config <overlay>` (repeatable).

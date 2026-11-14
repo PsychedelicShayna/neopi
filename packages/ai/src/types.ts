@@ -178,7 +178,8 @@ export type ServiceTierFamily = "openai" | "anthropic" | "google";
  */
 export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>>;
 
-type ServiceTierModel = Pick<Model, "provider" | "api" | "identity"> & Partial<Pick<Model, "serviceTiers">>;
+type ServiceTierModel = Pick<Model, "provider" | "api" | "identity"> &
+	Partial<Pick<Model, "serviceTiers" | "codexVariant">>;
 // The service-tier matrix below intentionally stays in TypeScript rather than
 // the KDL compat tree: `shouldSendServiceTier` accepts bare provider strings
 // (agent telemetry, google-shared header placement) and the stats parser
@@ -233,13 +234,14 @@ export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | 
 }
 
 /**
- * Reduce a per-family tier map to the single wire tier for `model` — the entry
- * for the model's family, or `undefined` when the model has no family.
+ * Reduce a per-family tier map to the model's tier. Explicit catalog variant
+ * policy wins over ambient family settings, including an explicit standard profile.
  */
 export function resolveModelServiceTier(
 	tiers: ServiceTierByFamily | null | undefined,
 	model: ServiceTierModel,
 ): ServiceTier | undefined {
+	if (model.codexVariant) return model.codexVariant.serviceTier;
 	if (!tiers) return undefined;
 	const family = serviceTierFamily(model);
 	return family ? tiers[family] : undefined;

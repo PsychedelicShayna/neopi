@@ -252,6 +252,76 @@ describe("ExtensionDashboard menu navigation", () => {
 		expect(fx.disabled).toEqual([]);
 	});
 
+	test("cancels unconfirmed status searches and retains the last confirmed regex", async () => {
+		const fx = fixture([extension("skill", "alpha", "native"), extension("skill", "beta", "native")]);
+		const dashboard = await ExtensionDashboard.create({ runtime: fx.runtime, terminalHeight: 30 });
+		try {
+			for (const char of "/alpha") dashboard.handleInput(char);
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha"]);
+			expect(dashboard.navigationSnapshot().list.search.query).toBe("");
+			dashboard.handleInput("\x1b");
+			dashboard.handleInput("\x1b");
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha", "beta"]);
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "", focused: false });
+
+			for (const char of "//beta") dashboard.handleInput(char);
+			dashboard.handleInput("\r");
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["beta"]);
+			dashboard.handleInput("/");
+			dashboard.handleInput("\x15");
+			dashboard.handleInput("alpha");
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha"]);
+			dashboard.handleInput("\x1b");
+			dashboard.handleInput("\x1b");
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["beta"]);
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({
+				value: "/beta",
+				query: "/beta",
+				focused: false,
+			});
+			expect(fx.disabled).toEqual([]);
+		} finally {
+			dashboard.dispose();
+		}
+	});
+
+	test("keeps Vim search editing in normal mode after changing a status pattern", async () => {
+		const dashboard = await ExtensionDashboard.create({ runtime: fixture().runtime, terminalHeight: 30 });
+		try {
+			for (const char of "/alpha") dashboard.handleInput(char);
+			dashboard.handleInput("\x1b");
+			dashboard.handleInput("0");
+			dashboard.handleInput("x");
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "lpha", cursor: 0 });
+			dashboard.handleInput("x");
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "pha", cursor: 0, query: "" });
+			dashboard.handleInput("\x1b");
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "", focused: false });
+		} finally {
+			dashboard.dispose();
+		}
+	});
+
+	test("native row selection cancels a draft without leaving stale filtered rows", async () => {
+		const fx = fixture([extension("skill", "alpha", "native"), extension("skill", "beta", "native")]);
+		const dashboard = await ExtensionDashboard.create({ runtime: fx.runtime, terminalHeight: 30 });
+		try {
+			for (const char of "/beta") dashboard.handleInput(char);
+			const item = describedPicker(dashboard).items[0]!;
+			dashboard.handleNativeEvent({ type: "select", key: "", item: item.id, mods: [] });
+			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha", "beta"]);
+			expect(dashboard.navigationSnapshot().list.search).toMatchObject({
+				value: "",
+				query: "",
+				focused: false,
+			});
+			expect(dashboard.navigationSnapshot().list.selected).toContain("skill:beta");
+			expect(fx.disabled).toEqual([]);
+		} finally {
+			dashboard.dispose();
+		}
+	});
+
 	test("blocks history for MCP mutations but not their read-only refresh tail", async () => {
 		const server = extension("mcp", "server", "native");
 		const fx = fixture([server]);
