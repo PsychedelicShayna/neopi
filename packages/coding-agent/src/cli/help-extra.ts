@@ -6,7 +6,7 @@ export function getExtraHelpText(): string {
 	return `${chalk.bold("NeoProxy connection:")}
   ${APP_NAME} login neoproxy --url https://proxy.example.com
   Prompts for your existing administrator-assigned API key in a hidden field.
-  Discovers granted models automatically. Use /login in-session, then /model or /models.
+  Discovers granted models automatically. Use /login in-session, then /model or /roles.
   Remote servers require validated HTTPS; loopback HTTP is supported for local use.
 
 ${chalk.bold("Environment Variables:")}

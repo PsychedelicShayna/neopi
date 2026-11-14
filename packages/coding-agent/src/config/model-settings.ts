@@ -115,8 +115,8 @@ export const cfgModelsDefaultScope = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: "Models default scope",
-		description: "Scope edited by /models without an explicit session, project, or global argument",
+		label: "Roles default scope",
+		description: "Scope edited by /roles without an explicit session, project, or global argument",
 		options: [
 			{ value: "session", label: "Session", description: "Only this conversation" },
 			{ value: "project", label: "Project", description: "This project's configuration" },

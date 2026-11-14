@@ -15,6 +15,10 @@ Package-specific references:
 - [MCP server/tool authoring](../../docs/mcp-server-tool-authoring.md)
 - [DEVELOPMENT](./DEVELOPMENT.md)
 
+## Model selection and roles
+
+`/model [selector]` uses the compact session-only picker, the same as Alt+P; an explicit selector switches directly. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` and `/switch` remain hidden aliases for `/roles` and `/model`, respectively, and appear in completion only when no visible candidates match. See [Model configuration](../../docs/models.md).
+
 ## Session work contracts
 
 `/contract` manages operational clauses for the current session. No clauses or agent permissions are enabled by default. Active clauses are stored in the session journal and injected in a reserved system-prompt block on each provider request, including continuations and mixture members. Compaction and resume retain them; `/new` starts empty. They do not replace sticky `RULES.md` or assignment tracking.

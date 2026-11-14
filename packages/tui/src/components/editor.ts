@@ -2513,7 +2513,7 @@ export class Editor implements Component, Focusable {
 					// immediately after applying, so only a real command may be completed here, and
 					// only one whose name matches: a description-only hit would run an unrelated command.
 					const selected = syncResult?.items.find(item => item.value !== SKILL_NAMESPACE);
-					if (syncResult && selected && !selected.descriptionMatch) {
+					if (syncResult && selected && !selected.descriptionMatch && !selected.preserveInputOnSubmit) {
 						// Invalidate any pending async autocomplete so its stale results are discarded
 						this.#autocompleteRequestId += 1;
 						// Apply the best match and submit the completed command
@@ -5917,7 +5917,8 @@ export class Editor implements Component, Focusable {
 	): void {
 		this.#autocompletePrefix = suggestions.prefix;
 		this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
-		this.#enterAcceptsSelection = !suggestions.items[0]?.descriptionMatch;
+		this.#enterAcceptsSelection =
+			!suggestions.items[0]?.descriptionMatch && !suggestions.items[0]?.preserveInputOnSubmit;
 		this.#autocompleteState = state;
 		this.onAutocompleteUpdate?.();
 	}
