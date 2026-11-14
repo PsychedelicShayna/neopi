@@ -83,6 +83,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Chaining",
 		"Control",
 		"Agent monitor",
+		"Settings",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
 	memory: ["General", "Chronicler", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
@@ -101,7 +102,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Extensions",
 		"Developer",
 	],
-	tasks: ["Modes", "Subagents", "Messaging", "Isolation", "Commands & Skills"],
+	tasks: ["Modes", "Subagents", "Agent Definitions", "Messaging", "Isolation", "Commands & Skills"],
 	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Timeouts", "Privacy"],
 };
 
