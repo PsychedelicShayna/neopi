@@ -34,6 +34,7 @@ import {
 	saveWatchdogConfigFile,
 } from "../../advisor";
 import { createAdvisorGenerator } from "../../advisor/generate";
+import { createAdvisorActivationSetSource } from "../../advisor/activation-config";
 import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
@@ -1082,6 +1083,7 @@ export class SelectorController {
 					: undefined,
 			};
 			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				activationSets: createAdvisorActivationSetSource(this.ctx.settings, { cwd, agentDir, sessionDir }),
 				copyPrompt: copyToClipboard,
 				generateAdvisor: (bases, comment, signal) => generator.generate(bases, comment, signal),
 				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),

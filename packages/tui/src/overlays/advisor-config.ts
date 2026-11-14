@@ -171,6 +171,8 @@ export interface AdvisorConfigCallbacks {
 	/** Sources available to copy and generation pickers, including absent scope files. */
 	getSources?: () => Promise<readonly { path: string; scope: AdvisorConfigScope; doc: WatchdogConfigDoc }[]>;
 	generateAdvisor?: (bases: readonly AdvisorConfig[], comment: string, signal: AbortSignal) => Promise<AdvisorConfig>;
+	/** Open the active role's activation set without discarding this file's draft. */
+	editActivationSet?: () => Promise<void>;
 }
 
 export interface AdvisorConfigDeps {
@@ -189,6 +191,7 @@ export interface AdvisorConfigDeps {
 	filePath?: string;
 	/** Resolved files edited by each scope, including WATCHDOG.yaml when present. */
 	configFiles?: Partial<Record<AdvisorConfigScope, string>>;
+	getActivationNote?: (advisor: AdvisorConfig) => string | undefined;
 }
 
 /**
@@ -684,7 +687,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 				{
 					id: "toggleEnabled",
 					label: "Enabled",
-					hint: "Run this advisor alongside the session.",
+					hint: this.#deps.getActivationNote?.(advisor) ?? "Run this advisor alongside the session.",
 					control: { k: "switch", on: advisor.enabled !== false },
 				},
 				{ id: "name", label: "Name", control: { k: "text", value: advisor.name } },
@@ -751,6 +754,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 					control: { k: "action", label: "Edit…", act: "edit" },
 				},
 			];
+			if (this.#cb.editActivationSet)
+				rows.push({
+					id: "activationSet",
+					label: "Role activation set",
+					hint:
+						this.#deps.getActivationNote?.(advisor) ??
+						"Edit role membership; a role set replaces individual switches.",
+					control: { k: "action", label: "Edit role set…", act: "edit" },
+				});
 			rows.push({ id: "duplicate", label: "Duplicate advisor", control: { k: "action", label: "Duplicate", act: "edit" } });
 			if (this.#cb.copyAdvisor && this.#cb.getSources)
 				rows.push({ id: "copy", label: "Copy to another scope", control: { k: "action", label: "Choose file…", act: "edit" } });
@@ -1469,10 +1481,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
 		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		const syncBacklog = this.#syncBacklogLabel(advisor);
+		const activationNote = this.#deps.getActivationNote?.(advisor);
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
 			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
+			...(activationNote ? [activationNote] : []),
 			`${theme.fg("dim", "Read primary reasoning stream:")} ${advisor.includeThinking === false ? "○ off" : "● on"}`,
 			`${theme.fg("dim", "Model:")} ${model}`,
 			`${theme.fg("dim", "Tools:")} ${tools}`,
@@ -1622,7 +1636,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
 			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
-			description: this.#advisorSummary(advisor),
+			description: this.#deps.getActivationNote?.(advisor) ?? this.#advisorSummary(advisor),
 		}));
 		if (this.#effectiveRoster.length > 0) {
 			items.unshift({
@@ -1812,7 +1826,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			{
 				value: "toggleEnabled",
 				label: "Enabled",
-				description: advisor.enabled === false ? "○ off" : "● on",
+				description: this.#deps.getActivationNote?.(advisor) ?? (advisor.enabled === false ? "○ off" : "● on"),
 			},
 			{
 				value: "toggleIncludeThinking",
@@ -1828,6 +1842,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 				description: this.#syncBacklogLabel(advisor),
 			},
 		];
+		if (this.#cb.editActivationSet)
+			items.push({
+				value: "activationSet",
+				label: "Role activation set",
+				description: this.#deps.getActivationNote?.(advisor) ?? "Edit role membership",
+			});
 		if (advisor.model?.trim()) {
 			items.push({ value: "resetModel", label: "Reset model to advisor-role default" });
 		}
@@ -1916,6 +1936,9 @@ export class AdvisorConfigOverlayComponent implements Component {
 		// Editors opened straight from the prefs page edit this advisor too.
 		this.#detailIndex = index;
 		switch (field) {
+			case "activationSet":
+				void this.#cb.editActivationSet?.().catch(error => this.#cb.notify(String(error)));
+				return;
 			case "duplicate":
 				this.#cloneAdvisor(index);
 				return;
@@ -2396,6 +2419,15 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#viewRevision++;
 		this.#generationAbort?.abort();
 		this.#keys.reset();
+	}
+
+	/** Rebuild labels after a nested role editor, preserving this file's unsaved draft. */
+	refreshActivationNotes(pendingApply = false): void {
+		if (pendingApply) this.#pendingApply = true;
+		const selected = this.#active instanceof SelectList ? this.#active.getSelectedItem()?.value : undefined;
+		if (this.#screen === "detail") this.#showDetail(this.#detailIndex, selected);
+		else if (this.#screen === "list") this.#showList(selected);
+		this.#cb.requestRender();
 	}
 
 	get blocksMenuHistory(): boolean {

@@ -357,7 +357,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		await Bun.write(file, source);
 		const loaded = await loadWatchdogConfigFile(file);
 		for (const advisor of loaded.advisors) advisor.enabled = false;
-		await saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true });
+		await saveWatchdogConfigFile(file, loaded, { advisorField: "enabled" });
 		const saved = await Bun.file(file).text();
 		expect(YAML.parse(saved)).toEqual({
 			future: "retained",
@@ -385,7 +385,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		);
 		const loaded = await loadWatchdogConfigFile(file);
 		for (const advisor of loaded.advisors) advisor.enabled = false;
-		await saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true });
+		await saveWatchdogConfigFile(file, loaded, { advisorField: "enabled" });
 		expect(YAML.parse(await Bun.file(file).text())).toEqual({
 			template: { name: "Review", enabled: true },
 			advisors: [
@@ -402,7 +402,7 @@ describe("WATCHDOG.yml file round-trip", () => {
 		for (const advisor of loaded.advisors) advisor.enabled = false;
 		const changed = "advisors:\n  - id: a\n    name: First\n  - id: b\n    name: Second\n    enabled: true\n";
 		await Bun.write(file, changed);
-		await expect(saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true })).rejects.toThrow("reload");
+		await expect(saveWatchdogConfigFile(file, loaded, { advisorField: "enabled" })).rejects.toThrow("reload");
 		expect(await Bun.file(file).text()).toBe(changed);
 	});
 
