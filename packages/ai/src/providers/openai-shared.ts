@@ -387,10 +387,18 @@ export function resolveOpenAIRequestSetup(
 export function applyOpenAIServiceTier(
 	params: { service_tier?: ServiceTier | null | undefined },
 	serviceTier: ServiceTier | null | undefined,
-	model: Pick<Model, "provider" | "api" | "identity"> & Partial<Pick<Model, "serviceTiers">>,
+	model: Pick<Model, "provider" | "api" | "identity"> & Partial<Pick<Model, "serviceTiers" | "codexVariant">>,
 ): void {
-	if (!shouldSendServiceTier(serviceTier, model)) return;
-	params.service_tier = serviceTier;
+	if (model.codexVariant?.serviceTier === "default") {
+		delete params.service_tier;
+		return;
+	}
+	const tier = model.codexVariant?.serviceTier ?? serviceTier;
+	if (!shouldSendServiceTier(tier, model)) {
+		if (model.codexVariant) throw new Error(`Codex variant requires unavailable service tier: ${tier}`);
+		return;
+	}
+	params.service_tier = tier;
 }
 
 /**

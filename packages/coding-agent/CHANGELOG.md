@@ -12,6 +12,7 @@
 
 ### Added
 
+- Select supported Codex Fast, Ultra, and extended-context profiles with ordinary model slugs in CLI selections, roles, advisors, tasks, and web search without changing other assignments ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
 - Slash commands and Settings distinguish nightly-only NeoPi additions with moons, published stable additions with purple stars, and the newest and previous upstream sync ranges with gold and silver stars.
 - Recover NeoPi independently of normal startup with `npi update stable|nightly`, verified platform-specific GitHub releases and retained previous binaries. POSIX replacement is atomic; Windows uses journalled recoverable replacement with an independent PowerShell recovery helper (real Windows verification remains pending). Repurposed update-channel and automatic-update settings follow NeoPi stable/nightly releases; rollback has a cumulative cursor, a cross-profile auto-update hold, and explicit confirmation before losing the recovery command on an older release.
 - Slash commands and Settings mark NeoPi additions with a crescent: purple for nightly-only features, original green for features in the latest published stable release; gold and silver stars mark the newest and previous upstream sync ranges, while every older range remains bronze.

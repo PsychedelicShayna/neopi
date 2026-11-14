@@ -39,6 +39,7 @@ import {
 	type ModelManagerOptions,
 	type ModelRefreshStrategy,
 } from "@oh-my-pi/pi-catalog/model-manager";
+import { expandCodexVariants } from "@oh-my-pi/pi-catalog/model-variants";
 import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import {
 	googleAntigravityModelManagerOptions,
@@ -517,7 +518,8 @@ export class ModelRegistry {
 		for (let index = 0; index < measured.length; index++) {
 			this.#carryStandardWindow(models[index], measured[index]);
 		}
-		const finalized = this.#orderImplicitProvidersLast(measured);
+		const variants = expandCodexVariants(measured, model => this.#windowTiers.get(contextWindowKey(model)));
+		const finalized = this.#orderImplicitProvidersLast(variants);
 		return finalized;
 	}
 
@@ -3506,6 +3508,7 @@ export class ModelRegistry {
 	 * Returns `model` itself when it already has that window.
 	 */
 	fitContextWindow(model: Model<Api>, scope: Settings): Model<Api> {
+		if (model.codexVariant) return model;
 		const tiers = this.contextWindowTiers(model);
 		if (!tiers || (model.contextWindow !== tiers.standard && model.contextWindow !== tiers.extended)) return model;
 		const window =
