@@ -3160,6 +3160,7 @@ export class ModelHubComponent implements Component {
 			this.#browser.setQuery("");
 			this.#browser.selectSelector(selector);
 		}
+		this.#focus = "list";
 		this.#requestRender();
 	}
 
