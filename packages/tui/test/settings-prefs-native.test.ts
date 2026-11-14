@@ -368,6 +368,22 @@ describe("settings as a native prefs page", () => {
 				const { selector, values, changes } = harness(
 					{},
 					{
+						// SelectList offers search only for an overflowing choice list.
+						entries: ENTRIES.map(entry =>
+							entry.path === "edit.mode"
+								? {
+										...entry,
+										enumValues: [
+											...entry.enumValues!,
+											"custom-1",
+											"custom-2",
+											"custom-3",
+											"custom-4",
+											"custom-5",
+										],
+									}
+								: entry,
+						),
 						onCancel: () => {
 							closed++;
 						},
