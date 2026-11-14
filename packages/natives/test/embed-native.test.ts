@@ -136,11 +136,15 @@ describe("native addon embedding", () => {
 				const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
 					.filter(filename => filename.endsWith(".node"))
 					.sort();
+				const expectedVariants = variant === "modern" ? ["modern", "baseline"] : ["baseline"];
 				expect(extracted).toEqual(
-					(variant === "modern"
-						? [`pi_natives.${tag}-modern.node`, `pi_natives.${tag}-baseline.node`]
-						: [`pi_natives.${tag}-baseline.node`]
-					).sort(),
+					expectedVariants
+						.map(selected => {
+							const contents = `fake ${selected} PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`;
+							const hash = Bun.CryptoHasher.hash("sha256", contents, "hex").slice(0, 16);
+							return `pi_natives.${tag}-${selected}.${hash}.node`;
+						})
+						.sort(),
 				);
 			}
 		} finally {

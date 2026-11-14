@@ -125,7 +125,9 @@ describe("WelcomeComponent", () => {
 		for (const width of [80, 38, 30]) {
 			const rows = welcome.render(width).map(line => Bun.stripANSI(line));
 			headers.set(width, rows[0] ?? "");
-			expect(rows.slice(1)).toEqual(baselines.get(width)?.slice(1));
+			const baseline = baselines.get(width);
+			if (!baseline) throw new Error(`missing classic welcome baseline at width ${width}`);
+			expect(rows.slice(1)).toEqual(baseline.slice(1));
 			for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
 		}
 		const full = headers.get(80)!;

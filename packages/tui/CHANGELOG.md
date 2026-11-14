@@ -57,6 +57,9 @@
 - Hidden command aliases such as `/models` reveal with their descriptions after visible name prefixes run out, even when fuzzy candidates remain.
 - The startup model-switching tip names `/model`, and the agent model picker points to `/roles` for provider configuration.
 
+- Ask dialogs account for wrapped action hints when sizing questions and review tabs, keeping expanded headers within the terminal height cap.
+- Session pickers reserve wrapped footer rows before laying out the list, keeping the selected session visible in narrow terminals.
+- Settings and Agent Definitions controls appear in their registered interaction and task tab groups.
 - Role activation-set save notices acknowledge automatic WATCHDOG reloads in normal main sessions and direct manual reloads back to advisor configuration ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - `/advisor configure` bulk enable, disable, and invert affect only advisor entries in the selected scope, leaving whole-file switches unchanged ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
 
