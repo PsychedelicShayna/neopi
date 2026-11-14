@@ -49,6 +49,8 @@
 
 ### Fixed
 
+- `/advisor configure` bulk enable, disable, and invert affect only advisor entries in the selected scope, leaving whole-file switches unchanged ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
+
 - Native Close leaves a focused search field in one action even with Vim editing enabled, and settings history keeps unconfirmed search drafts separate from saved patterns.
 - Model hub Roles searches show only matching fallback entries while retaining their parent headers and original edit targets.
 - Settings restores its normal section headings as soon as the search pattern is empty, while Escape leaves the search field before closing Settings ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).

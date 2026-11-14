@@ -350,6 +350,62 @@ describe("WATCHDOG.yml file round-trip", () => {
 		]);
 	});
 
+	it("bulk state saves preserve legacy identities, malformed entries, file gates, and unrelated data", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const source =
+			"# Keep this roster\nfuture: retained\nenabled: false\nadvisors:\n  - name: Review\n    future: yes\n  - broken: keep\n  - name: Review\n    future: yes\n  - name: Review\n    future: yes\n";
+		await Bun.write(file, source);
+		const loaded = await loadWatchdogConfigFile(file);
+		for (const advisor of loaded.advisors) advisor.enabled = false;
+		await saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true });
+		const saved = await Bun.file(file).text();
+		expect(YAML.parse(saved)).toEqual({
+			future: "retained",
+			enabled: false,
+			advisors: [
+				{ name: "Review", future: "yes", enabled: false },
+				{ broken: "keep" },
+				{ name: "Review", future: "yes", enabled: false },
+				{ name: "Review", future: "yes", enabled: false },
+			],
+		});
+		expect(saved).toContain("# Keep this roster");
+		expect((await loadWatchdogConfigFile(file)).advisors).toEqual([
+			{ name: "Review", enabled: false },
+			{ name: "Review", enabled: false },
+			{ name: "Review", enabled: false },
+		]);
+	});
+
+	it("bulk state saves detach aliased advisors without changing their shared source", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(
+			file,
+			"template: &review\n  name: Review\n  enabled: true\nadvisors:\n  - *review\n  - *review\n",
+		);
+		const loaded = await loadWatchdogConfigFile(file);
+		for (const advisor of loaded.advisors) advisor.enabled = false;
+		await saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true });
+		expect(YAML.parse(await Bun.file(file).text())).toEqual({
+			template: { name: "Review", enabled: true },
+			advisors: [
+				{ name: "Review", enabled: false },
+				{ name: "Review", enabled: false },
+			],
+		});
+	});
+
+	it("bulk state saves reject stale targets without partially writing earlier entries", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		await Bun.write(file, "advisors:\n  - id: a\n    name: First\n  - id: b\n    name: Second\n");
+		const loaded = await loadWatchdogConfigFile(file);
+		for (const advisor of loaded.advisors) advisor.enabled = false;
+		const changed = "advisors:\n  - id: a\n    name: First\n  - id: b\n    name: Second\n    enabled: true\n";
+		await Bun.write(file, changed);
+		await expect(saveWatchdogConfigFile(file, loaded, { advisorEnabledOnly: true })).rejects.toThrow("reload");
+		expect(await Bun.file(file).text()).toBe(changed);
+	});
+
 	it("matches persisted IDs after a concurrent rename without dropping a disjoint edit", async () => {
 		const file = path.join(tmp, "WATCHDOG.yml");
 		await saveWatchdogConfigFile(file, { advisors: [{ name: "Review" }] });
