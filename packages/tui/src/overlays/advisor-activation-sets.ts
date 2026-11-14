@@ -199,7 +199,7 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 			this.#discardArmed = false;
 			this.#list = this.#buildList(this.#list.navigationState());
 			this.#cb.notify(
-				`Saved ${this.#scope} role ${this.#role} advisor activation set.${assigned.length > 0 ? " New advisor IDs saved; return and press a to apply saved WATCHDOG changes." : ""}`,
+				`Saved ${this.#scope} role ${this.#role} advisor activation set.${assigned.length > 0 ? " New advisor IDs saved; normal main sessions reload WATCHDOG changes automatically. Return to advisor configuration and press a for a manual reload." : ""}`,
 			);
 		} catch (error) {
 			this.#cb.notify(`Advisor activation set: ${String(error)}`);

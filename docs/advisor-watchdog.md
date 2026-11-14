@@ -59,7 +59,7 @@ Space/Enter check and uncheck advisors; `c` creates an empty set, Backspace clea
 
 Rows show when a role set replaces an advisor's own enabled flag, when a whole-file gate still disables it, and when an ID is missing, out of scope, duplicated, or shadowed. Missing/out-of-scope references can be removed from those rows. The selected row shows its stable ID and exact source path. The per-advisor Enabled row also explains active-role overrides and links directly to the role-set editor without discarding unsaved file edits.
 
-Checkbox changes remain a draft until Save. Role settings use the normal settings persistence path. Newly assigned roster IDs are saved without applying other saved WATCHDOG edits; return and explicitly Apply (`a`) to reload the roster. The global advisor switch and whole-file gates are never changed by editing a role set.
+Checkbox changes remain a draft until Save. Role settings use the normal settings persistence path and can update the active role immediately. Assigning legacy IDs also writes `WATCHDOG.yml`: normal main-session file watching automatically rediscovers saved roster changes after its debounce, so Save is **not** an apply barrier and may reconcile other already-saved roster edits. The editor does not invoke its explicit Apply callback while saving a role set; Apply (`a`) remains a manual reload, including for hosts without that watcher. The global advisor switch and whole-file gates are never changed by editing a role set.
 
 The equivalent configuration in the user settings file, project's `.omp/config.yml`, or session `settings.yml` is:
 
@@ -460,13 +460,27 @@ A continuation an advisor delivery itself starts — a steer while the primary i
 
 ### Discovery locations
 
-`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user and project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root, or the home directory when no repo root is found. All discovered files load together. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
+`WATCHDOG.yml`/`WATCHDOG.yaml` have **four storage scopes**, exposed separately by `/advisor configure`:
 
-For compatibility, a `$HOME/WATCHDOG.yml` or `$HOME/.omp/WATCHDOG.yml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
+| Scope label | Source files | Stored source scope |
+| --- | --- | --- |
+| User | `<active agent dir>/WATCHDOG.yml` or `WATCHDOG.yaml` | `user` |
+| Project root | Standalone `WATCHDOG.yml`/`WATCHDOG.yaml` in the project/ancestor walk | `project` |
+| Project .omp | `.omp/WATCHDOG.yml`/`.omp/WATCHDOG.yaml` in the same ancestor walk | `project-omp` |
+| Session | `<current transcript artifact dir>/WATCHDOG.yml` or `WATCHDOG.yaml` | `session` |
+
+The user/project search reuses the `WATCHDOG.md` ancestor walk from `cwd` up to the repository root, or the home directory when no repository root exists. Session roster sources are appended afterward, so their matching IDs or legacy names override earlier files. All discovered roster files are listed, including disabled files and multiple ancestors in the same storage scope; editing targets the exact selected path. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
+
+Storage scope is separate from `advisors[].scope` (`main`, `subagent`, `all`), which controls which session kinds an advisor watches. It is also separate from [role-set persistence](#role-activation-sets): User, Project .omp, and Session have role settings, while project-root WATCHDOG is only a roster source. A shared discovery helper may call both project locations “project”; that coarse loader level is not the advisor editor's storage-scope vocabulary.
+
+Bulk enable/disable/invert changes only explicit advisor flags within the selected storage scope; it never flips a whole-file gate or touches another scope. Space remains the explicit per-file switch. An implicit default with no advisor row has no per-entry flag to change.
+
+For compatibility, a `$HOME/WATCHDOG.yml` found by the ancestor walk has `project` storage scope, while `$HOME/.omp/WATCHDOG.yml` has `project-omp`; neither becomes a User source merely because it is beneath `$HOME`. They apply to non-repository sessions beneath home. Inside a repository, the walk stops at its root and does not reach home unless home itself is that root. User scope specifically means the active agent directory. These labels do not change which rosters load.
 
 The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed YAML leaves the previous live roster running, with a logged warning, until a subsequent valid edit.
 
 At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win identity collisions; top-level instructions still concatenate.
+
 ## Subagents
 
 Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:
