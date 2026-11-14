@@ -240,7 +240,7 @@ export interface ModelHubRegistry extends ModelBrowserRegistry {
 		  }
 		| undefined;
 	find(provider: string, id: string): Model | undefined;
-	refresh(strategy: "online" | "offline"): Promise<void>;
+	refresh(strategy: "online" | "offline", options?: { refreshCommandCredentials?: boolean }): Promise<void>;
 	refreshProvider(
 		provider: string,
 		strategy: "online",
@@ -558,7 +558,6 @@ const MODEL_KIND_LABELS: Record<"all" | ModelKind, string> = {
 	video: "Video",
 };
 
-const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
 /** Accepted compaction limit input, shown beside the field: a scaled base, a fixed trigger, or a percentage. */
 const COMPACTION_INPUT_HINT = "400k base · f400k fixed · 80% · empty resets";
@@ -645,6 +644,7 @@ export class ModelHubComponent implements Component {
 	readonly #taskSelector: string | undefined;
 
 	#browser: ModelBrowser;
+	#catalogModels: ReadonlyArray<Model> = [];
 	#roles: RoleAssignments = {};
 	#availableItems: ModelBrowserItem[] = [];
 	#recentItems: ModelBrowserItem[] = [];
@@ -778,9 +778,11 @@ export class ModelHubComponent implements Component {
 	/** Per-provider fuzzy match counts while a query is active; null when not searching. */
 	#searchCounts: Map<string, number> | null = null;
 
-	// Provider discovery refresh (debounced per sidebar selection, with spinner).
+	// Provider discovery refresh, queued off the input stack, with spinner.
 	#refreshingProviders = new Set<string>();
 	#scheduledProviderRefreshes = new Map<string, Timer>();
+	#scheduledCatalogRefresh?: Timer;
+	#refreshingAllProviders = false;
 	/** F5 while a catalog-only refresh is in flight: re-run with credentials after it settles. */
 	#pendingCredentialRefreshProviders = new Set<string>();
 	#refreshSpinnerFrame = 0;
@@ -837,8 +839,6 @@ export class ModelHubComponent implements Component {
 	#nativeVersion = 0;
 	#nativeCache: { version: number; picker: boolean; node: NativeNode } | undefined;
 	#currentSelector: string | undefined;
-	/** The opening online catalog refresh is still in flight (an empty scope then shows as loading). */
-	#catalogRefreshing = false;
 	#kindTabsMemo: { candidates: readonly ModelBrowserItem[]; tabs: TspPickerProps["tabs"] } | undefined;
 	#pickerRoleItems:
 		| {
@@ -903,24 +903,8 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry(this.#sessionOnly ? "recent" : "all");
 		}
 
-		// Reconcile catalogs in the background. This is online discovery only —
-		// it must not re-run `!command` credential helpers (F5 / `npi models
-		// refresh` passes refreshCommandCredentials for that). A --models scope is
-		// registry-independent, so the reload would only repeat the hydration
-		// above.
-		if (this.#scopedModels.length === 0) {
-			this.#catalogRefreshing = true;
-			this.#registry
-				.refresh("online")
-				.then(() => this.#afterRegistryRefresh())
-				.catch(error => {
-					this.#configError = error instanceof Error ? error.message : String(error);
-				})
-				.finally(() => {
-					this.#catalogRefreshing = false;
-					this.#requestRender();
-				});
-		}
+		// Opening and highlighting are cache-only. Discovery starts on explicit
+		// provider entry, F5 (current provider), or Ctrl+F5 (all providers).
 	}
 
 	#copyStrip(strip: StripState | null): StripState | null {
@@ -1112,6 +1096,8 @@ export class ModelHubComponent implements Component {
 		this.#disposed = true;
 		for (const [, timer] of this.#scheduledProviderRefreshes) clearTimeout(timer);
 		this.#scheduledProviderRefreshes.clear();
+		clearTimeout(this.#scheduledCatalogRefresh);
+		this.#scheduledCatalogRefresh = undefined;
 		this.#refreshingProviders.clear();
 		this.#pendingCredentialRefreshProviders.clear();
 		if (this.#refreshSpinnerInterval) {
@@ -1141,7 +1127,7 @@ export class ModelHubComponent implements Component {
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
 	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
-		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll("all");
+		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#catalogModels;
 		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
@@ -1178,6 +1164,7 @@ export class ModelHubComponent implements Component {
 				availableModels = [];
 			}
 		}
+		this.#catalogModels = allModels;
 
 		this.#reloadRoles(availableModels);
 		this.#buildRolesRows();
@@ -1412,14 +1399,13 @@ export class ModelHubComponent implements Component {
 		// navigation active. Diving into the roles rows is explicit (Enter, →,
 		// or a click on the Roles entry).
 		this.#focus = "scope";
-		if (
-			entry.kind === "provider" &&
-			!entry.locked &&
-			!this.#pinnedProviders.some(pinned => pinned.id === entry.providerId)
-		) {
+	}
+
+	/** Entering, not highlighting, is the discovery boundary for a provider. */
+	#enterProvider(): void {
+		const entry = this.#activeEntry();
+		if (entry.kind === "provider" && !entry.locked && !this.#pinnedProviders.some(p => p.id === entry.providerId))
 			this.#scheduleProviderRefresh(entry.providerId ?? "");
-		}
-		this.#cancelScheduledRefreshesExcept(entry.kind === "provider" ? entry.providerId : undefined);
 	}
 
 	/** Push the active scope's items into the browser. */
@@ -1708,18 +1694,6 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	#cancelScheduledRefreshesExcept(keepProviderId?: string): void {
-		// Hover debounce only. An explicit F5 queued behind an in-flight catalog
-		// fetch must still re-mint credentials after that fetch settles, even if
-		// the user has moved to All models or another provider.
-		for (const [providerId, timer] of this.#scheduledProviderRefreshes) {
-			if (providerId === keepProviderId) continue;
-			clearTimeout(timer);
-			this.#scheduledProviderRefreshes.delete(providerId);
-			this.#setProviderRefreshing(providerId, false);
-		}
-	}
-
 	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
 		if (this.#scopedModels.length > 0 || !providerId) return;
 		const force = options?.force === true;
@@ -1730,35 +1704,34 @@ export class ModelHubComponent implements Component {
 				// instead of returning at the pending-guard and dropping force.
 				clearTimeout(pending);
 				this.#scheduledProviderRefreshes.delete(providerId);
-				autoRefreshedProviders.add(providerId);
-				void this.#refreshProviderInBackground(providerId, true);
-				return;
 			}
-			if (this.#refreshingProviders.has(providerId)) {
+			if (!pending && this.#refreshingProviders.has(providerId)) {
 				this.#pendingCredentialRefreshProviders.add(providerId);
 				return;
 			}
 		} else if (this.#scheduledProviderRefreshes.has(providerId) || this.#refreshingProviders.has(providerId)) {
 			return;
 		}
-		// Hovering a provider must not re-fetch on every visit: auto-refresh runs
-		// at most once per provider for the process lifetime. F5 forces a re-fetch.
+		// Explicit provider entry auto-refreshes at most once per process.
+		// F5 always forces a re-fetch; queue it off the key-input stack.
 		if (!force && autoRefreshedProviders.has(providerId)) return;
 		this.#setProviderRefreshing(providerId, true);
 		const timer = setTimeout(() => {
-			// Consume the once-guard only when the fetch actually starts: hopping
-			// through a provider cancels the debounce and must not burn its slot.
+			// Consume the once-guard only when the queued fetch starts.
 			autoRefreshedProviders.add(providerId);
 			this.#scheduledProviderRefreshes.delete(providerId);
 			void this.#refreshProviderInBackground(providerId, force);
-		}, PROVIDER_REFRESH_DEBOUNCE_MS);
+		}, 0);
 		this.#scheduledProviderRefreshes.set(providerId, timer);
 	}
 
 	async #afterRegistryRefresh(providerId?: string): Promise<void> {
+		// An all-provider pass publishes one complete snapshot, not one full
+		// catalog rebuild for every provider that happens to finish along the way.
+		if (this.#disposed || (providerId !== undefined && this.#refreshingAllProviders)) return;
 		const scope = await this.#callbacks.onCatalogRefreshed?.(providerId);
 		if (scope) this.#scopedModels = scope;
-		this.#syncFromRegistryState();
+		if (!this.#disposed) this.#syncFromRegistryState();
 	}
 
 	async #refreshProviderInBackground(providerId: string, refreshCommandCredentials = false): Promise<void> {
@@ -1774,13 +1747,52 @@ export class ModelHubComponent implements Component {
 		} catch (error) {
 			this.#configError = error instanceof Error ? error.message : String(error);
 		} finally {
-			this.#setProviderRefreshing(providerId, false);
-			if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
-				this.#setProviderRefreshing(providerId, true);
-				autoRefreshedProviders.add(providerId);
-				void this.#refreshProviderInBackground(providerId, true);
+			if (!this.#refreshingAllProviders) {
+				this.#setProviderRefreshing(providerId, false);
+				if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
+					this.#setProviderRefreshing(providerId, true);
+					autoRefreshedProviders.add(providerId);
+					void this.#refreshProviderInBackground(providerId, true);
+				}
 			}
 			this.#requestRender();
+		}
+	}
+
+	#refreshAllProviders(): void {
+		if (this.#scopedModels.length > 0 || this.#refreshingAllProviders || this.#disposed) return;
+		const providerIds = this.#entries.flatMap(entry =>
+			entry.kind === "provider" && !entry.locked && !this.#pinnedProviders.some(p => p.id === entry.providerId)
+				? [entry.providerId ?? ""]
+				: [],
+		);
+		if (providerIds.length === 0) return;
+		this.#refreshingAllProviders = true;
+		for (const timer of this.#scheduledProviderRefreshes.values()) clearTimeout(timer);
+		this.#scheduledProviderRefreshes.clear();
+		for (const providerId of providerIds) this.#setProviderRefreshing(providerId, true);
+		this.#scheduledCatalogRefresh = setTimeout(() => {
+			this.#scheduledCatalogRefresh = undefined;
+			void this.#refreshCatalogInBackground(providerIds);
+		}, 0);
+	}
+
+	async #refreshCatalogInBackground(providerIds: readonly string[]): Promise<void> {
+		for (const providerId of providerIds) autoRefreshedProviders.add(providerId);
+		try {
+			await this.#registry.refresh("online", { refreshCommandCredentials: true });
+			await this.#afterRegistryRefresh();
+		} catch (error) {
+			this.#configError = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#refreshingAllProviders = false;
+			for (const providerId of providerIds) {
+				this.#setProviderRefreshing(providerId, false);
+				if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
+					this.#scheduleProviderRefresh(providerId, { force: true });
+				}
+			}
+			if (!this.#disposed) this.#requestRender();
 		}
 	}
 
@@ -3340,6 +3352,11 @@ export class ModelHubComponent implements Component {
 		}
 		if (action?.kind === "context") {
 			this.#focus = this.#focus === "scope" ? "list" : "scope";
+			if (this.#focus === "list") this.#enterProvider();
+			return;
+		}
+		if (matchesKey(data, "ctrl+f5")) {
+			this.#refreshAllProviders();
 			return;
 		}
 		if (matchesKey(data, "f5")) {
@@ -3379,7 +3396,10 @@ export class ModelHubComponent implements Component {
 
 		if (action?.kind === "horizontal") {
 			if (action.delta < 0) this.#focus = "scope";
-			else if (rolesView || effortView || this.#isBrowserView(entry)) this.#focus = "list";
+			else if (rolesView || effortView || this.#isBrowserView(entry)) {
+				this.#focus = "list";
+				this.#enterProvider();
+			}
 			return;
 		}
 		if (action && (this.#focus === "scope" || rolesView || effortView) && this.#applyPanelMotion(action)) return;
@@ -3445,6 +3465,7 @@ export class ModelHubComponent implements Component {
 		// rows instead of acting on a row the user cannot see is selected.
 		if (this.#focus === "scope" && (action?.kind === "confirm" || action?.kind === "toggle")) {
 			this.#focus = "list";
+			this.#enterProvider();
 			if (pinned && !this.#browser.getSelected()) this.#pinnedActionFocused = true;
 			return;
 		}
@@ -3993,6 +4014,7 @@ export class ModelHubComponent implements Component {
 		const already = clicked.id === this.#activeEntryId;
 		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#assigning = null;
 		this.#setActiveEntry(clicked.id);
+		if (clicked.kind === "provider") this.#enterProvider();
 		// A click on settings deliberately dives into its rows.
 		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#focus = "list";
 		if (already && clicked.kind === "provider" && clicked.locked) {
@@ -4403,7 +4425,7 @@ export class ModelHubComponent implements Component {
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
 			lines.push(truncateToWidth(theme.fg("dim", `  ${catalogCount} models in catalog:`), width));
-			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
+			const preview = this.#scopedModels.length > 0 ? [] : this.#catalogModels;
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
 				if (lines.length >= rows) break;
@@ -4418,6 +4440,10 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		const configFile = !this.#sessionOnly && this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : "";
 		if (entry.kind === "overrides" && this.#assigning === null) return `${this.#overrides().hint}${configFile}`;
+		const refreshHint =
+			this.#scopedModels.length === 0 && !this.#strip && !this.#filterEditing
+				? `${entry.kind === "provider" && !entry.locked ? " · F5 refresh" : ""} · Ctrl+F5 refresh all`
+				: "";
 		const facts =
 			!this.#sessionOnly && this.#callbacks.onEditFacts && this.#assigning === null
 				? ` · ${formatKeyHint("f6")} model facts`
@@ -4430,10 +4456,10 @@ export class ModelHubComponent implements Component {
 			this.#isBrowserView(entry) &&
 			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
 		)
-			return `${MODEL_SCOPE_HINT}${facts}${configFile}`;
+			return `${MODEL_SCOPE_HINT}${refreshHint}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `/ search · ${detail}${facts}${configFile}`;
+		return `/ search · ${detail}${refreshHint}${facts}${configFile}`;
 	}
 
 	#surfaceFooterHint(): string {
@@ -5156,7 +5182,7 @@ export class ModelHubComponent implements Component {
 		}
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
-			const models = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
+			const models = this.#scopedModels.length > 0 ? [] : this.#catalogModels;
 			const items: NativeNode[] = [];
 			for (const model of models) {
 				if (model.provider !== entry.providerId) continue;
@@ -5313,9 +5339,7 @@ export class ModelHubComponent implements Component {
 			providers: entry.kind === "all" && query.length === 0,
 			rest: entry.kind === "provider" ? entry.label : query ? "Matches" : "All models",
 		});
-		const refreshing =
-			this.#catalogRefreshing ||
-			(entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? ""));
+		const refreshing = entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? "");
 		const state =
 			view.count > 0 || query
 				? "ready"
@@ -5574,7 +5598,13 @@ export class ModelHubComponent implements Component {
 				? pickerAction("modelFacts", "Model facts", "f6")
 				: undefined;
 		const refresh =
-			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
+			this.#scopedModels.length > 0
+				? undefined
+				: entry.kind === "provider" && !entry.locked
+					? pickerAction("refresh", "Refresh provider", "f5")
+					: undefined;
+		const refreshAll =
+			this.#scopedModels.length > 0 ? undefined : pickerAction("refreshAll", "Refresh all", "ctrl+f5");
 		if (this.#assigning !== null) {
 			const label =
 				this.#assigning.kind === "fallback"
@@ -5584,7 +5614,7 @@ export class ModelHubComponent implements Component {
 						: this.#assigning.kind === "effortRule"
 							? "Pick rule model"
 							: "Assign";
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel]);
+			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, refreshAll, cancel]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -5672,6 +5702,7 @@ export class ModelHubComponent implements Component {
 					})
 				: undefined,
 			refresh,
+			refreshAll,
 			facts,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
 			cancel,
@@ -5997,7 +6028,7 @@ export class ModelHubComponent implements Component {
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0 && this.#scopedModels.length === 0) {
 			const ids: string[] = [];
-			for (const model of this.#registry.getAll("all")) {
+			for (const model of this.#catalogModels) {
 				if (model.provider === entry.providerId) ids.push(`- \`${model.id}\``);
 			}
 			children.push(node("section", { head: `${catalogCount} models in catalog` }, [md(ids.join("\n"))]));
@@ -6063,6 +6094,9 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		switch (act) {
+			case "refreshAll":
+				this.#refreshAllProviders();
+				return;
 			case "task":
 				this.#toggleTaskMode();
 				return;

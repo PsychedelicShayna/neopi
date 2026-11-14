@@ -336,6 +336,7 @@ export class ModelRegistry {
 	 */
 	#baseModels: Model<Api>[] = [];
 	#hasFullSnapshot = false;
+	#staticCompositionRevision = 0;
 	#cachedStandardModelsByProvider: Map<string, Model<Api>[]> = new Map();
 	#pendingStandardCacheProviders: Set<string> = new Set();
 	#cachedDiscoverableModels: Model<Api>[] = [];
@@ -407,7 +408,7 @@ export class ModelRegistry {
 	get modelConfig(): ModelConfigEditor {
 		return (this.#modelConfigEditor ??= new ModelConfigEditor(this.#modelsConfigFile));
 	}
-	#lastStaticLoadMtime: number | null = null;
+	#lastStaticLoadMtime: number | null | undefined;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -614,7 +615,9 @@ export class ModelRegistry {
 		if (options?.refreshCommandCredentials) {
 			if (providerId) this.#invalidateProviderCommandConfigs(providerId);
 			else this.#invalidateAllCommandConfigs();
-			this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
+			// Re-mint command results without discarding the warm catalog.
+			// A changed models.yml still reloads and preserves live discoveries.
+			this.#reloadStaticModels({ preserveRuntimeDiscovery: true });
 			return;
 		}
 		this.#reloadStaticModels();
@@ -959,7 +962,7 @@ export class ModelRegistry {
 
 	async #runPolicyReapply(): Promise<void> {
 		try {
-			this.#lastStaticLoadMtime = null;
+			this.#lastStaticLoadMtime = undefined;
 			await this.refresh("offline");
 		} finally {
 			this.#policyReapply = undefined;
@@ -1271,7 +1274,7 @@ export class ModelRegistry {
 	#reloadStaticModels(options?: { force?: boolean; preserveRuntimeDiscovery?: boolean }): void {
 		const currentMtime = this.#modelsConfigFile.getMtimeMs();
 		const staticConfigUnchanged = currentMtime === this.#lastStaticLoadMtime;
-		if (!options?.force && currentMtime !== null && staticConfigUnchanged) {
+		if (!options?.force && staticConfigUnchanged) {
 			// Models config unchanged since last load; reloading would be redundant.
 			return;
 		}
@@ -1435,6 +1438,7 @@ export class ModelRegistry {
 	}
 
 	#resetStaticComposition(): void {
+		this.#staticCompositionRevision++;
 		this.#models = [];
 		this.#unprojectedModels = [];
 		this.#baseModels = [];
@@ -2483,49 +2487,81 @@ export class ModelRegistry {
 							...(await this.#discoverProviderModelsCoalesced(provider, strategy)),
 						})),
 					);
+		const runtimeRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
 		const [configuredDiscoveryResults, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
 			this.#discoverBuiltInProviderModels(strategy, providerFilter),
 		]);
 		this.#captureCatalogMetrics(builtInDiscovery.models, providerFilter === undefined);
-		const currentDiscoverableProviders = new Set(this.#discoverableProviders);
-		const currentConfiguredDiscoveryResults = configuredDiscoveryResults.filter(result =>
-			currentDiscoverableProviders.has(result.provider),
-		);
-		const configuredDiscovered = currentConfiguredDiscoveryResults.flatMap(result => result.models);
-		const replacedConfiguredProviders = currentConfiguredDiscoveryResults.flatMap(result =>
-			result.replaceRuntimeModels ? [result.provider.provider] : [],
-		);
-		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
-		if (
-			discovered.length === 0 &&
-			builtInDiscovery.authoritativeProviders.size === 0 &&
-			builtInDiscovery.replaceRuntimeProviders.size === 0 &&
-			replacedConfiguredProviders.length === 0
-		) {
-			return;
+		let discoveredModels: Model<Api>[];
+		let replacedConfiguredProviders: string[];
+		let touchedProviders: Set<string>;
+		let builtInAuthoritativeProviders: Set<string>;
+		let builtInReplaceRuntimeProviders: Set<string>;
+		for (;;) {
+			const revision = this.#staticCompositionRevision;
+			const currentDiscoverableProviders = new Set(this.#discoverableProviders);
+			const currentConfiguredDiscoveryResults = configuredDiscoveryResults.filter(result =>
+				currentDiscoverableProviders.has(result.provider),
+			);
+			const currentRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
+			const isCurrentRegistration = (provider: string) =>
+				runtimeRegistrations.get(provider) === currentRegistrations.get(provider);
+			const builtInModels = builtInDiscovery.models.filter(model => isCurrentRegistration(model.provider));
+			builtInAuthoritativeProviders = new Set(
+				[...builtInDiscovery.authoritativeProviders].filter(isCurrentRegistration),
+			);
+			builtInReplaceRuntimeProviders = new Set(
+				[...builtInDiscovery.replaceRuntimeProviders].filter(isCurrentRegistration),
+			);
+			const configuredDiscovered = currentConfiguredDiscoveryResults.flatMap(result => result.models);
+			replacedConfiguredProviders = currentConfiguredDiscoveryResults.flatMap(result =>
+				result.replaceRuntimeModels ? [result.provider.provider] : [],
+			);
+			const discovered = [...configuredDiscovered, ...builtInModels];
+			if (
+				discovered.length === 0 &&
+				builtInAuthoritativeProviders.size === 0 &&
+				builtInReplaceRuntimeProviders.size === 0 &&
+				replacedConfiguredProviders.length === 0
+			) {
+				return;
+			}
+			touchedProviders = new Set(discovered.map(model => model.provider));
+			for (const provider of replacedConfiguredProviders) touchedProviders.add(provider);
+			for (const provider of builtInReplaceRuntimeProviders) touchedProviders.add(provider);
+			for (const provider of builtInAuthoritativeProviders) touchedProviders.add(provider);
+			const referenceModels = this.#composeDiscoveryReferenceModels(touchedProviders);
+			const merged: Model<Api>[] = [];
+			let yieldAfter = performance.now() + 4;
+			for (const model of discovered) {
+				merged.push(
+					this.#mergeDiscoveredModelMemoized(
+						model,
+						resolveProviderModelReference(model.provider, model.id, referenceModels),
+						this.#providerOverrides.get(model.provider),
+					),
+				);
+				if (performance.now() >= yieldAfter) {
+					await Bun.sleep(0);
+					if (revision !== this.#staticCompositionRevision) break;
+					yieldAfter = performance.now() + 4;
+				}
+			}
+			// Keep staged rows private while yielding. A config reload invalidates
+			// their references; unrelated provider commits do not, and the final
+			// uninterrupted merge below always starts from the latest base state.
+			if (revision !== this.#staticCompositionRevision) continue;
+			discoveredModels = this.#applyHardcodedModelPolicies(merged);
+			break;
 		}
-		const touchedProviders = new Set(discovered.map(model => model.provider));
-		for (const provider of replacedConfiguredProviders) touchedProviders.add(provider);
-		for (const provider of builtInDiscovery.replaceRuntimeProviders) touchedProviders.add(provider);
-		for (const provider of builtInDiscovery.authoritativeProviders) touchedProviders.add(provider);
-		const referenceModels = this.#composeDiscoveryReferenceModels(touchedProviders);
-		const discoveredModels = this.#applyHardcodedModelPolicies(
-			discovered.map(model =>
-				this.#mergeDiscoveredModelMemoized(
-					model,
-					resolveProviderModelReference(model.provider, model.id, referenceModels),
-					this.#providerOverrides.get(model.provider),
-				),
-			),
-		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
-		for (const provider of builtInDiscovery.authoritativeProviders) {
+		for (const provider of builtInAuthoritativeProviders) {
 			authoritativeProviders.add(provider);
 		}
 
 		const replacedProviderSet = new Set(replacedConfiguredProviders);
-		for (const provider of builtInDiscovery.replaceRuntimeProviders) {
+		for (const provider of builtInReplaceRuntimeProviders) {
 			replacedProviderSet.add(provider);
 			this.#replacedCacheProviders.add(provider);
 			this.#cachedStandardModelsByProvider.delete(provider);
@@ -4265,6 +4301,7 @@ export class ModelRegistry {
 			},
 			"runtime-register",
 		);
+		this.#staticCompositionRevision++;
 
 		if (config.streamSimple && config.api) {
 			const streamSimple = config.streamSimple;
