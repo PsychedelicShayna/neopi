@@ -196,15 +196,14 @@ function renderTemplate(template: PromptTemplate, argsString: string): string {
  */
 export function expandPromptTemplate(text: string, templates: PromptTemplate[]): string {
 	let expanded = text;
-	if (text.startsWith("/")) {
-		const spaceIndex = text.indexOf(" ");
-		const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const template = templates.find(candidate => candidate.name === templateName);
-		if (template) {
-			expanded = renderTemplate(template, spaceIndex === -1 ? "" : text.slice(spaceIndex + 1));
+	const inlineBodies: string[] = [];
+	let markerPrefix = "\uE000";
+	if (templates.length > 0 && text.includes("/prompts:")) {
+		// Hide original references from legacy argument parsing/rendering. The
+		// marker is absent from both the submitted text and every pasted body.
+		while (text.includes(markerPrefix) || templates.some(template => template.content.includes(markerPrefix))) {
+			markerPrefix += "\uE000";
 		}
-	}
-	if (templates.length > 0 && expanded.includes("/prompts:")) {
 		const names = templates
 			.map(template => RegExp.escape(template.name))
 			.sort((a, b) => b.length - a.length)
@@ -213,10 +212,24 @@ export function expandPromptTemplate(text: string, templates: PromptTemplate[]):
 			String.raw`(?<![\p{L}\p{N}_/])\/prompts:(${names})(?=$|[\s,;:!?"'\x60()[\]{}<>]|\.(?![\p{L}\p{N}_.-]))`,
 			"gu",
 		);
-		expanded = expanded.replace(references, (_token, name: string) => {
+		expanded = text.replace(references, (_token, name: string) => {
 			const template = templates.find(candidate => candidate.name === name)!;
-			return template.content;
+			inlineBodies.push(template.content);
+			return `${markerPrefix}${inlineBodies.length - 1}\uE001`;
 		});
+	}
+	// Resolve legacy commands only from original input, never pasted content.
+	if (text.startsWith("/") && !text.startsWith("/prompts:")) {
+		const spaceIndex = text.indexOf(" ");
+		const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const template = templates.find(candidate => candidate.name === templateName);
+		if (template) {
+			expanded = renderTemplate(template, spaceIndex === -1 ? "" : expanded.slice(spaceIndex + 1));
+		}
+	}
+	if (inlineBodies.length > 0) {
+		const markers = new RegExp(`${RegExp.escape(markerPrefix)}(\\d+)\uE001`, "g");
+		return expanded.replace(markers, (_token, index: string) => inlineBodies[Number(index)]!);
 	}
 	return expanded;
 }

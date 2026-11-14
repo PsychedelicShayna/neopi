@@ -352,6 +352,18 @@ describe("template expansion fallback", () => {
 		];
 		expect(expandPromptTemplate("/review this /prompts:code", templates)).toBe(`Review this ${body}`);
 	});
+
+	test("expands only original references and never interprets pasted leading commands or legacy body references", () => {
+		const templates = [
+			{ ...createPromptTemplate("/prompts:other"), name: "legacy" },
+			{ ...createPromptTemplate("/legacy should remain literal"), name: "command" },
+			{ ...createPromptTemplate("OTHER"), name: "other" },
+		];
+		expect(expandPromptTemplate("/legacy", templates)).toBe("/prompts:other");
+		expect(expandPromptTemplate("/prompts:command /prompts:other", templates)).toBe(
+			"/legacy should remain literal OTHER",
+		);
+	});
 });
 
 // ============================================================================
