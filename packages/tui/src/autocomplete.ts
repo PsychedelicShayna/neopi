@@ -88,7 +88,7 @@ export function findLeadingSlashCommandStart(text: string): number | null {
 }
 
 export function findTrailingSlashCommandStart(text: string): number | null {
-	const match = /(?:^|\s)\/([^\s/]*)$/.exec(text);
+	const match = /(?:^|[\s("'`\[{<])\/([^\s/]*)$/.exec(text);
 	if (!match || match.index === undefined) return null;
 	const slashOffset = match[0].indexOf("/");
 	return match.index + slashOffset;
@@ -423,6 +423,13 @@ function buildSlashCommandCompletions(
 			if (!name) return [];
 			const usage = commandUsage?.(name) ?? 0;
 			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+			if (
+				name.startsWith(PROMPT_NAMESPACE) &&
+				!lowerPrefix.startsWith(PROMPT_NAMESPACE) &&
+				!(lowerPrefix.length > 0 && PROMPT_NAMESPACE.startsWith(lowerPrefix))
+			) {
+				return [];
+			}
 			const staticDesc = getStaticCommandDescription(cmd);
 			let fullDescMemo: string | undefined;
 			let nativeTextMemo: Pick<AutocompleteItem, "nativeDetail" | "state"> = {};
@@ -554,6 +561,7 @@ function hasPromptTextBeforeSlash(
 }
 
 export const SKILL_NAMESPACE = "skill:";
+export const PROMPT_NAMESPACE = "prompts:";
 
 /** Exact/leading-prefix tier for ordinary command names and aliases. */
 function commandBreakoutTier(lowerPrefix: string, lowerTarget: string): number {
@@ -645,10 +653,11 @@ function collapseSkillNamespace(commands: CommandEntry[], lowerPrefix: string): 
 }
 
 /**
- * Whether a mid-prompt slash token (`prose … /tok`) is skill-shaped enough to
- * surface `name` in the skill popup. Deliberately stricter than submitted
- * slash-command matching: a stray `/word` in running prose must not keep the
- * popup alive through fuzzy name/description hits, so a token only matches as
+ * Whether a mid-prompt slash token (`prose … /tok`) matches an inline skill or
+ * prompt reference. Prompt names match only through the explicit `prompts:`
+ * namespace (or a nonempty prefix approaching it), never a bare template name.
+ * For skills, matching is deliberately stricter than leading slash-command
+ * matching: a stray `/word` must not keep the popup alive. Skill tokens match as
  * - a prefix of the `skill:` namespace (incl. the bare `/` entry point),
  * - an explicit `skill:…` query (full fuzzy name/description search), or
  * - a prefix at the start of the skill bare name or one of its hyphen-delimited
@@ -658,7 +667,13 @@ function collapseSkillNamespace(commands: CommandEntry[], lowerPrefix: string): 
  * staleness guard so Tab/Enter never accepts a skill the refreshed popup
  * would no longer show.
  */
-export function midPromptSkillTokenMatches(lowerToken: string, name: string, description?: string): boolean {
+export function midPromptInlineTokenMatches(lowerToken: string, name: string, description?: string): boolean {
+	if (name.startsWith(PROMPT_NAMESPACE)) {
+		return (
+			(lowerToken.length > 0 && PROMPT_NAMESPACE.startsWith(lowerToken)) ||
+			(lowerToken.startsWith(PROMPT_NAMESPACE) && scoreCommandTextMatch(lowerToken, name.toLowerCase()) > 0)
+		);
+	}
 	if (SKILL_NAMESPACE.startsWith(lowerToken)) return true;
 	const lowerName = name.toLowerCase();
 	if (lowerToken.startsWith(SKILL_NAMESPACE)) {
@@ -671,13 +686,13 @@ export function midPromptSkillTokenMatches(lowerToken: string, name: string, des
 	);
 }
 
-function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: string): AutocompleteItem[] {
+function buildMidPromptInlineCompletions(commands: CommandEntry[], lowerPrefix: string): AutocompleteItem[] {
 	return buildSlashCommandCompletions(
 		commands.filter(cmd => {
 			const name = getCommandName(cmd);
 			return (
-				name?.startsWith(SKILL_NAMESPACE) &&
-				midPromptSkillTokenMatches(lowerPrefix, name, getStaticCommandDescription(cmd))
+				(name?.startsWith(SKILL_NAMESPACE) || name?.startsWith(PROMPT_NAMESPACE)) &&
+				midPromptInlineTokenMatches(lowerPrefix, name, getStaticCommandDescription(cmd))
 			);
 		}),
 		lowerPrefix,
@@ -758,7 +773,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				const lowerPrefix = prefix.toLowerCase();
 
 				const matches = isMidPromptSkillLookup
-					? buildMidPromptSkillCompletions(this.#commands, lowerPrefix)
+					? buildMidPromptInlineCompletions(this.#commands, lowerPrefix)
 					: buildSlashCommandCompletions(
 							collapseSkillNamespace(this.#commands, lowerPrefix),
 							lowerPrefix,
@@ -895,19 +910,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
 		const isMidPromptSkillLookup =
-			item.value.startsWith("skill:") &&
+			(item.value.startsWith(SKILL_NAMESPACE) || item.value.startsWith(PROMPT_NAMESPACE)) &&
 			trailingSlashStart !== null &&
 			hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, trailingSlashStart) &&
 			findTrailingSlashCommandStart(prefix) !== null;
 
 		if (isMidPromptSkillLookup && trailingSlashStart !== null) {
-			// Replace ONLY the partial slash token (e.g. "/sec") at the cursor with
-			// `/skill:<name> `; the rest of the user's draft — prose typed before
-			// the slash, text after the cursor, and any other lines — is preserved.
-			// The submit-time parser (`parseSkillInvocation` in coding-agent/skills)
-			// detects the mid-prompt `/skill:<name>` token and threads the surrounding
-			// prose through as `args`, so the skill still invokes (issue #3913, after
-			// the original mid-prompt autocomplete landed in #3654 wiped the draft).
+			// Replace only the live inline skill/prompt token, preserving prose,
+			// other references, following text and all other lines in the draft.
 			const beforeSlash = currentLine.slice(0, trailingSlashStart);
 			const insert = `/${item.value} `;
 			const newLine = `${beforeSlash}${insert}${afterCursor}`;

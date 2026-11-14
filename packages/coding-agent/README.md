@@ -19,6 +19,14 @@ Package-specific references:
 
 `/model [selector]` uses the compact session-only picker, the same as Alt+P; an explicit selector switches directly. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` and `/switch` remain hidden aliases for `/roles` and `/model`, respectively, and appear in completion only when no visible candidates match. See [Model configuration](../../docs/models.md).
 
+## Inline prompt templates
+
+Use `/prompts:<name>` anywhere in a message to paste the body of a discovered prompt template, including files from `~/.omp/agent/prompts/` and project prompt directories. The composer completes prompt names after `/prompts:`. Multiple references expand in place, in the order written; repeated references paste the body again.
+
+For example, `Review this change /prompts:security then /prompts:style` includes the security prompt before the style prompt without consuming the surrounding request. Inline references paste the body literally, including quotes, indentation and placeholder syntax; inserted bodies are not recursively expanded. Unknown names remain unchanged.
+
+The existing leading `/<name> [args]` invocation still renders the template with its normal argument substitution. It remains distinct from the literal inline form.
+
 ## Session work contracts
 
 `/contract` manages operational clauses for the current session. No clauses or agent permissions are enabled by default. Active clauses are stored in the session journal and injected in a reserved system-prompt block on each provider request, including continuations and mixture members. Compaction and resume retain them; `/new` starts empty. They do not replace sticky `RULES.md` or assignment tracking.

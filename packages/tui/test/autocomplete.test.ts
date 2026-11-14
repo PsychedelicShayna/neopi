@@ -90,6 +90,22 @@ describe("CombinedAutocompleteProvider", () => {
 			]);
 		});
 
+		it("completes explicit prompt references anywhere without replacing surrounding text or earlier references", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "prompts:review", description: "Review changes" },
+				{ name: "model", description: "Switch model" },
+			]);
+			const lines = ["Earlier /prompts:review", "Now use /prompts:rev and keep this"];
+			const cursorCol = "Now use /prompts:rev".length;
+			const result = await provider.getSuggestions(lines, 1, cursorCol);
+			expect(result?.prefix).toBe("/prompts:rev");
+			expect(result?.items.map(item => item.value)).toEqual(["prompts:review"]);
+			const applied = provider.applyCompletion(lines, 1, cursorCol, result!.items[0]!, result!.prefix);
+			expect(applied.lines).toEqual(["Earlier /prompts:review", "Now use /prompts:review  and keep this"]);
+			expect(applied.cursorLine).toBe(1);
+			expect(applied.cursorCol).toBe("Now use /prompts:review ".length);
+		});
+
 		it("suggests only skill commands after prose", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[

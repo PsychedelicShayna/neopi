@@ -226,6 +226,7 @@ describe("InteractiveMode prompt-template autocomplete (#2462)", () => {
 		// Builtin `/exit` stays; the colliding template is filtered out so the picker
 		// shows a single entry rather than two `exit` rows.
 		expect(matches.filter(name => name === "exit")).toHaveLength(1);
+		expect(await fetchSlashSuggestions(provider!, "Use /prompts:exit")).toEqual(["prompts:exit"]);
 	});
 
 	it.each(["models", "switch"])("does not surface a template shadowed by hidden /%s", async alias => {
