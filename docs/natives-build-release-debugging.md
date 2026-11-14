@@ -89,6 +89,8 @@ Linux-hosted Darwin Rust links receive `SDKROOT` from `//bazel/toolchains/darwin
 
 `@crates//...` is generated from the workspace `Cargo.toml`/`Cargo.lock`, restricted to exactly the eight Bazel triples (including `aarch64-pc-windows-msvc`). Crate-specific build fixes live as `crate.annotation`s in `MODULE.bazel` (see the debugging playbook below).
 
+`crate.from_cargo.manifests` in `MODULE.bazel` must explicitly list the root manifest and every `[workspace].members` manifest. Cargo discovers members during splicing, but the module extension watches only listed labels; omitting a member lets its dependency-feature changes reuse a stale snapshot even when the freshness check passes. Keep the manifest list aligned when adding or removing workspace members.
+
 The root module intentionally omits `crate_universe`'s optional rendering lock. The extension is therefore non-reproducible, and Bazel records its full result in `MODULE.bazel.lock`, keyed by hashes of `Cargo.toml`, `Cargo.lock`, every member manifest, and the `crate.*` tags. While that entry is current, a clean output base (every CI pod) reuses it and never evaluates the extension. After any of those inputs changes (every release version bump, every dependency edit), each fresh server instead re-splices the workspace with `cargo-bazel splice`: about 240 s per CI job, with correct results. That is why the entry must be refreshed and committed together with Cargo changes:
 
 ```bash

@@ -345,7 +345,7 @@ export class KbService {
 
 			if (entry.isDirectory() || entry.isSymbolicLink()) {
 				let isDir = entry.isDirectory();
-				let isSymlink = entry.isSymbolicLink();
+				const isSymlink = entry.isSymbolicLink();
 				if (isSymlink) {
 					try {
 						const st = await stat(abs); // follows

@@ -173,10 +173,29 @@ crate.from_cargo(
     # Nightly host tools (see the rust_host_tools extension above): the
     # splice's rustc probe must accept user-level -Z RUSTFLAGS.
     host_tools = "@rust_host_tools_nightly",
-    # The root manifest covers all workspace members, including the vendored
-    # crates (members so their sources render hermetically; the
-    # [patch.crates-io] entries redirect registry deps to them).
-    manifests = ["//:Cargo.toml"],
+    # Watch every manifest explicitly: cargo-bazel reads workspace members
+    # during splicing, but the module extension only tracks listed labels.
+    # Keep this list aligned with [workspace].members in Cargo.toml.
+    manifests = [
+        "//:Cargo.toml",
+        "//crates/pi-ast:Cargo.toml",
+        "//crates/pi-builtins:Cargo.toml",
+        "//crates/pi-diff:Cargo.toml",
+        "//crates/pi-edit:Cargo.toml",
+        "//crates/pi-iso:Cargo.toml",
+        "//crates/pi-natives:Cargo.toml",
+        "//crates/pi-predict:Cargo.toml",
+        "//crates/pi-shell:Cargo.toml",
+        "//crates/pi-vcs:Cargo.toml",
+        "//crates/pi-vfs:Cargo.toml",
+        "//crates/pi-voice:Cargo.toml",
+        "//crates/pi-walker:Cargo.toml",
+        "//crates/vendor/cfg_aliases:Cargo.toml",
+        "//crates/vendor/grep-searcher:Cargo.toml",
+        "//crates/vendor/jaq-core:Cargo.toml",
+        "//crates/vendor/napi:Cargo.toml",
+        "//crates/vendor/tree-sitter-go:Cargo.toml",
+    ],
     # Exactly the shipped addon triples: crate BUILD files get
     # target_compatible_with selects over this set (defaults omit darwin-x64
     # and musl), and features/deps resolve per-triple from Cargo.lock.

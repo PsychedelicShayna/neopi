@@ -140,8 +140,7 @@ describe("agent loop live steering", () => {
 			responses: [{ content: ["first"] }, { content: ["second"] }, { content: ["third"] }],
 		});
 		let calls = 0;
-		let agent: Agent;
-		agent = new Agent({
+		const agent: Agent = new Agent({
 			initialState: { model: mock.model },
 			interruptMode: "immediate",
 			steeringMode: mode,
