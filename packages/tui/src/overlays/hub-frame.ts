@@ -159,12 +159,18 @@ export function describeHubFrame(
 	sidebar: NativeChild,
 	body: NativeChild,
 	footer: NativeChild,
+	tone?: "error",
 ): NativeNode {
-	return overlayCard(role, title, [
-		node("row", { gap: "md", align: "start", grow: 1 }, [sidebar, body], "split"),
-		node("rule", undefined, undefined, "divider"),
-		footer,
-	]);
+	return overlayCard(
+		role,
+		title,
+		[
+			node("row", { gap: "md", align: "start", grow: 1 }, [sidebar, body], "split"),
+			node("rule", undefined, undefined, "divider"),
+			footer,
+		],
+		{ tone },
+	);
 }
 
 /** Persistent fullscreen split frame, sidebar viewport, and footer chip renderer. */
@@ -185,6 +191,7 @@ export class HubFrame {
 	readonly #preserveSidebar: boolean;
 	/** Preferred body floor, reduced only as needed to retain sidebar navigation. */
 	readonly #bodyMinWidth: number;
+	#borderColor: "error" | undefined;
 
 	/** Compose hub-specific sidebar and body renderers into a persistent frame. */
 	constructor(
@@ -207,9 +214,9 @@ export class HubFrame {
 			},
 			right: renderBody,
 			rightMinWidth: this.#bodyMinWidth,
-			prefix: () => `${theme.fg("border", theme.boxRound.vertical)} `,
-			divider: () => ` ${theme.fg("border", theme.boxRound.vertical)} `,
-			suffix: () => ` ${theme.fg("border", theme.boxRound.vertical)}`,
+			prefix: () => `${theme.fg(this.#borderColor ?? "border", theme.boxRound.vertical)} `,
+			divider: () => ` ${theme.fg(this.#borderColor ?? "border", theme.boxRound.vertical)} `,
+			suffix: () => ` ${theme.fg(this.#borderColor ?? "border", theme.boxRound.vertical)}`,
 		});
 		this.#stack = new Stack({
 			children: [
@@ -352,7 +359,9 @@ export class HubFrame {
 		height: number,
 		entries: readonly SidebarEntry<string>[],
 		footer: string | readonly string[],
+		chrome?: { title?: string; borderColor?: "error" },
 	): readonly string[] {
+		this.#borderColor = chrome?.borderColor;
 		const footerLines = typeof footer === "string" ? [footer] : footer;
 		const contentRows = Math.max(1, height - 3 - footerLines.length);
 		const sidebarWidth = this.sidebarWidth(entries);
@@ -367,10 +376,10 @@ export class HubFrame {
 			this.#split.setRightMinWidth(rightMinWidth);
 		}
 		const leftWidth = this.#split.measure(width).left?.width ?? 0;
-		this.#top.setLines([topBorderSplit(width, this.#title, leftWidth)]);
-		this.#divider.setLines([dividerSplit(width, leftWidth)]);
-		this.#footer.setLines(footerLines.map(line => row(line, width)));
-		this.#bottom.setLines([bottomBorder(width)]);
+		this.#top.setLines([topBorderSplit(width, chrome?.title ?? this.#title, leftWidth, this.#borderColor)]);
+		this.#divider.setLines([dividerSplit(width, leftWidth, this.#borderColor)]);
+		this.#footer.setLines(footerLines.map(line => row(line, width, this.#borderColor)));
+		this.#bottom.setLines([bottomBorder(width, this.#borderColor)]);
 		this.#stack.setHeight(contentRows + 3 + footerLines.length);
 		return this.#stack.render(width);
 	}

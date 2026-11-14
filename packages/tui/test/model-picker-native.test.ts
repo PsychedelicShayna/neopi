@@ -12,7 +12,7 @@ import {
 	type ModelHubSource,
 } from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
-import { initTheme } from "../src/theme";
+import { initTheme, theme } from "../src/theme";
 import type { TUI } from "../src/tui";
 
 const withPicker: DescribeContext = {
@@ -485,6 +485,62 @@ test("the quick picker is an md sheet with the summary below and a task-model to
 	expect(p.actions?.find(action => action.id === "task")?.on).toBe(true);
 	picker.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
 	expect(picked).toEqual(["task:openai/gpt-5.6"]);
+});
+
+test("the fullscreen session picker toggles the configured temporary Task target without editing roles", () => {
+	const picked: string[] = [];
+	const hub = new ModelHubComponent(
+		ui,
+		source({ default: "demo/demo" }, ["demo/demo", "openai/gpt-5.6"]),
+		registry(MODELS),
+		MODELS.map(model => ({ model })),
+		{
+			onPick: (_model, selector) => {
+				picked.push(`session:${selector}`);
+			},
+			onPickTask: (_model, selector) => {
+				picked.push(`task:${selector}`);
+			},
+			onAssign: () => {
+				throw new Error("Session picker must not author roles");
+			},
+			onUnassign: () => {},
+			onCancel: () => {},
+		},
+		{
+			sessionOnly: true,
+			currentSelector: "demo/demo",
+			taskSelector: "openai/gpt-5.6",
+			taskModeKeys: ["alt+t"],
+		},
+	);
+	hubs.push(hub);
+	const session = hub.navigationSnapshot();
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:demo", mods: [] });
+	hub.handleInput("\x1bt");
+	const task = hub.navigationSnapshot();
+	expect(hub.describe(withPicker).p).toMatchObject({
+		title: "Task model",
+		tone: "error",
+		current: ["openai/gpt-5.6"],
+		selected: "openai/gpt-5.6",
+	});
+	expect(hub.describe(withoutPicker).p).toMatchObject({ tone: "error" });
+	expect(hub.render(120)[0]).toContain(theme.fg("error", theme.boxRound.topLeft + theme.boxRound.horizontal));
+	hub.handleInput("\r");
+	expect(picked).toEqual(["task:openai/gpt-5.6"]);
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:openai", mods: [] });
+	hub.handleInput("\x1bt");
+	expect(hub.describe(withPicker).p).toMatchObject({
+		title: "Session model",
+		current: ["demo/demo"],
+		selected: "demo/demo",
+	});
+	hub.restoreNavigation(task);
+	expect(hub.describe(withPicker).p).toMatchObject({ title: "Task model", tone: "error" });
+	hub.restoreNavigation(session);
+	hub.handleNativeEvent({ type: "activate", key: "", item: "demo/demo" });
+	expect(picked).toEqual(["task:openai/gpt-5.6", "session:demo/demo"]);
 });
 
 for (const kind of ["hub", "picker"] as const) {
