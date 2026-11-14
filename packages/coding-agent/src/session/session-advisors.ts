@@ -136,6 +136,7 @@ import type { YieldQueue } from "./yield-queue";
 
 import {
 	cfgAdvisorActivation,
+	advisorVisibleToActivationSet,
 	advisorDeliveryTiming,
 	cfgAdvisorContinueSeverity,
 	cfgAdvisorEvictStaleResults,
@@ -1188,7 +1189,7 @@ export class SessionAdvisors {
 		if (selected && emitWarnings) {
 			const visibleIds = new Set(
 				roster
-					.filter(config => activation.scope === "project" || config.sourceScope === "user")
+					.filter(config => advisorVisibleToActivationSet(activation.scope, config.sourceScope))
 					.map(config => config.id),
 			);
 			const skipped = [...selected].filter(id => !visibleIds.has(id)).length;
@@ -1221,7 +1222,7 @@ export class SessionAdvisors {
 			const active = selected
 				? config.id !== undefined &&
 					selected.has(config.id) &&
-					(activation.scope === "project" || config.sourceScope === "user")
+					advisorVisibleToActivationSet(activation.scope, config.sourceScope)
 				: config.enabled !== false;
 			if (!active) {
 				this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
@@ -3417,7 +3418,7 @@ export class SessionAdvisors {
 				config =>
 					config.id !== undefined &&
 					activation.ids?.includes(config.id) &&
-					(activation.scope === "project" || config.sourceScope === "user"),
+					advisorVisibleToActivationSet(activation.scope, config.sourceScope),
 			)
 			.map(config => config.name);
 		return `${precedence}\n${role}: ${activation.scope}-scoped activation set replaces enabled flags. Selected advisors: ${selectedNames.length ? selectedNames.join(", ") : "none"}.`;

@@ -12,6 +12,8 @@
 
 ### Added
 
+- Role advisor activation sets can be edited in `/advisor configure`, including persisted session sets whose scope is preserved when selecting project advisors ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
+
 - Complete `/prompts:<name>` references anywhere in a message and paste multiple prompt-template bodies in the order written, while preserving the existing leading `/<name> [args]` invocation.
 - `/model` and Alt+P now open the fullscreen Big Pickle by default; choose Small picker in Settings → Model → Session model picker (`models.sessionPicker: small`) for the compact view. Both support the temporary Task-model target.
 

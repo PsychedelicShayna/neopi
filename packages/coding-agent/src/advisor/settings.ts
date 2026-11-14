@@ -8,6 +8,7 @@ import { Derived, register, type AnySetting } from "../config/registry";
 import { cfgRoleSettings } from "../config/role-settings";
 import type { Settings } from "../config/settings";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
+import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 export const ADVISOR_DELIVERY_TIMINGS = ["on-yield", "next-tool-call"] as const;
 export type AdvisorDeliveryTiming = (typeof ADVISOR_DELIVERY_TIMINGS)[number];
@@ -50,11 +51,17 @@ export const cfgAdvisorDeliveryNit = deliverySetting("nit", "on-yield");
 export const cfgAdvisorDeliveryConcern = deliverySetting("concern", "next-tool-call");
 export const cfgAdvisorDeliveryBlocker = deliverySetting("blocker", "next-tool-call");
 
-export function advisorDeliveryTiming(settings: Settings, severity: "nit" | "concern" | "blocker" = "nit"): AdvisorDeliveryTiming {
+export function advisorDeliveryTiming(
+	settings: Settings,
+	severity: "nit" | "concern" | "blocker" = "nit",
+): AdvisorDeliveryTiming {
 	switch (severity) {
-		case "nit": return cfgAdvisorDeliveryNit.get(settings);
-		case "concern": return cfgAdvisorDeliveryConcern.get(settings);
-		case "blocker": return cfgAdvisorDeliveryBlocker.get(settings);
+		case "nit":
+			return cfgAdvisorDeliveryNit.get(settings);
+		case "concern":
+			return cfgAdvisorDeliveryConcern.get(settings);
+		case "blocker":
+			return cfgAdvisorDeliveryBlocker.get(settings);
 	}
 }
 
@@ -90,7 +97,15 @@ export const cfgAdvisorActivationSet = register({
 export interface AdvisorActivation {
 	ids: string[] | null;
 	role: string | undefined;
-	scope: "user" | "project";
+	scope: "user" | "project" | "session";
+}
+
+/** User sets cannot select project/session definitions; narrower sets see the full roster. */
+export function advisorVisibleToActivationSet(
+	scope: AdvisorActivation["scope"],
+	sourceScope: AdvisorConfigScope | undefined,
+): boolean {
+	return scope !== "user" || sourceScope === "user";
 }
 
 /** Scope is part of activation even when two roles list the same IDs. */
@@ -105,7 +120,7 @@ class AdvisorActivationSetting extends Derived<AdvisorActivation> {
 		const scope =
 			(provenance === "role" && role !== undefined
 				? settings.getRoleSettingSourceScope(role, cfgAdvisorActivationSet)
-				: undefined) ?? (provenance === "project" ? "project" : "user");
+				: undefined) ?? (provenance === "project" || provenance === "session" ? provenance : "user");
 		return [cfgAdvisorActivationSet.get(settings), role, scope];
 	}
 
@@ -113,7 +128,7 @@ class AdvisorActivationSetting extends Derived<AdvisorActivation> {
 		return {
 			ids: inputs[0] as string[] | null,
 			role: inputs[1] as string | undefined,
-			scope: inputs[2] as "user" | "project",
+			scope: inputs[2] as AdvisorActivation["scope"],
 		};
 	}
 }

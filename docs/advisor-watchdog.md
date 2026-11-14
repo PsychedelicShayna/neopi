@@ -49,11 +49,19 @@ Without an effort suffix, advisors request `medium`, clamped to the model's supp
 
 ### Role activation sets
 
-Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.yml` when declaring a role activation set.
+Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Renaming preserves the ID. `/advisor configure` can select legacy entries for a role set: saving the set assigns IDs only to those selected entries, without repairing other rows or changing file gates.
 
 Duplicate IDs within one file emit a warning without hiding rows. Only the first row uses the shared ID during discovery. Saving in `/advisor configure` gives later duplicates fresh IDs and preserves each row's settings.
 
-Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.yml`:
+Edit sets in `/advisor configure`: choose **User**, **Project .omp**, or **Session**, then a **Role:** row. The active role and roles that already have settings appear first, including roles with no remaining model assignment. Project-root `WATCHDOG.yml` is a roster source, not a role-settings store. Persisted session role settings live in the transcript artifact directory's `settings.yml`; sessions without a persistent transcript keep that layer in memory.
+
+Space/Enter check and uncheck advisors; `c` creates an empty set, Backspace clears the set back to ordinary settings/per-advisor flags, and `s` saves. A project or session clear masks an inherited role set with `null`. Editing an inherited set creates a local set in the selected scope. Ordinary `advisor.activationSet` values are diagnosed separately and never silently copied into a role draft.
+
+Rows show when a role set replaces an advisor's own enabled flag, when a whole-file gate still disables it, and when an ID is missing, out of scope, duplicated, or shadowed. Missing/out-of-scope references can be removed from those rows. The selected row shows its stable ID and exact source path. The per-advisor Enabled row also explains active-role overrides and links directly to the role-set editor without discarding unsaved file edits.
+
+Checkbox changes remain a draft until Save. Role settings use the normal settings persistence path. Newly assigned roster IDs are saved without applying other saved WATCHDOG edits; return and explicitly Apply (`a`) to reload the roster. The global advisor switch and whole-file gates are never changed by editing a role set.
+
+The equivalent configuration in the user settings file, project's `.omp/config.yml`, or session `settings.yml` is:
 
 ```yaml
 roleSettings:
@@ -62,7 +70,7 @@ roleSettings:
       - 0198ad12-6751-7455-b102-45e8fe384b9e
 ```
 
-User-scoped sets can reference user advisors only. Project-scoped sets can reference any advisor visible in that project. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
+User-scoped sets can reference user advisors only. Project- and session-scoped sets can reference any advisor visible in that project/session. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
 
 Activation precedence is:
 
@@ -70,7 +78,7 @@ Activation precedence is:
 2. An explicit role activation set selects exactly its listed advisors, including entries whose own `enabled` flag is false. `[]` selects none.
 3. Without a set, each advisor's own `enabled` flag decides, including the legacy default when no roster exists. Omit the setting or use `null` to restore this behavior.
 
-Switching roles stops old-only advisors and starts new-only advisors. Advisors selected by both roles keep their running context and pending reviews. `/advisor status` explains the current activation policy. Activation-set editing belongs to the role editor, not the model picker.
+Switching roles stops old-only advisors and starts new-only advisors. Advisors selected by both roles keep their running context and pending reviews. `/advisor status` explains the current activation policy. Activation sets are edited inside `/advisor configure`, not the model picker.
 
 
 ### Backup reviewer

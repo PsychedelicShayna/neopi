@@ -2551,11 +2551,12 @@ export class Settings {
 	}
 
 	/** Persisted scope supplying a role value. Null restores inheritance and has no source. */
-	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | undefined {
+	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | "session" | undefined {
 		if (!setting.roleScoped || this.getRoleSetting(role, setting) === undefined) return undefined;
 		const segments = ["roleSettings", role, setting.id];
 		for (const [layer, scope] of [
 			[this.#overrides, "user"],
+			[this.#session, "session"],
 			[this.#configOverlay, "user"],
 			[overlaySettingsToml(this.#project, this.#projectToml), "project"],
 			[overlaySettingsToml(this.#global, this.#globalToml), "user"],

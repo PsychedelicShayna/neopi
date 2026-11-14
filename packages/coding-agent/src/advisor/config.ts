@@ -873,17 +873,17 @@ function patchWatchdogDocument(
 	source: string,
 	doc: WatchdogConfigDoc,
 	baseline?: WatchdogBaseline,
-	advisorEnabledOnly = false,
+	advisorField?: "enabled" | "id",
 ): string {
 	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) {
-		if (advisorEnabledOnly) throw new Error("WATCHDOG source disappeared; reload before changing advisor states");
+		if (advisorField) throw new Error("WATCHDOG source disappeared; reload before changing advisor fields");
 		return serializeWatchdogConfig(doc);
 	}
 	for (const advisor of doc.advisors) assertAdvisorCadence(advisor);
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
-	if (advisorEnabledOnly) {
-		if (!baseline) throw new Error("Advisor state changes require a loaded WATCHDOG document");
+	if (advisorField) {
+		if (!baseline) throw new Error("Advisor field changes require a loaded WATCHDOG document");
 		const sequence = materializeYamlAlias(document, ["advisors"]);
 		if (!isSeq(sequence)) throw new Error("WATCHDOG advisors changed; reload before changing advisor states");
 		for (let index = 0; index < sequence.items.length; index++) {
@@ -891,17 +891,17 @@ function patchWatchdogDocument(
 		}
 		const changes = baseline.origins.flatMap(origin => {
 			const advisor = doc.advisors.find(candidate => candidate === origin.advisor);
-			if (!advisor || (advisor.enabled !== false) === (origin.base.enabled !== false)) return [];
+			if (!advisor || advisor[advisorField] === origin.base[advisorField]) return [];
 			const resolved = resolveWatchdogAdvisorOrigin(document, sequence, origin, baseline.origins);
-			if (!resolved || resolved.map.get("enabled") !== origin.base.enabled) {
-				throw new Error("WATCHDOG advisor changed; reload before changing advisor states");
+			if (!resolved || resolved.map.get(advisorField) !== origin.base[advisorField]) {
+				throw new Error("WATCHDOG advisor changed; reload before changing advisor fields");
 			}
-			return [{ map: resolved.map, enabled: advisor.enabled }];
+			return [{ map: resolved.map, value: advisor[advisorField] }];
 		});
 		if (changes.length === 0) return source;
 		for (const change of changes) {
-			if (change.enabled === undefined) change.map.delete("enabled");
-			else change.map.set("enabled", change.enabled);
+			if (change.value === undefined) change.map.delete(advisorField);
+			else change.map.set(advisorField, change.value);
 		}
 		return document.toString({ lineWidth: 0 });
 	}
@@ -1066,17 +1066,17 @@ function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
  * Write an editable doc under the file lock. Known fields are patched into the
  * latest document so comments, future fields, and disjoint edits survive. The
  * file is removed only when the resulting document is empty.
- * Bulk state saves bypass identity migration and malformed-row repair; only
- * loaded advisor enabled flags may change, and stale targets fail atomically.
+ * Restricted field saves bypass identity migration and malformed-row repair;
+ * only that loaded advisor field may change, and stale targets fail atomically.
  */
 export async function saveWatchdogConfigFile(
 	filePath: string,
 	doc: WatchdogConfigDoc,
-	options?: { advisorEnabledOnly: boolean },
+	options?: { advisorField: "enabled" | "id" },
 ): Promise<void> {
 	const storedBaseline = watchdogBaselines.get(doc);
 	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
-	if (!options?.advisorEnabledOnly) ensureAdvisorIds(doc);
+	if (!options?.advisorField) ensureAdvisorIds(doc);
 	await withFileLock(filePath, async () => {
 		let source = "";
 		try {
@@ -1086,9 +1086,9 @@ export async function saveWatchdogConfigFile(
 		}
 		let content: string;
 		try {
-			content = patchWatchdogDocument(source, doc, baseline, options?.advisorEnabledOnly);
+			content = patchWatchdogDocument(source, doc, baseline, options?.advisorField);
 		} catch (error) {
-			if (options?.advisorEnabledOnly || !watchdogRepairDocs.has(doc)) throw error;
+			if (options?.advisorField || !watchdogRepairDocs.has(doc)) throw error;
 			content = serializeWatchdogConfig(doc);
 		}
 		const root = yamlDocumentRoot(parseYamlMappingDocument(content));
