@@ -3073,6 +3073,28 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN);
 			expect(hub.navigationSnapshot().browser.selected).toBe("prov-b/model-c");
 		});
+
+		test("refresh all can populate an initially locked-only catalog", async () => {
+			const locked = makeModel("anthropic", "locked-model");
+			let available: Model[] = [];
+			const { hub } = createHub({
+				models: () => [locked, ...available],
+				registry: {
+					getAvailable: () => available,
+					refresh: async () => {
+						available = [makeModel("local", "discovered-model")];
+					},
+				},
+			});
+			expect(hub.navigationSnapshot().browser.selected).toBeUndefined();
+			hub.handleInput("\x1b[15;5~");
+			await flushRefresh();
+			hub.handleInput("\r");
+			expect(hub.navigationSnapshot()).toMatchObject({
+				focus: "list",
+				browser: { selected: "local/discovered-model" },
+			});
+		});
 	});
 
 	describe("locked providers", () => {

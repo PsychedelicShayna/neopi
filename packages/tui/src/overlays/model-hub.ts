@@ -1766,7 +1766,6 @@ export class ModelHubComponent implements Component {
 				? [entry.providerId ?? ""]
 				: [],
 		);
-		if (providerIds.length === 0) return;
 		this.#refreshingAllProviders = true;
 		for (const timer of this.#scheduledProviderRefreshes.values()) clearTimeout(timer);
 		this.#scheduledProviderRefreshes.clear();
