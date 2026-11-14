@@ -260,6 +260,49 @@ describe("ModelRegistry runtime provider registration", () => {
 		}
 	});
 
+	test.each(["openai", "openai-codex"] as const)(
+		"%s runtime takeover during credential lookup publishes only the selected manager's catalog",
+		async provider => {
+			registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => Response.json({ data: [{ id: "superseded-model" }] }),
+			});
+			registry.registerProvider(provider, { apiKey: "old-key" }, "ext://runtime");
+			registry.getAll();
+			const waiting = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			const peek = vi.spyOn(authStorage.keys, "peek").mockImplementation(async providerId => {
+				if (providerId === provider) {
+					waiting.resolve();
+					await released.promise;
+					return "old-key";
+				}
+				return undefined;
+			});
+			const refreshing = registry.refresh("online");
+			try {
+				await waiting.promise;
+				registry.registerProvider(
+					provider,
+					{
+						baseUrl: "https://replacement.example.com/v1",
+						api: "openai-completions",
+						apiKey: "replacement-key",
+						fetchDynamicModels: async () => [{ ...baseModel, id: "replacement-model" }],
+					},
+					"ext://runtime",
+				);
+				released.resolve();
+				await refreshing;
+				expect(getProviderModels(registry, provider).map(model => model.id)).toEqual(["replacement-model"]);
+				expect(registry.find(provider, "replacement-model")?.baseUrl).toBe("https://replacement.example.com/v1");
+			} finally {
+				released.resolve();
+				peek.mockRestore();
+				await refreshing;
+			}
+		},
+	);
+
 	test.each(["reload", "unregister"] as const)(
 		"%s during a yielded discovery build cannot publish stale provider state",
 		async change => {

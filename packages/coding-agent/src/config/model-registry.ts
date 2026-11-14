@@ -2487,7 +2487,6 @@ export class ModelRegistry {
 							...(await this.#discoverProviderModelsCoalesced(provider, strategy)),
 						})),
 					);
-		const runtimeRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
 		const [configuredDiscoveryResults, builtInDiscovery] = await Promise.all([
 			configuredDiscoveriesPromise,
 			this.#discoverBuiltInProviderModels(strategy, providerFilter),
@@ -2506,7 +2505,7 @@ export class ModelRegistry {
 			);
 			const currentRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
 			const isCurrentRegistration = (provider: string) =>
-				runtimeRegistrations.get(provider) === currentRegistrations.get(provider);
+				builtInDiscovery.runtimeRegistrations.get(provider) === currentRegistrations.get(provider);
 			const builtInModels = builtInDiscovery.models.filter(model => isCurrentRegistration(model.provider));
 			builtInAuthoritativeProviders = new Set(
 				[...builtInDiscovery.authoritativeProviders].filter(isCurrentRegistration),
@@ -2883,16 +2882,21 @@ export class ModelRegistry {
 	async #discoverBuiltInProviderModels(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
-	): Promise<BuiltInDiscoveryResult> {
+	): Promise<BuiltInDiscoveryResult & { runtimeRegistrations: ReadonlyMap<string, ModelRegistryRegisterChange> }> {
 		// Skip providers already handled by configured discovery (e.g. user-configured ollama with discovery.type)
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(p => p.provider));
-		const managerOptions = await this.#collectBuiltInModelManagerOptions(
+		const { options: managerOptions, runtimeRegistrations } = await this.#collectBuiltInModelManagerOptions(
 			strategy,
 			providerFilter,
 			configuredDiscoveryProviders,
 		);
 		if (managerOptions.length === 0) {
-			return { models: [], authoritativeProviders: new Set(), replaceRuntimeProviders: new Set() };
+			return {
+				models: [],
+				authoritativeProviders: new Set(),
+				replaceRuntimeProviders: new Set(),
+				runtimeRegistrations,
+			};
 		}
 		const writesBefore = getModelCacheWriteStats();
 		const discoveries = await Promise.all(
@@ -2923,7 +2927,7 @@ export class ModelRegistry {
 				replaceRuntimeProviders.add(provider);
 			}
 		}
-		return { models, authoritativeProviders, replaceRuntimeProviders };
+		return { models, authoritativeProviders, replaceRuntimeProviders, runtimeRegistrations };
 	}
 
 	/**
@@ -3004,7 +3008,10 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter: ReadonlySet<string> | undefined,
 		configuredDiscoveryProviders: ReadonlySet<string>,
-	): Promise<ModelManagerOptions<Api>[]> {
+	): Promise<{
+		options: ModelManagerOptions<Api>[];
+		runtimeRegistrations: ReadonlyMap<string, ModelRegistryRegisterChange>;
+	}> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
 			resolveKey: (value: string | undefined) => string | undefined;
@@ -3086,6 +3093,7 @@ export class ModelRegistry {
 		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
 		const standardProviderKeys = await Promise.all(
@@ -3111,9 +3119,13 @@ export class ModelRegistry {
 				),
 			),
 		);
+		// Options and their registration identities are selected without yielding,
+		// after credential awaits; replacements during those awaits belong to this pass.
+		const runtimeRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
 		const options: ModelManagerOptions<Api>[] = [];
 		for (let i = 0; i < standardProviderDescriptors.length; i++) {
 			const descriptor = standardProviderDescriptors[i];
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) continue;
 			const apiKey = standardProviderKeys[i];
 			const hasExplicitVllmConfig =
 				descriptor.providerId === "vllm" &&
@@ -3154,6 +3166,7 @@ export class ModelRegistry {
 
 		for (let i = 0; i < enabledSpecialProviderDescriptors.length; i++) {
 			const descriptor = enabledSpecialProviderDescriptors[i];
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) continue;
 			const key = descriptor.resolveKey(specialKeys[i]);
 			if (!isAuthenticated(key)) {
 				continue;
@@ -3198,7 +3211,7 @@ export class ModelRegistry {
 				);
 			}
 		}
-		return options;
+		return { options, runtimeRegistrations };
 	}
 
 	async #discoverWithModelManager(
