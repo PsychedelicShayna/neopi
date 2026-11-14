@@ -180,26 +180,56 @@ export async function loadPromptTemplates(options: LoadPromptTemplatesOptions = 
 	return templates;
 }
 
+function renderTemplate(template: PromptTemplate, argsString: string): string {
+	const args = parseCommandArgs(argsString);
+	const argsText = args.join(" ");
+	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
+	const substituted = substituteArgs(template.content, args);
+	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+}
+
 /**
- * Expand a prompt template if it matches a template name.
- * Returns the expanded content or the original text if not a template.
+ * Expand `/prompts:<name>` references in place, once in
+ * message order, and preserve the leading `/<name> [args]` template invocation.
+ * Inline references consume only their name, never the surrounding prose.
  */
 export function expandPromptTemplate(text: string, templates: PromptTemplate[]): string {
-	if (!text.startsWith("/")) return text;
-
-	const spaceIndex = text.indexOf(" ");
-	const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-	const argsString = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1);
-
-	const template = templates.find(t => t.name === templateName);
-	if (template) {
-		const args = parseCommandArgs(argsString);
-		const argsText = args.join(" ");
-		const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(template.content);
-		const substituted = substituteArgs(template.content, args);
-		const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
-		return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
+	let expanded = text;
+	const inlineBodies: string[] = [];
+	let markerPrefix = "\uE000";
+	if (templates.length > 0 && text.includes("/prompts:")) {
+		// Hide original references from legacy argument parsing/rendering. The
+		// marker is absent from both the submitted text and every pasted body.
+		while (text.includes(markerPrefix) || templates.some(template => template.content.includes(markerPrefix))) {
+			markerPrefix += "\uE000";
+		}
+		const names = templates
+			.map(template => RegExp.escape(template.name))
+			.sort((a, b) => b.length - a.length)
+			.join("|");
+		const references = new RegExp(
+			String.raw`(?<![\p{L}\p{N}_/])\/prompts:(${names})(?=$|[\s,;:!?"'\x60()[\]{}<>]|\.(?![\p{L}\p{N}_.-]))`,
+			"gu",
+		);
+		expanded = text.replace(references, (_token, name: string) => {
+			const template = templates.find(candidate => candidate.name === name)!;
+			inlineBodies.push(template.content);
+			return `${markerPrefix}${inlineBodies.length - 1}\uE001`;
+		});
 	}
-
-	return text;
+	// Resolve legacy commands only from original input, never pasted content.
+	if (text.startsWith("/") && !text.startsWith("/prompts:")) {
+		const spaceIndex = text.indexOf(" ");
+		const templateName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const template = templates.find(candidate => candidate.name === templateName);
+		if (template) {
+			expanded = renderTemplate(template, spaceIndex === -1 ? "" : expanded.slice(spaceIndex + 1));
+		}
+	}
+	if (inlineBodies.length > 0) {
+		const markers = new RegExp(`${RegExp.escape(markerPrefix)}(\\d+)\uE001`, "g");
+		return expanded.replace(markers, (_token, index: string) => inlineBodies[Number(index)]!);
+	}
+	return expanded;
 }

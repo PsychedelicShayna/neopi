@@ -138,7 +138,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "query_model_selector",
-		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		doc: "Query native /model ordering, scoped candidates, role aliases and model facts without selecting.",
 		params: { query: "string" },
 		result: "ModelSelectorResult",
 	},

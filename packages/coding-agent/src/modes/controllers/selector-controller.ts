@@ -200,7 +200,12 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled, cfgCompactionThresholdTokens } from "../../session/context-settings";
-import { cfgCycleOrder, cfgDisabledProviders, cfgModelsDefaultScope } from "../../config/model-settings";
+import {
+	cfgCycleOrder,
+	cfgDisabledProviders,
+	cfgModelsDefaultScope,
+	cfgSessionModelPicker,
+} from "../../config/model-settings";
 import { cfgRoleSettings, type RoleSettings } from "../../config/role-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
@@ -1011,7 +1016,12 @@ export class SelectorController {
 			const sessionDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
 			const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 			const candidates = [...discovered.files];
-			const scopes: AdvisorConfigScope[] = ["user", "project", "project-omp", ...(sessionDir ? ["session" as const] : [])];
+			const scopes: AdvisorConfigScope[] = [
+				"user",
+				"project",
+				"project-omp",
+				...(sessionDir ? ["session" as const] : []),
+			];
 			for (const scope of scopes) {
 				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir, sessionDir });
 				if (!candidates.some(file => file.path === filePath)) candidates.push({ path: filePath, scope });
@@ -1097,7 +1107,11 @@ export class SelectorController {
 					// Re-discover the merged roster (project + user) so the live advisors
 					// reflect cross-level precedence, not just the edited file. Only
 					// advisors whose effective configuration changed restart.
-					const discovered = await discoverAdvisorConfigs(cwd, agentDir, this.ctx.sessionManager.getArtifactsDir() ?? undefined);
+					const discovered = await discoverAdvisorConfigs(
+						cwd,
+						agentDir,
+						this.ctx.sessionManager.getArtifactsDir() ?? undefined,
+					);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
@@ -1579,7 +1593,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen git UI on the alternate screen (the /models idiom): split
+	 * Fullscreen git UI on the alternate screen (the /roles idiom): split
 	 * diff viewer, staging sidebar, and commit composer. Resolves focus back
 	 * to the editor when the user closes it.
 	 */
@@ -1600,7 +1614,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen agents hub on the alternate screen (the /models idiom): scope
+	 * Fullscreen agents hub on the alternate screen (the /roles idiom): scope
 	 * sidebar, agent rows, and chip strips that dive into the model browser.
 	 */
 	async showAgentsDashboard(): Promise<void> {
@@ -1677,15 +1691,21 @@ export class SelectorController {
 			this.#showModelPicker({ selectOnly: options.selectOnly });
 			return;
 		}
-		if (options?.temporaryOnly || this.ctx.focusedAgentId) {
+		if (
+			this.ctx.focusedAgentId ||
+			(options?.temporaryOnly && cfgSessionModelPicker.get(this.ctx.settings) === "small")
+		) {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({ sessionOnly: options?.sessionOnly, scope: options?.scope });
+		this.#showModelHub({
+			sessionOnly: options?.sessionOnly || options?.temporaryOnly,
+			scope: options?.scope,
+		});
 	}
 
 	/**
-	 * Session-only model switch (`/switch <selector>`) for the viewed session:
+	 * Session-only model switch (`/model <selector>`) for the viewed session:
 	 * applies the resolved model without persisting it. Compacts first when the
 	 * transcript exceeds the target's context window, mirroring an over-context
 	 * pick in the alt+p picker. Failures surface as status errors.
@@ -1730,7 +1750,7 @@ export class SelectorController {
 				return;
 			}
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
-			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /models for roles.`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /roles for roles.`);
 		};
 		if (!compactFirst || focusedAgentId) {
 			await apply();
@@ -1750,7 +1770,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Compact session-only model picker (alt+p / `/switch`): a floating
+	 * Compact session-only model picker (alt+p / `/model`): a floating
 	 * bottom-anchored overlay over the transcript. The current model is
 	 * highlighted and preselected; a leading `@` searches ctrl+p quick roles.
 	 */

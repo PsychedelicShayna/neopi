@@ -3534,10 +3534,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		for (const command of this.#pendingSlashCommands) {
 			reservedNames.add(command.name);
 			for (const alias of command.aliases ?? []) reservedNames.add(alias);
+			for (const alias of command.hiddenAliases ?? []) reservedNames.add(alias);
 		}
 		for (const command of fileSlashCommands) {
 			reservedNames.add(command.name);
 			for (const alias of command.aliases ?? []) reservedNames.add(alias);
+			for (const alias of command.hiddenAliases ?? []) reservedNames.add(alias);
 		}
 		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
 			.filter(template => !reservedNames.has(template.name))
@@ -3549,8 +3551,21 @@ export class InteractiveMode implements InteractiveModeContext {
 				icon: promptIcon,
 				iconName: "prompt",
 			}));
-		const allCommands = [...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands];
-		this.slashCommandNames = new Set(allCommands.flatMap(command => [command.name, ...(command.aliases ?? [])]));
+		const inlinePromptCommands: SlashCommand[] = this.session.promptTemplates.map(template => ({
+			name: `prompts:${template.name}`,
+			description: template.description,
+			icon: promptIcon,
+			iconName: "prompt",
+		}));
+		const allCommands = [
+			...this.#pendingSlashCommands,
+			...fileSlashCommands,
+			...promptTemplateCommands,
+			...inlinePromptCommands,
+		];
+		this.slashCommandNames = new Set(
+			allCommands.flatMap(command => [command.name, ...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]),
+		);
 		this.#baseAutocompleteProvider = this.#inputController.createAutocompleteProvider(allCommands, basePath);
 		this.#applyAutocompleteProvider();
 	}

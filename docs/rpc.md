@@ -44,7 +44,7 @@ Behavior notes:
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
 | `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
 | `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
-| `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
+| `model_selector` | Read-only `query_model_selector` returns native `/model` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login-ID-scoped dialogs, explicit `allowSecretInput` / `allowTrustConfirmation` capabilities, and same-connection `cancel_login`. Capabilities never substitute for user consent. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
@@ -967,7 +967,7 @@ configuration files or substitute a bundled theme inventory.
 ### Native model selector query
 
 Send `{"type":"query_model_selector","query":"example"}` to read the native
-`/switch` filter without selecting a model or starting a turn. The same command
+`/model` filter without selecting a model or starting a turn. The same command
 is available through terminal control. Check the `model_selector` capability
 before using it.
 
@@ -1024,7 +1024,7 @@ role:
 - `tag` is absent for custom roles, which have no built-in tag.
 - `description` is the effective `modelTags.<id>.description` override or the
   built-in default. Custom roles have no default description. An empty string
-  deliberately clears the description. In `/models`, `D` edits this metadata
+  deliberately clears the description. In `/roles`, `D` edits this metadata
   and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
@@ -1953,7 +1953,7 @@ unavailable in that view.
 
 ### Changing a running subagent's model
 
-`set_subagent_model` is the focused `/switch` for one owned running subagent: it
+`set_subagent_model` is the focused `/model` for one owned running subagent: it
 changes that session's model only, from its next provider request, without
 aborting the request in flight. The parent, siblings, saved roles and global
 settings are untouched. Give either a `selector` or an exact `provider` with

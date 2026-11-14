@@ -8,8 +8,9 @@ import {
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	isDirectoryCompletionValue,
-	midPromptSkillTokenMatches,
+	midPromptInlineTokenMatches,
 	SKILL_NAMESPACE,
+	PROMPT_NAMESPACE,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { canonicalKeyId, getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -2513,7 +2514,7 @@ export class Editor implements Component, Focusable {
 					// immediately after applying, so only a real command may be completed here, and
 					// only one whose name matches: a description-only hit would run an unrelated command.
 					const selected = syncResult?.items.find(item => item.value !== SKILL_NAMESPACE);
-					if (syncResult && selected && !selected.descriptionMatch) {
+					if (syncResult && selected && !selected.descriptionMatch && !selected.preserveInputOnSubmit) {
 						// Invalidate any pending async autocomplete so its stale results are discarded
 						this.#autocompleteRequestId += 1;
 						// Apply the best match and submit the completed command
@@ -5453,7 +5454,10 @@ export class Editor implements Component, Focusable {
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
+		if (
+			(item?.value.startsWith(SKILL_NAMESPACE) || item?.value.startsWith(PROMPT_NAMESPACE)) &&
+			findTrailingSlashCommandStart(this.#autocompletePrefix) !== null
+		) {
 			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
 			if (currentTrailingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentTrailingStart);
@@ -5466,7 +5470,7 @@ export class Editor implements Component, Focusable {
 					// therefore falls through to file completion instead of rewriting
 					// the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
-					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
+					if (midPromptInlineTokenMatches(lowerToken, item.value, item.description)) return true;
 				}
 			}
 			return false;
@@ -5917,7 +5921,8 @@ export class Editor implements Component, Focusable {
 	): void {
 		this.#autocompletePrefix = suggestions.prefix;
 		this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
-		this.#enterAcceptsSelection = !suggestions.items[0]?.descriptionMatch;
+		this.#enterAcceptsSelection =
+			!suggestions.items[0]?.descriptionMatch && !suggestions.items[0]?.preserveInputOnSubmit;
 		this.#autocompleteState = state;
 		this.onAutocompleteUpdate?.();
 	}

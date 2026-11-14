@@ -9642,7 +9642,7 @@ impl Command for UpdateThemeCommand {
 	}
 }
 
-/// Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+/// Query native /model ordering, scoped candidates, role aliases and model facts without selecting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryModelSelectorCommand {
 	pub query: String,

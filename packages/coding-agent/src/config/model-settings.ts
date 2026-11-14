@@ -115,12 +115,29 @@ export const cfgModelsDefaultScope = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: "Models default scope",
-		description: "Scope edited by /models without an explicit session, project, or global argument",
+		label: "Roles default scope",
+		description: "Scope edited by /roles without an explicit session, project, or global argument",
 		options: [
 			{ value: "session", label: "Session", description: "Only this conversation" },
 			{ value: "project", label: "Project", description: "This project's configuration" },
 			{ value: "global", label: "Global", description: "The active profile's defaults" },
+		],
+	},
+});
+
+export const cfgSessionModelPicker = register({
+	id: "models.sessionPicker",
+	type: "enum",
+	values: ["big", "small"] as const,
+	default: "big",
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Session model picker",
+		description: "Picker opened by /model and Alt+P for this conversation",
+		options: [
+			{ value: "big", label: "Big Pickle", description: "Fullscreen provider-sidebar model browser" },
+			{ value: "small", label: "Small picker", description: "Compact picker over the transcript" },
 		],
 	},
 });

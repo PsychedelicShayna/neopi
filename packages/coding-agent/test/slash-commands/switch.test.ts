@@ -40,21 +40,10 @@ function createRuntime() {
 	};
 }
 
-describe("/model slash command", () => {
-	it("opens the rich session-only picker without replacing the full /models alias", async () => {
+describe.each(["roles", "models"])("/%s slash command", name => {
+	it.each(["session", "project", "global"] as const)("opens %s in the requested scope", async scope => {
 		const harness = createRuntime();
-
-		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
-
-		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({ sessionOnly: true });
-		expect(harness.setText).toHaveBeenCalledWith("");
-		await executeBuiltinSlashCommand("/models", harness.runtime);
-		expect(harness.showModelSelector.mock.calls).toEqual([[{ sessionOnly: true }], [{ scope: "global" }]]);
-	});
-	it.each(["session", "project", "global"] as const)("opens /models %s in the requested scope", async scope => {
-		const harness = createRuntime();
-		await executeBuiltinSlashCommand(`/models ${scope}`, harness.runtime);
+		await executeBuiltinSlashCommand(`/${name} ${scope}`, harness.runtime);
 		expect(harness.showModelSelector).toHaveBeenCalledWith({ scope });
 	});
 
@@ -63,36 +52,36 @@ describe("/model slash command", () => {
 		harness.settings.writeScopeValue(cfgModelsDefaultScope, "global", "global");
 		harness.settings.writeScopeValue(cfgModelsDefaultScope, "project", "project");
 		harness.settings.writeScopeValue(cfgModelsDefaultScope, "session", "session");
-		await executeBuiltinSlashCommand("/models", harness.runtime);
+		await executeBuiltinSlashCommand(`/${name}`, harness.runtime);
 		expect(harness.showModelSelector).toHaveBeenLastCalledWith({ scope: "session" });
 		harness.settings.writeScopeValue(cfgModelsDefaultScope, undefined, "session");
-		await executeBuiltinSlashCommand("/models", harness.runtime);
+		await executeBuiltinSlashCommand(`/${name}`, harness.runtime);
 		expect(harness.showModelSelector).toHaveBeenLastCalledWith({ scope: "project" });
 	});
 
 	it("rejects an invalid scope without opening a model menu", async () => {
 		const harness = createRuntime();
-		await executeBuiltinSlashCommand("/models wrong", harness.runtime);
-		expect(harness.showError).toHaveBeenCalledWith("Usage: /models [session|project|global]");
+		await executeBuiltinSlashCommand(`/${name} wrong`, harness.runtime);
+		expect(harness.showError).toHaveBeenCalledWith("Usage: /roles [session|project|global]");
 		expect(harness.showModelSelector).not.toHaveBeenCalled();
 	});
 });
 
-describe("/switch slash command", () => {
+describe.each(["model", "switch"])("/%s slash command", name => {
 	it("opens the temporary model selector (mirrors alt+p)", async () => {
 		const harness = createRuntime();
 
-		const handled = await executeBuiltinSlashCommand("/switch", harness.runtime);
+		const handled = await executeBuiltinSlashCommand(`/${name}`, harness.runtime);
 
 		expect(handled).toBe(true);
 		expect(harness.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 
-	it("/switch sonnet:high fuzzy-resolves and switches session-only with the thinking suffix", async () => {
+	it("fuzzy-resolves and switches session-only with the thinking suffix", async () => {
 		const harness = createRuntime();
 
-		const handled = await executeBuiltinSlashCommand("/switch sonnet:high", harness.runtime);
+		const handled = await executeBuiltinSlashCommand(`/${name} sonnet:high`, harness.runtime);
 
 		expect(handled).toBe(true);
 		expect(harness.switchSessionModel).toHaveBeenCalledWith(MODELS[1], "high");
@@ -100,19 +89,19 @@ describe("/switch slash command", () => {
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 
-	it("/switch @smol resolves the configured role alias", async () => {
+	it("resolves the configured role alias", async () => {
 		const harness = createRuntime();
 		harness.settings.setModelRole("smol", "openai/gpt-5.2");
 
-		await executeBuiltinSlashCommand("/switch @smol", harness.runtime);
+		await executeBuiltinSlashCommand(`/${name} @smol`, harness.runtime);
 
 		expect(harness.switchSessionModel).toHaveBeenCalledWith(MODELS[2], undefined);
 	});
 
-	it("/switch unknown surfaces an error without opening the picker or switching", async () => {
+	it("surfaces unknown selectors without opening the picker or switching", async () => {
 		const harness = createRuntime();
 
-		await executeBuiltinSlashCommand("/switch nope-9000", harness.runtime);
+		await executeBuiltinSlashCommand(`/${name} nope-9000`, harness.runtime);
 
 		expect(harness.showError).toHaveBeenCalledWith("Unknown model: nope-9000");
 		expect(harness.switchSessionModel).not.toHaveBeenCalled();

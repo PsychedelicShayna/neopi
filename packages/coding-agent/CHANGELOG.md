@@ -8,11 +8,16 @@
 - Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 - Bare `npi update` now reports binary-update status; the preserved prompted source-fork integration workflow moves to `npi update source`.
+- Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, offered only when no visible completion candidate matches.
 
 ### Added
 
 - Role advisor activation sets can be edited in `/advisor configure`, including persisted session sets whose scope is preserved when selecting project advisors ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
+- Complete `/prompts:<name>` references anywhere in a message and paste multiple prompt-template bodies in the order written, while preserving the existing leading `/<name> [args]` invocation.
+- `/model` and Alt+P now open the fullscreen Big Pickle by default; choose Small picker in Settings → Model → Session model picker (`models.sessionPicker: small`) for the compact view. Both support the temporary Task-model target.
+
+- Select supported Codex Fast, Ultra, and extended-context profiles with ordinary model slugs in CLI selections, roles, advisors, tasks, and web search without changing other assignments ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
 - Slash commands and Settings distinguish nightly-only NeoPi additions with moons, published stable additions with purple stars, and the newest and previous upstream sync ranges with gold and silver stars.
 - Recover NeoPi independently of normal startup with `npi update stable|nightly`, verified platform-specific GitHub releases and retained previous binaries. POSIX replacement is atomic; Windows uses journalled recoverable replacement with an independent PowerShell recovery helper (real Windows verification remains pending). Repurposed update-channel and automatic-update settings follow NeoPi stable/nightly releases; rollback has a cumulative cursor, a cross-profile auto-update hold, and explicit confirmation before losing the recovery command on an older release.
 - Slash commands and Settings mark NeoPi additions with a crescent: purple for nightly-only features, original green for features in the latest published stable release; gold and silver stars mark the newest and previous upstream sync ranges, while every older range remains bronze.

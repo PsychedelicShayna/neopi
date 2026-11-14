@@ -12219,7 +12219,7 @@ type QueryModelSelectorCommand struct {
 	Query string `json:"query"`
 }
 
-// QueryModelSelector sends "query_model_selector": Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+// QueryModelSelector sends "query_model_selector": Query native /model ordering, scoped candidates, role aliases and model facts without selecting.
 func (c Commands) QueryModelSelector(ctx context.Context, p QueryModelSelectorCommand) (ModelSelectorResult, error) {
 	var out ModelSelectorResult
 	err := c.call(ctx, "query_model_selector", p, 0, &out)

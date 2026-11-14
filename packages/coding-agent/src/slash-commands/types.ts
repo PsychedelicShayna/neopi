@@ -21,6 +21,8 @@ export interface SubcommandDef {
 export interface BuiltinSlashCommand {
 	name: string;
 	aliases?: string[];
+	/** Accepted aliases shown only when no visible completion candidate matches. */
+	hiddenAliases?: string[];
 	description: string;
 	/** Autocomplete type-indicator icon. Defaults to "action" (generic terminal glyph). */
 	icon?: SlashCommandIconName;

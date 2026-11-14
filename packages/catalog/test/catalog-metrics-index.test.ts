@@ -73,12 +73,10 @@ describe("applyCatalogMetrics", () => {
 		[{ int: 0 }, { int: 0, tps: 66.2 }],
 	])("fills a missing metric without replacing an existing one: %j", (existing, expected) => {
 		const original = model("github-copilot", "claude-fable-5.1", existing);
+		const before = { int: original.int, tps: original.tps };
 		const [enriched] = applyCatalogMetrics([original], scored);
 		expect({ int: enriched.int, tps: enriched.tps }).toEqual(expected);
-		expect({ int: original.int, tps: original.tps }).toEqual({
-			int: existing.int,
-			tps: existing.tps,
-		});
+		expect({ int: original.int, tps: original.tps }).toEqual(before);
 	});
 
 	test("fills only unscored models and preserves array identity when nothing changes", () => {

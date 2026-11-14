@@ -205,11 +205,12 @@ describe("prompt action autocomplete", () => {
 		expect(suggestions?.items.map(item => item.label)).toEqual(["Copy current line", "Copy whole prompt"]);
 	});
 
-	it("returns slash command argument completions instead of # prompt actions when the command defines them", async () => {
+	it.each(["rename", "retitle"])("prioritizes /%s arguments over prompt actions", async commandName => {
 		const provider = createPromptActionAutocompleteProvider({
 			commands: [
 				{
 					name: "rename",
+					hiddenAliases: ["retitle"],
 					description: "Rename current session",
 					allowArgs: true,
 					getArgumentCompletions: argumentPrefix =>
@@ -229,7 +230,7 @@ describe("prompt action autocomplete", () => {
 			moveCursorToLineEnd: () => {},
 		});
 
-		const line = "/rename repro #copy";
+		const line = `/${commandName} repro #copy`;
 		const suggestions = await provider.getSuggestions([line], 0, line.length);
 
 		expect(suggestions).toEqual({

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added selectable Codex `-fast`, `-ultra`, `-900k`, and supported combined slugs derived from model capabilities, carrying their fixed tier and exact context budget ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
 - Declared NeoProxy's non-storing wire policy in KDL; virtual model names and routing remain server-owned rather than inventing a bundled/default model ([#600](https://github.com/PsychedelicShayna/neopi/issues/600), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 
 - Added KDL selection of model-family behavioral presets, initially scoped to Opus 5 ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
