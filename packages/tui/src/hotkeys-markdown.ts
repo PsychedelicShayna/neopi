@@ -309,7 +309,14 @@ export class HotkeysSheetComponent implements Component {
 					actionBar([
 						close,
 						null,
-						text([span(getMenuSearchVimMode() ? "? help   jk gg/G C-u d e y PgUp/PgDn" : "? help   ↑/↓ Home/End PgUp/PgDn", "dim")]),
+						text([
+							span(
+								getMenuSearchVimMode()
+									? "? help   jk gg/G C-u d e y PgUp/PgDn"
+									: "? help   ↑/↓ Home/End PgUp/PgDn",
+								"dim",
+							),
+						]),
 					]),
 				],
 				{ gap: "lg" },

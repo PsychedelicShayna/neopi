@@ -110,7 +110,6 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: snapco
 	}
 }
 
-
 // ============================================================================
 // Message Serialization
 // ============================================================================

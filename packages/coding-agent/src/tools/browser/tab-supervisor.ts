@@ -1251,7 +1251,9 @@ async function recoverWorkerTab(
 	} catch (recycleError) {
 		const failure = recycleError instanceof Error ? recycleError.message : String(recycleError);
 		logger.warn("Failed to recycle browser tab worker; killing tab", { error: failure });
-		return await killTab(opts.failedReason?.(failure) ?? `Browser tab worker recovery failed; tab killed: ${failure}`);
+		return await killTab(
+			opts.failedReason?.(failure) ?? `Browser tab worker recovery failed; tab killed: ${failure}`,
+		);
 	}
 }
 
@@ -2132,7 +2134,8 @@ function attachTabWorker(tab: WorkerTabSession, worker: WorkerHandle): void {
 		const recovery = recoverWorkerTab(tab, tab.name, WORKER_EXIT_REATTACH_TIMEOUT_MS, `${exited}; tab closed`, {
 			// Keep the page as the worker left it: stopping its loading would cancel a navigation the agent started.
 			recover: false,
-			failedReason: failure => `${exited}; it could not be reattached to a new worker, so the tab was closed: ${failure}`,
+			failedReason: failure =>
+				`${exited}; it could not be reattached to a new worker, so the tab was closed: ${failure}`,
 		})
 			.then(reattached => {
 				// No run was in flight to report the reset, so the next call on the tab does.

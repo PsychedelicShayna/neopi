@@ -64,7 +64,13 @@ describe("ask native view", () => {
 				content: [],
 				details: {
 					results: [
-						{ id: "db", question: "Database?", options: ["Postgres"], multi: false, selectedOptions: ["Postgres"] },
+						{
+							id: "db",
+							question: "Database?",
+							options: ["Postgres"],
+							multi: false,
+							selectedOptions: ["Postgres"],
+						},
 						{ id: "notes", question: "Notes", options: [], multi: false, selectedOptions: [] },
 					],
 				},
@@ -121,10 +127,7 @@ describe("ask native view", () => {
 	});
 
 	it("falls back to the result text when details are unavailable", () => {
-		const view = askToolRenderer.describeResult(
-			{ content: [{ type: "text", text: "Question unavailable" }] },
-			opts,
-		);
+		const view = askToolRenderer.describeResult({ content: [{ type: "text", text: "Question unavailable" }] }, opts);
 		expect(view?.tone).toBe("warning");
 		expect(JSON.stringify(view?.body)).toContain("Question unavailable");
 	});

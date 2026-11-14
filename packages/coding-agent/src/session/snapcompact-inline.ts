@@ -827,7 +827,14 @@ export class SnapcompactInlineTransformer {
 			const message = messages[target.index];
 			if (message.role !== "toolResult") continue;
 			const frames = await this.#framesFor(this.#toolCache, swap.id, target.frameText, shape, shapeKey);
-			const note = target.read?.note ?? renderPromptAsset("system/snapcompact-toolresult-note.md", toolResultNote, {}, { cwd: options.cwd, kind: "notice" });
+			const note =
+				target.read?.note ??
+				renderPromptAsset(
+					"system/snapcompact-toolresult-note.md",
+					toolResultNote,
+					{},
+					{ cwd: options.cwd, kind: "notice" },
+				);
 			const content: (TextContent | ImageContent)[] = [{ type: "text", text: note }, ...frames];
 			let sourceImageIndex = 0;
 			for (const block of message.content) {

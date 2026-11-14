@@ -406,7 +406,12 @@ export async function generateBranchSummary(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = snapcompact.computeFileLists(fileOps);
 	summary = snapcompact.upsertFileOperations(
-		summary, readFiles, modifiedFiles, fileOps.read, options.cwd, "compaction/file-operations.md",
+		summary,
+		readFiles,
+		modifiedFiles,
+		fileOps.read,
+		options.cwd,
+		"compaction/file-operations.md",
 	);
 
 	return {

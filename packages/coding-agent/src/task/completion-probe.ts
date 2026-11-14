@@ -204,7 +204,11 @@ export function startCompletionProbe(options: CompletionProbeOptions): void {
 					completionProbePrompt,
 					{
 						inflight: inflightToolCalls(session),
-						previous: previous && { percent: previous.percent, stage: previous.stage, ago: formatDuration(Date.now() - previous.at) },
+						previous: previous && {
+							percent: previous.percent,
+							stage: previous.stage,
+							ago: formatDuration(Date.now() - previous.at),
+						},
 					},
 					{ cwd: session.sessionManager.getCwd(), kind: "notice" },
 				),

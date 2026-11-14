@@ -22,11 +22,13 @@ import { computerTurnInFlight, registerComputerController } from "@oh-my-pi/pi-c
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
-const GO_ON_QUESTIONS = [{
-	id: "go",
-	question: "Go on?",
-	options: [{ label: "Yes" }, { label: "No" }],
-}];
+const GO_ON_QUESTIONS = [
+	{
+		id: "go",
+		question: "Go on?",
+		options: [{ label: "Yes" }, { label: "No" }],
+	},
+];
 describe("SDK session dialogs and the computer display hold", () => {
 	let tempDir: string;
 	let authStorage: AuthStorage;

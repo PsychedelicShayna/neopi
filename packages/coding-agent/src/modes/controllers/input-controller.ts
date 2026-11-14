@@ -1411,7 +1411,8 @@ export class InputController {
 			this.ctx.sessionManager !== sessionManager ||
 			!isCurrent() ||
 			!isDeferredSubmissionActive()
-		) return undefined;
+		)
+			return undefined;
 		if (result?.handled) return undefined;
 		if (result?.text !== undefined) text = result.text.trim();
 		if (result?.images !== undefined) {
@@ -1422,7 +1423,8 @@ export class InputController {
 				this.ctx.sessionManager !== sessionManager ||
 				!isCurrent() ||
 				!isDeferredSubmissionActive()
-			) return undefined;
+			)
+				return undefined;
 		}
 		if (!text && !images?.length) return undefined;
 		return { text, images, imageLinks };
@@ -3903,7 +3905,8 @@ export class InputController {
 				const result = await openInEditor(editorCmd, draft, { extension: ".omp.md", env });
 				if (result !== null) {
 					const message = extractExternalEditorMessage(result);
-					if (message === null) this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
+					if (message === null)
+						this.ctx.showWarning("External editor context marker was removed; draft unchanged.");
 					else this.ctx.editor.setText(message);
 				}
 			},

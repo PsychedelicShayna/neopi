@@ -64,7 +64,9 @@ describe("role context budgets", () => {
 		expect(host.get("compaction.thresholdTokens")).toBe(110000);
 		settings.setRoleSetting("slow", cfgCompactionThresholdTokens, undefined);
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(110000);
-		expect(() => settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 12.5)).toThrow("positive safe integer");
+		expect(() => settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 12.5)).toThrow(
+			"positive safe integer",
+		);
 	});
 
 	it("persists 120000 across model reassignment without baking activation into global settings", async () => {

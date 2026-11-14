@@ -29,7 +29,12 @@ const sessions: SessionSelectorEntry[] = Array.from({ length: 40 }, (_, i) => ({
 function snapshot(selector: SessionSelectorComponent) {
 	return selector.navigationSnapshot() as {
 		scope: string;
-		list: { search: { value: string; cursor: number; focused: boolean }; selected: string; order: string[]; top: unknown };
+		list: {
+			search: { value: string; cursor: number; focused: boolean };
+			selected: string;
+			order: string[];
+			top: unknown;
+		};
 	};
 }
 function make() {

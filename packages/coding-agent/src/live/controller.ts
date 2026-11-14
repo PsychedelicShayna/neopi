@@ -458,7 +458,6 @@ export class LiveSessionController {
 		return this.#heldContext.length;
 	}
 
-
 	/**
 	 * SDP answer for the caller's peer in an `sdpOffer` session. It exists as soon as the offer is
 	 * signaled, before the control socket connects, so apply it only after `start()` resolves.
@@ -1092,7 +1091,8 @@ export class LiveSessionController {
 		const released = this.#releasedReplyTurns;
 		this.#releasedReplyTurns = undefined;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = released ??
+		this.#answeredTurns =
+			released ??
 			this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(turn => turn.turn);
 	}
 
@@ -1294,14 +1294,17 @@ export class LiveSessionController {
 		const block = stripLiveKeyword(routingText, this.#blockDelegateKeyword);
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		const lastTurn = this.#tailTurn();
-		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs())
+			return false;
 		const captured = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn));
 		const preserved = captured?.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
 		const primary = voiceOnly.length
-			? captured?.text.trim() ??
+			? (captured?.text.trim() ??
 				this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
-					.map(turn => turn.text).join("\n\n").trim()
-			: captured?.text.trim() ?? (block.matched ? block.text : message);
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim())
+			: (captured?.text.trim() ?? (block.matched ? block.text : message));
 		if (!this.retireComposerSpeech(preserved)) return false;
 		this.#holdReleased = true;
 		// A pre-submit response/route belongs to the old draft, not this released request.
@@ -1322,7 +1325,12 @@ export class LiveSessionController {
 			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText);
 		} else if (block.matched) {
 			const turn: UserLedgerTurn = {
-				turn: ++this.#userLedgerTurn, text: primary, routingText, final: true, blocked: true, composerReceipt: captured?.receipt,
+				turn: ++this.#userLedgerTurn,
+				text: primary,
+				routingText,
+				final: true,
+				blocked: true,
+				composerReceipt: captured?.receipt,
 			};
 			this.#putTurn(turn);
 			this.#deliverBlockedTurn(turn);
@@ -1332,7 +1340,12 @@ export class LiveSessionController {
 		return true;
 	}
 
-	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+	#offerPendingComposer(
+		text: string,
+		forced: boolean,
+		composerReceipt?: LiveComposerReceipt,
+		routingText?: string,
+	): void {
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
@@ -1360,14 +1373,16 @@ export class LiveSessionController {
 			"utf8",
 		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			void this.#queueSend(buildSessionContextAppend(
-				renderPromptAsset(
-					"live/operator-submitted-message.md",
-					operatorSubmittedMessageTemplate,
-					{ message: part },
-					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			void this.#queueSend(
+				buildSessionContextAppend(
+					renderPromptAsset(
+						"live/operator-submitted-message.md",
+						operatorSubmittedMessageTemplate,
+						{ message: part },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
 				),
-			));
+			);
 		}
 	}
 
@@ -1494,7 +1509,9 @@ export class LiveSessionController {
 	#keywordText(expanded = false): string | undefined {
 		return this.#composerText
 			? this.#composerText(expanded)
-			: this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			: this.#turnsWhere(turn => turn.claim === undefined)
+					.map(turn => turn.text)
+					.join("\n\n");
 	}
 
 	#scheduleTranscriptKeyword(): void {
@@ -1505,25 +1522,31 @@ export class LiveSessionController {
 		const text = this.#keywordText();
 		if (text !== this.#lastKeywordSubmission) this.#lastKeywordSubmission = undefined;
 		if (!text || text === this.#lastKeywordSubmission || this.#tailTurn()?.final === false) return;
-		if (!stripLiveKeyword(text, keywords.force, true).matched &&
-			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		if (
+			!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched
+		)
+			return;
 		const remaining = this.#lastComposerWrite + Math.max(keywords.silenceMs, this.#quietFloorMs()) - Date.now();
-		this.#transcriptKeywordTimer = setTimeout(() => {
-			this.#transcriptKeywordTimer = undefined;
-			const current = this.#transcriptKeywords?.();
-			if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
-			const expanded = this.#keywordText(true);
-			if (!expanded) return;
-			const force = stripLiveKeyword(text, current.force, true);
-			const submit = stripLiveKeyword(text, current.submit, true);
-			const keyword = force.matched ? current.force : current.submit;
-			if (!(force.matched || submit.matched)) return;
-			const message = stripLiveKeyword(expanded, keyword, true).text;
-			if (!message.trim()) return;
-			this.#lastKeywordSubmission = text;
-			const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
-			if (!accepted) this.#lastKeywordSubmission = undefined;
-		}, Math.max(0, remaining));
+		this.#transcriptKeywordTimer = setTimeout(
+			() => {
+				this.#transcriptKeywordTimer = undefined;
+				const current = this.#transcriptKeywords?.();
+				if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
+				const expanded = this.#keywordText(true);
+				if (!expanded) return;
+				const force = stripLiveKeyword(text, current.force, true);
+				const submit = stripLiveKeyword(text, current.submit, true);
+				const keyword = force.matched ? current.force : current.submit;
+				if (!(force.matched || submit.matched)) return;
+				const message = stripLiveKeyword(expanded, keyword, true).text;
+				if (!message.trim()) return;
+				this.#lastKeywordSubmission = text;
+				const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
+				if (!accepted) this.#lastKeywordSubmission = undefined;
+			},
+			Math.max(0, remaining),
+		);
 	}
 
 	#voiceTurnBlocked(): boolean {
@@ -1536,8 +1559,13 @@ export class LiveSessionController {
 
 	/** Holding the next input must not close native playback in the middle of an admitted reply. */
 	#voiceOutputBlocked(): boolean {
-		return this.#voiceTurnBlocked() && !this.#responding &&
-			this.#releasedReplyTurns === undefined && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
+		return (
+			this.#voiceTurnBlocked() &&
+			!this.#responding &&
+			this.#releasedReplyTurns === undefined &&
+			!this.#contextSinceResponse &&
+			this.#outputLevel <= OUTPUT_ACTIVE_LEVEL
+		);
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */

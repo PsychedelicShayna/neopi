@@ -465,7 +465,9 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 			...(assertApprovedModel
 				? {
 						thinkingLevelCeiling:
-							cfgEffortPolicyMode.get(spec.settings) === "legacy" ? cfgTaskMaxEffort.get(spec.settings) : undefined,
+							cfgEffortPolicyMode.get(spec.settings) === "legacy"
+								? cfgTaskMaxEffort.get(spec.settings)
+								: undefined,
 						disableModelFallback: true,
 						disableServerSideFallback: true,
 						assertDispatchModel: (model: Model) => {

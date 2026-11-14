@@ -81,9 +81,11 @@ export class MenuHelp {
 	}
 
 	describe(): NativeNode {
-		return node("card", { head: getMenuSearchVimMode() ? "Vim navigation" : "Menu navigation", role: "omp.menu.vim-help" }, [
-			col(this.#explanations().map(line => node("text", { spans: [span(line)] }))),
-		]);
+		return node(
+			"card",
+			{ head: getMenuSearchVimMode() ? "Vim navigation" : "Menu navigation", role: "omp.menu.vim-help" },
+			[col(this.#explanations().map(line => node("text", { spans: [span(line)] })))],
+		);
 	}
 
 	#explanations(): string[] {

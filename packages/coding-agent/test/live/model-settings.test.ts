@@ -43,7 +43,9 @@ it("round-trips live.model through config YAML and builds the configured session
 		await settings.flush();
 		const voiceSettings = await Settings.loadReadOnly({ cwd, agentDir });
 		expect(cfgLiveVoice.get(voiceSettings)).toBe(voice);
-		expect(buildLiveSessionPayload("", cfgLiveVoice.get(voiceSettings), cfgLiveModel.get(voiceSettings))).toMatchObject({
+		expect(
+			buildLiveSessionPayload("", cfgLiveVoice.get(voiceSettings), cfgLiveModel.get(voiceSettings)),
+		).toMatchObject({
 			model: "custom-live-model",
 			audio: { output: { voice } },
 		});

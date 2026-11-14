@@ -340,10 +340,15 @@ export class IdleMaintenance {
 				this.#complete(pending, "recap");
 				return;
 			}
-			const promptText = renderPromptAsset("system/recap-user.md", idleRecapPrompt, {
-				goal: this.#goalText() ?? "",
-				task: nextActionableTask(session.getTodoPhases())?.content ?? "",
-			}, { cwd: session.sessionManager.getCwd(), kind: "notice" });
+			const promptText = renderPromptAsset(
+				"system/recap-user.md",
+				idleRecapPrompt,
+				{
+					goal: this.#goalText() ?? "",
+					task: nextActionableTask(session.getTodoPhases())?.content ?? "",
+				},
+				{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+			);
 			const { replyText } = await session.runEphemeralTurn({ promptText, signal: run.signal });
 			if (this.#recapRun !== run || run.signal.aborted) return;
 			if (this.#isBlocked()) return;

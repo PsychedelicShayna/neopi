@@ -1326,7 +1326,8 @@ export class AskDialogComponent implements Component {
 	#measureHeight(width: number, termRows: number): number {
 		const maxHeight = Math.max(MIN_DIALOG_ROWS, Math.floor(termRows * DIALOG_HEIGHT_RATIO));
 		const chromeRows = (question: ExtensionAskDialogQuestion | undefined, submit: boolean): number =>
-			4 + menuHintLines(this.#footerHintText("", question, submit), width, this.#guardBlocks() ? "" : undefined).length;
+			4 +
+			menuHintLines(this.#footerHintText("", question, submit), width, this.#guardBlocks() ? "" : undefined).length;
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
 		const mdTheme = getMarkdownTheme();
 		let needed = MIN_DIALOG_ROWS;
@@ -1479,7 +1480,8 @@ export class AskDialogComponent implements Component {
 			!question ||
 			(wrapQuestionTitle(question, this.#contentWidth).length <= MAX_HEADER_ROWS &&
 				!questionDescriptionsOverflow(question, this.#contentWidth))
-		) return "";
+		)
+			return "";
 		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
 	}
 
@@ -1494,7 +1496,8 @@ export class AskDialogComponent implements Component {
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
+		if (inputGuard && this.#guardBlocks())
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
 		if (submit) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;

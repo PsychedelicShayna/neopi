@@ -202,22 +202,27 @@ const probe: FocusProbe = {
 		const manager = local(id).asyncJobManager;
 		if (!manager) throw new Error("root async-job service missing");
 		const entered = Promise.withResolvers<void>();
-		const jobId = manager.register("bash", "idle worker job", async context => {
-			jobProgress.set(context.jobId, context.reportProgress);
-			entered.resolve();
-			try {
-				await new Promise<void>(resolve => {
-					if (context.signal.aborted) resolve();
-					else context.signal.addEventListener("abort", () => resolve(), { once: true });
-				});
-				const observed = jobAborts.get(id) ?? [];
-				observed.push({ jobId: context.jobId, reason: context.signal.reason });
-				jobAborts.set(id, observed);
-				return "idle job stopped";
-			} finally {
-				jobProgress.delete(context.jobId);
-			}
-		}, { ownerId: id });
+		const jobId = manager.register(
+			"bash",
+			"idle worker job",
+			async context => {
+				jobProgress.set(context.jobId, context.reportProgress);
+				entered.resolve();
+				try {
+					await new Promise<void>(resolve => {
+						if (context.signal.aborted) resolve();
+						else context.signal.addEventListener("abort", () => resolve(), { once: true });
+					});
+					const observed = jobAborts.get(id) ?? [];
+					observed.push({ jobId: context.jobId, reason: context.signal.reason });
+					jobAborts.set(id, observed);
+					return "idle job stopped";
+				} finally {
+					jobProgress.delete(context.jobId);
+				}
+			},
+			{ ownerId: id },
+		);
 		await entered.promise;
 		return jobId;
 	},

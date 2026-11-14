@@ -758,7 +758,11 @@ describe("persisted subagent revival", () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
 		const highOnly = perCallModelFixture("mock-high-only", [Effort.High]);
 		const disposed: boolean[] = [];
-		const settings = Settings.isolated({ "task.maxEffort": "low", "effort.mode": "legacy", modelRoles: { review: "mock/mock-high-only" } });
+		const settings = Settings.isolated({
+			"task.maxEffort": "low",
+			"effort.mode": "legacy",
+			modelRoles: { review: "mock/mock-high-only" },
+		});
 		let options: CreateAgentSessionOptions | undefined;
 		let sessionModel: typeof highOnly | undefined = highOnly;
 		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {

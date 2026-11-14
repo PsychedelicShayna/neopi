@@ -432,7 +432,8 @@ export class CfgProtocolHandler implements ProtocolHandler {
 			// A session sharing the persistent instance drops its own override on save, so it does not shadow.
 			const persistent = host.persistentSettings;
 			const above = ABOVE_GLOBAL.filter(
-				layer => !(layer === "env" && leaf.envFallback) &&
+				layer =>
+					!(layer === "env" && leaf.envFallback) &&
 					!((layer === "runtime" || layer === "session") && settings === persistent),
 			);
 			const layer = saveShadowingLayer(leaf, persistent, value, above);

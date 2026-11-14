@@ -289,9 +289,7 @@ describe("RPC fork and tree navigation", () => {
 		const [reopenable, unusable] = askResults;
 
 		const identity = await navigationIdentity();
-		expect(
-			await client.navigateTree({ targetId: reopenable!, ...identity, allowAskReopen: true }),
-		).toMatchObject({
+		expect(await client.navigateTree({ targetId: reopenable!, ...identity, allowAskReopen: true })).toMatchObject({
 			cancelled: false,
 			outcome: "ask_reopen",
 			leafId: identity.expectedLeafId,

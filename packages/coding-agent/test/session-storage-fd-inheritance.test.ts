@@ -26,7 +26,6 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const sessionStorageUrl = pathToFileURL(path.join(import.meta.dir, "../src/session/session-storage.ts")).href;
 
-
 const ROOTS: string[] = [];
 
 afterAll(async () => {

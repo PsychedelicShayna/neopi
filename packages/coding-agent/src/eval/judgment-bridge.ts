@@ -287,7 +287,9 @@ export async function runEvalJudgment(
 			const images = await loadEvalJudgmentImages(args.images, options.session.cwd);
 			signal?.throwIfAborted();
 			return {
-				...toEvalJudgmentResult(await judge.judge({ state, questions, ...(images === undefined ? {} : { images }) }, { signal })),
+				...toEvalJudgmentResult(
+					await judge.judge({ state, questions, ...(images === undefined ? {} : { images }) }, { signal }),
+				),
 				...(notices.length ? { notices } : {}),
 			};
 		} finally {

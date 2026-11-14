@@ -201,11 +201,7 @@ describe("prefixed tool rows", () => {
 		const label = "This detailed option label is long enough to require a second row inside the narrow card.";
 		const ask = plain(
 			askToolRenderer
-				.renderCall(
-					{ question: "Pick?", options: [{ label }] },
-					{ expanded: false, isPartial: true },
-					theme,
-				)
+				.renderCall({ question: "Pick?", options: [{ label }] }, { expanded: false, isPartial: true }, theme)
 				.render(width),
 		);
 		const option = ask.findIndex(row => row.includes("This detailed"));

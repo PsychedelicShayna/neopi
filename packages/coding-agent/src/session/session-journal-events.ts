@@ -36,7 +36,12 @@ export class SessionJournalEvents {
 		if (identity.sessionFile !== this.#rawFile) {
 			this.#rawFile = identity.sessionFile;
 			this.#canonicalFile = identity.sessionFile
-				? resolveEquivalentPath(path.join(resolveEquivalentPath(path.dirname(identity.sessionFile)), path.basename(identity.sessionFile)))
+				? resolveEquivalentPath(
+						path.join(
+							resolveEquivalentPath(path.dirname(identity.sessionFile)),
+							path.basename(identity.sessionFile),
+						),
+					)
 				: null;
 		}
 		return { ...identity, sessionFile: this.#canonicalFile };

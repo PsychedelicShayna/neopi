@@ -21,5 +21,4 @@ describe("omp zsh|bash|sh", () => {
 			expect(resolveCliArgv([shell, "-c", "echo hi"])).toEqual({ argv: [shell, "-c", "echo hi"] });
 		}
 	});
-
 });

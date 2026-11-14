@@ -1818,7 +1818,8 @@ export class CustomEditor extends Editor {
 			canonical !== undefined &&
 			getKeybindings().matchesCanonical(canonical, "tui.input.submit") &&
 			dictationHoldsDraft(this.composerState().dictation)
-		) return;
+		)
+			return;
 		// The fork's sustained Space gesture precedes editor/app shortcuts.
 		switch (this.spaceHold.process(canonical === "space", canonical === "backspace")) {
 			case "type":

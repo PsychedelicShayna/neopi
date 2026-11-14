@@ -792,9 +792,7 @@ function formatFileOperations(
 	assetId = "compaction/snapcompact/file-operations.md",
 ): string {
 	const files = formatFileList(readFiles, modifiedFiles, readSet);
-	return files.length > 0
-		? renderPromptAsset(assetId, fileOperationsTemplate, { files }, { cwd })
-		: "";
+	return files.length > 0 ? renderPromptAsset(assetId, fileOperationsTemplate, { files }, { cwd }) : "";
 }
 
 export function upsertFileOperations(

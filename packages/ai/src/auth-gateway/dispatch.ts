@@ -191,7 +191,11 @@ export async function resolveGatewayApiKey(
 		credentialId ??= opts.credentialId;
 		if (credentialId !== undefined) {
 			if (opts.client) {
-				return { status: 403, type: "permission_error", message: "Credential selection requires the gateway bearer" };
+				return {
+					status: 403,
+					type: "permission_error",
+					message: "Credential selection requires the gateway bearer",
+				};
 			}
 			if (!/^[1-9]\d*$/.test(credentialId) || !Number.isSafeInteger(Number(credentialId))) {
 				return { status: 400, type: "invalid_request_error", message: "Invalid X-Neopi-Credential-Id" };

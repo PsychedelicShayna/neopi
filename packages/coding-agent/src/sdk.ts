@@ -1927,7 +1927,11 @@ export function createAutoLearnCaptureRunner(
 			options.sourceAgent.sessionId;
 		// Resolve headers once so the tool list and the request agree on which tools the host runs.
 		const captureModel: Model = captureSourceModel.resolveHeaders
-			? { ...captureSourceModel, resolveHeaders: undefined, headers: { ...(await captureSourceModel.resolveHeaders(signal)) } }
+			? {
+					...captureSourceModel,
+					resolveHeaders: undefined,
+					headers: { ...(await captureSourceModel.resolveHeaders(signal)) },
+				}
 			: captureSourceModel;
 		if (signal?.aborted) return;
 		const hostRuns = (name: string) => hostRunsTool(captureModel, name);
@@ -5889,7 +5893,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						discovered.sharedMaxNotesPerUpdate,
 					);
 				};
-				stopWatching = watchAdvisorConfigs(currentCwd, agentDir, apply, () => sessionManager.getArtifactsDir() ?? undefined);
+				stopWatching = watchAdvisorConfigs(
+					currentCwd,
+					agentDir,
+					apply,
+					() => sessionManager.getArtifactsDir() ?? undefined,
+				);
 				if (reload)
 					void discoverAdvisorConfigs(currentCwd, agentDir, sessionManager.getArtifactsDir() ?? undefined)
 						.then(apply)
@@ -5897,7 +5906,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			};
 			bindAdvisorSources(false);
 			session.addDisposer(session.registerSessionChangeCallback(() => bindAdvisorSources(true)));
-			session.addDisposer(() => { rosterRevision++; stopWatching(); });
+			session.addDisposer(() => {
+				rosterRevision++;
+				stopWatching();
+			});
 		}
 		// The session now owns its cost gate; the interactive TUI starts compression after its first frame.
 		if (options.deferSkillDescriptionCompression !== true) skillDescriptions.startCompression();

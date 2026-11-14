@@ -171,8 +171,9 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 		return extensions;
 	}
 
-	const tokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean))
-		.map(token => new FuzzyQuery(token));
+	const tokens = (compileMenuRegex(query) ? [query] : query.toLowerCase().split(/\s+/).filter(Boolean)).map(
+		token => new FuzzyQuery(token),
+	);
 	if (tokens.length === 0) {
 		return extensions;
 	}

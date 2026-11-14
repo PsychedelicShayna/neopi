@@ -1009,15 +1009,19 @@ export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): Auth
 		const pathname = new URL(req.url).pathname;
 		const scopedOpts = client ? scopeRouteOptions(hostOpts, client) : hostOpts;
 		const credentialId = req.headers.get(NEOPROXY_CREDENTIAL_HEADER);
-		const opts: AuthGatewayRouteOptions = credentialId === null ? scopedOpts : {
-			...scopedOpts,
-			credentialId,
-			resolveModel: (id, options) => {
-				const accepts = (model: Model<Api>): boolean => !scopedOpts.excludeProviders?.has(model.provider) && (options?.accepts?.(model) ?? true);
-				const model = scopedOpts.resolveModel(id, { ...options, accepts });
-				return model && accepts(model) ? model : undefined;
-			},
-		};
+		const opts: AuthGatewayRouteOptions =
+			credentialId === null
+				? scopedOpts
+				: {
+						...scopedOpts,
+						credentialId,
+						resolveModel: (id, options) => {
+							const accepts = (model: Model<Api>): boolean =>
+								!scopedOpts.excludeProviders?.has(model.provider) && (options?.accepts?.(model) ?? true);
+							const model = scopedOpts.resolveModel(id, { ...options, accepts });
+							return model && accepts(model) ? model : undefined;
+						},
+					};
 		try {
 			if (client && (pathname === "/v1/neoproxy/accounts" || credentialId !== null)) {
 				return json(403, { error: "NeoProxy account sharing requires the gateway bearer" });

@@ -426,7 +426,6 @@ describe("SelectList", () => {
 		expect(reopened.navigationState()).toEqual(state);
 	});
 
-
 	it("restores literal filter focus and caret without activating the saved row", () => {
 		const items = [{ value: "a", label: "alpha" }];
 		const list = new SelectList(items, 3, testTheme, { search: "always" });
@@ -453,7 +452,9 @@ describe("SelectList", () => {
 		const activated: string[] = [];
 		const list = new SelectList(
 			["Live", "Voice", "Revoice"].map(label => ({ value: label, label })),
-			5, testTheme, { search: "always" },
+			5,
+			testTheme,
+			{ search: "always" },
 		);
 		list.onSelect = item => activated.push(item.value);
 		list.handleInput("/");

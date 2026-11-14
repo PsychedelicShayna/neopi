@@ -150,21 +150,27 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	const prompts: string[] = [];
 	const sent: LiveClientMessage[] = [];
 	let fire: ((event: LiveServerEvent) => void) | undefined;
-	const h = createHarness(options => new LiveSessionController({
-		...options,
-		createTransport: transportOptions => {
-			fire = transportOptions.callbacks.onEvent;
-			return {
-				async connect() {},
-				async send(message: LiveClientMessage) { sent.push(message); await voiceDelivery; },
-				async close() {},
-				async setMuted() {},
-				setOutputSuppressed() {},
-				pushAudio: () => true,
-			};
-		},
-		createRecorder: () => ({ stop() {} }),
-	}));
+	const h = createHarness(
+		options =>
+			new LiveSessionController({
+				...options,
+				createTransport: transportOptions => {
+					fire = transportOptions.callbacks.onEvent;
+					return {
+						async connect() {},
+						async send(message: LiveClientMessage) {
+							sent.push(message);
+							await voiceDelivery;
+						},
+						async close() {},
+						async setMuted() {},
+						setOutputSuppressed() {},
+						pushAudio: () => true,
+					};
+				},
+				createRecorder: () => ({ stop() {} }),
+			}),
+	);
 	Object.assign(h.ctx.session, {
 		sessionId: "composer-attachment-handoff",
 		modelRegistry: { authStorage: {} },
@@ -181,19 +187,21 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	cfgLiveForceUtteranceKeyword.set(h.ctx.settings, "relay");
 	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
 	return {
-		...h, prompts, sent,
+		...h,
+		prompts,
+		sent,
 		speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }),
-		delegate: () => fire?.({
-			type: "delegation.created",
-			item: { type: "delegation", target: "client", id: crypto.randomUUID(), content: [] },
-		}),
+		delegate: () =>
+			fire?.({
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id: crypto.randomUUID(), content: [] },
+			}),
 		answer: () => {
 			fire?.({ type: "output_transcript.added", item: { text: "Answered" } });
 			fire?.({ type: "turn.done", turn: { role: "assistant", transcript: "Answered" } });
 		},
 	};
 }
-
 
 function speak(h: Harness, turn: number, text: string, final: boolean): void {
 	h.callbacks().onUserSpeech?.({ role: "user", turn, text, final });
@@ -208,21 +216,26 @@ describe("LiveCommandController", () => {
 		const prompts: string[] = [];
 		const sent: LiveClientMessage[] = [];
 		let fire: ((event: LiveServerEvent) => void) | undefined;
-		const h = createHarness(options => new LiveSessionController({
-			...options,
-			createTransport: transportOptions => {
-				fire = transportOptions.callbacks.onEvent;
-				return {
-					async connect() {},
-					async send(message: LiveClientMessage) { sent.push(message); },
-					async close() {},
-					async setMuted() {},
-					setOutputSuppressed() {},
-					pushAudio: () => true,
-				};
-			},
-			createRecorder: () => ({ stop() {} }),
-		}));
+		const h = createHarness(
+			options =>
+				new LiveSessionController({
+					...options,
+					createTransport: transportOptions => {
+						fire = transportOptions.callbacks.onEvent;
+						return {
+							async connect() {},
+							async send(message: LiveClientMessage) {
+								sent.push(message);
+							},
+							async close() {},
+							async setMuted() {},
+							setOutputSuppressed() {},
+							pushAudio: () => true,
+						};
+					},
+					createRecorder: () => ({ stop() {} }),
+				}),
+		);
 		cfgLiveHoldMode.set(h.ctx.settings, true);
 		cfgLiveSubmitKeyword.set(h.ctx.settings, "over");
 		cfgLiveSubmitSilenceMs.set(h.ctx.settings, 50);
@@ -239,7 +252,8 @@ describe("LiveCommandController", () => {
 		await h.controller.handleCommand();
 		try {
 			const route = (id: string): LiveServerEvent => ({
-				type: "delegation.created", item: { type: "delegation", target: "client", id, content: [] },
+				type: "delegation.created",
+				item: { type: "delegation", target: "client", id, content: [] },
 			});
 			fire?.({ type: "turn.done", turn: { role: "user", transcript: "first part over" } });
 			fire?.(route("premature-first"));
@@ -252,8 +266,10 @@ describe("LiveCommandController", () => {
 			fire?.({ type: "turn.done", turn: { role: "user", transcript: "third part over and the rest over" } });
 			await Bun.sleep(80);
 			expect(prompts).toEqual([]);
-			const submitted = sent.filter(message => message.type === "session.context.append")
-				.flatMap(message => message.content.map(item => item.text)).join("\n");
+			const submitted = sent
+				.filter(message => message.type === "session.context.append")
+				.flatMap(message => message.content.map(item => item.text))
+				.join("\n");
 			expect(submitted).toContain("first part over");
 			expect(submitted).toContain("second part over");
 			expect(submitted).toContain("typed correction");
@@ -804,7 +820,8 @@ describe("LiveCommandController", () => {
 						await Bun.sleep(40);
 						if (hold) {
 							expect(h.prompts).toEqual([]);
-							const submitted = h.sent.filter(message => message.type === "session.context.append")
+							const submitted = h.sent
+								.filter(message => message.type === "session.context.append")
 								.flatMap(message => message.content.map(item => item.text));
 							expect(submitted).toContain(`"Operator Submitted Message":\n\n${content}`);
 							h.delegate();

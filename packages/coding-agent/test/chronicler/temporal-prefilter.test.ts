@@ -16,22 +16,38 @@ const GAMMA = "c3c3c3c3-0000-7000-8000-00000000000c";
 describe("transcript keyword grammar", () => {
 	it("binds AND before OR, with case-insensitive operators and parenthesized overrides", () => {
 		expect(parseKeywords("daemon or tmux and hub")).toEqual({
-			operator: "OR", left: { term: "daemon" }, right: {
-				operator: "AND", left: { term: "tmux" }, right: { term: "hub" },
+			operator: "OR",
+			left: { term: "daemon" },
+			right: {
+				operator: "AND",
+				left: { term: "tmux" },
+				right: { term: "hub" },
 			},
 		});
 		expect(parseKeywords('(daemon AND tmux) OR "session hub"')).toEqual({
-			operator: "OR", left: { operator: "AND", left: { term: "daemon" }, right: { term: "tmux" } },
+			operator: "OR",
+			left: { operator: "AND", left: { term: "daemon" }, right: { term: "tmux" } },
 			right: { term: "session hub" },
 		});
 		expect(parseKeywords('(daemon OR tmux) AND "AND"')).toEqual({
-			operator: "AND", left: { operator: "OR", left: { term: "daemon" }, right: { term: "tmux" } },
+			operator: "AND",
+			left: { operator: "OR", left: { term: "daemon" }, right: { term: "tmux" } },
 			right: { term: "AND" },
 		});
 		expect(parseKeywords('"quoted \\"word\\""')).toEqual({ term: 'quoted "word"' });
 	});
 	it("rejects malformed expressions instead of widening the search", () => {
-		for (const expression of ["", "daemon tmux", "daemon AND", "OR daemon", "()", "(daemon", "daemon)", '"open', '""']) {
+		for (const expression of [
+			"",
+			"daemon tmux",
+			"daemon AND",
+			"OR daemon",
+			"()",
+			"(daemon",
+			"daemon)",
+			'"open',
+			'""',
+		]) {
 			expect(() => parseKeywords(expression)).toThrow();
 		}
 	});
@@ -66,17 +82,24 @@ describe("native transcript prefilter and recall", () => {
 			[BETA, "/work/beta", "session hub routing repaired", "2026-09-03T10:00:00.000Z"],
 			[GAMMA, "/work/gamma", "tmux routing repaired", "2026-10-02T10:00:00.000Z"],
 		] as const) {
-			const written = await writeSessionAtoms(sessionsDir, { sessionId, cwd: project,
+			const written = await writeSessionAtoms(sessionsDir, {
+				sessionId,
+				cwd: project,
 				batches: [[{ title, eventTime: time, body: "Routing repaired and saved." }]],
 			});
 			if (sessionId === ALPHA) {
-				await Bun.write(written.transcriptPath, `${await Bun.file(written.transcriptPath).text()}${JSON.stringify({ type: "custom", data: "tmux C++ a.b" })}\n`);
+				await Bun.write(
+					written.transcriptPath,
+					`${await Bun.file(written.transcriptPath).text()}${JSON.stringify({ type: "custom", data: "tmux C++ a.b" })}\n`,
+				);
 			}
 		}
-		await Bun.write(path.join(sessionsDir, "-work-alpha", "diagnostic.jsonl"), 'not a session daemon tmux\n');
-		await Bun.write(path.join(sessionsDir, "-work-alpha", "artifact", "__chronicler.jsonl"), 'daemon tmux\n');
+		await Bun.write(path.join(sessionsDir, "-work-alpha", "diagnostic.jsonl"), "not a session daemon tmux\n");
+		await Bun.write(path.join(sessionsDir, "-work-alpha", "artifact", "__chronicler.jsonl"), "daemon tmux\n");
 	});
-	afterEach(async () => { await temp.remove(); });
+	afterEach(async () => {
+		await temp.remove();
+	});
 
 	const ids = async (keywords: string, caseSensitive = false) =>
 		(await prefilterTranscripts({ sessionsDir, keywords, caseSensitive })).map(match => match.sessionId).sort();
@@ -94,23 +117,49 @@ describe("native transcript prefilter and recall", () => {
 	});
 
 	it("returns no sessions for an absent root and honours cancellation", async () => {
-		expect(await prefilterTranscripts({ sessionsDir: path.join(temp.path(), "missing"), keywords: "daemon" })).toEqual([]);
+		expect(
+			await prefilterTranscripts({ sessionsDir: path.join(temp.path(), "missing"), keywords: "daemon" }),
+		).toEqual([]);
 		const controller = new AbortController();
 		controller.abort();
-		await expect(prefilterTranscripts({ sessionsDir, keywords: "daemon", signal: controller.signal })).rejects.toThrow();
+		await expect(
+			prefilterTranscripts({ sessionsDir, keywords: "daemon", signal: controller.signal }),
+		).rejects.toThrow();
 	});
 
 	it("restricts descent, adjacency and neighbors to selected sessions and event dates", async () => {
 		const fake = createFakeChronicleModel();
-		const report = await indexChronicle({ agentDir: temp.path(), root,
-			config: { timeZone: "UTC", summaryTokens: 500, hopTokens: 1000, terminalAtoms: 8, leadTokens: 120, shortNames: false },
+		const report = await indexChronicle({
+			agentDir: temp.path(),
+			root,
+			config: {
+				timeZone: "UTC",
+				summaryTokens: 500,
+				hopTokens: 1000,
+				terminalAtoms: 8,
+				leadTokens: 120,
+				shortNames: false,
+			},
 			summarizer: createSummarizer(fake.client),
 		});
 		expect(report.complete).toBe(true);
-		const recall = (selection: { sessions?: string[]; keywords?: string; project?: string; from?: string; to?: string }) =>
-			recallChronicle({ root, query: "routing repaired", hint: "routing repaired", ranker: lexicalRanker,
-				budget: 10, beam: 4, neighborhoodMinutes: 60 * 24 * 60,
-				...selection, sessionsDir,
+		const recall = (selection: {
+			sessions?: string[];
+			keywords?: string;
+			project?: string;
+			from?: string;
+			to?: string;
+		}) =>
+			recallChronicle({
+				root,
+				query: "routing repaired",
+				hint: "routing repaired",
+				ranker: lexicalRanker,
+				budget: 10,
+				beam: 4,
+				neighborhoodMinutes: 60 * 24 * 60,
+				...selection,
+				sessionsDir,
 				from: selection.from ? parseTimeBound(selection.from) : undefined,
 				to: selection.to ? parseTimeBound(selection.to) : undefined,
 			});

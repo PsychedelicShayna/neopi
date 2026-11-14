@@ -110,9 +110,7 @@ afterEach(() => {
 });
 
 describe("AskTool interruption and headless behavior", () => {
-	const questions = [
-		{ id: "store", question: "Session store?", options: [{ label: "SQLite" }, { label: "Redis" }] },
-	];
+	const questions = [{ id: "store", question: "Session store?", options: [{ label: "SQLite" }, { label: "Redis" }] }];
 
 	it.each(["user", "irc", "aside", "job"])("handles %s steering without cancelling the turn", async source => {
 		const steering = new AbortController();
@@ -136,7 +134,13 @@ describe("AskTool interruption and headless behavior", () => {
 						};
 			},
 		});
-		const outcome = new AskTool(createSession()).execute(`call-${source}`, { questions }, undefined, undefined, context);
+		const outcome = new AskTool(createSession()).execute(
+			`call-${source}`,
+			{ questions },
+			undefined,
+			undefined,
+			context,
+		);
 		if (source === "user") {
 			await expect(outcome).rejects.toThrow("Ask interrupted by message");
 		} else {
@@ -1743,7 +1747,6 @@ describe("askToolRenderer malformed call args", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
-
 	it("names the option a note is on in the text the model reads and in single-question details", async () => {
 		const askDialog = vi.fn().mockResolvedValue({
 			kind: "submit",
@@ -2175,7 +2178,6 @@ describe("AskTool rich ask dialog", () => {
 		expect(result.content[0]?.type).toBe("text");
 		expect((result.content[0] as { text: string }).text).toContain("chat about this");
 	});
-
 
 	it("rejects reserved-label collision in parameters validation", async () => {
 		const tool = new AskTool(createSession());

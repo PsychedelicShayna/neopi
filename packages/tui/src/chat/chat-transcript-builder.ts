@@ -68,7 +68,12 @@ import {
 import { groupedReadUsageCallIds, ReadToolGroupComponent, readArgsCollapseIntoGroup } from "./read-tool-group";
 import { isReplyWrite, ReplyWriteComponent, replyDisplayMessage, toolResultReplies } from "./reply-write";
 import { SkillMessageComponent } from "./skill-message";
-import { toolRenderName, ToolExecutionComponent, type ToolResultFrame, type ToolExecutionHandle } from "./tool-execution";
+import {
+	toolRenderName,
+	ToolExecutionComponent,
+	type ToolResultFrame,
+	type ToolExecutionHandle,
+} from "./tool-execution";
 import { TranscriptContainer } from "../chrome/transcript-container";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "../overlays/usage-row";
 import { CollapsedSyntheticMessageComponent, UserMessageComponent } from "./user-message";

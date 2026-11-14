@@ -438,7 +438,13 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 		}
 		return bash
 			? { terminal, name: "bash", role: "omp.bash", title: "Bash", target: source }
-			: { terminal, name: "eval", role: "omp.eval", title: language !== undefined ? `Eval (${language})` : "Python", target: source };
+			: {
+					terminal,
+					name: "eval",
+					role: "omp.eval",
+					title: language !== undefined ? `Eval (${language})` : "Python",
+					target: source,
+				};
 	}
 	switch (message.customType) {
 		case "advisor": {

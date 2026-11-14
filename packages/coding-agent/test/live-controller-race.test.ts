@@ -648,10 +648,15 @@ describe("held keyword submission boundaries", () => {
 	const keywords = () => ({ submit: "over", force: "make it so", silenceMs: 40 });
 
 	it("keeps custom persona instructions while adding the submitted-message routing contract", async () => {
-		const persona = vi.spyOn(livePersonas, "resolveLiveInstructions")
+		const persona = vi
+			.spyOn(livePersonas, "resolveLiveInstructions")
 			.mockResolvedValue("Custom Iris persona. Default route: relay every utterance.");
 		let instructions = "";
-		const h = makeHarness({ onInstructions: text => { instructions = text; } });
+		const h = makeHarness({
+			onInstructions: text => {
+				instructions = text;
+			},
+		});
 		try {
 			await h.controller.start();
 			expect(instructions).toContain("Custom Iris persona.");
@@ -675,8 +680,11 @@ describe("held keyword submission boundaries", () => {
 			h.fireLive({ type: "input_transcript.added", item: { text: "next request" } });
 			h.fireLive({ type: "output_transcript.added", item: { text: " the complete answer." } });
 			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Here is the complete answer." } });
-			expect(h.transcripts.some(item => item?.role === "assistant" && item.final &&
-				item.text === "Here is the complete answer.")).toBe(true);
+			expect(
+				h.transcripts.some(
+					item => item?.role === "assistant" && item.final && item.text === "Here is the complete answer.",
+				),
+			).toBe(true);
 			expect(h.outputSuppressed.slice(-2)).not.toContain(true);
 			expect(h.controller.pendingUserTurnCount()).toBe(1);
 		} finally {
@@ -715,8 +723,13 @@ describe("held keyword submission boundaries", () => {
 				await wait(70);
 				await settle();
 				expect(h.prompts).toEqual([]);
-				expect(h.sent.some(message => message.type === "session.context.append" &&
-					message.content.some(item => item.text.includes("tell me a joke")))).toBe(true);
+				expect(
+					h.sent.some(
+						message =>
+							message.type === "session.context.append" &&
+							message.content.some(item => item.text.includes("tell me a joke")),
+					),
+				).toBe(true);
 				h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A complete joke" } });
 				h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "fix the parser over" } });
 				await wait(70);
@@ -849,7 +862,8 @@ describe("held keyword submission boundaries", () => {
 
 	it("releases a force-utterance route at submit without turning ordinary submits into forced routes", async () => {
 		const h = makeHarness({
-			holdMode: () => true, transcriptKeywords: keywords,
+			holdMode: () => true,
+			transcriptKeywords: keywords,
 			delegationKeywords: () => ({ suppress: "Iris", force: "relay" }),
 		});
 		await h.controller.start();
@@ -1402,7 +1416,9 @@ describe("live controller delegation ownership", () => {
 		expect(h.prompts).toEqual(["typed context Fix the cache."]);
 		expect(h.sentSpeech).toEqual(["typed context Fix the cache."]);
 		expect(
-			h.sent.filter(item => item.type === "session.context.append").map(item => [item.channel, item.content[0]?.text]),
+			h.sent
+				.filter(item => item.type === "session.context.append")
+				.map(item => [item.channel, item.content[0]?.text]),
 		).toEqual([["commentary", '"Operator Message Sent To Main Agent":\n\ntyped context Fix the cache.']]);
 		await h.controller.stop();
 	});

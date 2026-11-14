@@ -303,7 +303,8 @@ export class AgentActivityIndex {
 						(row.timestamp === query.before.timestamp && row.id >= query.before.id);
 					if (afterCursor) continue;
 				}
-				if (regex ? !regex.regex?.test(searchTextOf(row).raw) : search && !searchTextOf(row).lower.includes(search)) continue;
+				if (regex ? !regex.regex?.test(searchTextOf(row).raw) : search && !searchTextOf(row).lower.includes(search))
+					continue;
 				rows.push(row);
 			}
 		}

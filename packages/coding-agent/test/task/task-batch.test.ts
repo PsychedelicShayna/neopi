@@ -220,7 +220,6 @@ describe("task.batch schema gating", () => {
 		expect(getBatchItemProperties(batch).schemaMode).toBeUndefined();
 		expect(batch.description).not.toContain("outputSchema");
 	});
-
 });
 
 describe("task.batch validation", () => {
@@ -858,7 +857,9 @@ describe("task.batch spawning", () => {
 			return makeResult(options.id ?? "?");
 		});
 		const run = async (settings: Record<string, unknown>, params: TaskParams) => {
-			const tool = await TaskTool.create(createSession({ settings: { "async.enabled": false, "effort.mode": "legacy", ...settings } }));
+			const tool = await TaskTool.create(
+				createSession({ settings: { "async.enabled": false, "effort.mode": "legacy", ...settings } }),
+			);
 			await tool.execute("tc-effort", params);
 		};
 		const batch = { context: "Shared.", tasks: [{ name: "Solo", task: "Reply OK.", effort: "hi" }] } as TaskParams;

@@ -54,7 +54,11 @@ describe("owner-scoped retained kernel resets", () => {
 			expect(await run(child, "globalThis.childOldValue = 19; print([parentValue]);")).toBe("[ 17 ]");
 			expect(await run(parent, "print([childOldValue]);")).toBe("[ 19 ]");
 			expect(
-				await run(child, "print([typeof parentValue, typeof childOldValue]); globalThis.childValue = 23; void 0;", true),
+				await run(
+					child,
+					"print([typeof parentValue, typeof childOldValue]); globalThis.childValue = 23; void 0;",
+					true,
+				),
 			).toBe("[ 'undefined', 'undefined' ]");
 			expect(await run(child, "print([typeof parentValue, childValue]);")).toBe("[ 'undefined', 23 ]");
 			expect(await run(parent, "print([parentValue, childOldValue, typeof childValue]);")).toBe(

@@ -65,15 +65,7 @@ describe("InteractiveMode quit while docked", () => {
 			preferences: { ...COMPOSER_DEFAULTS, quiet: true, spellingTypoDetection: false, spellingAutocomplete: "off" },
 		});
 		composer.start();
-		const mode = new InteractiveMode(
-			session,
-			"test",
-			undefined,
-			undefined,
-			undefined,
-			undefined,
-			composer,
-		);
+		const mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 		try {
 			composer.setRuntimeChildren([mode.chatContainer, new Text("EDITOR", 0, 0)]);
 			mode.sidePanel.applySettings();

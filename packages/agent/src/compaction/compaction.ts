@@ -1268,7 +1268,11 @@ async function generateShortSummary(
 	const llmMessages = options?.convertToLlm
 		? options.convertToLlm(recentMessages)
 		: defaultConvertToLlm(recentMessages, options?.cwd);
-	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id), resolveCatalogPolicy(model).classifierCotExtraction === true);
+	const conversationText = serializeConversationForSummary(
+		llmMessages,
+		preferredDialect(model.id),
+		resolveCatalogPolicy(model).classifierCotExtraction === true,
+	);
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	if (historySummary) {
@@ -1938,7 +1942,9 @@ export async function compact(
 		// too, so pick the user's own messages before serialization erases that,
 		// then serialize each one exactly as the request does.
 		const isUserAuthored = summaryOptions.isUserAuthored ?? ((message: AgentMessage) => message.role === "user");
-		const remoteSystemPrompt = summaryOptions.remoteSystemPrompt ?? [getSummarizationSystemPrompt(summaryOptions.cwd)];
+		const remoteSystemPrompt = summaryOptions.remoteSystemPrompt ?? [
+			getSummarizationSystemPrompt(summaryOptions.cwd),
+		];
 		const buildV2Input = async (includeTail: boolean): Promise<RemoteCompactionV2Input> => {
 			const messages = convertToLlm(includeTail ? remoteMessages : remotePrefixMessages);
 			const userMessages = convertToLlm(
@@ -2117,7 +2123,9 @@ export async function compact(
 				: previousV2Compaction?.provider === model.provider
 					? previousV2Compaction.replacementHistory
 					: undefined;
-		const convertToLlm = summaryOptions.convertToLlm ?? ((messages: AgentMessage[]) => defaultConvertToLlm(messages, summaryOptions.cwd));
+		const convertToLlm =
+			summaryOptions.convertToLlm ??
+			((messages: AgentMessage[]) => defaultConvertToLlm(messages, summaryOptions.cwd));
 		const supportsOriginalDetail = openAiCompatSupportsImageDetailOriginal(model);
 		const sendV1 = async (remoteHistory: Array<Record<string, unknown>>, rewriteOutputs: boolean): Promise<void> => {
 			const remote = await withAuth(
@@ -2410,7 +2418,12 @@ export async function compact(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = snapcompact.computeFileLists(fileOps);
 	summary = snapcompact.upsertFileOperations(
-		summary, readFiles, modifiedFiles, fileOps.read, summaryOptions.cwd, "compaction/file-operations.md",
+		summary,
+		readFiles,
+		modifiedFiles,
+		fileOps.read,
+		summaryOptions.cwd,
+		"compaction/file-operations.md",
 	);
 	if (nativeSummary !== undefined) {
 		// The replayed block (summary and any `tool_changes`) stays
@@ -2419,9 +2432,15 @@ export async function compact(
 		// summary message with the block and skips its text, so they would
 		// otherwise be invisible to this provider. Every other provider keeps
 		// reading the entry text.
-		const filesText = snapcompact.upsertFileOperations(
-			"", readFiles, modifiedFiles, fileOps.read, summaryOptions.cwd, "compaction/file-operations.md",
-		) || undefined;
+		const filesText =
+			snapcompact.upsertFileOperations(
+				"",
+				readFiles,
+				modifiedFiles,
+				fileOps.read,
+				summaryOptions.cwd,
+				"compaction/file-operations.md",
+			) || undefined;
 		preserveData = withAnthropicCompactionPreserveData(preserveData, {
 			provider: model.provider,
 			content: nativeSummary,
@@ -2474,7 +2493,11 @@ async function generateTurnPrefixSummary(
 	const llmMessages = options?.convertToLlm
 		? options.convertToLlm(messages)
 		: defaultConvertToLlm(messages, options?.cwd);
-	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id), resolveCatalogPolicy(model).classifierCotExtraction === true);
+	const conversationText = serializeConversationForSummary(
+		llmMessages,
+		preferredDialect(model.id),
+		resolveCatalogPolicy(model).classifierCotExtraction === true,
+	);
 	const instructions = renderPromptAsset(
 		"compaction/compaction-turn-prefix.md",
 		compactionTurnPrefixPrompt,

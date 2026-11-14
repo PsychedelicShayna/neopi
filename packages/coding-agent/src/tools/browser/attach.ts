@@ -631,7 +631,11 @@ function selectRelayEntry(entries: RelayJsonEntry[], options: PickTargetOptions)
 }
 
 /** Resolve an existing explicit relay target without attaching before its worker can claim it. */
-export async function findRelayTargetId(relayJson: string, matcher: string, signal?: AbortSignal): Promise<string | null> {
+export async function findRelayTargetId(
+	relayJson: string,
+	matcher: string,
+	signal?: AbortSignal,
+): Promise<string | null> {
 	const entries = await fetchRelayEntries(relayJson, signal);
 	if (!entries) return null;
 	const pages = entries.filter(entry => entry.type === "page");

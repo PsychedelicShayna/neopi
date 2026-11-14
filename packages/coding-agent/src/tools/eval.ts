@@ -103,7 +103,9 @@ function summarizeEvalLanguages(langs: readonly string[], session?: ToolSession 
 	const registered = session ? (registryForToolSession(session)?.modelVisibleBackends() ?? []) : [];
 	const labels = new Map(registered.map(backend => [backend.id, backend.label]));
 	const names = langs.map(lang => EVAL_LANGUAGE_NAME[lang as EvalLanguageToken] ?? labels.get(lang) ?? lang);
-	return names.length > 0 ? `Execute ${joinWithOr(names)} in persistent kernels; load scripts or install packages` : "No eval runtimes are currently available";
+	return names.length > 0
+		? `Execute ${joinWithOr(names)} in persistent kernels; load scripts or install packages`
+		: "No eval runtimes are currently available";
 }
 
 /** Resolved-allowance → enabled language tokens, preserving display order. */
@@ -449,7 +451,6 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		return session.getAdvertisedEvalPreludes?.() ?? getEnabledEvalPreludes(session.getEvalPreludes?.() ?? []);
 	}
 
-
 	/** Only syntax not obvious from the field schema; filtered by enabled language. */
 	static readonly #examples: readonly ToolExample<typeof evalSchema.infer>[] = [
 		{
@@ -464,7 +465,12 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	get parameters(): typeof evalSchema {
 		const langs = this.#enabledLanguages();
 		const maxTimeout = this.session ? cfgToolsMaxTimeout.get(this.session.settings) : undefined;
-		if (langs.length === EVAL_LANGUAGE_ORDER.length && langs.every((lang, i) => lang === EVAL_LANGUAGE_ORDER[i]) && !maxTimeout) return evalSchema;
+		if (
+			langs.length === EVAL_LANGUAGE_ORDER.length &&
+			langs.every((lang, i) => lang === EVAL_LANGUAGE_ORDER[i]) &&
+			!maxTimeout
+		)
+			return evalSchema;
 		const key = `${langs.join(",")}:${maxTimeout ?? 0}`;
 		if (this.#paramsKey !== key) {
 			this.#cachedParams = buildEvalSchema(langs, maxTimeout);
@@ -514,7 +520,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	#enabledLanguages(): string[] {
 		const builtins = this.session ? enabledEvalLanguages(resolveAdvertisedEvalBackends(this.session)) : ["py", "js"];
 		if (!this.session) return builtins;
-		const registered = registryForToolSession(this.session)?.modelVisibleBackends().map(backend => backend.id) ?? [];
+		const registered =
+			registryForToolSession(this.session)
+				?.modelVisibleBackends()
+				.map(backend => backend.id) ?? [];
 		return [...builtins, ...registered];
 	}
 
