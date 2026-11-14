@@ -19,6 +19,7 @@
  * Its `process` / `widgetInputs` stay here too; main reads them through a
  * {@link WireJobFeed} whose pulls and final push this module answers.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type {
 	AsyncJob,
@@ -59,8 +60,9 @@ const LOCAL_INPUTS_RETENTION_MS = 10 * 60 * 1000;
 
 type Remote = RemoteObject<AsyncJobManagerProtocol>;
 
-/** Live inputs of a job registered from this worker. */
+/** Live inputs and initiating async context of a job registered from this worker. */
 interface LocalInputs {
+	readonly runInContext: <T>(fn: () => T) => T;
 	readonly process?: AsyncJobProcess;
 	readonly widgetInputs?: JobWidgetInputs;
 }
@@ -243,25 +245,30 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 	}
 
 	register(type: AsyncJobType, label: string, run: AsyncJobRun, options?: AsyncJobRegisterOptions): string {
-		const local: LocalInputs | undefined =
-			options?.process || options?.widgetInputs
-				? { process: options.process, widgetInputs: options.widgetInputs }
-				: undefined;
-		const feed = local ? new WorkerJobFeed(local) : undefined;
-		const wired: WireJobRun = async ctx => {
-			try {
-				return await run({
-					jobId: ctx.jobId,
-					signal: fromWireSignal(ctx.signal),
-					reportProgress: ctx.reportProgress,
-					markRunning: () => ignoreSettle(ctx.markRunning()),
-				});
-			} finally {
-				// Sent ahead of the result, so main's final widget read sees the job's last output.
-				if (feed && ctx.pushFeed) ignoreSettle(ctx.pushFeed(feed.delta()));
-				if (local) this.#expireLocal(ctx.jobId, local);
-			}
+		// RPC callbacks enter from the link's context, not the spawning turn.
+		// Keep the job's run owners and other async-local state through delivery.
+		const local: LocalInputs = {
+			process: options?.process,
+			widgetInputs: options?.widgetInputs,
+			runInContext: AsyncLocalStorage.snapshot(),
 		};
+		const feed = options?.process || options?.widgetInputs ? new WorkerJobFeed(local) : undefined;
+		const wired: WireJobRun = ctx =>
+			local.runInContext(async () => {
+				this.#local.set(ctx.jobId, local);
+				try {
+					return await run({
+						jobId: ctx.jobId,
+						signal: fromWireSignal(ctx.signal),
+						reportProgress: ctx.reportProgress,
+						markRunning: () => ignoreSettle(ctx.markRunning()),
+					});
+				} finally {
+					// Sent ahead of the result, so main's final widget read sees the job's last output.
+					if (feed && ctx.pushFeed) ignoreSettle(ctx.pushFeed(feed.delta()));
+					this.#expireLocal(ctx.jobId, local);
+				}
+			});
 		const wireOptions: WireRegisterOptions = {
 			id: options?.id,
 			ownerId: options?.ownerId,
@@ -273,7 +280,7 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 			feed: feed?.wire(),
 		};
 		const id = this.#remote.callSync("register", type, label, wired, wireOptions);
-		if (local) this.#local.set(id, local);
+		this.#local.set(id, local);
 		return id;
 	}
 
@@ -362,9 +369,11 @@ export class RemoteAsyncJobManager implements AsyncJobManagerApi {
 
 	registerDeliverySink(ownerId: string, sink: AsyncJobDeliverySink): () => void {
 		return localUnsubscribe(
-			this.#remote.callSync("registerDeliverySink", ownerId, (jobId, text, job) =>
-				sink(jobId, text, job ? this.#row(job) : undefined),
-			),
+			this.#remote.callSync("registerDeliverySink", ownerId, (jobId, text, job) => {
+				const local = this.#local.get(jobId);
+				const row = job ? this.#row(job) : undefined;
+				return local ? local.runInContext(() => sink(jobId, text, row)) : sink(jobId, text, row);
+			}),
 		);
 	}
 
