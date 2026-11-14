@@ -135,7 +135,6 @@ async function boot(bearerTokens = [GATEWAY_TOKEN]): Promise<Fixture> {
 	const embedding: Model<Api> = { ...chat, id: "pool-embedding", api: "openai-embeddings", kind: "embedding" };
 	const models: Model<Api>[] = [chat, oauthChat, entitled, embedding, chatModel("devin", "disabled-chat")];
 	const attempts: Attempt[] = [];
-	let fixture: Fixture;
 	const transport: FetchImpl = async (_input, init) => {
 		const attempt = {
 			headers: new Headers(init?.headers),
@@ -155,7 +154,7 @@ async function boot(bearerTokens = [GATEWAY_TOKEN]): Promise<Fixture> {
 		listModels: () => [...models, chat],
 		excludeProviders: new Set(["devin"]),
 	});
-	fixture = {
+	const fixture: Fixture = {
 		broker,
 		brokerStorage,
 		storage,

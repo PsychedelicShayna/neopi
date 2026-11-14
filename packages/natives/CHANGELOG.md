@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed native CI builds and voice tests using outdated dependency features after workspace manifest changes.
 - Fixed spurious computer-use typing cancellation on X11; cancellation errors now report why input stopped ([#598](https://github.com/PsychedelicShayna/neopi/issues/598)).
 
 ## [18.18.8] - 2026-11-11
