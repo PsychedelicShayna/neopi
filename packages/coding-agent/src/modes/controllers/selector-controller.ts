@@ -1086,8 +1086,8 @@ export class SelectorController {
 				generateAdvisor: (bases, comment, signal) => generator.generate(bases, comment, signal),
 				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
 				loadFile: loadWatchdogConfigFile,
-				saveFile: async (filePath, doc) => {
-					await saveWatchdogConfigFile(filePath, doc);
+				saveFile: async (filePath, doc, options) => {
+					await saveWatchdogConfigFile(filePath, doc, options);
 					this.ctx.showStatus(`Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.`);
 					this.ctx.ui.requestRender();
 				},
