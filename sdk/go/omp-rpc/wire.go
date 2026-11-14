@@ -12973,7 +12973,7 @@ type SetSubagentModelCommand struct {
 	ModelID    *string `json:"modelId,omitempty"`
 }
 
-// SetSubagentModel sends "set_subagent_model": Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+// SetSubagentModel sends "set_subagent_model": Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
 func (c Commands) SetSubagentModel(ctx context.Context, p SetSubagentModelCommand) (SetSubagentModelResult, error) {
 	var out SetSubagentModelResult
 	err := c.call(ctx, "set_subagent_model", p, 0, &out)

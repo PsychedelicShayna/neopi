@@ -5954,7 +5954,7 @@ class WireClient:
         return required(expect_object(self._command("cancel_job", params), "cancel_job"), "cancelled", decode_bool, "cancel_job")
 
     def set_subagent_model(self, subagent_id: str, *, selector: str | None = None, provider: str | None = None, model_id: str | None = None) -> SetSubagentModelResult:
-        """Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
+        """Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
         params: dict[str, object] = {}
         params["subagentId"] = subagent_id
         if selector is not None:

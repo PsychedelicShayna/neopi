@@ -42,14 +42,15 @@ describe("CombinedAutocompleteProvider", () => {
 	});
 
 	describe("slash commands", () => {
-		it("reveals hidden aliases with descriptions only after every visible candidate is exhausted", async () => {
+		it("reveals hidden alias prefixes only after visible name and alias prefixes run out", async () => {
 			const provider = new CombinedAutocompleteProvider([
 				{ name: "roles", hiddenAliases: ["legacy"], description: "Configure assignments" },
-				{ name: "logs", aliases: ["ledger"], description: "Inspect events" },
+				{ name: "logs", aliases: ["legend"], description: "Inspect events" },
 			]);
 			for (const [input, expected] of [
 				["/", ["roles", "logs"]],
-				["/leg", ["ledger"]],
+				["/leg", ["legend"]],
+				["/lega", ["legacy"]],
 				["/legacy", ["legacy"]],
 			] as const) {
 				const asyncResult = await provider.getSuggestions([input], 0, input.length);
@@ -60,7 +61,30 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(provider.trySyncSlashCompletion("/legacy")?.items[0]?.description).toBe("Configure assignments");
 		});
 
-		it("lets visible descriptions and skills outrank hidden aliases in both completion paths", async () => {
+		it("reveals models despite fuzzy command matches in both completion paths", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "model", description: "Select a model" },
+				{ name: "modelpreset", description: "Save and switch model presets" },
+				{ name: "moa", description: "Configure ensembles of models" },
+				{ name: "loadout", description: "Load model roles" },
+				{ name: "roles", hiddenAliases: ["models"], description: "Manage model role assignments" },
+			]);
+			for (const input of ["/", "/m", "/model", "/models", "/MoDeLs"]) {
+				const result = await provider.getSuggestions([input], 0, input.length);
+				expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+				if (input.toLowerCase() === "/models") {
+					expect(result?.items[0]).toMatchObject({
+						value: "models",
+						description: "Manage model role assignments",
+					});
+					expect(result?.items.some(item => item.value === "modelpreset")).toBe(true);
+				} else {
+					expect(result?.items.some(item => item.value === "models")).toBe(false);
+				}
+			}
+		});
+
+		it("does not let fuzzy descriptions or skill names suppress a literal hidden alias prefix", async () => {
 			for (const competitor of [
 				{ name: "other", description: "switch tasks" },
 				{ name: "skill:switch", description: "Change branches" },
@@ -69,10 +93,14 @@ describe("CombinedAutocompleteProvider", () => {
 					{ name: "model", hiddenAliases: ["switch"], description: "Choose a model" },
 					competitor,
 				]);
-				const input = "/switch";
-				const result = await provider.getSuggestions([input], 0, input.length);
-				expect(result?.items.map(item => item.value)).toEqual([competitor.name]);
-				expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+				for (const input of ["/swit", "/switch"]) {
+					const result = await provider.getSuggestions([input], 0, input.length);
+					expect(result?.items).toContainEqual(
+						expect.objectContaining({ value: "switch", description: "Choose a model" }),
+					);
+					expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+				}
+				expect(provider.trySyncSlashCompletion("/swt")?.items.some(item => item.value === "switch")).toBeFalsy();
 			}
 		});
 
