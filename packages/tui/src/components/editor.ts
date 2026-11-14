@@ -8,8 +8,9 @@ import {
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	isDirectoryCompletionValue,
-	midPromptSkillTokenMatches,
+	midPromptInlineTokenMatches,
 	SKILL_NAMESPACE,
+	PROMPT_NAMESPACE,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { canonicalKeyId, getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -5453,7 +5454,10 @@ export class Editor implements Component, Focusable {
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
+		if (
+			(item?.value.startsWith(SKILL_NAMESPACE) || item?.value.startsWith(PROMPT_NAMESPACE)) &&
+			findTrailingSlashCommandStart(this.#autocompletePrefix) !== null
+		) {
 			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
 			if (currentTrailingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentTrailingStart);
@@ -5466,7 +5470,7 @@ export class Editor implements Component, Focusable {
 					// therefore falls through to file completion instead of rewriting
 					// the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
-					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
+					if (midPromptInlineTokenMatches(lowerToken, item.value, item.description)) return true;
 				}
 			}
 			return false;

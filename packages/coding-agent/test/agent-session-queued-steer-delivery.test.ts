@@ -1551,6 +1551,41 @@ describe("AgentSession queued steer delivery", () => {
 			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["keep"], liveSteered: 0 });
 		});
 
+		it.each(["prompt", "steer", "followUp"] as const)(
+			"expands original inline references once before %s queues a message",
+			async method => {
+				const { session } = await createSession(
+					[],
+					[
+						{ name: "first", description: "First", content: "/prompts:second", source: "(test)" },
+						{ name: "second", description: "Second", content: "SECOND", source: "(test)" },
+					],
+				);
+				const text = "Before /prompts:first then /prompts:second";
+				session.agent.state.isStreaming = true;
+				try {
+					if (method === "prompt") await session.prompt(text, { streamingBehavior: "steer" });
+					else if (method === "steer") await session.steer(text);
+					else await session.followUp(text);
+					const queued = session.getQueuedMessages();
+					expect(method === "followUp" ? queued.followUp : queued.steering).toEqual([
+						"Before /prompts:second then SECOND",
+					]);
+				} finally {
+					session.agent.state.isStreaming = false;
+				}
+			},
+		);
+
+		it("keeps inline references raw when follow-up expansion is disabled", async () => {
+			const { session } = await createSession(
+				[],
+				[{ name: "review", description: "Review", content: "REVIEW", source: "(test)" }],
+			);
+			await session.followUp("Keep /prompts:review", undefined, { expandPromptTemplates: false });
+			expect(session.getQueuedMessages().followUp).toEqual(["Keep /prompts:review"]);
+		});
+
 		it("removes a queued file-based slash command by its raw /cmd invocation", async () => {
 			const { session } = await createSession([]);
 			session.setSlashCommands([{ name: "cmd", description: "Test", content: "Expanded $1", source: "(test)" }]);

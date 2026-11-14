@@ -266,6 +266,14 @@ Situation report. Focus on $ARGUMENTS if given, else the whole session.
 
 This routing applies to Enter, Ctrl+Enter, and focused subagent views; a focused view answers about the agent being viewed. An extension command, TypeScript custom command, or `/skill:` command of the same name still takes precedence. If the template fails to render, the error is shown and the typed command goes back into the editor. Other modes (RPC, ACP, print) have no `/btw` surface, so they expand a side command as an ordinary prompt.
 
+### Inline prompt-template references
+
+`/prompts:<name>` refers to the same discovered prompt-template catalog displayed by `/status`. The explicit namespace works anywhere in the message, including beside punctuation. Multiple references are replaced in message order, in place, with each template's literal body. Quotes, indentation and placeholder syntax in those bodies are preserved; inserted bodies are not rescanned. Unknown names remain literal. Only the reference token is consumed, not subsequent prose.
+
+Only references in the original submitted text are recognized. Their bodies stay opaque while the legacy leading `/<name> [args]` renderer applies its existing argument substitution and fallback behavior; literal bodies are inserted afterwards without argument parsing or recursive expansion. A pasted leading slash command is never dispatched. All session prompt/queue entrypoints retain their existing expansion policy; callers that disable `expandPromptTemplates` keep raw text.
+
+The composer offers `prompts:<name>` candidates from all loaded templates, independently of bare command-name collisions. Mid-message completion replaces only the live token and preserves other references and surrounding text. Leading `/` and bare-name queries retain the existing unnamespaced entries; namespaced rows appear when the query approaches or enters `prompts:`.
+
 ## 7) Unknown `/...` behavior
 
 Unknown slash input is **not rejected** by core slash logic.

@@ -12,6 +12,7 @@
 
 ### Added
 
+- Complete `/prompts:<name>` references anywhere in a message and paste multiple prompt-template bodies in the order written, while preserving the existing leading `/<name> [args]` invocation.
 - `/model` and Alt+P now open the fullscreen Big Pickle by default; choose Small picker in Settings → Model → Session model picker (`models.sessionPicker: small`) for the compact view. Both support the temporary Task-model target.
 
 - Select supported Codex Fast, Ultra, and extended-context profiles with ordinary model slugs in CLI selections, roles, advisors, tasks, and web search without changing other assignments ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).

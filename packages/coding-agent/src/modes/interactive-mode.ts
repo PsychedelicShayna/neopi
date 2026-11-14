@@ -3551,7 +3551,18 @@ export class InteractiveMode implements InteractiveModeContext {
 				icon: promptIcon,
 				iconName: "prompt",
 			}));
-		const allCommands = [...this.#pendingSlashCommands, ...fileSlashCommands, ...promptTemplateCommands];
+		const inlinePromptCommands: SlashCommand[] = this.session.promptTemplates.map(template => ({
+			name: `prompts:${template.name}`,
+			description: template.description,
+			icon: promptIcon,
+			iconName: "prompt",
+		}));
+		const allCommands = [
+			...this.#pendingSlashCommands,
+			...fileSlashCommands,
+			...promptTemplateCommands,
+			...inlinePromptCommands,
+		];
 		this.slashCommandNames = new Set(
 			allCommands.flatMap(command => [command.name, ...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]),
 		);
