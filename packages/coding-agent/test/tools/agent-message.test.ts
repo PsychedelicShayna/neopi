@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
-import { executeSend } from "@oh-my-pi/pi-coding-agent/irc/messaging";
-import { registerIrcOperator } from "@oh-my-pi/pi-coding-agent/irc/operator";
 import { AgentProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/agent-protocol";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, type AgentRegistryApi } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -14,13 +12,13 @@ import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 const received = new Map<string, IrcMessage[]>();
 let registry: AgentRegistryApi;
 
-function registerPeer(id: string, status: "running" | "idle" = "running", kind: "sub" | "advisor" = "sub"): void {
+function registerPeer(id: string, status: "running" | "idle" = "running"): void {
 	const messages: IrcMessage[] = [];
 	received.set(id, messages);
 	registry.register({
 		id,
 		displayName: id,
-		kind,
+		kind: "sub",
 		parentId: "Main",
 		status,
 		session: {
@@ -114,34 +112,18 @@ describe("write agent:// messaging", () => {
 		);
 	});
 
-	it.each(["sub", "advisor"] as const)("refuses a %s's broadcast without waking anyone, while its direct messages still go through", async kind => {
-		registerPeer("Sender", "running", kind);
+	it("delivers a subagent's broadcast and direct message under its own identity", async () => {
+		registerPeer("Sender");
 		registerPeer("Sibling", "idle");
 		const tool = new WriteTool(makeSession({ senderId: "Sender" }));
-		const refused = await tool.execute("broadcast", { path: "agent://all", content: "editing auth.ts" });
-		expect(refused.isError).toBeTrue();
-		expect(received.get("Sibling")).toEqual([]);
+		const broadcast = await tool.execute("broadcast", { path: "agent://all", content: "editing auth.ts" });
+		expect(broadcast.isError).toBeFalsy();
+		expect(received.get("Sibling")).toMatchObject([
+			{ from: "Sender", to: "Sibling", body: "editing auth.ts", broadcast: true },
+		]);
 		const direct = await tool.execute("direct", { path: "agent://Sibling", content: "who owns auth.ts?" });
 		expect(direct.isError).toBeFalsy();
-		expect(received.get("Sibling")?.map(message => message.body)).toEqual(["who owns auth.ts?"]);
-	});
-
-	it("delivers the operator's broadcast under the operator identity", async () => {
-		registerPeer("Sibling", "idle");
-		const unregister = registerIrcOperator(registry, "Operator", "Main");
-		expect(unregister).toBeDefined();
-		try {
-			const result = await executeSend(
-				{ registry, senderId: "Operator" },
-				{ to: "all", message: "Please stop at the next boundary." },
-			);
-			expect(result.isError).toBeFalsy();
-			expect(received.get("Sibling")).toMatchObject([
-				{ from: "Operator", to: "Sibling", body: "Please stop at the next boundary.", broadcast: true },
-			]);
-		} finally {
-			unregister?.();
-		}
+		expect(received.get("Sibling")?.map(message => message.body)).toEqual(["editing auth.ts", "who owns auth.ts?"]);
 	});
 
 	it("reports unknown and stopped recipients without delivering", async () => {

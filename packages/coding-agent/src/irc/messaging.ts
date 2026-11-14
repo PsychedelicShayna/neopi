@@ -46,7 +46,7 @@ export function messageResult(senderId: string, waited: IrcMessage[]): AgentTool
 	};
 }
 
-/** Send a direct message or, from a top-level agent/operator only, a broadcast; delivery never waits for a reply. */
+/** Send a direct message or broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
 export async function executeSend(
 	deps: { registry: AgentRegistryApi; senderId: string; sessionFileHint?: string | null },
 	params: { to: string; message: string; replyTo?: string; progress?: boolean },
@@ -60,14 +60,6 @@ export async function executeSend(
 	if (to === senderId)
 		return coordinationErrorResult("Cannot send a message to yourself.", { op: "send", from: senderId, to });
 	const isBroadcast = to === "all";
-	if (isBroadcast) {
-		const senderKind = registry.get(senderId)?.kind;
-		if (senderKind !== "main" && senderKind !== "operator")
-			return coordinationErrorResult(
-				"Only the main agent or operator can broadcast. Message the one agent that can answer via `agent://<id>`.",
-				{ op: "send", from: senderId, to },
-			);
-	}
 	// Restore parked recipients only when needed; never delay delivery to a live peer.
 	if (!isBroadcast && sessionFileHint) {
 		const recipient = registry.get(to);
