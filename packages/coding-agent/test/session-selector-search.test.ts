@@ -47,7 +47,7 @@ function makeCorpus(): SessionInfo[] {
 interface Harness {
 	selector: SessionSelectorComponent<SessionInfo>;
 	type: (text: string) => void;
-	/** Sessions currently in the filtered list, probed through the public selection surface. */
+	/** Sessions in the published picker order, without selecting or confirming a row. */
 	filtered: () => SessionInfo[];
 	renders: () => number;
 }
@@ -64,19 +64,12 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 	selector.setOnRequestRender(() => renders++);
 	const list = selector.getSessionList();
 	list.handleInput("/");
-	const filtered = (): SessionInfo[] => {
-		const out: SessionInfo[] = [];
-		list.onSelect = session => {
-			out.push(session);
-		};
-		for (let i = 0; ; i++) {
-			const before = out.length;
-			list.selectAndConfirm(i);
-			if (out.length === before) break;
-		}
-		list.onSelect = undefined;
-		return out;
-	};
+	const byPath = new Map(sessions.map(session => [session.path, session]));
+	const filtered = (): SessionInfo[] =>
+		list.pickerView().order.flatMap(entry => {
+			const session = typeof entry === "string" ? byPath.get(entry) : undefined;
+			return session ? [session] : [];
+		});
 	return {
 		selector,
 		type: text => {

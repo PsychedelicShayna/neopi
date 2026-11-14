@@ -509,7 +509,7 @@ describe("structured subagent primitive", () => {
 		mockDiscovery({ ...AGENT, model: [selector], thinkingLevel: Effort.High });
 		const tagged: AgentDefinition = { ...AGENT, name: "m1", model: [`${selector}:high`], thinkingLevel: Effort.High };
 		const untagged: AgentDefinition = { ...AGENT, name: "m2", model: [selector], thinkingLevel: Effort.Medium };
-		const settings = Settings.isolated({ "task.maxEffort": "low", "task.isolation.enabled": false });
+		const settings = Settings.isolated({ "task.maxEffort": "low", "task.isolation.enabled": false, "effort.mode": "legacy" });
 		const parent = Object.assign(session({ settings, sessionAgents: [tagged, untagged] }), {
 			modelRegistry: { authStorage: {}, refresh: async () => {}, getAvailable: () => [model] },
 			getApiKey: async () => "test-key",

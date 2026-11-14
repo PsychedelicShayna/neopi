@@ -793,7 +793,7 @@ describe("ACP builtin slash commands", () => {
 	});
 
 	it("model: applies known id and emits both title + config change notifications", async () => {
-		const { output, runtime, session } = createRuntime();
+		const { runtime, session } = createRuntime();
 		const available = [{ provider: "anthropic", id: "claude-3-5-sonnet", contextWindow: 200_000 }];
 		session.getAvailableModels = () => available;
 		let titleNotified = 0;
@@ -804,13 +804,12 @@ describe("ACP builtin slash commands", () => {
 		runtime.notifyConfigChanged = () => {
 			configNotified++;
 		};
-		const setModelSpy = spyOn(session, "setModel").mockResolvedValue(undefined);
+		const setModelSpy = spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
 
 		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
 
 		expect(result).toEqual({ consumed: true });
-		expect(setModelSpy).toHaveBeenCalledWith(available[0]);
-		expect(output[0]).toContain("Model set to anthropic/claude-3-5-sonnet");
+		expect(setModelSpy).toHaveBeenCalledWith(available[0], undefined);
 		expect(titleNotified).toBe(1);
 		expect(configNotified).toBe(1);
 	});

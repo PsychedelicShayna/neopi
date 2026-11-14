@@ -34,6 +34,7 @@ async function createHarness(): Promise<Harness> {
 		settings,
 		agent: { state: { tools: [] }, metadataForProvider: () => undefined },
 		customCommands: [],
+		getToolCatalogEntries: () => [],
 		skills: [],
 		autoCompactionEnabled: true,
 		messages: [],

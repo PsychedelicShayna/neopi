@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as runtimeDirs from "@oh-my-pi/pi-utils/dirs";
 import { Settings } from "../src/config/settings";
@@ -24,9 +25,7 @@ describe("session local voice", () => {
 	let directory: string;
 	const modes: LocalVoiceMode[] = [];
 	beforeEach(async () => {
-		const scratch = "/mnt/alias/m2/agents/scratch/LocalVoiceMode";
-		await fs.mkdir(scratch, { recursive: true });
-		directory = await fs.mkdtemp(path.join(scratch, "voice-test-"));
+		directory = await fs.mkdtemp(path.join(os.tmpdir(), "local-voice-test-"));
 		vi.spyOn(runtimeDirs, "getGlobalDaemonRuntimeDir").mockReturnValue(directory);
 		vi.spyOn(player.StreamingAudioPlayer.prototype, "start").mockImplementation(() => {});
 		vi.spyOn(player.StreamingAudioPlayer.prototype, "write").mockImplementation(() => {});

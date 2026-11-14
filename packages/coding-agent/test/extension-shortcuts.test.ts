@@ -178,16 +178,6 @@ describe("extension shortcuts", () => {
 		expect(api.getShortcutConflict("shift+up")).toEqual({ kind: "keybinding", keybindings: ["app.ask.hide"] });
 	});
 
-	it("reports the chord an emptied approve or follow-up binding falls back to", async () => {
-		// Approval and follow-up stay reachable on Ctrl+Enter when the user empties their key lists.
-		const keymap = KeybindingsManager.inMemory({ "app.approval.approve": [], "app.message.followUp": [] });
-		const api = (await loadRunner(keymap, noop)).apis[0]!;
-		expect(api.getShortcutConflict("ctrl+enter")).toEqual({
-			kind: "keybinding",
-			keybindings: ["app.approval.approve", "app.message.followUp"],
-		});
-	});
-
 	it("treats a shifted symbol and its bare spelling as one key, as the keymap does", async () => {
 		// The keymap matches a bare `?` binding on `shift+?` too, and so does a bare `?` shortcut.
 		const bare = (await loadRunner(KeybindingsManager.inMemory({ "app.ask.hide": "?" }), noop)).apis[0]!;

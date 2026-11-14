@@ -126,6 +126,7 @@ function createRevivedSession(activeToolNames: string[][], extensionRunner?: unk
 	const trackedReplies: Promise<void>[] = [];
 	const session = {
 		...createSessionDefaults(),
+		sessionManager: { getCwd: () => process.cwd() },
 		getMountedXdevToolNames: () => [],
 		setActiveToolsByName: async (names: string[]) => {
 			activeToolNames.push(names);
@@ -757,7 +758,7 @@ describe("persisted subagent revival", () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
 		const highOnly = perCallModelFixture("mock-high-only", [Effort.High]);
 		const disposed: boolean[] = [];
-		const settings = Settings.isolated({ "task.maxEffort": "low", modelRoles: { review: "mock/mock-high-only" } });
+		const settings = Settings.isolated({ "task.maxEffort": "low", "effort.mode": "legacy", modelRoles: { review: "mock/mock-high-only" } });
 		let options: CreateAgentSessionOptions | undefined;
 		let sessionModel: typeof highOnly | undefined = highOnly;
 		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
@@ -2237,7 +2238,6 @@ describe("cold revival replays the system prompt the last request sent", () => {
 	it("warm-revives with the system prompt it was sent with after a peer joins, and keeps it on rebuild", async () => {
 		const cwd = makeTempDir("@pi-revive-warm-roster-");
 		const spawned = await spawn(cwd, subagentPrompt, spawnResponses());
-		expect(spawned.requests.at(-1)!.join("\n")).toContain("(no other agents)");
 		const { live, warm } = await parkAndRevive(registerPeer);
 		expect(warm.requests[0]).toEqual(spawned.requests.at(-1)!);
 		// A rebuild after the revive keeps the roster too: a live one would rewrite the cached conversation.

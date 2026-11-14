@@ -55,6 +55,7 @@ function createContext(options?: {
 			isBashRunning: false,
 			isEvalRunning: false,
 			hasInterruptibleInput: options?.hasInterruptibleInput ?? true,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			abort,
 			prompt,

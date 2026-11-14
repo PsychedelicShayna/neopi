@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveConfiguredModelPatterns, resolveRoleChain } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { KIND_ROLE_IDS, MODEL_ROLE_IDS, MODEL_ROLES } from "@oh-my-pi/pi-coding-agent/config/model-roles";
@@ -106,27 +105,12 @@ describe("RpcRoles", () => {
 		expect(roles.list().roles.find(role => role.id === "title")?.resolved?.modelId).toBe("claude-sonnet-4-5");
 	});
 
-	test("deck-inbox is a built-in chat role with the subscription Luna default", () => {
-		const luna = createMockModel({ provider: "openai-codex", id: "gpt-6-luna" }).model;
-		vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [luna]);
-		expect(new RpcRoles(session).list().roles.find(role => role.id === "deck-inbox")).toMatchObject({
-			alias: "@deck-inbox",
-			name: "Deck inbox",
-			section: "chat",
-			source: "builtin",
-			namespace: "deck",
-			patterns: ["openai-codex/gpt-6-luna"],
-			resolved: { provider: "openai-codex", modelId: "gpt-6-luna" },
-			hidden: false,
-		});
-		expect(settings.getModelRoleProvenance("deck-inbox")).toBe("default");
-	});
-
-	test("missing Luna leaves deck-inbox unresolved without borrowing the conversation model", async () => {
+	test("an unavailable assigned inbox model stays unresolved without borrowing the conversation model", async () => {
+		settings.setModelRole("deck-inbox", "missing-provider/missing-inbox-model");
 		const roles = new RpcRoles(session);
 		const before = session.model;
 		const inbox = roles.list().roles.find(role => role.id === "deck-inbox");
-		expect(inbox?.patterns).toEqual(["openai-codex/gpt-6-luna"]);
+		expect(inbox?.patterns).toEqual(["missing-provider/missing-inbox-model"]);
 		expect(inbox?.resolved).toBeUndefined();
 		expect(await roles.setRole("deck-inbox")).toMatchObject({ ok: false, code: "role_unresolved" });
 		expect(session.model).toBe(before);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
 import { createSettingsHost } from "../src/config/settings-ui";
@@ -9,8 +10,7 @@ import { SESSION_SETTINGS_QUIT_CHOICES, settleSessionSettingsOnQuit } from "../s
 
 let root: string;
 beforeEach(async () => {
-	root = `/mnt/alias/m2/agents/scratch/scoped-settings/test-${crypto.randomUUID()}`;
-	await fs.mkdir(root, { recursive: true });
+	root = await fs.mkdtemp(path.join(os.tmpdir(), "npi-scoped-settings-"));
 });
 afterEach(async () => {
 	await fs.rm(root, { recursive: true, force: true });

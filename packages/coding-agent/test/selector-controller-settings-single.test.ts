@@ -170,7 +170,10 @@ describe("single-instance menus", () => {
 			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			controller.showStatusLineConfigure();
 			expect(shown).toHaveLength(1);
-			press(shown[0]!, "\r", DOWN, "l", "l"); // band → box; model past the context bar into the right side
+			press(shown[0]!, "\r", DOWN);
+			const beforeMove = await waitForDraft(statusLineDraftPath(getAgentDir()), saved => saved.selected === "model");
+			// Disabled catalog widgets retain positions too; cross the actual left-side boundary.
+			press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"));
 			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
 			press(shown[0]!, "\x13"); // Ctrl+S
 			await Bun.sleep(0);
@@ -226,7 +229,9 @@ describe("single-instance menus", () => {
 			const warning = spyOn(logger, "warn").mockImplementation(() => {});
 			try {
 				controller.showStatusLineConfigure();
-				press(shown[0]!, "\r", DOWN, "l", "s");
+				press(shown[0]!, "\r", DOWN);
+				const beforeMove = await waitForDraft(statusLineDraftPath(dir), saved => saved.selected === "model");
+				press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"), "s");
 				await failed.promise;
 				expect(handles.map(handle => handle.get(isolated))).toEqual(before);
 				expect(handles.map(handle => isolated.isConfigured(handle))).toEqual(handles.map(() => configured));

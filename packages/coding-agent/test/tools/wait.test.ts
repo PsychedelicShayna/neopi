@@ -373,6 +373,7 @@ describe("wait", () => {
 		function streamingMain(): IrcBridge {
 			const bridge = new IrcBridge({
 				agent: { steer: () => {} } as unknown as Agent,
+				sessionManager: { getCwd: () => process.cwd() },
 				isDisposed: () => false,
 				isStreaming: () => true,
 				planModeEnabled: () => false,

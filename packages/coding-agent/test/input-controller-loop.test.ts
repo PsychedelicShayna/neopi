@@ -66,6 +66,7 @@ function createLoopContext(options: {
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner,
 			customCommands: [],
 			promptTemplates: [],

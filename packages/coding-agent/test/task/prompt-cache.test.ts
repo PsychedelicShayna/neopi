@@ -289,6 +289,7 @@ describe("task sibling prompt-cache routing", () => {
 			);
 			try {
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -491,6 +492,7 @@ describe("task sibling prompt-cache routing", () => {
 				const lineage = `parent-lineage-${suffix}`;
 				const childName = `sibling-${suffix}`;
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -616,6 +618,7 @@ describe("task sibling prompt-cache routing", () => {
 		);
 		async function createParent(lineage: string, model: Model, explicitKey?: string) {
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -777,6 +780,7 @@ describe("task sibling prompt-cache routing", () => {
 			authStorage.keys.setRuntime(provider, "test-key");
 			try {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -857,6 +861,7 @@ describe("task sibling prompt-cache routing", () => {
 			if (!muse) throw new Error(`Model missing from offline catalog fixture: muse-code/${modelId}`);
 			const luna = getBundledModel("openai-codex", "gpt-6-luna");
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -1000,6 +1005,7 @@ describe("task sibling prompt-cache routing", () => {
 			const reopened = await SessionManager.open(forkFile, directory.path());
 			for (const sessionManager of [forked, reopened]) {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheCopy${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -1058,6 +1064,7 @@ describe("task sibling prompt-cache routing", () => {
 			const altCwd = directory.join("alt");
 			fs.mkdirSync(altCwd, { recursive: true });
 			const { session: alt } = await sdk.createAgentSession({
+				agentId: `CacheAlternate${Bun.randomUUIDv7()}`,
 				cwd: altCwd,
 				agentDir: directory.path(),
 				authStorage,

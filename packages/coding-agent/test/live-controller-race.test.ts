@@ -17,6 +17,7 @@ import { type CustomMessage, LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session
 import { type LiveDelegationDelivery, LiveSessionController, type LiveTranscript } from "../src/live/controller";
 import { LiveIngest } from "../src/live/ingest";
 import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "../src/live/ingest-settings";
+import { OUTPUT_RELEASE_MS } from "../src/live/output-activity";
 import * as livePersonas from "../src/live/personas";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "../src/task/types";
 import { EventBus, emitSubagentFrame } from "../src/utils/event-bus";
@@ -1126,7 +1127,9 @@ describe("live microphone forwarding", () => {
 		const speech = new Float32Array(320).fill(0.02);
 		h.fireMicrophone(speech);
 		expect(h.audioSent).toEqual([]);
-		await wait(300);
+		await wait(OUTPUT_RELEASE_MS / 2);
+		expect(h.controller.phase).toBe("speaking");
+		await wait(OUTPUT_RELEASE_MS / 2 + 50);
 		expect(h.controller.phase).toBe("listening");
 		h.fireMicrophone(speech);
 		expect(h.audioSent).toEqual([speech]);
@@ -1147,11 +1150,11 @@ describe("live microphone forwarding", () => {
 		const h = makeHarness();
 		await h.controller.start();
 		h.fireOutputLevel(0.5);
-		await wait(150);
+		await wait(OUTPUT_RELEASE_MS / 2);
 		h.fireOutputLevel(0.4);
-		await wait(150);
+		await wait(OUTPUT_RELEASE_MS / 2);
 		expect(h.controller.phase).toBe("speaking");
-		await wait(120);
+		await wait(OUTPUT_RELEASE_MS / 2 + 50);
 		expect(h.controller.phase).toBe("listening");
 		await h.controller.stop();
 	});

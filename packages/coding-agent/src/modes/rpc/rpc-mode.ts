@@ -2138,6 +2138,15 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				session.abortBranchSummary();
 				return success(id, "abort_branch_summary");
 
+			case "set_label": {
+				if (typeof command.entryId !== "string" || !command.entryId)
+					return error(id, "set_label", "entryId must be a non-empty string");
+				if (command.label !== undefined && typeof command.label !== "string")
+					return error(id, "set_label", "label must be a string");
+				session.sessionManager.appendLabelChange(command.entryId, command.label);
+				return success(id, "set_label");
+			}
+
 			case "set_todos": {
 				session.commitTodoPhases(command.phases);
 				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
