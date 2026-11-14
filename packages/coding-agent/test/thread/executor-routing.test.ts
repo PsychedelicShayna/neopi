@@ -168,7 +168,13 @@ class FakeModelServer {
 		if (runTurn && last?.role === "tool") {
 			reply = { text: `tool said: ${messageText(last.content)}` };
 		} else if (runTurn && userText.includes(BG_JOB_TASK)) {
-			reply = { tool: "bash", args: { command: "echo bg-done", async: true } };
+			reply = {
+				tool: "bash",
+				args: {
+					command: `while [ ! -f ${JSON.stringify(path.join(cwd, "bg-release"))} ]; do sleep 0.01; done; echo bg-done`,
+					async: true,
+				},
+			};
 		} else if (runTurn && userText.includes(HANG_TASK)) {
 			const held = Promise.withResolvers<void>();
 			this.#hangs.push(held.resolve);
@@ -395,7 +401,18 @@ describe("subagent runs routed into pooled workers", () => {
 		"runs the child in a worker: main mirror, result, progress, lifecycle frames, cost, async jobs",
 		async () => {
 			const progress: AgentProgress[] = [];
-			const result = await runSubprocess(runOptions("Bg", BG_JOB_TASK, { onProgress: p => progress.push(p) }));
+			// Keep the job pending until the first plain-text answer finishes, so this
+			// exercises a follow-up turn rather than an inline tool-boundary delivery.
+			let release: Promise<number> | undefined;
+			const result = await runSubprocess(
+				runOptions("Bg", BG_JOB_TASK, {
+					onProgress: p => {
+						progress.push(p);
+						if (p.requests >= 2 && !release) release = Bun.write(path.join(cwd, "bg-release"), "");
+					},
+				}),
+			);
+			await release;
 
 			expect(result.error).toBeUndefined();
 			expect(result.exitCode).toBe(0);

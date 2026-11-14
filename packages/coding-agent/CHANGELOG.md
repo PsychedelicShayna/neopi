@@ -163,6 +163,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Background jobs started by worker-thread subagents retain their initiating run ownership, so completion follow-ups update the parent's final answer, request count and lifecycle instead of being ignored.
 - Hidden aliases such as `/models` reveal with their command descriptions once literal visible-name prefixes run out, even when fuzzy candidates remain; startup tips and model-configuration help use `/model` and `/roles`.
 
 - NeoPi no longer offers omp update onboarding, checks upstream releases on startup, or installs upstream binaries through flagged update commands; the fork-aware source update and plugin updates remain available.
