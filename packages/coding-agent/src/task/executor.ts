@@ -10,15 +10,18 @@ import { buildAgentAdvisorSpawnConfig } from "./agent-advisor";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core";
-import {
-	AgentBusyError,
-	ThinkingLevel,
-	recordHandoff,
-	resolveTelemetry,
-} from "@oh-my-pi/pi-agent-core";
+import { AgentBusyError, ThinkingLevel, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, logger, popLoopPhase, postmortem, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import {
+	isRecord,
+	logger,
+	popLoopPhase,
+	postmortem,
+	pushLoopPhase,
+	sanitizeText,
+	untilAborted,
+} from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { isCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import {
@@ -3650,7 +3653,9 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 		let unsubscribeTurn: () => void;
 		let ownerPrompted = false;
 		let unsubscribeParentSteer = () => {};
-		const userPrompted = records.some(record => record.role === "user" ? record.attribution === "user" : record.role === "developer" && record.userInitiated);
+		const userPrompted = records.some(record =>
+			record.role === "user" ? record.attribution === "user" : record.role === "developer" && record.userInitiated,
+		);
 		try {
 			turnMonitor.setActiveSession(session);
 			unsubscribeTurn = turnMonitor.attach(session);
@@ -4365,25 +4370,30 @@ function buildSubagentSessionOptions(
 					? inputs.ircRoster
 					: (heldIrcRoster(inputs, defaultPrompt) ??
 						collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile));
-			const subagentPrompt = renderPromptAsset("system/subagent-system-prompt.md", subagentSystemPromptTemplate, {
-				agent: inputs.agentSystemPrompt,
-				context: inputs.context,
-				planReference: inputs.planReference,
-				planReferencePath: inputs.planReferencePath,
-				worktree: inputs.worktree,
-				structured: inputs.structured,
-				outputSchema: inputs.outputSchema,
-				outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
-				// Read the live item set through the registry instead of capturing the session, which
-				// would pin its whole graph past park. A revive builds while the registry session is
-				// null, so it renders the cleared set rather than the launch-time pooled instructions.
-				workPoolYieldItems:
-					ownAttachedSession(inputs.id)?.getWorkPoolYieldItems?.() ?? launch?.workPoolYieldItems ?? [],
-				ircPeers: ircRoster?.peers ?? [],
-				ircParkedCount: ircRoster?.parkedCount ?? 0,
-				ircOmittedCount: ircRoster?.omittedCount ?? 0,
-				ircSelfId: inputs.ircEnabled ? inputs.id : "",
-			}, { cwd: spec.options.cwd });
+			const subagentPrompt = renderPromptAsset(
+				"system/subagent-system-prompt.md",
+				subagentSystemPromptTemplate,
+				{
+					agent: inputs.agentSystemPrompt,
+					context: inputs.context,
+					planReference: inputs.planReference,
+					planReferencePath: inputs.planReferencePath,
+					worktree: inputs.worktree,
+					structured: inputs.structured,
+					outputSchema: inputs.outputSchema,
+					outputSchemaOverridesAgent: inputs.outputSchemaOverridesAgent,
+					// Read the live item set through the registry instead of capturing the session, which
+					// would pin its whole graph past park. A revive builds while the registry session is
+					// null, so it renders the cleared set rather than the launch-time pooled instructions.
+					workPoolYieldItems:
+						ownAttachedSession(inputs.id)?.getWorkPoolYieldItems?.() ?? launch?.workPoolYieldItems ?? [],
+					ircPeers: ircRoster?.peers ?? [],
+					ircParkedCount: ircRoster?.parkedCount ?? 0,
+					ircOmittedCount: ircRoster?.omittedCount ?? 0,
+					ircSelfId: inputs.ircEnabled ? inputs.id : "",
+				},
+				{ cwd: spec.options.cwd },
+			);
 			if (ircRoster) recordIrcRender(inputs, subagentPrompt, ircRoster);
 			// Per-spawn text (context, worktree, IRC roster) goes after the trailing
 			// `<project-context>` block so spawns of the same agent share the static
@@ -5628,10 +5638,15 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				// Abort raced session startup. The session may still resolve later
 				// holding live LSP/MCP child processes — dispose it when it does so
 				// Failed creation never adopts the manager; release its lease as well.
-				const disposal = sessionPromise?.then(
-					created => created.session.dispose(),
-					() => sessionManager.close(),
-				).then(() => {}, () => {});
+				const disposal = sessionPromise
+					?.then(
+						created => created.session.dispose(),
+						() => sessionManager.close(),
+					)
+					.then(
+						() => {},
+						() => {},
+					);
 				if (preparedSession) pendingSessionDisposal = disposal;
 				else void disposal;
 				throw err;

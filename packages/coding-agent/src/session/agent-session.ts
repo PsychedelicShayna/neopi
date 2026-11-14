@@ -10254,10 +10254,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			origin?: MessageOrigin;
 		},
 		options:
-			| (Pick<
-					PromptOptions,
-					"streamingBehavior" | "toolChoice" | "entryId" | "onPromptAdmitted" | "followUps"
-			  > & {
+			| (Pick<PromptOptions, "streamingBehavior" | "toolChoice" | "entryId" | "onPromptAdmitted" | "followUps"> & {
 					queueChipText?: string;
 					queueOnly?: boolean;
 					onPromptQueued?: PromptOptions["onPromptQueued"];
@@ -11491,7 +11488,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#pushQueuedUserMessage(
 				"followUp",
 				[],
-				{ role: "user", content: [{ type: "text", text: expandedText }], attribution: "user", timestamp: Date.now() },
+				{
+					role: "user",
+					content: [{ type: "text", text: expandedText }],
+					attribution: "user",
+					timestamp: Date.now(),
+				},
 				text,
 			);
 		}
@@ -17954,7 +17956,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			!refreshed ||
 			(refreshed.contextWindow === current.contextWindow &&
 				Bun.deepEquals(refreshed.serviceTiers, current.serviceTiers))
-		) return;
+		)
+			return;
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;

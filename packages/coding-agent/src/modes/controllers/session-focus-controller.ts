@@ -46,7 +46,9 @@ function replayedIncludes(replayed: ReadonlyMap<unknown, readonly AgentMessage[]
  */
 export function pickRecentFocusableAgentId(refs: readonly AgentRef[], currentId?: string): string | undefined {
 	const ordered = refs
-		.filter(ref => ref.id !== MAIN_AGENT_ID && ref.kind === "sub" && !ref.history?.readOnly && ref.status !== "aborted")
+		.filter(
+			ref => ref.id !== MAIN_AGENT_ID && ref.kind === "sub" && !ref.history?.readOnly && ref.status !== "aborted",
+		)
 		.filter(ref => ref.status === "running" || ref.status === "idle" || ref.status === "parked")
 		.toSorted(
 			(a, b) =>
@@ -99,7 +101,9 @@ export class SessionFocusController {
 		if (id === MAIN_AGENT_ID || this.registry.get(id)?.kind === "main") return this.unfocus();
 		const ref = this.registry.get(id);
 		if (ref && (ref.kind !== "sub" || ref.history?.readOnly || ref.status === "aborted")) {
-			throw new Error(`Agent ${id} is a read-only transcript; explicitly revive a killed agent in the Agent Hub first.`);
+			throw new Error(
+				`Agent ${id} is a read-only transcript; explicitly revive a killed agent in the Agent Hub first.`,
+			);
 		}
 		// Several top-level roots can share the registry; this view may only
 		// attach to agents of the root it belongs to.

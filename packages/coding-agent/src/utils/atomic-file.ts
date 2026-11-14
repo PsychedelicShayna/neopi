@@ -138,7 +138,6 @@ async function replaceAfterWindowsRenameFailure(
 	}
 }
 
-
 /**
  * Synchronous sibling of {@link writeFileAtomically} for callers that cannot
  * await, such as the boot-time config migration.

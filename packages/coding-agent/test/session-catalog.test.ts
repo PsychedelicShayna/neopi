@@ -854,7 +854,13 @@ describe("session catalog liveness (--live)", () => {
 		return {
 			cwd,
 			dialogs: state === "waiting" ? [{ dialogId: "d1" }] : [],
-			busy: { streaming: state === "busy", compacting: false, pendingSteerAndFollowUp: 0, pendingAsyncWork: false, settled: state !== "busy" },
+			busy: {
+				streaming: state === "busy",
+				compacting: false,
+				pendingSteerAndFollowUp: 0,
+				pendingAsyncWork: false,
+				settled: state !== "busy",
+			},
 		} as unknown as ControlSnapshot;
 	}
 
@@ -862,8 +868,11 @@ describe("session catalog liveness (--live)", () => {
 		const f = await fixture();
 		const repo = path.join(f.root, "repo");
 		await fs.mkdir(repo);
-		for (const args of [["init", "-q", "-b", "feat/live"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]]) {
-			expect((await Bun.spawn(["git", ...args], { cwd: repo }).exited)).toBe(0);
+		for (const args of [
+			["init", "-q", "-b", "feat/live"],
+			["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
+		]) {
+			expect(await Bun.spawn(["git", ...args], { cwd: repo }).exited).toBe(0);
 		}
 		const dir = sessionDirForCwd(f.cwd, f.sessionsRoot);
 		const files = {
@@ -876,7 +885,9 @@ describe("session catalog liveness (--live)", () => {
 		};
 		const cwds: Record<string, string> = { busy: repo, waiting: f.cwd, idle: f.cwd, dead: f.cwd, silent: f.cwd };
 		const publications = await Promise.all(
-			Object.entries(cwds).map(([name, cwd]) => publish(f, `${name}000000000`, files[name as keyof typeof files], cwd)),
+			Object.entries(cwds).map(([name, cwd]) =>
+				publish(f, `${name}000000000`, files[name as keyof typeof files], cwd),
+			),
 		);
 		try {
 			const probeControl = async (metadata: { instanceId: string }) => {
@@ -885,7 +896,9 @@ describe("session catalog liveness (--live)", () => {
 				if (name === "silent") return new Promise<ControlSnapshot>(() => {});
 				return snapshotFor(cwds[name], name as "busy" | "waiting" | "idle");
 			};
-			const withLive = (await listSessionCatalog({ ...f, sessionDirs: [dir], live: true, liveTimeoutMs: 100, probeControl })).sessions;
+			const withLive = (
+				await listSessionCatalog({ ...f, sessionDirs: [dir], live: true, liveTimeoutMs: 100, probeControl })
+			).sessions;
 			const byId = Object.fromEntries(withLive.map(row => [row.id, row.live]));
 			expect(byId.busy).toEqual({ state: "busy", isStreaming: true, pendingDialogs: 0, branch: "feat/live" });
 			expect(byId.waiting).toEqual({ state: "waiting", isStreaming: false, pendingDialogs: 1, branch: null });

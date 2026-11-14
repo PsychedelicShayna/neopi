@@ -378,7 +378,6 @@ test("hub history keeps frozen ranks but ranks replacement generations and new a
 	}
 });
 
-
 test("hub scope counts exclude roots and other sessions, and history retains the status filter", () => {
 	const hub = createHub(
 		[

@@ -354,7 +354,10 @@ interface PreparedQuery {
 
 function prepareQuery(query: string): PreparedQuery | null {
 	const normalized = normalizeForSearch(query);
-	const literals = query.toLowerCase().split(/\s+/).filter(token => /[^\p{Letter}\p{Mark}\p{Number}]/u.test(token));
+	const literals = query
+		.toLowerCase()
+		.split(/\s+/)
+		.filter(token => /[^\p{Letter}\p{Mark}\p{Number}]/u.test(token));
 	if (normalized.length === 0 && literals.length === 0) return null;
 	const tokens = normalized ? normalized.split(" ") : [];
 	return {
@@ -502,7 +505,11 @@ export class FuzzyCorpus<T> {
 	}
 }
 
-function rankRegex<T>(items: readonly T[], pattern: MenuRegex, textAt: (index: number) => string): FuzzyFilterResult<T>[] {
+function rankRegex<T>(
+	items: readonly T[],
+	pattern: MenuRegex,
+	textAt: (index: number) => string,
+): FuzzyFilterResult<T>[] {
 	const regex = pattern.regex;
 	if (!regex) return [];
 	const results: FuzzyFilterResult<T>[] = [];

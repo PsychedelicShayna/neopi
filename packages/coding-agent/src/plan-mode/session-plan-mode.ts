@@ -52,7 +52,10 @@ export interface PlanToolPresentation {
  * because plan mode's read-only guarantee relies on the built-in write guard.
  */
 export function planModeToolSet(
-	session: Pick<AgentSession, "getEnabledToolNames" | "getMountedXdevToolNames" | "getAllToolNames" | "hasBuiltInTool">,
+	session: Pick<
+		AgentSession,
+		"getEnabledToolNames" | "getMountedXdevToolNames" | "getAllToolNames" | "hasBuiltInTool"
+	>,
 ): { previous: PlanToolPresentation; planTools: string[]; shadowedWrite: boolean } {
 	const enabled = session.getEnabledToolNames();
 	const mounted = session.getMountedXdevToolNames();

@@ -1524,7 +1524,6 @@ it("refuses a steer into an agent-initiated turn whose output has no client forw
 	).toBe(false);
 });
 
-
 it("delivers two steers admitted in one dialog window first-arrival-first", async () => {
 	// Two admissions can land while one permission dialog is open, before
 	// the gate's abort wake runs: the first group must stay first (the

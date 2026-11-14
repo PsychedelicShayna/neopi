@@ -2328,7 +2328,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
 					return error(id, command.type, "`subagentId` must be a non-empty string.");
 				}
-				const failure = await handleRpcSetSubagentThinkingLevel(subagentRegistry, command.subagentId, command.level);
+				const failure = await handleRpcSetSubagentThinkingLevel(
+					subagentRegistry,
+					command.subagentId,
+					command.level,
+				);
 				return failure ? error(id, command.type, failure) : success(id, command.type);
 			}
 

@@ -146,10 +146,16 @@ export class RpcSessionEventForwarder {
 		const messageEntryIds = getDurableMessageEntryIdentities(manager);
 		this.#emit({ type: "journal_state", reason: "snapshot", ...identity, messageEntryIds });
 		const current = manager.getJournalIdentity();
-		if (streamMessage?.role !== "assistant" || session.isSessionTransitioning ||
-			generation !== this.#bindingGeneration || revision !== this.#messageRevision ||
-			current.sessionId !== identity.sessionId || current.sessionFile !== identity.sessionFile ||
-			current.leafId !== identity.leafId) return current;
+		if (
+			streamMessage?.role !== "assistant" ||
+			session.isSessionTransitioning ||
+			generation !== this.#bindingGeneration ||
+			revision !== this.#messageRevision ||
+			current.sessionId !== identity.sessionId ||
+			current.sessionFile !== identity.sessionFile ||
+			current.leafId !== identity.leafId
+		)
+			return current;
 		let messageId = this.#assistantMessageId;
 		if (messageId === undefined) {
 			messageId = observeLiveMessageId(manager, streamMessage);
@@ -207,11 +213,20 @@ export class RpcSessionEventForwarder {
 	}
 
 	forward(event: AgentSessionEvent): void {
-		if (event.type === "message_start" || event.type === "message_update" ||
-			event.type === "message_end" || event.type === "agent_end") this.#messageRevision++;
+		if (
+			event.type === "message_start" ||
+			event.type === "message_update" ||
+			event.type === "message_end" ||
+			event.type === "agent_end"
+		)
+			this.#messageRevision++;
 		// A subscription snapshot or update may beat the session's delayed start notification.
-		if (event.type === "message_start" && event.message.role === "assistant" &&
-			this.#assistantMessageId !== undefined) return;
+		if (
+			event.type === "message_start" &&
+			event.message.role === "assistant" &&
+			this.#assistantMessageId !== undefined
+		)
+			return;
 		const generation = this.#bindingGeneration;
 		const frame = this.#stamp(event);
 		if (event.type === "message_end" && frame.type === "message_end" && this.#manager) {
@@ -248,7 +263,8 @@ export class RpcSessionEventForwarder {
 				return { ...event, messageId };
 			}
 			case "message_end": {
-				const messageId = this.#openMessageIds.pop() ?? this.#assistantMessageId ?? this.#mintMessageId(event.message);
+				const messageId =
+					this.#openMessageIds.pop() ?? this.#assistantMessageId ?? this.#mintMessageId(event.message);
 				if (event.message.role === "assistant") this.#assistantMessageId = undefined;
 				if (this.#manager) liveMessageId(this.#manager, event.message, messageId);
 				return { ...event, messageId };

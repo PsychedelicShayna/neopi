@@ -113,7 +113,9 @@ describe("AgentSession prompt admission racing abort", () => {
 			expect(await pending).toBe(true);
 			expect(admitted).toBe(false);
 			expect(streamCalls).toEqual([]);
-			expect(session.agent.state.messages.some(message => JSON.stringify(message).includes("cancel me"))).toBe(false);
+			expect(session.agent.state.messages.some(message => JSON.stringify(message).includes("cancel me"))).toBe(
+				false,
+			);
 
 			await session.prompt("fresh prompt");
 			expect(streamCalls).toEqual(["started"]);

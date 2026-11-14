@@ -110,7 +110,6 @@ import {
 	perCallModelEnabled,
 } from "./settings";
 
-
 function createUsageTotals(): Usage {
 	return {
 		input: 0,
@@ -1026,10 +1025,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/** Background-job lifecycle contract; inherited by extension replacements that delegate to Task. */
 	get delegationGuidance(): string {
 		if (!cfgAsyncEnabled.get(this.session.settings)) return "";
-		return renderPromptAsset("tools/task-async-contract.md", taskAsyncContractTemplate, {
-			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
-			waitTool: hasWaitTool(this.session),
-		}, { cwd: this.session.cwd, kind: "notice" });
+		return renderPromptAsset(
+			"tools/task-async-contract.md",
+			taskAsyncContractTemplate,
+			{
+				ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
+				waitTool: hasWaitTool(this.session),
+			},
+			{ cwd: this.session.cwd, kind: "notice" },
+		);
 	}
 
 	/** Dynamic description that reflects current task settings. */

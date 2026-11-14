@@ -2071,7 +2071,8 @@ export class SessionManager {
 				const confirmed = writer.appendSync ? writer.flush() : writer.append(line);
 				void confirmed
 					.then(() => {
-						if (sessionId === this.#sessionId && sessionFile === this.#sessionFile) this.#recordDurableAppend(line, entry);
+						if (sessionId === this.#sessionId && sessionFile === this.#sessionFile)
+							this.#recordDurableAppend(line, entry);
 					})
 					.catch(err => {
 						this.#fileIsCurrent = false;
@@ -2239,7 +2240,12 @@ export class SessionManager {
 		this.#journal.state();
 	}
 
-	#freshEntryFields(reservedId?: string): { id: string; parentId: string | null; timestamp: string; runtime: RuntimeIdentity } {
+	#freshEntryFields(reservedId?: string): {
+		id: string;
+		parentId: string | null;
+		timestamp: string;
+		runtime: RuntimeIdentity;
+	} {
 		return {
 			id: this.#claimReservedEntryId(reservedId) ?? generateId(this.#takenEntryIds),
 			parentId: this.#index.leafId(),

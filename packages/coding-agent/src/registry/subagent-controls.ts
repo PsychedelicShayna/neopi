@@ -82,7 +82,8 @@ export async function selectSubagentModel(
 	let thinkingLevel: ConfiguredThinkingLevel | undefined;
 	let warning: string | undefined;
 	if (selector === undefined) {
-		const find = () => session.getAvailableModels().find(model => model.provider === provider && model.id === modelId);
+		const find = () =>
+			session.getAvailableModels().find(model => model.provider === provider && model.id === modelId);
 		model = find();
 		if (!model) {
 			await session.modelRegistry.awaitBackgroundRefresh();

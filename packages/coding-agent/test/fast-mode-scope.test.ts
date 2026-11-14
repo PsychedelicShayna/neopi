@@ -208,9 +208,9 @@ describe("/fast targets the current model's service-tier family", () => {
 		const ready = Promise.withResolvers<void>();
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "tier-models.yml"));
 		const wait = vi.spyOn(registry, "awaitInitialBackgroundRefresh").mockImplementation(() => ready.promise);
-		const find = vi.spyOn(registry, "find").mockImplementation((provider, id) =>
-			provider === fresh.provider && id === fresh.id ? fresh : undefined,
-		);
+		const find = vi
+			.spyOn(registry, "find")
+			.mockImplementation((provider, id) => (provider === fresh.provider && id === fresh.id ? fresh : undefined));
 		authStorage.keys.setRuntime(stale.provider, "token");
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model: stale, systemPrompt: ["Test"], tools: [], messages: [] } }),

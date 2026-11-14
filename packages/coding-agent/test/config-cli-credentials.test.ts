@@ -61,7 +61,6 @@ describe("credential masking reaches every surface", () => {
 			expect(getSettingDef(createSettingsHost(Settings.isolated({})).entries, path)).toBeUndefined();
 		}
 	});
-
 });
 
 /**

@@ -1062,7 +1062,11 @@ export class Agent {
 		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("followUp", signal);
 	}
 
-	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
+	async #prepareQueuedMessageBatch(
+		queue: QueuedMessageQueue,
+		signal: AbortSignal,
+		liveOnly = false,
+	): Promise<AgentMessage[]> {
 		if (this.#queuedMessageClaims[queue]) return [];
 		const messages = queue === "steering" ? this.#dequeueSteeringMessages(liveOnly) : this.#dequeueFollowUpMessages();
 		const prepare = this.prepareQueuedMessages;
@@ -1619,11 +1623,7 @@ export class Agent {
 		this.#queuedMessageGrouping = predicate;
 	}
 
-	#dequeueMessages(
-		queue: readonly AgentMessage[],
-		mode: "all" | "one-at-a-time",
-		liveOnly = false,
-	): AgentMessage[] {
+	#dequeueMessages(queue: readonly AgentMessage[], mode: "all" | "one-at-a-time", liveOnly = false): AgentMessage[] {
 		// Wait-mode notes stay queue-owned while live user steering passes them.
 		if (liveOnly) queue = queue.filter(message => this.#steeringInterruptModes.get(message) !== "wait");
 		if (mode === "all") return queue.slice();

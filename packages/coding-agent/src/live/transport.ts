@@ -208,7 +208,6 @@ export class CodexLiveTransport {
 			},
 			(error, message) => this.#reportFailure(error?.message ?? message),
 		);
-
 	}
 
 	async #signal(offer: string): Promise<LiveSignalingResult> {

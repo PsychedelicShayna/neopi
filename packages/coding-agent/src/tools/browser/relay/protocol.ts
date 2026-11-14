@@ -62,7 +62,8 @@ export const DISCARDED_TABS_PROTOCOL_VERSION = 1;
 export const EXTENSION_RELOAD_PROTOCOL_VERSION = 1;
 
 /** Chrome access conflicts an explicit claim may retry after the user removes the blocker. */
-export const DEBUGGER_ACCESS_REFUSAL = /chrome-extension:\/\/ URL of different extension|another debugger is already attached/i;
+export const DEBUGGER_ACCESS_REFUSAL =
+	/chrome-extension:\/\/ URL of different extension|another debugger is already attached/i;
 
 /** Hello capability of an extension that answers `findDownload` (it holds Chrome's `downloads` permission). */
 export const DOWNLOADS_PROTOCOL_VERSION = 1;

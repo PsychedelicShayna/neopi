@@ -2016,7 +2016,12 @@ export class AnnotationOverlay implements Focusable {
 				key("tab", this.#textSource ? "actions" : "pane"),
 			];
 		}
-		return [upDown("choose"), this.#hint("tui.select.confirm", "run"), key(["left", "right"], "panes"), key("tab", "pane")];
+		return [
+			upDown("choose"),
+			this.#hint("tui.select.confirm", "run"),
+			key(["left", "right"], "panes"),
+			key("tab", "pane"),
+		];
 	}
 
 	/** Keycap hint for the primary keys this overlay's keybindings bind to `actions`. */

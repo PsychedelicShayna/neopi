@@ -394,10 +394,13 @@ describe("AgentLifecycleManager", () => {
 		});
 		const probe = Promise.withResolvers<void>();
 		const revive = vi.fn(async () => makeSessionStub().session);
-		lifecycle.setPersistedSubagentReviverFactory(async () => {
-			await probe.promise;
-			return revive;
-		}, () => 0);
+		lifecycle.setPersistedSubagentReviverFactory(
+			async () => {
+				await probe.promise;
+				return revive;
+			},
+			() => 0,
+		);
 		const pending = lifecycle.ensureLive(killed.id);
 		await lifecycle.disposeRoot(root);
 		probe.resolve();

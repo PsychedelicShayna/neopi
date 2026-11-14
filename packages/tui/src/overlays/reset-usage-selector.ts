@@ -448,8 +448,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			else if (ev.act === "cancel" && this.#menu.cancelConfirmation()) {
 				this.#statusMessage = undefined;
 				this.#updateList();
-			} else if (ev.act === "close" || ev.act === "cancel")
-				this.handleInput(this.#search.focused ? "\x03" : "\x1b");
+			} else if (ev.act === "close" || ev.act === "cancel") this.handleInput(this.#search.focused ? "\x03" : "\x1b");
 			return;
 		}
 		if (ev) {

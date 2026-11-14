@@ -69,9 +69,9 @@ describe("live model catalog", () => {
 	test("rejects legacy scores, out-of-range values and non-numbers for every metric", () => {
 		for (const metric of ["economy", "performance", "stability", "speed"]) {
 			for (const rating of ["-0.01", "1.01", "3", "5", "1e999", "-1e999", "true", '"0.37"']) {
-				expect(() =>
-					parseModelCatalog(fixture().replaceAll(`"${metric}":null`, `"${metric}":${rating}`)),
-				).toThrow("Malformed model catalog rating");
+				expect(() => parseModelCatalog(fixture().replaceAll(`"${metric}":null`, `"${metric}":${rating}`))).toThrow(
+					"Malformed model catalog rating",
+				);
 			}
 		}
 	});

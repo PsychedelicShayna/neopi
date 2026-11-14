@@ -17,12 +17,7 @@ import { peekFileEnds } from "@oh-my-pi/pi-utils/peek-file";
 import { isPidAlive } from "@oh-my-pi/pi-utils/pid";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
-import {
-	acquireSessionLease,
-	inspectSessionLease,
-	type SessionLease,
-	type SessionLeaseHolder,
-} from "./session-lease";
+import { acquireSessionLease, inspectSessionLease, type SessionLease, type SessionLeaseHolder } from "./session-lease";
 import {
 	overlayTitleSlotContent,
 	parseTitleSlotFromContent,

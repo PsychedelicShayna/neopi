@@ -1364,7 +1364,10 @@ export class CollabHost {
 		// Validate against the host registry, not the guest's potentially stale roster.
 		const ref = AgentRegistry.global().get(agentId);
 		if (ref && isAgentTranscriptReadOnly(ref)) {
-			this.#send({ t: "error", message: `agent ${agentId}: transcripts for this participant are read-only` }, fromPeer);
+			this.#send(
+				{ t: "error", message: `agent ${agentId}: transcripts for this participant are read-only` },
+				fromPeer,
+			);
 			return;
 		}
 		const fail = (err: unknown) => {
@@ -1374,7 +1377,13 @@ export class CollabHost {
 		switch (cmd) {
 			case "chat": {
 				if (ref?.status === "aborted") {
-					this.#send({ t: "error", message: `agent ${agentId}: killed transcript is read-only; explicitly revive it first` }, fromPeer);
+					this.#send(
+						{
+							t: "error",
+							message: `agent ${agentId}: killed transcript is read-only; explicitly revive it first`,
+						},
+						fromPeer,
+					);
 					return;
 				}
 				const trimmed = text?.trim();
@@ -1407,7 +1416,13 @@ export class CollabHost {
 			}
 			case "revive":
 				if (!ref || !canReviveAgent(ref)) {
-					this.#send({ t: "error", message: `agent ${agentId}: only parked agents or killed agents with transcripts can be revived` }, fromPeer);
+					this.#send(
+						{
+							t: "error",
+							message: `agent ${agentId}: only parked agents or killed agents with transcripts can be revived`,
+						},
+						fromPeer,
+					);
 					return;
 				}
 				AgentLifecycleManager.global().ensureLive(agentId).catch(fail);

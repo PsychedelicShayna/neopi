@@ -14,7 +14,12 @@ import type { AgentSessionHandle } from "../session/agent-session-handle";
 import { AgentAwaits, type AgentAwaitsApi } from "./agent-awaits";
 import { oneLineLabel } from "@oh-my-pi/pi-tui/tools/task";
 
-import { MAIN_AGENT_ID, type AgentStatus, type AgentMetricsSummary, isAgentTranscriptReadOnly } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import {
+	MAIN_AGENT_ID,
+	type AgentStatus,
+	type AgentMetricsSummary,
+	isAgentTranscriptReadOnly,
+} from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 export { MAIN_AGENT_ID };
 export type { AgentStatus, AgentMetricsSummary };
 
@@ -293,7 +298,8 @@ export class AgentRegistry implements AgentRegistryApi {
 	 */
 	reopen(id: string, expected: AgentRef): AgentRef | undefined {
 		const current = this.#refs.get(id);
-		if (current !== expected || current.status !== "aborted" || current.session || isAgentTranscriptReadOnly(current)) return undefined;
+		if (current !== expected || current.status !== "aborted" || current.session || isAgentTranscriptReadOnly(current))
+			return undefined;
 		return this.register({
 			id,
 			displayName: current.displayName,

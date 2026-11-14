@@ -416,7 +416,15 @@ describe("focused subagent view slash commands", () => {
 	});
 
 	it("keeps other commands gated to the main session, draft intact", async () => {
-		for (const text of ["/compact", "/model", "/models", "/model openai/gpt-5", "/switch", "/slow on", "!echo unsafe"]) {
+		for (const text of [
+			"/compact",
+			"/model",
+			"/models",
+			"/model openai/gpt-5",
+			"/switch",
+			"/slow on",
+			"!echo unsafe",
+		]) {
 			const { raw, editor, prompt } = await submit(text);
 			expect(editor.getText()).toBe(text);
 			expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));

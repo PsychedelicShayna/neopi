@@ -838,10 +838,7 @@ async function applySpawnHook(
 	if (spawnResult?.model === undefined) return policy;
 	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
 	if (replacement.length === 0) return policy;
-	if (
-		policy.perCallModelGrants &&
-		(replacement.length !== 1 || replacement[0] !== policy.modelOverride?.[0])
-	) {
+	if (policy.perCallModelGrants && (replacement.length !== 1 || replacement[0] !== policy.modelOverride?.[0])) {
 		throw new StructuredSubagentError("preflight", "The spawn hook cannot replace a per-call model.");
 	}
 	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
@@ -914,7 +911,11 @@ function buildExecutorOptions(
 	const preparedSession = policy.preparedSession;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = request.tools !== undefined || preparedSession !== undefined || policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames =
+		request.tools !== undefined ||
+		preparedSession !== undefined ||
+		policy.planMode ||
+		session.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,

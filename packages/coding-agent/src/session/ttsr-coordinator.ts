@@ -238,7 +238,10 @@ export class TtsrCoordinator {
 					{
 						name: rule.name,
 						path: this.#displayRulePath(rule.path),
-						matched: matched[rule.name] === undefined ? undefined : escapeHarnessTags(JSON.stringify(matched[rule.name])),
+						matched:
+							matched[rule.name] === undefined
+								? undefined
+								: escapeHarnessTags(JSON.stringify(matched[rule.name])),
 						content: rule.content,
 					},
 					{ cwd: this.#host.sessionManager.getCwd() },
@@ -378,7 +381,10 @@ export class TtsrCoordinator {
 					{
 						name: rule.name,
 						path: this.#displayRulePath(rule.path),
-						matched: matched[rule.name] === undefined ? undefined : escapeHarnessTags(JSON.stringify(matched[rule.name])),
+						matched:
+							matched[rule.name] === undefined
+								? undefined
+								: escapeHarnessTags(JSON.stringify(matched[rule.name])),
 						content: rule.content,
 					},
 					{ cwd: this.#host.sessionManager.getCwd() },

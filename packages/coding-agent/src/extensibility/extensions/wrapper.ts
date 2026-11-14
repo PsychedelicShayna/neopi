@@ -508,7 +508,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			} else {
 				const uiContext = this.runner.getUIContext();
 				const safetyAppendix =
-					pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
+					pendingSafetyChecks.length > 0
+						? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)]
+						: [];
 				let approved: boolean;
 				try {
 					const answer = await requestApproval(uiContext, this.tool, resolvedArgs, {

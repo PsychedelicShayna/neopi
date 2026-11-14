@@ -83,7 +83,6 @@ describe("headless builtins", () => {
 	});
 
 	describe("/personality", () => {
-
 		test("lists current and available personalities without changing selection or invoking the model", async () => {
 			const current = currentPersonalityName(settings);
 			expect(await run("/personality")).toEqual({ consumed: true });
@@ -121,7 +120,12 @@ describe("headless builtins", () => {
 			await session.waitForIdle();
 			expect(mock.calls).toHaveLength(1);
 			const delivered = mock.calls[0].context.messages.find(message => message.role === "developer");
-			expect(delivered).toMatchObject({ role: "developer", attribution: "user", synthetic: true, userInitiated: true });
+			expect(delivered).toMatchObject({
+				role: "developer",
+				attribution: "user",
+				synthetic: true,
+				userInitiated: true,
+			});
 			expect(JSON.stringify(delivered?.content)).toContain("check the logs");
 			expect(session.isStreaming).toBe(false);
 		});

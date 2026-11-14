@@ -579,7 +579,9 @@ export class ChainJudge implements Judge {
 			if (requiresImages) throw new Error("judgment: no compatible judge candidate supports images");
 			throw new Error(`judgment: no ${this.#role} model available`);
 		}
-		throw new Error(`judgment: every ${this.#role} candidate failed: ${lastFailure ?? lastUnavailable ?? "unknown error"}`);
+		throw new Error(
+			`judgment: every ${this.#role} candidate failed: ${lastFailure ?? lastUnavailable ?? "unknown error"}`,
+		);
 	}
 
 	/** Attribute one attempt: the ledger unless answered wholly from cache, and one telemetry span. */

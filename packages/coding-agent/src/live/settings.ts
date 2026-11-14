@@ -159,7 +159,8 @@ export const cfgLiveSubmitKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Keyword",
-		description: "Trailing phrase releases a complete request for the voice agent to answer or delegate after silence (empty disables)",
+		description:
+			"Trailing phrase releases a complete request for the voice agent to answer or delegate after silence (empty disables)",
 	},
 });
 
@@ -174,7 +175,8 @@ export const cfgLiveSubmitSilenceMs = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Silence (ms)",
-		description: "Quiet after microphone speech and composer writes before a trailing keyword runs; speech must be finalized",
+		description:
+			"Quiet after microphone speech and composer writes before a trailing keyword runs; speech must be finalized",
 		options: [
 			{ value: "0", label: "Immediately" },
 			{ value: "500", label: "500 ms" },

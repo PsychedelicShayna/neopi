@@ -27,11 +27,7 @@ import { formatModelString, resolveModelOverride } from "../config/model-resolve
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { parseSelectorSuffix } from "../config/model-selector-suffix";
-import {
-	type ConfiguredThinkingLevel,
-	concreteThinkingLevel,
-	toReasoningEffort,
-} from "@oh-my-pi/pi-tui/thinking";
+import { type ConfiguredThinkingLevel, concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { editDistance } from "../utils/edit-distance";
 
 /** The registry surfaces selector validation needs; tests can stub them. */
@@ -205,4 +201,3 @@ function nearestModels(input: string, available: readonly Model<Api>[], limit = 
 		.slice(0, limit)
 		.map(entry => entry.full);
 }
-

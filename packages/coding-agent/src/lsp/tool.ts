@@ -206,11 +206,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 	get description(): string {
 		const maxTimeout = cfgToolsMaxTimeout.get(this.session.settings);
 		const defaults = resolveLspTimeouts(undefined, cfgLspRequestTimeout.get(this.session.settings), maxTimeout);
-		return renderPromptAsset("tools/lsp.md", lspDescription, {
-			defaultTimeoutSec: defaults.call,
-			defaultWaitSec: defaults.wait,
-			maxTimeoutSec: clampTimeout("lsp", TOOL_TIMEOUTS.lsp.max, maxTimeout),
-		}, { cwd: this.session.cwd });
+		return renderPromptAsset(
+			"tools/lsp.md",
+			lspDescription,
+			{
+				defaultTimeoutSec: defaults.call,
+				defaultWaitSec: defaults.wait,
+				maxTimeoutSec: clampTimeout("lsp", TOOL_TIMEOUTS.lsp.max, maxTimeout),
+			},
+			{ cwd: this.session.cwd },
+		);
 	}
 
 	static createIf(session: ToolSession): LspTool | null {

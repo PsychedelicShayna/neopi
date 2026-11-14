@@ -254,8 +254,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#confirmSelection();
-			else if (ev.act === "close" || ev.act === "cancel")
-				this.handleInput(this.#search.focused ? "\x03" : "\x1b");
+			else if (ev.act === "close" || ev.act === "cancel") this.handleInput(this.#search.focused ? "\x03" : "\x1b");
 			return;
 		}
 		if (ev?.kind === "select") {

@@ -46,10 +46,10 @@ export function createBrowserPreludeDefinition(
 		},
 		guidance: fallback
 			? renderPrompt(relayGuidance, {
-				cdpUrl: fallback.kind === "connected" ? redactUrlForLog(fallback.cdpUrl) : undefined,
-				tern: fallback.kind === "tern",
-				cmux: fallback.kind === "cmux",
-			})
+					cdpUrl: fallback.kind === "connected" ? redactUrlForLog(fallback.cdpUrl) : undefined,
+					tern: fallback.kind === "tern",
+					cmux: fallback.kind === "cmux",
+				})
 			: undefined,
 		javascript: browserJavascript,
 		python: browserPython,
