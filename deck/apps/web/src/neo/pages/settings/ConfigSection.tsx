@@ -61,7 +61,7 @@ function ConfigSettingRow({ setting, cwd, onSaved, onNotice }: { setting: NpiCon
 			<p className="neo-settings-description">{setting.description || "Config-file setting without panel metadata."}</p>
 			{setting.warning && <p className="neo-settings-advanced-warning">{setting.warning}</p>}
 			{setting.invalidGlobalValue && <p className="neo-settings-advanced-warning">The global config value is invalid. NeoPi uses the default. Save a valid value or reset.</p>}
-			{["project", "overlay", "runtime", "role"].includes(setting.provenance) && <p className="neo-settings-description">A {setting.provenance} layer overrides the global value in {cwd}.</p>}
+			{["project", "overlay", "runtime", "role", "session"].includes(setting.provenance) && <p className="neo-settings-description">A {setting.provenance} layer overrides the global value in {cwd}.</p>}
 			{setting.env?.active && setting.env.fallback && <p className="neo-settings-description">{setting.provenance === "env" ? `Using $${setting.env.name} until a config value is saved.` : `Config overrides $${setting.env.name}.`}</p>}
 		</div>
 		<div className="neo-settings-advanced-editor">
