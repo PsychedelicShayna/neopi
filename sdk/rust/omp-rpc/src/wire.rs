@@ -10426,7 +10426,7 @@ impl Command for CancelJobCommand {
 	}
 }
 
-/// Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+/// Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetSubagentModelCommand {
 	#[serde(rename = "subagentId")]

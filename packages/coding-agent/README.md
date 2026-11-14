@@ -17,7 +17,7 @@ Package-specific references:
 
 ## Model selection and roles
 
-`/model [selector]` uses the fullscreen Big Pickle session-only picker by default, the same as Alt+P; an explicit selector switches directly. Choose **Small picker** in Settings → Model → **Session model picker** (`models.sessionPicker: small`) for the compact view. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` and `/switch` remain hidden aliases for `/roles` and `/model`, respectively, and appear in completion only when no visible candidates match. See [Model configuration](../../docs/models.md).
+`/model [selector]` uses the fullscreen Big Pickle session-only picker by default, the same as Alt+P; an explicit selector switches directly. Choose **Small picker** in Settings → Model → **Session model picker** (`models.sessionPicker: small`) for the compact view. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` and `/switch` remain hidden aliases for `/roles` and `/model`, respectively, revealed by a literal prefix once no visible command name or ordinary alias shares it. See [Model configuration](../../docs/models.md).
 
 ## Inline prompt templates
 

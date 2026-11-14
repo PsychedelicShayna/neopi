@@ -1965,7 +1965,7 @@ settings are untouched. Give either a `selector` or an exact `provider` with
 { "id": "req_5", "type": "set_subagent_model", "subagentId": "OmpWorker", "provider": "anthropic", "modelId": "claude-haiku-4-5" }
 ```
 
-A `selector` resolves exactly like `/switch <selector>` against the subagent's
+A `selector` resolves exactly like `/model <selector>` against the subagent's
 own model registry and scope: `provider/id`, a fuzzy id, an `@role` alias, and an
 optional `:level` suffix. Without a suffix the level a role configures for that
 model applies, else the subagent's current level is kept within what the new

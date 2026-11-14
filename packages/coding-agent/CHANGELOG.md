@@ -8,7 +8,7 @@
 - Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 - Bare `npi update` now reports binary-update status; the preserved prompted source-fork integration workflow moves to `npi update source`.
-- Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, offered only when no visible completion candidate matches.
+- Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, revealed by a literal prefix once no visible command name or ordinary alias shares it.
 
 ### Added
 
@@ -46,7 +46,7 @@
 - Configure advisors separately in User, Project root, Project .omp, and Session scopes; copy advisors and their prompts, or generate a new advisor from existing definitions ([#632](https://github.com/PsychedelicShayna/neopi/issues/632)).
 - Create and edit agent definitions in one rich `/agents` editor, with tool checkboxes, nested JSON Schema/JTD output fields, raw file editing, per-field generation, and named or private inline advisors.
 - Settings, slash-command suggestions, hotkey help, model roles and status-line widgets mark fork additions with a crescent and the latest upstream release's additions with a star, while retaining command type icons.
-- Edit role models and token budgets in `/models session`, `/models project`, or `/models global`; role rows explain higher-scope shadowing and `models.defaultScope` selects the scope opened by plain `/models`.
+- Edit role models and token budgets in `/roles session`, `/roles project`, or `/roles global`; role rows explain higher-scope shadowing and `models.defaultScope` selects the scope opened by plain `/roles`.
 - Edit global, project, or session settings with `/settings global|project|session`; Ctrl+S cycles scopes, F6 applies durable edits to other running sessions, and session overrides follow the saved session across directory changes.
 - Keep live settings synchronized after dropped notifications or a replaced settings directory, and explicitly refresh other updated sessions through the control socket. Already-running older builds must restart on an updated binary to receive these fixes or Apply notifications.
 
@@ -162,6 +162,8 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
+
+- Hidden aliases such as `/models` reveal with their command descriptions once literal visible-name prefixes run out, even when fuzzy candidates remain; startup tips and model-configuration help use `/model` and `/roles`.
 
 - NeoPi no longer offers omp update onboarding, checks upstream releases on startup, or installs upstream binaries through flagged update commands; the fork-aware source update and plugin updates remain available.
 - Built-in prompt inspection and overrides recognize async-result command headers and eval-agent model advertisements added by the upstream sync ([#703](https://github.com/PsychedelicShayna/neopi/pull/703), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).

@@ -1098,25 +1098,30 @@ class SyncSlashProvider implements AutocompleteProvider {
 }
 
 describe("Editor Enter handler sync slash completion", () => {
-	it.each(["models", "switch"])("submits exact hidden /%s without accepting a competing popup row", async alias => {
-		for (const popupResolved of [false, true]) {
-			const editor = new Editor(defaultEditorTheme);
-			editor.setAutocompleteProvider(
-				new CombinedAutocompleteProvider([
-					{ name: "model", hiddenAliases: ["switch"], description: "Switch model for this session" },
-					{ name: "roles", hiddenAliases: ["models"], description: "Configure model roles" },
-				]),
-			);
-			let submitted = "";
-			editor.onSubmit = text => {
-				submitted = text;
-			};
-			editor.handleInput(`/${alias}`);
-			if (popupResolved) await untilAutocompleteShown(editor);
-			editor.handleInput("\r");
-			expect(submitted).toBe(`/${alias}`);
-		}
-	});
+	it.each(["models", "switch", "MoDeLs", "SwItCh", "launch"])(
+		"submits canonical hidden /%s rather than a competing popup row",
+		async alias => {
+			for (const popupResolved of [false, true]) {
+				const editor = new Editor(defaultEditorTheme);
+				editor.setAutocompleteProvider(
+					new CombinedAutocompleteProvider([
+						{ name: "model", hiddenAliases: ["switch"], description: "Switch model for this session" },
+						{ name: "roles", hiddenAliases: ["models", "launch"], description: "Configure model roles" },
+						{ name: "modelpreset", description: "Save and switch model presets" },
+						{ name: "launcher", description: "Open the launcher" },
+					]),
+				);
+				let submitted = "";
+				editor.onSubmit = text => {
+					submitted = text;
+				};
+				editor.handleInput(`/${alias}`);
+				if (popupResolved) await untilAutocompleteShown(editor);
+				editor.handleInput("\r");
+				expect(submitted).toBe(`/${alias.toLowerCase()}`);
+			}
+		},
+	);
 
 	it("accepts repeated inline prompt completions without submitting or erasing the draft", async () => {
 		const editor = new Editor(defaultEditorTheme);

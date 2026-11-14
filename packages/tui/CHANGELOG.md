@@ -13,7 +13,7 @@
 
 - The fullscreen session model picker repeats its picker shortcut to target a temporary Task-subagent override, with a red frame and an explicit session-only cue.
 - Search composers preview results live, confirm with Enter, share the main composer's Vim editing, restore confirmed patterns on cancel, and support glob patterns alongside slash-prefixed regex ([#500](https://github.com/PsychedelicShayna/neopi/issues/500)).
-- Commands can declare hidden aliases that retain dispatch and argument completion while appearing in suggestions only when no visible command, description, alias, or skill matches.
+- Commands can declare hidden aliases that retain dispatch and argument completion while revealing on a literal prefix once no visible command name or ordinary alias shares it.
 - Complete namespaced `/prompts:<name>` references mid-message without replacing surrounding prose or earlier references.
 - Settings, command suggestions, hotkey help, role pickers and status-line widget lists can show themed fork and latest-upstream provenance marks without changing entry identifiers.
 - `/advisor configure` lists every loaded file with an advisor preview, whole-file toggles, exact-file editing, and bulk enabled-state actions ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
@@ -53,6 +53,9 @@
 - `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
+
+- Hidden command aliases such as `/models` reveal with their descriptions after visible name prefixes run out, even when fuzzy candidates remain.
+- The startup model-switching tip names `/model`, and the agent model picker points to `/roles` for provider configuration.
 
 - Role activation-set save notices acknowledge automatic WATCHDOG reloads in normal main sessions and direct manual reloads back to advisor configuration ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 - `/advisor configure` bulk enable, disable, and invert affect only advisor entries in the selected scope, leaving whole-file switches unchanged ([#323](https://github.com/PsychedelicShayna/neopi/issues/323)).
