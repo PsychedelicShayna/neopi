@@ -62,6 +62,7 @@ function makeCtx(isStreaming = false, messages: AgentMessage[] = []) {
 			isStreaming,
 			isCompacting: false,
 			queuedMessageCount: 0,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],

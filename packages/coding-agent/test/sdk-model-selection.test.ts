@@ -1693,6 +1693,10 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			const authStorage = createInMemoryAuthStorage();
 			authStorage.keys.setRuntime("anthropic", "test-key");
 			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			// Eligibility is part of this fixture, not the developer machine's provider credentials.
+			const available = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!available) throw new Error("Expected bundled anthropic default model");
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([available]);
 			const settings = Settings.isolated();
 			settings.setModelRole("default", configured);
 

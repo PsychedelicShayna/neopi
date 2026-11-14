@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Settings } from "../src/config/settings";
 import { serializeRpcModel } from "../src/modes/rpc/rpc-model";
 import { buildRpcSessionState } from "../src/modes/rpc/rpc-session-state";
 import type { AgentSession } from "../src/session/agent-session";
+import { SessionManager } from "../src/session/session-manager";
 
 function model<TApi extends Api>(provider: string, api: TApi, id: string, serviceTiers?: string[]): Model<TApi> {
 	return buildModel({
@@ -50,6 +52,7 @@ const cases: [string, Model, boolean][] = [
 /** The state builder only reads these session fields; no runtime or provider is started. */
 function sessionFor(selectedModel: Model | undefined, fastModeEnabled: boolean, fastModeActive: boolean): AgentSession {
 	const session = {
+		settings: Settings.isolated(),
 		model: selectedModel,
 		thinkingLevel: "high",
 		isStreaming: false,
@@ -58,6 +61,9 @@ function sessionFor(selectedModel: Model | undefined, fastModeEnabled: boolean, 
 		followUpMode: "one-at-a-time",
 		interruptMode: "immediate",
 		sessionId: "rpc-model-test",
+		sessionFile: undefined,
+		chroniclerHealth: undefined,
+		chatMode: undefined,
 		autoCompactionEnabled: true,
 		queuedMessageCount: 0,
 		hasAdmittedSubmission: false,
@@ -65,10 +71,12 @@ function sessionFor(selectedModel: Model | undefined, fastModeEnabled: boolean, 
 		getApprovalMode: () => "always-ask",
 		getAdvisorCost: () => 0,
 		advisorCostRestoreState: "ready",
-		sessionManager: { getUsageStatistics: () => ({ cost: 0 }) },
+		sessionManager: SessionManager.inMemory(),
 		getQueuedMessages: () => ({ steering: [], followUp: [], liveSteered: 0 }),
 		hasPendingAsyncWork: () => false,
+		getRunningBackgroundJobCount: () => 0,
 		getTodoPhases: () => [],
+		getActiveTimeMs: () => 0,
 		isFastModeEnabled: () => fastModeEnabled,
 		isFastModeActive: () => fastModeActive,
 		isSlowModeSupported: () => false,

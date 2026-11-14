@@ -1,6 +1,6 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { TSP_KINDS, type TspNode, type TspPickerProps } from "@oh-my-pi/pi-wire";
+import { TSP_KINDS, type TspNode, type TspPickerItem, type TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext } from "../src/native/node";
 import { ExtensionDashboard, type ExtensionDashboardRuntime } from "../src/overlays/extensions/extension-dashboard";
 import type { Extension, ExtensionProvider } from "../src/overlays/extensions/types";
@@ -84,10 +84,12 @@ const pickerContext: DescribeContext = {
 	feature: () => false,
 };
 
-function describedPicker(dashboard: ExtensionDashboard): TspPickerProps {
+function describedPicker(dashboard: ExtensionDashboard): TspPickerProps & { items: readonly TspPickerItem[] } {
 	const described = dashboard.describe(pickerContext);
 	if (described.k !== "picker" || !described.p) throw new Error("no extension picker");
-	return described.p;
+	const items = described.p.items;
+	if (!items) throw new Error("extension picker has no items catalogue");
+	return { ...described.p, items };
 }
 
 describe("ExtensionDashboard native", () => {
@@ -307,8 +309,9 @@ describe("ExtensionDashboard menu navigation", () => {
 		const dashboard = await ExtensionDashboard.create({ runtime: fx.runtime, terminalHeight: 30 });
 		try {
 			for (const char of "/beta") dashboard.handleInput(char);
-			const item = describedPicker(dashboard).items[0]!;
-			dashboard.handleNativeEvent({ type: "select", key: "", item: item.id, mods: [] });
+			const [item] = describedPicker(dashboard).items;
+			if (!item) throw new Error("filtered extension picker has no beta row");
+			dashboard.handleNativeEvent({ type: "select", key: "", item: item.id });
 			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha", "beta"]);
 			expect(dashboard.navigationSnapshot().list.search).toMatchObject({
 				value: "",

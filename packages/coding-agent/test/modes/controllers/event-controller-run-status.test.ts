@@ -62,10 +62,10 @@ function toolEnd(toolCallId: string, toolName: string): AgentSessionEvent {
 	} as unknown as AgentSessionEvent;
 }
 
-/** `ask` call arguments: one HTML form asking `question` as a yes/no radio group. */
+/** A valid live `ask` call, so blocked status can recover its question. */
 function askArgs(question: string): Record<string, unknown> {
 	return {
-		html: `<form><p>${question}</p><label><input type="radio" name="q" value="yes"> Yes</label><label><input type="radio" name="q" value="no"> No</label></form>`,
+		questions: [{ id: "q", question, options: [{ label: "Yes" }, { label: "No" }] }],
 	};
 }
 

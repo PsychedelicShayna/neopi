@@ -6,7 +6,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
+import { cfgEffortPolicyMode, cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -14,7 +14,7 @@ import { getRestorableSessionModels } from "@oh-my-pi/pi-coding-agent/session/se
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
-import { AUTO_THINKING, resolveProvisionalAutoLevel } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -461,10 +461,12 @@ describe("AgentSession model persistence", () => {
 	it("keeps DEFAULT-role auto thinking on a fresh session when the model declares defaultLevel (#16370)", async () => {
 		const model = getBundledModel("zai", "glm-5.3");
 		if (!model) throw new Error("Expected zai/glm-5.3 to exist");
-		expect(model.thinking?.defaultLevel).toBe(Effort.Max);
+		expect(model.thinking?.defaultLevel).toBeDefined();
 		// The /model hub stores DEFAULT-role `auto` as a bare role plus `defaultThinkingLevel: auto`.
 		const settings = Settings.isolated({ defaultThinkingLevel: AUTO_THINKING });
 		settings.setModelRole("default", modelValue(model));
+		cfgEffortPolicyMode.override(settings, "replacement");
+		cfgEffortRules.override(settings, [{ selector: modelValue(model), allowed: [Effort.Low] }]);
 		const result = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
@@ -485,8 +487,7 @@ describe("AgentSession model persistence", () => {
 
 		expect(result.session.model?.id).toBe(model.id);
 		expect(result.session.configuredThinkingLevel()).toBe(AUTO_THINKING);
-		expect(result.session.thinkingLevel).toBe(resolveProvisionalAutoLevel(model));
-		expect(result.session.thinkingLevel).not.toBe(Effort.Max);
+		expect(result.session.thinkingLevel).toBe(Effort.Low);
 	});
 
 	it("marks an incomplete process-exit transcript aborted during SDK resume without dropping history", async () => {

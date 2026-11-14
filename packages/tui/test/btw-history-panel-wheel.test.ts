@@ -182,9 +182,9 @@ describe("BtwHistoryPanel mouse wheel", () => {
 
 			const scrolled = viewport(terminal);
 			// Action row and bottom border sit below the body; the top border above it.
-			wheel(terminal, 1, WIDE - 4, HEIGHT - 2);
 			wheel(terminal, 1, WIDE - 4, HEIGHT - 1);
-			wheel(terminal, 1, WIDE - 4, 0);
+			wheel(terminal, 1, WIDE - 4, HEIGHT);
+			wheel(terminal, 1, WIDE - 4, 1);
 			await scheduler.settle(terminal);
 			expect(viewport(terminal)).toEqual(scrolled);
 		} finally {

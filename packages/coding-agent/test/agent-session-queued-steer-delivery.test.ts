@@ -31,7 +31,6 @@ import { convertToLlm, type CustomMessage, USER_INTERRUPT_LABEL } from "@oh-my-p
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
-import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
@@ -788,9 +787,7 @@ describe("AgentSession queued steer delivery", () => {
 		await withTimeout(session.waitForIdle(), 2_000, "continuation did not finish");
 
 		expect(mock.calls.length).toBe(2);
-		expect(JSON.stringify(mock.calls[1].context.messages)).toContain(
-			JSON.stringify(manualContinuePrompt).slice(1, -1),
-		);
+		expect(mock.calls[1].context.messages.filter(message => message.role === "developer")).toHaveLength(1);
 		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "resumed" }]);
 		await resumed;
 	});
@@ -1020,6 +1017,7 @@ describe("AgentSession queued steer delivery", () => {
 				pendingImages: [],
 				pendingImageLinks: [],
 				addToHistory: () => {},
+				clearSubmittedDraft: () => {},
 			},
 			withLocalSubmission: async (_text, submit) => submit(),
 			hasActiveBtw: () => false,

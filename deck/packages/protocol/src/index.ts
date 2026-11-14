@@ -182,7 +182,7 @@ export interface UpdateNotificationSettingsRequest {
 
 export type NpiConfigValueType = "boolean" | "string" | "number" | "enum" | "array" | "record";
 /** Layer supplying a setting's effective value, highest precedence first. */
-export type NpiConfigProvenance = "env" | "runtime" | "role" | "overlay" | "project" | "global" | "default";
+export type NpiConfigProvenance = "env" | "runtime" | "session" | "role" | "overlay" | "project" | "global" | "default";
 
 export interface NpiConfigOption {
 	value: string;

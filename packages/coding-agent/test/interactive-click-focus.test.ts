@@ -8,6 +8,12 @@ import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extens
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { cfgExtensionAssistantTextRenderers } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import {
+	getKeybindings,
+	setKeybindings,
+	type KeybindingsManager as BaseKeybindingsManager,
+} from "@oh-my-pi/pi-tui/keybindings";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -35,15 +41,22 @@ describe("inline click-to-focus geometry", () => {
 	let term: VirtualTerminal;
 	let eventBus: EventBus;
 	let modelRegistry: ModelRegistry;
+	let previousKeybindings: BaseKeybindingsManager;
 
 	beforeAll(() => {
 		initTheme();
 	});
 
 	beforeEach(async () => {
+		previousKeybindings = getKeybindings();
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-click-focus-e2e-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		vi.spyOn(KeybindingsManager, "create").mockImplementation(() => {
+			const keybindings = KeybindingsManager.inMemory({ "app.links.hint": "alt+o" });
+			setKeybindings(keybindings);
+			return keybindings;
+		});
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -66,6 +79,7 @@ describe("inline click-to-focus geometry", () => {
 		authStorage?.close();
 		tempDir?.removeSync();
 		resetSettingsForTest();
+		setKeybindings(previousKeybindings);
 	});
 
 	it("maps a painted live task row back to its agent id", async () => {

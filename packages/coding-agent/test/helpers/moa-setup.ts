@@ -295,6 +295,8 @@ export interface MoaSessionOptions {
 	model?: Model | null;
 	/** The workspace; defaults to the fixture's project directory. */
 	cwd?: string;
+	systemPrompt?: string[];
+	toolNames?: string[];
 }
 
 /** A real session over the fixture's registry, starting on `fake/other` unless `model` says otherwise. */
@@ -307,6 +309,8 @@ export async function createMoaSession(fixture: MoaFixture, options: MoaSessionO
 		authStorage: fixture.authStorage,
 		modelRegistry: fixture.registry,
 		settings: options.settings ?? Settings.isolated({ "compaction.enabled": false }),
+		systemPrompt: options.systemPrompt,
+		toolNames: options.toolNames,
 		model: options.model === null ? undefined : (options.model ?? fixture.registry.find(FAKE_PROVIDER, "other")),
 		disableExtensionDiscovery: true,
 		skills: [],

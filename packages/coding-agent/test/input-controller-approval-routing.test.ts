@@ -20,6 +20,7 @@ function createContext(approvalOwnsComposer: boolean) {
 		getText: () => "",
 		getExpandedText: () => "",
 		clearDraft: vi.fn(),
+		clearSubmittedDraft: vi.fn(),
 		setCollapsedText: vi.fn(),
 		composerChips: () => [],
 	} as unknown as InteractiveModeContext["editor"];
@@ -32,6 +33,7 @@ function createContext(approvalOwnsComposer: boolean) {
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],

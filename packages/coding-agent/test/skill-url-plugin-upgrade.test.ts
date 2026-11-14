@@ -200,6 +200,7 @@ describe("a plugin upgrade that replaces the plugin's version directory under a 
 	async function startSession(options: { skills?: AgentSession["skills"]; cwd?: string } = {}): Promise<AgentSession> {
 		const cwd = options.cwd ?? tempDir;
 		const { session } = await sdkModule.createAgentSession({
+			agentId: `SkillUpgrade${sessions.length}`,
 			cwd,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(cwd),

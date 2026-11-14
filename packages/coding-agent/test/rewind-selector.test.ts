@@ -162,6 +162,8 @@ describe("RewindSelectorComponent", () => {
 			selector.handleInput("prompt 0");
 			selector.render(120);
 			selector.handleInput(ENTER);
+			expect(selected).toEqual([]);
+			selector.handleInput(ENTER);
 
 			expect(selected).toEqual(["u0"]);
 		} finally {
@@ -325,13 +327,13 @@ describe("RewindSelectorComponent", () => {
 		expect(lines.join("\n")).toContain("first prompt");
 	});
 
-	it("f filters the transcript to matching items and Enter rewinds to one", () => {
+	it("f filters the transcript and a confirmed search rewinds on Enter", () => {
 		const selected: string[] = [];
 		const selector = makeSelector(id => selected.push(id));
 		selector.render(80);
 
 		// The rendered bash card is searchable: "ls" matches only the bash turn,
-		// so the prompts drop out of the body and Enter rewinds onto that turn.
+		// so the prompts drop out of the body and Enter confirms the filter.
 		for (const key of ["f", ..."ls"]) selector.handleInput(key);
 		const body = selector
 			.render(80)
@@ -340,6 +342,8 @@ describe("RewindSelectorComponent", () => {
 		expect(body).toContain("Running a command.");
 		expect(body).not.toContain("first prompt");
 		expect(body).not.toContain("second prompt");
+		selector.handleInput(ENTER);
+		expect(selected).toEqual([]);
 		selector.handleInput(ENTER);
 
 		expect(selected).toEqual(["tr1"]);
@@ -353,6 +357,7 @@ describe("RewindSelectorComponent", () => {
 		// "prompt" keeps u1 and u2; one Up skips the assistant turn between them.
 		for (const key of ["f", ..."prompt"]) selector.handleInput(key);
 		selector.render(80);
+		selector.handleInput(ENTER);
 		selector.handleInput(UP);
 		selector.handleInput(ENTER);
 
@@ -371,6 +376,7 @@ describe("RewindSelectorComponent", () => {
 		// Both words must appear: "second" rules out u1 even though it has "prompt".
 		for (const key of "pt second") selector.handleInput(key);
 		expect(Bun.stripANSI(selector.render(80).join("\n"))).not.toContain("first prompt");
+		selector.handleInput(ENTER);
 		selector.handleInput(ENTER);
 
 		expect(selected).toEqual(["u2"]);
@@ -399,11 +405,12 @@ describe("RewindSelectorComponent", () => {
 		expect(body).not.toContain('No items match "你好"');
 		expect(body).not.toContain("first prompt");
 		selector.handleInput(ENTER);
+		selector.handleInput(ENTER);
 
 		expect(selected).toEqual(["u2"]);
 	});
 
-	it("Esc leaves the filter with the match kept instead of closing the selector", () => {
+	it("Esc rolls an unconfirmed filter back to the confirmed match without closing the selector", () => {
 		const selected: string[] = [];
 		let cancelled = false;
 		const selector = new RewindSelectorComponent(makeEntries(), {
@@ -418,13 +425,15 @@ describe("RewindSelectorComponent", () => {
 		selector.render(80);
 
 		for (const key of ["f", ..."first"]) selector.handleInput(key);
+		selector.handleInput(ENTER);
+		for (const key of ["f", "\x15", ..."second"]) selector.handleInput(key);
 		selector.handleInput("\x1b");
 		expect(cancelled).toBe(false);
 		const body = selector
 			.render(80)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
-		// The field loses focus but keeps both query and filtered selection.
+		// Cancelling the draft preserves the previously confirmed query and selection.
 		expect(body).not.toContain("second prompt");
 		expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "first", focused: false } });
 		selector.handleInput(ENTER);

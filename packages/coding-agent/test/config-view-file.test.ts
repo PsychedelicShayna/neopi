@@ -109,7 +109,7 @@ for (const scope of ["global", "project"] as const) {
 			let selectedPath: string | undefined;
 			const view = new SettingsSelectorComponent(
 				{
-					settings: createSettingsHost(settings),
+					settings: createSettingsHost(settings, scope),
 					plugins: createPluginSettingsHost(cwd),
 					availableThinkingLevels: [],
 					thinkingLevel: undefined,

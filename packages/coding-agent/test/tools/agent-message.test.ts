@@ -112,17 +112,18 @@ describe("write agent:// messaging", () => {
 		);
 	});
 
-	it("refuses a subagent's broadcast without waking anyone, while its direct messages still go through", async () => {
+	it("delivers a subagent's broadcast and direct message under its own identity", async () => {
 		registerPeer("Sender");
 		registerPeer("Sibling", "idle");
 		const tool = new WriteTool(makeSession({ senderId: "Sender" }));
-		const refused = await tool.execute("broadcast", { path: "agent://all", content: "editing auth.ts" });
-		expect(refused.isError).toBeTrue();
-		expect(refused.content[0]).toMatchObject({ text: expect.stringContaining("Only the main agent can broadcast") });
-		expect(received.get("Sibling")).toEqual([]);
+		const broadcast = await tool.execute("broadcast", { path: "agent://all", content: "editing auth.ts" });
+		expect(broadcast.isError).toBeFalsy();
+		expect(received.get("Sibling")).toMatchObject([
+			{ from: "Sender", to: "Sibling", body: "editing auth.ts", broadcast: true },
+		]);
 		const direct = await tool.execute("direct", { path: "agent://Sibling", content: "who owns auth.ts?" });
 		expect(direct.isError).toBeFalsy();
-		expect(received.get("Sibling")?.map(message => message.body)).toEqual(["who owns auth.ts?"]);
+		expect(received.get("Sibling")?.map(message => message.body)).toEqual(["editing auth.ts", "who owns auth.ts?"]);
 	});
 
 	it("reports unknown and stopped recipients without delivering", async () => {

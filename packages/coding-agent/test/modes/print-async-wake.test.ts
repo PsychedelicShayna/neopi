@@ -316,12 +316,17 @@ describe("print mode async-result wake with a real session", () => {
 	test("by default prints the first answer and cancels the job at dispose", async () => {
 		const { lines } = captureStdout();
 		const { session, mock, manager } = await realSession(false);
+		const statuses: string[] = [];
+		manager.subscribe(({ job }) => {
+			if (job.id === "print-job") statuses.push(job.status);
+		});
 
 		expect(await runPrintMode(session, { mode: "text", messages: ["go"] })).toBe(0);
 
 		expect(lines.join("")).toBe("STARTED\n");
 		expect(mock.calls).toHaveLength(1);
-		expect(manager.getJob("print-job")?.status).toBe("cancelled");
+		expect(statuses).toContain("cancelled");
+		expect(manager.getJob("print-job")).toBeUndefined();
 	});
 
 	test("with async.printWake, the job result wakes the same session and its answer is printed", async () => {

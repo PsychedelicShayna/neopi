@@ -1652,6 +1652,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	// scrollback, stranding it above the viewport once the dialog closed).
 	#contentSlot: Container;
 	#messageContainer: Container;
+	readonly #topSpacer = new Spacer(1);
 	#onDelete?: (session: T) => Promise<boolean>;
 	#onRename?: (session: T, title: string) => Promise<string | null>;
 	#onSetPinned?: (session: T, pinned: boolean) => Promise<void>;
@@ -1683,6 +1684,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	// resume a session scrolled off-screen.
 	#footerStart = 0;
 	readonly #getTerminalRows: () => number;
+	#extraFooterRows = 0;
 	readonly #fillHeight: boolean;
 	readonly #title: string;
 	readonly #actionLabel: string;
@@ -1752,7 +1754,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.title = this.#headerLabel();
 		// One spacer of breathing room; OverlayPanel supplies the two outer
 		// border rows and the horizontal inset.
-		this.addChild(new Spacer(1));
+		this.addChild(this.#topSpacer);
 		this.addChild(this.#messageContainer);
 		// Create session list in folder scope; the empty-state hint invites the
 		// user to Tab into all-projects rather than silently surfacing other
@@ -1761,7 +1763,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			sessions,
 			this.#folderShowCwd(),
 			options.historyMatcher,
-			options.getTerminalRows,
+			() => this.#getTerminalRows() - this.#extraFooterRows,
 			options.pinnedIds,
 			options.currentSessionPath,
 		);
@@ -2175,13 +2177,26 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	 */
 	override render(width: number): readonly string[] {
 		const innerWidth = Math.max(1, width - 4);
+		const footer = this.#footerLines(width);
+		// The list budget includes the usual four footer rows; wrapped hints need more.
+		this.#extraFooterRows = Math.max(0, footer.length - 4);
 		const lines: string[] = [topBorder(width, this.title)];
+		let topSpacerLine: number | undefined;
 		for (const child of this.children) {
 			const childLines = child.render(innerWidth);
+			if (child === this.#topSpacer) topSpacerLine = lines.length;
 			if (child === this.#contentSlot) this.#listLineOffset = lines.length;
 			for (const line of childLines) lines.push(row(line, width));
 		}
-		const footer = this.#footerLines(width);
+		if (
+			topSpacerLine !== undefined &&
+			(this.#confirmationDialog || this.#renameDialog) &&
+			lines.length + footer.length > this.#getTerminalRows()
+		) {
+			// A nested dialog already supplies breathing room; reclaim the outer padding before clipping content.
+			lines.splice(topSpacerLine, 1);
+			this.#listLineOffset--;
+		}
 		if (this.#fillHeight) {
 			const target = Math.max(0, this.#getTerminalRows() - footer.length);
 			if (lines.length > target) lines.length = target;

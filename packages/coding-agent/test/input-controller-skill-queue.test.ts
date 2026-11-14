@@ -124,6 +124,7 @@ function createStubInputControllerContext(opts: {
 			isCompacting: opts.isCompacting ?? false,
 			isBashRunning: false,
 			isEvalRunning: false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			prompt,
 			buildUserSkillPrompt: buildSkillPromptMessage,

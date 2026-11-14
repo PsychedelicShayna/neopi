@@ -542,11 +542,15 @@ describe("native transcript", () => {
 			// The wire name never keys the card; the canonical registry name does.
 			expect(h.find(node => node.k === "tool" && node.p?.role === "omp.tool.shell")).toBeUndefined();
 			const card = h.find(node => node.k === "tool" && node.p?.role === "omp.tool.bash");
-			expect(card?.p).toMatchObject({ name: "bash", status: source === "live" ? "running" : "done" });
-			// The canonical bash renderer described the call; the generic fallback would not.
-			expect(h.find(node => node.k === "code" && node.p?.role === "omp.tool.bash.command")?.p).toMatchObject({
-				text: "ls -la",
+			expect(card?.p).toMatchObject({
+				name: "bash",
+				command: "ls -la",
+				status: source === "live" ? "running" : "done",
 			});
+			// The canonical renderer owns this pane whether it presents plain shell source or a live visualization.
+			const command = h.find(node => node.p?.role === "omp.tool.bash.command");
+			if (!command) throw new Error("canonical bash renderer has no command pane");
+			expect(["code", "shell"]).toContain(command.k);
 			expect(h.errors).toEqual([]);
 		});
 	}

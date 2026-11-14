@@ -272,6 +272,7 @@ describe("browser executable selection", () => {
 			const result = Bun.spawnSync([process.execPath, EXECUTABLE_PROBE], {
 				env: {
 					...probeEnv(),
+					HOME: path.join(tempDir.path(), "home"),
 					OMP_BROWSER_PROBE_PLATFORM: "win32",
 					ProgramFiles: tempDir.path(),
 					"ProgramFiles(x86)": path.join(tempDir.path(), "missing-x86"),

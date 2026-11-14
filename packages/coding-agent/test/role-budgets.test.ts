@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,15 +14,14 @@ import {
 } from "../src/session/model-compaction-threshold";
 
 const roots: string[] = [];
+beforeEach(() => resetSettingsForTest());
 afterEach(async () => {
 	resetSettingsForTest();
 	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
 async function fixture() {
-	const base = path.join(os.homedir(), ".cache/npi-canary");
-	await fs.mkdir(base, { recursive: true });
-	const root = await fs.mkdtemp(path.join(base, "role-budgets-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "role-budgets-"));
 	roots.push(root);
 	const agentDir = path.join(root, "agent");
 	const cwd = path.join(root, "project");
@@ -49,22 +48,25 @@ describe("role context budgets", () => {
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(-1);
 	});
 
-	it("edits global and role budgets with the same numeric settings control", () => {
+	it("edits the global numeric budget without copying the active role into global settings", () => {
 		const settings = Settings.isolated();
 		const host = createSettingsHost(settings);
-		const path = "roleSettings.slow.compaction.thresholdTokens";
-		expect(host.entries.find(entry => entry.path === path)?.ui).toMatchObject({ customInput: true });
+		expect(host.entries.find(entry => entry.path === cfgCompactionThresholdTokens.id)?.ui).toMatchObject({
+			customInput: true,
+		});
 		host.set("compaction.thresholdTokens", 100000);
-		host.set(path, 120000);
+		settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 120000);
 		settings.setActiveRole("slow");
 		expect(cfgCompaction.get(settings).thresholdTokens).toBe(120000);
 		expect(host.get("compaction.thresholdTokens")).toBe(100000);
-		host.set(path, -1);
-		expect(cfgCompaction.get(settings).thresholdTokens).toBe(100000);
-		host.set(path, 130000);
-		host.unset(path);
-		expect(cfgCompaction.get(settings).thresholdTokens).toBe(100000);
-		expect(() => host.set(path, 12.5)).toThrow("positive safe integer");
+		host.set("compaction.thresholdTokens", 110000);
+		expect(cfgCompaction.get(settings).thresholdTokens).toBe(120000);
+		expect(host.get("compaction.thresholdTokens")).toBe(110000);
+		settings.setRoleSetting("slow", cfgCompactionThresholdTokens, undefined);
+		expect(cfgCompaction.get(settings).thresholdTokens).toBe(110000);
+		expect(() => settings.setRoleSetting("slow", cfgCompactionThresholdTokens, 12.5)).toThrow(
+			"positive safe integer",
+		);
 	});
 
 	it("persists 120000 across model reassignment without baking activation into global settings", async () => {

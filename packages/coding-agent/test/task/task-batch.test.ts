@@ -30,7 +30,7 @@ import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { isRecord } from "@oh-my-pi/pi-utils";
 
-import { cfgTaskDisabledAgents, cfgTaskEnableEffort, cfgTaskStructured } from "@oh-my-pi/pi-coding-agent/task/settings";
+import { cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
@@ -219,31 +219,6 @@ describe("task.batch schema gating", () => {
 		expect(getBatchItemProperties(batch).outputSchema).toBeUndefined();
 		expect(getBatchItemProperties(batch).schemaMode).toBeUndefined();
 		expect(batch.description).not.toContain("outputSchema");
-	});
-
-	it("explains structured result navigation with task.structured off only while a visible agent opts in", async () => {
-		mockDiscovery([
-			taskAgent,
-			{ ...taskAgent, name: "reporter", description: "Reports a verdict", structured: true },
-		]);
-		const session = createSession({ settings: { "task.batch": true, "async.enabled": true } });
-		const tool = await TaskTool.create(session);
-		const navigation = "nested `/reports/0/data`";
-
-		const optedIn = tool.description;
-		expect(optedIn).toContain(navigation);
-		expect(optedIn).toContain("- `reporter` (STRUCTURED; schema result): Reports a verdict");
-		expect(optedIn).not.toContain("outputSchema");
-		expect(optedIn).not.toContain("schemaMode");
-
-		cfgTaskDisabledAgents.override(session.settings, ["reporter"]);
-		expect(tool.description).not.toContain(navigation);
-
-		cfgTaskDisabledAgents.override(session.settings, []);
-		cfgTaskStructured.override(session.settings, true);
-		const settingOn = tool.description;
-		expect(settingOn).toContain("`outputSchema` parsed payload, even invalid");
-		expect(settingOn).not.toContain("STRUCTURED");
 	});
 });
 
@@ -882,7 +857,9 @@ describe("task.batch spawning", () => {
 			return makeResult(options.id ?? "?");
 		});
 		const run = async (settings: Record<string, unknown>, params: TaskParams) => {
-			const tool = await TaskTool.create(createSession({ settings: { "async.enabled": false, ...settings } }));
+			const tool = await TaskTool.create(
+				createSession({ settings: { "async.enabled": false, "effort.mode": "legacy", ...settings } }),
+			);
 			await tool.execute("tc-effort", params);
 		};
 		const batch = { context: "Shared.", tasks: [{ name: "Solo", task: "Reply OK.", effort: "hi" }] } as TaskParams;

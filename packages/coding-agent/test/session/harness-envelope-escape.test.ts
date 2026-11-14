@@ -63,6 +63,7 @@ function makeBridge(streaming: boolean) {
 	const woken: AgentMessage[][] = [];
 	const steered: AgentMessage[] = [];
 	const host = {
+		sessionManager: { getCwd: () => process.cwd() },
 		agent: { steer: (message: AgentMessage) => steered.push(message) } as unknown as Agent,
 		isDisposed: () => false,
 		isStreaming: () => streaming,

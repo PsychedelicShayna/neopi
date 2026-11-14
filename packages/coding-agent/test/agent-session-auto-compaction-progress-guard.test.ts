@@ -1213,10 +1213,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// The capped turn is dropped from history; its failure must stay visible to
 		// post-settle readers, or the task executor sees an idle run and re-prompts
 		// it straight back into the loop.
-		expect(session.getLastAssistantMessage()).toMatchObject({
-			stopReason: "error",
-			errorMessage: expect.stringContaining("Length-stop recovery gave up"),
-		});
+		const terminalFailure = session.getLastAssistantMessage();
+		expect(terminalFailure?.stopReason).toBe("error");
+		expect(terminalFailure?.errorMessage).toContain("Length-stop recovery gave up");
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",

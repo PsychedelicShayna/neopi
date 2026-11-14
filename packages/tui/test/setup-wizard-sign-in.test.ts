@@ -94,7 +94,7 @@ function providerSheet(scene: SignInScene): { props: TspPickerProps; owner: Comp
 function signInTo(scene: SignInScene, provider: string): void {
 	scene.handleInput("/");
 	for (const char of provider) scene.handleInput(char);
-	scene.handleInput("\x1b");
+	scene.handleInput("\r"); // Confirm the search without activating a provider.
 	scene.handleInput("\r");
 }
 
@@ -137,7 +137,8 @@ describe("SignInScene", () => {
 			state.focus?.handleInput?.("\x1bc");
 			expect(state.copied).toEqual([url, url]);
 			const rows = scene.render(36);
-			expect(rows.map(row => Bun.stripANSI(row).trim()).join("")).toContain(url);
+			expect(rows.join("\n")).toContain(`\x1b]8;;${url}\x07`);
+			expect(rows.map(row => Bun.stripANSI(row).slice(1, -1).trim()).join("")).toContain(url);
 		} finally {
 			pending.resolve();
 			scene.dispose();
@@ -289,6 +290,8 @@ describe("fullscreen setup sign-in cursor", () => {
 				await scheduler.settle(terminal);
 				terminal.sendInput("/"); // Printable text belongs to the explicitly focused filter.
 				for (const char of "anthropic") terminal.sendInput(char);
+				terminal.sendInput("\r");
+				expect(tui.getFocused()).toBe(wizard); // The first Enter only confirms search.
 				terminal.sendInput("\r");
 				await scheduler.settle(terminal);
 				const prompt = tui.getFocused();

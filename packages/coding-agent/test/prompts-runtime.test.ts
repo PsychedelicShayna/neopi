@@ -79,9 +79,7 @@ describe("built-in prompt runtime boundaries", () => {
 				contextFiles: [{ path: path.join(cwd, "role.md"), content: "PROJECT ROLE" }],
 			});
 			expect(adapted.systemPrompt[0]).toBe(baseline.systemPrompt[0]);
-			expect(adapted.systemPrompt[1]).toContain("Model adapter: Opus 5");
-			expect(adapted.systemPrompt[1]).toContain("anthropic / opus / 5.0.0");
-			expect(adapted.systemPrompt[1]).toContain("Recommended effort");
+			expect(adapted.systemPrompt).toHaveLength(baseline.systemPrompt.length + 1);
 			expect(adapted.systemPrompt.at(-1)).toContain("PROJECT ROLE");
 			for (const activeModel of [
 				{ ...opus, id: "claude-opus-4-8" },

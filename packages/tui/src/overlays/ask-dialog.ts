@@ -644,8 +644,6 @@ export class AskDialogComponent implements Component {
 	#overflowLayouts = new WeakMap<ExtensionAskDialogQuestion, Set<string>>();
 	#expanded = false;
 	#contentWidth = 76;
-	#headerExpandable = false;
-	#descExpandable = false;
 	/** Collapsed to one line (`app.ask.hide` / the Hide button) while the question stays pending. */
 	#hidden = false;
 	/** Memoized native description; dropped whenever dialog state may have changed. */
@@ -851,27 +849,34 @@ export class AskDialogComponent implements Component {
 		// available within the existing height cap.
 		const totalRows = this.#dialogHeight(innerWidth, process.stdout.rows || 40);
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
-		const maxTitleRows = Math.max(1, totalRows - 5 - MIN_BODY_ROWS - tabBarRows);
-		const headerLines = this.#renderHeader(innerWidth, maxTitleRows);
-		// top border (1) + header(N) + two dividers + footer(1) + bottom
-		// border (1) = N + 5 fixed rows outside the body. Without the bottom
-		// border term the dialog overflowed the viewport by one row
-		// (PRRT_kwDOQxs0bc6OFbDY).
-		const hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
-		const fixedRows = 1 + headerLines.length + 1 + 1 + hintRows + 1;
-		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
-		this.#bodyRows = bodyRows;
-		const bodyLines = this.#isSubmitTab()
-			? this.#renderSubmitBody(innerWidth, bodyRows)
-			: this.#renderQuestionBody(innerWidth, bodyRows);
-		const footer = this.#footerHintText(bodyLines.indicator);
+		let hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
+		let headerLines: string[];
+		let bodyLines: RenderedList;
+		let footerLines: string[];
+		for (;;) {
+			// Borders and dividers cost four rows; the footer may wrap independently on each tab.
+			const maxTitleRows = Math.max(1, totalRows - 4 - hintRows - MIN_BODY_ROWS - tabBarRows);
+			headerLines = this.#renderHeader(innerWidth, maxTitleRows);
+			const fixedRows = 4 + headerLines.length + hintRows;
+			const bodyRows = Math.max(1, totalRows - fixedRows);
+			this.#bodyRows = bodyRows;
+			bodyLines = this.#isSubmitTab()
+				? this.#renderSubmitBody(innerWidth, bodyRows)
+				: this.#renderQuestionBody(innerWidth, bodyRows);
+			footerLines = menuHintLines(
+				this.#footerHintText(bodyLines.indicator),
+				innerWidth,
+				this.#guardBlocks() ? "" : undefined,
+			);
+			if (footerLines.length <= hintRows) break;
+			hintRows = footerLines.length;
+		}
 		this.#panel.title = this.#titleText();
 		this.#headerRegion.setLines(headerLines);
 		this.#bodyRegion.setLines(bodyLines.lines);
-		this.#bodyRegion.setHeight(bodyRows);
-		this.#footerRegion.setLines(
-			menuHintLines(footer, innerWidth, this.#guardBlocks() ? "" : undefined).map(line => theme.fg("dim", line)),
-		);
+		this.#bodyRegion.setHeight(this.#bodyRows);
+		this.#footerRegion.setLines(footerLines.map(line => theme.fg("dim", line)));
+		this.#footerRegion.setHeight(hintRows);
 		return this.#help.render(this.#panel.render(width), width);
 	}
 
@@ -1320,7 +1325,9 @@ export class AskDialogComponent implements Component {
 	 *  size is stable for the dialog's lifetime at a given terminal size. */
 	#measureHeight(width: number, termRows: number): number {
 		const maxHeight = Math.max(MIN_DIALOG_ROWS, Math.floor(termRows * DIALOG_HEIGHT_RATIO));
-		const chrome = 5; // topBorder + divider + divider + footer + bottomBorder
+		const chromeRows = (question: ExtensionAskDialogQuestion | undefined, submit: boolean): number =>
+			4 +
+			menuHintLines(this.#footerHintText("", question, submit), width, this.#guardBlocks() ? "" : undefined).length;
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
 		const mdTheme = getMarkdownTheme();
 		let needed = MIN_DIALOG_ROWS;
@@ -1348,13 +1355,13 @@ export class AskDialogComponent implements Component {
 				return total;
 			};
 			const body = listRows(width);
-			needed = Math.max(needed, chrome + headerRows + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(question, false) + headerRows + Math.max(MIN_BODY_ROWS, body));
 		}
 		if (this.#hasSubmitTab()) {
 			// Warning line + blank, one summary line per question, blank, and
 			// the Submit row; note lines added later scroll within the body.
 			const body = 2 + this.#questions.length + 2;
-			needed = Math.max(needed, chrome + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(undefined, true) + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
 		}
 		return Math.min(needed, maxHeight);
 	}
@@ -1457,51 +1464,51 @@ export class AskDialogComponent implements Component {
 			lines.push(...this.#tabBar.render(width));
 		}
 		if (this.#isSubmitTab()) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
 			lines.push(theme.bold(theme.fg("accent", "Review answers")));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
 		const question = this.#questions[questionIndex];
-		if (!question) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
-			return lines;
-		}
-		const wrapped = wrapQuestionTitle(question, width);
-		this.#headerExpandable = wrapped.length > MAX_HEADER_ROWS;
-		this.#descExpandable = questionDescriptionsOverflow(question, width);
-		const maxRows = this.#expanded ? maxTitleRows : MAX_HEADER_ROWS;
+		if (!question) return lines;
+		const maxRows = this.#expanded ? maxTitleRows : Math.min(MAX_HEADER_ROWS, maxTitleRows);
 		lines.push(...renderQuestionTitle(question, width, maxRows));
 		return lines;
 	}
 
-	#expandHint(): string {
-		if (!this.#headerExpandable && !this.#descExpandable) return "";
+	#expandHint(question = this.#questions[this.#currentQuestionIndex()]): string {
+		if (
+			!question ||
+			(wrapQuestionTitle(question, this.#contentWidth).length <= MAX_HEADER_ROWS &&
+				!questionDescriptionsOverflow(question, this.#contentWidth))
+		)
+			return "";
 		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
 	}
 
-	#footerHintText(indicator: string): string {
+	#footerHintText(
+		indicator: string,
+		question = this.#questions[this.#currentQuestionIndex()],
+		submit = this.#isSubmitTab(),
+	): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
 		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
-		if (this.#isSubmitTab()) {
+		if (inputGuard && this.#guardBlocks())
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
+		if (submit) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
 		}
-		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
 		const enterAction = this.#questions.length > 1 ? "next" : "submit";
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
 			: `${enter} select · ${formatKeyHint("n")} note`;
 		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
-		const expand = this.#expandHint();
+		const expand = this.#expandHint(question);
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
 			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
