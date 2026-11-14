@@ -156,7 +156,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
-- Model refreshes retain warm catalog snapshots when models.yml is unchanged or absent, still re-mint explicitly requested command credentials, and cooperatively normalize large discovered rosters before atomically publishing them.
+- Model refreshes retain warm catalog snapshots when `models.yml` is unchanged or absent, still re-mint explicitly requested command credentials, and cooperatively normalize large discovered rosters before atomically publishing them ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - NeoPi no longer offers omp update onboarding, checks upstream releases on startup, or installs upstream binaries through flagged update commands; the fork-aware source update and plugin updates remain available.
 - Built-in prompt inspection and overrides recognize async-result command headers and eval-agent model advertisements added by the upstream sync ([#703](https://github.com/PsychedelicShayna/neopi/pull/703), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - Source-mode CLI workers start without discovery initialization cycles, while plugin manifest upgrades still invalidate classification and resolution caches ([#703](https://github.com/PsychedelicShayna/neopi/pull/703), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).

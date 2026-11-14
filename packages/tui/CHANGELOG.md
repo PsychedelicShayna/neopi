@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Model hubs show cached catalogs without refreshing on open or highlight; entering a provider starts its once-per-process discovery, F5 refreshes that provider, and Ctrl+F5 refreshes all catalogs in place.
+- Model hubs show cached catalogs without refreshing on open or highlight; entering a provider starts its once-per-process discovery, F5 refreshes that provider, and Ctrl+F5 refreshes all catalogs in place ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - NeoPi provenance uses the same crescent in purple for nightly-only additions and the original green for published stable additions; gold, silver and bronze stars identify upstream additions only, with every older sync cohort retained as bronze.
 - Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.
 
