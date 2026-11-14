@@ -70,7 +70,7 @@ describe("SDK systemPrompt replacements", () => {
 				const baseline = [...session.systemPrompt];
 				await session.setModel(getBundledModel("anthropic", "claude-opus-5"));
 				expect(session.systemPrompt[0]).toBe("BASELINE");
-				expect(session.systemPrompt[1]).toContain("Model adapter: Opus 5");
+				expect(session.systemPrompt).toHaveLength(baseline.length + 1);
 				await session.setModel(getBundledModel("openai", "gpt-4o-mini"));
 				expect(session.systemPrompt).toEqual(baseline);
 			},

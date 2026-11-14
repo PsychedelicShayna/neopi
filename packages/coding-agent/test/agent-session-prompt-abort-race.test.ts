@@ -62,7 +62,9 @@ describe("AgentSession prompt admission racing abort", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
-			modelRegistry: (options.modelRegistry ?? fallbackRegistry) as never,
+			modelRegistry: options.modelRegistry
+				? ({ getAvailable: () => [model], ...options.modelRegistry } as ModelRegistry)
+				: fallbackRegistry,
 			...(options.extensionRunner ? { extensionRunner: options.extensionRunner as never } : {}),
 		});
 		if (options.clientBridge) {

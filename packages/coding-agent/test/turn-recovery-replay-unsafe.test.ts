@@ -77,6 +77,7 @@ function createHost(
 			},
 		} as never,
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			getLastModelChangeRole: () => options.lastModelChangeRole,
 			getBranch: () => [],
 			getBranchView: () => [],

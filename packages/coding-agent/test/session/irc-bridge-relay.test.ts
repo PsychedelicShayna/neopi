@@ -17,6 +17,7 @@ beforeAll(() => initTheme());
 function makeBridge() {
 	const woken: AgentMessage[][] = [];
 	const host = {
+		sessionManager: { getCwd: () => process.cwd() },
 		isDisposed: () => false,
 		isStreaming: () => false,
 		planModeEnabled: () => false,
@@ -67,6 +68,7 @@ describe("IrcBridge broadcast legs reaching a streaming recipient", () => {
 		const steered: AgentMessage[] = [];
 		const observed: AgentSessionEvent[] = [];
 		const host = {
+			sessionManager: { getCwd: () => process.cwd() },
 			agent: { steer: (message: AgentMessage) => steered.push(message) } as unknown as Agent,
 			isDisposed: () => false,
 			isStreaming: () => true,

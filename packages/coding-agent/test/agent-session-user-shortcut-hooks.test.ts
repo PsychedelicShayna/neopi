@@ -195,9 +195,9 @@ describe("AgentSession user shortcut hooks", () => {
 			outputBytes: 2,
 		};
 		const extensionRunner = {
-			hasHandlers: vi.fn((eventType: string) => eventType === "user_bash" || eventType === "user_python"),
+			hasHandlers: vi.fn((eventType: string) => eventType === "user_bash" || eventType === "user_eval"),
 			emitUserBash: vi.fn().mockResolvedValue({ result: { ...hookResult, output: "sh" } }),
-			emitUserPython: vi
+			emitUserEval: vi
 				.fn()
 				.mockResolvedValue({ result: { ...hookResult, output: "py", displayOutputs: [], stdinRequested: false } }),
 		} as unknown as ExtensionRunner;
@@ -211,7 +211,7 @@ describe("AgentSession user shortcut hooks", () => {
 
 		expect(onRecorded).toHaveBeenCalledTimes(2);
 		const recorded = session.messages.filter(
-			message => message.role === "bashExecution" || message.role === "pythonExecution",
+			message => message.role === "bashExecution" || message.role === "evalExecution",
 		);
 		expect(recorded.map(message => message.output)).toEqual(["sh", "py"]);
 		expect(onRecorded.mock.calls.map(([message]) => message)).toEqual(recorded);

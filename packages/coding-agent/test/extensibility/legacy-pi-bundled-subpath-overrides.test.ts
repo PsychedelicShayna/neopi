@@ -93,7 +93,7 @@ const { LRUCache } = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-utils/lru"]()
 const cache = new LRUCache({ max: 1 });
 cache.set("image", "photo.png");
 const paragraph = Lexer.lex("[photo.png](file:///tmp/photo.png)")[0];
-export const observed = {
+return {
 	cachedImage: cache.get("image"),
 	link: paragraph.tokens.map(token => ({ type: token.type, text: token.text, href: token.href })),
 };`,
@@ -124,7 +124,7 @@ const lru = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-utils/lru"]();
 const lruJs = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-utils/lru.js"]();
 const cache = new lruJs.LRUCache({ max: 1 });
 cache.set("image", "photo.png");
-export const observed = {
+return {
 	sharedLexer: markedJs.Lexer === marked.Lexer,
 	sharedCache: lruJs.LRUCache === lru.LRUCache,
 	text: markedJs.Lexer.lex(cache.get("image"))[0].text,
@@ -342,7 +342,7 @@ return { role: actionBar([actionButton("Go", "go")]).p.role, line: plainLine("\\
 const themeIndex = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-tui/theme/index"]();
 const svg = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-tui/chat/svg-figure"]();
 const caps = await BUNDLED_PI_MODULE_LOADERS["@oh-my-pi/pi-tui/terminal-capabilities"]();
-export const observed = {
+return {
 	theme: theme.setThemeInstance === themeIndex.setThemeInstance,
 	svg: typeof svg.svgFigurePalette,
 	caps: typeof caps.setTerminalImageProtocol,

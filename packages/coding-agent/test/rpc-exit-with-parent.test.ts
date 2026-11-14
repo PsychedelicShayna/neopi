@@ -42,19 +42,36 @@ describe("--exit-with-parent for RPC", () => {
 		using dir = TempDir.createSync("@rpc-eof-");
 		const pidFile = path.join(dir.path(), "sleep.pid");
 		const child = await RpcChild.spawn({ args: ["--exit-with-parent"] });
-		await child.waitFor(frame => frame.type === "ready");
-		// A foreground command that spawns a long-lived descendant and then waits on it.
-		void child.request({ type: "bash", command: `sleep 300 & echo $! > ${pidFile}; wait` }, 60_000).catch(() => {});
-		expect(
-			await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8").trim() !== "", 15_000),
-		).toBe(true);
-		const sleeper = Number(fs.readFileSync(pidFile, "utf8").trim());
-		expect(alive(sleeper)).toBe(true);
-		const started = Date.now();
-		child.process.stdin.end();
-		await child.process.exited;
-		expect(Date.now() - started).toBeLessThan(RPC_INPUT_CLOSED_TEARDOWN_MS + 2_000);
-		expect(await waitFor(() => !alive(sleeper), 5_000)).toBe(true);
+		let sleeper: number | undefined;
+		try {
+			await child.waitFor(frame => frame.type === "ready");
+			// Keep POSIX job control in a real child shell: this test owns
+			// process teardown, not shell parsing or job bookkeeping.
+			void child
+				.request(
+					{ type: "bash", command: `sh -c 'sleep 300 & echo $! > "$1"; wait' sh ${JSON.stringify(pidFile)}` },
+					60_000,
+				)
+				.catch(() => {});
+			expect(
+				await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8").trim() !== "", 15_000),
+			).toBe(true);
+			const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+			sleeper = pid;
+			expect(alive(pid)).toBe(true);
+			const started = Date.now();
+			child.process.stdin.end();
+			await child.process.exited;
+			expect(Date.now() - started).toBeLessThan(RPC_INPUT_CLOSED_TEARDOWN_MS + 2_000);
+			expect(await waitFor(() => !alive(pid), 5_000)).toBe(true);
+		} finally {
+			if (sleeper && alive(sleeper)) {
+				try {
+					process.kill(sleeper, "SIGKILL");
+				} catch {}
+			}
+			await child.dispose();
+		}
 	}, 90_000);
 
 	test("without the flag, stdin EOF still drains accepted work", async () => {

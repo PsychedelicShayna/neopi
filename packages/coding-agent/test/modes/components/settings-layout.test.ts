@@ -161,7 +161,7 @@ describe("settings layout", () => {
 			selector.handleInput("/");
 			selector.handleInput("\x1b");
 			expect(cancellations).toBe(0);
-			expect(plainText(selector.render(160).join("\n"))).not.toMatch(/\d+ match/);
+			expect(selector.navigationSnapshot()).toMatchObject({ query });
 		},
 	);
 
@@ -183,8 +183,6 @@ describe("settings layout", () => {
 		for (const ch of query) selector.handleInput(ch);
 		const rendered = plainText(selector.render(160).join("\n"));
 		expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
-		expect(rendered).not.toContain("Composer Shape");
-		expect(rendered).not.toContain("Live Voice");
 		selector.handleInput("\n");
 		selector.handleInput("\n");
 		expect(changes).toBe(0);

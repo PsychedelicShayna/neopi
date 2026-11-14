@@ -76,10 +76,11 @@ describe("/fork slash command", () => {
 		for (const character of "/fork") editor.handleInput(character);
 		await untilRendered(editor, () => editor.isShowingAutocomplete());
 
+		const accepted = nextAutocompleteUpdate(editor);
 		editor.handleInput("\t");
 		expect(editor.getText()).toBe("/fork ");
-		// Accepting a command name chains an argument-completion request; let it settle.
-		await nextAutocompleteUpdate(editor);
+		// Acceptance notifies synchronously, before any chained argument-completion request.
+		await accepted;
 
 		editor.handleInput("\r");
 		expect(submitted).toEqual(["/fork"]);

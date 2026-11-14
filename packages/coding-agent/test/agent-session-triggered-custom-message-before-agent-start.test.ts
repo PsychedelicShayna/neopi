@@ -54,7 +54,7 @@ describe("AgentSession turn started by a triggered custom message", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
-			modelRegistry: { getApiKey: async () => "test-key" } as never,
+			modelRegistry: { getApiKey: async () => "test-key", getAvailable: () => [createModel()] } as never,
 			extensionRunner: {
 				emitBeforeAgentStart: async () => {
 					hookCalls++;

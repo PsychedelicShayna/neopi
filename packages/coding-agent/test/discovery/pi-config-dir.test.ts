@@ -41,9 +41,10 @@ describe("PI_CONFIG_DIR", () => {
 	});
 
 	test("getConfigDirs respects PI_CONFIG_DIR for user base", () => {
-		startWith({ PI_CONFIG_DIR: ".config/omp" });
+		const configDir = path.relative(os.homedir(), path.join(os.tmpdir(), "omp-config-dir"));
+		startWith({ PI_CONFIG_DIR: configDir });
 		const result = getConfigDirs("commands", { project: false });
-		const expected = path.resolve(path.join(os.homedir(), ".config/omp", "agent", "commands"));
+		const expected = path.resolve(os.homedir(), configDir, "agent", "commands");
 		expect(result[0]).toEqual({ path: expected, source: ".omp", level: "user" });
 	});
 

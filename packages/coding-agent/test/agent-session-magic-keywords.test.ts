@@ -8,6 +8,7 @@ import { Effort } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { cfgEffortPolicyMode, cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -246,9 +247,13 @@ describe("AgentSession magic keyword settings", () => {
 		},
 	);
 
-	it("resolves an auto chillax turn to the model floor without classifying", async () => {
+	it("resolves an auto chillax turn to its configured effort floor without classifying", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, [], "claude-sonnet-5-5");
 		session = created.session;
+		cfgEffortPolicyMode.override(created.settings, "replacement");
+		cfgEffortRules.override(created.settings, [
+			{ selector: "anthropic/claude-sonnet-5-5", allowed: [Effort.Low, Effort.High] },
+		]);
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
 		session.setThinkingLevel(AUTO_THINKING);

@@ -174,7 +174,7 @@ describe("per-call exact selection after background discovery", () => {
 		);
 		const result = await runWorker({
 			model,
-			settings: perCallSettings(model, { "task.maxEffort": "low" }),
+			settings: perCallSettings(model, { "task.maxEffort": "low", "effort.mode": "legacy" }),
 			perCallModel: `mock/${model.id}:high`,
 		});
 		if (efforts.length > 1) {

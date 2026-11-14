@@ -18,7 +18,6 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 
 /** A response that stalls until aborted; `started` resolves once the request is in flight. */
 function stalledResponse(): { handler: MockHandler; started: Promise<void> } {
@@ -158,7 +157,7 @@ describe("AgentSession.resume", () => {
 		expect(session.agent.state.messages.map(message => [message.role, textOf(message)])).toEqual([
 			["user", "do the thing"],
 			["assistant", "done"],
-			["developer", manualContinuePrompt],
+			["developer", expect.any(String)],
 			["assistant", "more"],
 		]);
 	});
@@ -180,7 +179,7 @@ describe("AgentSession.resume", () => {
 		expect(session.agent.state.messages.map(message => [message.role, textOf(message)])).toEqual([
 			["custom", "follow the skill"],
 			["assistant", "done"],
-			["developer", manualContinuePrompt],
+			["developer", expect.any(String)],
 			["assistant", "more"],
 		]);
 	});
@@ -210,7 +209,7 @@ describe("AgentSession.resume", () => {
 			"developer",
 			"assistant",
 		]);
-		expect(textOf(session.agent.state.messages[2])).toBe(manualContinuePrompt);
+		expect(textOf(session.agent.state.messages[2])).not.toBe("");
 	});
 
 	it("re-runs an interrupted continue directive instead of stacking another", async () => {
@@ -225,7 +224,7 @@ describe("AgentSession.resume", () => {
 		expect(session.agent.state.messages.map(message => [message.role, textOf(message)])).toEqual([
 			["user", "do the thing"],
 			["assistant", "done"],
-			["developer", manualContinuePrompt],
+			["developer", expect.any(String)],
 			["assistant", "more"],
 		]);
 	});

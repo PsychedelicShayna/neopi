@@ -20,6 +20,7 @@ describe("findUnknownSlashCommand", () => {
 		expect(findUnknownSlashCommand("/q", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/skill:grilling plan", KNOWN)).toBeUndefined();
 		expect(findUnknownSlashCommand("/rename:session", KNOWN)).toBeUndefined();
+		expect(findUnknownSlashCommand("/model:opus", KNOWN)).toBeUndefined();
 	});
 
 	it("flags an unknown namespaced command", () => {
@@ -30,7 +31,6 @@ describe("findUnknownSlashCommand", () => {
 	});
 
 	it("warns when a builtin does not accept colon arguments", () => {
-		expect(findUnknownSlashCommand("/model:opus", KNOWN)).toEqual({ name: "model:opus" });
 		expect(findUnknownSlashCommand("/quit:foo", KNOWN)).toEqual({ name: "quit:foo" });
 	});
 

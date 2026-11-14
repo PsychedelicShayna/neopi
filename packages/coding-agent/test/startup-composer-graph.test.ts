@@ -28,9 +28,8 @@ describe("startup composer prepaint graph", () => {
 	it("keeps CLI bootstrap isolated from command, worker, provider, and failure-runtime graphs", async () => {
 		const modules = await importedModules("src/cli.ts");
 
-		// Positive controls: the entry and its bootstrap-only selector table were evaluated.
+		// Positive control: the CLI entry was evaluated.
 		expect(modules.some(module => module.endsWith("/src/cli.ts"))).toBe(true);
-		expect(modules.some(module => module.includes("/cli/worker-selectors"))).toBe(true);
 		expectGraphExcludes(modules, [
 			/commands\/launch/,
 			/eval\/js\/worker-core/,

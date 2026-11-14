@@ -181,6 +181,7 @@ function createContext(): {
 			isEvalRunning: false,
 			queuedMessageCount: 0,
 			messages: [],
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],
@@ -414,6 +415,7 @@ describe("InputController escape behavior", () => {
 			const harness = ctx as unknown as SideCommandHarness;
 			harness.fileSlashCommands = new Set(commands.map(cmd => cmd.name));
 			harness.session.slashCommands = commands;
+			ctx.isKnownSlashCommand = text => ctx.fileSlashCommands.has(text.slice(1).split(/\s+/, 1)[0]!);
 			return harness;
 		}
 
@@ -514,6 +516,7 @@ describe("InputController escape behavior", () => {
 			withFileCommands(ctx, [sitrep]).session.extensionRunner = {
 				getCommand: (name: string) => (name === "sitrep" ? { name } : undefined),
 				hasHandlers: () => false,
+				getEvalBackendAliases: () => [],
 			};
 			Object.assign(editor, { clearDraft: vi.fn() });
 			const controller = new InputController(ctx);

@@ -116,6 +116,7 @@ describe("shared LSP flag with subagents and helper sessions", () => {
 			await start(Settings.isolated({ "compaction.enabled": false, "lsp.shared": true }), { enableLsp: true });
 			const newer = await start(Settings.isolated({ "compaction.enabled": false, "lsp.shared": false }), {
 				enableLsp: true,
+				agentId: "Newer",
 			});
 			expect(lspClient.isSharedLspEnabled()).toBe(false);
 
