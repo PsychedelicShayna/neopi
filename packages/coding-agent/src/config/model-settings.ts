@@ -125,6 +125,23 @@ export const cfgModelsDefaultScope = register({
 	},
 });
 
+export const cfgSessionModelPicker = register({
+	id: "models.sessionPicker",
+	type: "enum",
+	values: ["big", "small"] as const,
+	default: "big",
+	ui: {
+		tab: "model",
+		group: "Prompt",
+		label: "Session model picker",
+		description: "Picker opened by /model and Alt+P for this conversation",
+		options: [
+			{ value: "big", label: "Big Pickle", description: "Fullscreen provider-sidebar model browser" },
+			{ value: "small", label: "Small picker", description: "Compact picker over the transcript" },
+		],
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Total provider budget for one native judge candidate, including setup and retries. */

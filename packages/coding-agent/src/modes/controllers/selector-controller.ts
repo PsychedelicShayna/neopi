@@ -199,7 +199,12 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled, cfgCompactionThresholdTokens } from "../../session/context-settings";
-import { cfgCycleOrder, cfgDisabledProviders, cfgModelsDefaultScope } from "../../config/model-settings";
+import {
+	cfgCycleOrder,
+	cfgDisabledProviders,
+	cfgModelsDefaultScope,
+	cfgSessionModelPicker,
+} from "../../config/model-settings";
 import { cfgRoleSettings, type RoleSettings } from "../../config/role-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
@@ -1010,7 +1015,12 @@ export class SelectorController {
 			const sessionDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
 			const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 			const candidates = [...discovered.files];
-			const scopes: AdvisorConfigScope[] = ["user", "project", "project-omp", ...(sessionDir ? ["session" as const] : [])];
+			const scopes: AdvisorConfigScope[] = [
+				"user",
+				"project",
+				"project-omp",
+				...(sessionDir ? ["session" as const] : []),
+			];
 			for (const scope of scopes) {
 				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir, sessionDir });
 				if (!candidates.some(file => file.path === filePath)) candidates.push({ path: filePath, scope });
@@ -1095,7 +1105,11 @@ export class SelectorController {
 					// Re-discover the merged roster (project + user) so the live advisors
 					// reflect cross-level precedence, not just the edited file. Only
 					// advisors whose effective configuration changed restart.
-					const discovered = await discoverAdvisorConfigs(cwd, agentDir, this.ctx.sessionManager.getArtifactsDir() ?? undefined);
+					const discovered = await discoverAdvisorConfigs(
+						cwd,
+						agentDir,
+						this.ctx.sessionManager.getArtifactsDir() ?? undefined,
+					);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
@@ -1675,11 +1689,17 @@ export class SelectorController {
 			this.#showModelPicker({ selectOnly: options.selectOnly });
 			return;
 		}
-		if (options?.temporaryOnly || this.ctx.focusedAgentId) {
+		if (
+			this.ctx.focusedAgentId ||
+			(options?.temporaryOnly && cfgSessionModelPicker.get(this.ctx.settings) === "small")
+		) {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({ sessionOnly: options?.sessionOnly, scope: options?.scope });
+		this.#showModelHub({
+			sessionOnly: options?.sessionOnly || options?.temporaryOnly,
+			scope: options?.scope,
+		});
 	}
 
 	/**

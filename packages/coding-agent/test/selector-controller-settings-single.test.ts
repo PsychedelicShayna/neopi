@@ -16,6 +16,7 @@ import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-relo
 import * as settingsSelector from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import * as sessionPins from "@oh-my-pi/pi-coding-agent/session/session-pins";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
+import { cfgSessionModelPicker } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
@@ -109,6 +110,8 @@ function overlayUi(): {
 
 /** A context whose model picker reads a supplied current catalog. */
 function pickerContext(ui: OverlayUi, models: Model[] = [], current?: Model, settings?: Settings) {
+	settings ??= Settings.isolated();
+	cfgSessionModelPicker.override(settings, "small");
 	return createInteractiveModeContext({
 		settings,
 		session: {
