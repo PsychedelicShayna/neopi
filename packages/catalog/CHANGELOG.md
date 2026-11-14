@@ -10,6 +10,11 @@
 - Exposed native thinking choices, including `off` only when model metadata supports disabling reasoning ([#498](https://github.com/PsychedelicShayna/neopi/issues/498)).
 - Added Grok STT models to the xAI and xAI OAuth catalogs.
 - Added endpoint-specific sampling capability rules so first-party OpenAI models do not receive unsupported sampling extensions ([#53](https://github.com/PsychedelicShayna/neopi/issues/53)).
+
+### Fixed
+
+- Preserved an existing intelligence or speed score when catalog enrichment fills the other missing metric.
+
 ## [18.18.8] - 2026-11-11
 
 ### Added
