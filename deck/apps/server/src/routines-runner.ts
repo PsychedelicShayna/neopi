@@ -246,7 +246,7 @@ export class RoutinesRunner {
 		if (!validation.valid) throw new Error(`invalid graph: ${JSON.stringify(validation.errors)}`);
 		const definition = structuredClone(graph);
 		// Simulations start their own trace, never a durable event-delivery claim.
-		// Keep this return before live inbox admission when integrating #204.
+		// Keep this return before live inbox admission when integrating PsychedelicShayna/neodeck#204.
 		if (options.dryRun) {
 			await this.executeGraphRun(routine, activation, definition, startRun(routine.id, trigger, activation.event), options);
 			return;

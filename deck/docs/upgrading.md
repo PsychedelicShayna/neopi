@@ -120,7 +120,7 @@ For the onboarding flag specifically (introduced in 0.6.0): an older deck will i
 If an upgrade broke something for you:
 
 1. Roll back to the previous version (see above) so you're unblocked.
-2. File an issue at <https://github.com/PsychedelicShayna/neodeck/issues> with:
+2. File an issue at <https://github.com/PsychedelicShayna/neopi/issues> with the `npi-deck` label and:
    - the version you came from + version you went to
    - your OS + Bun version (`bun --version`)
    - the relevant log excerpt (`journalctl --user -u npi-deck` under the launcher, or the terminal where the deck is running)

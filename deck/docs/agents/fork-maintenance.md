@@ -1,7 +1,7 @@
 # Maintaining fork behavior across upstream updates
 
-NPI deck is the `PsychedelicShayna/neodeck` fork of `Shreyans13/omp-deck`.
-The active `upstream` remote targets `Shreyans13/omp-deck`; original
+NPI deck is a fork of `Shreyans13/omp-deck`, maintained in NeoPi as the
+`deck/` subtree. `Shreyans13/omp-deck` is the active deck upstream; original
 `bjb2/omp-deck` author/fork credits remain historical provenance.
 
 ## Placement of new behavior
@@ -27,7 +27,7 @@ repository renaming alone does not authorize runtime rebranding.
 
 ## Integrating an upstream release
 
-Follow `docs/agents/upstream-sync.md`. Pin the source fork commit, upstream
+Follow [upstream-sync.md](upstream-sync.md). Pin the `origin/nightly` commit, upstream
 release commit, and relevant open PR heads before resolving conflicts. Use a
 fresh worktree from `origin/nightly` and preserve recovery refs.
 
@@ -36,10 +36,10 @@ Determine whether upstream preserves, replaces fully, overlaps partly, or
 conflicts with each contract; a clean textual merge is not compatibility proof.
 Keep open PRs separate until their contracts are compared with upstream.
 Preserve requirements not actually replaced and report the recommended merge
-order and unresolved behavior decisions before promotion.
+order and unresolved behavior decisions before merging.
 
 Record affected-boundary validation and unavailable checks honestly.
 Isolated verification leaves default/live state, display, and service untouched.
-After landing, follow [policy.md](policy.md#nightly-delivery) for authorized
-nightly build/install/launch; default/live promotion remains separate.
-Installation details live in `docs/install.md`.
+After landing, follow NeoPi's [nightly delivery](../../../docs/agents/policy.md#nightly-delivery)
+policy; default/live promotion remains separate.
+Installation details live in [docs/install.md](../install.md).

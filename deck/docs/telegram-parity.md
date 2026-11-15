@@ -1,8 +1,8 @@
 # Telegram / Hermes parity
 
-Reference: read-only inspection of the local `~/.hermes/hermes-agent` source on 2026-10-13, not its configuration, credentials, receivers or data. NeoDeck remains independent of Hermes. This matrix is the implementation contract for #103; exclusions follow the Captain's inbox/card boundary, not a claim that Hermes lacks these features.
+Reference: read-only inspection of the local `~/.hermes/hermes-agent` source on 2026-10-13, not its configuration, credentials, receivers or data. NeoDeck remains independent of Hermes. This matrix is the implementation contract for [neodeck#103](https://github.com/PsychedelicShayna/neodeck/issues/103); exclusions follow the Captain's inbox/card boundary, not a claim that Hermes lacks these features.
 
-| Hermes capability and source | Bridge before #103 | Result / justified exclusion |
+| Hermes capability and source | Bridge before neodeck#103 | Result / justified exclusion |
 | --- | --- | --- |
 | DMs, text and slash commands (`plugins/platforms/telegram/adapter.py`, `_register_handlers`) | DM prompts; exact `/reset` only | Implement DM and group commands, `/command@bot` parsing, help/menu, task/inbox and explicit agent chat. |
 | Group/supergroup invocation (`adapter.py`, `_should_process_message`, `_compile_mention_patterns`, `_telegram_free_response_topics`, `_telegram_allowed_topics`, `_telegram_ignored_threads`) | All groups ignored | Implement numeric sender AND chat allowlists, mention/reply/command invocation, case-insensitive regex wake patterns on text/captions, per-chat/topic free response and topic allow/ignore filters. Ignored routable topics override invocation; forum General is 1. Allowed-topics treats missing thread as 1; ignored-topics does not filter plain-group absent/reply-anchor threads. DMs are not topic-filtered. No guest bypass or passive ambient collection. |
@@ -22,7 +22,7 @@ Reference: read-only inspection of the local `~/.hermes/hermes-agent` source on 
 - **Transport:** standalone supervised Bun process consuming Telegram new-message updates. A failure cannot stop the deck.
 - **Identity:** the configured Telegram bot (not the Captain's account, and never Hermes).
 - **Invocation:** authorized DMs initially default to task intake; their saved preference can select capture or chat. Groups first require an allowed chat and allowed or paired sender, plus an allowed, non-ignored topic, then a command, leading standalone `@bot_username`, reply or configured wake pattern unless free response applies. A username inside prose, a URL or YAML is data, not an invocation. Accepted text/captions remain unchanged. No invocation choice bypasses identity/topic restrictions.
-- **Capabilities:** authorized senders share the Captain-configured deck authority; intake only files cards/inbox items. Explicit chat uses the existing deck session/tool policy, not a new unrestricted runner. Read-only card metadata describes future #101 execution; this bridge never claims to enforce an execution sandbox itself.
+- **Capabilities:** authorized senders share the Captain-configured deck authority; intake only files cards/inbox items. Explicit chat uses the existing deck session/tool policy, not a new unrestricted runner. Read-only card metadata describes future [neodeck#101](https://github.com/PsychedelicShayna/neodeck/issues/101) execution; this bridge never claims to enforce an execution sandbox itself.
 
 Telegram message identity (chat/topic/message ID) supplies a durable
 `Idempotency-Key` for capture and each decomposed card index. The inbox API

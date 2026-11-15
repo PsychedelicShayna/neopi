@@ -273,7 +273,7 @@ its WAL/SHM files separately, replace the database with the protected snapshot
 and remove the old WAL/SHM files before restarting. A full rollback also
 rewinds unrelated database changes since the snapshot.
 
-This is not the completed #163 cutover. V0/V1 readers and YAML authoring,
+This is not the completed [NeoPi #748](https://github.com/PsychedelicShayna/neopi/issues/748) cutover. V0/V1 readers and YAML authoring,
 templates, the old builder/compiler and legacy runtime dispatch still serve
 unconverted callers and rows. They must be removed only after that dependency
 count reaches zero. Studio TOML documents in `studio_graphs` are a distinct
@@ -475,7 +475,7 @@ mutations, message sends, writing `gh` calls, fake target identities or live
 reservations. `RoutinesRunner.fire`/`fireGraphEvent` and `executeGraph` expose
 the same `dryRun` option. Traces identify simulation with `dryRun: true`.
 Simulation starts a separate trace before live event admission and must never
-claim or discard a pending inbox delivery. When integrating inbox intake (#204),
+claim or discard a pending inbox delivery. When integrating inbox intake ([neodeck#204](https://github.com/PsychedelicShayna/neodeck/pull/204)),
 forward `dryRun` through event activation, bypass live intake filtering/discard
 for simulations, and keep `admitInboxGraphEvent` exclusively after the simulation
 guard. A later live call must still admit the committed delivery exactly once.
@@ -489,7 +489,7 @@ on first execution and replay, including redacted card front matter. The
 created card itself retains its requested properties; receipt bindings do not
 expose credential properties from it.
 
-Bounded/nested iteration belongs to #159 and is not implemented by this action
+Bounded/nested iteration belongs to [neodeck#159](https://github.com/PsychedelicShayna/neodeck/issues/159) and is not implemented by this action
 slice. Its per-occurrence identity and dry-run propagation must be added with
 that executor; do not reuse one operation identity for distinct iterations.
 
