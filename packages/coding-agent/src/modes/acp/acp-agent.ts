@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { getAgentDir, getBlobsDir, isEnoent, logger, type postmortem, PRODUCT_NAME, VERSION } from "@oh-my-pi/pi-utils";
 import {
 	type Agent,
@@ -2449,7 +2450,7 @@ export class AcpAgent implements Agent {
 			},
 		];
 
-		const models = session.getAvailableModels();
+		const models = this.#getAdvertisedModels(session);
 		const currentModel = session.model;
 		if (models.length > 0) {
 			configOptions.push({
@@ -2501,8 +2502,22 @@ export class AcpAgent implements Agent {
 		return value && value !== "inherit" ? value : THINKING_OFF;
 	}
 
+	/**
+	 * Models offered in the ACP `model` picker: the session's `--models` scope when one is
+	 * set, matching the TUI's scoped `/models` picker, otherwise every allowed model. The
+	 * current model stays listed so the option's `currentValue` is always one of its values.
+	 */
+	#getAdvertisedModels(session: AgentSession): Model[] {
+		const scoped = session.scopedModels.map(entry => entry.model);
+		if (scoped.length === 0) return session.getAvailableModels();
+		const current = session.model;
+		if (current && !scoped.some(model => modelsAreEqual(model, current))) scoped.unshift(current);
+		return scoped;
+	}
+
 	async #setModelById(session: AgentSession, modelId: string): Promise<void> {
-		const model = session.getAvailableModels().find(candidate => this.#toModelId(candidate) === modelId);
+		const matches = (candidate: Model) => this.#toModelId(candidate) === modelId;
+		const model = this.#getAdvertisedModels(session).find(matches) ?? session.getAvailableModels().find(matches);
 		if (!model) {
 			throw new Error(`Unknown ACP model: ${modelId}`);
 		}

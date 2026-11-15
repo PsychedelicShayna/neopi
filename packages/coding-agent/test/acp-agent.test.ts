@@ -219,6 +219,8 @@ class FakeAgentSession {
 		};
 	}
 
+	scopedModels: Array<{ model: Model }> = [];
+
 	getAvailableModels(): Model[] {
 		return this.models;
 	}
@@ -558,6 +560,10 @@ async function createHarness(
 		extensionRunners?: boolean;
 		/** Exposed to each created session's `modelRegistry` for MCP credential round-trips. */
 		authStorage?: AuthStorage;
+		/** Allowed models of each created session; defaults to `TEST_MODELS`. */
+		models?: Model[];
+		/** `--models` scope of each created session. */
+		scopedModels?: Model[];
 	} = {},
 ): Promise<AgentHarness> {
 	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-test-"));
@@ -601,7 +607,8 @@ async function createHarness(
 	const initialSession = new FakeAgentSession(cwdA);
 	sessions.push(initialSession);
 	const factory = async (cwd: string, factoryOptions?: { interactivePrompts?: boolean }) => {
-		const session = new FakeAgentSession(cwd);
+		const session = new FakeAgentSession(cwd, options.models);
+		if (options.scopedModels) session.scopedModels = options.scopedModels.map(model => ({ model }));
 		if (options.authStorage) session.authStorage = options.authStorage;
 		if (options.extensionRunners) {
 			session.extensionRunner = new ExtensionRunner(
@@ -1366,6 +1373,32 @@ describe("ACP agent", () => {
 		vi.useRealTimers();
 		harness.abortController.abort();
 		await Bun.sleep(0);
+	});
+
+	it("advertises the --models scope instead of every allowed model", async () => {
+		const extraModel = buildModel({
+			...TEST_MODELS[1]!,
+			id: "gpt-5.4-mini",
+			name: "GPT-5.4 Mini",
+		});
+		const allowed = [...TEST_MODELS, extraModel];
+		const harness = await createHarness({ models: allowed, scopedModels: [extraModel] });
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+
+		// The running model stays listed ahead of the scope so `currentValue` names an option.
+		const modelOption = created.configOptions?.find(option => option.id === "model") as
+			| { currentValue?: unknown; options?: Array<{ value: string }> }
+			| undefined;
+		const current = `${TEST_MODELS[0]!.provider}/${TEST_MODELS[0]!.id}`;
+		const scoped = `${extraModel.provider}/${extraModel.id}`;
+		expect(modelOption?.options?.map(option => option.value)).toEqual([current, scoped]);
+		expect(modelOption?.currentValue).toBe(current);
+
+		// An allowed model outside the scope is still selectable by id.
+		const outside = `${TEST_MODELS[1]!.provider}/${TEST_MODELS[1]!.id}`;
+		await harness.agent.setSessionConfigOption({ sessionId: created.sessionId, configId: "model", value: outside });
+		expect(harness.sessions.at(-1)?.model).toBe(TEST_MODELS[1]);
+		await harness.agent.dispose();
 	});
 
 	it("lists role selectors for ACP mobile voice settings", async () => {
