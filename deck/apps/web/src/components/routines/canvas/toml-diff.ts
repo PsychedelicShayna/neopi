@@ -1,10 +1,10 @@
 /**
  * Tiny line-diff helper used by SavePreviewDialog (T-70).
  *
- * We render the compiled YAML pre-save with green/red line tints so the user
+ * We render the compiled TOML pre-save with green/red line tints so the user
  * can verify that branch compilation didn't silently rewrite anything they
  * didn't intend. A canonical diff library would work but is overkill here:
- * routine YAML is small (typically < 80 lines), so a textbook LCS in O(n*m)
+ * routine TOML is small (typically < 80 lines), so a textbook LCS in O(n*m)
  * is fast enough and ships zero new deps.
  *
  * The shape returned is intentionally simple: an ordered list of
@@ -28,7 +28,7 @@ export interface DiffLine {
  * unified-style list.
  *
  * Empty/whitespace lines compare verbatim — a blank line that moves is a
- * delete + add, not a "same". That's the right answer for YAML where blank
+ * delete + add, not a "same". That's the right answer for TOML where blank
  * lines are structural separators between blocks.
  */
 export function lineDiff(before: string, after: string): DiffLine[] {

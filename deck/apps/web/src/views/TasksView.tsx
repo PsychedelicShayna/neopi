@@ -120,7 +120,7 @@ export function TasksView() {
 	}, [tasks, states]);
 
 	async function onCreate(stateId: string, title: string, body: string): Promise<void> {
-		// Routing stays independent from opaque YAML properties in the body.
+		// Routing stays independent from opaque TOML properties in the body.
 		const cwd = projectFilter.kind === "cwd" ? projectFilter.cwd : undefined;
 		const created = await tasksApi.create({ title, body, stateId, ...(cwd ? { cwd } : {}) });
 		setTasks((prev) => [...prev.filter((t) => t.id !== created.id), created]);

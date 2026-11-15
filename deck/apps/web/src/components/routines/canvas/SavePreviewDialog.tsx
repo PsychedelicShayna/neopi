@@ -3,13 +3,13 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Save, X } from "lucide-react";
 
-import { diffIsClean, lineDiff, type DiffLine } from "./yaml-diff";
+import { diffIsClean, lineDiff, type DiffLine } from "./toml-diff";
 
 interface SavePreviewDialogProps {
-	/** YAML currently persisted on the routine (empty string for a new routine). */
-	currentYaml: string;
-	/** Compiled YAML that will be PATCHed to the API if the user confirms. */
-	newYaml: string;
+	/** TOML currently persisted on the routine (empty string for a new routine). */
+	currentToml: string;
+	/** Compiled TOML that will be PATCHed to the API if the user confirms. */
+	newToml: string;
 	/** Commit via `routinesApi.update/create`. The dialog renders its own busy state. */
 	onConfirm: () => void | Promise<void>;
 	/** Close without saving. */
@@ -19,13 +19,13 @@ interface SavePreviewDialogProps {
 }
 
 export function SavePreviewDialog({
-	currentYaml,
-	newYaml,
+	currentToml,
+	newToml,
 	onConfirm,
 	onCancel,
 	busy,
 }: SavePreviewDialogProps): JSX.Element {
-	const diff = useMemo(() => lineDiff(currentYaml, newYaml), [currentYaml, newYaml]);
+	const diff = useMemo(() => lineDiff(currentToml, newToml), [currentToml, newToml]);
 	const clean = diffIsClean(diff);
 
 	const addCount = diff.reduce((n, l) => (l.kind === "add" ? n + 1 : n), 0);
@@ -87,7 +87,7 @@ export function SavePreviewDialog({
 				<div className="flex-1 overflow-auto bg-paper-code px-2 py-2">
 					{clean ? (
 						<div className="rounded border border-dashed border-line bg-paper-2 px-3 py-6 text-center font-mono text-2xs text-ink-3">
-							The compiled YAML matches the currently-saved spec. Nothing to commit.
+							The compiled TOML matches the currently-saved spec. Nothing to commit.
 						</div>
 					) : (
 						<pre className="font-mono text-2xs leading-snug">
