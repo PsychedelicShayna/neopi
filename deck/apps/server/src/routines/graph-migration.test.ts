@@ -225,7 +225,7 @@ test("bundled census now converts without executing; briefing stays blocked only
 			expect(row(routine.id)).toEqual(before);
 		} else {
 			expect(report.status).toBe("migrated");
-			expect(parse(exportRoutineMigration(routine.id, report.sourceDigest))).toEqual(source);
+			expect(parse(exportRoutineMigration(routine.id, report.sourceDigest)) as unknown).toEqual(source);
 			expect(migrate(routine.id).reports[0]?.status).toBe("native");
 			restoreRoutineDefinition(routine.id, report.sourceDigest);
 			expect(row(routine.id)).toEqual(before);
@@ -342,7 +342,7 @@ test("queued migrated runs initialize expression timestamps after admission and 
 });
 
 function assertV1Lifecycle(routineId: string, source: RoutineSpec, digest: string) {
-	expect(parse(exportRoutineMigration(routineId, digest))).toEqual(source);
+	expect(parse(exportRoutineMigration(routineId, digest)) as unknown).toEqual(source);
 	const copy = seed(parse(exportRoutineMigration(routineId, digest)) as unknown as RoutineSpec);
 	expect(migrate(copy.id).reports[0]?.status).toBe("migrated");
 	expect(graph(copy.id)).toEqual(graph(routineId));
@@ -593,7 +593,7 @@ test("pre-TOML conversion journals restore lost YAML provenance and canonical TO
 	restoreRoutineDefinition(routine.id, converted.sourceDigest);
 	expect(row(routine.id).spec_yaml).toBe(legacyYaml);
 	expect(getRoutine(routine.id)?.specVersion).toBe(1);
-	expect(parse(getRoutine(routine.id)!.specToml!)).toEqual(source);
+	expect(parse(getRoutine(routine.id)!.specToml!) as unknown).toEqual(source);
 	expect(() => restoreRoutineDefinition(routine.id, converted.sourceDigest)).not.toThrow();
 	expect(row(routine.id).spec_yaml).toBe(legacyYaml);
 	expect(listRuns(routine.id)).toEqual([]);

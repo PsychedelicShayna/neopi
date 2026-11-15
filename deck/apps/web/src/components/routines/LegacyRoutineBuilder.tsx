@@ -65,7 +65,11 @@ function RoutineImportRepair({ routine, onSaved, onError, editorRef, onStateChan
 	const [busy, setBusy] = useState(false);
 	const validation = useMemo(() => parseSpec(source), [source]);
 	async function save() {
-		if (!validation.ok || !validation.spec) return;
+		if (!validation.ok || !validation.spec) {
+			// The imperative save handle bypasses the disabled button; report why nothing was saved.
+			onError(validation.tomlError?.message ?? validation.schemaErrors?.map(error => `${error.path}: ${error.message}`).join("; ") ?? "Enter a complete TOML routine before saving.");
+			return;
+		}
 		setBusy(true);
 		try {
 			onSaved(await routinesApi.update(routine.id, { name: validation.spec.name, specToml: source }));

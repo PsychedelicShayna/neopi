@@ -17,6 +17,7 @@
  * (dotenv merge, native addon, router registrations), so this runs once per
  * process; probing a candidate belongs in a child process (plan C3).
  */
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { readBackendDocument, updateBackendDocument } from "./config.ts";
 

@@ -8,7 +8,7 @@ const logger = createLogger("config:toml");
 import { createSettingsTomlCodec, plainSettingsTomlTable as plainTable } from "@npi-deck/protocol/settings-toml-codec";
 import { preserveLegacyYamlComments } from "./legacy-yaml-import.ts";
 export * from "@npi-deck/protocol/settings-toml-codec";
-export const { parseSettingsToml, stringifySettingsToml, patchSettingsToml, stringifyTomlValue } = createSettingsTomlCodec(content => Bun.TOML.parse(content));
+export const { parseSettingsToml, stringifySettingsToml, patchSettingsToml, stringifyTomlValue } = createSettingsTomlCodec(content => Bun.TOML.parse(content) as Record<string, unknown>);
 export const SETTINGS_TOML = "settings.toml";
 export const CONFIG_TOML = "config.toml";
 
