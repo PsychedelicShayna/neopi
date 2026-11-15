@@ -1,7 +1,8 @@
 # Contributing to npi-deck
 
-Thanks for your interest. [Repository policy](docs/agents/policy.md) defines
-branches, signed commits, pull requests, review, and promotion.
+Thanks for your interest. NeoDeck lives in NeoPi's `deck/` subtree, so NeoPi's
+[repository policy](../docs/agents/policy.md) defines branches, signed commits,
+pull requests, review, and promotion.
 
 ## Repo layout
 
@@ -45,9 +46,9 @@ bounces the deck you're chatting in.
 The fix is a parallel checkout via `git worktree`, env-isolated:
 
 ```sh
-# from the existing checkout
-git fetch origin && git worktree add ../neodeck-wt-feature -b feat/feature origin/nightly
-cd ../neodeck-wt-feature
+# from the existing NeoPi checkout
+git fetch origin && git worktree add ../neopi-wt-deck-feature -b feat/deck-feature origin/nightly
+cd ../neopi-wt-deck-feature/deck
 bun install
 cat > .env <<'EOF'
 NPI_DECK_PORT=8889
@@ -76,7 +77,7 @@ under test touches `auth.db` and you need to repeatedly clear the
 no-credentials state.
 
 Open a PR into `nightly`; after it merges, remove the worktree and local branch
-as described in the repository policy. Promotion to `main` belongs to the owner.
+as described in the repository policy. Promotion to `neopi` belongs to the owner.
 
 ### What survives vs. dies on restart
 
@@ -161,14 +162,15 @@ look at `apps/web/src/lib/reducer.test.ts` for the pattern.
 
 ## Commits
 
-Follow [commit policy](docs/agents/policy.md#commits): Conventional Commits,
+Follow [commit policy](../docs/agents/policy.md#commits-and-identity): Conventional Commits,
 descriptive prose, actual-model attribution, verified signatures, and one logical
-change per commit. Follow [review mechanics](docs/agents/pr-review-bots.md) before
+change per commit. Follow [review mechanics](../docs/agents/pr-review-bots.md) before
 requesting a scoped Code Review or merging.
 
 ## Filing issues
 
-If you hit a bug, a minimal repro plus your `bun --version`, OS, deck commit
+File deck issues in [NeoPi's tracker](https://github.com/PsychedelicShayna/neopi/issues)
+with the `npi-deck` label. If you hit a bug, a minimal repro plus your `bun --version`, OS, deck commit
 (`git rev-parse --short HEAD`) and NeoPi backend commit (Settings → Backend)
 is all we need.
 

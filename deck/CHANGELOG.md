@@ -3,6 +3,9 @@
 All notable changes to NPI deck (a fork of bjb2/omp-deck; entries before the fork use its name). The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Entries written before NeoDeck moved into NeoPi's `deck/` subtree (2026-10-23) use
+NeoDeck issue and PR numbers from `PsychedelicShayna/neodeck`.
+
 ## [Unreleased]
 
 ### Changed

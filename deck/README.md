@@ -142,4 +142,4 @@ The short version: **Claude Code** is the polished vendor experience for Claude.
 
 ## License
 
-MIT. See [LICENSE](./LICENSE). NPI deck is a fork of [Shreyans13/omp-deck](https://github.com/Shreyans13/omp-deck), originally by Bryan Bartley. The active upstream is `Shreyans13/omp-deck`; original `bjb2/omp-deck` credits record historical provenance. Branches, promotion, releases, and contribution workflow are documented in [Repository policy](./docs/agents/policy.md).
+MIT. See [LICENSE](./LICENSE). NPI deck is a fork of [Shreyans13/omp-deck](https://github.com/Shreyans13/omp-deck), originally by Bryan Bartley. The active upstream is `Shreyans13/omp-deck`; original `bjb2/omp-deck` credits record historical provenance. Branches, promotion, releases, and contribution workflow follow NeoPi's [repository policy](../docs/agents/policy.md).
