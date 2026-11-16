@@ -12,6 +12,8 @@
 
 ### Added
 
+- The `/agents` definition editor is rebuilt on the `/advisor configure` pattern: every manifest field gets its own picker (ordered model fallbacks with the model browser and effort step, tool and spawn checklists, prewalk and advisor choices, the output-schema editor), beside a live preview of what the harness will do with the definition, the problems it would hit, and the file as saved; definitions can also be saved as a copy or deleted, and a missing spawn target can be created next ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
+- The agent author now sees the existing agent types, installed skills, model roles, read-only tool classification and spawn depth cap, so generated definitions reference real spawn targets, skills and roles.
 - Role advisor activation sets can be edited in `/advisor configure`, including persisted session sets whose scope is preserved when selecting project advisors ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
 - Complete `/prompts:<name>` references anywhere in a message and paste multiple prompt-template bodies in the order written, while preserving the existing leading `/<name> [args]` invocation.
@@ -163,6 +165,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.
 - ACP clients now see the `--models` scope in their model picker, like the TUI's scoped `/models` list, instead of every model from every configured provider, which clients that cap the list (T3 Code keeps 256) truncated.
 - RPC clients can set and clear transcript entry labels with `set_label` instead of receiving an unknown-command error.
 - `cfg://` typo suggestions recognize dotted setting paths, and saving a session setting no longer warns about the session override that the save itself clears.
@@ -289,6 +292,8 @@
 
 ### Changed
 
+- The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.
+- The Chronicler summary role's description now says it summarizes index nodes only when `/chron index` or the chronicle index command runs; nothing indexes automatically.
 - Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.
 - HTML exports include the shared transcript and trace views with the current Markdown parser, while remaining self-contained and usable offline.
 - The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).

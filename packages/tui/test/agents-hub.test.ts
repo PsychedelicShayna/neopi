@@ -327,7 +327,7 @@ describe("AgentsHub definition editing", () => {
 	test("Ctrl-G opens the same rich editor for existing definitions and Esc returns to selection", async () => {
 		const { hub } = await createHub(new TestSettings());
 		hub.handleInput("\x07");
-		expect(pickerProps(hub).title).toBe("Edit dev");
+		expect(pickerProps(hub).title).toStartWith("Edit dev");
 		expect(pickerProps(hub).items?.map(item => item.id)).toContain("tools");
 		hub.handleInput("\x1b");
 		expect(pickerProps(hub).selected).toBe("agent:project:dev");

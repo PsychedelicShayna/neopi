@@ -48,13 +48,17 @@
 				"prose",
 				"title"
 			],
-			"composerShapes": []
+			"composerShapes": [],
+			"features": []
 		},
 		"nightly": {
 			"keybindings": [],
 			"statusSegments": [],
 			"roles": [],
-			"composerShapes": []
+			"composerShapes": [],
+			"features": [
+				"agent-definition-editor"
+			]
 		}
 	},
 	"upstream": [
@@ -64,7 +68,8 @@
 				"keybindings": [],
 				"statusSegments": [],
 				"roles": [],
-				"composerShapes": []
+				"composerShapes": [],
+				"features": []
 			}
 		},
 		{
@@ -81,7 +86,8 @@
 				"roles": [
 					"widget"
 				],
-				"composerShapes": []
+				"composerShapes": [],
+				"features": []
 			}
 		}
 	]

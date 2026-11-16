@@ -9,6 +9,7 @@
 
 ### Added
 
+- The agent definition editor uses a field list with a live preview pane and dedicated screens per field, in the terminal and as native pickers ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 - `/advisor configure` edits role advisor activation sets in User, Project .omp, and Session scopes, with stable-ID checkboxes, inherited-set clearing, and editable override/missing-reference diagnostics ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
 - The fullscreen session model picker repeats its picker shortcut to target a temporary Task-subagent override, with a red frame and an explicit session-only cue.

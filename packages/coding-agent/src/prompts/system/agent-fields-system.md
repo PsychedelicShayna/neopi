@@ -20,7 +20,7 @@ These names and descriptions come from the host registry, including tools not en
 
 ## Structured output
 
-The output field configures the agent's yield result, not its prompt text. It accepts JSON Schema or JSON Type Definition (JTD), including nested objects, required and optional properties, arrays, enums, and unions/discriminators supported by that format. JSON Schema can express composition and local references. Use a coherent schema in one format, never a mixture of JTD and JSON Schema keywords. true means unconstrained output; omit output when structured output is not wanted. Prefer a compact JSON Schema object with explicit properties and required fields when generating a new output declaration.
+The output field configures the agent's yield result, not its prompt text. It accepts JSON Schema or JSON Type Definition (JTD), including nested objects, required and optional properties, arrays, enums, and unions/discriminators supported by that format. JSON Schema can express composition and local references. Use a coherent schema in one format, never a mixture of JTD and JSON Schema keywords. Never return true or null for output: dispatch rejects a schema-less output; omit output when structured output is not wanted. Prefer a compact JSON Schema object with explicit properties and required fields when generating a new output declaration.
 
 ## Advisors
 
