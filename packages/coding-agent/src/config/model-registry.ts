@@ -92,6 +92,8 @@ import {
 	getOllamaContextLengthOverride,
 	isDiscoveryAuthRejection,
 	LLAMA_CPP_DEFAULT_BASE_URLS,
+	NEOPROXY_PROVIDER_ID,
+	neoproxySelectorId,
 	normalizeBareDiscoveryBaseUrl,
 	normalizeLiteLLMDiscoveryBaseUrl,
 	normalizeLlamaCppBaseUrl,
@@ -2167,14 +2169,32 @@ export class ModelRegistry {
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+		// Pre-single-prefix proxy caches stored the advertised wire id as the
+		// selector id. Normalize only those discovered rows, never custom models
+		// or rows already carrying an explicit wire identity.
+		const canonicalModels =
+			providerConfig.provider === NEOPROXY_PROVIDER_ID && providerConfig.discovery.type === "proxy"
+				? models.map(model => {
+						if (model.requestModelId !== undefined) return model;
+						const id = neoproxySelectorId(providerConfig.provider, model.id);
+						return id === model.id
+							? model
+							: buildModel({
+									...model,
+									id,
+									requestModelId: model.id,
+									compat: model.compatConfig,
+								} as ModelSpec<Api>);
+					})
+				: models;
 		const withDecoderMetadata =
 			providerConfig.discovery.type === "ollama" ||
 			providerConfig.discovery.type === "llama.cpp" ||
 			providerConfig.discovery.type === "lm-studio"
-				? models.map(model =>
+				? canonicalModels.map(model =>
 						buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
 					)
-				: models;
+				: canonicalModels;
 
 		const withRemoteCompaction = providerConfig.remoteCompaction
 			? withDecoderMetadata.map(model =>

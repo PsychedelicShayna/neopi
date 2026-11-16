@@ -1627,7 +1627,7 @@ function proxyModelsFromPayload(
 const NEOPROXY_SERVED_NAME_PREFIX = `${NEOPROXY_PROVIDER_ID}/`;
 
 /** Selector id for an advertised NeoProxy name: one leading `neoproxy/` removed, since the provider id adds it. */
-function neoproxySelectorId(provider: string, advertisedId: string): string {
+export function neoproxySelectorId(provider: string, advertisedId: string): string {
 	if (provider !== NEOPROXY_PROVIDER_ID || !advertisedId.startsWith(NEOPROXY_SERVED_NAME_PREFIX)) return advertisedId;
 	const slug = advertisedId.slice(NEOPROXY_SERVED_NAME_PREFIX.length);
 	return slug.length > 0 ? slug : advertisedId;

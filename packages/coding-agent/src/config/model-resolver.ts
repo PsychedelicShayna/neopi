@@ -49,6 +49,7 @@ import {
 	resolveThinkingLevelForModel,
 } from "@oh-my-pi/pi-tui/thinking";
 import { isAuthenticated, kNoAuth, type ModelRegistry } from "./model-registry";
+import { NEOPROXY_PROVIDER_ID } from "./model-discovery";
 import {
 	DEFAULT_MODEL_ROLE_ALIAS,
 	formatModelRoleAlias,
@@ -477,6 +478,34 @@ function getProviderWireRouteIndex(availableModels: readonly Model<Api>[]): Map<
 	return index;
 }
 
+const kNeoProxyLegacyIndex = Symbol("model-resolver.neoproxyLegacyIndex");
+
+/**
+ * The old selector was provider/advertised-id. Admit it only when discovery's
+ * explicit wire identity proves this exact single-prefix cutover. Keep saved
+ * role/list/thinking syntax untouched; subsequent model writes are canonical.
+ */
+function resolveLegacyNeoProxyReference(
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	const tagged = availableModels as readonly Model<Api>[] & {
+		[kNeoProxyLegacyIndex]?: Map<string, Model<Api> | null>;
+	};
+	let index = tagged[kNeoProxyLegacyIndex];
+	if (!index) {
+		index = new Map();
+		for (const model of availableModels) {
+			if (model.provider !== NEOPROXY_PROVIDER_ID || model.requestModelId !== `${NEOPROXY_PROVIDER_ID}/${model.id}`)
+				continue;
+			const wireId = model.requestModelId;
+			index.set(wireId, index.has(wireId) ? null : model);
+		}
+		tagged[kNeoProxyLegacyIndex] = index;
+	}
+	return index.get(modelId) ?? undefined;
+}
+
 export function resolveProviderModelReference(
 	provider: string,
 	modelId: string,
@@ -501,6 +530,11 @@ export function resolveProviderModelReference(
 	}
 	if (exact !== undefined) {
 		return exact;
+	}
+
+	if (normalizedProvider === NEOPROXY_PROVIDER_ID) {
+		const legacy = resolveLegacyNeoProxyReference(trimmedModelId, availableModels);
+		if (legacy) return legacy;
 	}
 
 	// Retired effort-tier variant ids resolve to their collapsed logical
@@ -1516,7 +1550,10 @@ export function resolveAgentAdvisorSelection(
 	if (override) {
 		const lowered = override.toLowerCase();
 		if (lowered === "off" || lowered === "false") return undefined;
-		if (lowered === "on" || lowered === "true") return typeof options.agentAdvisor === "object" ? { definition: options.agentAdvisor } : { model: agentPattern };
+		if (lowered === "on" || lowered === "true")
+			return typeof options.agentAdvisor === "object"
+				? { definition: options.agentAdvisor }
+				: { model: agentPattern };
 		return { model: override };
 	}
 	if (options.agentAdvisor === true) return {};
