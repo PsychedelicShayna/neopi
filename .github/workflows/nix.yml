@@ -53,5 +53,5 @@ jobs:
           echo "OMP_OUT=$out" >> "$GITHUB_ENV"
       - name: Smoke-test omp
         run: |
-          "$OMP_OUT/bin/omp" --version
-          "$OMP_OUT/bin/omp" --smoke-test
+          "$OMP_OUT/bin/npi" --version
+          "$OMP_OUT/bin/npi" --smoke-test
