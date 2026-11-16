@@ -164,6 +164,7 @@
 ### Fixed
 
 - Changing a running subagent's model no longer interrupts its active Codex WebSocket request; the new model starts with fresh transport state on the next request ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
+- Forked sessions retain their own complete subagent history and by-id transcript reads while the source still owns same-id children; history queries no longer move another root's ownership ([#680](https://github.com/PsychedelicShayna/neopi/issues/680)).
 - ACP clients now see the `--models` scope in their model picker, like the TUI's scoped `/models` list, instead of every model from every configured provider, which clients that cap the list (T3 Code keeps 256) truncated.
 - RPC clients can set and clear transcript entry labels with `set_label` instead of receiving an unknown-command error.
 - `cfg://` typo suggestions recognize dotted setting paths, and saving a session setting no longer warns about the session override that the save itself clears.

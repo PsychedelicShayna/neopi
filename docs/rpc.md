@@ -1824,9 +1824,12 @@ reports `reset: true`.
 
 With the `subagent_history` capability, `get_subagent_history { includeAdvisors? }`
 returns `{ rootSessionFile?, rootAgentId?, subagents }`: every child of the root
-session's tree, oldest first, live or persisted. It hydrates the session's
-artifacts tree the way the Agent Hub does, so finished and killed children
-survive a host restart, which `get_subagents` (active children only) does not.
+session's tree, oldest first, live or persisted. It reads the artifacts tree with
+the Agent Hub's persisted-history scanner without changing process-wide ownership,
+so finished and killed children survive a host restart, which `get_subagents`
+(active children only) does not. Forked copies remain visible even while the
+source keeps a same-id live or parked child; live facts apply only to the exact
+root-local transcript and its current ownership generation.
 Each entry has `id`, `kind` (`sub`, or `advisor` when `includeAdvisors` is true),
 `parentId`, `displayName`, `agent`, `description` (persisted task gist or live
 activity), `status`, `live`, `sessionFile`, `createdAt`, `lastActivity`,
@@ -1836,9 +1839,10 @@ roster knows it), the model facts `resolvedModel`, `resolvedModelIdentity`,
 `modelRole`, `readOnly`, `metrics` (`tokens`, `requests`, `tools`, `cost`,
 `durationMs`, `contextTokens?`, `contextWindow?`), `directCost`, and the
 `outputPath`/`patchPath`/`branchName` artifacts when captured. `status` is the
-registry's: `running`, `idle`, `parked` (finished, resumable) or `aborted`
-(killed). The registry keeps no completed/failed split and failure detail is not
-persisted, so none is reported. Control sockets serve the command for terminal
+root-local owner's when present: `running`, `idle`, `parked` (finished, resumable)
+or `aborted` (killed). History-only copies are `parked`, or `aborted` when their
+own tombstone is present. There is no persisted completed/failed split or failure
+detail, so none is reported. Control sockets serve the command for terminal
 sessions too, with no event bus needed.
 
 With the same capability `get_subagent_messages` also reads persisted children of

@@ -373,15 +373,34 @@ export async function handleRpcSetSubagentModel(
 type RpcRosterSession = Pick<AgentSession, "sessionFile" | "getAgentId">;
 
 /**
- * Hydrate the root session's persisted children into the process registry, as the Agent Hub does, so
- * finished, parked and aborted children survive a restart in the roster. Idempotent: already registered
- * transcripts are left alone and unchanged ones are not reread.
+ * Project persisted transcripts independently of global id ownership. A fork can
+ * retain another root's live owner for the same id; reading history must neither
+ * hide this root's copy nor move that owner (even when it is parked).
  */
-async function hydrateRoster(session: RpcRosterSession): Promise<string | undefined> {
+async function readRoster(
+	session: RpcRosterSession,
+): Promise<{ root: string; byTranscript: Map<string, AgentRef> } | undefined> {
 	const root = session.sessionFile;
 	if (!root?.endsWith(".jsonl")) return undefined;
-	await registerPersistedSubagents(AgentRegistry.global(), root, { rootAgentId: session.getAgentId() });
-	return root;
+	const registry = AgentRegistry.global();
+	const owners = registry.list().map(ref => ({ ref, sessionFile: ref.sessionFile }));
+	const persisted = new AgentRegistry();
+	await registerPersistedSubagents(persisted, root, { rootAgentId: session.getAgentId() });
+	const byTranscript = new Map<string, AgentRef>();
+	for (const ref of persisted.list()) {
+		if (ref.sessionFile) byTranscript.set(path.resolve(ref.sessionFile), ref);
+	}
+	for (const { ref, sessionFile } of owners) {
+		// Metadata/history reads yield: only the same generation and transcript
+		// may contribute live facts after those reads complete.
+		if (registry.get(ref.id) !== ref || ref.sessionFile !== sessionFile || !sessionFile || sessionFile === root)
+			continue;
+		if (!sessionFileBelongsToRoot(sessionFile, root)) continue;
+		const key = path.resolve(sessionFile);
+		const history = byTranscript.get(key)?.history;
+		byTranscript.set(key, { ...ref, history: { ...ref.history, ...history } });
+	}
+	return { root, byTranscript };
 }
 
 /** Every child of the root session's tree, live or persisted: the Agent Hub roster over RPC. */
@@ -390,15 +409,16 @@ export async function listRpcSubagentHistory(
 	bus: Pick<RpcSubagentRegistry, "getSubagents"> | undefined,
 	options: { includeAdvisors?: boolean } = {},
 ): Promise<RpcSubagentHistoryResult> {
-	const root = await hydrateRoster(session);
-	if (!root) return { subagents: [] };
+	const roster = await readRoster(session);
+	if (!roster) return { subagents: [] };
+	const { root, byTranscript } = roster;
 	const toolCallIds = new Map<string, string>();
 	for (const snapshot of bus?.getSubagents() ?? []) {
 		if (snapshot.parentToolCallId && snapshot.sessionFile)
 			toolCallIds.set(snapshot.sessionFile, snapshot.parentToolCallId);
 	}
 	const subagents: RpcSubagentHistoryEntry[] = [];
-	for (const ref of AgentRegistry.global().list()) {
+	for (const ref of byTranscript.values()) {
 		if (ref.kind !== "sub" && !(options.includeAdvisors && ref.kind === "advisor")) continue;
 		if (!ref.sessionFile || ref.sessionFile === root || !sessionFileBelongsToRoot(ref.sessionFile, root)) continue;
 		if (ref.status === "running" && ref.kind === "sub" && ref.session === null) continue;
@@ -462,10 +482,12 @@ export async function resolvePersistedSubagentFile(
 	session: RpcRosterSession,
 	selector: RpcSubagentTranscriptSelector,
 ): Promise<string | undefined> {
-	const root = await hydrateRoster(session);
-	if (!root) return undefined;
+	const roster = await readRoster(session);
+	if (!roster) return undefined;
+	const { root, byTranscript } = roster;
 	let file: string | undefined;
-	if (selector.subagentId) file = AgentRegistry.global().get(selector.subagentId)?.sessionFile ?? undefined;
+	if (selector.subagentId)
+		file = [...byTranscript.values()].find(ref => ref.id === selector.subagentId)?.sessionFile ?? undefined;
 	else if (selector.sessionFile) file = path.resolve(selector.sessionFile);
 	if (!file || !file.endsWith(".jsonl") || file === root || !sessionFileBelongsToRoot(file, root)) return undefined;
 	return file;
