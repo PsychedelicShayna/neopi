@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { type FetchImpl, streamSimple } from "@oh-my-pi/pi-ai";
+import { type Api, type FetchImpl, type Model, streamSimple } from "@oh-my-pi/pi-ai";
 import { apiKeyAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
+import { createAuthGatewayRouter, serveAuthGatewayStdio, type AuthGatewayAccount } from "@oh-my-pi/pi-ai/auth-gateway";
+import { selectorCandidates, stdioModelResolver } from "@oh-my-pi/pi-coding-agent/cli/auth-gateway-stdio";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	getOAuthProvider,
 	type OAuthLoginCallbacks,
@@ -189,6 +192,73 @@ describe("NeoProxy multi-key aggregation", () => {
 		).result();
 		expect(result.stopReason).toBe("stop");
 		expect(inference).toEqual([{ key: KEY_B, model: "neoproxy/only-b" }]);
+	});
+
+	test("gateway inventory and stdio candidate routing honor each discovered API-key grant", async () => {
+		await connectBothKeys();
+		const settings = Settings.isolated();
+		const models = registry.getProviderModels("neoproxy");
+		const selected = new Map<string, Model<Api>>();
+		const sends: RequestInit[] = [];
+		const router = createAuthGatewayRouter({
+			storage,
+			resolveModel: stdioModelResolver(selected, registry),
+			listModels: () => models,
+			fetch: (input, init) => {
+				sends.push(init!);
+				return fetchImpl(input, init);
+			},
+		});
+		try {
+			const output: { status?: number; body?: { data: AuthGatewayAccount[] } }[] = [];
+			await serveAuthGatewayStdio({
+				input: new Response(`${JSON.stringify({ id: "inventory", path: "/v1/neoproxy/accounts" })}\n`).body!,
+				write: line => output.push(JSON.parse(line)),
+				route: request => router.route(request, "test"),
+				version: "test",
+			});
+			expect(output[1].status).toBe(200);
+			const rows = output[1].body!.data;
+			const [rowA, rowB] = storage.credentials.list("neoproxy");
+			expect(rows.find(row => row.id === String(rowA.id))?.models.sort()).toEqual([
+				"neoproxy/only-a",
+				"neoproxy/shared-model",
+			]);
+			expect(rows.find(row => row.id === String(rowB.id))?.models.sort()).toEqual([
+				"neoproxy/only-b",
+				"neoproxy/shared-model",
+			]);
+			for (const [id, selector, status] of [
+				[rowA.id, "neoproxy/only-b", 403],
+				[rowA.id, "neoproxy/only-a", 200],
+				[rowB.id, "neoproxy/only-b", 200],
+				[rowA.id, "neoproxy/shared-model", 200],
+				[rowB.id, "neoproxy/shared-model", 200],
+			] as const) {
+				const candidates = selectorCandidates(selector, settings, registry, "chat");
+				expect(candidates.map(formatModelString)).toEqual([selector]);
+				for (const candidate of candidates) selected.set(formatModelString(candidate), candidate);
+				const before = inference.length;
+				const response = await router.route(
+					new Request("http://stdio.test/v1/chat/completions", {
+						method: "POST",
+						headers: { "content-type": "application/json", "X-Neopi-Credential-Id": String(id) },
+						body: JSON.stringify({ model: selector, messages: [{ role: "user", content: "grant test" }] }),
+					}),
+					"test",
+				);
+				expect(response.status).toBe(status);
+				await response.text();
+				expect(inference.length - before).toBe(status === 200 ? 1 : 0);
+				if (status === 200) expect(inference.at(-1)?.key).toBe(id === rowA.id ? KEY_A : KEY_B);
+			}
+			for (const init of sends) {
+				expect(init.redirect).toBe("manual");
+				expect(init.credentials).toBe("omit");
+			}
+		} finally {
+			router.close();
+		}
 	});
 
 	test("a revoked key drops only its own models", async () => {

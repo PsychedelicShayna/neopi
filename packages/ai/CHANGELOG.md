@@ -10,6 +10,7 @@
 ### Fixed
 
 - Credential-pinned gateway requests retain their approved origin and private CA policy before sending to a provider.
+- Gateway account sharing and explicit pins honor discovered API-key grants without falling through to another account.
 - Preserve terminal credential-scope refusals through transport, provider and turn error classification so rejected origins, redirects and replacement certificates do not enter retry loops ([#649](https://github.com/PsychedelicShayna/neopi/issues/649), [#651](https://github.com/PsychedelicShayna/neopi/issues/651)).
 - Recover from a broker access token rejected immediately after refresh, coalescing concurrent retries without rotating sibling accounts ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).
 - Share a broker expiry refresh between usage checks and delayed concurrent consumers instead of rotating a fresh token again ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).

@@ -11,7 +11,7 @@ import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import { type ApiKeyResolver, createOAuthProvenance, NO_AUTH_SENTINEL, type ResolvedApiKey } from "../auth-retry";
 import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
 import { fingerprintCredential } from "../auth/credential-binding";
-import { oauthAccountKey, type StoredAuthCredential } from "../auth/types";
+import { apiKeyAccountKey, oauthAccountKey, type StoredAuthCredential } from "../auth/types";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
@@ -83,8 +83,8 @@ export interface GatewayResolvedApiKey extends ResolvedApiKey {
 export function gatewayCredentialAllowsModel(row: StoredAuthCredential, model: Model<Api>): boolean {
 	if (row.provider !== model.provider || row.disabledCause !== null) return false;
 	if (model.accountAccess === undefined) return true;
-	if (row.credential.type !== "oauth") return false;
-	const account = oauthAccountKey(row.credential);
+	const account =
+		row.credential.type === "api_key" ? apiKeyAccountKey(row.credential) : oauthAccountKey(row.credential);
 	return account !== undefined && Object.hasOwn(model.accountAccess, account);
 }
 
