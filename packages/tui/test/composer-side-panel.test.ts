@@ -1335,18 +1335,20 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		}
 	});
 
-	it("(1d twin) a placement whose top scrolls off in the paint that draws it is archived at emit", async () => {
+	it("keeps a newly drawn, top-clipped placement mutable until replay replaces it", async () => {
 		const s = scripted(10);
 		try {
 			await s.paint(() => ({ viewport: ["EDITOR"] }));
-			// 20 history rows retire while the block's APC lands at viewport index 1 (rows −3..1).
+			// The APC at viewport index 1 clips the block to its bottom two rows.
+			// That visible slice stays on screen; its omitted source rows never enter history.
 			await s.paint(image => ({
 				history: lines("h", 20),
 				viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"],
 			}));
 			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
 			const commands = await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
-			expect(commands.filter(command => command.a === "d")).toEqual([]);
+			expect(commands.filter(command => command.a === "d")).toEqual([{ a: "d", d: "i", i: s.id, p: 1 }]);
+			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(false);
 		} finally {
 			s.tui.stop();
 		}
