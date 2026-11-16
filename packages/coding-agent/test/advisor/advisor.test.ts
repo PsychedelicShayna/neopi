@@ -794,7 +794,10 @@ describe("advisor", () => {
 			);
 			for (let turn = 1; turn <= 6; turn++) {
 				tool.beginUpdate(turn);
-				const result = await tool.execute(`note-${turn}`, { note: `Missing regression ${turn}.`, severity: "concern" });
+				const result = await tool.execute(`note-${turn}`, {
+					note: `Missing regression ${turn}.`,
+					severity: "concern",
+				});
 				expect(JSON.stringify(result.content)).toContain("Queued for the configured delivery point");
 			}
 			// Even a new completed review and explicit flush cannot release held notes.
@@ -857,7 +860,10 @@ describe("advisor", () => {
 			const noise = await tool.execute("noise", { note: "Stop.", severity: "concern" });
 			expect(JSON.stringify(noise.content)).toContain("nothing actionable");
 			await tool.execute("good", { note: "The migration needs a backup.", severity: "concern" });
-			const rejected = await tool.execute("extra", { note: "The second migration needs a backup.", severity: "concern" });
+			const rejected = await tool.execute("extra", {
+				note: "The second migration needs a backup.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(rejected.content)).toContain("Dropped:");
 			expect(JSON.stringify(rejected.content)).not.toContain("Queued");
 			hold = false;
@@ -910,8 +916,11 @@ describe("advisor", () => {
 		it("moves an escalated reservation to its earlier configured delivery point without replaying it", async () => {
 			let active = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => active && severity !== "blocker");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => active && severity !== "blocker",
+			);
 			await tool.execute("pending", { note: "The migration drops users without a backup.", severity: "concern" });
 			await tool.execute("duplicate", { note: "The migration drops users without a backup.", severity: "concern" });
 			tool.beginUpdate();
@@ -924,8 +933,11 @@ describe("advisor", () => {
 
 		it("does not free a routed concern's budget when its earlier held nit escalates again", async () => {
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => severity === "nit");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => severity === "nit",
+			);
 			await tool.execute("held", { note: "The write path is unsafe.", severity: "nit" });
 			await tool.execute("live", { note: "The write path is unsafe.", severity: "concern" });
 			await tool.execute("blocker", { note: "The write path is unsafe.", severity: "blocker" });
@@ -938,8 +950,11 @@ describe("advisor", () => {
 		it("applies live timing edits selectively without resetting admission or charging the backlog twice", async () => {
 			let holdConcern = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
-				severity => severity === "nit" || severity === undefined || holdConcern);
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
+				severity => severity === "nit" || severity === undefined || holdConcern,
+			);
 			await tool.execute("nit", { note: "Rename the helper." });
 			await tool.execute("concern", { note: "The write drops the lock.", severity: "concern" });
 			holdConcern = false;
@@ -949,7 +964,10 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenCalledWith("The write drops the lock.", "concern", undefined);
 			// The new concern may displace the still-held, lower-rank nit. The
 			// routed concern keeps its slot, so another concern cannot fit.
-			const replacement = await tool.execute("replacement", { note: "Another lock is missing.", severity: "concern" });
+			const replacement = await tool.execute("replacement", {
+				note: "Another lock is missing.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(replacement.content)).toContain("Delivered.");
 			tool.flushDeferredNotes();
 			expect(onAdvice).toHaveBeenCalledTimes(2);
@@ -1239,7 +1257,6 @@ describe("advisor", () => {
 				}),
 			).toBe(false);
 		});
-
 
 		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
