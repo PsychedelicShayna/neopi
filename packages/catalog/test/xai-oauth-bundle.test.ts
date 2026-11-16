@@ -25,8 +25,8 @@ describe("xai-oauth catalog seed", () => {
 			provider: "xai-oauth",
 			api: "openai-responses",
 			baseUrl: "https://api.x.ai/v1",
-			contextWindow: 2_000_000,
-			maxTokens: 2_000_000,
+			contextWindow: 1_000_000,
+			maxTokens: 1_000_000,
 			reasoning: true,
 			input: ["text", "image"],
 			compat: {
