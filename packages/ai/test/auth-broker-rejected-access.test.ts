@@ -172,9 +172,9 @@ describe("broker rejected access recovery", () => {
 					return result.entry.credential.type === "oauth" ? result.entry.credential.access : undefined;
 				});
 				const ordinaryRefreshes = consumers.map(storage => recover(storage, "fake-access-0"));
-				expect(await Promise.all([usageRefresh, ...lateRefreshes, ...ordinaryRefreshes])).toEqual(
-					Array(7).fill("fake-access-1"),
-				);
+				const refreshed = await Promise.all([usageRefresh, ...lateRefreshes, ...ordinaryRefreshes]);
+				expect(refreshed).toHaveLength(7);
+				for (const access of refreshed) expect(access).toBe("fake-access-1");
 				// A gateway refresh arriving after that single flight must reuse it too.
 				const delayed = await client.refreshCredential(id, undefined, "expiry");
 				expect(delayed.entry.credential).toMatchObject({ access: "fake-access-1" });

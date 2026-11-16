@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import type { HeadersInit } from "bun";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, RemoteAuthCredentialStore, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import type { AuthBrokerServerHandle } from "@oh-my-pi/pi-ai/auth-broker";
@@ -233,7 +234,8 @@ describe("NeoProxy authenticated account source", () => {
 
 	test("inventory requires the gateway bearer even when legacy unauthenticated mode is enabled", async () => {
 		fixture = await boot();
-		for (const headers of [{}, { authorization: "Bearer wrong" }]) {
+		const rejectedHeaders: HeadersInit[] = [{}, { authorization: "Bearer wrong" }];
+		for (const headers of rejectedHeaders) {
 			const response = await fetch(`${fixture.gateway.url}/v1/neoproxy/accounts`, { headers });
 			expect(response.status).toBe(401);
 			expect(await response.text()).not.toContain("private-key");
