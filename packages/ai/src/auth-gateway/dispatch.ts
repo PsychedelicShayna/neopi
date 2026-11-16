@@ -10,6 +10,7 @@
 import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
 import { type ApiKeyResolver, createOAuthProvenance, NO_AUTH_SENTINEL, type ResolvedApiKey } from "../auth-retry";
 import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
+import { fingerprintCredential } from "../auth/credential-binding";
 import { oauthAccountKey, type StoredAuthCredential } from "../auth/types";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
@@ -109,7 +110,12 @@ async function resolvePinnedGatewayApiKey(
 	});
 	if (apiKey === undefined) return undefined;
 	const latest = storage.credentials.list(model.provider).find(candidate => candidate.id === pin.id);
-	if (!latest || !gatewayCredentialAllowsModel(latest, model)) return undefined;
+	if (
+		!latest ||
+		!gatewayCredentialAllowsModel(latest, model) ||
+		fingerprintCredential(latest, apiKey) !== pin.fingerprint
+	)
+		return undefined;
 	const credential = latest.credential;
 	return {
 		apiKey,
@@ -124,7 +130,7 @@ async function resolvePinnedGatewayApiKey(
 						inferenceRegion: credential.inferenceRegion,
 					},
 				}
-			: {}),
+			: { requestOrigin: credential.requestOrigin, tlsTrust: credential.tlsTrust }),
 	};
 }
 
