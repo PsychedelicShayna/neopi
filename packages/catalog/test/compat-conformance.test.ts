@@ -45,6 +45,9 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// User-configured models.yml provider pointing at
 	// https://inference-api.nousresearch.com/v1 (NousResearch inference API).
 	"nous",
+	// NeoProxy's grant-scoped virtual roster is discovered per stored key by
+	// coding-agent/config/model-discovery.ts; the server owns names and routing.
+	"neoproxy",
 ]);
 
 function collectReferencedProviders(): Map<string, string> {

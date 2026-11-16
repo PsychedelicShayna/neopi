@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Enabled the declared OpenAI sampling restrictions, provider option schemas, Grok STT routing, and Opus 5 prompt adapter.
 - Preserved an existing intelligence or speed score when catalog enrichment fills the other missing metric.
 
 ## [18.18.8] - 2026-11-11
