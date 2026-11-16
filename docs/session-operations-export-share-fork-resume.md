@@ -369,6 +369,7 @@ The original bare `/fork` uses `AgentSession.fork()`:
    - `parentSession` set to previous session id
    - `providerPromptCacheKey` set to the previous header's inherited key, or the previous session id when none was pinned
 - Keeps all non-header entries unchanged in the new file.
+- Before publishing inherited history or changing the active identity, transfers and verifies Chronicler blind metadata independently of optional artifact copying. A privacy-transfer error aborts the fork, leaves the source selected, and publishes no child journal. This also applies to entry forks, startup `--fork`, and callers that disable ordinary artifact copying.
 
 ### Non-persistent behavior
 

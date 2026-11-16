@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import * as nativeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentPromptOptions } from "@oh-my-pi/pi-agent-core";
@@ -6,6 +7,7 @@ import type { Context, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { runHeadlessBackfill } from "../../src/chronicler/backfill";
 import { readCommittedChroniclerBatches } from "../../src/chronicler/store";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
@@ -28,25 +30,29 @@ async function scriptedPrompt(
 	input: string | AgentMessage | AgentMessage[],
 	imagesOrOptions?: ImageContent[] | AgentPromptOptions,
 	options?: AgentPromptOptions,
+	onCapture?: (context: Context) => void,
 ): Promise<void> {
 	if (this.state.tools.some(tool => tool.name === "finish_chronicle")) {
 		const mock = createMockModel({
 			responses: [
-				context => ({
-					content: [
-						{
-							type: "toolCall",
-							name: "chronicle",
-							arguments: {
-								title: "Transition capture",
-								kind: "decision",
-								body: "The requested decision survived the session transition.",
-								topics: ["lifecycle"],
-								sources: receivedSources(context),
+				context => {
+					onCapture?.(context);
+					return {
+						content: [
+							{
+								type: "toolCall",
+								name: "chronicle",
+								arguments: {
+									title: "Transition capture",
+									kind: "decision",
+									body: "The requested decision survived the session transition.",
+									topics: ["lifecycle"],
+									sources: receivedSources(context),
+								},
 							},
-						},
-					],
-				}),
+						],
+					};
+				},
 				{ content: [{ type: "toolCall", name: "finish_chronicle", arguments: { carry: null } }] },
 				{ content: ["Capture complete."], stopReason: "stop" },
 			],
@@ -70,6 +76,7 @@ describe("AgentSession Chronicler identity boundaries", () => {
 	let storage: FileSessionStorage;
 	let manager: SessionManager;
 	let inherited: string[];
+	let captureConversations: string[];
 
 	beforeEach(async () => {
 		temporary = TempDir.createSync("@pi-chronicler-lifecycle-");
@@ -79,7 +86,17 @@ describe("AgentSession Chronicler identity boundaries", () => {
 		registry = new ModelRegistry(auth);
 		const capture = createMockModel({ id: ROLE_ID, provider: "mock", contextWindow: 200_000 });
 		spyOn(registry, "getAvailable").mockReturnValue([capture]);
-		spyOn(Agent.prototype, "prompt").mockImplementation(scriptedPrompt as typeof Agent.prototype.prompt);
+		captureConversations = [];
+		spyOn(Agent.prototype, "prompt").mockImplementation(function (
+			this: Agent,
+			input: string | AgentMessage | AgentMessage[],
+			imagesOrOptions?: ImageContent[] | AgentPromptOptions,
+			options?: AgentPromptOptions,
+		) {
+			return scriptedPrompt.call(this, input, imagesOrOptions, options, context => {
+				captureConversations.push(JSON.stringify(context.messages));
+			});
+		});
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!bundled) throw new Error("expected bundled primary model");
 		primaryModel = bundled;
@@ -87,7 +104,11 @@ describe("AgentSession Chronicler identity boundaries", () => {
 		manager = SessionManager.create(temporary.path(), path.join(temporary.path(), "sessions"), storage);
 		inherited = appendDecision(manager, "initial decision");
 		await manager.ensureOnDisk();
-		const settings = Settings.isolated({ "compaction.enabled": false, "chronicler.enabled": true });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"chronicler.enabled": true,
+			"chronicler.notices": false,
+		});
 		settings.setModelRole("chronicler", `mock/${ROLE_ID}`);
 		session = new AgentSession({
 			agent: new Agent({
@@ -166,6 +187,156 @@ describe("AgentSession Chronicler identity boundaries", () => {
 		expect(await coveredAt(previousRoot)).toEqual(inherited);
 		expect(session!.chroniclerHealth.sessionFile).toBe(manager.getSessionFile());
 	});
+
+	for (const code of ["EACCES", "EIO"]) {
+		for (const route of ["startup", "full", "entry"]) {
+			it(`aborts ${route} fork before publishing or capturing private backlog on source ${code}`, async () => {
+				const originalFile = manager.getSessionFile()!;
+				const originalId = manager.getSessionId();
+				const sourceArtifacts = manager.getArtifactsDir()!;
+				const sentinel = `PRIVATE_FORK_${route}_${code}`;
+				expect(await session!.chroniclerControl("blind")).toBe(true);
+				const privateIds = appendDecision(manager, sentinel);
+				await manager.flush();
+				const filesBefore = await fs.readdir(path.dirname(originalFile));
+				const readFileSync = nativeFs.readFileSync;
+				const cp = nativeFs.promises.cp;
+				// The journal and destination stay healthy; only the source artifact
+				// tree is unavailable before its privacy file can be transferred.
+				const readFault = spyOn(nativeFs, "readFileSync").mockImplementation(((
+					file: nativeFs.PathOrFileDescriptor,
+					options?: unknown,
+				) => {
+					if (String(file) === path.join(sourceArtifacts, "chronicler", "blind.json")) {
+						throw Object.assign(new Error(`source privacy ${code}`), { code });
+					}
+					return (readFileSync as (target: nativeFs.PathOrFileDescriptor, opts?: unknown) => string | Buffer)(
+						file,
+						options,
+					);
+				}) as typeof nativeFs.readFileSync);
+				const copyFault = spyOn(nativeFs.promises, "cp").mockImplementation(
+					async (source, destination, options) => {
+						if (String(source) === sourceArtifacts) {
+							throw Object.assign(new Error(`source artifacts ${code}`), { code });
+						}
+						return cp(source, destination, options);
+					},
+				);
+				let failure: unknown;
+				try {
+					if (route === "startup") {
+						const forked = await SessionManager.forkFrom(
+							originalFile,
+							temporary.path(),
+							path.dirname(originalFile),
+							storage,
+							{
+								sessionFile: path.join(path.dirname(originalFile), "startup-fork.jsonl"),
+								suppressBreadcrumb: true,
+							},
+						);
+						const forkFile = forked.getSessionFile()!;
+						await forked.close();
+						await session!.switchSession(forkFile);
+						manager = session!.sessionManager;
+					} else {
+						await session!.fork(route === "entry" ? privateIds.at(-1) : undefined);
+					}
+				} catch (error) {
+					failure = error;
+				} finally {
+					readFault.mockRestore();
+					copyFault.mockRestore();
+				}
+				if (!failure) await waitForCoverage(privateIds);
+				expect(captureConversations.join("\n")).not.toContain(sentinel);
+				expect(failure).toMatchObject({ code });
+				expect(manager.getSessionFile()).toBe(originalFile);
+				expect(manager.getSessionId()).toBe(originalId);
+				expect((await fs.readdir(path.dirname(originalFile))).filter(file => file.endsWith(".jsonl"))).toEqual(
+					filesBefore.filter(file => file.endsWith(".jsonl")),
+				);
+				// No child exists for restart/backfill to discover. The held source's
+				// durable fence also remains authoritative for explicit backfill.
+				await session!.dispose();
+				session = undefined;
+				await manager.close();
+				const result = await runHeadlessBackfill({
+					sessionFile: originalFile,
+					settings: Settings.isolated({ "chronicler.enabled": true }),
+					modelRegistry: registry,
+					obfuscator: undefined,
+					timeoutMs: 5_000,
+					drainMs: 1_000,
+					pollMs: 10,
+				});
+				expect(result.outcome).toBe("complete");
+				expect(captureConversations.join("\n")).not.toContain(sentinel);
+			});
+		}
+	}
+
+	for (const route of ["startup", "full", "entry"]) {
+		it(`preserves closed private spans through ${route} fork, restart and backfill despite optional copy failure`, async () => {
+			const sourceFile = manager.getSessionFile()!;
+			expect(await session!.chroniclerControl("blind")).toBe(true);
+			const sentinel = `CLOSED_PRIVATE_FORK_${route}`;
+			const privateIds = appendDecision(manager, sentinel);
+			await manager.flush();
+			expect(await session!.chroniclerControl("unblind")).toBe(true);
+			const publicIds = appendDecision(manager, "public fork catch-up");
+			await manager.flush();
+			const copyFault = spyOn(nativeFs.promises, "cp").mockRejectedValueOnce(
+				Object.assign(new Error("optional artifact copy failed"), { code: "EIO" }),
+			);
+			try {
+				if (route === "startup") {
+					const forked = await SessionManager.forkFrom(
+						sourceFile,
+						temporary.path(),
+						path.dirname(sourceFile),
+						storage,
+						{
+							sessionFile: path.join(path.dirname(sourceFile), "closed-fork.jsonl"),
+							suppressBreadcrumb: true,
+						},
+					);
+					const file = forked.getSessionFile()!;
+					await forked.close();
+					expect(await session!.switchSession(file)).toBe(true);
+					manager = session!.sessionManager;
+				} else {
+					expect(await session!.fork(route === "entry" ? publicIds.at(-1) : undefined)).toBe(true);
+				}
+			} finally {
+				copyFault.mockRestore();
+			}
+			const coverage = await waitForCoverage([...inherited, ...publicIds]);
+			for (const id of privateIds) expect(coverage).not.toContain(id);
+			expect(captureConversations.join("\n")).not.toContain(sentinel);
+			const childFile = manager.getSessionFile()!;
+			// Reopening the published child must use its own durable fence.
+			expect(await session!.switchSession(sourceFile)).toBe(true);
+			expect(await session!.switchSession(childFile)).toBe(true);
+			expect(captureConversations.join("\n")).not.toContain(sentinel);
+			await session!.dispose();
+			session = undefined;
+			await manager.close();
+			const result = await runHeadlessBackfill({
+				sessionFile: childFile,
+				settings: Settings.isolated({ "chronicler.enabled": true }),
+				modelRegistry: registry,
+				obfuscator: undefined,
+				timeoutMs: 5_000,
+				drainMs: 1_000,
+				pollMs: 10,
+			});
+			expect(result.outcome).toBe("complete");
+			expect(result.before.totalEntries).toBe(inherited.length + publicIds.length);
+			expect(captureConversations.join("\n")).not.toContain(sentinel);
+		});
+	}
 
 	it("branch captures child-owned retained sources without another primary turn or changing parent history", async () => {
 		const parentRoot = root();

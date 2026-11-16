@@ -28,7 +28,8 @@ import {
 import { isTaskToolDetails, type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import * as snapcompact from "@oh-my-pi/snapcompact";
-import { moveFileAcrossDevices } from "../utils/atomic-file";
+import { CHRONICLER_BLIND_FILENAME } from "../chronicler/blind-metadata";
+import { moveFileAcrossDevices, writeFileAtomicallySync } from "../utils/atomic-file";
 import { hasAnnotationDraftsSync } from "../extensibility/custom-commands/bundled/annotate/draft-store";
 import { ArtifactManager, type ArtifactManagerApi } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, lazyImageDataSync } from "./blob-store";
@@ -179,6 +180,38 @@ function fileSafeTimestamp(iso: string): string {
 export function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	if (!sessionFile?.endsWith(".jsonl")) return null;
 	return sessionFile.slice(0, -JSONL_SUFFIX_LENGTH);
+}
+
+/**
+ * Privacy is required before publishing inherited history, even when ordinary
+ * artifacts are omitted or their best-effort copy fails. Synchronous because
+ * createBranchedSession publishes synchronously; failure leaves its source active.
+ */
+function copySessionPrivacySync(sourceSessionFile: string, destinationSessionFile: string): void {
+	let realSource = sourceSessionFile;
+	try {
+		realSource = fs.realpathSync(sourceSessionFile);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	const sourceArtifacts = artifactsDirectoryFor(realSource);
+	const destinationArtifacts = artifactsDirectoryFor(destinationSessionFile);
+	if (!sourceArtifacts || !destinationArtifacts) return;
+	if (path.resolve(sourceArtifacts) === path.resolve(destinationArtifacts)) return;
+	let privacy: string;
+	try {
+		privacy = fs.readFileSync(path.join(sourceArtifacts, "chronicler", CHRONICLER_BLIND_FILENAME), "utf8");
+	} catch (error) {
+		// Only confirmed absence means the source has never installed a fence.
+		if (isEnoent(error)) return;
+		throw error;
+	}
+	const destination = path.join(destinationArtifacts, "chronicler", CHRONICLER_BLIND_FILENAME);
+	fs.mkdirSync(path.dirname(destination), { recursive: true });
+	writeFileAtomicallySync(destination, privacy);
+	if (fs.readFileSync(destination, "utf8") !== privacy) {
+		throw new Error("Failed to verify fork privacy metadata; fork aborted");
+	}
 }
 
 /**
@@ -2694,6 +2727,7 @@ export class SessionManager {
 	/**
 	 * Fork the current session into a new file with the same entries.
 	 * Optionally copy artifacts, keeping relocation and artifact reads behind the copy.
+	 * Privacy metadata is always verified before changing identity or publishing.
 	 * @returns the old and new session file paths, or undefined when not persisting.
 	 */
 	async fork(options?: {
@@ -2708,10 +2742,13 @@ export class SessionManager {
 		this.#reconcileSessionDirForFallback();
 
 		const timestamp = nowIso();
+		const newSessionId = mintSessionId();
+		const newSessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${newSessionId}.jsonl`);
+		copySessionPrivacySync(oldSessionFile, newSessionFile);
 		this.#reservedEntryIds.clear();
-		this.#sessionId = mintSessionId();
+		this.#sessionId = newSessionId;
 		this.#taskSiblingCandidate = undefined;
-		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
+		this.#sessionFile = newSessionFile;
 		this.#syncLease();
 		this.#expectedDiskSize = null;
 		this.#header = {
@@ -2738,7 +2775,6 @@ export class SessionManager {
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
-		const newSessionFile = this.#sessionFile;
 		if (options?.copyArtifacts) {
 			this.#pendingArtifactCopy = {
 				sessionFile: newSessionFile,
@@ -4374,6 +4410,7 @@ export class SessionManager {
 	 * With `copyArtifacts`, the source artifact directory is copied in the background;
 	 * the new artifact manager waits for it before allocating ids or resolving
 	 * `artifact://`, so kept references stay valid and new ids cannot collide.
+	 * Privacy metadata is transferred synchronously before publishing the new journal.
 	 * Returns the new file path, or undefined when not persisting.
 	 */
 	createBranchedSession(leafId: string, options?: { copyArtifacts?: boolean }): string | undefined {
@@ -4426,6 +4463,8 @@ export class SessionManager {
 			labels.push(labelEntry);
 			parentId = labelEntry.id;
 		}
+
+		if (this.#persist && sourceSessionFile) copySessionPrivacySync(sourceSessionFile, newSessionFile);
 
 		this.#header = header;
 		this.#entries = [...entriesToKeep, ...labels];
@@ -4512,11 +4551,11 @@ export class SessionManager {
 	 * session file while creating a fresh session file in this sessionDir.
 	 *
 	 * `options.sessionFile` pins the new session's file path (default: an
-	 * auto-named `<timestamp>_<id>.jsonl` in `sessionDir`). Artifacts are copied
-	 * recursively by default; nested agents that deliberately share their parent's
-	 * artifact root may disable this with `copyArtifacts: false`.
+	 * auto-named `<timestamp>_<id>.jsonl` in `sessionDir`). Ordinary artifacts are
+	 * copied recursively by default; nested agents sharing their parent's artifact
+	 * root may disable this with `copyArtifacts: false`. Privacy transfer is required.
 	 *
-	 * `seance` creates a read-only consult fork instead: artifacts stay in the
+	 * `seance` creates a read-only consult fork instead: ordinary artifacts stay in the
 	 * source (the header's `seanceSource` points lookups at them), inherited
 	 * workspace roots are dropped, and the source's `session_init` contracts
 	 * become inert `source_session_init` custom entries so revival never
@@ -4588,6 +4627,7 @@ export class SessionManager {
 		}
 		manager.#forceFileCreation = true;
 		await manager.#releaseLeaseOnFailure(async () => {
+			copySessionPrivacySync(sourcePath, manager.#sessionFile!);
 			await manager.#rewriteAtomically();
 			if (!options?.seance && options?.copyArtifacts !== false) {
 				await copySessionArtifacts(sourcePath, manager.#sessionFile!);

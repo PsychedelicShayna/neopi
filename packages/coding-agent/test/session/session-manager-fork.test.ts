@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import * as nativeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Usage } from "@oh-my-pi/pi-ai";
@@ -1075,5 +1076,78 @@ describe("SessionManager.forkFrom", () => {
 		expect(forkedEntries.some(entry => entry.type === "message" && isSyntheticToolResultMessage(entry.message))).toBe(
 			false,
 		);
+	});
+});
+
+describe("fork privacy publication", () => {
+	for (const route of ["startup", "full", "entry"]) {
+		it(`does not publish a ${route} fork if writing its privacy fence fails`, async () => {
+			using tempDir = TempDir.createSync("@omp-fork-privacy-write-");
+			const sessionDir = path.join(tempDir.path(), "sessions");
+			const manager = SessionManager.create(tempDir.path(), sessionDir);
+			const privateId = manager.appendMessage({ role: "user", content: "private backlog", timestamp: 1 });
+			await manager.ensureOnDisk();
+			const sourceFile = manager.getSessionFile()!;
+			const sourceId = manager.getSessionId();
+			const sourceRoot = manager.getArtifactsDir()!;
+			await Bun.write(
+				path.join(sourceRoot, "chronicler", "blind.json"),
+				JSON.stringify({ version: 1, spans: [{ startAfter: null, endAt: null }] }),
+			);
+			const renameSync = nativeFs.renameSync;
+			const writeFault = spyOn(nativeFs, "renameSync").mockImplementation((from, to) => {
+				if (
+					String(to).endsWith(`${path.sep}chronicler${path.sep}blind.json`) &&
+					!String(to).startsWith(`${sourceRoot}${path.sep}`)
+				) {
+					throw Object.assign(new Error("destination privacy write failed"), { code: "EIO" });
+				}
+				return renameSync(from, to);
+			});
+			let forked: SessionManager | undefined;
+			let failure: unknown;
+			try {
+				if (route === "startup") {
+					forked = await SessionManager.forkFrom(sourceFile, tempDir.path(), sessionDir, undefined, {
+						suppressBreadcrumb: true,
+					});
+				} else if (route === "full") {
+					await manager.fork({ copyArtifacts: true });
+				} else {
+					manager.createBranchedSession(privateId, { copyArtifacts: true });
+				}
+			} catch (error) {
+				failure = error;
+			} finally {
+				writeFault.mockRestore();
+				await forked?.close();
+				await manager.close();
+			}
+			expect(failure).toMatchObject({ code: "EIO" });
+			expect(manager.getSessionFile()).toBe(sourceFile);
+			expect(manager.getSessionId()).toBe(sourceId);
+			expect((await fs.readdir(sessionDir)).filter(file => file.endsWith(".jsonl"))).toEqual([
+				path.basename(sourceFile),
+			]);
+		});
+	}
+
+	it("inherits privacy even when ordinary artifacts are disabled and the source is a symlink", async () => {
+		using tempDir = TempDir.createSync("@omp-fork-required-privacy-");
+		const { cwd, sessionDir, sourceFile, sourceArtifactsDir } = await createSessionWithArtifacts(tempDir.path());
+		const privacy = JSON.stringify({ version: 1, spans: [{ startAfter: null, endAt: null }] });
+		await Bun.write(path.join(sourceArtifactsDir, "chronicler", "blind.json"), privacy);
+		const linkedSource = path.join(tempDir.path(), "linked.jsonl");
+		await fs.symlink(sourceFile, linkedSource);
+		const forked = await SessionManager.forkFrom(linkedSource, cwd, sessionDir, undefined, {
+			copyArtifacts: false,
+			suppressBreadcrumb: true,
+		});
+		try {
+			expect(await Bun.file(path.join(forked.getArtifactsDir()!, "chronicler", "blind.json")).text()).toBe(privacy);
+			expect(await Bun.file(path.join(forked.getArtifactsDir()!, "1.read.log")).exists()).toBe(false);
+		} finally {
+			await forked.close();
+		}
 	});
 });

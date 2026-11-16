@@ -20,6 +20,7 @@
  * is used only for terminal assertions and teardown.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as nativeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentPromptOptions } from "@oh-my-pi/pi-agent-core";
@@ -568,6 +569,47 @@ describe("SessionChronicler capture runtime", () => {
 			totalEntries: 2,
 			coveredEntries: 2,
 		});
+	});
+
+	it("keeps a fork's private backlog out of capture when the optional artifact copy fails", async () => {
+		const manager = await newSessionManager();
+		appendUser(manager, "PRIVATE_FORK_COPY_FAILURE_SENTINEL");
+		await manager.flush();
+		await writeChroniclerBlindMetadata(chroniclerRoot(manager), {
+			version: 1,
+			spans: [{ startAfter: null, endAt: null }],
+		});
+		const copyFault = spyOn(nativeFs.promises, "cp").mockRejectedValueOnce(
+			Object.assign(new Error("source artifact traversal denied"), { code: "EACCES" }),
+		);
+		let forked: SessionManager;
+		try {
+			forked = await SessionManager.forkFrom(manager.getSessionFile()!, cwd, sessionDir, undefined, {
+				suppressBreadcrumb: true,
+			});
+		} finally {
+			copyFault.mockRestore();
+		}
+		scripts.push(ackPass());
+		const harness = startChronicler(forked, newSettings());
+		await harness.chronicler.idle();
+		expect(passes.map(passConversationText).join("\n")).not.toContain("PRIVATE_FORK_COPY_FAILURE_SENTINEL");
+		expect(harness.chronicler.health.captureMode).toBe("blinded");
+		await shutdown(harness);
+		const forkFile = forked.getSessionFile()!;
+		await forked.close();
+		forked = await SessionManager.open(forkFile, sessionDir);
+		const restarted = startChronicler(forked, newSettings());
+		await restarted.chronicler.idle();
+		expect(restarted.chronicler.health.captureMode).toBe("blinded");
+		expect(await restarted.chronicler.unblind()).toBe(true);
+		const publicId = appendUser(forked, "Public continuation after the fork is explicitly unblinded.");
+		await forked.flush();
+		restarted.chronicler.onPrimaryTurnEnd(false);
+		await waitForCoverage(restarted.root, [publicId]);
+		await restarted.chronicler.idle();
+		expect(await committedEntryIds(restarted.root)).toEqual([publicId]);
+		expect(passes.map(passConversationText).join("\n")).not.toContain("PRIVATE_FORK_COPY_FAILURE_SENTINEL");
 	});
 
 	it("excludes durable blind spans from headless backfill and completion counts", async () => {

@@ -23,6 +23,8 @@ Capture automatically catches up the current session when enabled, including whe
 
 These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
 
+Writable forks inherit blind metadata before their transcript is published, including entry forks and startup `--fork`. If reading, writing or verifying that privacy state fails, the fork aborts without publishing a child; an in-place fork keeps the source session selected. Confirmed absence of source metadata is allowed. Unrelated artifact-copy failures remain best-effort and never remove the inherited fence.
+
 Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
 
 Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
