@@ -2477,16 +2477,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#bash = new BashRunner(bashHost);
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		const evalHost: EvalRunnerHost = {
-			agent: this.agent,
 			sessionManager: this.sessionManager,
-			settings: this.settings,
+			transcript: this.#bash.transcript,
 			extensionRunner: () => this.#extensionRunner,
 			isStreaming: () => this.isStreaming,
 			toolSession: () => evalToolSession,
-			appendSessionMessage: message => {
-				this.agent.appendMessage(message);
-				this.sessionManager.appendMessage(message);
-			},
 		};
 		this.#eval = new EvalRunner(evalHost, {
 			kernelOwnerId: evalKernelOwnerId,
@@ -10661,7 +10656,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (this.#refuseOverCostCap()) return false;
 			// Flush any pending bash messages before the new prompt
 			await this.#bash.flushPending();
-			this.#eval.flushPending();
+			await this.#eval.flushPending();
 			// This turn carries the assignment: IRC asides parked for it fold in ahead of the message.
 			this.#ircAwaitingAssignment = false;
 			this.#irc.flushPending();
@@ -13790,9 +13785,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return setSessionName.call(this.sessionManager, name, source, trigger);
 	}
 
-	/** Write pending bash output and every session entry to the session file, as {@link fork} does before copying it. */
+	/** Write pending user execution output and every session entry to disk before copying it. */
 	async flushToDisk(): Promise<void> {
 		await this.#bash.flushPending();
+		await this.#eval.flushPending();
 		await this.sessionManager.flush();
 	}
 

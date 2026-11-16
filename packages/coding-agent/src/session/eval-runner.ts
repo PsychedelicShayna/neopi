@@ -1,6 +1,4 @@
-import type { Agent } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { Settings } from "../config/settings";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { disposeVmContextsByOwner } from "../eval/js/context-manager";
@@ -10,17 +8,16 @@ import type { ExtensionRunner } from "../extensibility/extensions";
 import type { ToolSession } from "../tools";
 import { outputMeta } from "../tools/output-meta";
 import { evalBackendRegistry, extensionBackendAdapter, invokeEvalCell } from "./eval-service";
+import type { ExecutionSessionTarget, ExecutionTranscript } from "./execution-transcript";
 import type { EvalExecutionMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 
 export interface EvalRunnerHost {
-	agent: Agent;
 	sessionManager: SessionManager;
-	settings: Settings;
+	transcript: ExecutionTranscript;
 	extensionRunner(): ExtensionRunner | undefined;
 	toolSession(): ToolSession;
 	isStreaming(): boolean;
-	appendSessionMessage(message: EvalExecutionMessage): void;
 }
 
 export interface UserEvalOptions {
@@ -32,13 +29,18 @@ export interface UserEvalOptions {
 	onRecorded?: (message: EvalExecutionMessage) => void;
 }
 
+interface PendingEvalMessage {
+	target: ExecutionSessionTarget;
+	message: EvalExecutionMessage;
+}
+
 /** Owns user-initiated generic eval execution and retained backend lifecycle. */
 export class EvalRunner {
 	readonly #kernelOwnerId: string;
 	readonly #parentSessionId: string | undefined;
 	readonly #host: EvalRunnerHost;
 	#abortControllers = new Map<AbortController, string>();
-	#pendingMessages: EvalExecutionMessage[] = [];
+	#pendingMessages: PendingEvalMessage[] = [];
 	#activeExecutions = new Set<Promise<unknown>>();
 	#disposing = false;
 
@@ -54,44 +56,52 @@ export class EvalRunner {
 		onChunk?: (chunk: string) => void,
 		options?: UserEvalOptions,
 	): Promise<ExecutorBackendResult> {
+		this.assertExecutionAllowed();
+		const target = this.#host.transcript.capture();
 		const excludeFromContext = options?.excludeFromContext === true;
 		const cwd = this.#host.sessionManager.getCwd();
-		this.assertExecutionAllowed();
 		const abortController = new AbortController();
 		const canonicalLanguage = this.#canonicalLanguage(language);
 		const execution = (async () => {
-			const extensionRunner = this.#host.extensionRunner();
-			if (extensionRunner?.hasHandlers("user_eval")) {
-				const hookResult = await extensionRunner.emitUserEval({
-					type: "user_eval",
-					language,
-					alias: options?.alias ?? language,
-					code,
-					excludeFromContext,
-					cwd,
-				});
-				this.assertExecutionAllowed();
-				if (hookResult?.result) {
-					this.recordResult(language, code, hookResult.result, options);
-					return hookResult.result;
+			let targetTransferred = false;
+			try {
+				const extensionRunner = this.#host.extensionRunner();
+				if (extensionRunner?.hasHandlers("user_eval")) {
+					const hookResult = await extensionRunner.emitUserEval({
+						type: "user_eval",
+						language,
+						alias: options?.alias ?? language,
+						code,
+						excludeFromContext,
+						cwd,
+					});
+					this.assertExecutionAllowed();
+					if (hookResult?.result) {
+						targetTransferred = true;
+						await this.#recordResultForTarget(target, language, code, hookResult.result, options);
+						return hookResult.result;
+					}
 				}
-			}
 
-			const session = this.#host.toolSession();
-			const backend = await this.#resolveBackend(language, session, abortController.signal);
-			const sessionId = this.getSessionId();
-			const result = await invokeEvalCell(backend, code, {
-				cwd,
-				sessionId,
-				sessionFile: this.#host.sessionManager.getSessionFile() ?? undefined,
-				kernelOwnerId: this.#kernelOwnerId,
-				signal: abortController.signal,
-				session,
-				reset: options?.reset === true,
-				onChunk: onChunk ?? (() => {}),
-			});
-			this.recordResult(backend.id, code, result, options);
-			return result;
+				const session = this.#host.toolSession();
+				const backend = await this.#resolveBackend(language, session, abortController.signal);
+				const sessionId = this.getSessionId();
+				const result = await invokeEvalCell(backend, code, {
+					cwd,
+					sessionId,
+					sessionFile: this.#host.sessionManager.getSessionFile() ?? undefined,
+					kernelOwnerId: this.#kernelOwnerId,
+					signal: abortController.signal,
+					session,
+					reset: options?.reset === true,
+					onChunk: onChunk ?? (() => {}),
+				});
+				targetTransferred = true;
+				await this.#recordResultForTarget(target, backend.id, code, result, options);
+				return result;
+			} finally {
+				if (!targetTransferred) await this.#host.transcript.release(target);
+			}
 		})();
 		return await this.trackExecution(execution, abortController, canonicalLanguage);
 	}
@@ -137,6 +147,19 @@ export class EvalRunner {
 	}
 
 	recordResult(language: string, code: string, result: ExecutorBackendResult, options?: UserEvalOptions): void {
+		const target = this.#host.transcript.capture();
+		void this.#recordResultForTarget(target, language, code, result, options).catch(error => {
+			logger.error("Failed to record eval result in its owning session", { error: String(error) });
+		});
+	}
+
+	async #recordResultForTarget(
+		target: ExecutionSessionTarget,
+		language: string,
+		code: string,
+		result: ExecutorBackendResult,
+		options?: UserEvalOptions,
+	): Promise<void> {
 		const message: EvalExecutionMessage = {
 			role: "evalExecution",
 			language,
@@ -148,8 +171,11 @@ export class EvalRunner {
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};
-		if (this.#host.isStreaming()) this.#pendingMessages.push(message);
-		else this.#host.appendSessionMessage(message);
+		if (!this.#disposing && this.#host.isStreaming() && this.#host.transcript.isCurrent(target)) {
+			this.#pendingMessages.push({ target, message });
+		} else {
+			await this.#host.transcript.appendOwned(target, message);
+		}
 		try {
 			options?.onRecorded?.(message);
 		} catch (error) {
@@ -188,9 +214,10 @@ export class EvalRunner {
 			getSessionFile: () => this.#host.sessionManager.getSessionFile() ?? null,
 		});
 	}
-	flushPending(): void {
-		for (const message of this.#pendingMessages) this.#host.appendSessionMessage(message);
+	async flushPending(): Promise<void> {
+		const pending = this.#pendingMessages;
 		this.#pendingMessages = [];
+		for (const { target, message } of pending) await this.#host.transcript.appendOwned(target, message);
 	}
 	beginDispose(): void {
 		this.#disposing = true;
@@ -198,6 +225,7 @@ export class EvalRunner {
 
 	async disposeKernels(): Promise<void> {
 		const settled = await this.#prepareExecutionsForDispose();
+		await this.flushPending();
 		if (!settled) logger.warn("Detaching retained eval-kernel ownership while eval execution is still active");
 		const results = await Promise.allSettled([
 			disposeKernelSessionsByOwner(this.#kernelOwnerId),

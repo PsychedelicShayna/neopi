@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import type { Agent } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
@@ -15,25 +14,16 @@ import { clampTimeout } from "../tools/tool-timeouts";
 import type { BashExecutionMessage } from "./messages";
 import type { SessionManager } from "./session-manager";
 import type { SessionEnvironment } from "./environment";
+import {
+	ExecutionTranscript,
+	type ExecutionSessionTarget,
+	type ExecutionSessionTransition,
+} from "./execution-transcript";
 
 import { cfgToolsMaxTimeout } from "../tools/settings";
 
-/** Destination that owns a bash result after a session or branch transition. */
-export type BashAppendDestination =
-	| { kind: "current"; manager: SessionManager }
-	| { kind: "detached"; manager: SessionManager }
-	| { kind: "branch"; manager: SessionManager; parentId: string | null };
-
-/** Reference-counted session target captured when a bash execution starts. */
-export interface BashSessionTarget {
-	sessionId: string;
-	refs: number;
-	destination?: BashAppendDestination;
-	pending?: Promise<BashAppendDestination>;
-}
-
 interface PendingBashMessage {
-	target: BashSessionTarget;
+	target: ExecutionSessionTarget;
 	message: BashExecutionMessage;
 }
 
@@ -43,18 +33,6 @@ export interface BashExecuteOptions {
 	pty?: BashPtyOptions;
 	/** Receives the `bashExecution` message the run is recorded as, once it is persisted or queued for a mid-turn flush. */
 	onRecorded?: (message: BashExecutionMessage) => void;
-}
-
-/** Ownership snapshot spanning a session or branch transition. */
-export interface BashSessionTransition {
-	oldTarget: BashSessionTarget;
-	newTarget: BashSessionTarget;
-	oldSessionId: string;
-	oldSessionFile: string | undefined;
-	oldLeafId: string | null;
-	detachedManager: SessionManager | undefined;
-	resolveOld: ((destination: BashAppendDestination) => void) | undefined;
-	resolveNew: (destination: BashAppendDestination) => void;
 }
 
 /** Capabilities the bash runner borrows from its owning session. */
@@ -74,15 +52,11 @@ export class BashRunner {
 	/** Session ids of cancelled commands; a command keeps the id it started under across transitions. */
 	#cancelledSessionIds = new Set<string>();
 	#pendingMessages: PendingBashMessage[] = [];
-	#sessionTarget: BashSessionTarget;
+	readonly transcript: ExecutionTranscript;
 
 	constructor(host: BashRunnerHost) {
 		this.#host = host;
-		this.#sessionTarget = {
-			sessionId: host.sessionManager.getSessionId(),
-			refs: 0,
-			destination: { kind: "current", manager: host.sessionManager },
-		};
+		this.transcript = new ExecutionTranscript(host);
 	}
 
 	/** Executes a bash command while retaining the session and branch that owned its start. */
@@ -91,7 +65,7 @@ export class BashRunner {
 		onChunk?: (chunk: string) => void,
 		options?: BashExecuteOptions,
 	): Promise<BashResult> {
-		const target = this.#captureSessionTarget();
+		const target = this.transcript.capture();
 		let targetTransferred = false;
 		const excludeFromContext = options?.excludeFromContext === true;
 		const cwd = this.#host.sessionManager.getCwd();
@@ -154,27 +128,27 @@ export class BashRunner {
 			await this.#recordResultForTarget(target, command, result, options);
 			return result;
 		} finally {
-			if (!targetTransferred) await this.#releaseSessionTarget(target);
+			if (!targetTransferred) await this.transcript.release(target);
 		}
 	}
 
 	/** Records a bash result supplied outside executeBash in the current ownership scope. */
 	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
-		const target = this.#captureSessionTarget();
+		const target = this.transcript.capture();
 		const message = this.#createMessage(command, result, options);
-		if (this.#host.isStreaming() && target === this.#sessionTarget) {
+		if (this.#host.isStreaming() && this.transcript.isCurrent(target)) {
 			this.#pendingMessages.push({ target, message });
 			return;
 		}
 		if (target.destination) {
 			try {
-				this.#appendMessage(target.destination, message);
+				this.transcript.append(target.destination, message);
 			} finally {
-				void this.#releaseSessionTarget(target);
+				void this.transcript.release(target);
 			}
 			return;
 		}
-		void this.#appendOwnedMessage(target, message).catch(error => {
+		void this.transcript.appendOwned(target, message).catch(error => {
 			logger.error("Failed to record bash result in its owning session", { error: String(error) });
 		});
 	}
@@ -204,7 +178,7 @@ export class BashRunner {
 		if (this.#pendingMessages.length === 0) return;
 		const pending = this.#pendingMessages;
 		this.#pendingMessages = [];
-		for (const { target, message } of pending) await this.#appendOwnedMessage(target, message);
+		for (const { target, message } of pending) await this.transcript.appendOwned(target, message);
 	}
 
 	/** Runs a leaf rewrite while retaining in-flight bash on its originating branch. */
@@ -221,85 +195,24 @@ export class BashRunner {
 		}
 	}
 
-	/** Snapshots the owner of in-flight bash before a session or branch transition. */
-	beginSessionTransition(options?: { persistDetached?: boolean }): BashSessionTransition {
-		const oldTarget = this.#sessionTarget;
-		let detachedManager: SessionManager | undefined;
-		let resolveOld: ((destination: BashAppendDestination) => void) | undefined;
-		if (oldTarget.refs > 0) {
-			detachedManager = this.#host.sessionManager.cloneCurrentSession({ persist: options?.persistDetached });
-			const pendingOld = Promise.withResolvers<BashAppendDestination>();
-			oldTarget.destination = undefined;
-			oldTarget.pending = pendingOld.promise;
-			resolveOld = pendingOld.resolve;
-		}
-		const pendingNew = Promise.withResolvers<BashAppendDestination>();
-		return {
-			oldTarget,
-			newTarget: {
-				sessionId: this.#host.sessionManager.getSessionId(),
-				refs: 0,
-				pending: pendingNew.promise,
-			},
-			oldSessionId: this.#host.sessionManager.getSessionId(),
-			oldSessionFile: this.#host.sessionManager.getSessionFile(),
-			oldLeafId: this.#host.sessionManager.getLeafId(),
-			detachedManager,
-			resolveOld,
-			resolveNew: pendingNew.resolve,
-		};
+	/** Snapshots the owner of in-flight user execution before a transcript transition. */
+	beginSessionTransition(options?: { persistDetached?: boolean }): ExecutionSessionTransition {
+		return this.transcript.beginSessionTransition(options);
 	}
 
-	/** Adopts a transition's new target as the live bash owner. */
-	markSessionTransition(transition: BashSessionTransition): void {
-		transition.newTarget.sessionId = this.#host.sessionManager.getSessionId();
-		this.#sessionTarget = transition.newTarget;
+	markSessionTransition(transition: ExecutionSessionTransition): void {
+		this.transcript.markSessionTransition(transition);
 	}
 
-	/** Resolves destinations opened by beginSessionTransition. */
-	finishSessionTransition(transition: BashSessionTransition, success: boolean): void {
-		const manager = this.#host.sessionManager;
-		const currentDestination: BashAppendDestination = { kind: "current", manager };
-		let oldDestination: BashAppendDestination = currentDestination;
-		if (success && transition.resolveOld) {
-			const currentFile = manager.getSessionFile();
-			const sameFile =
-				transition.oldSessionFile === currentFile ||
-				(transition.oldSessionFile !== undefined &&
-					currentFile !== undefined &&
-					path.resolve(transition.oldSessionFile) === path.resolve(currentFile));
-			const sameSession = transition.oldSessionId === manager.getSessionId() && sameFile;
-			if (sameSession) {
-				oldDestination =
-					transition.oldLeafId === manager.getLeafId()
-						? currentDestination
-						: { kind: "branch", manager, parentId: transition.oldLeafId };
-			} else if (transition.detachedManager) {
-				oldDestination = { kind: "detached", manager: transition.detachedManager };
-			}
-		}
-		if (transition.resolveOld) {
-			transition.oldTarget.pending = undefined;
-			transition.oldTarget.destination = oldDestination;
-			transition.resolveOld(oldDestination);
-		}
-		transition.newTarget.pending = undefined;
-		transition.newTarget.destination = currentDestination;
-		if (!success) transition.newTarget.sessionId = manager.getSessionId();
-		transition.resolveNew(currentDestination);
-		// The left session's persistent shells are unreachable under the new id; drop
-		// them as dispose does, rather than holding each one until process exit.
-		if (success && transition.oldSessionId !== manager.getSessionId()) {
+	finishSessionTransition(transition: ExecutionSessionTransition, success: boolean): void {
+		this.transcript.finishSessionTransition(transition, success);
+		// Shell lifecycle remains bash-owned; transcript ownership is shared with eval.
+		if (success && transition.oldSessionId !== this.#host.sessionManager.getSessionId()) {
 			releaseShellSessions(transition.oldSessionId);
 		}
-		if (transition.detachedManager && (oldDestination.kind !== "detached" || transition.oldTarget.refs === 0)) {
-			void transition.detachedManager.close().catch(error => {
-				logger.warn("Failed to close detached bash session writer", { error: String(error) });
-			});
-		}
 	}
 
-	async #saveOriginalArtifact(target: BashSessionTarget, originalText: string): Promise<string | undefined> {
+	async #saveOriginalArtifact(target: ExecutionSessionTarget, originalText: string): Promise<string | undefined> {
 		try {
 			const destination = target.destination ?? (await target.pending);
 			return await destination?.manager.saveArtifact(originalText, "bash-original");
@@ -328,53 +241,17 @@ export class BashRunner {
 		};
 	}
 
-	#captureSessionTarget(): BashSessionTarget {
-		this.#sessionTarget.refs++;
-		return this.#sessionTarget;
-	}
-
-	async #releaseSessionTarget(target: BashSessionTarget): Promise<void> {
-		if (target.refs <= 0) throw new Error("Bash session target released more than once");
-		target.refs--;
-		if (target.refs === 0 && target.destination?.kind === "detached") await target.destination.manager.close();
-	}
-
-	#appendMessage(destination: BashAppendDestination, message: BashExecutionMessage): void {
-		switch (destination.kind) {
-			case "current":
-				this.#host.agent.appendMessage(message);
-				destination.manager.appendMessage(message);
-				break;
-			case "detached":
-				destination.manager.appendMessage(message);
-				break;
-			case "branch":
-				destination.parentId = destination.manager.appendMessageToBranch(message, destination.parentId);
-				break;
-		}
-	}
-
-	async #appendOwnedMessage(target: BashSessionTarget, message: BashExecutionMessage): Promise<void> {
-		try {
-			const destination = target.destination ?? (await target.pending);
-			if (!destination) throw new Error("Bash session target has no append destination");
-			this.#appendMessage(destination, message);
-		} finally {
-			await this.#releaseSessionTarget(target);
-		}
-	}
-
 	async #recordResultForTarget(
-		target: BashSessionTarget,
+		target: ExecutionSessionTarget,
 		command: string,
 		result: BashResult,
 		options?: BashExecuteOptions,
 	): Promise<void> {
 		const message = this.#createMessage(command, result, options);
-		if (this.#host.isStreaming() && target === this.#sessionTarget) {
+		if (this.#host.isStreaming() && this.transcript.isCurrent(target)) {
 			this.#pendingMessages.push({ target, message });
 		} else {
-			await this.#appendOwnedMessage(target, message);
+			await this.transcript.appendOwned(target, message);
 		}
 		try {
 			options?.onRecorded?.(message);
