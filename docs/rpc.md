@@ -1640,13 +1640,17 @@ MUST read it instead of hardcoding a list: a command moves to `headless` the
 release it gains a headless handler, with no host change. Skill, extension,
 custom, MCP and file commands are always `headless`.
 
-`prompt` text that starts with `/` goes through the same builtin dispatcher the
-terminal editor uses. A `tui` command is never sent to the model: the response
-is `{ success: false, command: "prompt", error: "/settings needs the terminal UI", code: "command_requires_tui" }`
-(for `abort_and_prompt`, a `prompt_result` with `status: "error"`). An extension
-or custom command of the same name runs instead, as in the terminal. Slash text
-that names no command, such as a file path, is still ordinary chat. ACP clients
-keep receiving only the headless commands.
+`prompt` and `abort_and_prompt` text that starts with `/` goes through the same
+headless builtin dispatcher after extension input hooks. A `tui` command is never
+sent to the model: `prompt` responds with
+`{ success: false, command: "prompt", error: "/settings needs the terminal UI", code: "command_requires_tui" }`.
+`abort_and_prompt` aborts the old turn and acknowledges first, then emits one
+`prompt_result` with `status: "error"` and `agentInvoked: false` for a terminal-only
+command, or a local completion for a builtin such as bare `/personality`.
+Agent-invoking builtins such as `/notice` keep their normal transformation and
+complete after their own work. An extension or custom command of the same name
+runs instead, as in the terminal. Slash text that names no command, such as a
+file path, is still ordinary chat. ACP clients keep receiving only the headless commands.
 
 With the `command_completions` capability, `get_command_completions { command, prefix }`
 returns `{ items }`, the argument completions a terminal user would see:

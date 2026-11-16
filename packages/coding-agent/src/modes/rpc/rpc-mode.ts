@@ -1688,64 +1688,64 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				});
 				if (skillResult === "cancelled") return { kind: "cancelled" };
 				if (skillResult) return { kind: "admitted", userEntryId: skillResult.userEntryId };
-				const builtinAbort = new AbortController();
-				builtinCommandAborts.add(builtinAbort);
-				let backgroundedBuiltin = false;
-				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
-					session,
-					sessionManager: session.sessionManager,
-					settings: session.settings,
-					cwd: session.sessionManager.getCwd(),
-					output: text => output({ type: "command_output", text }),
-					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: reloadPluginState,
-					mcpManager: ctx.mcpManager,
-					reconnectMcpServer: ctx.mcpManager
-						? async (name, selected) => {
-								const manager = ctx.mcpManager!;
-								const state = await reconnectMcpManagerServer(manager, name, selected);
-								if (state) await session.refreshMCPTools(manager.getTools());
-								return state;
-							}
-						: undefined,
-					signal: builtinAbort.signal,
-					runCommandInBackground: task => {
-						backgroundedBuiltin = true;
-						trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
-					},
-					notifyTitleChanged: async () => {
-						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
-					},
-					notifyConfigChanged: async () => {
-						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-					},
-				});
-				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
-				if (!isCurrent()) return { kind: "cancelled" };
-				if (builtinResult !== false) {
-					if (!("prompt" in builtinResult)) {
-						if (builtinResult.agentInvoked === true) {
-							void session.waitForIdle().then(
-								() => promptResults.settle(ticket),
-								(cause: unknown) =>
-									promptResults.fail(ticket, cause instanceof Error ? cause.message : String(cause)),
-							);
-							return { kind: "builtin-agent" };
+			}
+			const builtinAbort = new AbortController();
+			builtinCommandAborts.add(builtinAbort);
+			let backgroundedBuiltin = false;
+			const builtinResult = await executeAcpBuiltinSlashCommand(text, {
+				session,
+				sessionManager: session.sessionManager,
+				settings: session.settings,
+				cwd: session.sessionManager.getCwd(),
+				output: text => output({ type: "command_output", text }),
+				refreshCommands: emitAvailableCommandsUpdate,
+				reloadPlugins: reloadPluginState,
+				mcpManager: ctx.mcpManager,
+				reconnectMcpServer: ctx.mcpManager
+					? async (name, selected) => {
+							const manager = ctx.mcpManager!;
+							const state = await reconnectMcpManagerServer(manager, name, selected);
+							if (state) await session.refreshMCPTools(manager.getTools());
+							return state;
 						}
-						return { kind: "local" };
+					: undefined,
+				signal: builtinAbort.signal,
+				runCommandInBackground: task => {
+					backgroundedBuiltin = true;
+					trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
+				},
+				notifyTitleChanged: async () => {
+					output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+				},
+				notifyConfigChanged: async () => {
+					output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+				},
+			});
+			if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
+			if (!isCurrent()) return { kind: "cancelled" };
+			if (builtinResult !== false) {
+				if (!("prompt" in builtinResult)) {
+					if (builtinResult.agentInvoked === true) {
+						void session.waitForIdle().then(
+							() => promptResults.settle(ticket),
+							(cause: unknown) =>
+								promptResults.fail(ticket, cause instanceof Error ? cause.message : String(cause)),
+						);
+						return { kind: "builtin-agent" };
 					}
-					text = builtinResult.prompt;
-				} else {
-					// A builtin that needs the terminal UI is refused here, never sent to the model as chat. An
-					// extension or custom command of the same name runs instead, as it does in the TUI.
-					const tuiOnly = lookupTuiOnlyBuiltin(text);
-					if (
-						tuiOnly &&
-						!session.isExtensionCommand(text) &&
-						!session.customCommands.some(loaded => loaded.command.name === tuiOnly.name)
-					) {
-						return { kind: "needs-tui", name: tuiOnly.name };
-					}
+					return { kind: "local" };
+				}
+				text = builtinResult.prompt;
+			} else {
+				// A builtin that needs the terminal UI is refused here, never sent to the model as chat. An
+				// extension or custom command of the same name runs instead, as it does in the TUI.
+				const tuiOnly = lookupTuiOnlyBuiltin(text);
+				if (
+					tuiOnly &&
+					!session.isExtensionCommand(text) &&
+					!session.customCommands.some(loaded => loaded.command.name === tuiOnly.name)
+				) {
+					return { kind: "needs-tui", name: tuiOnly.name };
 				}
 			}
 			const customCommandResult = await executeCustomPromptCommand(text);
@@ -1873,6 +1873,8 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				abortBuiltinCommands("RPC command aborted by host");
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				const ticket = promptResults.begin(id);
+				// Local builtin/refusal results also belong to this connection, without a model run owner.
+				ticket.route = output;
 				void dispatchOrderedUserInput(command, ticket).then(
 					outcome => {
 						if (outcome.kind === "cancelled") promptResults.settle(ticket);

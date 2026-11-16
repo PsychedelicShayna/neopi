@@ -5,6 +5,8 @@ import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 export interface RpcChildOptions {
 	/** Bun runtime arguments (e.g. a test-only preload), before the CLI entrypoint. */
 	bunArgs?: string[];
+	/** Source runtime fixture instead of the normal CLI entrypoint. */
+	entrypoint?: string;
 	/** Extra CLI arguments appended after `--mode <mode>`. */
 	args?: string[];
 	/** Include discovered extensions and custom commands in the child. */
@@ -45,7 +47,7 @@ export class RpcChild {
 			[
 				"bun",
 				...(options.bunArgs ?? []),
-				path.join(packageRoot, "src", "cli.ts"),
+				options.entrypoint ?? path.join(packageRoot, "src", "cli.ts"),
 				"--mode",
 				options.mode ?? "rpc",
 				...(options.enableExtensions ? [] : ["--no-extensions"]),

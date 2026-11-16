@@ -26,6 +26,7 @@ Read `state` before a write. Pass `if` revisions on draft and surface commands. 
 
 - On a TUI-owned session, `input` and `slash` do exactly what a human typing and pressing Enter does: the text is placed in the composer and the editor's own submit handler runs, so the same slash dispatcher, extension `input` hooks, deferred-draft handling and queueing apply. Terminal-only commands (`/settings`, `/tree`, `/hotkeys`, ...) therefore open their UI in the pane; the reply is `{ delivery: "started" }`, not the command's result. Read the effect with `state`, `dialogs` or `screen`.
 - A headless session (`rpc`, `print`) has no composer, so `input`/`slash` answer `code: "no_tui"`. Send the text as an RPC `prompt` instead: it runs through the same builtin dispatcher, headless commands run, and a `tui` command answers `code: "command_requires_tui"` without reaching the model.
+- RPC `abort_and_prompt` applies the same headless builtin/refusal rules after aborting the old turn. Its acknowledgement precedes the new input's `prompt_result`; a refused terminal command reports `status: "error"` and `agentInvoked: false`.
 - `get_command_completions { command, prefix }` is served over `rpc` for either kind of session; see [Available commands](./rpc.md#available-commands).
 
 ### Dictation over control
