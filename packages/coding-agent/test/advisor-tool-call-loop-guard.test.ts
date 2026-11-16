@@ -19,7 +19,7 @@ import { finalizeSubagentLifecycle } from "@oh-my-pi/pi-coding-agent/task/execut
 import { TempDir } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { AdvisorLoopGuard } from "../src/advisor/loop-guard";
-import { cfgAdvisorReviewInterval } from "../src/advisor/settings";
+import { cfgAdvisorReviewInterval, cfgAdvisorSyncBacklog } from "../src/advisor/settings";
 import { activateTodoTool, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const zeroUsage = {
@@ -335,14 +335,12 @@ describe("advisor tool-call loop guard", () => {
 	});
 
 	it("cancels reviews of the handoff a deferred concern continues and reviews the fix instead", async () => {
-		// The reported session: a concern deferred during the run steers a
-		// continuation at the final boundary while the review of the pre-fix
-		// handoff is still queued (catch-up off). That review would re-raise the
-		// issue as a blocker against the fix in progress; it is cancelled, and the
-		// continuation's final boundary reviews pre- and post-fix work together.
+		// Finish the WIP review before the primary handoff so the concern really
+		// is reserved for on-yield delivery. Only the handoff review runs with
+		// catch-up off; it must be superseded and reviewed with the fix instead.
 		const completions = (context: Context) => JSON.stringify(context.messages).split("primary complete").length - 1;
-		const { reviewStarts } = createAdvisor(
-			{ "advisor.syncBacklog": "off" },
+		const { advisor, reviewStarts } = createAdvisor(
+			{ "advisor.syncBacklog": "1", "advisor.delivery.concern": "on-yield" },
 			0,
 			undefined,
 			1,
@@ -356,12 +354,55 @@ describe("advisor tool-call loop guard", () => {
 			},
 		);
 		if (!session) throw new Error("Expected live session");
+		const live = session;
+		const primaryStream = live.agent.streamFn;
+		let primaryRequests = 0;
+		live.agent.streamFn = (model, context, options) => {
+			if (++primaryRequests === 2) cfgAdvisorSyncBacklog.set(live.settings, "off");
+			return primaryStream(model, context, options);
+		};
+
+		// If the handoff review reaches generation before run-end delivery,
+		// keep its verdict in flight until supersession. Do not rely on relative
+		// microtask timing between the primary unwind and advisor maintenance.
+		const cancelledHandoffReviews: AbortSignal[] = [];
+		const staleReview = createMockModel({
+			provider: "anthropic",
+			handler: async (_context, options) => {
+				const signal = options?.signal;
+				if (!signal) throw new Error("Expected cancellable advisor review");
+				cancelledHandoffReviews.push(signal);
+				const aborted = Promise.withResolvers<void>();
+				if (signal.aborted) aborted.resolve();
+				else signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+				await aborted.promise;
+				return {
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "hash pin still present", severity: "blocker" },
+						},
+					],
+				};
+			},
+		});
+		const advisorStream = advisor.streamFn;
+		advisor.streamFn = (model, context, options) =>
+			completions(context) === 1
+				? staleReview.stream(model, context, options)
+				: advisorStream(model, context, options);
 
 		await session.prompt("only update");
 		await session.agent.waitForIdle();
 		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
 		await session.agent.waitForIdle();
 		const messages = session.agent.state.messages;
+		expect(completions(reviewStarts[0]!)).toBe(0);
+		expect(cancelledHandoffReviews.every(signal => signal.aborted)).toBe(true);
+		expect(
+			messages.filter(message => message.role === "custom" && JSON.stringify(message).includes("drop the hash pin")),
+		).toHaveLength(1);
 		expect(messages.some(message => JSON.stringify(message).includes("hash pin still present"))).toBe(false);
 		expect(
 			messages.filter(m => m.role === "assistant" && JSON.stringify(m.content).includes("primary complete")),
