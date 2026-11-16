@@ -163,6 +163,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- RPC and RPC-UI with `--exit-with-parent` now honor the ten-second stdin-EOF ceiling during startup, cleanup and blocked output delivery ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).
 - ACP clients now see the `--models` scope in their model picker, like the TUI's scoped `/models` list, instead of every model from every configured provider, which clients that cap the list (T3 Code keeps 256) truncated.
 - RPC clients can set and clear transcript entry labels with `set_label` instead of receiving an unknown-command error.
 - `cfg://` typo suggestions recognize dotted setting paths, and saving a session setting no longer warns about the session override that the save itself clears.

@@ -38,6 +38,41 @@ describe("--exit-with-parent for RPC", () => {
 		expect(RPC_INPUT_CLOSED_TEARDOWN_MS).toBeLessThanOrEqual(10_000);
 	});
 
+	test.each(["rpc", "rpc-ui"] as const)(
+		// A real subprocess exercises the platform's hard-exit timer; parent fake timers cannot advance it.
+		"%s stdin EOF bounds a non-dialog session_start wait from input closure",
+		async mode => {
+			using dir = TempDir.createSync("@rpc-eof-startup-");
+			const startedFile = dir.join("started");
+			const extensionFile = dir.join("slow-start.ts");
+			await Bun.write(
+				extensionFile,
+				`export default pi => {
+					pi.on("session_start", async () => {
+						await Bun.write(${JSON.stringify(startedFile)}, "started");
+						await Bun.sleep(20_000);
+					});
+				};`,
+			);
+			const child = await RpcChild.spawn({ mode, args: ["--exit-with-parent", "--extension", extensionFile] });
+			let deadline: Timer | undefined;
+			try {
+				expect(await waitFor(() => fs.existsSync(startedFile), 30_000)).toBe(true);
+				const started = performance.now();
+				child.process.stdin.end();
+				const timedOut = Promise.withResolvers<never>();
+				deadline = setTimeout(() => timedOut.reject(new Error("RPC exceeded the EOF ceiling")), 12_000);
+				expect(await Promise.race([child.process.exited, timedOut.promise])).toBe(129);
+				expect(performance.now() - started).toBeLessThan(12_000);
+			} finally {
+				clearTimeout(deadline);
+				child.process.kill("SIGKILL");
+				await child.dispose(0);
+			}
+		},
+		45_000,
+	);
+
 	test("stdin EOF aborts a running bash command and exits within the budget, leaving no descendants", async () => {
 		using dir = TempDir.createSync("@rpc-eof-");
 		const pidFile = path.join(dir.path(), "sleep.pid");
@@ -61,7 +96,7 @@ describe("--exit-with-parent for RPC", () => {
 			expect(alive(pid)).toBe(true);
 			const started = Date.now();
 			child.process.stdin.end();
-			await child.process.exited;
+			await child.dispose(12_000);
 			expect(Date.now() - started).toBeLessThan(RPC_INPUT_CLOSED_TEARDOWN_MS + 2_000);
 			expect(await waitFor(() => !alive(pid), 5_000)).toBe(true);
 		} finally {
@@ -78,12 +113,16 @@ describe("--exit-with-parent for RPC", () => {
 		using dir = TempDir.createSync("@rpc-eof-default-");
 		const doneFile = path.join(dir.path(), "done");
 		const child = await RpcChild.spawn();
-		await child.waitFor(frame => frame.type === "ready");
-		const pending = child.request({ type: "bash", command: `sleep 2; echo ok > ${doneFile}` }, 60_000);
-		child.process.stdin.end();
-		const response = await pending;
-		expect(response).toMatchObject({ type: "response", command: "bash", success: true });
-		expect(fs.existsSync(doneFile)).toBe(true);
-		await child.process.exited;
+		try {
+			await child.waitFor(frame => frame.type === "ready");
+			const pending = child.request({ type: "bash", command: `sleep 2; echo ok > ${doneFile}` }, 60_000);
+			child.process.stdin.end();
+			const response = await pending;
+			expect(response).toMatchObject({ type: "response", command: "bash", success: true });
+			expect(fs.existsSync(doneFile)).toBe(true);
+			expect(await child.dispose()).toBe(0);
+		} finally {
+			await child.dispose();
+		}
 	}, 90_000);
 });

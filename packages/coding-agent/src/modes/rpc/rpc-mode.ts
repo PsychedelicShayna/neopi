@@ -3233,9 +3233,18 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 		message => output(error(undefined, "parse", message)),
 	);
-	// EOF during startup must fail a pending startup dialog, not strand it.
+	// Start the one EOF ceiling before startup or cleanup can await anything.
+	// Keep it referenced until process termination, including final output delivery.
 	void inputClosed.then(
-		() => pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed"),
+		() => {
+			if (options.exitOnInputClosed) {
+				setTimeout(
+					() => void postmortem.exitProcess(EXIT_WITH_PARENT_EXIT_CODE),
+					RPC_INPUT_CLOSED_TEARDOWN_MS,
+				);
+			}
+			pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
+		},
 		() => {},
 	);
 	// Set up extensions with RPC-based UI context
@@ -3465,22 +3474,14 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 	});
 
-	/** The host is gone: abort, stop owned work, and exit within the budget even if teardown hangs. */
+	/** Best-effort teardown under the deadline already armed by input closure. */
 	const exitAfterInputClosed = async (): Promise<never> => {
-		const hardExit = setTimeout(
-			() => void postmortem.exitProcess(EXIT_WITH_PARENT_EXIT_CODE),
-			RPC_INPUT_CLOSED_TEARDOWN_MS,
+		await tearDownExitTarget(
+			{ session, mcpManager: options.mcpManager },
+			EXIT_WITH_PARENT_TEARDOWN_MS,
+			"RPC host closed its input",
 		);
-		try {
-			await tearDownExitTarget(
-				{ session, mcpManager: options.mcpManager },
-				EXIT_WITH_PARENT_TEARDOWN_MS,
-				"RPC host closed its input",
-			);
-			await liveBridge.stop().catch(() => {});
-		} finally {
-			clearTimeout(hardExit);
-		}
+		await liveBridge.stop().catch(() => {});
 		return disposeAndExit();
 	};
 
