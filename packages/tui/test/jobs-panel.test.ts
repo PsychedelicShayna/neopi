@@ -119,7 +119,8 @@ describe("JobsSheet", () => {
 		expect(source.cancel).toHaveBeenCalledTimes(1);
 	});
 
-	it("retains settled output across eviction and a filter-driven selection until another job is selected", () => {
+	it("retains settled output across eviction and a filter-driven selection until another job is selected", async () => {
+		await initTheme();
 		let jobs: JobsPanelSnapshot = JOBS;
 		const details: Record<string, JobsPanelDetail | undefined> = { ...DETAILS };
 		const sheet = new JobsSheet({ load: () => jobs, inspect: id => details[id], close: vi.fn() });
