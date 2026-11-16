@@ -241,6 +241,10 @@ installers.
   on a later interactive launch, at most once per 24 hours unless the channel changes.
   Running sessions keep their loaded version. Project/session overrides cannot
   silently replace a machine-wide executable.
+  The recovery updater reads persisted global YAML with the same `config.toml`
+  (or legacy `settings.toml`) whole-table precedence as Settings. Explicit channel
+  changes write to the active TOML file when present, leaving underlying YAML
+  unchanged; unreadable or conflicting settings disable automatic replacement.
 - Every install selects the exact platform asset, verifies its release's
   `SHA256SUMS.txt`, smoke-checks the staged executable and retains `npi.previous`.
 - POSIX replacement is atomic. Windows uses **recoverable replacement**:
