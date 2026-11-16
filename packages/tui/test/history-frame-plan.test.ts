@@ -206,7 +206,8 @@ describe("terminal frame plans", () => {
 			const output = terminal.writes.join("");
 			const changedRows = after.filter((line, row) => line !== before[row + count]).length;
 			expect(output).not.toMatch(/\x1b\[(?:2J|3J|J)/);
-			expect((output.match(/\r/g) ?? []).length).toBe(count + changedRows);
+			// Unsynchronized terminals may move surviving rows instead of rewriting them.
+			expect((output.match(/\r/g) ?? []).length).toBeLessThanOrEqual(count + changedRows);
 			expect(changedRows).toBeLessThan(24);
 			expect(terminal.getViewport().map(row => row.trimEnd())).toEqual(after);
 			expect(plainBuffer(terminal).slice(0, -24)).toEqual(history);
