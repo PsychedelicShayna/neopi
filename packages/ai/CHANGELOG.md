@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Codex model changes preserve active requests through transport recovery and close retired connections after their final request finishes ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Preserve terminal credential-scope refusals through transport, provider and turn error classification so rejected origins, redirects and replacement certificates do not enter retry loops ([#649](https://github.com/PsychedelicShayna/neopi/issues/649), [#651](https://github.com/PsychedelicShayna/neopi/issues/651)).
 - Recover from a broker access token rejected immediately after refresh, coalescing concurrent retries without rotating sibling accounts ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).
 - Share a broker expiry refresh between usage checks and delayed concurrent consumers instead of rotating a fresh token again ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).

@@ -150,6 +150,16 @@ failures, stale-anchor rejections, or disabled continuation). Such entries remai
 until their existing session/provider owner releases them, so a temporary sibling
 cannot erase a later network downgrade or change the identity of an outstanding lease.
 
+### Codex model-switch retirement
+
+Codex requests lease their provider-state generation before asynchronous request
+preparation and retain it through transport recovery. A model switch removes the
+generation from the session map immediately, so the next request gets fresh state,
+but calls `retire()` rather than force-closing its sockets. Retirement closes the
+generation only after its last request or prewarm releases it. Idle generations
+close immediately. `close()` remains the force-close operation for disposal;
+request abort signals retain their existing cancellation behavior.
+
 ### OpenRouter native finish reasons
 
 Chat Completions and Responses treat explicit `native_finish_reason` values

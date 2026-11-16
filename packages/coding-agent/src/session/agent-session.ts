@@ -14877,7 +14877,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (!state) continue;
 
 			try {
-				state.close();
+				if (state.retire) state.retire();
+				else state.close();
 			} catch (error) {
 				logger.warn("Failed to close provider session state during model switch", {
 					providerKey,

@@ -450,6 +450,8 @@ export interface CodexProviderSessionState extends ProviderSessionState {
 	metadataSessions: Map<string, CodexMetadataSessionState>;
 	/** `configuration_update` effort baselines, keyed by model + session. */
 	effortControls: Map<string, OpenAIEffortControlState<ReasoningConfig["effort"]>>;
+	/** Lease this generation through request preparation, streaming and transport recovery. */
+	retainRequest(): () => void;
 }
 
 /** Request classification encoded in Codex turn metadata. */
@@ -1251,6 +1253,7 @@ function createCodexRequestContext(
 		isolateCompactionTransport: boolean;
 		startNewTurn?: boolean;
 		turnStartedAtUnixMs?: number;
+		providerSessionState?: CodexProviderSessionState;
 	},
 ): CodexRequestContext {
 	const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -1275,7 +1278,8 @@ function createCodexRequestContext(
 		body: transformedBody,
 	};
 
-	const providerSessionState = getCodexProviderSessionState(options?.providerSessionState);
+	const providerSessionState =
+		contextOptions.providerSessionState ?? getCodexProviderSessionState(options?.providerSessionState);
 	const isolatedTransportState =
 		contextOptions.isolateCompactionTransport && options?.codexCompaction
 			? createCodexProviderSessionState()
@@ -1347,11 +1351,13 @@ async function buildCodexRequestContext(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
+	providerSessionState: CodexProviderSessionState | undefined,
 ): Promise<CodexRequestContext> {
 	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const transformedBody = await buildTransformedCodexRequestBody(model, context, options, promptCacheKey);
 	return createCodexRequestContext(model, transformedBody, options, {
 		isolateCompactionTransport: true,
+		providerSessionState,
 		startNewTurn: options?.codexCompaction ? undefined : !isCodexWithinTurnContinuation(context),
 		turnStartedAtUnixMs: options?.codexCompaction ? undefined : getCodexTurnStartedAtUnixMs(context),
 	});
@@ -1383,6 +1389,7 @@ export async function buildTransformedCodexRequestBody(
 	// Retention candidates are serialization-only: they must not synthesize a user prompt.
 	ensureVisibleInput = true,
 ): Promise<RequestBody> {
+	const providerState = getCodexProviderSessionState(options?.providerSessionState);
 	const input = convertMessages(model, context);
 	const params: RequestBody = {
 		model: model.requestModelId ?? model.id,
@@ -1431,7 +1438,7 @@ export async function buildTransformedCodexRequestBody(
 	};
 
 	const body = await transformRequestBody(params, model, codexOptions, { developerMessages, ensureVisibleInput });
-	applyCodexStableEffort(model, body, options);
+	applyCodexStableEffort(model, body, options, providerState);
 	return body;
 }
 
@@ -1445,11 +1452,11 @@ function applyCodexStableEffort(
 	model: Model<"openai-codex-responses">,
 	body: RequestBody,
 	options: OpenAICodexResponsesOptions | undefined,
+	providerState: CodexProviderSessionState | undefined,
 ): void {
 	if (!model.compat.supportsConfigurationUpdate || options?.codexCompaction) return;
 	const effort = body.reasoning?.effort;
 	if (effort === undefined || effort === "none" || !body.input) return;
-	const providerState = getCodexProviderSessionState(options?.providerSessionState);
 	const sessionId = normalizeOpenAIPromptCacheKey(options?.sessionId);
 	if (!providerState || !sessionId) return;
 	const state = resolveOpenAIEffortControlState(
@@ -1554,6 +1561,7 @@ export async function openCodexCompactionEventStream(
 		requestBodyForState: RequestBody;
 		transport: CodexTransport;
 	};
+	const release = getCodexProviderSessionState(options.providerSessionState)?.retainRequest();
 	try {
 		requestContext = createCodexRequestContext(model, toCodexRequestBody(body), options, {
 			isolateCompactionTransport: false,
@@ -1561,6 +1569,7 @@ export async function openCodexCompactionEventStream(
 		initial = await openInitialCodexEventStream(model, options, requestSetup, requestContext);
 	} catch (error) {
 		requestSetup.requestAbortController.abort();
+		release?.();
 		throw error;
 	}
 
@@ -1570,7 +1579,7 @@ export async function openCodexCompactionEventStream(
 		// replacement history makes that baseline stale for the next normal turn.
 		resetCodexWebSocketAppendState(requestContext.websocketState);
 	}
-	return streamCodexCompactionEvents(model, options, requestSetup, requestContext, initial);
+	return streamCodexCompactionEvents(model, options, requestSetup, requestContext, initial, release);
 }
 
 async function* streamCodexCompactionEvents(
@@ -1583,6 +1592,7 @@ async function* streamCodexCompactionEvents(
 		requestBodyForState: RequestBody;
 		transport: CodexTransport;
 	},
+	release: (() => void) | undefined,
 ): AsyncGenerator<Record<string, unknown>> {
 	let completed = false;
 	const websocketState = requestContext.websocketState;
@@ -1639,6 +1649,7 @@ async function* streamCodexCompactionEvents(
 			requestContext.turnState.value = previousTurnState;
 			if (websocketState) websocketState.modelsEtag = previousModelsEtag;
 		}
+		release?.();
 	}
 }
 
@@ -3211,9 +3222,11 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 		const requestSetup = createRequestSetup(options);
 		let processingContext: CodexStreamProcessor | undefined;
 		let requestContext: CodexRequestContext | undefined;
+		const providerState = getCodexProviderSessionState(options?.providerSessionState);
+		const release = providerState?.retainRequest();
 
 		try {
-			requestContext = await buildCodexRequestContext(model, context, options);
+			requestContext = await buildCodexRequestContext(model, context, options, providerState);
 			const initialTransport = await openInitialCodexEventStream(model, options, requestSetup, requestContext);
 			const runtime = new CodexStreamRuntime({
 				...initialTransport,
@@ -3283,6 +3296,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			stream.end();
 		} finally {
 			requestContext?.isolatedTransportState?.close();
+			release?.();
 		}
 	})();
 
@@ -3320,65 +3334,70 @@ export async function prewarmOpenAICodexResponses(
 	if (!sessionKey || !transportSessionId || !providerSessionState) return;
 	const state = getCodexWebSocketSessionState(sessionKey, transportSessionId, providerSessionState);
 	if (!shouldUseCodexWebSocket(model, state, options?.preferWebsockets)) return;
-	const metadataSession = getOrCreateCodexMetadataSessionState(transportSessionId, providerSessionState);
-	const turnState = getOrCreateCodexTurnState(metadataSession, sessionKey);
-	const codexClientVersion = CODEX_CLIENT_VERSION;
-	const requestIdentity = createCodexCompatibilityIdentity(metadataSession);
-	const attestation = await getCodexAttestationHeader(accountId);
-	const routedRequest: Pick<RequestBody, "model" | "service_tier"> = {
-		model: model.requestModelId ?? model.id,
-	};
-	applyOpenAIServiceTier(routedRequest, options?.serviceTier, model);
-	const headers = logger.time(
-		"prewarmCodex:createHeaders",
-		createCodexHeaders,
-		{ ...model.headers, ...options?.headers },
-		accountId,
-		apiKey,
-		codexClientVersion,
-		promptCacheKey,
-		"websocket",
-		state,
-		turnState,
-		responsesLite,
-		requestIdentity,
-		attestation,
-		routedRequest,
-	);
-	const existing = state.connection;
-	if (
-		existing?.isReserved() ||
-		(state.acceptedSteering !== undefined && state.acceptedSteering.connection === existing)
-	) {
-		return;
-	}
-	if (existing?.isConnecting()) {
-		// Another caller owns this handshake: join it rather than racing it with a
-		// routing-change close once it opens.
-		try {
-			await existing.connect(options?.signal);
-		} catch {
-			return;
-		}
-		if (state.connection === existing && existing.isOpen()) state.prewarmed = true;
-		return;
-	}
+	const release = providerSessionState.retainRequest();
 	try {
-		await logger.time(
-			"prewarmCodex:establishWs",
-			getOrCreateCodexWebSocketConnection,
+		const metadataSession = getOrCreateCodexMetadataSessionState(transportSessionId, providerSessionState);
+		const turnState = getOrCreateCodexTurnState(metadataSession, sessionKey);
+		const codexClientVersion = CODEX_CLIENT_VERSION;
+		const requestIdentity = createCodexCompatibilityIdentity(metadataSession);
+		const attestation = await getCodexAttestationHeader(accountId);
+		const routedRequest: Pick<RequestBody, "model" | "service_tier"> = {
+			model: model.requestModelId ?? model.id,
+		};
+		applyOpenAIServiceTier(routedRequest, options?.serviceTier, model);
+		const headers = logger.time(
+			"prewarmCodex:createHeaders",
+			createCodexHeaders,
+			{ ...model.headers, ...options?.headers },
+			accountId,
+			apiKey,
+			codexClientVersion,
+			promptCacheKey,
+			"websocket",
 			state,
 			turnState,
-			toWebSocketUrl(url),
-			headers,
-			model.provider,
-			options?.signal,
+			responsesLite,
+			requestIdentity,
+			attestation,
+			routedRequest,
 		);
-	} catch (error) {
-		if (error instanceof CodexWebSocketBusyError) return;
-		throw error;
+		const existing = state.connection;
+		if (
+			existing?.isReserved() ||
+			(state.acceptedSteering !== undefined && state.acceptedSteering.connection === existing)
+		) {
+			return;
+		}
+		if (existing?.isConnecting()) {
+			// Another caller owns this handshake: join it rather than racing it with a
+			// routing-change close once it opens.
+			try {
+				await existing.connect(options?.signal);
+			} catch {
+				return;
+			}
+			if (state.connection === existing && existing.isOpen()) state.prewarmed = true;
+			return;
+		}
+		try {
+			await logger.time(
+				"prewarmCodex:establishWs",
+				getOrCreateCodexWebSocketConnection,
+				state,
+				turnState,
+				toWebSocketUrl(url),
+				headers,
+				model.provider,
+				options?.signal,
+			);
+		} catch (error) {
+			if (error instanceof CodexWebSocketBusyError) return;
+			throw error;
+		}
+		state.prewarmed = true;
+	} finally {
+		release();
 	}
-	state.prewarmed = true;
 }
 
 function getCodexCredentialKey(accountId: string | undefined, apiKey: string): string {

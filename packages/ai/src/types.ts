@@ -437,6 +437,8 @@ export function coerceServiceTierByFamily(value: unknown): ServiceTierByFamily |
 
 export interface ProviderSessionState {
 	close(): void;
+	/** Retire this generation after its in-flight requests finish; unlike close, must not interrupt them. */
+	retire?(): void;
 	/** Release one routing session after its final request, preserving shared provider fallbacks. */
 	releaseSession?(sessionId: string): void;
 }

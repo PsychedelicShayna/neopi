@@ -6,7 +6,7 @@
  */
 import { MessagePort, parentPort } from "node:worker_threads";
 import { Agent, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Effort } from "@oh-my-pi/pi-ai";
+import type { Effort, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -33,6 +33,7 @@ import { type RpcFrame, RpcLink } from "../../src/thread/rpc";
 import type { ThreadService } from "../../src/thread/services";
 import { agentsThreadService } from "../../src/thread/services/agents";
 import { identityThreadService } from "../../src/thread/services/identity";
+import { codexModelSwitchAgent } from "../helpers/codex-model-switch";
 
 /** What a worker-side peer handle reports about a session homed elsewhere. */
 export interface PeerReport {
@@ -52,6 +53,8 @@ interface ProbeSessionOptions {
 	thinkingLevelCeiling?: Effort;
 	settings?: Parameters<typeof Settings.isolated>[0];
 	runtimeApiKeys?: Record<string, string>;
+	codexModel?: Model;
+	modelsPath?: string;
 }
 
 /** Operations the test drives on the worker. */
@@ -120,12 +123,14 @@ async function makeSession(id: string, gated: boolean, options: ProbeSessionOpti
 			return { content: ["Done"] };
 		},
 	});
-	const agent = new Agent({
-		getApiKey: () => "test-key",
-		initialState: { model, systemPrompt: ["Test"], tools: [] },
-		convertToLlm,
-		streamFn: mock.stream,
-	});
+	const agent = options.codexModel
+		? codexModelSwitchAgent(options.codexModel)
+		: new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
 	const authStorage = await AuthStorage.create(":memory:");
 	authStorage.keys.setRuntime("anthropic", "test-key");
 	for (const [provider, key] of Object.entries(options.runtimeApiKeys ?? {})) {
@@ -135,7 +140,7 @@ async function makeSession(id: string, gated: boolean, options: ProbeSessionOpti
 		agent,
 		sessionManager: SessionManager.inMemory(),
 		settings: Settings.isolated(options.settings),
-		modelRegistry: new ModelRegistry(authStorage),
+		modelRegistry: new ModelRegistry(authStorage, options.modelsPath),
 		agentId: id,
 		thinkingLevelCeiling: options.thinkingLevelCeiling,
 	});

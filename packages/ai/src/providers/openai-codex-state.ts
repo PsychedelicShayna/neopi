@@ -40,11 +40,26 @@ export function resetOpenAICodexHistoryAfterCompaction(options: OpenAICodexCompa
 
 /** Create isolated Codex transport state for a session or compaction request. */
 export function createCodexProviderSessionState(): CodexProviderSessionState {
+	let activeRequests = 0;
+	let retired = false;
 	const state: CodexProviderSessionState = {
 		webSocketSessions: new Map(),
 		webSocketPublicToPrivate: new Map(),
 		metadataSessions: new Map(),
 		effortControls: new Map(),
+		retainRequest: () => {
+			activeRequests++;
+			let released = false;
+			return () => {
+				if (released) return;
+				released = true;
+				if (--activeRequests === 0 && retired) state.close();
+			};
+		},
+		retire: () => {
+			retired = true;
+			if (activeRequests === 0) state.close();
+		},
 		releaseSession: sessionId => {
 			const normalizedSessionId = normalizeOpenAIPromptCacheKey(sessionId);
 			if (!normalizedSessionId) return;
@@ -82,7 +97,9 @@ function isCodexProviderSessionState(state: ProviderSessionState | undefined): s
 		"metadataSessions" in state &&
 		state.metadataSessions instanceof Map &&
 		"effortControls" in state &&
-		state.effortControls instanceof Map
+		state.effortControls instanceof Map &&
+		"retainRequest" in state &&
+		typeof state.retainRequest === "function"
 	);
 }
 
