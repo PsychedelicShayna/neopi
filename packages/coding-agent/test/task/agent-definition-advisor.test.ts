@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listNamedAdvisors } from "@oh-my-pi/pi-coding-agent/advisor/config";
+import { listNamedAdvisors, loadWatchdogConfigFile } from "@oh-my-pi/pi-coding-agent/advisor/config";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildAgentAdvisorSpawnConfig } from "@oh-my-pi/pi-coding-agent/task/agent-advisor";
 import { parseAgentDefinitionDocument, serializeAgentDefinitionDocument } from "@oh-my-pi/pi-coding-agent/task/agent-definition-document";
@@ -41,10 +41,18 @@ describe("agent advisor frontmatter and spawn configuration", () => {
 
 	test("named advisor instructions expand imports relative to the selected source file", async () => {
 		await Bun.write(path.join(project, ".omp", "instructions.md"), "Imported named advisor instructions");
-		await Bun.write(path.join(project, ".omp", "WATCHDOG.yml"), "advisors:\n  - name: velvet\n    instructions: '@instructions.md'\n");
+		const sourcePath = path.join(project, ".omp", "WATCHDOG.yml");
+		const source = "advisors:\n  - name: velvet\n    instructions: '@instructions.md'\n";
+		await Bun.write(sourcePath, source);
 		const launch = await buildAgentAdvisorSpawnConfig({ advisor: { ref: "velvet", scope: "project-omp" }, settings: Settings.isolated(), cwd: project, agentDir });
 		expect(launch.advisorConfigs?.[0]?.instructions).toContain("Imported named advisor instructions");
-		expect((await listNamedAdvisors(project, agentDir)).find(advisor => advisor.name === "velvet")?.config.instructions).toBe("@instructions.md");
+		expect((await listNamedAdvisors(project, agentDir)).find(advisor => advisor.name === "velvet")).toMatchObject({
+			scope: "project-omp",
+			sourcePath,
+			config: { instructions: launch.advisorConfigs?.[0]?.instructions },
+		});
+		expect((await loadWatchdogConfigFile(sourcePath)).advisors[0]?.instructions).toBe("@instructions.md");
+		expect(await Bun.file(sourcePath).text()).toBe(source);
 	});
 
 	test("private inline model, prompt, cadence and delivery survive load and child settings without catalog writes", async () => {
