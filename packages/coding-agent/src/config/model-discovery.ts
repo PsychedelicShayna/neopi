@@ -24,15 +24,23 @@ import {
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
 	resolveLiteLLMApi,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import { unionAccountCatalogs } from "@oh-my-pi/pi-catalog/provider-models/account-access";
 import {
 	type KindApiKind,
 	type ModelKind,
 	type ModelSpec,
 	type OpenAICompat,
+	type ThinkingConfig,
 	runnerApiKind,
 } from "@oh-my-pi/pi-catalog/types";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, wrapFetchForCredentialScope } from "@oh-my-pi/pi-utils";
+import { Effort, THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
+import { parseServiceTierIds } from "@oh-my-pi/pi-catalog/utils";
+import {
+	CredentialScopeError,
+	type CredentialRequestScope,
+	isRecord,
+	wrapFetchForCredentialScope,
+} from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
 // Default cap on `max_tokens` for auto-discovered models that do not advertise
@@ -46,6 +54,16 @@ import type { ProviderDiscovery } from "./models-config-schema";
 // "socket connection was closed unexpectedly").
 export const DISCOVERY_DEFAULT_CONTEXT_WINDOW = OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 export const DISCOVERY_DEFAULT_MAX_TOKENS = OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS;
+
+/** Provider id NeoProxy logins store keys under; its discovery fetches and unions every key's roster. */
+export const NEOPROXY_PROVIDER_ID = "neoproxy";
+
+/** One stored API key for per-key discovery, with its non-secret account key and request scope. */
+export interface DiscoveryApiKeyAccount extends CredentialRequestScope {
+	/** `apiKeyAccountKey` of the credential; recorded in `Model.accountAccess`. */
+	accountKey: string;
+	apiKey: string;
+}
 
 /**
  * A discovery HTTP failure carrying the response status as a structured field
@@ -217,6 +235,12 @@ export interface DiscoveryContext {
 	 * never persists header values and drops rows that had them.
 	 */
 	getBearerApiKeyResolver(provider: string): Promise<ApiKey | undefined>;
+	/**
+	 * Every stored API key of a per-key discovery provider (NeoProxy), with its
+	 * request scope. Empty when a runtime/config override, env var, or OAuth
+	 * credential authenticates the provider instead of stored keys.
+	 */
+	listApiKeyAccounts?(provider: string): Promise<readonly DiscoveryApiKeyAccount[]>;
 }
 
 type OllamaDiscoveredModelMetadata = {
@@ -958,15 +982,24 @@ function advertisedReasoningEnabled(providerConfig: DiscoveryProviderConfig): bo
 type AdvertisedReasoning =
 	/** The row states it does not reason. */
 	| { kind: "none" }
-	/** The row advertises an effort ladder, and whether it also accepts `none`. */
-	| { kind: "ladder"; efforts: Effort[]; acceptsNone: boolean; defaultLevel?: Effort };
+	/** The row advertises an effort ladder, whether it accepts `none`, its aliases, and whether thinking can be off. */
+	| {
+			kind: "ladder";
+			efforts: Effort[];
+			acceptsNone: boolean;
+			defaultLevel?: Effort;
+			effortMap?: Partial<Record<Effort, Effort>>;
+			requiresEffort?: boolean;
+	  };
 
 /**
  * Read server-advertised reasoning support from an OpenAI-compatible
  * `/v1/models` row. codex-lb nests the Codex registry fields under `metadata`
  * (`supported_reasoning_levels: [{ effort }]`, `default_reasoning_level`);
- * other gateways may advertise the same fields top-level. Returns undefined
- * when the row says nothing usable about reasoning.
+ * other gateways may advertise the same fields top-level, along with
+ * `reasoning_effort_map` (where an unserved request lands) and
+ * `reasoning_required`. Returns undefined when the row says nothing usable
+ * about reasoning.
  *
  * An explicit non-reasoning declaration is reported as `{ kind: "none" }`
  * rather than `undefined`: the caller must be able to tell "this endpoint says
@@ -979,6 +1012,8 @@ function extractAdvertisedReasoning(item: {
 	supported_reasoning_levels?: unknown;
 	default_reasoning_level?: unknown;
 	reasoning?: unknown;
+	reasoning_effort_map?: unknown;
+	reasoning_required?: unknown;
 }): AdvertisedReasoning | undefined {
 	const metadata = isRecord(item.metadata) ? item.metadata : undefined;
 	// codex-lb nests every reasoning field under `metadata`; read the denial from
@@ -990,6 +1025,8 @@ function extractAdvertisedReasoning(item: {
 	if (efforts === undefined) return undefined;
 	const rawDefault = metadata?.default_reasoning_level ?? item.default_reasoning_level;
 	const defaultLevel = advertisedReasoningEffort(rawDefault);
+	const effortMap = extractReasoningEffortMap(metadata?.reasoning_effort_map ?? item.reasoning_effort_map);
+	const requiresEffort = metadata?.reasoning_required ?? item.reasoning_required;
 	return {
 		kind: "ladder",
 		efforts,
@@ -999,6 +1036,9 @@ function extractAdvertisedReasoning(item: {
 		// clamped to the lowest tier.
 		acceptsNone: advisoryEffortEntries(raw).includes("none"),
 		...(defaultLevel !== undefined && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
+		...(effortMap !== undefined ? { effortMap } : {}),
+		// An explicit `false` is kept so it outranks an identity default that locks reasoning on.
+		...(typeof requiresEffort === "boolean" ? { requiresEffort } : {}),
 	};
 }
 
@@ -1009,6 +1049,21 @@ function advisoryEffortEntries(value: unknown): string[] {
 		const raw = isRecord(entry) ? entry.effort : entry;
 		return typeof raw === "string" ? [raw.toLowerCase()] : [];
 	});
+}
+
+/**
+ * A row's requested → served aliases (`{"medium": "high"}` for a low/high/max
+ * route). Any omp effort may be requested; served values must be ladder tiers.
+ */
+function extractReasoningEffortMap(value: unknown): Partial<Record<Effort, Effort>> | undefined {
+	if (!isRecord(value)) return undefined;
+	let effortMap: Partial<Record<Effort, Effort>> | undefined;
+	for (const [rawRequested, rawServed] of Object.entries(value)) {
+		const requested = rawRequested.toLowerCase() as Effort;
+		const served = advertisedReasoningEffort(rawServed);
+		if (served !== undefined && THINKING_EFFORTS.includes(requested)) (effortMap ??= {})[requested] = served;
+	}
+	return effortMap;
 }
 
 /**
@@ -1050,7 +1105,14 @@ function withAdvertisedEfforts(
 		preferredDefault !== undefined && advertised.efforts.includes(preferredDefault)
 			? preferredDefault
 			: advertised.efforts[0];
-	const thinking = { mode: "effort" as const, efforts: advertised.efforts, defaultLevel };
+	// The alias map and the thinking-off lock are wire facts of this row too.
+	const thinking: ThinkingConfig = {
+		mode: "effort",
+		efforts: advertised.efforts,
+		defaultLevel,
+		...(advertised.effortMap !== undefined ? { effortMap: advertised.effortMap } : {}),
+		...(advertised.requiresEffort !== undefined ? { requiresEffort: advertised.requiresEffort } : {}),
+	};
 	if (isAnthropic) {
 		const mode = resolveModelPolicy({ ...spec, reasoning: true }).thinking?.mode ?? "budget";
 		return { ...spec, reasoning: true, thinking: { ...thinking, mode } };
@@ -1159,6 +1221,9 @@ export async function discoverOpenAIModelsList(
 						supported_reasoning_levels?: unknown;
 						default_reasoning_level?: unknown;
 						reasoning?: unknown;
+						reasoning_effort_map?: unknown;
+						reasoning_required?: unknown;
+						service_tiers?: unknown;
 					}>;
 				};
 			}),
@@ -1274,6 +1339,10 @@ export async function discoverOpenAIModelsList(
 		const advertisedReasoning = advertisedReasoningEnabled(providerConfig)
 			? extractAdvertisedReasoning(item)
 			: undefined;
+		// Relays in front of the Codex backend republish its per-model tier list
+		// (bare ids or codex-rs `{ id }` objects; codex-lb nests it under
+		// `metadata`). It is what lets Ultrafast reach an advertising relay row.
+		const serviceTiers = parseServiceTierIds(metadata?.service_tiers ?? item.service_tiers);
 		const spec = {
 			id,
 			name: advertisedName || reference?.name || id,
@@ -1308,6 +1377,7 @@ export async function discoverOpenAIModelsList(
 				contextWindow,
 			),
 			headers: baseHeaders,
+			...(serviceTiers !== undefined ? { serviceTiers } : {}),
 			compat: {
 				supportsStore: false,
 				supportsDeveloperRole: false,
@@ -1419,19 +1489,40 @@ export async function discoverProxyModels(
 			if (!res.ok) {
 				throw new DiscoveryHttpError(res.status, modelsUrl);
 			}
-			return (await res.json()) as {
-				data?: Array<{
-					id?: string;
-					name?: string;
-					supported_endpoint_types?: string[];
-					context_length?: number;
-					metadata?: unknown;
-					supported_reasoning_levels?: unknown;
-					default_reasoning_level?: unknown;
-					reasoning?: unknown;
-				}>;
-			};
+			return (await res.json()) as { data?: ProxyModelEntry[] };
 		});
+	const parse = (payload: { data?: ProxyModelEntry[] }) =>
+		proxyModelsFromPayload(payload.data ?? [], providerConfig, baseUrl, baseHeaders);
+	const keyAccounts =
+		providerConfig.provider === NEOPROXY_PROVIDER_ID
+			? ((await ctx.listApiKeyAccounts?.(providerConfig.provider)) ?? [])
+			: [];
+	if (keyAccounts.length > 0) {
+		// NeoProxy administrators grant models per key: fetch each key's roster and
+		// record which keys serve each model so requests route to a granting key.
+		const catalogs: Model<Api>[][] = [];
+		let rejection: unknown;
+		for (const account of keyAccounts) {
+			let payload: { data?: ProxyModelEntry[] };
+			try {
+				payload = await attempt(
+					{ ...baseHeaders, Authorization: `Bearer ${account.apiKey}` },
+					wrapFetchForCredentialScope(ctx.fetch, account),
+				);
+			} catch (error) {
+				// A revoked key, or one bound to another origin, contributes nothing;
+				// other keys keep their models. Any other failure aborts so the
+				// last-known union stays cached instead of a partial roster.
+				if (!isDiscoveryAuthRejection(error) && !(error instanceof CredentialScopeError)) throw error;
+				rejection ??= error;
+				continue;
+			}
+			const access = { [account.accountKey]: {} };
+			catalogs.push(parse(payload).map(model => ({ ...model, accountAccess: access })));
+		}
+		if (catalogs.length === 0) throw rejection;
+		return unionAccountCatalogs(catalogs);
+	}
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
 	const payload = apiKey
 		? await withAuth(apiKey, (key, resolved) =>
@@ -1441,11 +1532,37 @@ export async function discoverProxyModels(
 				),
 			)
 		: await attempt(baseHeaders);
-	const items = payload.data ?? [];
+	return parse(payload);
+}
+
+type ProxyModelEntry = {
+	id?: string;
+	name?: string;
+	supported_endpoint_types?: string[];
+	context_length?: number;
+	metadata?: unknown;
+	supported_reasoning_levels?: unknown;
+	default_reasoning_level?: unknown;
+	reasoning?: unknown;
+	reasoning_effort_map?: unknown;
+	reasoning_required?: unknown;
+};
+
+function proxyModelsFromPayload(
+	items: readonly ProxyModelEntry[],
+	providerConfig: DiscoveryProviderConfig,
+	baseUrl: string,
+	baseHeaders: Record<string, string>,
+): Model<Api>[] {
 	const discovered: Model<Api>[] = [];
 	for (const item of items) {
-		const id = item.id;
-		if (!id) continue;
+		const advertisedId = item.id;
+		if (!advertisedId) continue;
+		// NeoProxy advertises its served names under its own `neoproxy/` prefix,
+		// which the provider id already supplies: select `neoproxy/<slug>` and
+		// keep sending the advertised name NeoProxy accepts.
+		const id = neoproxySelectorId(providerConfig.provider, advertisedId);
+		const requestModelId = id === advertisedId ? undefined : advertisedId;
 		const endpoints = item.supported_endpoint_types ?? [];
 		const api: Api | undefined = endpoints.includes("anthropic")
 			? "anthropic-messages"
@@ -1454,7 +1571,7 @@ export async function discoverProxyModels(
 				: providerConfig.api;
 		if (!api) continue;
 		const isAnthropic = api === "anthropic-messages";
-		const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+		const reference = resolveModelReference(advertisedId, getBundledModelReferenceIndex());
 		// A proxy that dispatches with its own catalog advertises the ladder it
 		// accepts for each row. That ladder is authoritative over the reference
 		// guess: cross-provider references carry no thinking at all, so rows whose
@@ -1463,12 +1580,13 @@ export async function discoverProxyModels(
 		const advertised = advertisedReasoningEnabled(providerConfig) ? extractAdvertisedReasoning(item) : undefined;
 		const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
 		const displayName =
-			(discoveryName && discoveryName !== id ? discoveryName : undefined) ??
+			(discoveryName && discoveryName !== advertisedId && discoveryName !== id ? discoveryName : undefined) ??
 			reference?.name ??
 			stripBracketedModelIdAffixes(id) ??
 			id;
 		const spec = {
 			id,
+			...(requestModelId !== undefined && { requestModelId }),
 			name: displayName,
 			api,
 			provider: providerConfig.provider,
@@ -1504,6 +1622,15 @@ export async function discoverProxyModels(
 		discovered.push(buildModel(withAdvertisedEfforts(spec, advertised, isAnthropic)));
 	}
 	return discovered;
+}
+
+const NEOPROXY_SERVED_NAME_PREFIX = `${NEOPROXY_PROVIDER_ID}/`;
+
+/** Selector id for an advertised NeoProxy name: one leading `neoproxy/` removed, since the provider id adds it. */
+function neoproxySelectorId(provider: string, advertisedId: string): string {
+	if (provider !== NEOPROXY_PROVIDER_ID || !advertisedId.startsWith(NEOPROXY_SERVED_NAME_PREFIX)) return advertisedId;
+	const slug = advertisedId.slice(NEOPROXY_SERVED_NAME_PREFIX.length);
+	return slug.length > 0 ? slug : advertisedId;
 }
 
 export function normalizeLlamaCppBaseUrl(baseUrl?: string): string {

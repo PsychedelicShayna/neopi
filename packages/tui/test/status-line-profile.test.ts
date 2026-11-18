@@ -26,6 +26,7 @@ function createContext(overrides: Partial<SegmentContext> = {}): SegmentContext 
 		vim: null,
 		collab: null,
 		stream: null,
+		live: null,
 		recording: false,
 		usageStats: {
 			input: 0,
@@ -52,6 +53,7 @@ function createContext(overrides: Partial<SegmentContext> = {}): SegmentContext 
 		activeRepo: null,
 		worktree: null,
 		git: { branch: null, status: null, pr: null },
+		usageReports: null,
 		usage: null,
 		...overrides,
 	};

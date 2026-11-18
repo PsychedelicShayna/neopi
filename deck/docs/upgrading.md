@@ -53,7 +53,7 @@ Unreleased. npi-deck is a hard fork of omp-deck and drops every upstream distrib
 
 - **No npm package.** `omp-deck` from npm, its `omp-deck` CLI shim and its in-app "update available" pill are gone. Remove the global `omp-deck` package with the package manager you installed it with, then install from a checkout as in [install.md](./install.md).
 - **No Docker image and no Windows launcher.** `Dockerfile`, `docker-compose.yml`, `Start-OMP-Deck.cmd` and the `scripts/*.ps1` helpers were deleted. The `npi-deck` launcher (systemd user service, or `--no-systemd`) is the only supported way to run the deck.
-- **NeoPi and the deck share a checkout.** The `deck/` subtree uses root workspace packages and the root lockfile. Runtime selection still uses `NPI_DECK_BACKEND` or `config.yml`. Native staging is separate from selecting a backend.
+- **NeoPi and the deck share a checkout.** The `deck/` subtree uses root workspace packages and the root lockfile. Runtime selection still uses `NPI_DECK_BACKEND` or `config.toml`. Native staging is separate from selecting a backend.
 - **New data dir and env names.** Deck state lives in `~/.npi-deck`, and every `OMP_DECK_*` variable is now `NPI_DECK_*`. Old `~/.omp-deck` data is not read; `bun scripts/migrate-omp-deck.ts` copies it over, renaming the env keys, when you pass `--apply` (without it, the script is a dry run). Stop the deck before applying. The script leaves the old dirs in place and never overwrites deck state (a database or its WAL, uploads, `.env`, …) in `~/.npi-deck`: files byte-identical to the migrated copy are skipped, so an interrupted run can be retried, and anything else makes `--apply` refuse. `--force` moves the differing files into a new `~/.npi-deck/.omp-deck-migration-replaced/<timestamp>-<random>/` directory and installs the legacy copy in their place; files the migration would not write stay where they are. Once a migration has completed, a plain `--apply` rerun is refused, and `--apply --force` re-checks the deck home against the legacy source, changing nothing when they already match. A deck home that reaches the legacy dirs through a symlink, or contains them, is refused, and no file is written through a symlinked directory inside the deck home.
 
 ---
@@ -120,7 +120,7 @@ For the onboarding flag specifically (introduced in 0.6.0): an older deck will i
 If an upgrade broke something for you:
 
 1. Roll back to the previous version (see above) so you're unblocked.
-2. File an issue at <https://github.com/PsychedelicShayna/neodeck/issues> with:
+2. File an issue at <https://github.com/PsychedelicShayna/neopi/issues> with the `npi-deck` label and:
    - the version you came from + version you went to
    - your OS + Bun version (`bun --version`)
    - the relevant log excerpt (`journalctl --user -u npi-deck` under the launcher, or the terminal where the deck is running)

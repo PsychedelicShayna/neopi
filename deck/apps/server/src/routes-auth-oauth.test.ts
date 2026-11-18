@@ -111,7 +111,7 @@ describe("abortFlow (issue #5 cleanup helper)", () => {
 		// forever. abortFlow MUST resolve every queued prompt so the SDK's
 		// login promise can settle.
 		const flow = makeFlow();
-		let promptAnswers: string[] = [];
+		const promptAnswers: string[] = [];
 		flow.promptResolvers.set("p1", (answer) => promptAnswers.push(`p1:${answer}`));
 		flow.promptResolvers.set("p2", (answer) => promptAnswers.push(`p2:${answer}`));
 		flow.promptResolvers.set("p3", (answer) => promptAnswers.push(`p3:${answer}`));

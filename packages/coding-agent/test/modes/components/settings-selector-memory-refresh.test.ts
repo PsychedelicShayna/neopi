@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadHindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
@@ -160,12 +161,15 @@ describe("SettingsSelectorComponent memory tab", () => {
 			cancelCount++;
 		});
 
-		// Typing changes the search draft; Enter applies it and Escape discards it.
+		// Typing previews results live; Escape leaves Insert before discarding the draft.
 		comp.handleInput("/");
 		comp.handleInput("b");
-		expect(comp.navigationSnapshot()).toMatchObject({ query: "", search: { value: "b" }, searchFocused: true });
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", search: { value: "b" }, searchFocused: true });
 
-		// First Escape clears the query and returns to the ordinary tab.
+		// First Escape stays in the search field in Vim Normal mode.
+		comp.handleInput("\x1b");
+		expect(cancelCount).toBe(0);
+		expect(comp.navigationSnapshot()).toMatchObject({ query: "b", searchFocused: true });
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
 		expect(comp.navigationSnapshot()).toMatchObject({ query: "", searchFocused: false });
@@ -228,4 +232,13 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

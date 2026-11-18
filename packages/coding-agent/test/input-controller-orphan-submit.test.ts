@@ -101,6 +101,7 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 			isCompacting: false,
 			isBashRunning: false,
 			isEvalRunning: false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			settings: Settings.isolated({}),
 			steer,

@@ -6,7 +6,7 @@ export function getExtraHelpText(): string {
 	return `${chalk.bold("NeoProxy connection:")}
   ${APP_NAME} login neoproxy --url https://proxy.example.com
   Prompts for your existing administrator-assigned API key in a hidden field.
-  Discovers granted models automatically. Use /login in-session, then /model or /models.
+  Discovers granted models automatically. Use /login in-session, then /model or /roles.
   Remote servers require validated HTTPS; loopback HTTP is supported for local use.
 
 ${chalk.bold("Environment Variables:")}
@@ -50,6 +50,9 @@ ${chalk.bold("Environment Variables:")}
   YOLO_AUTO_API_KEY          - Yolo-Auto flat-rate Qwen models
   SINGULARITYAPI_DEV_API_KEY - SingularityAPI universal gateway (300+ models)
   SINGULARITYAPI_TECH_API_KEY - SingularityAPI reserved DeepSeek lanes
+  SCW_SECRET_KEY             - Scaleway Generative APIs models
+  OTARI_API_KEY              - Otari AI gateway (workspace models)
+  OTARI_BASE_URL             - Otari self-hosted API root (e.g. https://host/api/v1)
 
   ${chalk.dim("# Cloud Providers")}
   AWS_PROFILE                - AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)
@@ -63,6 +66,7 @@ ${chalk.bold("Environment Variables:")}
   PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
   TAVILY_API_KEY             - Tavily web search
   TINYFISH_API_KEY           - TinyFish web search
+  KEENABLE_API_KEY           - Keenable web search (optional; keyless public fallback)
   FIRECRAWL_API_KEY          - Firecrawl web search + fetch reader backend
   ANTHROPIC_SEARCH_API_KEY   - Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)
   ANTHROPIC_SEARCH_BASE_URL  - Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)

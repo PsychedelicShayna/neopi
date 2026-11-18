@@ -204,6 +204,16 @@ _SLOW_MODE_SCOPE_VALUES: Final[frozenset[str]] = frozenset({"session", "global"}
 _decode_slow_mode_scope = cast("Decoder[SlowModeScope]", literal(_SLOW_MODE_SCOPE_VALUES))
 
 
+JobType: TypeAlias = Literal["bash", "task", "eval", "chronicle"]
+_JOB_TYPE_VALUES: Final[frozenset[str]] = frozenset({"bash", "task", "eval", "chronicle"})
+_decode_job_type = cast("Decoder[JobType]", literal(_JOB_TYPE_VALUES))
+
+
+JobStatus: TypeAlias = Literal["running", "completed", "failed", "cancelled"]
+_JOB_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "completed", "failed", "cancelled"})
+_decode_job_status = cast("Decoder[JobStatus]", literal(_JOB_STATUS_VALUES))
+
+
 BtwStatus: TypeAlias = Literal["running", "complete", "cancelled", "error", "interrupted"]
 """Side-question turn lifecycle; `interrupted` marks a turn whose process died while it ran."""
 _BTW_STATUS_VALUES: Final[frozenset[str]] = frozenset({"running", "complete", "cancelled", "error", "interrupted"})
@@ -351,10 +361,15 @@ class Usage(TypedDict):
     credits: NotRequired[JsonObject]
 
 
+ParentIrc = TypedDict("ParentIrc", {"from": "str", "body": "str"})
+"""Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope."""
+
+
 class UserMessage(TypedDict):
     role: Literal["user"]
     content: MessageContent
     timestamp: float
+    parentIrc: NotRequired[ParentIrc]
     synthetic: NotRequired[bool]
     steering: NotRequired[bool]
     liveSteered: NotRequired[bool]
@@ -727,6 +742,8 @@ class RoleInfo:
 class RolesResult:
     roles: tuple[RoleInfo, ...]
     active_role: str | None = None
+    cycle_order: tuple[str, ...] = ()
+    """The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1076,6 +1093,8 @@ class SessionState:
     """`/slow` applies to the active model."""
     slow_mode_enabled: bool = False
     """`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`."""
+    dictation_enabled: bool = False
+    """Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off."""
     slow_mode_scope: SlowModeScope | None = None
     """Where the active model's `/slow` lives; absent when unsupported."""
     usage_limit: UsageLimitState | None = None
@@ -1083,6 +1102,12 @@ class SessionState:
     tokens_per_second: float | None = None
     message_count: int = 0
     queued_message_count: int = 0
+    hostname: str = ""
+    """Short machine hostname (first DNS label)."""
+    active_time_ms: float = 0
+    """Accumulated active-processing time, including the run in flight; idle time never counts."""
+    running_job_count: int = 0
+    """Running background jobs outside the subagents count, as the TUI jobs pill counts them."""
     has_pending_async_work: bool = False
     """Background jobs or deliveries can still inject a follow-up and wake the session."""
     is_settled: bool = False
@@ -1110,9 +1135,30 @@ class BashResult:
     timed_out: bool | None = None
     artifact_id: str | None = None
     artifact_elided_bytes: int | None = None
+    elided_bytes: int | None = None
+    """Bytes dropped from the middle of `output`, which keeps the head and tail."""
+    elided_lines: int | None = None
+    """Lines dropped from the middle of `output`."""
+    column_dropped_bytes: int | None = None
+    """Bytes the per-line column cap cut from `output`, across all lines."""
+    column_truncated_lines: int | None = None
+    """Lines of `output` the per-line column cap cut; the artifact holds them whole."""
+    column_truncated_range: LineRange | None = None
+    """First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it."""
+    column_max: int | None = None
+    """The per-line column cap in UTF-8 bytes, set when it cut a line."""
     artifact_error: JsonObject | None = None
+    minimized: JsonObject | None = None
     working_dir: str | None = None
     images: tuple[ImageContent, ...] | None = None
+    trace: JsonObject | None = None
+    """The embedded shell's final `ShellTrace` of the run; only when the caller asked for one."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class LineRange:
+    first: int
+    last: int
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1259,6 +1305,18 @@ class SlashSubcommand:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class CommandCompletion:
+    value: str
+    """Replaces the argument text the host typed."""
+    label: str
+    description: str | None = None
+    hint: str | None = None
+    """Ghost text to show after the cursor."""
+    submits_command: bool | None = None
+    """Accepting it leaves a complete command, so the host may submit at once."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class AvailableSlashCommand:
     name: str
     source: SlashCommandSource
@@ -1266,6 +1324,8 @@ class AvailableSlashCommand:
     description: str | None = None
     input: SlashCommandInput | None = None
     subcommands: tuple[SlashSubcommand, ...] | None = None
+    availability: Literal["headless", "tui"] = "headless"
+    """`tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1387,6 +1447,123 @@ class SubagentSnapshot:
     resolved_thinking_level: ConfiguredThinkingLevel | None = None
     fast_mode_enabled: bool | None = None
     fast_mode_active: bool | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobInfo:
+    """One background job."""
+    id: str
+    """Stable `bg_N` id."""
+    type: JobType
+    label: str
+    status: JobStatus
+    started_at: float
+    """Epoch milliseconds."""
+    output_bytes: int
+    """Size in bytes of the output snapshot `get_job_output` reads."""
+    command: str | None = None
+    """Full command line of a job that runs a process; `label` is cut to 120 characters."""
+    finished_at: float | None = None
+    exit_code: int | None = None
+    error: str | None = None
+    """Failure text of a failed job, cut to a bounded length."""
+    owner_id: str | None = None
+    """Registry id of the agent that registered the job."""
+    agent_id: str | None = None
+    """Registry id of the subagent a task job runs."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobAgent:
+    id: str
+    parent_id: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobsResult:
+    running: tuple[JobInfo, ...]
+    recent: tuple[JobInfo, ...]
+    """Settled jobs, newest first, at most `recentLimit`."""
+    agents: tuple[JobAgent, ...]
+    """Subagents owning listed jobs, with the ancestors linking them to the root."""
+    running_count: int
+    """Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`."""
+    root_id: str | None = None
+    """The agent the tree is for; its own jobs are the top level."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobOutput:
+    job_id: str
+    status: JobStatus
+    from_byte: int
+    next_byte: int
+    """Pass as the next `fromByte` to read on."""
+    total_bytes: int
+    """Size in bytes of the whole output snapshot."""
+    reset: bool
+    """`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero."""
+    output: str
+    revision: str = ""
+    """Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistoryMetrics:
+    tokens: float
+    requests: float
+    tools: float
+    cost: float
+    duration_ms: float
+    context_tokens: float | None = None
+    context_window: float | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistoryEntry:
+    """One child of the root session's tree."""
+    id: str
+    kind: Literal["sub", "advisor"]
+    display_name: str
+    status: Literal["running", "idle", "parked", "aborted"]
+    """`parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted."""
+    live: bool
+    """The child's session is in memory (`running` or `idle`)."""
+    session_file: str
+    created_at: float
+    last_activity: float
+    parent_id: str | None = None
+    agent: str | None = None
+    description: str | None = None
+    """Persisted task gist, or the current activity of a live child."""
+    response_at: float | None = None
+    accepted_at: float | None = None
+    terminal_at: float | None = None
+    parent_tool_call_id: str | None = None
+    """Known only from the live roster."""
+    resolved_model: str | None = None
+    resolved_model_identity: str | None = None
+    resolved_thinking_level: ConfiguredThinkingLevel | None = None
+    fast_mode_enabled: bool | None = None
+    """Live children only."""
+    fast_mode_active: bool | None = None
+    """Live children only."""
+    model_role: str | None = None
+    read_only: bool | None = None
+    metrics: SubagentHistoryMetrics | None = None
+    direct_cost: float | None = None
+    """Cumulative cost of the child's own session, excluding nested task results."""
+    output_path: str | None = None
+    patch_path: str | None = None
+    branch_name: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class SubagentHistory:
+    subagents: tuple[SubagentHistoryEntry, ...]
+    """Oldest first."""
+    root_session_file: str | None = None
+    root_agent_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2015,6 +2192,8 @@ class ReadyEvent:
     supported_protocol_versions: tuple[int, ...] | None = None
     max_frame_bytes: int | None = None
     max_reassembled_frame_bytes: int | None = None
+    supports_bash_exclude_from_context: bool | None = None
+    """`bash` accepts `excludeFromContext`; require exactly true before sending excluded commands."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2163,6 +2342,16 @@ class LiveEndEvent:
     """Sent exactly once when a live session ends; `error` carries the failure cause."""
     type: Literal["live_end"] = "live_end"
     error: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class JobLifecycleEvent:
+    """A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."""
+    type: Literal["job_lifecycle"] = "job_lifecycle"
+    event: Literal["registered", "progress", "completed", "failed", "cancelled"]
+    job: JobInfo
+    running_count: int
+    """Running jobs by the TUI jobs-pill rule after this transition."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2478,6 +2667,13 @@ class SetRoleResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class CycleRoleResult:
+    role: str
+    model: ModelInfo
+    thinking_level: ThinkingLevel | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class GetModelsConfigurationResult:
     providers: tuple[JsonObject, ...]
     models: tuple[JsonObject, ...]
@@ -2513,9 +2709,23 @@ class ResumeTreeResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SetSubagentModelResult:
+    provider: str
+    model_id: str
+    thinking_level: ThinkingLevel | None = None
+    warning: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class LiveConnectResult:
     voice: str
     sdp_answer: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class GetSessionLeaseResult:
+    held: tuple[str, ...]
+    unknown: tuple[str, ...]
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2557,7 +2767,7 @@ RpcAgentEvent: TypeAlias = JournalStateEvent | JournalEntryEvent | MessagePersis
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
-RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
+RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | JobLifecycleEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
 """Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`."""
 
 
@@ -2599,6 +2809,10 @@ parse_usage_cost = cast("Decoder[UsageCost]", open_record(None, None))
 
 parse_usage = cast("Decoder[Usage]", open_record(None, None))
 """Decodes a `Usage` open record: checks the discriminator and keeps every key."""
+
+
+parse_parent_irc = cast("Decoder[ParentIrc]", open_record(None, None))
+"""Decodes a `ParentIrc` open record: checks the discriminator and keeps every key."""
 
 
 parse_user_message = cast("Decoder[UserMessage]", open_record("role", frozenset({"user"})))
@@ -2888,6 +3102,7 @@ def parse_roles_result(value: object, path: str = "RolesResult") -> RolesResult:
     return RolesResult(
         roles=required(payload, "roles", array(parse_role_info), path),
         active_role=optional(payload, "activeRole", decode_str, path),
+        cycle_order=defaulted(payload, "cycleOrder", array(decode_str), path, ()),
     )
 
 
@@ -3297,11 +3512,15 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         fast_mode_active=defaulted(payload, "fastModeActive", decode_bool, path, False),
         slow_mode_supported=defaulted(payload, "slowModeSupported", decode_bool, path, False),
         slow_mode_enabled=defaulted(payload, "slowModeEnabled", decode_bool, path, False),
+        dictation_enabled=defaulted(payload, "dictationEnabled", decode_bool, path, False),
         slow_mode_scope=optional(payload, "slowModeScope", _decode_slow_mode_scope, path),
         usage_limit=optional(payload, "usageLimit", parse_usage_limit_state, path),
         tokens_per_second=defaulted(payload, "tokensPerSecond", nullable(decode_float), path, None),
         message_count=defaulted(payload, "messageCount", decode_int, path, 0),
         queued_message_count=defaulted(payload, "queuedMessageCount", decode_int, path, 0),
+        hostname=defaulted(payload, "hostname", decode_str, path, ""),
+        active_time_ms=defaulted(payload, "activeTimeMs", decode_float, path, 0),
+        running_job_count=defaulted(payload, "runningJobCount", decode_int, path, 0),
         has_pending_async_work=defaulted(payload, "hasPendingAsyncWork", decode_bool, path, False),
         is_settled=defaulted(payload, "isSettled", decode_bool, path, False),
         queued_messages=defaulted(payload, "queuedMessages", parse_queued_messages_state, path, parse_queued_messages_state({"steering": [], "followUp": [], "liveSteered": 0}, path)),
@@ -3327,9 +3546,25 @@ def parse_bash_result(value: object, path: str = "BashResult") -> BashResult:
         timed_out=optional(payload, "timedOut", decode_bool, path),
         artifact_id=optional(payload, "artifactId", decode_str, path),
         artifact_elided_bytes=optional(payload, "artifactElidedBytes", decode_int, path),
+        elided_bytes=optional(payload, "elidedBytes", decode_int, path),
+        elided_lines=optional(payload, "elidedLines", decode_int, path),
+        column_dropped_bytes=optional(payload, "columnDroppedBytes", decode_int, path),
+        column_truncated_lines=optional(payload, "columnTruncatedLines", decode_int, path),
+        column_truncated_range=optional(payload, "columnTruncatedRange", parse_line_range, path),
+        column_max=optional(payload, "columnMax", decode_int, path),
         artifact_error=optional(payload, "artifactError", decode_json_object, path),
+        minimized=optional(payload, "minimized", decode_json_object, path),
         working_dir=optional(payload, "workingDir", decode_str, path),
         images=optional(payload, "images", array(parse_image_content), path),
+        trace=optional(payload, "trace", decode_json_object, path),
+    )
+
+
+def parse_line_range(value: object, path: str = "LineRange") -> LineRange:
+    payload = expect_object(value, path)
+    return LineRange(
+        first=required(payload, "first", decode_int, path),
+        last=required(payload, "last", decode_int, path),
     )
 
 
@@ -3503,6 +3738,17 @@ def parse_slash_subcommand(value: object, path: str = "SlashSubcommand") -> Slas
     )
 
 
+def parse_command_completion(value: object, path: str = "CommandCompletion") -> CommandCompletion:
+    payload = expect_object(value, path)
+    return CommandCompletion(
+        value=required(payload, "value", decode_str, path),
+        label=required(payload, "label", decode_str, path),
+        description=optional(payload, "description", decode_str, path),
+        hint=optional(payload, "hint", decode_str, path),
+        submits_command=optional(payload, "submitsCommand", decode_bool, path),
+    )
+
+
 def parse_available_slash_command(value: object, path: str = "AvailableSlashCommand") -> AvailableSlashCommand:
     payload = expect_object(value, path)
     return AvailableSlashCommand(
@@ -3512,6 +3758,7 @@ def parse_available_slash_command(value: object, path: str = "AvailableSlashComm
         description=optional(payload, "description", decode_str, path),
         input=optional(payload, "input", parse_slash_command_input, path),
         subcommands=optional(payload, "subcommands", array(parse_slash_subcommand), path),
+        availability=defaulted(payload, "availability", cast('Decoder[Literal["headless", "tui"]]', literal(frozenset({"headless", "tui"}))), path, "headless"),
     )
 
 
@@ -3649,6 +3896,112 @@ def parse_subagent_snapshot(value: object, path: str = "SubagentSnapshot") -> Su
         resolved_thinking_level=optional(payload, "resolvedThinkingLevel", _decode_configured_thinking_level, path),
         fast_mode_enabled=optional(payload, "fastModeEnabled", decode_bool, path),
         fast_mode_active=optional(payload, "fastModeActive", decode_bool, path),
+    )
+
+
+def parse_job_info(value: object, path: str = "JobInfo") -> JobInfo:
+    payload = expect_object(value, path)
+    return JobInfo(
+        id=required(payload, "id", decode_str, path),
+        type=required(payload, "type", _decode_job_type, path),
+        label=required(payload, "label", decode_str, path),
+        status=required(payload, "status", _decode_job_status, path),
+        started_at=required(payload, "startedAt", decode_float, path),
+        output_bytes=required(payload, "outputBytes", decode_int, path),
+        command=optional(payload, "command", decode_str, path),
+        finished_at=optional(payload, "finishedAt", decode_float, path),
+        exit_code=optional(payload, "exitCode", decode_int, path),
+        error=optional(payload, "error", decode_str, path),
+        owner_id=optional(payload, "ownerId", decode_str, path),
+        agent_id=optional(payload, "agentId", decode_str, path),
+    )
+
+
+def parse_job_agent(value: object, path: str = "JobAgent") -> JobAgent:
+    payload = expect_object(value, path)
+    return JobAgent(
+        id=required(payload, "id", decode_str, path),
+        parent_id=optional(payload, "parentId", decode_str, path),
+    )
+
+
+def parse_jobs_result(value: object, path: str = "JobsResult") -> JobsResult:
+    payload = expect_object(value, path)
+    return JobsResult(
+        running=required(payload, "running", array(parse_job_info), path),
+        recent=required(payload, "recent", array(parse_job_info), path),
+        agents=required(payload, "agents", array(parse_job_agent), path),
+        running_count=required(payload, "runningCount", decode_int, path),
+        root_id=optional(payload, "rootId", decode_str, path),
+    )
+
+
+def parse_job_output(value: object, path: str = "JobOutput") -> JobOutput:
+    payload = expect_object(value, path)
+    return JobOutput(
+        job_id=required(payload, "jobId", decode_str, path),
+        status=required(payload, "status", _decode_job_status, path),
+        from_byte=required(payload, "fromByte", decode_int, path),
+        next_byte=required(payload, "nextByte", decode_int, path),
+        total_bytes=required(payload, "totalBytes", decode_int, path),
+        reset=required(payload, "reset", decode_bool, path),
+        output=required(payload, "output", decode_str, path),
+        revision=defaulted(payload, "revision", decode_str, path, ""),
+    )
+
+
+def parse_subagent_history_metrics(value: object, path: str = "SubagentHistoryMetrics") -> SubagentHistoryMetrics:
+    payload = expect_object(value, path)
+    return SubagentHistoryMetrics(
+        tokens=required(payload, "tokens", decode_float, path),
+        requests=required(payload, "requests", decode_float, path),
+        tools=required(payload, "tools", decode_float, path),
+        cost=required(payload, "cost", decode_float, path),
+        duration_ms=required(payload, "durationMs", decode_float, path),
+        context_tokens=optional(payload, "contextTokens", decode_float, path),
+        context_window=optional(payload, "contextWindow", decode_float, path),
+    )
+
+
+def parse_subagent_history_entry(value: object, path: str = "SubagentHistoryEntry") -> SubagentHistoryEntry:
+    payload = expect_object(value, path)
+    return SubagentHistoryEntry(
+        id=required(payload, "id", decode_str, path),
+        kind=required(payload, "kind", cast('Decoder[Literal["sub", "advisor"]]', literal(frozenset({"sub", "advisor"}))), path),
+        display_name=required(payload, "displayName", decode_str, path),
+        status=required(payload, "status", cast('Decoder[Literal["running", "idle", "parked", "aborted"]]', literal(frozenset({"running", "idle", "parked", "aborted"}))), path),
+        live=required(payload, "live", decode_bool, path),
+        session_file=required(payload, "sessionFile", decode_str, path),
+        created_at=required(payload, "createdAt", decode_float, path),
+        last_activity=required(payload, "lastActivity", decode_float, path),
+        parent_id=optional(payload, "parentId", decode_str, path),
+        agent=optional(payload, "agent", decode_str, path),
+        description=optional(payload, "description", decode_str, path),
+        response_at=optional(payload, "responseAt", decode_float, path),
+        accepted_at=optional(payload, "acceptedAt", decode_float, path),
+        terminal_at=optional(payload, "terminalAt", decode_float, path),
+        parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        resolved_model=optional(payload, "resolvedModel", decode_str, path),
+        resolved_model_identity=optional(payload, "resolvedModelIdentity", decode_str, path),
+        resolved_thinking_level=optional(payload, "resolvedThinkingLevel", _decode_configured_thinking_level, path),
+        fast_mode_enabled=optional(payload, "fastModeEnabled", decode_bool, path),
+        fast_mode_active=optional(payload, "fastModeActive", decode_bool, path),
+        model_role=optional(payload, "modelRole", decode_str, path),
+        read_only=optional(payload, "readOnly", decode_bool, path),
+        metrics=optional(payload, "metrics", parse_subagent_history_metrics, path),
+        direct_cost=optional(payload, "directCost", decode_float, path),
+        output_path=optional(payload, "outputPath", decode_str, path),
+        patch_path=optional(payload, "patchPath", decode_str, path),
+        branch_name=optional(payload, "branchName", decode_str, path),
+    )
+
+
+def parse_subagent_history(value: object, path: str = "SubagentHistory") -> SubagentHistory:
+    payload = expect_object(value, path)
+    return SubagentHistory(
+        subagents=required(payload, "subagents", array(parse_subagent_history_entry), path),
+        root_session_file=optional(payload, "rootSessionFile", decode_str, path),
+        root_agent_id=optional(payload, "rootAgentId", decode_str, path),
     )
 
 
@@ -4371,6 +4724,7 @@ def parse_ready_event(value: object, path: str = "ReadyEvent") -> ReadyEvent:
         supported_protocol_versions=optional(payload, "supportedProtocolVersions", array(decode_int), path),
         max_frame_bytes=optional(payload, "maxFrameBytes", decode_int, path),
         max_reassembled_frame_bytes=optional(payload, "maxReassembledFrameBytes", decode_int, path),
+        supports_bash_exclude_from_context=optional(payload, "supportsBashExcludeFromContext", decode_bool, path),
     )
 
 
@@ -4534,6 +4888,16 @@ def parse_live_end_event(value: object, path: str = "LiveEndEvent") -> LiveEndEv
     required(payload, "type", cast('Decoder[Literal["live_end"]]', literal(frozenset({"live_end"}))), path)
     return LiveEndEvent(
         error=optional(payload, "error", decode_str, path),
+    )
+
+
+def parse_job_lifecycle_event(value: object, path: str = "JobLifecycleEvent") -> JobLifecycleEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["job_lifecycle"]]', literal(frozenset({"job_lifecycle"}))), path)
+    return JobLifecycleEvent(
+        event=required(payload, "event", cast('Decoder[Literal["registered", "progress", "completed", "failed", "cancelled"]]', literal(frozenset({"registered", "progress", "completed", "failed", "cancelled"}))), path),
+        job=required(payload, "job", parse_job_info, path),
+        running_count=required(payload, "runningCount", decode_int, path),
     )
 
 
@@ -4898,6 +5262,15 @@ def parse_set_role_result(value: object, path: str = "SetRoleResult") -> SetRole
     )
 
 
+def parse_cycle_role_result(value: object, path: str = "CycleRoleResult") -> CycleRoleResult:
+    payload = expect_object(value, path)
+    return CycleRoleResult(
+        role=required(payload, "role", decode_str, path),
+        model=required(payload, "model", parse_model_info, path),
+        thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+    )
+
+
 def parse_get_models_configuration_result(value: object, path: str = "GetModelsConfigurationResult") -> GetModelsConfigurationResult:
     payload = expect_object(value, path)
     return GetModelsConfigurationResult(
@@ -4943,11 +5316,29 @@ def parse_resume_tree_result(value: object, path: str = "ResumeTreeResult") -> R
     )
 
 
+def parse_set_subagent_model_result(value: object, path: str = "SetSubagentModelResult") -> SetSubagentModelResult:
+    payload = expect_object(value, path)
+    return SetSubagentModelResult(
+        provider=required(payload, "provider", decode_str, path),
+        model_id=required(payload, "modelId", decode_str, path),
+        thinking_level=optional(payload, "thinkingLevel", _decode_thinking_level, path),
+        warning=optional(payload, "warning", decode_str, path),
+    )
+
+
 def parse_live_connect_result(value: object, path: str = "LiveConnectResult") -> LiveConnectResult:
     payload = expect_object(value, path)
     return LiveConnectResult(
         voice=required(payload, "voice", decode_str, path),
         sdp_answer=required(payload, "sdpAnswer", decode_str, path),
+    )
+
+
+def parse_get_session_lease_result(value: object, path: str = "GetSessionLeaseResult") -> GetSessionLeaseResult:
+    payload = expect_object(value, path)
+    return GetSessionLeaseResult(
+        held=required(payload, "held", array(decode_str), path),
+        unknown=required(payload, "unknown", array(decode_str), path),
     )
 
 
@@ -5077,6 +5468,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "live_levels": parse_live_levels_event,
         "live_transcript": parse_live_transcript_event,
         "live_end": parse_live_end_event,
+        "job_lifecycle": parse_job_lifecycle_event,
         "dictation_state": parse_dictation_state_event,
         "dictation_transcript": parse_dictation_transcript_event,
         "dictation_end": parse_dictation_end_event,
@@ -5255,7 +5647,7 @@ class WireClient:
         return parse_themes_configuration(self._command("update_theme", params), "update_theme")
 
     def query_model_selector(self, query: str) -> ModelSelectorResult:
-        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        """Query native /model ordering, scoped candidates, role aliases and model facts without selecting."""
         params: dict[str, object] = {}
         params["query"] = query
         return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
@@ -5265,6 +5657,14 @@ class WireClient:
         params: dict[str, object] = {}
         params["role"] = role
         return parse_set_role_result(self._command("set_role", params), "set_role")
+
+    def cycle_role(self, direction: Literal["forward", "backward"] | None = None) -> CycleRoleResult | None:
+        """Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available."""
+        params: dict[str, object] = {}
+        if direction is not None:
+            params["direction"] = direction
+        data = self._command("cycle_role", params)
+        return None if data is None else parse_cycle_role_result(data, "cycle_role")
 
     def get_models_configuration(self) -> GetModelsConfigurationResult:
         """Read the native provider catalog, scoped model roles, and effort rules."""
@@ -5478,8 +5878,15 @@ class WireClient:
         params: dict[str, object] = {}
         return required(expect_object(self._command("get_subagents", params), "get_subagents"), "subagents", array(parse_subagent_snapshot), "get_subagents")
 
+    def get_subagent_history(self, include_advisors: bool | None = None) -> SubagentHistory:
+        """List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first."""
+        params: dict[str, object] = {}
+        if include_advisors is not None:
+            params["includeAdvisors"] = include_advisors
+        return parse_subagent_history(self._command("get_subagent_history", params), "get_subagent_history")
+
     def get_subagent_messages(self, *, subagent_id: str | None = None, session_file: str | None = None, from_byte: int | None = None) -> SubagentMessages:
-        """Read a subagent transcript by id or registered session file (`subagentId` wins)."""
+        """Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too."""
         params: dict[str, object] = {}
         if subagent_id is not None:
             params["subagentId"] = subagent_id
@@ -5515,6 +5922,48 @@ class WireClient:
         params["subagentId"] = subagent_id
         params["enabled"] = enabled
         return parse_fast_mode_result(self._command("set_subagent_fast", params), "set_subagent_fast")
+
+    def get_command_completions(self, command: str, prefix: str) -> tuple[CommandCompletion, ...]:
+        """Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none."""
+        params: dict[str, object] = {}
+        params["command"] = command
+        params["prefix"] = prefix
+        return required(expect_object(self._command("get_command_completions", params), "get_command_completions"), "items", array(parse_command_completion), "get_command_completions")
+
+    def get_jobs(self, recent_limit: int | None = None) -> JobsResult:
+        """List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones."""
+        params: dict[str, object] = {}
+        if recent_limit is not None:
+            params["recentLimit"] = recent_limit
+        return parse_jobs_result(self._command("get_jobs", params), "get_jobs")
+
+    def get_job_output(self, job_id: str, *, from_byte: int | None = None, revision: str | None = None) -> JobOutput:
+        """Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset."""
+        params: dict[str, object] = {}
+        params["jobId"] = job_id
+        if from_byte is not None:
+            params["fromByte"] = from_byte
+        if revision is not None:
+            params["revision"] = revision
+        return parse_job_output(self._command("get_job_output", params), "get_job_output")
+
+    def cancel_job(self, job_id: str) -> bool:
+        """Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable."""
+        params: dict[str, object] = {}
+        params["jobId"] = job_id
+        return required(expect_object(self._command("cancel_job", params), "cancel_job"), "cancelled", decode_bool, "cancel_job")
+
+    def set_subagent_model(self, subagent_id: str, *, selector: str | None = None, provider: str | None = None, model_id: str | None = None) -> SetSubagentModelResult:
+        """Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        if selector is not None:
+            params["selector"] = selector
+        if provider is not None:
+            params["provider"] = provider
+        if model_id is not None:
+            params["modelId"] = model_id
+        return parse_set_subagent_model_result(self._command("set_subagent_model", params), "set_subagent_model")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""
@@ -5641,10 +6090,12 @@ class WireClient:
         params: dict[str, object] = {}
         self._command("abort_retry", params)
 
-    def bash(self, command: str) -> BashResult:
-        """Run a shell command."""
+    def bash(self, command: str, *, exclude_from_context: bool | None = None) -> BashResult:
+        """Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true."""
         params: dict[str, object] = {}
         params["command"] = command
+        if exclude_from_context is not None:
+            params["excludeFromContext"] = exclude_from_context
         return parse_bash_result(self._command("bash", params), "bash")
 
     def abort_bash(self) -> None:
@@ -5656,6 +6107,12 @@ class WireClient:
         """Session statistics."""
         params: dict[str, object] = {}
         return parse_session_stats(self._command("get_session_stats", params), "get_session_stats")
+
+    def get_session_lease(self, session_ids: Sequence[str]) -> GetSessionLeaseResult:
+        """Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed."""
+        params: dict[str, object] = {}
+        params["sessionIds"] = list(session_ids)
+        return parse_get_session_lease_result(self._command("get_session_lease", params), "get_session_lease")
 
     def export_html(self, output_path: str | Path | None = None) -> Path:
         """Export the session as HTML; returns the written path."""
@@ -5855,6 +6312,10 @@ class WireClient:
     def on_live_end(self, listener: Callable[[LiveEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `live_end`: Sent exactly once when a live session ends; `error` carries the failure cause."""
         return self._listen("live_end", listener)
+
+    def on_job_lifecycle(self, listener: Callable[[JobLifecycleEvent], None]) -> Callable[[], None]:
+        """Subscribe to `job_lifecycle`: A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."""
+        return self._listen("job_lifecycle", listener)
 
     def on_dictation_state(self, listener: Callable[[DictationStateEvent], None]) -> Callable[[], None]:
         """Subscribe to `dictation_state`: State of one draft-only microphone capture."""
@@ -6149,6 +6610,7 @@ __all__ = [
     "ChatModeSetting",
     "ChatModeState",
     "ChroniclerHealth",
+    "CommandCompletion",
     "CommandOutputEvent",
     "CompactionResult",
     "CompactionSummaryMessage",
@@ -6159,6 +6621,7 @@ __all__ = [
     "ContextUsage",
     "CreateMixtureResult",
     "CustomMessage",
+    "CycleRoleResult",
     "DeveloperMessage",
     "DictationEndEvent",
     "DictationStateEvent",
@@ -6175,6 +6638,7 @@ __all__ = [
     "FileMentionMessage",
     "FollowUpResult",
     "GetModelsConfigurationResult",
+    "GetSessionLeaseResult",
     "GetUsageResult",
     "Goal",
     "GoalModeState",
@@ -6190,10 +6654,18 @@ __all__ = [
     "InputUiRequest",
     "InterruptMode",
     "IrcMessageEvent",
+    "JobAgent",
+    "JobInfo",
+    "JobLifecycleEvent",
+    "JobOutput",
+    "JobStatus",
+    "JobType",
+    "JobsResult",
     "JournalEntryEvent",
     "JournalIdentity",
     "JournalPage",
     "JournalStateEvent",
+    "LineRange",
     "ListMixturesResult",
     "LiveConnectResult",
     "LiveEndEvent",
@@ -6278,6 +6750,7 @@ __all__ = [
     "NotifyUiRequest",
     "OpenSessionResult",
     "OpenUrlUiRequest",
+    "ParentIrc",
     "PlanModeInfo",
     "PromoteQueuedMessageResult",
     "PromptAck",
@@ -6321,6 +6794,7 @@ __all__ = [
     "SetModeResult",
     "SetRoleResult",
     "SetStatusUiRequest",
+    "SetSubagentModelResult",
     "SetTitleUiRequest",
     "SetWidgetUiRequest",
     "SlashCommandInput",
@@ -6332,6 +6806,9 @@ __all__ = [
     "StreamingBehavior",
     "SubagentEvent",
     "SubagentEventPayload",
+    "SubagentHistory",
+    "SubagentHistoryEntry",
+    "SubagentHistoryMetrics",
     "SubagentLifecycleEvent",
     "SubagentLifecyclePayload",
     "SubagentLifecycleStatus",
@@ -6435,6 +6912,7 @@ __all__ = [
     "parse_chat_mode_changed_event",
     "parse_chat_mode_state",
     "parse_chronicler_health",
+    "parse_command_completion",
     "parse_command_output_event",
     "parse_compaction_result",
     "parse_compaction_summary_message",
@@ -6444,6 +6922,7 @@ __all__ = [
     "parse_context_usage",
     "parse_create_mixture_result",
     "parse_custom_message",
+    "parse_cycle_role_result",
     "parse_developer_message",
     "parse_dictation_end_event",
     "parse_dictation_state_event",
@@ -6458,6 +6937,7 @@ __all__ = [
     "parse_file_mention_message",
     "parse_follow_up_result",
     "parse_get_models_configuration_result",
+    "parse_get_session_lease_result",
     "parse_get_usage_result",
     "parse_goal",
     "parse_goal_mode_state",
@@ -6470,10 +6950,16 @@ __all__ = [
     "parse_image_content",
     "parse_input_ui_request",
     "parse_irc_message_event",
+    "parse_job_agent",
+    "parse_job_info",
+    "parse_job_lifecycle_event",
+    "parse_job_output",
+    "parse_jobs_result",
     "parse_journal_entry_event",
     "parse_journal_identity",
     "parse_journal_page",
     "parse_journal_state_event",
+    "parse_line_range",
     "parse_list_mixtures_result",
     "parse_live_connect_result",
     "parse_live_end_event",
@@ -6548,6 +7034,7 @@ __all__ = [
     "parse_notify_ui_request",
     "parse_open_session_result",
     "parse_open_url_ui_request",
+    "parse_parent_irc",
     "parse_plan_mode_info",
     "parse_promote_queued_message_result",
     "parse_prompt_ack",
@@ -6586,6 +7073,7 @@ __all__ = [
     "parse_set_mode_result",
     "parse_set_role_result",
     "parse_set_status_ui_request",
+    "parse_set_subagent_model_result",
     "parse_set_title_ui_request",
     "parse_set_widget_ui_request",
     "parse_slash_command_input",
@@ -6593,6 +7081,9 @@ __all__ = [
     "parse_steer_result",
     "parse_subagent_event",
     "parse_subagent_event_payload",
+    "parse_subagent_history",
+    "parse_subagent_history_entry",
+    "parse_subagent_history_metrics",
     "parse_subagent_lifecycle_event",
     "parse_subagent_lifecycle_payload",
     "parse_subagent_messages",

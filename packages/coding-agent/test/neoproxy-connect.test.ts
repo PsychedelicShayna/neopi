@@ -304,12 +304,12 @@ describe("NeoProxy credential-local private CA", () => {
 					return Response.json(
 						invalidCatalogue
 							? { data: [{ id: 42 }] }
-							: { data: [{ id: "office-model", supported_endpoint_types: ["openai"] }] },
+							: { data: [{ id: "neoproxy/office-model", supported_endpoint_types: ["openai"] }] },
 					);
 				}
 				if (url.pathname.endsWith("/v1/chat/completions")) {
 					const body = (await request.json()) as { model?: string };
-					if (body.model !== "office-model") return new Response("Unknown model", { status: 400 });
+					if (body.model !== "neoproxy/office-model") return new Response("Unknown model", { status: 400 });
 					const chunks = [
 						{
 							id: "chatcmpl-owned",
@@ -423,6 +423,7 @@ describe("NeoProxy credential-local private CA", () => {
 		await registry.refreshProvider("neoproxy", "online");
 		const model = registry.find("neoproxy", "office-model");
 		if (!model) throw new Error("Reopened provider did not discover its granted model");
+		expect(`${model.provider}/${model.id}`).toBe("neoproxy/office-model");
 		const result = await streamSimple(
 			model,
 			{ messages: [{ role: "user", content: "Reply locally.", timestamp: 0 }] },
@@ -687,7 +688,7 @@ describe("NeoProxy credential-local private CA", () => {
 			expect.objectContaining({ id: priorId }),
 		);
 
-		// Re-entering the old key after fresh certificate/key validation reactivates its original row.
+		// Explicitly replacing with the old key after fresh certificate/key validation reactivates its original row.
 		requests = [];
 		events = [];
 		confirmations = [];
@@ -696,6 +697,7 @@ describe("NeoProxy credential-local private CA", () => {
 		const reconnect = loginCallbacks();
 		const prompt = reconnect.onPrompt;
 		reconnect.onPrompt = async input => {
+			if (input.message.includes("other NeoProxy key")) return "replace";
 			const value = await prompt(input);
 			return input.secret ? acceptedKey : value;
 		};

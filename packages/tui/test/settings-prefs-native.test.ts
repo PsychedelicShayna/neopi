@@ -60,6 +60,13 @@ const ENTRIES: SettingsDisplayEntry[] = [
 	},
 	{ path: "shell.path", type: "string", defaultValue: "", ui: { tab: "shell", label: "Shell path", description: "" } },
 	{
+		path: "edit.mode",
+		type: "enum",
+		enumValues: ["apply_patch", "hashline", "patch", "replace", "sloppy", "none"],
+		defaultValue: "hashline",
+		ui: { tab: "files", group: "Editing", label: "Edit Mode", description: "" },
+	},
+	{
 		path: "providers.order",
 		type: "array",
 		defaultValue: ["a", "b"],
@@ -346,6 +353,68 @@ describe("settings as a native prefs page", () => {
 			const reopened = harness().selector;
 			reopened.restoreNavigation(nested);
 			expect(prefs(reopened).props.editing).toEqual({ row: "theme.dark", option: "titanium" });
+		},
+	);
+
+	it.each(["plain", "filtered", "remapped-filter"] as const)(
+		"commits a native enum pick and closes only its menu (%s)",
+		mode => {
+			const previous = getKeybindings();
+			if (mode === "remapped-filter") {
+				setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+			}
+			try {
+				let closed = 0;
+				const { selector, values, changes } = harness(
+					{},
+					{
+						// SelectList offers search only for an overflowing choice list.
+						entries: ENTRIES.map(entry =>
+							entry.path === "edit.mode"
+								? {
+										...entry,
+										enumValues: [
+											...entry.enumValues!,
+											"custom-1",
+											"custom-2",
+											"custom-3",
+											"custom-4",
+											"custom-5",
+										],
+									}
+								: entry,
+						),
+						onCancel: () => {
+							closed++;
+						},
+					},
+				);
+				send(selector, { type: "action", key: "", act: "page", value: "files", mods: [] });
+				send(selector, { type: "activate", key: "", item: "edit.mode" });
+				expect(prefs(selector).props.editing).toEqual({ row: "edit.mode", option: "hashline" });
+
+				if (mode !== "plain") {
+					for (const key of ["/", "s", "l"]) selector.handleInput(key);
+					expect(selector.navigationSnapshot()).toMatchObject({
+						list: { submenu: { filterFocused: true, filterDraft: "sl" } },
+					});
+				}
+				send(selector, { type: "select", key: "", item: "edit.mode=sloppy" });
+				expect(prefs(selector).props.editing).toEqual({ row: "edit.mode", option: "sloppy" });
+				expect(values.get("edit.mode")).toBe("hashline");
+				expect(changes).toEqual([]);
+
+				send(selector, { type: "change", key: "", item: "edit.mode", value: "sloppy" });
+				expect(values.get("edit.mode")).toBe("sloppy");
+				expect(changes).toEqual([["edit.mode", "sloppy"]]);
+				expect(prefs(selector).props.editing).toBeNull();
+				expect(prefs(selector).props.page).toBe("files");
+				expect(closed).toBe(0);
+				send(selector, { type: "action", key: "", act: "close", mods: [] });
+				expect(closed).toBe(1);
+			} finally {
+				setKeybindings(previous);
+			}
 		},
 	);
 

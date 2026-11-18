@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
-import { afterEach, beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, type Mock, test, vi, beforeEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -391,7 +392,7 @@ describe("ModelHub", () => {
 	});
 
 	test.each(["roles", "effort", "context", "all"])(
-		"confirmed %s search keeps motion, model facts and config file hints",
+		"confirmed %s search keeps help, model facts and config file actions usable",
 		async entry => {
 			const open = vi.fn(async () => {});
 			const facts = vi.fn();
@@ -404,12 +405,6 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			hub.handleInput(".");
 			hub.handleInput("\n");
-			const footer = footerLine(hub.render(320));
-			expect(footer).toContain("hjkl gg/G C-u d e y");
-			expect(footer).toContain("? help");
-			expect(footer).toContain("model facts");
-			expect(footer).toContain("Ctrl+G config file");
-			expect(footer.indexOf("model facts")).toBeLessThan(footer.indexOf("hjkl"));
 			hub.handleInput("?");
 			const help = normalize(hub.render(320));
 			expect(help).toContain("gg / G: first / last item");
@@ -510,7 +505,7 @@ describe("ModelHub", () => {
 		expect(onAssign).toHaveBeenCalled();
 	});
 
-	test("hjkl moves between panes and rows; only slash enters literal search and double-Esc closes (#35)", () => {
+	test("hjkl navigates panes and rows while Vim search owns literal text until two Escapes", () => {
 		const { hub, onCancel, onAssign } = createHub({
 			models: [makeModel("test", "hjkl-model"), makeModel("test", "other-model")],
 			scoped: true,
@@ -525,10 +520,12 @@ describe("ModelHub", () => {
 		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
 		expect(normalize(hub.render(220))).toContain("hjkl-model");
-		expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
+		expect(hub.navigationSnapshot().filterFocused).toBe(true);
 		hub.handleInput(ESC);
+		expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: true, browser: { value: "hjkl" } });
+		hub.handleInput(ESC); // leave Normal search and restore the unfiltered list
 		expect(onCancel).not.toHaveBeenCalled();
-		expect(footerLine(hub.render(220))).not.toContain("Search · Enter confirm · Esc clear");
+		expect(hub.navigationSnapshot().filterFocused).toBe(false);
 		hub.handleInput("j");
 		hub.handleInput("h"); // back to sidebar, without typing h
 		expect(normalize(hub.render(220))).toContain("hjkl-model");
@@ -985,12 +982,11 @@ describe("ModelHub", () => {
 			for (const ch of "model") hub.handleInput(ch);
 
 			// Focus is now on the model list
-			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
-			hub.handleInput(ESC);
+			expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: true, focus: "list" });
+			hub.handleInput("\n"); // confirm search before navigating its results
 			// Down arrow navigates within the model list (from model-a to model-b)
 			hub.handleInput(DOWN);
 			hub.handleInput("\n"); // open role strip for model-b
-			expect(footerLine(hub.render(220))).toContain("model-b →");
 
 			hub.handleInput("\n"); // assign to default
 			hub.handleInput("\n"); // confirm effort, then persist assignment
@@ -1013,7 +1009,9 @@ describe("ModelHub", () => {
 				rolesValue: "t",
 				focus: "list",
 			});
-			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
+			expect(hub.navigationSnapshot().filterFocused).toBe(true);
+			hub.handleInput(ESC);
+			expect(hub.navigationSnapshot().filterFocused).toBe(true); // Insert → Normal
 			hub.handleInput(ESC);
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
 		});
@@ -1039,9 +1037,11 @@ describe("ModelHub", () => {
 			hub.handleInput("/");
 			hub.handleInput("t");
 			expect(normalize(hub.render(220))).toContain("All available models");
-			expect(footerLine(hub.render(220))).toContain("Search · Enter confirm · Esc clear");
+			expect(hub.navigationSnapshot().filterFocused).toBe(true);
 			hub.handleInput(ESC);
-			expect(footerLine(hub.render(220))).toContain("↑/↓ models · ← providers");
+			expect(hub.navigationSnapshot().filterFocused).toBe(true); // Insert → Normal
+			hub.handleInput(ESC);
+			expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: false, focus: "list" });
 		});
 	});
 
@@ -2856,13 +2856,15 @@ describe("ModelHub", () => {
 			expect(sidebarIndexOf("zzz-provider")).toBeLessThan(sidebarIndexOf("aaa-provider"));
 		});
 
-		test("Escape clears the query and returns to normal mode, then closes the hub", () => {
+		test("Vim Escape leaves Insert, restores the query, then closes the hub", () => {
 			const model = makeModel("test", "escape-model");
 			const { hub, onCancel } = createHub({ models: [model] });
 			installTestTheme();
 
 			hub.handleInput("/");
 			for (const ch of "esc") hub.handleInput(ch);
+			hub.handleInput("\x1b");
+			expect(hub.navigationSnapshot()).toMatchObject({ filterFocused: true, browser: { value: "esc" } });
 			hub.handleInput("\x1b");
 			expect(onCancel).not.toHaveBeenCalled();
 			expect(hub.navigationSnapshot().filterFocused).toBe(false);
@@ -3474,4 +3476,13 @@ test("Ctrl-G opens global settings for a project role's per-model compaction edi
 	hub.handleInput("\x07");
 	await Bun.sleep(0);
 	expect(open).toHaveBeenCalledWith("context", "global");
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

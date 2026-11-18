@@ -272,7 +272,7 @@ export class PlanReviewOverlay implements Component {
 	readonly #keys = new MenuKeyReader();
 	readonly #help = new MenuHelp(
 		undefined,
-		"h/l switch panes. The focused region controls whether j/k select actions, sections, or scroll the plan.",
+		"Left/Right switch panes. The focused region controls whether Up/Down select actions, sections, or scroll the plan.",
 	);
 	readonly #tocMenu = new MenuSelection<number>([], {
 		getKey: String,
@@ -1773,7 +1773,7 @@ export class PlanReviewOverlay implements Component {
 		// Copy and the external editor are head buttons with their keycaps; the hints skip them.
 		hints.push(key("tab", "regions"));
 		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));
-		hints.push({ keys: ["?"], label: "help" }, { keys: [], label: "hjkl gg/G C-u d e y" });
+		hints.push({ keys: ["?"], label: "help" }, { keys: [], label: "↑/↓ ←/→ Home/End PgUp/PgDn" });
 		return hints;
 	}
 

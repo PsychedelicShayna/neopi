@@ -20,6 +20,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { BlobPutOptions, BlobPutResult } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { lookupBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -32,7 +33,7 @@ const transformedImage: ImageContent = { type: "image", mimeType: "image/jpeg", 
 async function createHarness(factory: ExtensionFactory) {
 	const runtime = new ExtensionRuntime();
 	const generatedMessages: Array<string | (TextContent | ImageContent)[]> = [];
-	runtime.sendUserMessage = (content?: string | (TextContent | ImageContent)[]) => {
+	runtime.sendUserMessage = async (content?: string | (TextContent | ImageContent)[]) => {
 		if (content !== undefined) generatedMessages.push(content);
 	};
 	const sessionManager = SessionManager.inMemory(process.cwd());
@@ -55,6 +56,7 @@ async function createHarness(factory: ExtensionFactory) {
 	const runner = new ExtensionRunner([extension], runtime, process.cwd(), sessionManager, {} as ModelRegistry);
 	const editor = new CustomEditor(getEditorTheme());
 	const prompt = vi.fn(async (_text: string, _options?: PromptOptions) => true);
+	let submissionGeneration = 0;
 	const session = {
 		extensionRunner: runner,
 		isStreaming: true,
@@ -64,13 +66,21 @@ async function createHarness(factory: ExtensionFactory) {
 		followUp: vi.fn(async (_text: string, _images?: ImageContent[]) => {}),
 		buildUserSkillPrompt: buildSkillPromptMessage,
 		promptCustomMessage: vi.fn(async () => true),
-		abort: vi.fn(async () => {}),
+		abort: vi.fn(async () => {
+			submissionGeneration++;
+		}),
 		prewarmModelConnection: vi.fn(),
+		captureSubmissionGuard: () => {
+			const generation = submissionGeneration;
+			return () => generation === submissionGeneration;
+		},
 	};
 	const ctx = {
 		editor,
 		session,
-		viewSession: session,
+		get viewSession(): InteractiveModeContext["viewSession"] {
+			return ctx.session;
+		},
 		sessionManager,
 		eventController: { isAwaitingAsyncWork: () => false },
 		settings: Settings.isolated({}),
@@ -86,6 +96,8 @@ async function createHarness(factory: ExtensionFactory) {
 		compactionQueuedMessages: [],
 		skillCommands: new Map<string, Skill>(),
 		fileSlashCommands: new Set<string>(),
+		isKnownSlashCommand: (text: string) =>
+			lookupBuiltinSlashCommand(text.slice(1).split(/\s|:/, 1)[0] ?? "") !== undefined,
 		locallySubmittedUserSignatures: new Set<string>(),
 		mcpTestEscapeHandlers: new Set<() => void>(),
 		isBashMode: false,
@@ -168,7 +180,6 @@ describe("interactive native input ingress", () => {
 				extensionRunner: h.runner,
 			});
 			h.ctx.session = session;
-			h.ctx.viewSession = session;
 			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
 			const release = Promise.withResolvers<void>();
 			session.setDeferredExtensionLoader(() => release.promise);

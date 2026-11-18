@@ -12,9 +12,15 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
 import followUpWarning from "../prompts/control-follow-up-warning.md" with { type: "text" };
 import { lookup } from "../config/registry";
+import { resolveSessionModelSelector } from "../config/session-model-selector";
 import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
+import {
+	RpcDictationBridge,
+	type RpcDictationControl,
+	type RpcDictationControllerFactory,
+} from "../modes/rpc/rpc-dictation";
 import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
@@ -71,6 +77,8 @@ export interface ControlHostOptions {
 	 * A role selector seeds `activeRole` in snapshots, as it does for RPC `get_state`.
 	 */
 	launchModel?: string;
+	/** Builds the capture behind control `dictation_start`; tests substitute the microphone boundary. */
+	createDictationController?: RpcDictationControllerFactory;
 }
 
 /** Field that failed an optimistic revision check, if any. */
@@ -143,6 +151,8 @@ export class ControlHost {
 	presenter: ControlPresenter | undefined;
 	/** Attached by the session's mode. Control connections never own a separate call. */
 	liveBridge: RpcLiveControl | undefined;
+	/** The one control connection recording with this process's microphone, and its capture. */
+	#dictation: { owner: ControlConnection; bridge: RpcDictationBridge } | undefined;
 	publication: ControlPublication | undefined;
 	readonly #options: ControlHostOptions;
 	readonly #connections = new Set<ControlConnection>();
@@ -254,7 +264,8 @@ export class ControlHost {
 					type: "ready",
 					protocolVersion: 1,
 					supportedProtocolVersions: [1, 2],
-					capabilities: [...RPC_CAPABILITIES, "control_v1"],
+					// Dictation records with this process's microphone: only a terminal session owns one.
+					capabilities: [...RPC_CAPABILITIES, "control_v1", ...(this.presenter ? ["dictation"] : [])],
 				});
 			},
 			onClosed: (connection: ControlConnection) => {
@@ -608,6 +619,9 @@ export class ControlHost {
 			output,
 			get liveBridge() {
 				return host.liveBridge;
+			},
+			get dictationBridge() {
+				return host.#dictationFor(connection);
 			},
 			success,
 			error,
@@ -975,19 +989,6 @@ export class ControlHost {
 			case "commands": {
 				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
 				const commands = await buildAvailableSlashCommands(this.#options.session);
-				if (presenter) {
-					const { BUILTIN_SLASH_COMMANDS_INTERNAL } = await import("../slash-commands/builtin-registry");
-					const listed = new Set(commands.map(command => command.name));
-					for (const builtin of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-						if (listed.has(builtin.name)) continue;
-						commands.push({
-							name: builtin.name,
-							aliases: builtin.aliases,
-							description: builtin.description,
-							source: "builtin",
-						});
-					}
-				}
 				this.#reply(connection, frame, { success: true, data: { commands } });
 				return;
 			}
@@ -1155,7 +1156,67 @@ export class ControlHost {
 		this.#settledHandles.add(record.requestHandle);
 	}
 
+	/** A control capture is recording; the terminal's own push-to-talk refuses to start meanwhile. */
+	get dictationActive(): boolean {
+		return this.#dictation !== undefined;
+	}
+
+	/**
+	 * The dictation a control connection drives, or undefined for a headless session (no terminal owns a
+	 * microphone there). One capture at a time per process: frames go only to the connection that started
+	 * it, it is draft-only like stdio dictation, and the terminal's own recording blocks it.
+	 */
+	#dictationFor(connection: ControlConnection): RpcDictationControl | undefined {
+		const presenter = this.presenter;
+		if (!presenter) return undefined;
+		const host = this;
+		return {
+			get active() {
+				return host.#dictation?.owner === connection;
+			},
+			async start(captureId: string): Promise<void> {
+				if (host.#dictation) {
+					throw new Error(
+						host.#dictation.owner === connection
+							? "A dictation capture is already active"
+							: "Dictation is already active on another control connection",
+					);
+				}
+				if (presenter.dictationBusy()) throw new Error("The terminal's own dictation is active");
+				const bridge: RpcDictationBridge = new RpcDictationBridge(
+					host.#options.session,
+					frame => {
+						connection.write(frame);
+						if (frame.type === "dictation_end" && host.#dictation?.bridge === bridge) host.#dictation = undefined;
+					},
+					host.#options.createDictationController,
+				);
+				host.#dictation = { owner: connection, bridge };
+				try {
+					await bridge.start(captureId);
+				} catch (error) {
+					if (host.#dictation?.bridge === bridge) host.#dictation = undefined;
+					throw error;
+				}
+			},
+			async stop(): Promise<{ text: string }> {
+				const current = host.#dictation;
+				if (!current || current.owner !== connection) return { text: "" };
+				return current.bridge.stop();
+			},
+		};
+	}
+
+	/** End a connection's capture without a stop: the microphone closes with the connection that asked for it. */
+	#endDictationOf(connection: ControlConnection): void {
+		const current = this.#dictation;
+		if (current?.owner !== connection) return;
+		this.#dictation = undefined;
+		current.bridge.dispose();
+	}
+
 	#closeBridges(connection: ControlConnection): void {
+		this.#endDictationOf(connection);
 		const bridges = this.#bridges.get(connection);
 		if (!bridges) return;
 		this.#bridges.delete(connection);
@@ -1352,7 +1413,6 @@ export class ControlHost {
 			return;
 		}
 		const selector = typeof frame.thinkingLevel === "string" ? `${base}:${frame.thinkingLevel}` : base;
-		const { resolveSessionModelSelector } = await import("../slash-commands/builtin-modes");
 		const resolved = resolveSessionModelSelector(selector, session, session.settings);
 		if (!resolved.model) {
 			this.#reply(connection, frame, { success: false, error: `Unknown model: ${selector}`, code: "unknown_model" });

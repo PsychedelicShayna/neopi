@@ -14,6 +14,8 @@ const RUST_AFFECTING_FILE_NAMES = [
 	"rustfmt.toml",
 	".rustfmt.toml",
 ] as const satisfies readonly string[];
+// Prefer the fork's integration baseline; main refs are fallbacks for upstream checkouts.
+const TRUNKS = ["origin/nightly", "upstream/main", "origin/main"] as const satisfies readonly string[];
 // Vendored path-patched crates are workspace members for Bazel hermeticity
 // (path-patch rendering is machine-local), but cargo dev tasks keep their
 // historical scope: the forks are not held to workspace format/lint/test gates.
@@ -24,11 +26,9 @@ const RUST_AFFECTING_FILE_NAMES = [
 // warnings like everything else.
 const VENDORED_FORK_EXCLUDES = [
 	"--exclude",
-	"brush-core",
-	"--exclude",
-	"brush-parser",
-	"--exclude",
 	"cfg_aliases",
+	"--exclude",
+	"jaq-core",
 	"--exclude",
 	"napi",
 ] as const satisfies readonly string[];
@@ -69,28 +69,27 @@ type RustTaskName = keyof typeof TASK_COMMANDS;
 const repoRoot = path.join(import.meta.dir, "..");
 const taskName = process.argv[2];
 
-if (import.meta.main) {
-	if (!isRustTaskName(taskName)) {
-		console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
-		process.exit(1);
-	}
+if (!isRustTaskName(taskName)) {
+	console.error(`Unknown Rust task: ${taskName ?? "(missing)"}`);
+	process.exit(1);
+}
 
-	const commands = taskName === "test:rs" ? rustTestCommands(process.argv.slice(3)) : TASK_COMMANDS[taskName];
-	if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
-		console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
-		process.exit(0);
-	}
+const commands = taskName === "test:rs" ? rustTestCommands(process.argv.slice(3)) : TASK_COMMANDS[taskName];
+if (taskName !== "fmt:rs") {
+	const decision = await decideWhetherToRun();
+	console.log(`${decision.run ? "Running" : "Skipping"} ${taskName}: ${decision.reason}`);
+	if (!decision.run) process.exit(0);
+}
 
-	for (const command of commands) {
-		const exitCode = await runCommand(command);
-		if (exitCode !== 0) {
-			process.exit(exitCode);
-		}
+for (const command of commands) {
+	const exitCode = await runCommand(command);
+	if (exitCode !== 0) {
+		process.exit(exitCode);
 	}
 }
 
 /** Scope both test passes together; remaining options belong to nextest only. */
-export function rustTestCommands(args: readonly string[]): readonly (readonly string[])[] {
+function rustTestCommands(args: readonly string[]): readonly (readonly string[])[] {
 	let packageName: string | undefined;
 	const nextestArgs: string[] = [];
 	for (let index = 0; index < args.length; index += 1) {
@@ -119,7 +118,7 @@ interface CargoPackage {
 	targets: { kind: string[] }[];
 }
 
-export function supportsDoctests(pkg: CargoPackage): boolean {
+function supportsDoctests(pkg: CargoPackage): boolean {
 	return pkg.targets.some(target =>
 		target.kind.some(kind => ["lib", "rlib", "dylib", "staticlib", "proc-macro"].includes(kind)),
 	);
@@ -129,26 +128,80 @@ function isRustTaskName(value: string | undefined): value is RustTaskName {
 	return value != null && value in TASK_COMMANDS;
 }
 
-function isCI(): boolean {
-	const value = Bun.env.CI;
+interface RunDecision {
+	run: boolean;
+	/** Printed as one line, so a skipped Rust gate is never silent. */
+	reason: string;
+}
+
+type GitResult = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * Runs unless the branch provably changed nothing Rust builds from since its merge base with a trunk.
+ * `CI` is not read: omp exports `CI=true` into every agent command. GitHub Actions and
+ * `OMP_FORCE_RUST_TASKS=1` force a run.
+ */
+async function decideWhetherToRun(): Promise<RunDecision> {
+	if (isEnabled(Bun.env.OMP_FORCE_RUST_TASKS)) return { run: true, reason: "OMP_FORCE_RUST_TASKS is set." };
+	// A CI job on its integration branch has no topic diff and must still check everything.
+	if (Bun.env.GITHUB_ACTIONS === "true") return { run: true, reason: "running in GitHub Actions." };
+	const changed = await changedPathsSinceTrunk();
+	if (typeof changed === "string")
+		return { run: true, reason: `cannot tell what this checkout changed (${changed}).` };
+	const rust = changed.filter(isRustAffectingPath);
+	if (rust.length === 0) {
+		return {
+			run: false,
+			reason:
+				"no Rust-affecting change since the merge base with the integration branch. Set OMP_FORCE_RUST_TASKS=1 to run it anyway.",
+		};
+	}
+	return {
+		run: true,
+		reason: `${JSON.stringify(rust[0])}${rust.length > 1 ? ` and ${rust.length - 1} more` : ""} changed.`,
+	};
+}
+
+function isEnabled(value: string | undefined): boolean {
 	if (!value) return false;
 	const normalized = value.trim().toLowerCase();
 	return normalized !== "" && normalized !== "0" && normalized !== "false";
 }
 
-async function hasRustAffectingChanges(): Promise<boolean> {
-	const result = await $`git status --porcelain -z`.cwd(repoRoot).quiet().nothrow();
-	if (result.exitCode !== 0) {
-		const stderr = result.stderr.toString().trim();
-		const suffix = stderr === "" ? `exit ${result.exitCode}` : stderr;
-		console.warn(`Warning: failed to inspect git status: ${suffix}. Running ${taskName} conservatively.`);
-		return true;
+/**
+ * Paths changed since the merge base with the first available integration trunk, plus uncommitted
+ * and untracked files; a string says why that cannot be known.
+ */
+async function changedPathsSinceTrunk(): Promise<string[] | string> {
+	const shallow = await git("rev-parse", "--is-shallow-repository");
+	if (!shallow.ok) return shallow.error;
+	// A shallow clone can report a stale merge base.
+	if (shallow.text.trim() === "true") return "shallow clone; run git fetch --unshallow";
+	// `--untracked-files=all` lists a new crate's files instead of one `crates/new/` entry.
+	const status = await git("status", "--porcelain", "-z", "--untracked-files=all");
+	if (!status.ok) return status.error;
+	const paths = getChangedPathsFromPorcelain(status.text);
+	for (const trunk of TRUNKS) {
+		const base = await git("merge-base", "HEAD", `refs/remotes/${trunk}`);
+		if (!base.ok) continue;
+		// `--no-renames` reports both sides, so moving a file out of a crate still counts.
+		const committed = await git("diff", "--no-renames", "--name-only", "-z", base.text.trim(), "HEAD");
+		if (!committed.ok) return committed.error;
+		paths.push(...committed.text.split("\0").filter(Boolean));
+		return paths;
 	}
-	return getChangedPathsFromPorcelain(result.stdout).some(isRustAffectingPath);
+	return `no fetched ${TRUNKS.join(" or ")}`;
 }
 
-function getChangedPathsFromPorcelain(buf: Uint8Array): string[] {
-	const entries = new TextDecoder().decode(buf).split("\0").filter(Boolean);
+async function git(...args: string[]): Promise<GitResult> {
+	const result = await $`git ${args}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return { ok: true, text: result.text() };
+	const firstLine = result.stderr.toString().trim().split("\n")[0];
+	return { ok: false, error: `git ${args[0]}: ${firstLine || `exit ${result.exitCode}`}` };
+}
+
+function getChangedPathsFromPorcelain(porcelain: string): string[] {
+	const entries = porcelain.split("\0").filter(Boolean);
 	const changedPaths: string[] = [];
 
 	for (let index = 0; index < entries.length; index += 1) {
@@ -177,7 +230,13 @@ function isRustAffectingPath(changedPath: string): boolean {
 	const normalized = changedPath.replace(/\\/g, "/");
 	const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
 	return (
-		normalized.endsWith(".rs") || normalized.startsWith(".cargo/") || isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
+		normalized.endsWith(".rs") ||
+		// Everything under crates/ feeds a crate: fixtures, include_bytes! data, grammars build.rs compiles.
+		normalized.startsWith("crates/") ||
+		normalized.startsWith(".cargo/") ||
+		// `test:rs` is `cargo nextest run`, which reads its filters and scheduling from here.
+		normalized === ".config/nextest.toml" ||
+		isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
 	);
 }
 

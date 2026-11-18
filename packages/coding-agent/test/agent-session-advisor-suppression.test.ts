@@ -446,7 +446,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const advisor = session.getAdvisorAgent();
 			if (!advisor) throw new Error("Expected advisor");
 			const unsubscribeAdvice = advisor.subscribe(event => {
-				if (event.type === "message_end" && event.message.role === "toolResult" && event.message.toolName === "advise") {
+				if (
+					event.type === "message_end" &&
+					event.message.role === "toolResult" &&
+					event.message.toolName === "advise"
+				) {
 					advised.resolve();
 				}
 			});
@@ -513,11 +517,13 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				await session.waitForIdle();
 				expect(mock.calls).toHaveLength(continuation ? 4 : 3);
 				const nextContext = JSON.stringify(mock.calls[2].context.messages);
-				expect(mock.calls[2].context.messages).toContainEqual(expect.objectContaining({
-					role: "toolResult",
-					toolName: "held",
-					content: [{ type: "text", text: "held complete" }],
-				}));
+				expect(mock.calls[2].context.messages).toContainEqual(
+					expect.objectContaining({
+						role: "toolResult",
+						toolName: "held",
+						content: [{ type: "text", text: "held complete" }],
+					}),
+				);
 				if (severity !== "nit") expect(nextContext).toContain(note);
 				else expect(nextContext).not.toContain(note);
 				const advisorCards = agent.state.messages.filter(isAdvisorCard);
@@ -530,9 +536,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					expect(continuedContext).toContain("The terminal result needs its missing correction.");
 					expect(continuedContext).toContain(note);
 					expect(agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-					expect(advisorMock.calls.some(call =>
-						JSON.stringify(call.context.messages).includes("corrected terminal result"),
-					)).toBe(false);
+					expect(
+						advisorMock.calls.some(call =>
+							JSON.stringify(call.context.messages).includes("corrected terminal result"),
+						),
+					).toBe(false);
 				}
 				expect(spokenAdvice.some(text => text.includes(note))).toBe(true);
 			} finally {
@@ -642,14 +650,16 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			if (!advisor) throw new Error("Expected advisor agent to be live");
 			const notes = ["First late regression needs a test.", "Second late regression needs a test."];
 			const advisorMock = createMockModel({
-				responses: [{
-					content: notes.map((note, index) => ({
-						type: "toolCall" as const,
-						id: `late-advice-${index}`,
-						name: "advise",
-						arguments: { note, severity: "concern" },
-					})),
-				}],
+				responses: [
+					{
+						content: notes.map((note, index) => ({
+							type: "toolCall" as const,
+							id: `late-advice-${index}`,
+							name: "advise",
+							arguments: { note, severity: "concern" },
+						})),
+					},
+				],
 				handler: () => ({ content: [], stopReason: "stop" }),
 			});
 			advisor.streamFn = advisorMock.stream;
@@ -794,25 +804,22 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			{ severity: "blocker" as const, continueSeverity: "blocker" as const, reviewMode },
 			{ severity: "nit" as const, continueSeverity: "nit" as const, reviewMode },
 		]),
-	)(
-		"steers late advice at advisor.continueSeverity after a terminal answer %j",
-		async opts => {
-			const { session, mock } = await createCompletedAdvisorSession(opts);
+	)("steers late advice at advisor.continueSeverity after a terminal answer %j", async opts => {
+		const { session, mock } = await createCompletedAdvisorSession(opts);
 
-			await session.prompt("read five fixture files and answer with exactly one line");
-			await session.waitForIdle();
-			expect(mock.calls.length).toBe(1);
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
 
-			expect(session.setAdvisorEnabled(true)).toBe(true);
-			const advisor = session.getAdvisorAgent();
-			if (!advisor) throw new Error("Expected advisor agent to be live");
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
 
-			await advisor.prompt("inspect the completed turn");
-			await session.waitForIdle();
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
 
-			expect(mock.calls.length).toBe(2);
-		},
-	);
+		expect(mock.calls.length).toBe(2);
+	});
 
 	it("preserves another late advisor note after an existing advisor card", async () => {
 		const { session, mock } = await createCompletedAdvisorSession();
@@ -1213,6 +1220,33 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(userMessageText([...session.agent.peekFollowUpQueue()])).toContain("then add the test");
 		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
 		expect(mock.calls.length).toBe(2);
+	});
+
+	it("keeps a follow-up the editor took back while parked behind an IRC wake turn out of the queue", async () => {
+		const { session, streamStarted } = await createParkedSession([{ content: ["replying to peer"] }]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		await session.prompt("then add the test", { streamingBehavior: "followUp" });
+		const followUp = session.agent.peekFollowUpQueue().at(-1);
+		if (!followUp) throw new Error("follow-up not queued");
+		await session.deliverIrcMessage({ id: "m3", from: "peer", to: "me", body: "ping", ts: Date.now() } as IrcMessage);
+		// The wake turn starts with the blocked follow-up parked aside; the editor takes it back then.
+		const withdrawn: boolean[] = [];
+		const unsubscribe = session.subscribe(event => {
+			if (event.type === "agent_start" && withdrawn.length === 0 && session.agent.peekFollowUpQueue().length === 0) {
+				withdrawn.push(session.withdrawQueuedMessage(followUp));
+			}
+		});
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await session.waitForIdle();
+		await running.catch(() => {});
+		unsubscribe();
+
+		expect(withdrawn).toEqual([true]);
+		expect(session.agent.peekFollowUpQueue()).not.toContain(followUp);
+		expect(userMessageText(session.agent.state.messages)).not.toContain("then add the test");
+		// Neither queued nor held any more: gone for good.
+		expect(session.withdrawQueuedMessage(followUp)).toBe(false);
 	});
 
 	it("folds a background completion into context after a user interrupt instead of restarting the run", async () => {

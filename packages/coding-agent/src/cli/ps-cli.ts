@@ -32,6 +32,9 @@ import {
 import { runPsTop, type PsTopHost } from "@oh-my-pi/pi-tui/apps/ps-top";
 import { isSharedBrowserDaemonName, restartSharedBrowser } from "../tools/browser/shared-daemon";
 import { collectReports, KILL_GRACE_MS, scopeClient } from "./ps-data";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { Settings } from "../config/settings";
+import { cfgTuiVimMode } from "../modes/settings";
 
 export type PsAction = "list" | "info" | "logs" | "stop" | "kill" | "restart";
 
@@ -134,8 +137,11 @@ export async function runPsCommand(cmd: PsCommandArgs): Promise<void> {
 		if (cmd.action === "list") {
 			const interactive =
 				!cmd.flags.json && !cmd.flags.plain && process.stdout.isTTY === true && process.stdin.isTTY === true;
-			if (interactive) await runPsTop(cmd.flags, createPsTopHost());
-			else await runList(cmd);
+			if (interactive) {
+				const settings = await Settings.init({ cwd: cmd.flags.dir ?? getProjectDir() });
+				setMenuSearchVimMode(cfgTuiVimMode.get(settings));
+				await runPsTop(cmd.flags, createPsTopHost());
+			} else await runList(cmd);
 			return;
 		}
 		if (!cmd.name) {

@@ -1,4 +1,4 @@
-import { uiProvenanceSuffix } from "../theme/provenance";
+import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -9,7 +9,7 @@ import { parseModelString, splitUpstreamRouting } from "./model-selector";
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
  * Fully mouse-navigable (hover, wheel, click). `/model` reuses the browser in
- * session-only mode; alt+p keeps its compact picker ({@link ./model-picker}).
+ * session-only mode; either picker can target a temporary Task model.
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
@@ -19,16 +19,18 @@ import type {
 	TspPickerItem,
 	TspPickerProps,
 	TspPickerScope,
+	TspProps,
 	TspSpan,
 } from "@oh-my-pi/pi-wire";
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts, getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
-import { Effort, THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
+import { THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-pi/pi-catalog/effort";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
-import { extractPrintableText, matchesKey } from "../keys";
+import { extractPrintableText, type KeyId, matchesKey, parseKey } from "../keys";
+import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { FuzzyCorpus } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -42,6 +44,7 @@ import { compileMenuRegex } from "../menu-search";
 import { Input } from "../components/input";
 import {
 	applyMenuMotion,
+	getMenuSearchVimMode,
 	MenuKeyReader,
 	type MenuNavAction,
 	MenuSearchField,
@@ -256,6 +259,8 @@ export type ModelRoleSelectionScope = "global" | "project" | "session";
 export interface ModelHubCallbacks {
 	/** Select a model without authoring a role or changing saved preferences. */
 	onPick?: (model: Model, selector: string) => void | boolean | Promise<void | boolean>;
+	/** Select a temporary Task-subagent model without changing saved role preferences. */
+	onPickTask?: (model: Model, selector: string) => void;
 	/** Open fact sources and per-field overrides in the full model configuration UI. */
 	onEditFacts?: (provider?: string, model?: Model) => void;
 	/** Persist a role assignment. */
@@ -290,6 +295,10 @@ export interface ModelHubCallbacks {
 	onLoginRequest?: (providerId: string) => void;
 	/** Open the mixture graph editor from a selected mixture model. */
 	onDefineMixture?: (name?: string) => void;
+	/** Returns the rebuilt `--models` scope for the hub to list; `undefined` keeps the current one. */
+	onCatalogRefreshed?: (
+		providerId?: string,
+	) => ReadonlyArray<ScopedModelItem> | undefined | Promise<ReadonlyArray<ScopedModelItem> | undefined>;
 	/** Save the current role assignments and default thinking level as a named model preset. */
 	onSavePreset?: (name: string) => void;
 	/**
@@ -337,6 +346,10 @@ export interface ModelHubOptions {
 	initialProviderId?: string;
 	/** `provider/id` of the session's model, marked current in the native picker. */
 	currentSelector?: string;
+	/** The session picker shortcut, repeated to toggle the temporary Task target. */
+	taskModeKeys?: readonly KeyId[];
+	/** Effective Task override, or the session model when Task inherits it. */
+	taskSelector?: string;
 	/** Provider entries available even before their first model exists. */
 	pinnedProviders?: ReadonlyArray<{ id: string; label: string; action: { label: string; onSelect: () => void } }>;
 }
@@ -459,6 +472,7 @@ type StripState =
 interface ModelHubPageNavigation {
 	entry: string;
 	focus: "scope" | "list";
+	taskMode: boolean;
 	modelKind: "all" | ModelKind;
 	roleTab: RoleTab;
 	filterFocused: boolean;
@@ -625,6 +639,10 @@ export class ModelHubComponent implements Component {
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#callbacks: ModelHubCallbacks;
 	readonly #sessionOnly: boolean;
+	#taskMode = false;
+	readonly #taskMatchKeys = new Set<string>();
+	readonly #taskModeKey: KeyId | undefined;
+	readonly #taskSelector: string | undefined;
 
 	#browser: ModelBrowser;
 	#roles: RoleAssignments = {};
@@ -856,6 +874,11 @@ export class ModelHubComponent implements Component {
 		this.#callbacks = callbacks;
 		this.#sessionOnly = options.sessionOnly === true;
 		this.#currentSelector = options.currentSelector;
+		this.#taskSelector = options.taskSelector;
+		if (this.#sessionOnly && callbacks.onPickTask) {
+			this.#taskModeKey = options.taskModeKeys?.[0];
+			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
+		}
 		this.#pinnedProviders = options.pinnedProviders ?? [];
 
 		this.#browser = new ModelBrowser(settings, {
@@ -889,7 +912,7 @@ export class ModelHubComponent implements Component {
 			this.#catalogRefreshing = true;
 			this.#registry
 				.refresh("online")
-				.then(() => this.#syncFromRegistryState())
+				.then(() => this.#afterRegistryRefresh())
 				.catch(error => {
 					this.#configError = error instanceof Error ? error.message : String(error);
 				})
@@ -946,6 +969,7 @@ export class ModelHubComponent implements Component {
 		return {
 			entry: this.#activeEntryId,
 			focus: this.#focus,
+			taskMode: this.#taskMode,
 			modelKind: this.#modelKindTab,
 			roleTab: this.#roleTab,
 			filterFocused: this.#filterEditing,
@@ -976,6 +1000,7 @@ export class ModelHubComponent implements Component {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as Partial<ModelHubNavigation>;
 		if (typeof state.entry !== "string" || !state.browser) return;
+		this.#taskMode = state.taskMode === true && this.#sessionOnly && this.#callbacks.onPickTask !== undefined;
 		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
 		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
 		this.#assigning = state.assigning ? { ...state.assigning } : null;
@@ -1730,6 +1755,12 @@ export class ModelHubComponent implements Component {
 		this.#scheduledProviderRefreshes.set(providerId, timer);
 	}
 
+	async #afterRegistryRefresh(providerId?: string): Promise<void> {
+		const scope = await this.#callbacks.onCatalogRefreshed?.(providerId);
+		if (scope) this.#scopedModels = scope;
+		this.#syncFromRegistryState();
+	}
+
 	async #refreshProviderInBackground(providerId: string, refreshCommandCredentials = false): Promise<void> {
 		try {
 			if (refreshCommandCredentials) {
@@ -1739,7 +1770,7 @@ export class ModelHubComponent implements Component {
 			}
 			// The provider refresh already updated the registry snapshot;
 			// re-reading it here stays purely in-memory.
-			this.#syncFromRegistryState();
+			await this.#afterRegistryRefresh(providerId);
 		} catch (error) {
 			this.#configError = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -1804,7 +1835,9 @@ export class ModelHubComponent implements Component {
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
 		if (this.#sessionOnly) {
-			const result = this.#callbacks.onPick?.(item.model, item.selector);
+			const result = this.#taskMode
+				? this.#callbacks.onPickTask?.(item.model, item.selector)
+				: this.#callbacks.onPick?.(item.model, item.selector);
 			this.#finishAssignment(result, () => this.#requestRender());
 			return;
 		}
@@ -1833,7 +1866,9 @@ export class ModelHubComponent implements Component {
 		const roleValue =
 			scope === "session"
 				? this.#settings.getSessionModelRole?.(role)
-				: scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+				: scope === "project"
+					? this.#settings.getProjectModelRole(role)
+					: this.#settings.getGlobalModelRole(role);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1844,11 +1879,12 @@ export class ModelHubComponent implements Component {
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
 				scope === "session"
-					? (this.#settings.getSessionModelRole?.(scopedRole) ?? this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					:
-				scope === "project"
-					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					: this.#settings.getGlobalModelRole(scopedRole),
+					? (this.#settings.getSessionModelRole?.(scopedRole) ??
+						this.#settings.getProjectModelRole(scopedRole) ??
+						this.#settings.getGlobalModelRole(scopedRole))
+					: scope === "project"
+						? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
+						: this.#settings.getGlobalModelRole(scopedRole),
 		};
 		return this.#settings.resolveRoleValue(roleValue, allModels, roleLookup);
 	}
@@ -1965,7 +2001,9 @@ export class ModelHubComponent implements Component {
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
 		const scopes: readonly ModelRoleSelectionScope[] = this.#settings.editingScope
 			? [this.#settings.editingScope]
-			: scopedStorage ? ["global", "project"] : ["global"];
+			: scopedStorage
+				? ["global", "project"]
+				: ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -2028,12 +2066,11 @@ export class ModelHubComponent implements Component {
 		committedLevel?: ConfiguredThinkingLevel,
 	): void {
 		const scoped = scope ?? "global";
-		const saved =
-			this.#settings.editingScope
-				? this.#settings.getRoleEffortSelection(role)
-				: scoped === "project"
-					? this.#settings.getProjectRoleEffortSelection(role)
-					: this.#settings.getGlobalRoleEffortSelection(role);
+		const saved = this.#settings.editingScope
+			? this.#settings.getRoleEffortSelection(role)
+			: scoped === "project"
+				? this.#settings.getProjectRoleEffortSelection(role)
+				: this.#settings.getGlobalRoleEffortSelection(role);
 		const selection =
 			saved?.mode === "auto" && saved.selector && saved.selector !== item.selector ? undefined : saved;
 		const options = this.#thinkingOptionsFor(item.model, role);
@@ -3114,6 +3151,19 @@ export class ModelHubComponent implements Component {
 		this.#finishAssignment(onSwitchPreset(name), settle);
 	}
 
+	#toggleTaskMode(): void {
+		if (!this.#sessionOnly || !this.#callbacks.onPickTask || this.#assignmentPending) return;
+		this.#taskMode = !this.#taskMode;
+		const selector = this.#taskMode ? this.#taskSelector : this.#currentSelector;
+		if (selector && !this.#browser.selectSelector(selector)) {
+			this.#setActiveEntry("all");
+			this.#browser.setQuery("");
+			this.#browser.selectSelector(selector);
+		}
+		this.#focus = "list";
+		this.#requestRender();
+	}
+
 	handleInput(rawData: string): void {
 		if (rawData.startsWith("\x1b[<")) {
 			this.#nativeVersion++;
@@ -3145,6 +3195,13 @@ export class ModelHubComponent implements Component {
 
 	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
+		if (this.#taskMatchKeys.size > 0 && !this.#filterEditing) {
+			const parsed = parseKey(rawData);
+			if (parsed !== undefined && this.#taskMatchKeys.has(canonicalKeyId(parsed))) {
+				this.#toggleTaskMode();
+				return;
+			}
+		}
 		if (
 			!this.#sessionOnly &&
 			matchesKey(rawData, "ctrl+g") &&
@@ -3193,7 +3250,12 @@ export class ModelHubComponent implements Component {
 		if (this.#activeEntry().kind === "overrides" && this.#assigning === null) {
 			const panel = this.#overrides();
 			if (this.#focus === "list" || panel.editing) {
-				if (!panel.editing && (matchesKey(rawData, "tab") || matchesKey(rawData, "left") || rawData === "h")) {
+				if (
+					!panel.editing &&
+					(matchesKey(rawData, "tab") ||
+						matchesKey(rawData, "left") ||
+						(getMenuSearchVimMode() && rawData === "h"))
+				) {
 					this.#focus = "scope";
 				} else panel.handleInput(rawData);
 				return;
@@ -3202,7 +3264,7 @@ export class ModelHubComponent implements Component {
 				matchesKey(rawData, "enter") ||
 				matchesKey(rawData, "right") ||
 				matchesKey(rawData, "tab") ||
-				rawData === "l"
+				(getMenuSearchVimMode() && rawData === "l")
 			) {
 				this.#focus = "list";
 				return;
@@ -3246,6 +3308,26 @@ export class ModelHubComponent implements Component {
 		const rolesView = entry.kind === "roles" && this.#assigning === null;
 		const effortView = entry.kind === "effort" && this.#assigning === null;
 		const lockedView = entry.kind === "provider" && entry.locked && this.#assigning === null;
+		const printable = extractPrintableText(data);
+		const actionKey =
+			(rolesView && printable !== undefined && Object.hasOwn(ROLES_ACTION_KEYS, printable)) ||
+			(effortView && (printable === "x" || printable === "[" || printable === "]")) ||
+			(entry.kind === "provider" &&
+				printable === "e" &&
+				this.#pinnedProviders.some(provider => provider.id === entry.providerId));
+		if (
+			!action &&
+			!getMenuSearchVimMode() &&
+			printable !== undefined &&
+			!actionKey &&
+			(rolesView || effortView || this.#isBrowserView(entry))
+		) {
+			this.#filterEditing = true;
+			this.#focus = "list";
+			if (!rolesView && !effortView) this.#browser.focusFilter();
+			this.#handleInput(data);
+			return;
+		}
 
 		if (action?.kind === "search") {
 			if (rolesView || effortView || this.#isBrowserView(entry)) {
@@ -3642,7 +3724,7 @@ export class ModelHubComponent implements Component {
 		}
 		const row = this.#rolesRows[this.#roleIndex];
 		const printable = extractPrintableText(data);
-		if (printable === "y") {
+		if ((getMenuSearchVimMode() && printable === "y") || matchesKey(data, "alt+y")) {
 			if (row?.kind === "role") {
 				const model = this.#roles[row.role]?.model;
 				if (model) {
@@ -3683,7 +3765,7 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
-		if (printable === "Y") {
+		if ((getMenuSearchVimMode() && printable === "Y") || matchesKey(data, "alt+shift+y")) {
 			if (row?.kind === "fallback") {
 				this.#yankedFallback = (this.#fallbackChains()[row.role] ?? []).map(selector =>
 					this.#snapshotFallback(row.role, selector),
@@ -3691,7 +3773,7 @@ export class ModelHubComponent implements Component {
 			}
 			return;
 		}
-		if (printable === "p") {
+		if ((getMenuSearchVimMode() && printable === "p") || matchesKey(data, "alt+p")) {
 			if (row?.kind === "role" || row?.kind === "fallback" || row?.kind === "chainKey") {
 				this.#pasteFallback(row.role);
 			}
@@ -4188,7 +4270,7 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role, true);
 			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
@@ -4200,12 +4282,11 @@ export class ModelHubComponent implements Component {
 				tagStyled = theme.fg(info.color ?? "muted", tag);
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const source = this.#settings.getModelRoleSource(role);
-				const policy =
-					this.#settings.editingScope
-						? this.#settings.getRoleEffortSelection(role)
-						: source === "project"
-							? this.#settings.getProjectRoleEffortSelection(role)
-							: this.#settings.getGlobalRoleEffortSelection(role);
+				const policy = this.#settings.editingScope
+					? this.#settings.getRoleEffortSelection(role)
+					: source === "project"
+						? this.#settings.getProjectRoleEffortSelection(role)
+						: this.#settings.getGlobalRoleEffortSelection(role);
 				const effective =
 					policy?.mode === "auto"
 						? AUTO_THINKING
@@ -4241,7 +4322,9 @@ export class ModelHubComponent implements Component {
 			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
 			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
-			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled]
+				.filter(part => part.length > 0)
+				.join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4366,7 +4449,8 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
-				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · ${cancel} leave field`;
+				if (strip.purpose === "roleBudget")
+					return `${enter} save token budget · empty inherits · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4391,7 +4475,10 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
-			return `${enter} use for session · ${upDown} models · ${left} providers · ${cancel} close`;
+			const toggle = this.#taskModeKey
+				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "Task model"}`
+				: "";
+			return `${enter} ${this.#taskMode ? "use for Task subagents (session-only)" : "use for session"} · ${upDown} models · ${left} providers · ${cancel} close${toggle}`;
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
@@ -4420,6 +4507,8 @@ export class ModelHubComponent implements Component {
 				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
+			const copyKeys = getMenuSearchVimMode() ? (["y", "shift+y"] as const) : (["alt+y", "alt+shift+y"] as const);
+			const pasteKey = getMenuSearchVimMode() ? "p" : "alt+p";
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
 					? ` · ${formatKeyHint("m")} compaction limit`
@@ -4428,10 +4517,10 @@ export class ModelHubComponent implements Component {
 				// Advertise thinking only when the entry resolves to an editable model.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				const thinking = editable ? ` · ${formatKeyHint("t")} effort` : "";
-				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(["y", "shift+y"])} yank · ${formatKeyHint("p")} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
+				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(copyKeys)} copy · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
 			}
 			if (row?.kind === "chainKey") {
-				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
+				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
 			}
 			if (row?.kind === "newFallback") {
 				return `${upDown} rows · ${enter} new exact/pattern fallback chain · ${left} providers`;
@@ -4444,7 +4533,7 @@ export class ModelHubComponent implements Component {
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint("y")} ${yank} · ${formatKeyHint("p")} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y")} ${yank} · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -4497,14 +4586,14 @@ export class ModelHubComponent implements Component {
 				strip.purpose === "roleBudget"
 					? `${strip.role} token budget:`
 					: strip.purpose === "compaction"
-					? `${strip.model.id} limit:`
-					: strip.purpose === "contextRule"
-						? `${strip.selector} limit:`
-						: strip.purpose === "description"
-							? `${strip.role} description:`
-							: strip.purpose === "preset"
-								? "Preset name:"
-								: "New role name:";
+						? `${strip.model.id} limit:`
+						: strip.purpose === "contextRule"
+							? `${strip.selector} limit:`
+							: strip.purpose === "description"
+								? `${strip.role} description:`
+								: strip.purpose === "preset"
+									? "Preset name:"
+									: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
@@ -4614,7 +4703,13 @@ export class ModelHubComponent implements Component {
 		).map(line => theme.fg("dim", line));
 		if (strip) footer.unshift(this.#renderFooter(innerWidth));
 		else this.#frame.chipRanges = [];
-		return this.#help.render(this.#frame.render(width, height, this.#entries, footer), width);
+		return this.#help.render(
+			this.#frame.render(width, height, this.#entries, footer, {
+				title: this.#taskMode ? "Task model" : this.#sessionOnly ? "Session model" : "Models",
+				borderColor: this.#taskMode ? "error" : undefined,
+			}),
+			width,
+		);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -4642,10 +4737,11 @@ export class ModelHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.overlay.model-hub",
-			"Models",
+			this.#taskMode ? "Task model · session-only override" : this.#sessionOnly ? "Session model" : "Models",
 			describeHubSidebar(this.#entries, this.#activeEntryId, this.#nativeSidebarStyle, "scopes"),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
+			this.#taskMode ? "error" : undefined,
 		);
 		this.#nativeCache = { version: this.#nativeVersion, picker: false, node: described };
 		return described;
@@ -4961,7 +5057,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+		const tag = info.tag ?? info.name ?? role;
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -4981,6 +5077,9 @@ export class ModelHubComponent implements Component {
 			detail = assignment
 				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
+		}
+		if (uiProvenance("roles", role)) {
+			label.push(span(uiProvenanceSuffix("roles", role), provenanceColor(uiProvenance("roles", role))));
 		}
 		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 		if (limit) {
@@ -5096,8 +5195,15 @@ export class ModelHubComponent implements Component {
 					? this.#rolesSearch.value
 					: this.#browser.query,
 		)?.error;
-		const props: TspPickerProps = {
-			title: this.#sessionOnly ? "Session model" : this.#settings.editingScope ? `Models · ${this.#settings.editingScope}` : "Models",
+		const props: TspProps<"picker"> = {
+			tone: this.#taskMode ? "error" : undefined,
+			title: this.#sessionOnly
+				? this.#taskMode
+					? "Task model"
+					: "Session model"
+				: this.#settings.editingScope
+					? `Models · ${this.#settings.editingScope}`
+					: "Models",
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5185,7 +5291,8 @@ export class ModelHubComponent implements Component {
 			);
 		}
 		const catalogue = this.#browser.pickerItems(this.#availableItems);
-		const current = this.#currentSelector ? [this.#currentSelector] : undefined;
+		const currentSelector = this.#taskMode ? this.#taskSelector : this.#currentSelector;
+		const current = currentSelector ? [currentSelector] : undefined;
 		if (lockedView) {
 			return picker(
 				{
@@ -5222,22 +5329,26 @@ export class ModelHubComponent implements Component {
 				...props,
 				tabs: this.#pickerKindTabs(),
 				tab: this.#modelKindTab,
-				...this.#browser.pickerRows(catalogue, view, this.#currentSelector),
+				...this.#browser.pickerRows(catalogue, view, currentSelector),
 				state,
 				...(state === "error" && this.#configError ? { message: this.#configError } : {}),
 				empty:
 					this.#emptyStateMessage()?.trim() ??
 					(entry.kind === "provider" ? `No models from ${entry.label} yet` : "No models available in this scope"),
 			},
-			this.#browser.pickerPreview("full", this.#currentSelector),
+			this.#browser.pickerPreview("full", currentSelector),
 		);
 	}
 
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
-		if (this.#sessionOnly) return "Current session only";
-		if (rolesView && this.#settings.editingScope) return `Editing ${this.#settings.editingScope} · session > project > global`;
+		if (this.#sessionOnly)
+			return this.#taskMode
+				? [span("Task subagent model · temporary session-only override", "error")]
+				: "Current session only";
+		if (rolesView && this.#settings.editingScope)
+			return `Editing ${this.#settings.editingScope} · session > project > global`;
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -5551,10 +5662,15 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				this.#sessionOnly ? "Use for session" : "Assign role",
+				this.#sessionOnly ? (this.#taskMode ? "Use for Task subagents" : "Use for session") : "Assign role",
 				"enter",
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
+			this.#taskModeKey
+				? pickerAction("task", this.#taskMode ? "Session model" : "Task model", this.#taskModeKey, {
+						on: this.#taskMode,
+					})
+				: undefined,
 			refresh,
 			facts,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
@@ -5586,11 +5702,11 @@ export class ModelHubComponent implements Component {
 								? `${strip.selector} limit `
 								: strip.purpose === "roleBudget"
 									? `${strip.role} token budget `
-								: strip.purpose === "description"
-									? `${strip.role} description `
-									: strip.purpose === "preset"
-										? "Preset name "
-										: "New role name "
+									: strip.purpose === "description"
+										? `${strip.role} description `
+										: strip.purpose === "preset"
+											? "Preset name "
+											: "New role name "
 							: strip.target === "rule"
 								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
 								: strip.target === "role"
@@ -5727,7 +5843,12 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				detail: [info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "", this.#settings.getRoleScopeNote?.(row.role) ?? ""].filter(Boolean).join(" · "),
+				detail: [
+					info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "",
+					this.#settings.getRoleScopeNote?.(row.role) ?? "",
+				]
+					.filter(Boolean)
+					.join(" · "),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0
@@ -5887,7 +6008,8 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			this.#cancel();
+			if (this.#filterEditing) this.#handleInput("\x03");
+			else this.#cancel();
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.
@@ -5941,6 +6063,9 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		switch (act) {
+			case "task":
+				this.#toggleTaskMode();
+				return;
 			case "effort:edit":
 			case "effort:remove":
 				if (entry.kind === "effort" && this.#assigning === null) {

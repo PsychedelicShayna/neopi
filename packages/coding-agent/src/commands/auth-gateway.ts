@@ -24,8 +24,16 @@ export default class AuthGateway extends Command {
 	};
 
 	static flags = {
-		json: Flags.boolean({ description: "Output JSON (token/status/check)" }),
-		bind: Flags.string({ description: "Bind address for `serve` (host:port)", char: "b" }),
+		json: Flags.boolean({ description: "Output JSON (token/status/check/link)" }),
+		bind: Flags.string({
+			description: "Bind address for `serve` (host:port); for `link`, the gateway to describe",
+			char: "b",
+		}),
+		host: Flags.string({
+			description:
+				"For `link`: address other machines use to reach the gateway (default: the bind host, or this machine's LAN address when bound to 0.0.0.0)",
+		}),
+		name: Flags.string({ description: "For `link`: gateway label carried in the link (default: hostname)" }),
 		regenerate: Flags.boolean({ description: "Regenerate the gateway bearer token (token)" }),
 		"no-auth": Flags.boolean({
 			description:
@@ -53,6 +61,8 @@ export default class AuthGateway extends Command {
 		`# Rotate the gateway bearer token\n  ${APP_NAME} auth-gateway token --regenerate`,
 		`# Run on loopback without any bearer (anyone on this host can call)\n  ${APP_NAME} auth-gateway serve --no-auth`,
 		`# Also admit scoped client tokens listed in a file\n  ${APP_NAME} auth-gateway serve --clients=/etc/omp/gateway-clients.json`,
+		`# Print one connection link to paste into NeoProxy (contains the bearer token)\n  ${APP_NAME} auth-gateway link`,
+		`# Same, naming the address other machines use to reach this one\n  ${APP_NAME} auth-gateway link --host=192.168.1.31`,
 		`# Show local gateway + broker config status\n  ${APP_NAME} auth-gateway status`,
 		`# Probe each broker credential to see which one is producing 401s\n  ${APP_NAME} auth-gateway check`,
 		`# Same, machine-readable for scripts\n  ${APP_NAME} auth-gateway check --json`,
@@ -75,6 +85,8 @@ export default class AuthGateway extends Command {
 				trustProxyHeaders: flags["trust-proxy-headers"],
 				strict: flags.strict,
 				clients: flags.clients,
+				host: flags.host,
+				name: flags.name,
 			},
 		};
 		await initTheme();

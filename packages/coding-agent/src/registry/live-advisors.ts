@@ -11,17 +11,17 @@
  */
 import type { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "../session/agent-session";
-import type { AgentRef, AgentRegistry } from "./agent-registry";
+import type { AgentRef, AgentRegistryApi } from "./agent-registry";
 
 /** Registry id of an owner's advisor; matches the id disk discovery assigns. */
 export function advisorAgentId(ownerId: string, slug: string): string {
 	return slug ? `${ownerId}/advisor:${slug}` : `${ownerId}/advisor`;
 }
 
-const liveAgents = new WeakMap<AgentRegistry, Map<string, Agent>>();
+const liveAgents = new WeakMap<AgentRegistryApi, Map<string, Agent>>();
 
 /** The running agent behind an advisor ref, or undefined when its runtime is not live. */
-export function liveAdvisorAgent(registry: AgentRegistry, id: string): Agent | undefined {
+export function liveAdvisorAgent(registry: AgentRegistryApi, id: string): Agent | undefined {
 	return liveAgents.get(registry)?.get(id);
 }
 
@@ -32,13 +32,13 @@ interface TrackedAdvisor {
 }
 
 export interface LiveAdvisorTrackerOptions {
-	registry: AgentRegistry;
+	registry: AgentRegistryApi;
 	/** Registry id of the session that owns the advisors. */
 	ownerId: string;
 	session: Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange">;
 }
 
-function unregisterOwned(registry: AgentRegistry, owned: Map<string, AgentRef>): void {
+function unregisterOwned(registry: AgentRegistryApi, owned: Map<string, AgentRef>): void {
 	for (const [id, ref] of owned) registry.unregister(id, ref);
 	owned.clear();
 }
@@ -50,7 +50,7 @@ function unregisterOwned(registry: AgentRegistry, owned: Map<string, AgentRef>):
  * reachable. `tracker.stop` is the only link back and is cleared when tracking stops.
  */
 function unregisterOnOwnerExit(
-	registry: AgentRegistry,
+	registry: AgentRegistryApi,
 	ownerId: string,
 	owner: AgentRef,
 	owned: Map<string, AgentRef>,

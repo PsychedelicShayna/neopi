@@ -535,9 +535,43 @@ func (v Usage) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), "", v.Extra)
 }
 
+// Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope.
+type ParentIrc struct {
+	// Sending parent agent id.
+	From string `json:"from"`
+	// Message body as the parent wrote it.
+	Body string `json:"body"`
+	// Extra holds undeclared keys and declared keys whose value did not decode (that field stays zero).
+	// Encoding writes them back, over a declared field with the same key.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (v *ParentIrc) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ParentIrc", v.decodeFrom)
+}
+
+func (v *ParentIrc) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ParentIrc
+	d := fieldDecoder{raw: raw, owner: "ParentIrc", open: true}
+	d.required("from", &out.From)
+	d.required("body", &out.Body)
+	out.Extra = d.rest()
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ParentIrc) MarshalJSON() ([]byte, error) {
+	type plain ParentIrc
+	return encodeObject(plain(v), "", v.Extra)
+}
+
 type UserMessage struct {
 	Content          MessageContent             `json:"content"`
 	Timestamp        float64                    `json:"timestamp"`
+	ParentIrc        *ParentIrc                 `json:"parentIrc,omitempty"`
 	Synthetic        *bool                      `json:"synthetic,omitempty"`
 	Steering         *bool                      `json:"steering,omitempty"`
 	LiveSteered      *bool                      `json:"liveSteered,omitempty"`
@@ -559,6 +593,7 @@ func (v *UserMessage) decodeFrom(raw map[string]json.RawMessage) error {
 	d.constant("role", "user")
 	d.required("content", &out.Content)
 	d.required("timestamp", &out.Timestamp)
+	d.optional("parentIrc", &out.ParentIrc)
 	d.optional("synthetic", &out.Synthetic)
 	d.optional("steering", &out.Steering)
 	d.optional("liveSteered", &out.LiveSteered)
@@ -2365,6 +2400,8 @@ func (v *RoleInfoSource) UnmarshalJSON(data []byte) error {
 type RolesResult struct {
 	Roles      []RoleInfo `json:"roles"`
 	ActiveRole *string    `json:"activeRole,omitempty"`
+	// The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.
+	CycleOrder []string `json:"cycleOrder"`
 }
 
 func (v *RolesResult) UnmarshalJSON(data []byte) error {
@@ -2376,6 +2413,7 @@ func (v *RolesResult) decodeFrom(raw map[string]json.RawMessage) error {
 	d := fieldDecoder{raw: raw, owner: "RolesResult"}
 	d.required("roles", &out.Roles)
 	d.optional("activeRole", &out.ActiveRole)
+	d.defaulted("cycleOrder", &out.CycleOrder, `[]`)
 	if d.err != nil {
 		return d.err
 	}
@@ -4233,6 +4271,8 @@ type SessionState struct {
 	SlowModeSupported bool `json:"slowModeSupported"`
 	// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
 	SlowModeEnabled bool `json:"slowModeEnabled"`
+	// Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.
+	DictationEnabled bool `json:"dictationEnabled"`
 	// Where the active model's `/slow` lives; absent when unsupported.
 	SlowModeScope *SlowModeScope `json:"slowModeScope,omitempty"`
 	// Usage-limit stage of the active model's account; absent outside wrap-up and low priority.
@@ -4240,6 +4280,12 @@ type SessionState struct {
 	TokensPerSecond    *float64         `json:"tokensPerSecond"`
 	MessageCount       int64            `json:"messageCount"`
 	QueuedMessageCount int64            `json:"queuedMessageCount"`
+	// Short machine hostname (first DNS label).
+	Hostname string `json:"hostname"`
+	// Accumulated active-processing time, including the run in flight; idle time never counts.
+	ActiveTimeMs float64 `json:"activeTimeMs"`
+	// Running background jobs outside the subagents count, as the TUI jobs pill counts them.
+	RunningJobCount int64 `json:"runningJobCount"`
 	// Background jobs or deliveries can still inject a follow-up and wake the session.
 	HasPendingAsyncWork bool `json:"hasPendingAsyncWork"`
 	// Idle with nothing queued or pending; same predicate as `session_settled`.
@@ -4283,11 +4329,15 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 	d.defaulted("fastModeActive", &out.FastModeActive, `false`)
 	d.defaulted("slowModeSupported", &out.SlowModeSupported, `false`)
 	d.defaulted("slowModeEnabled", &out.SlowModeEnabled, `false`)
+	d.defaulted("dictationEnabled", &out.DictationEnabled, `false`)
 	d.optional("slowModeScope", &out.SlowModeScope)
 	d.optional("usageLimit", &out.UsageLimit)
 	d.defaulted("tokensPerSecond", &out.TokensPerSecond, `null`)
 	d.defaulted("messageCount", &out.MessageCount, `0`)
 	d.defaulted("queuedMessageCount", &out.QueuedMessageCount, `0`)
+	d.defaulted("hostname", &out.Hostname, `""`)
+	d.defaulted("activeTimeMs", &out.ActiveTimeMs, `0`)
+	d.defaulted("runningJobCount", &out.RunningJobCount, `0`)
 	d.defaulted("hasPendingAsyncWork", &out.HasPendingAsyncWork, `false`)
 	d.defaulted("isSettled", &out.IsSettled, `false`)
 	d.defaulted("queuedMessages", &out.QueuedMessages, `{"steering":[],"followUp":[],"liveSteered":0}`)
@@ -4305,20 +4355,35 @@ func (v *SessionState) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type BashResult struct {
-	Output              string                     `json:"output"`
-	Cancelled           bool                       `json:"cancelled"`
-	Truncated           bool                       `json:"truncated"`
-	TotalLines          int64                      `json:"totalLines"`
-	TotalBytes          int64                      `json:"totalBytes"`
-	OutputLines         int64                      `json:"outputLines"`
-	OutputBytes         int64                      `json:"outputBytes"`
-	ExitCode            *int64                     `json:"exitCode,omitempty"`
-	TimedOut            *bool                      `json:"timedOut,omitempty"`
-	ArtifactID          *string                    `json:"artifactId,omitempty"`
-	ArtifactElidedBytes *int64                     `json:"artifactElidedBytes,omitempty"`
-	ArtifactError       map[string]json.RawMessage `json:"artifactError,omitempty"`
-	WorkingDir          *string                    `json:"workingDir,omitempty"`
-	Images              []ImageContent             `json:"images,omitempty"`
+	Output              string  `json:"output"`
+	Cancelled           bool    `json:"cancelled"`
+	Truncated           bool    `json:"truncated"`
+	TotalLines          int64   `json:"totalLines"`
+	TotalBytes          int64   `json:"totalBytes"`
+	OutputLines         int64   `json:"outputLines"`
+	OutputBytes         int64   `json:"outputBytes"`
+	ExitCode            *int64  `json:"exitCode,omitempty"`
+	TimedOut            *bool   `json:"timedOut,omitempty"`
+	ArtifactID          *string `json:"artifactId,omitempty"`
+	ArtifactElidedBytes *int64  `json:"artifactElidedBytes,omitempty"`
+	// Bytes dropped from the middle of `output`, which keeps the head and tail.
+	ElidedBytes *int64 `json:"elidedBytes,omitempty"`
+	// Lines dropped from the middle of `output`.
+	ElidedLines *int64 `json:"elidedLines,omitempty"`
+	// Bytes the per-line column cap cut from `output`, across all lines.
+	ColumnDroppedBytes *int64 `json:"columnDroppedBytes,omitempty"`
+	// Lines of `output` the per-line column cap cut; the artifact holds them whole.
+	ColumnTruncatedLines *int64 `json:"columnTruncatedLines,omitempty"`
+	// First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it.
+	ColumnTruncatedRange *LineRange `json:"columnTruncatedRange,omitempty"`
+	// The per-line column cap in UTF-8 bytes, set when it cut a line.
+	ColumnMax     *int64                     `json:"columnMax,omitempty"`
+	ArtifactError map[string]json.RawMessage `json:"artifactError,omitempty"`
+	Minimized     map[string]json.RawMessage `json:"minimized,omitempty"`
+	WorkingDir    *string                    `json:"workingDir,omitempty"`
+	Images        []ImageContent             `json:"images,omitempty"`
+	// The embedded shell's final `ShellTrace` of the run; only when the caller asked for one.
+	Trace map[string]json.RawMessage `json:"trace,omitempty"`
 }
 
 func (v *BashResult) UnmarshalJSON(data []byte) error {
@@ -4339,9 +4404,38 @@ func (v *BashResult) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("timedOut", &out.TimedOut)
 	d.optional("artifactId", &out.ArtifactID)
 	d.optional("artifactElidedBytes", &out.ArtifactElidedBytes)
+	d.optional("elidedBytes", &out.ElidedBytes)
+	d.optional("elidedLines", &out.ElidedLines)
+	d.optional("columnDroppedBytes", &out.ColumnDroppedBytes)
+	d.optional("columnTruncatedLines", &out.ColumnTruncatedLines)
+	d.optional("columnTruncatedRange", &out.ColumnTruncatedRange)
+	d.optional("columnMax", &out.ColumnMax)
 	d.optional("artifactError", &out.ArtifactError)
+	d.optional("minimized", &out.Minimized)
 	d.optional("workingDir", &out.WorkingDir)
 	d.optional("images", &out.Images)
+	d.optional("trace", &out.Trace)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type LineRange struct {
+	First int64 `json:"first"`
+	Last  int64 `json:"last"`
+}
+
+func (v *LineRange) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "LineRange", v.decodeFrom)
+}
+
+func (v *LineRange) decodeFrom(raw map[string]json.RawMessage) error {
+	var out LineRange
+	d := fieldDecoder{raw: raw, owner: "LineRange"}
+	d.required("first", &out.First)
+	d.required("last", &out.Last)
 	if d.err != nil {
 		return d.err
 	}
@@ -4788,6 +4882,36 @@ func (v *SlashSubcommand) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
+type CommandCompletion struct {
+	// Replaces the argument text the host typed.
+	Value       string  `json:"value"`
+	Label       string  `json:"label"`
+	Description *string `json:"description,omitempty"`
+	// Ghost text to show after the cursor.
+	Hint *string `json:"hint,omitempty"`
+	// Accepting it leaves a complete command, so the host may submit at once.
+	SubmitsCommand *bool `json:"submitsCommand,omitempty"`
+}
+
+func (v *CommandCompletion) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CommandCompletion", v.decodeFrom)
+}
+
+func (v *CommandCompletion) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CommandCompletion
+	d := fieldDecoder{raw: raw, owner: "CommandCompletion"}
+	d.required("value", &out.Value)
+	d.required("label", &out.Label)
+	d.optional("description", &out.Description)
+	d.optional("hint", &out.Hint)
+	d.optional("submitsCommand", &out.SubmitsCommand)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type AvailableSlashCommand struct {
 	Name        string             `json:"name"`
 	Source      SlashCommandSource `json:"source"`
@@ -4795,6 +4919,8 @@ type AvailableSlashCommand struct {
 	Description *string            `json:"description,omitempty"`
 	Input       *SlashCommandInput `json:"input,omitempty"`
 	Subcommands []SlashSubcommand  `json:"subcommands,omitempty"`
+	// `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.
+	Availability AvailableSlashCommandAvailability `json:"availability"`
 }
 
 func (v *AvailableSlashCommand) UnmarshalJSON(data []byte) error {
@@ -4810,11 +4936,32 @@ func (v *AvailableSlashCommand) decodeFrom(raw map[string]json.RawMessage) error
 	d.optional("description", &out.Description)
 	d.optional("input", &out.Input)
 	d.optional("subcommands", &out.Subcommands)
+	d.defaulted("availability", &out.Availability, `"headless"`)
 	if d.err != nil {
 		return d.err
 	}
 	*v = out
 	return nil
+}
+
+type AvailableSlashCommandAvailability string
+
+const (
+	AvailableSlashCommandAvailabilityHeadless AvailableSlashCommandAvailability = "headless"
+	AvailableSlashCommandAvailabilityTui      AvailableSlashCommandAvailability = "tui"
+)
+
+func (v *AvailableSlashCommandAvailability) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "AvailableSlashCommandAvailability")
+	if err != nil {
+		return err
+	}
+	switch value := AvailableSlashCommandAvailability(s); value {
+	case AvailableSlashCommandAvailabilityHeadless, AvailableSlashCommandAvailabilityTui:
+		*v = value
+		return nil
+	}
+	return unknownValue("AvailableSlashCommandAvailability", s)
 }
 
 // OMP-native session entries in append order.
@@ -5167,6 +5314,364 @@ func (v *SubagentSnapshot) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("resolvedThinkingLevel", &out.ResolvedThinkingLevel)
 	d.optional("fastModeEnabled", &out.FastModeEnabled)
 	d.optional("fastModeActive", &out.FastModeActive)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobType string
+
+const (
+	JobTypeBash      JobType = "bash"
+	JobTypeTask      JobType = "task"
+	JobTypeEval      JobType = "eval"
+	JobTypeChronicle JobType = "chronicle"
+)
+
+func (v *JobType) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobType")
+	if err != nil {
+		return err
+	}
+	switch value := JobType(s); value {
+	case JobTypeBash, JobTypeTask, JobTypeEval, JobTypeChronicle:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobType", s)
+}
+
+type JobStatus string
+
+const (
+	JobStatusRunning   JobStatus = "running"
+	JobStatusCompleted JobStatus = "completed"
+	JobStatusFailed    JobStatus = "failed"
+	JobStatusCancelled JobStatus = "cancelled"
+)
+
+func (v *JobStatus) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobStatus")
+	if err != nil {
+		return err
+	}
+	switch value := JobStatus(s); value {
+	case JobStatusRunning, JobStatusCompleted, JobStatusFailed, JobStatusCancelled:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobStatus", s)
+}
+
+// One background job.
+type JobInfo struct {
+	// Stable `bg_N` id.
+	ID     string    `json:"id"`
+	Type   JobType   `json:"type"`
+	Label  string    `json:"label"`
+	Status JobStatus `json:"status"`
+	// Epoch milliseconds.
+	StartedAt float64 `json:"startedAt"`
+	// Size in bytes of the output snapshot `get_job_output` reads.
+	OutputBytes int64 `json:"outputBytes"`
+	// Full command line of a job that runs a process; `label` is cut to 120 characters.
+	Command    *string  `json:"command,omitempty"`
+	FinishedAt *float64 `json:"finishedAt,omitempty"`
+	ExitCode   *int64   `json:"exitCode,omitempty"`
+	// Failure text of a failed job, cut to a bounded length.
+	Error *string `json:"error,omitempty"`
+	// Registry id of the agent that registered the job.
+	OwnerID *string `json:"ownerId,omitempty"`
+	// Registry id of the subagent a task job runs.
+	AgentID *string `json:"agentId,omitempty"`
+}
+
+func (v *JobInfo) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobInfo", v.decodeFrom)
+}
+
+func (v *JobInfo) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobInfo
+	d := fieldDecoder{raw: raw, owner: "JobInfo"}
+	d.required("id", &out.ID)
+	d.required("type", &out.Type)
+	d.required("label", &out.Label)
+	d.required("status", &out.Status)
+	d.required("startedAt", &out.StartedAt)
+	d.required("outputBytes", &out.OutputBytes)
+	d.optional("command", &out.Command)
+	d.optional("finishedAt", &out.FinishedAt)
+	d.optional("exitCode", &out.ExitCode)
+	d.optional("error", &out.Error)
+	d.optional("ownerId", &out.OwnerID)
+	d.optional("agentId", &out.AgentID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobAgent struct {
+	ID       string  `json:"id"`
+	ParentID *string `json:"parentId,omitempty"`
+}
+
+func (v *JobAgent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobAgent", v.decodeFrom)
+}
+
+func (v *JobAgent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobAgent
+	d := fieldDecoder{raw: raw, owner: "JobAgent"}
+	d.required("id", &out.ID)
+	d.optional("parentId", &out.ParentID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobsResult struct {
+	Running []JobInfo `json:"running"`
+	// Settled jobs, newest first, at most `recentLimit`.
+	Recent []JobInfo `json:"recent"`
+	// Subagents owning listed jobs, with the ancestors linking them to the root.
+	Agents []JobAgent `json:"agents"`
+	// Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`.
+	RunningCount int64 `json:"runningCount"`
+	// The agent the tree is for; its own jobs are the top level.
+	RootID *string `json:"rootId,omitempty"`
+}
+
+func (v *JobsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobsResult", v.decodeFrom)
+}
+
+func (v *JobsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobsResult
+	d := fieldDecoder{raw: raw, owner: "JobsResult"}
+	d.required("running", &out.Running)
+	d.required("recent", &out.Recent)
+	d.required("agents", &out.Agents)
+	d.required("runningCount", &out.RunningCount)
+	d.optional("rootId", &out.RootID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type JobOutput struct {
+	JobID    string    `json:"jobId"`
+	Status   JobStatus `json:"status"`
+	FromByte int64     `json:"fromByte"`
+	// Pass as the next `fromByte` to read on.
+	NextByte int64 `json:"nextByte"`
+	// Size in bytes of the whole output snapshot.
+	TotalBytes int64 `json:"totalBytes"`
+	// `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.
+	Reset  bool   `json:"reset"`
+	Output string `json:"output"`
+	// Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.
+	Revision string `json:"revision"`
+}
+
+func (v *JobOutput) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobOutput", v.decodeFrom)
+}
+
+func (v *JobOutput) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobOutput
+	d := fieldDecoder{raw: raw, owner: "JobOutput"}
+	d.required("jobId", &out.JobID)
+	d.required("status", &out.Status)
+	d.required("fromByte", &out.FromByte)
+	d.required("nextByte", &out.NextByte)
+	d.required("totalBytes", &out.TotalBytes)
+	d.required("reset", &out.Reset)
+	d.required("output", &out.Output)
+	d.defaulted("revision", &out.Revision, `""`)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SubagentHistoryMetrics struct {
+	Tokens        float64  `json:"tokens"`
+	Requests      float64  `json:"requests"`
+	Tools         float64  `json:"tools"`
+	Cost          float64  `json:"cost"`
+	DurationMs    float64  `json:"durationMs"`
+	ContextTokens *float64 `json:"contextTokens,omitempty"`
+	ContextWindow *float64 `json:"contextWindow,omitempty"`
+}
+
+func (v *SubagentHistoryMetrics) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistoryMetrics", v.decodeFrom)
+}
+
+func (v *SubagentHistoryMetrics) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistoryMetrics
+	d := fieldDecoder{raw: raw, owner: "SubagentHistoryMetrics"}
+	d.required("tokens", &out.Tokens)
+	d.required("requests", &out.Requests)
+	d.required("tools", &out.Tools)
+	d.required("cost", &out.Cost)
+	d.required("durationMs", &out.DurationMs)
+	d.optional("contextTokens", &out.ContextTokens)
+	d.optional("contextWindow", &out.ContextWindow)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+// One child of the root session's tree.
+type SubagentHistoryEntry struct {
+	ID          string                   `json:"id"`
+	Kind        SubagentHistoryEntryKind `json:"kind"`
+	DisplayName string                   `json:"displayName"`
+	// `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted.
+	Status SubagentHistoryEntryStatus `json:"status"`
+	// The child's session is in memory (`running` or `idle`).
+	Live         bool    `json:"live"`
+	SessionFile  string  `json:"sessionFile"`
+	CreatedAt    float64 `json:"createdAt"`
+	LastActivity float64 `json:"lastActivity"`
+	ParentID     *string `json:"parentId,omitempty"`
+	Agent        *string `json:"agent,omitempty"`
+	// Persisted task gist, or the current activity of a live child.
+	Description *string  `json:"description,omitempty"`
+	ResponseAt  *float64 `json:"responseAt,omitempty"`
+	AcceptedAt  *float64 `json:"acceptedAt,omitempty"`
+	TerminalAt  *float64 `json:"terminalAt,omitempty"`
+	// Known only from the live roster.
+	ParentToolCallID      *string                  `json:"parentToolCallId,omitempty"`
+	ResolvedModel         *string                  `json:"resolvedModel,omitempty"`
+	ResolvedModelIdentity *string                  `json:"resolvedModelIdentity,omitempty"`
+	ResolvedThinkingLevel *ConfiguredThinkingLevel `json:"resolvedThinkingLevel,omitempty"`
+	// Live children only.
+	FastModeEnabled *bool `json:"fastModeEnabled,omitempty"`
+	// Live children only.
+	FastModeActive *bool                   `json:"fastModeActive,omitempty"`
+	ModelRole      *string                 `json:"modelRole,omitempty"`
+	ReadOnly       *bool                   `json:"readOnly,omitempty"`
+	Metrics        *SubagentHistoryMetrics `json:"metrics,omitempty"`
+	// Cumulative cost of the child's own session, excluding nested task results.
+	DirectCost *float64 `json:"directCost,omitempty"`
+	OutputPath *string  `json:"outputPath,omitempty"`
+	PatchPath  *string  `json:"patchPath,omitempty"`
+	BranchName *string  `json:"branchName,omitempty"`
+}
+
+func (v *SubagentHistoryEntry) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistoryEntry", v.decodeFrom)
+}
+
+func (v *SubagentHistoryEntry) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistoryEntry
+	d := fieldDecoder{raw: raw, owner: "SubagentHistoryEntry"}
+	d.required("id", &out.ID)
+	d.required("kind", &out.Kind)
+	d.required("displayName", &out.DisplayName)
+	d.required("status", &out.Status)
+	d.required("live", &out.Live)
+	d.required("sessionFile", &out.SessionFile)
+	d.required("createdAt", &out.CreatedAt)
+	d.required("lastActivity", &out.LastActivity)
+	d.optional("parentId", &out.ParentID)
+	d.optional("agent", &out.Agent)
+	d.optional("description", &out.Description)
+	d.optional("responseAt", &out.ResponseAt)
+	d.optional("acceptedAt", &out.AcceptedAt)
+	d.optional("terminalAt", &out.TerminalAt)
+	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.optional("resolvedModel", &out.ResolvedModel)
+	d.optional("resolvedModelIdentity", &out.ResolvedModelIdentity)
+	d.optional("resolvedThinkingLevel", &out.ResolvedThinkingLevel)
+	d.optional("fastModeEnabled", &out.FastModeEnabled)
+	d.optional("fastModeActive", &out.FastModeActive)
+	d.optional("modelRole", &out.ModelRole)
+	d.optional("readOnly", &out.ReadOnly)
+	d.optional("metrics", &out.Metrics)
+	d.optional("directCost", &out.DirectCost)
+	d.optional("outputPath", &out.OutputPath)
+	d.optional("patchPath", &out.PatchPath)
+	d.optional("branchName", &out.BranchName)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SubagentHistoryEntryKind string
+
+const (
+	SubagentHistoryEntryKindSub     SubagentHistoryEntryKind = "sub"
+	SubagentHistoryEntryKindAdvisor SubagentHistoryEntryKind = "advisor"
+)
+
+func (v *SubagentHistoryEntryKind) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SubagentHistoryEntryKind")
+	if err != nil {
+		return err
+	}
+	switch value := SubagentHistoryEntryKind(s); value {
+	case SubagentHistoryEntryKindSub, SubagentHistoryEntryKindAdvisor:
+		*v = value
+		return nil
+	}
+	return unknownValue("SubagentHistoryEntryKind", s)
+}
+
+type SubagentHistoryEntryStatus string
+
+const (
+	SubagentHistoryEntryStatusRunning SubagentHistoryEntryStatus = "running"
+	SubagentHistoryEntryStatusIdle    SubagentHistoryEntryStatus = "idle"
+	SubagentHistoryEntryStatusParked  SubagentHistoryEntryStatus = "parked"
+	SubagentHistoryEntryStatusAborted SubagentHistoryEntryStatus = "aborted"
+)
+
+func (v *SubagentHistoryEntryStatus) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SubagentHistoryEntryStatus")
+	if err != nil {
+		return err
+	}
+	switch value := SubagentHistoryEntryStatus(s); value {
+	case SubagentHistoryEntryStatusRunning, SubagentHistoryEntryStatusIdle, SubagentHistoryEntryStatusParked, SubagentHistoryEntryStatusAborted:
+		*v = value
+		return nil
+	}
+	return unknownValue("SubagentHistoryEntryStatus", s)
+}
+
+type SubagentHistory struct {
+	// Oldest first.
+	Subagents       []SubagentHistoryEntry `json:"subagents"`
+	RootSessionFile *string                `json:"rootSessionFile,omitempty"`
+	RootAgentID     *string                `json:"rootAgentId,omitempty"`
+}
+
+func (v *SubagentHistory) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SubagentHistory", v.decodeFrom)
+}
+
+func (v *SubagentHistory) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SubagentHistory
+	d := fieldDecoder{raw: raw, owner: "SubagentHistory"}
+	d.required("subagents", &out.Subagents)
+	d.optional("rootSessionFile", &out.RootSessionFile)
+	d.optional("rootAgentId", &out.RootAgentID)
 	if d.err != nil {
 		return d.err
 	}
@@ -7847,6 +8352,8 @@ type ReadyEvent struct {
 	SupportedProtocolVersions []int64  `json:"supportedProtocolVersions,omitempty"`
 	MaxFrameBytes             *int64   `json:"maxFrameBytes,omitempty"`
 	MaxReassembledFrameBytes  *int64   `json:"maxReassembledFrameBytes,omitempty"`
+	// `bash` accepts `excludeFromContext`; require exactly true before sending excluded commands.
+	SupportsBashExcludeFromContext *bool `json:"supportsBashExcludeFromContext,omitempty"`
 }
 
 func (v *ReadyEvent) UnmarshalJSON(data []byte) error {
@@ -7862,6 +8369,7 @@ func (v *ReadyEvent) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("supportedProtocolVersions", &out.SupportedProtocolVersions)
 	d.optional("maxFrameBytes", &out.MaxFrameBytes)
 	d.optional("maxReassembledFrameBytes", &out.MaxReassembledFrameBytes)
+	d.optional("supportsBashExcludeFromContext", &out.SupportsBashExcludeFromContext)
 	if d.err != nil {
 		return d.err
 	}
@@ -8458,6 +8966,60 @@ func (v *LiveEndEvent) decodeFrom(raw map[string]json.RawMessage) error {
 func (v LiveEndEvent) MarshalJSON() ([]byte, error) {
 	type plain LiveEndEvent
 	return encodeObject(plain(v), `"type":"live_end"`, nil)
+}
+
+// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+type JobLifecycleEvent struct {
+	Event JobLifecycleEventEvent `json:"event"`
+	Job   JobInfo                `json:"job"`
+	// Running jobs by the TUI jobs-pill rule after this transition.
+	RunningCount int64 `json:"runningCount"`
+}
+
+func (v *JobLifecycleEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "JobLifecycleEvent", v.decodeFrom)
+}
+
+func (v *JobLifecycleEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out JobLifecycleEvent
+	d := fieldDecoder{raw: raw, owner: "JobLifecycleEvent"}
+	d.constant("type", "job_lifecycle")
+	d.required("event", &out.Event)
+	d.required("job", &out.Job)
+	d.required("runningCount", &out.RunningCount)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v JobLifecycleEvent) MarshalJSON() ([]byte, error) {
+	type plain JobLifecycleEvent
+	return encodeObject(plain(v), `"type":"job_lifecycle"`, nil)
+}
+
+type JobLifecycleEventEvent string
+
+const (
+	JobLifecycleEventEventRegistered JobLifecycleEventEvent = "registered"
+	JobLifecycleEventEventProgress   JobLifecycleEventEvent = "progress"
+	JobLifecycleEventEventCompleted  JobLifecycleEventEvent = "completed"
+	JobLifecycleEventEventFailed     JobLifecycleEventEvent = "failed"
+	JobLifecycleEventEventCancelled  JobLifecycleEventEvent = "cancelled"
+)
+
+func (v *JobLifecycleEventEvent) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "JobLifecycleEventEvent")
+	if err != nil {
+		return err
+	}
+	switch value := JobLifecycleEventEvent(s); value {
+	case JobLifecycleEventEventRegistered, JobLifecycleEventEventProgress, JobLifecycleEventEventCompleted, JobLifecycleEventEventFailed, JobLifecycleEventEventCancelled:
+		*v = value
+		return nil
+	}
+	return unknownValue("JobLifecycleEventEvent", s)
 }
 
 // State of one draft-only microphone capture.
@@ -9945,6 +10507,7 @@ func (LivePhaseEvent) isRpcNotification()                  {}
 func (LiveLevelsEvent) isRpcNotification()                 {}
 func (LiveTranscriptEvent) isRpcNotification()             {}
 func (LiveEndEvent) isRpcNotification()                    {}
+func (JobLifecycleEvent) isRpcNotification()               {}
 func (DictationStateEvent) isRpcNotification()             {}
 func (DictationTranscriptEvent) isRpcNotification()        {}
 func (DictationEndEvent) isRpcNotification()               {}
@@ -10042,6 +10605,8 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[LiveTranscriptEvent](raw)
 	case "live_end":
 		value, err = decodeVariant[LiveEndEvent](raw)
+	case "job_lifecycle":
+		value, err = decodeVariant[JobLifecycleEvent](raw)
 	case "dictation_state":
 		value, err = decodeVariant[DictationStateEvent](raw)
 	case "dictation_transcript":
@@ -10195,6 +10760,7 @@ func (LivePhaseEvent) isRpcServerFrame()                  {}
 func (LiveLevelsEvent) isRpcServerFrame()                 {}
 func (LiveTranscriptEvent) isRpcServerFrame()             {}
 func (LiveEndEvent) isRpcServerFrame()                    {}
+func (JobLifecycleEvent) isRpcServerFrame()               {}
 func (DictationStateEvent) isRpcServerFrame()             {}
 func (DictationTranscriptEvent) isRpcServerFrame()        {}
 func (DictationEndEvent) isRpcServerFrame()               {}
@@ -10302,6 +10868,8 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[LiveTranscriptEvent](raw)
 	case "live_end":
 		value, err = decodeVariant[LiveEndEvent](raw)
+	case "job_lifecycle":
+		value, err = decodeVariant[JobLifecycleEvent](raw)
 	case "dictation_state":
 		value, err = decodeVariant[DictationStateEvent](raw)
 	case "dictation_transcript":
@@ -10557,6 +11125,29 @@ func (v *SetRoleResult) UnmarshalJSON(data []byte) error {
 func (v *SetRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
 	var out SetRoleResult
 	d := fieldDecoder{raw: raw, owner: "SetRoleResult"}
+	d.required("role", &out.Role)
+	d.required("model", &out.Model)
+	d.optional("thinkingLevel", &out.ThinkingLevel)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type CycleRoleResult struct {
+	Role          string         `json:"role"`
+	Model         ModelInfo      `json:"model"`
+	ThinkingLevel *ThinkingLevel `json:"thinkingLevel,omitempty"`
+}
+
+func (v *CycleRoleResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CycleRoleResult", v.decodeFrom)
+}
+
+func (v *CycleRoleResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CycleRoleResult
+	d := fieldDecoder{raw: raw, owner: "CycleRoleResult"}
 	d.required("role", &out.Role)
 	d.required("model", &out.Model)
 	d.optional("thinkingLevel", &out.ThinkingLevel)
@@ -10917,6 +11508,69 @@ func (v *CancelSubagentResult) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+type GetCommandCompletionsResult struct {
+	Items []CommandCompletion `json:"items"`
+}
+
+func (v *GetCommandCompletionsResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetCommandCompletionsResult", v.decodeFrom)
+}
+
+func (v *GetCommandCompletionsResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetCommandCompletionsResult
+	d := fieldDecoder{raw: raw, owner: "GetCommandCompletionsResult"}
+	d.required("items", &out.Items)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type CancelJobResult struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+func (v *CancelJobResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "CancelJobResult", v.decodeFrom)
+}
+
+func (v *CancelJobResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out CancelJobResult
+	d := fieldDecoder{raw: raw, owner: "CancelJobResult"}
+	d.required("cancelled", &out.Cancelled)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type SetSubagentModelResult struct {
+	Provider      string         `json:"provider"`
+	ModelID       string         `json:"modelId"`
+	ThinkingLevel *ThinkingLevel `json:"thinkingLevel,omitempty"`
+	Warning       *string        `json:"warning,omitempty"`
+}
+
+func (v *SetSubagentModelResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SetSubagentModelResult", v.decodeFrom)
+}
+
+func (v *SetSubagentModelResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SetSubagentModelResult
+	d := fieldDecoder{raw: raw, owner: "SetSubagentModelResult"}
+	d.required("provider", &out.Provider)
+	d.required("modelId", &out.ModelID)
+	d.optional("thinkingLevel", &out.ThinkingLevel)
+	d.optional("warning", &out.Warning)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type LiveStartResult struct {
 	Voice string `json:"voice"`
 }
@@ -11045,6 +11699,27 @@ func (v *SetCacheWarmingResult) decodeFrom(raw map[string]json.RawMessage) error
 	var out SetCacheWarmingResult
 	d := fieldDecoder{raw: raw, owner: "SetCacheWarmingResult"}
 	d.required("mode", &out.Mode)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+type GetSessionLeaseResult struct {
+	Held    []string `json:"held"`
+	Unknown []string `json:"unknown"`
+}
+
+func (v *GetSessionLeaseResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "GetSessionLeaseResult", v.decodeFrom)
+}
+
+func (v *GetSessionLeaseResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out GetSessionLeaseResult
+	d := fieldDecoder{raw: raw, owner: "GetSessionLeaseResult"}
+	d.required("held", &out.Held)
+	d.required("unknown", &out.Unknown)
 	if d.err != nil {
 		return d.err
 	}
@@ -11544,7 +12219,7 @@ type QueryModelSelectorCommand struct {
 	Query string `json:"query"`
 }
 
-// QueryModelSelector sends "query_model_selector": Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+// QueryModelSelector sends "query_model_selector": Query native /model ordering, scoped candidates, role aliases and model facts without selecting.
 func (c Commands) QueryModelSelector(ctx context.Context, p QueryModelSelectorCommand) (ModelSelectorResult, error) {
 	var out ModelSelectorResult
 	err := c.call(ctx, "query_model_selector", p, 0, &out)
@@ -11561,6 +12236,38 @@ func (c Commands) SetRole(ctx context.Context, p SetRoleCommand) (SetRoleResult,
 	var out SetRoleResult
 	err := c.call(ctx, "set_role", p, 0, &out)
 	return out, err
+}
+
+// CycleRoleCommand holds the parameters of "cycle_role".
+type CycleRoleCommand struct {
+	Direction *CycleRoleCommandDirection `json:"direction,omitempty"`
+}
+
+// CycleRole sends "cycle_role": Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.
+func (c Commands) CycleRole(ctx context.Context, p CycleRoleCommand) (*CycleRoleResult, error) {
+	var out *CycleRoleResult
+	err := c.call(ctx, "cycle_role", p, 0, &out)
+	return out, err
+}
+
+type CycleRoleCommandDirection string
+
+const (
+	CycleRoleCommandDirectionForward  CycleRoleCommandDirection = "forward"
+	CycleRoleCommandDirectionBackward CycleRoleCommandDirection = "backward"
+)
+
+func (v *CycleRoleCommandDirection) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "CycleRoleCommandDirection")
+	if err != nil {
+		return err
+	}
+	switch value := CycleRoleCommandDirection(s); value {
+	case CycleRoleCommandDirectionForward, CycleRoleCommandDirectionBackward:
+		*v = value
+		return nil
+	}
+	return unknownValue("CycleRoleCommandDirection", s)
 }
 
 // GetModelsConfiguration sends "get_models_configuration": Read the native provider catalog, scoped model roles, and effort rules.
@@ -12134,6 +12841,18 @@ func (c Commands) GetSubagents(ctx context.Context) ([]SubagentSnapshot, error) 
 	return out.Subagents, err
 }
 
+// GetSubagentHistoryCommand holds the parameters of "get_subagent_history".
+type GetSubagentHistoryCommand struct {
+	IncludeAdvisors *bool `json:"includeAdvisors,omitempty"`
+}
+
+// GetSubagentHistory sends "get_subagent_history": List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.
+func (c Commands) GetSubagentHistory(ctx context.Context, p GetSubagentHistoryCommand) (SubagentHistory, error) {
+	var out SubagentHistory
+	err := c.call(ctx, "get_subagent_history", p, 0, &out)
+	return out, err
+}
+
 // GetSubagentMessagesCommand holds the parameters of "get_subagent_messages".
 type GetSubagentMessagesCommand struct {
 	SubagentID  *string `json:"subagentId,omitempty"`
@@ -12141,7 +12860,7 @@ type GetSubagentMessagesCommand struct {
 	FromByte    *int64  `json:"fromByte,omitempty"`
 }
 
-// GetSubagentMessages sends "get_subagent_messages": Read a subagent transcript by id or registered session file (`subagentId` wins).
+// GetSubagentMessages sends "get_subagent_messages": Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.
 func (c Commands) GetSubagentMessages(ctx context.Context, p GetSubagentMessagesCommand) (SubagentMessages, error) {
 	var out SubagentMessages
 	err := c.call(ctx, "get_subagent_messages", p, 0, &out)
@@ -12192,6 +12911,72 @@ type SetSubagentFastCommand struct {
 func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand) (FastModeResult, error) {
 	var out FastModeResult
 	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
+	return out, err
+}
+
+// GetCommandCompletionsCommand holds the parameters of "get_command_completions".
+type GetCommandCompletionsCommand struct {
+	Command string `json:"command"`
+	Prefix  string `json:"prefix"`
+}
+
+// GetCommandCompletions sends "get_command_completions": Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.
+func (c Commands) GetCommandCompletions(ctx context.Context, p GetCommandCompletionsCommand) ([]CommandCompletion, error) {
+	var out GetCommandCompletionsResult
+	err := c.call(ctx, "get_command_completions", p, 0, &out)
+	return out.Items, err
+}
+
+// GetJobsCommand holds the parameters of "get_jobs".
+type GetJobsCommand struct {
+	RecentLimit *int64 `json:"recentLimit,omitempty"`
+}
+
+// GetJobs sends "get_jobs": List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.
+func (c Commands) GetJobs(ctx context.Context, p GetJobsCommand) (JobsResult, error) {
+	var out JobsResult
+	err := c.call(ctx, "get_jobs", p, 0, &out)
+	return out, err
+}
+
+// GetJobOutputCommand holds the parameters of "get_job_output".
+type GetJobOutputCommand struct {
+	JobID    string  `json:"jobId"`
+	FromByte *int64  `json:"fromByte,omitempty"`
+	Revision *string `json:"revision,omitempty"`
+}
+
+// GetJobOutput sends "get_job_output": Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.
+func (c Commands) GetJobOutput(ctx context.Context, p GetJobOutputCommand) (JobOutput, error) {
+	var out JobOutput
+	err := c.call(ctx, "get_job_output", p, 0, &out)
+	return out, err
+}
+
+// CancelJobCommand holds the parameters of "cancel_job".
+type CancelJobCommand struct {
+	JobID string `json:"jobId"`
+}
+
+// CancelJob sends "cancel_job": Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.
+func (c Commands) CancelJob(ctx context.Context, p CancelJobCommand) (bool, error) {
+	var out CancelJobResult
+	err := c.call(ctx, "cancel_job", p, 0, &out)
+	return out.Cancelled, err
+}
+
+// SetSubagentModelCommand holds the parameters of "set_subagent_model".
+type SetSubagentModelCommand struct {
+	SubagentID string  `json:"subagentId"`
+	Selector   *string `json:"selector,omitempty"`
+	Provider   *string `json:"provider,omitempty"`
+	ModelID    *string `json:"modelId,omitempty"`
+}
+
+// SetSubagentModel sends "set_subagent_model": Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+func (c Commands) SetSubagentModel(ctx context.Context, p SetSubagentModelCommand) (SetSubagentModelResult, error) {
+	var out SetSubagentModelResult
+	err := c.call(ctx, "set_subagent_model", p, 0, &out)
 	return out, err
 }
 
@@ -12388,10 +13173,11 @@ func (c Commands) AbortRetry(ctx context.Context) error {
 
 // BashCommand holds the parameters of "bash".
 type BashCommand struct {
-	Command string `json:"command"`
+	Command            string `json:"command"`
+	ExcludeFromContext *bool  `json:"excludeFromContext,omitempty"`
 }
 
-// Bash sends "bash": Run a shell command.
+// Bash sends "bash": Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true.
 func (c Commands) Bash(ctx context.Context, p BashCommand) (BashResult, error) {
 	var out BashResult
 	err := c.call(ctx, "bash", p, 0, &out)
@@ -12407,6 +13193,18 @@ func (c Commands) AbortBash(ctx context.Context) error {
 func (c Commands) GetSessionStats(ctx context.Context) (SessionStats, error) {
 	var out SessionStats
 	err := c.call(ctx, "get_session_stats", nil, 0, &out)
+	return out, err
+}
+
+// GetSessionLeaseCommand holds the parameters of "get_session_lease".
+type GetSessionLeaseCommand struct {
+	SessionIds []string `json:"sessionIds"`
+}
+
+// GetSessionLease sends "get_session_lease": Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed.
+func (c Commands) GetSessionLease(ctx context.Context, p GetSessionLeaseCommand) (GetSessionLeaseResult, error) {
+	var out GetSessionLeaseResult
+	err := c.call(ctx, "get_session_lease", p, 0, &out)
 	return out, err
 }
 

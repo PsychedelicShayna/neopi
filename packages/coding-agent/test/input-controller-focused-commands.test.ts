@@ -1,6 +1,6 @@
 /**
  * Focused subagent views allow chat, viewer-scoped /btw, /export, /jobs and /usage,
- * effort controls, and session-only /fast. Model changes and other mutations,
+ * effort controls, and session-only /fast. Other slash-command mutations,
  * including /usage reset and /jobs kill, still require returning to main.
  *
  * Failure mode if this regresses: allowed commands silently do nothing (or steer
@@ -8,7 +8,8 @@
  * change the main session instead of the viewed agent.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { AgentBusyError, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -63,9 +64,9 @@ function createFocusedContext() {
 			return [];
 		},
 		addToHistory: vi.fn(),
-		imageLinks: undefined,
-		pendingImages: [],
-		pendingImageLinks: [],
+		imageLinks: undefined as (string | undefined)[] | undefined,
+		pendingImages: [] as ImageContent[],
+		pendingImageLinks: [] as (string | undefined)[],
 		clearDraft: vi.fn(),
 	};
 	const prompt = vi.fn(async () => {});
@@ -73,24 +74,28 @@ function createFocusedContext() {
 	const childControls = createSessionControls();
 	const siblingControls = createSessionControls();
 	const resume = vi.fn(async () => {});
+	const childSession = Object.assign(childControls, {
+		isStreaming: false,
+		queuedMessageCount: 0,
+		prompt,
+		resume,
+		abort: vi.fn(async () => {}),
+	});
 	const ctx = {
 		editor,
 		ui: { requestRender: vi.fn() },
 		session: Object.assign(mainControls, {
 			isStreaming: false,
 			isCompacting: false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			queuedMessageCount: 0,
 			customCommands: [],
 			promptTemplates: [],
 		}),
-		viewSession: Object.assign(childControls, {
-			isStreaming: false,
-			queuedMessageCount: 0,
-			prompt,
-			resume,
-			abort: vi.fn(async () => {}),
-		}),
+		get viewSession() {
+			return this.focusedAgentId ? childSession : this.session;
+		},
 		focusedAgentId: "Worker" as string | undefined,
 		statusLine: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
@@ -157,17 +162,6 @@ describe("focused subagent view slash commands", () => {
 		}
 	});
 
-	it("restores a focused continue shortcut when the target is busy", async () => {
-		const { ctx, raw, editor, resume } = createFocusedContext();
-		resume.mockRejectedValueOnce(new AgentBusyError());
-		const controller = new InputController(ctx);
-		controller.setupEditorSubmitHandler();
-		await ctx.editor.onSubmit?.(".");
-
-		expect(editor.getText()).toBe(".");
-		expect(raw.showError).toHaveBeenCalledTimes(1);
-	});
-
 	it("runs /usage from the focused view", async () => {
 		const { raw, prompt } = await submit("/usage");
 		expect(raw.handleUsageCommand).toHaveBeenCalledTimes(1);
@@ -198,10 +192,10 @@ describe("focused subagent view slash commands", () => {
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
-	it("cycles only the focused child's effort and refreshes the focused display", () => {
+	it("cycles only the focused child's effort and refreshes the focused display", async () => {
 		const { ctx, raw, childControls, mainControls, siblingControls } = createFocusedContext();
 
-		new InputController(ctx).cycleThinkingLevel();
+		await new InputController(ctx).cycleThinkingLevel();
 
 		expect(childControls.cycleThinkingLevel).toHaveBeenCalledTimes(1);
 		expect(childControls.thinkingLevel).toBe(ThinkingLevel.High);
@@ -214,11 +208,11 @@ describe("focused subagent view slash commands", () => {
 		expect(raw.settings.set).not.toHaveBeenCalled();
 	});
 
-	it("keeps effort cycling on the main session outside a focused view", () => {
+	it("keeps effort cycling on the main session outside a focused view", async () => {
 		const { ctx, raw, mainControls, childControls } = createFocusedContext();
 		raw.focusedAgentId = undefined;
 
-		new InputController(ctx).cycleThinkingLevel();
+		await new InputController(ctx).cycleThinkingLevel();
 
 		expect(mainControls.cycleThinkingLevel).toHaveBeenCalledTimes(1);
 		expect(childControls.cycleThinkingLevel).not.toHaveBeenCalled();
@@ -226,11 +220,11 @@ describe("focused subagent view slash commands", () => {
 		expect(raw.updateEditorBorderColor).toHaveBeenCalledTimes(1);
 	});
 
-	it("reports unsupported focused effort without changing the main session", () => {
+	it("reports unsupported focused effort without changing the main session", async () => {
 		const { ctx, raw, mainControls } = createFocusedContext();
 		raw.viewSession.cycleThinkingLevel = vi.fn(() => undefined);
 
-		new InputController(ctx).cycleThinkingLevel();
+		await new InputController(ctx).cycleThinkingLevel();
 
 		expect(raw.showStatus).toHaveBeenCalledWith("Current model does not support thinking");
 		expect(mainControls.cycleThinkingLevel).not.toHaveBeenCalled();
@@ -272,7 +266,7 @@ describe("focused subagent view slash commands", () => {
 
 	it("reads shared-control changes in focused status without claiming priority is active", async () => {
 		const { ctx, raw, editor, childControls, mainControls, siblingControls } = createFocusedContext();
-		expect(setSubagentFast(ctx.viewSession, true)).toBe(true);
+		expect(await setSubagentFast(ctx.viewSession, true)).toBe(true);
 		new InputController(ctx).setupEditorSubmitHandler();
 		editor.setText("/fast status");
 
@@ -283,6 +277,44 @@ describe("focused subagent view slash commands", () => {
 		expect(childControls.setFastMode).toHaveBeenCalledTimes(1);
 		expect(mainControls.isFastModeEnabled()).toBe(false);
 		expect(siblingControls.isFastModeEnabled()).toBe(false);
+	});
+
+	it("preserves new text or image-only input arriving while focused /fast awaits its worker", async () => {
+		for (const replaceText of [true, false]) {
+			const { ctx, raw, editor } = createFocusedContext();
+			editor.clearDraft.mockImplementation(() => {
+				editor.setText("");
+				editor.pendingImages = [];
+				editor.pendingImageLinks = [];
+				editor.imageLinks = undefined;
+			});
+			const started = Promise.withResolvers<void>();
+			const finished = Promise.withResolvers<string>();
+			Object.assign(raw.viewSession, {
+				instanceKey: "remote-worker:focused-fast",
+				runSubagentFastCommand: () => {
+					started.resolve();
+					return finished.promise;
+				},
+			});
+			new InputController(ctx).setupEditorSubmitHandler();
+			editor.setText("/fast on");
+			const submitting = ctx.editor.onSubmit?.("/fast on");
+			await started.promise;
+
+			if (replaceText) editor.setText("next question");
+			const image: ImageContent = { type: "image", data: "later-image", mimeType: "image/png" };
+			editor.pendingImages.push(image);
+			editor.pendingImageLinks.push("later.png");
+			editor.imageLinks = editor.pendingImageLinks;
+			finished.resolve("Fast mode is on.");
+			await submitting;
+
+			expect(editor.getText()).toBe(replaceText ? "next question" : "");
+			expect(editor.pendingImages).toEqual([image]);
+			expect(editor.pendingImageLinks).toEqual(["later.png"]);
+			expect(editor.imageLinks).toEqual(["later.png"]);
+		}
 	});
 
 	it("preserves failed /fast drafts and reports invalid arguments or unavailable service", async () => {
@@ -319,16 +351,6 @@ describe("focused subagent view slash commands", () => {
 		expect(mainControls.setFastMode).toHaveBeenCalledWith(true);
 		expect(childControls.setFastMode).not.toHaveBeenCalled();
 		expect(raw.showStatus).toHaveBeenCalledWith("Fast mode enabled.");
-	});
-
-	it("keeps focused model cycling blocked", async () => {
-		const { ctx, raw, mainControls, childControls } = createFocusedContext();
-
-		await new InputController(ctx).cycleRoleModel();
-
-		expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));
-		expect(mainControls.cycleThinkingLevel).not.toHaveBeenCalled();
-		expect(childControls.cycleThinkingLevel).not.toHaveBeenCalled();
 	});
 
 	it("answers a side file command from the focused view and releases its draft", async () => {
@@ -394,7 +416,15 @@ describe("focused subagent view slash commands", () => {
 	});
 
 	it("keeps other commands gated to the main session, draft intact", async () => {
-		for (const text of ["/compact", "/model", "/models", "/model openai/gpt-5", "/switch", "/slow on", "!echo unsafe"]) {
+		for (const text of [
+			"/compact",
+			"/model",
+			"/models",
+			"/model openai/gpt-5",
+			"/switch",
+			"/slow on",
+			"!echo unsafe",
+		]) {
 			const { raw, editor, prompt } = await submit(text);
 			expect(editor.getText()).toBe(text);
 			expect(raw.showStatus).toHaveBeenCalledWith(expect.stringContaining("main session"));

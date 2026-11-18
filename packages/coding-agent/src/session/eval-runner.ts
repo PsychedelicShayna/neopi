@@ -28,6 +28,8 @@ export interface UserEvalOptions {
 	reset?: boolean;
 	/** Prefix alias selected by the user; defaults to the resolved language token. */
 	alias?: string;
+	/** Receives the `evalExecution` message once persisted or queued for a mid-turn flush. */
+	onRecorded?: (message: EvalExecutionMessage) => void;
 }
 
 /** Owns user-initiated generic eval execution and retained backend lifecycle. */
@@ -94,15 +96,6 @@ export class EvalRunner {
 		return await this.trackExecution(execution, abortController, canonicalLanguage);
 	}
 
-	/** Compatibility caller surface; new user-input routing calls execute("py", ...). */
-	executePython(
-		code: string,
-		onChunk?: (chunk: string) => void,
-		options?: UserEvalOptions,
-	): Promise<ExecutorBackendResult> {
-		return this.execute("py", code, onChunk, options);
-	}
-
 	async #resolveBackend(token: string, session: ToolSession, signal: AbortSignal): Promise<ExecutorBackend> {
 		const builtin: Record<string, ExecutorBackend> = {
 			py: pythonBackend,
@@ -157,6 +150,11 @@ export class EvalRunner {
 		};
 		if (this.#host.isStreaming()) this.#pendingMessages.push(message);
 		else this.#host.appendSessionMessage(message);
+		try {
+			options?.onRecorded?.(message);
+		} catch (error) {
+			logger.error("eval onRecorded callback failed", { error: String(error) });
+		}
 	}
 
 	abort(): void {

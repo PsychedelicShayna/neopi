@@ -367,7 +367,9 @@ unsafe extern "C" fn observe(_proxy: Ref, kind: u32, event: Ref, user: Ref) -> R
 	// invalidation.
 	let context = unsafe { &*(user.cast::<TapContext<EmergencyStop>>()) };
 	if kind == u32::MAX || kind == u32::MAX - 1 {
-		context.inner.cancel(super::CancellationReason::MonitorFailed);
+		context
+			.inner
+			.cancel(super::CancellationReason::MonitorFailed);
 		// SAFETY: the event tap remains alive until this callback returns.
 		unsafe {
 			CGEventTapEnable(context.tap, true);
@@ -465,7 +467,8 @@ fn input_target(
 		Some(Untargeted::Dropped) => None,
 		// Not a type the tap listens to, since each of those has a rule: counted
 		// against the front process, it at worst has the agent read that app
-		// again, where dropping it would let the agent act on what the user changed.
+		// again, where dropping it would let the agent act on what the user
+		// changed.
 		None => front(),
 	}
 }

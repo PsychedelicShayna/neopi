@@ -220,7 +220,7 @@
 			},
 			{
 				"name": "query_model_selector",
-				"doc": "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+				"doc": "Query native /model ordering, scoped candidates, role aliases and model facts without selecting.",
 				"params": "QueryModelSelectorParams",
 				"result": "ModelSelectorResult",
 				"nullable": false,
@@ -235,6 +235,17 @@
 				"params": "SetRoleParams",
 				"result": "SetRoleResult",
 				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cycle_role",
+				"doc": "Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.",
+				"params": "CycleRoleParams",
+				"result": "CycleRoleResult",
+				"nullable": true,
 				"unwrap": null,
 				"timeoutMs": null,
 				"completion": null,
@@ -573,8 +584,19 @@
 				"clientOmit": []
 			},
 			{
+				"name": "get_subagent_history",
+				"doc": "List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.",
+				"params": "GetSubagentHistoryParams",
+				"result": "SubagentHistory",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
 				"name": "get_subagent_messages",
-				"doc": "Read a subagent transcript by id or registered session file (`subagentId` wins).",
+				"doc": "Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.",
 				"params": "GetSubagentMessagesParams",
 				"result": "SubagentMessages",
 				"nullable": false,
@@ -621,6 +643,61 @@
 				"doc": "Enable or disable fast mode only for a running subagent, from its next request.",
 				"params": "SetSubagentFastParams",
 				"result": "FastModeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_command_completions",
+				"doc": "Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.",
+				"params": "GetCommandCompletionsParams",
+				"result": "GetCommandCompletionsResult",
+				"nullable": false,
+				"unwrap": "items",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_jobs",
+				"doc": "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
+				"params": "GetJobsParams",
+				"result": "JobsResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_job_output",
+				"doc": "Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.",
+				"params": "GetJobOutputParams",
+				"result": "JobOutput",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "cancel_job",
+				"doc": "Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.",
+				"params": "CancelJobParams",
+				"result": "CancelJobResult",
+				"nullable": false,
+				"unwrap": "cancelled",
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_subagent_model",
+				"doc": "Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
+				"params": "SetSubagentModelParams",
+				"result": "SetSubagentModelResult",
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -849,7 +926,7 @@
 			},
 			{
 				"name": "bash",
-				"doc": "Run a shell command.",
+				"doc": "Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true.",
 				"params": "BashParams",
 				"result": "BashResult",
 				"nullable": false,
@@ -874,6 +951,17 @@
 				"doc": "Session statistics.",
 				"params": null,
 				"result": "SessionStats",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "get_session_lease",
+				"doc": "Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed.",
+				"params": "GetSessionLeaseParams",
+				"result": "GetSessionLeaseResult",
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -1467,6 +1555,25 @@
 			],
 			"x-open": true
 		},
+		"ParentIrc": {
+			"type": "object",
+			"properties": {
+				"from": {
+					"type": "string",
+					"description": "Sending parent agent id."
+				},
+				"body": {
+					"type": "string",
+					"description": "Message body as the parent wrote it."
+				}
+			},
+			"required": [
+				"from",
+				"body"
+			],
+			"description": "Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope.",
+			"x-open": true
+		},
 		"UserMessage": {
 			"type": "object",
 			"properties": {
@@ -1478,6 +1585,9 @@
 				},
 				"timestamp": {
 					"type": "number"
+				},
+				"parentIrc": {
+					"$ref": "#/$defs/ParentIrc"
 				},
 				"synthetic": {
 					"type": "boolean"
@@ -2928,6 +3038,14 @@
 				},
 				"activeRole": {
 					"type": "string"
+				},
+				"cycleOrder": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.",
+					"default": []
 				}
 			},
 			"required": [
@@ -4335,6 +4453,11 @@
 					"description": "`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.",
 					"default": false
 				},
+				"dictationEnabled": {
+					"type": "boolean",
+					"description": "Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.",
+					"default": false
+				},
 				"slowModeScope": {
 					"$ref": "#/$defs/SlowModeScope",
 					"description": "Where the active model's `/slow` lives; absent when unsupported."
@@ -4360,6 +4483,21 @@
 				},
 				"queuedMessageCount": {
 					"type": "integer",
+					"default": 0
+				},
+				"hostname": {
+					"type": "string",
+					"description": "Short machine hostname (first DNS label).",
+					"default": ""
+				},
+				"activeTimeMs": {
+					"type": "number",
+					"description": "Accumulated active-processing time, including the run in flight; idle time never counts.",
+					"default": 0
+				},
+				"runningJobCount": {
+					"type": "integer",
+					"description": "Running background jobs outside the subagents count, as the TUI jobs pill counts them.",
 					"default": 0
 				},
 				"hasPendingAsyncWork": {
@@ -4462,7 +4600,36 @@
 				"artifactElidedBytes": {
 					"type": "integer"
 				},
+				"elidedBytes": {
+					"type": "integer",
+					"description": "Bytes dropped from the middle of `output`, which keeps the head and tail."
+				},
+				"elidedLines": {
+					"type": "integer",
+					"description": "Lines dropped from the middle of `output`."
+				},
+				"columnDroppedBytes": {
+					"type": "integer",
+					"description": "Bytes the per-line column cap cut from `output`, across all lines."
+				},
+				"columnTruncatedLines": {
+					"type": "integer",
+					"description": "Lines of `output` the per-line column cap cut; the artifact holds them whole."
+				},
+				"columnTruncatedRange": {
+					"$ref": "#/$defs/LineRange",
+					"description": "First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it."
+				},
+				"columnMax": {
+					"type": "integer",
+					"description": "The per-line column cap in UTF-8 bytes, set when it cut a line."
+				},
 				"artifactError": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {}
+				},
+				"minimized": {
 					"type": "object",
 					"properties": {},
 					"additionalProperties": {}
@@ -4475,6 +4642,12 @@
 					"items": {
 						"$ref": "#/$defs/ImageContent"
 					}
+				},
+				"trace": {
+					"type": "object",
+					"properties": {},
+					"additionalProperties": {},
+					"description": "The embedded shell's final `ShellTrace` of the run; only when the caller asked for one."
 				}
 			},
 			"required": [
@@ -4485,6 +4658,21 @@
 				"totalBytes",
 				"outputLines",
 				"outputBytes"
+			]
+		},
+		"LineRange": {
+			"type": "object",
+			"properties": {
+				"first": {
+					"type": "integer"
+				},
+				"last": {
+					"type": "integer"
+				}
+			},
+			"required": [
+				"first",
+				"last"
 			]
 		},
 		"FastModeResult": {
@@ -4871,6 +5059,33 @@
 				"name"
 			]
 		},
+		"CommandCompletion": {
+			"type": "object",
+			"properties": {
+				"value": {
+					"type": "string",
+					"description": "Replaces the argument text the host typed."
+				},
+				"label": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"hint": {
+					"type": "string",
+					"description": "Ghost text to show after the cursor."
+				},
+				"submitsCommand": {
+					"type": "boolean",
+					"description": "Accepting it leaves a complete command, so the host may submit at once."
+				}
+			},
+			"required": [
+				"value",
+				"label"
+			]
+		},
 		"AvailableSlashCommand": {
 			"type": "object",
 			"properties": {
@@ -4897,6 +5112,15 @@
 					"items": {
 						"$ref": "#/$defs/SlashSubcommand"
 					}
+				},
+				"availability": {
+					"enum": [
+						"headless",
+						"tui"
+					],
+					"type": "string",
+					"description": "`tui` commands need the terminal UI and are refused over RPC with `code: \"command_requires_tui\"`.",
+					"default": "headless"
 				}
 			},
 			"required": [
@@ -5328,6 +5552,345 @@
 				"agentSource",
 				"status",
 				"lastUpdate"
+			]
+		},
+		"JobType": {
+			"enum": [
+				"bash",
+				"task",
+				"eval",
+				"chronicle"
+			],
+			"type": "string"
+		},
+		"JobStatus": {
+			"enum": [
+				"running",
+				"completed",
+				"failed",
+				"cancelled"
+			],
+			"type": "string"
+		},
+		"JobInfo": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Stable `bg_N` id."
+				},
+				"type": {
+					"$ref": "#/$defs/JobType"
+				},
+				"label": {
+					"type": "string"
+				},
+				"status": {
+					"$ref": "#/$defs/JobStatus"
+				},
+				"startedAt": {
+					"type": "number",
+					"description": "Epoch milliseconds."
+				},
+				"outputBytes": {
+					"type": "integer",
+					"description": "Size in bytes of the output snapshot `get_job_output` reads."
+				},
+				"command": {
+					"type": "string",
+					"description": "Full command line of a job that runs a process; `label` is cut to 120 characters."
+				},
+				"finishedAt": {
+					"type": "number"
+				},
+				"exitCode": {
+					"type": "integer"
+				},
+				"error": {
+					"type": "string",
+					"description": "Failure text of a failed job, cut to a bounded length."
+				},
+				"ownerId": {
+					"type": "string",
+					"description": "Registry id of the agent that registered the job."
+				},
+				"agentId": {
+					"type": "string",
+					"description": "Registry id of the subagent a task job runs."
+				}
+			},
+			"required": [
+				"id",
+				"type",
+				"label",
+				"status",
+				"startedAt",
+				"outputBytes"
+			],
+			"description": "One background job."
+		},
+		"JobAgent": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"parentId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"id"
+			]
+		},
+		"JobsResult": {
+			"type": "object",
+			"properties": {
+				"running": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobInfo"
+					}
+				},
+				"recent": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobInfo"
+					},
+					"description": "Settled jobs, newest first, at most `recentLimit`."
+				},
+				"agents": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/JobAgent"
+					},
+					"description": "Subagents owning listed jobs, with the ancestors linking them to the root."
+				},
+				"runningCount": {
+					"type": "integer",
+					"description": "Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`."
+				},
+				"rootId": {
+					"type": "string",
+					"description": "The agent the tree is for; its own jobs are the top level."
+				}
+			},
+			"required": [
+				"running",
+				"recent",
+				"agents",
+				"runningCount"
+			]
+		},
+		"JobOutput": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				},
+				"status": {
+					"$ref": "#/$defs/JobStatus"
+				},
+				"fromByte": {
+					"type": "integer"
+				},
+				"nextByte": {
+					"type": "integer",
+					"description": "Pass as the next `fromByte` to read on."
+				},
+				"totalBytes": {
+					"type": "integer",
+					"description": "Size in bytes of the whole output snapshot."
+				},
+				"reset": {
+					"type": "boolean",
+					"description": "`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero."
+				},
+				"output": {
+					"type": "string"
+				},
+				"revision": {
+					"type": "string",
+					"description": "Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.",
+					"default": ""
+				}
+			},
+			"required": [
+				"jobId",
+				"status",
+				"fromByte",
+				"nextByte",
+				"totalBytes",
+				"reset",
+				"output"
+			]
+		},
+		"SubagentHistoryMetrics": {
+			"type": "object",
+			"properties": {
+				"tokens": {
+					"type": "number"
+				},
+				"requests": {
+					"type": "number"
+				},
+				"tools": {
+					"type": "number"
+				},
+				"cost": {
+					"type": "number"
+				},
+				"durationMs": {
+					"type": "number"
+				},
+				"contextTokens": {
+					"type": "number"
+				},
+				"contextWindow": {
+					"type": "number"
+				}
+			},
+			"required": [
+				"tokens",
+				"requests",
+				"tools",
+				"cost",
+				"durationMs"
+			]
+		},
+		"SubagentHistoryEntry": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"kind": {
+					"enum": [
+						"sub",
+						"advisor"
+					],
+					"type": "string"
+				},
+				"displayName": {
+					"type": "string"
+				},
+				"status": {
+					"enum": [
+						"running",
+						"idle",
+						"parked",
+						"aborted"
+					],
+					"type": "string",
+					"description": "`parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted."
+				},
+				"live": {
+					"type": "boolean",
+					"description": "The child's session is in memory (`running` or `idle`)."
+				},
+				"sessionFile": {
+					"type": "string"
+				},
+				"createdAt": {
+					"type": "number"
+				},
+				"lastActivity": {
+					"type": "number"
+				},
+				"parentId": {
+					"type": "string"
+				},
+				"agent": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string",
+					"description": "Persisted task gist, or the current activity of a live child."
+				},
+				"responseAt": {
+					"type": "number"
+				},
+				"acceptedAt": {
+					"type": "number"
+				},
+				"terminalAt": {
+					"type": "number"
+				},
+				"parentToolCallId": {
+					"type": "string",
+					"description": "Known only from the live roster."
+				},
+				"resolvedModel": {
+					"type": "string"
+				},
+				"resolvedModelIdentity": {
+					"type": "string"
+				},
+				"resolvedThinkingLevel": {
+					"$ref": "#/$defs/ConfiguredThinkingLevel"
+				},
+				"fastModeEnabled": {
+					"type": "boolean",
+					"description": "Live children only."
+				},
+				"fastModeActive": {
+					"type": "boolean",
+					"description": "Live children only."
+				},
+				"modelRole": {
+					"type": "string"
+				},
+				"readOnly": {
+					"type": "boolean"
+				},
+				"metrics": {
+					"$ref": "#/$defs/SubagentHistoryMetrics"
+				},
+				"directCost": {
+					"type": "number",
+					"description": "Cumulative cost of the child's own session, excluding nested task results."
+				},
+				"outputPath": {
+					"type": "string"
+				},
+				"patchPath": {
+					"type": "string"
+				},
+				"branchName": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"id",
+				"kind",
+				"displayName",
+				"status",
+				"live",
+				"sessionFile",
+				"createdAt",
+				"lastActivity"
+			],
+			"description": "One child of the root session's tree."
+		},
+		"SubagentHistory": {
+			"type": "object",
+			"properties": {
+				"subagents": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/SubagentHistoryEntry"
+					},
+					"description": "Oldest first."
+				},
+				"rootSessionFile": {
+					"type": "string"
+				},
+				"rootAgentId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"subagents"
 			]
 		},
 		"SubagentMessages": {
@@ -7455,6 +8018,10 @@
 				},
 				"maxReassembledFrameBytes": {
 					"type": "integer"
+				},
+				"supportsBashExcludeFromContext": {
+					"type": "boolean",
+					"description": "`bash` accepts `excludeFromContext`; require exactly true before sending excluded commands."
 				}
 			},
 			"required": [
@@ -7894,6 +8461,38 @@
 				"type"
 			],
 			"description": "Sent exactly once when a live session ends; `error` carries the failure cause."
+		},
+		"JobLifecycleEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "job_lifecycle"
+				},
+				"event": {
+					"enum": [
+						"registered",
+						"progress",
+						"completed",
+						"failed",
+						"cancelled"
+					],
+					"type": "string"
+				},
+				"job": {
+					"$ref": "#/$defs/JobInfo"
+				},
+				"runningCount": {
+					"type": "integer",
+					"description": "Running jobs by the TUI jobs-pill rule after this transition."
+				}
+			},
+			"required": [
+				"type",
+				"event",
+				"job",
+				"runningCount"
+			],
+			"description": "A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`."
 		},
 		"DictationStateEvent": {
 			"type": "object",
@@ -9053,6 +9652,9 @@
 					"$ref": "#/$defs/LiveEndEvent"
 				},
 				{
+					"$ref": "#/$defs/JobLifecycleEvent"
+				},
+				{
 					"$ref": "#/$defs/DictationStateEvent"
 				},
 				{
@@ -9429,6 +10031,36 @@
 			]
 		},
 		"SetRoleResult": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"model": {
+					"$ref": "#/$defs/ModelInfo"
+				},
+				"thinkingLevel": {
+					"$ref": "#/$defs/ThinkingLevel"
+				}
+			},
+			"required": [
+				"role",
+				"model"
+			]
+		},
+		"CycleRoleParams": {
+			"type": "object",
+			"properties": {
+				"direction": {
+					"enum": [
+						"forward",
+						"backward"
+					],
+					"type": "string"
+				}
+			}
+		},
+		"CycleRoleResult": {
 			"type": "object",
 			"properties": {
 				"role": {
@@ -10218,6 +10850,14 @@
 				"subagents"
 			]
 		},
+		"GetSubagentHistoryParams": {
+			"type": "object",
+			"properties": {
+				"includeAdvisors": {
+					"type": "boolean"
+				}
+			}
+		},
 		"GetSubagentMessagesParams": {
 			"type": "object",
 			"properties": {
@@ -10297,6 +10937,123 @@
 			"required": [
 				"subagentId",
 				"enabled"
+			]
+		},
+		"GetCommandCompletionsParams": {
+			"type": "object",
+			"properties": {
+				"command": {
+					"type": "string"
+				},
+				"prefix": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"command",
+				"prefix"
+			]
+		},
+		"GetCommandCompletionsResult": {
+			"type": "object",
+			"properties": {
+				"items": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/CommandCompletion"
+					}
+				}
+			},
+			"required": [
+				"items"
+			]
+		},
+		"GetJobsParams": {
+			"type": "object",
+			"properties": {
+				"recentLimit": {
+					"type": "integer"
+				}
+			}
+		},
+		"GetJobOutputParams": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				},
+				"fromByte": {
+					"type": "integer"
+				},
+				"revision": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"jobId"
+			]
+		},
+		"CancelJobParams": {
+			"type": "object",
+			"properties": {
+				"jobId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"jobId"
+			]
+		},
+		"CancelJobResult": {
+			"type": "object",
+			"properties": {
+				"cancelled": {
+					"type": "boolean"
+				}
+			},
+			"required": [
+				"cancelled"
+			]
+		},
+		"SetSubagentModelParams": {
+			"type": "object",
+			"properties": {
+				"subagentId": {
+					"type": "string"
+				},
+				"selector": {
+					"type": "string"
+				},
+				"provider": {
+					"type": "string"
+				},
+				"modelId": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"subagentId"
+			]
+		},
+		"SetSubagentModelResult": {
+			"type": "object",
+			"properties": {
+				"provider": {
+					"type": "string"
+				},
+				"modelId": {
+					"type": "string"
+				},
+				"thinkingLevel": {
+					"$ref": "#/$defs/ThinkingLevel"
+				},
+				"warning": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"provider",
+				"modelId"
 			]
 		},
 		"LiveStartParams": {
@@ -10538,10 +11295,48 @@
 			"properties": {
 				"command": {
 					"type": "string"
+				},
+				"excludeFromContext": {
+					"type": "boolean"
 				}
 			},
 			"required": [
 				"command"
+			]
+		},
+		"GetSessionLeaseParams": {
+			"type": "object",
+			"properties": {
+				"sessionIds": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"sessionIds"
+			]
+		},
+		"GetSessionLeaseResult": {
+			"type": "object",
+			"properties": {
+				"held": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"unknown": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": [
+				"held",
+				"unknown"
 			]
 		},
 		"ExportHtmlParams": {

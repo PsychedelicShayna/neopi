@@ -76,6 +76,7 @@ describe("/notice operator command", () => {
 			optimisticSkillMessagePending: false,
 			renderOptimisticSkillMessage: vi.fn(),
 			clearOptimisticSkillMessage: vi.fn(),
+			restoreDroppedPrompt: vi.fn(),
 		};
 		let editorText = "";
 		const ctx = createInteractiveModeContext({

@@ -1,4 +1,5 @@
-import { beforeAll, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, test, beforeEach, afterEach } from "bun:test";
 import { ThemeSelectorComponent } from "../src/overlays/theme-selector";
 import { initTheme } from "../src/theme";
 
@@ -32,4 +33,13 @@ test("history restores the theme cursor without applying its preview", () => {
 	expect(applied).toEqual([]);
 	selector.getSelectList().handleInput("k");
 	expect(previews).toEqual(["light", "dark"]);
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

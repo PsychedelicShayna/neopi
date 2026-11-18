@@ -1,18 +1,22 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
-import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
+import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
 
 /**
  * All names (primary + aliases) that are reserved by ACP builtins. Used to
  * filter out extension commands that would shadow a builtin or its alias at
- * dispatch time (e.g. `models` is an alias for `/model`, so an extension
- * registering `models` would appear in the palette but execute the builtin).
+ * dispatch time (e.g. `switch` is a hidden alias for `/model`, so an extension
+ * registering `switch` would appear in the palette but execute the builtin).
  */
 export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
-	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
+	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [
+		c.name,
+		...(c.aliases ?? []),
+		...(c.hiddenAliases ?? []),
+	]),
 );
 
 /**
@@ -47,6 +51,17 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 		input: hint ? { hint } : undefined,
 	};
 });
+
+/**
+ * The builtin a slash text names when it needs the terminal UI (no text-mode `handle`), else
+ * `undefined`. Hosts without a TUI use it to refuse such text instead of sending it to the model.
+ */
+export function lookupTuiOnlyBuiltin(text: string): SlashCommandSpec | undefined {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return undefined;
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	return command && !command.handle ? command : undefined;
+}
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:

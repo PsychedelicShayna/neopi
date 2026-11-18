@@ -16,8 +16,8 @@ import {
 	resolveViewRoot,
 	summaryPolicyFromSettings,
 } from "../chronicler/temporal/config";
-import { formatRecallResult } from "../chronicler/temporal/format";
-import { type IndexReport, indexChronicle } from "../chronicler/temporal/indexer";
+import { formatIndexReport, formatRecallResult } from "../chronicler/temporal/format";
+import { indexChronicle } from "../chronicler/temporal/indexer";
 import { resolveChronicleModelClient } from "../chronicler/temporal/model";
 import { recallChronicle } from "../chronicler/temporal/recall";
 import { parseKeywords, type RecallScope, resolveRecallSessions } from "../chronicler/temporal/prefilter";
@@ -77,41 +77,6 @@ async function withRegistry<T>(settings: Settings, agentDir: string, run: (regis
 	}
 }
 
-export function formatIndexReport(report: IndexReport, limit = 50): string {
-	const n = report.nodes;
-	const lines = [
-		`Chronicle view ${report.dryRun ? "(dry run) " : ""}at ${report.root}`,
-		`${report.atoms} atoms from ${report.sessions} sessions in ${report.projects} projects (${report.stores} stores)`,
-		`summary model: ${report.summaryModel ?? "unresolved"}`,
-		`nodes: ${n.total} total, ${n.fresh} fresh, ${n.generated} regenerated (${n.enumerated} enumerations, ${n.singleChild} single-child), ${n.stale} stale, ${n.blocked} blocked, ${n.outsideWindow} outside window, ${n.failed} failed, ${n.pruned} pruned`,
-		`complete: ${report.complete ? "yes" : "no"}`,
-	];
-	const pending = report.changes.filter(change => change.outcome !== "generated");
-	if (pending.length > 0) {
-		lines.push("", "Not regenerated:");
-		for (const change of pending.slice(0, limit)) {
-			lines.push(
-				`- ${change.key || "root"} (${change.level}): ${change.outcome}${change.reason ? ` [${change.reason}]` : ""}${change.detail ? ` — ${change.detail}` : ""}`,
-			);
-		}
-		if (pending.length > limit) lines.push(`  … ${pending.length - limit} more (use --json)`);
-	}
-	if (report.canonical.length > 0) {
-		lines.push("", `Canonical diagnostics (${report.canonical.length}; atoms untouched):`);
-		for (const diagnostic of report.canonical.slice(0, limit)) {
-			lines.push(
-				`- ${diagnostic.kind}: ${diagnostic.atomId ? `${diagnostic.atomId} ` : ""}${diagnostic.path} — ${diagnostic.detail}`,
-			);
-		}
-		if (report.canonical.length > limit) lines.push(`  … ${report.canonical.length - limit} more (use --json)`);
-	}
-	if (report.derived.length > 0) {
-		lines.push("", `Derived view problems (${report.derived.length}):`);
-		for (const problem of report.derived) lines.push(`- ${problem.key || "root"}: ${problem.detail}`);
-	}
-	return lines.join("\n");
-}
-
 export async function runChronicleIndex(flags: ChronicleIndexFlags): Promise<number> {
 	const agentDir = flags.agentDir ?? getAgentDir();
 	const settings = await Settings.init({ cwd: getProjectDir(), agentDir });
@@ -145,8 +110,13 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 	if (flags.resolution !== undefined && !(RESOLUTION_LEVELS as readonly string[]).includes(flags.resolution)) {
 		throw new CliUsageError(`--resolution must be one of ${RESOLUTION_LEVELS.join(", ")}`);
 	}
-	if (flags.ranker !== undefined && flags.ranker !== "model" && flags.ranker !== "lexical") {
-		throw new CliUsageError("--ranker must be model or lexical");
+	if (
+		flags.ranker !== undefined &&
+		flags.ranker !== "model" &&
+		flags.ranker !== "lexical" &&
+		flags.ranker !== "judge"
+	) {
+		throw new CliUsageError("--ranker must be model, lexical or judge");
 	}
 	const agentDir = flags.agentDir ?? getAgentDir();
 	const settings = await Settings.init({ cwd: getProjectDir(), agentDir });
@@ -177,10 +147,10 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 			beam: flags.beam ?? defaults.beam,
 			neighborhoodMinutes: defaults.neighborhoodMinutes,
 			policy: defaults.policy,
-			ranker: resolveRanker(settings, registry, flags.ranker as "model" | "lexical" | undefined),
+			ranker: await resolveRanker(settings, registry, flags.ranker as "model" | "lexical" | "judge" | undefined),
 		});
-	const wantsModel = (flags.ranker ?? cfgChroniclerRecallRanker.get(settings)) === "model";
-	const result = wantsModel ? await withRegistry(settings, agentDir, run) : await run(undefined);
+	const wantsRegistry = (flags.ranker ?? cfgChroniclerRecallRanker.get(settings)) !== "lexical";
+	const result = wantsRegistry ? await withRegistry(settings, agentDir, run) : await run(undefined);
 	process.stdout.write(
 		`${flags.json ? JSON.stringify(result, null, 2) : formatRecallResult(result, recallFormatFromSettings(settings, true))}\n`,
 	);

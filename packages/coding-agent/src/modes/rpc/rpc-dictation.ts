@@ -1,9 +1,12 @@
+import { toError } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../../session/agent-session";
 import { STTController, type SttCallbacks, type SttTarget } from "../../stt";
 import type { RpcDictationFrame } from "./rpc-types";
 
 /** The controller surface used by RPC; tests can substitute the microphone boundary. */
 export type RpcDictationController = Pick<STTController, "state" | "start" | "stop" | "dispose">;
+/** The part of a dictation bridge a command handler drives; control connections supply their own. */
+export type RpcDictationControl = Pick<RpcDictationBridge, "active" | "start" | "stop">;
 export type RpcDictationControllerFactory = (session: AgentSession) => RpcDictationController;
 
 interface Capture {
@@ -123,7 +126,7 @@ export class RpcDictationBridge {
 				throw new Error(capture.error || "Failed to start dictation");
 			}
 		} catch (cause) {
-			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const error = toError(cause);
 			if (!capture.stopping && !capture.ended) {
 				capture.error ??= error.message;
 				this.#finish(capture);

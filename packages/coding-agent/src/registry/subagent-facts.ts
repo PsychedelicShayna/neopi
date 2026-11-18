@@ -1,7 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelStringWithRouting } from "../config/model-resolver";
-import type { AgentSession } from "../session/agent-session";
+import type { AgentSessionHandle } from "../session/agent-session-handle";
 
 /** Current session configuration, not the request already in flight or its launch settings. */
 export interface LiveSubagentFacts {
@@ -12,7 +12,7 @@ export interface LiveSubagentFacts {
 	fastModeActive: boolean;
 }
 
-export function getLiveSubagentFacts(session: AgentSession): LiveSubagentFacts | undefined {
+export function getLiveSubagentFacts(session: AgentSessionHandle): LiveSubagentFacts | undefined {
 	const model = session.model;
 	if (!model) return undefined;
 	const resolvedModelIdentity = formatModelStringWithRouting(model);

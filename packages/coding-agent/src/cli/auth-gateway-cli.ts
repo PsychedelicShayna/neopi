@@ -13,8 +13,10 @@
  *     and model roles (`auth-gateway-stdio.ts`).
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
+ *   - `link [--host=…] [--name=…] [--bind=…]` — prints one connection link for the running gateway.
  */
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	type Api,
@@ -34,15 +36,21 @@ import {
 } from "@oh-my-pi/pi-ai/auth-broker";
 import {
 	type AuthGatewayClient,
+	authGatewayLinkBaseUrl,
 	DEFAULT_AUTH_GATEWAY_BIND,
+	defaultAuthGatewayLinkHost,
+	formatAuthGatewayLink,
+	isLoopbackHost,
+	isWildcardHost,
 	type ModelResolveOptions,
 	parseAuthGatewayClients,
 	startAuthGateway,
 } from "@oh-my-pi/pi-ai/auth-gateway";
+import { parseBind } from "@oh-my-pi/pi-ai/utils/parse-bind";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
-import { type ModelKind, modelKind } from "@oh-my-pi/pi-catalog/types";
+import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME, getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { ModelRegistry } from "../config/model-registry";
@@ -55,10 +63,10 @@ import {
 	resolveAuthBrokerConfig,
 	resolveEffectiveSettings,
 } from "../session/auth-broker-config";
-import { runAuthGatewayStdio } from "./auth-gateway-stdio";
+import { GATEWAY_MODEL_KINDS, runAuthGatewayStdio } from "./auth-gateway-stdio";
 import { generateToken, readTokenFile, writeTokenFile } from "./token-file";
 
-export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check";
+export type AuthGatewayAction = "serve" | "stdio" | "token" | "status" | "check" | "link";
 
 export interface AuthGatewayCommandArgs {
 	action: AuthGatewayAction;
@@ -86,13 +94,63 @@ export interface AuthGatewayCommandArgs {
 		 * models and broker OAuth accounts. Re-read while serving.
 		 */
 		clients?: string;
+		/** `link`: host other machines use to reach the gateway (default: bind host, or the LAN address for 0.0.0.0). */
+		host?: string;
+		/** `link`: gateway label carried in the link (default: this machine's hostname). */
+		name?: string;
 	};
 }
 
-const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check"];
+const ACTIONS: readonly AuthGatewayAction[] = ["serve", "stdio", "token", "status", "check", "link"];
 
 function getTokenFilePath(): string {
 	return path.join(getConfigRootDir(), "auth-gateway.token");
+}
+
+/**
+ * Where a running `serve` records its listener, next to the token file, so
+ * `link` and same-host consumers (NeoProxy's local NeoPi detection) find the
+ * bind without being told. Removed on clean shutdown; a crash leaves it stale,
+ * so readers confirm with `/healthz`.
+ */
+function getRuntimeFilePath(): string {
+	return path.join(getConfigRootDir(), "auth-gateway.runtime.json");
+}
+
+/** Contents of `<config-dir>/auth-gateway.runtime.json`. */
+export interface AuthGatewayRuntime {
+	pid: number;
+	/** Host the listener is bound to (`0.0.0.0` for all interfaces). */
+	hostname: string;
+	port: number;
+	/** `none` under `--no-auth`. */
+	auth: "token" | "none";
+	startedAt: number;
+	version: string;
+}
+
+async function writeRuntimeFile(runtime: AuthGatewayRuntime): Promise<void> {
+	const file = getRuntimeFilePath();
+	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+	await fs.writeFile(file, `${JSON.stringify(runtime, null, "\t")}\n`, { mode: 0o600 });
+}
+
+async function readRuntimeFile(): Promise<AuthGatewayRuntime | null> {
+	try {
+		const parsed = JSON.parse(await fs.readFile(getRuntimeFilePath(), "utf8")) as Partial<AuthGatewayRuntime>;
+		if (typeof parsed.hostname !== "string" || typeof parsed.port !== "number" || typeof parsed.pid !== "number") {
+			return null;
+		}
+		return parsed as AuthGatewayRuntime;
+	} catch {
+		return null;
+	}
+}
+
+/** Remove the runtime file only while it still describes this process. */
+async function removeRuntimeFile(pid: number): Promise<void> {
+	if ((await readRuntimeFile())?.pid !== pid) return;
+	await fs.rm(getRuntimeFilePath(), { force: true });
 }
 
 /**
@@ -207,25 +265,6 @@ export function createAuthGatewayClientsReloader(
 		return inFlight;
 	};
 }
-
-/**
- * Catalog kinds the gateway has a route for: chat (`/v1/chat/completions`,
- * `/v1/messages`, `/v1/responses`, `/v1/pi/stream`), judge (`/v1/systemone`),
- * image (`/v1/images/*`), tts (`/v1/audio/speech`), stt
- * (`/v1/audio/transcriptions`), embedding (`/v1/embeddings`), rerank
- * (`/v1/rerank`), video (`/v1/videos/*`). Other kinds (tiny, search) have no
- * wire and stay off the served catalog so `/v1/models` never advertises them.
- */
-const GATEWAY_MODEL_KINDS: readonly ModelKind[] = [
-	"chat",
-	"judge",
-	"image",
-	"tts",
-	"stt",
-	"embedding",
-	"rerank",
-	"video",
-];
 
 /** Every registry model of a kind the gateway can route, bundled catalog order within each kind. */
 export function gatewayRoutableModels(registry: ModelRegistry): Model<Api>[] {
@@ -461,8 +500,23 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		clients,
 	});
 	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
+	try {
+		await writeRuntimeFile({
+			pid: process.pid,
+			hostname: handle.hostname,
+			port: handle.port,
+			auth: gatewayToken ? "token" : "none",
+			startedAt: Date.now(),
+			version: VERSION,
+		});
+	} catch (error) {
+		logger.warn("auth-gateway runtime file write failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 	if (gatewayToken) {
 		process.stdout.write(`bearer token: ${getTokenFilePath()} (chmod 0600)\n`);
+		process.stdout.write(`connection link: run \`${APP_NAME} auth-gateway link\`\n`);
 	} else {
 		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
 	}
@@ -531,6 +585,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 			closeError = error;
 		} finally {
 			storage.close();
+			await removeRuntimeFile(process.pid).catch(() => {});
 		}
 		if (closeError) {
 			stopped.reject(closeError);
@@ -654,6 +709,101 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 	}
 }
 
+/** `/healthz` answers unauthenticated; a short deadline keeps `link` snappy when nothing listens. */
+async function probeGatewayHealth(baseUrl: string): Promise<boolean> {
+	try {
+		const res = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(2000), redirect: "manual" });
+		if (!res.ok) return false;
+		const body = (await res.json()) as { ok?: unknown };
+		return body.ok === true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * `npi auth-gateway link` — print one connection link for the running
+ * gateway: `neopi-gateway://<host>:<port>?token=…&name=…`. NeoProxy (and any
+ * other client) pairs from that single paste.
+ */
+async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	const runtime = await readRuntimeFile();
+	const bind = flags.bind
+		? parseBind(flags.bind)
+		: runtime
+			? { hostname: runtime.hostname, port: runtime.port }
+			: parseBind(DEFAULT_AUTH_GATEWAY_BIND);
+	const probeHost = isWildcardHost(bind.hostname)
+		? bind.hostname.includes(":")
+			? "::1"
+			: "127.0.0.1"
+		: bind.hostname.replace(/^\[(.*)\]$/, "$1");
+	const localUrl = `http://${probeHost.includes(":") ? `[${probeHost}]` : probeHost}:${bind.port}`;
+
+	if (!(await probeGatewayHealth(localUrl))) {
+		const serveCommand = flags.bind
+			? `${APP_NAME} auth-gateway serve --bind=${flags.bind}`
+			: `${APP_NAME} auth-gateway serve`;
+		const sharedCommand = `${APP_NAME} auth-gateway serve --bind=0.0.0.0:${bind.port}`;
+		const brokerConfigured = (await resolveAuthBrokerConfig().catch(() => null)) !== null;
+		if (flags.json) {
+			process.stdout.write(
+				`${JSON.stringify({ running: false, url: localUrl, serveCommand, sharedServeCommand: flags.bind ? undefined : sharedCommand, brokerConfigured })}\n`,
+			);
+		} else {
+			process.stderr.write(`${chalk.yellow("No auth-gateway is running")} at ${localUrl}.\n`);
+			process.stderr.write(`Start it, then run \`${APP_NAME} auth-gateway link\` again:\n  ${serveCommand}\n`);
+			if (!flags.bind) {
+				process.stderr.write(
+					`To let other machines connect, listen on every interface instead:\n  ${sharedCommand}\n`,
+				);
+			}
+			if (!brokerConfigured) {
+				process.stderr.write(
+					`\`serve\` needs a broker: set OMP_AUTH_BROKER_URL (or \`auth.broker.url\` in config.yml) first.\n`,
+				);
+			}
+		}
+		process.exitCode = 1;
+		return;
+	}
+
+	const sameListener = runtime !== null && runtime.hostname === bind.hostname && runtime.port === bind.port;
+	const token = await readTokenFile(getTokenFilePath());
+	const failure =
+		sameListener && runtime.auth === "none"
+			? `The gateway at ${localUrl} runs with --no-auth. Clients pair with its bearer token: restart it without --no-auth.`
+			: token === null
+				? `No gateway token at ${getTokenFilePath()}. Restart \`${APP_NAME} auth-gateway serve\` to create one.`
+				: undefined;
+	if (failure !== undefined || token === null) {
+		if (flags.json) {
+			process.stdout.write(`${JSON.stringify({ running: true, url: localUrl, error: failure })}\n`);
+		} else {
+			process.stderr.write(`${chalk.red("Cannot make a link:")} ${failure}\n`);
+		}
+		process.exitCode = 1;
+		return;
+	}
+
+	const host = flags.host?.trim() || defaultAuthGatewayLinkHost(bind.hostname, os.networkInterfaces(), os.hostname());
+	const name = flags.name?.trim() || os.hostname();
+	const parsedLink = { host, port: bind.port, token, name };
+	const link = formatAuthGatewayLink(parsedLink);
+	const warning = isLoopbackHost(bind.hostname)
+		? `The gateway listens on ${bind.hostname}:${bind.port}, so only programs on this machine can use this link. For other machines restart it with \`${APP_NAME} auth-gateway serve --bind=0.0.0.0:${bind.port}\`.`
+		: undefined;
+	if (flags.json) {
+		process.stdout.write(
+			`${JSON.stringify({ running: true, link, url: authGatewayLinkBaseUrl(parsedLink), host, port: bind.port, name, warning })}\n`,
+		);
+		return;
+	}
+	process.stdout.write(`${link}\n`);
+	process.stderr.write(`${chalk.dim("This link contains the gateway token; share it like a password.")}\n`);
+	if (warning) process.stderr.write(`${chalk.yellow(warning)}\n`);
+}
+
 export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promise<void> {
 	switch (cmd.action) {
 		case "serve":
@@ -670,6 +820,9 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 			return;
 		case "check":
 			await runCheck(cmd.flags);
+			return;
+		case "link":
+			await runLink(cmd.flags);
 			return;
 		default: {
 			const _exhaustive: never = cmd.action;

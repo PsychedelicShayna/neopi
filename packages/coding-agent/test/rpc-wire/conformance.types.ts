@@ -17,6 +17,7 @@ import type { AssistantMessageEvent, ImageContent, Model, Usage } from "@oh-my-p
 import type { BashResult } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import type { RpcJobLifecycleFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-jobs";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type { RpcNavigateTreeResult, RpcTreeAskReanswer } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tree";
 import type { AskToolDetails, AskOptionNote, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
@@ -224,6 +225,7 @@ export type Frames = Assert<
 		liveLevels: Outbound<RpcLiveLevelsFrame, Wire.LiveLevelsEvent>;
 		liveTranscript: Outbound<RpcLiveTranscriptFrame, Wire.LiveTranscriptEvent>;
 		liveEnd: Outbound<RpcLiveEndFrame, Wire.LiveEndEvent>;
+		jobLifecycle: Outbound<RpcJobLifecycleFrame, Wire.JobLifecycleEvent>;
 		dictationState: Outbound<RpcDictationStateFrame, Wire.DictationStateEvent>;
 		dictationTranscript: Outbound<RpcDictationTranscriptFrame, Wire.DictationTranscriptEvent>;
 		dictationEnd: Outbound<RpcDictationEndFrame, Wire.DictationEndEvent>;

@@ -76,7 +76,6 @@ import asset66 from "../../../agent/src/compaction/prompts/compaction-summary.md
 import asset67 from "../../../agent/src/compaction/prompts/compaction-turn-prefix.md" with { type: "text" };
 import asset68 from "../../../agent/src/compaction/prompts/compaction-update-summary.md" with { type: "text" };
 import asset69 from "../../../agent/src/compaction/prompts/context-window-truncated-output.md" with { type: "text" };
-import asset70 from "../../../agent/src/compaction/prompts/file-operations.md" with { type: "text" };
 import asset71 from "../../../agent/src/compaction/prompts/handoff-document.md" with { type: "text" };
 import asset72 from "../../../agent/src/compaction/prompts/handoff-summary-context.md" with { type: "text" };
 import asset73 from "../../../agent/src/compaction/prompts/snapcompact-archive-context.md" with { type: "text" };
@@ -398,9 +397,34 @@ import asset383 from "./tools/write.md" with { type: "text" };
 import asset384 from "./tools/yield.md" with { type: "text" };
 import asset385 from "../work-contracts/block.md" with { type: "text" };
 import asset386 from "../work-contracts/tool.md" with { type: "text" };
+import asset387 from "./system/chillax-notice.md" with { type: "text" };
+import asset388 from "./system/skill-notice.md" with { type: "text" };
+import asset389 from "./tools/wait-idle.md" with { type: "text" };
+import chroniclerStatusNotice from "./chronicler/status-notice.md" with { type: "text" };
 
 /** Static embeds are the release source; agents remain inspectable without changing discovery. */
 export const promptAssets: readonly PromptAsset[] = [
+	{
+		id: "chronicler/status-notice.md",
+		relPath: "chronicler/status-notice.md",
+		bundled: chroniclerStatusNotice,
+		scope: "feature:chronicler/status-notice",
+		group: "core",
+		keys: [
+			{ path: "enabled", type: "boolean", resolution: "session-dependent" },
+			{ path: "disabled", type: "boolean", resolution: "session-dependent" },
+			{ path: "paused", type: "boolean", resolution: "session-dependent" },
+			{ path: "resumed", type: "boolean", resolution: "session-dependent" },
+			{ path: "blinded", type: "boolean", resolution: "session-dependent" },
+			{ path: "unblinded", type: "boolean", resolution: "session-dependent" },
+			{ path: "enabledExtra", type: "string", resolution: "session-dependent" },
+		],
+		fixture: { enabled: true, enabledExtra: "" },
+		consumerHints: [
+			"packages/coding-agent/src/prompts/chronicler/status-notice.md",
+			"packages/coding-agent/src/chronicler/notices.ts",
+		],
+	},
 	{
 		id: "model-families/opus-5.md",
 		relPath: "model-families/opus-5.md",
@@ -599,8 +623,9 @@ export const promptAssets: readonly PromptAsset[] = [
 		keys: [
 			{ path: "name", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "selector", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "effort", type: "string", required: false, resolution: "session-dependent" },
 		],
-		fixture: { name: "Example name", selector: "Example selector" },
+		fixture: { name: "Example name", selector: "Example selector", effort: "high" },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/agents/model-mention.md",
 			"packages/coding-agent/src/session/model-mentions.ts",
@@ -1930,14 +1955,16 @@ export const promptAssets: readonly PromptAsset[] = [
 	{
 		id: "compaction/file-operations.md",
 		relPath: "compaction/file-operations.md",
-		bundled: asset70,
+		bundled: asset74,
 		scope: "compaction:file-operations",
 		group: "compaction",
 		keys: [{ path: "files", type: "string", required: true, resolution: "session-dependent" }],
 		fixture: { files: "Example files" },
 		consumerHints: [
-			"packages/agent/src/compaction/prompts/file-operations.md",
-			"packages/agent/src/compaction/utils.ts",
+			"packages/snapcompact/src/prompts/file-operations.md",
+			"packages/agent/src/compaction/branch-summarization.ts",
+			"packages/agent/src/compaction/compaction.ts",
+			"packages/coding-agent/src/session/session-maintenance.ts",
 		],
 	},
 	{
@@ -2523,6 +2550,7 @@ export const promptAssets: readonly PromptAsset[] = [
 				children: [
 					{ path: "number", type: "string" },
 					{ path: "isLine", type: "string" },
+					{ path: "line", type: "number" },
 					{ path: "quoteIsInline", type: "string" },
 					{ path: "quote", type: "string" },
 					{ path: "quoteFence", type: "string" },
@@ -2541,6 +2569,7 @@ export const promptAssets: readonly PromptAsset[] = [
 				{
 					number: "Example number",
 					isLine: "Example isLine",
+					line: 1,
 					quoteIsInline: "Example quoteIsInline",
 					quote: "Example quote",
 					quoteFence: "Example quoteFence",
@@ -2837,8 +2866,8 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset124,
 		scope: "feature:internal-urls/agent",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [{ path: "subagent", type: "boolean", required: false, resolution: "session-dependent" }],
+		fixture: { subagent: true },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/internal-urls/agent.md",
 			"packages/coding-agent/src/internal-urls/agent-protocol.ts",
@@ -4708,8 +4737,11 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset187,
 		scope: "feature:review-custom-request",
 		group: "core",
-		keys: [{ path: "instructions", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { instructions: "Example instructions" },
+		keys: [
+			{ path: "instructions", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "repository", type: "string", required: false, resolution: "session-dependent" },
+		],
+		fixture: { instructions: "Example instructions", repository: "/workspace/review-target" },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/review-custom-request.md",
 			"packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts",
@@ -4721,8 +4753,11 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset188,
 		scope: "feature:review-headless-request",
 		group: "core",
-		keys: [{ path: "focus", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { focus: "Example focus" },
+		keys: [
+			{ path: "focus", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "repository", type: "string", required: false, resolution: "session-dependent" },
+		],
+		fixture: { focus: "Example focus", repository: "/workspace/review-target" },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/review-headless-request.md",
 			"packages/coding-agent/src/extensibility/custom-commands/bundled/review/index.ts",
@@ -4736,6 +4771,9 @@ export const promptAssets: readonly PromptAsset[] = [
 		group: "core",
 		keys: [
 			{ path: "mode", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "repository", type: "string", required: false, resolution: "session-dependent" },
+			{ path: "prDiffUrl", type: "string", required: false, resolution: "session-dependent" },
+			{ path: "prDiffQuery", type: "string", required: false, resolution: "session-dependent" },
 			{
 				path: "files",
 				type: "unknown[]",
@@ -4743,6 +4781,8 @@ export const promptAssets: readonly PromptAsset[] = [
 				resolution: "session-dependent",
 				children: [
 					{ path: "path", type: "string" },
+					{ path: "diffIndex", type: "number" },
+					{ path: "diffUrl", type: "string" },
 					{ path: "linesAdded", type: "string" },
 					{ path: "linesRemoved", type: "string" },
 					{ path: "ext", type: "string" },
@@ -4775,9 +4815,14 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 		fixture: {
 			mode: "Example mode",
+			repository: "/workspace/review-target",
+			prDiffUrl: "pr://1/diff",
+			prDiffQuery: "?at=example",
 			files: [
 				{
 					path: "/workspace/example",
+					diffIndex: 1,
+					diffUrl: "pr://1/diff/1?at=example",
 					linesAdded: "Example linesAdded",
 					linesRemoved: "Example linesRemoved",
 					ext: "Example ext",
@@ -5043,8 +5088,26 @@ export const promptAssets: readonly PromptAsset[] = [
 		group: "core",
 		keys: [
 			{ path: "fieldSchema", type: "string", required: true, resolution: "runtime-only" },
-			{ path: "tools", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "description", type: "string" }] },
-			{ path: "advisors", type: "array", required: true, resolution: "runtime-only", children: [{ path: "name", type: "string" }, { path: "scope", type: "string" }] },
+			{
+				path: "tools",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+				],
+			},
+			{
+				path: "advisors",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "scope", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
@@ -5066,7 +5129,15 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "comment", type: "string", resolution: "session-dependent" },
-			{ path: "baseDefinitions", type: "array", resolution: "session-dependent", children: [{ path: "name", type: "string" }, { path: "definition", type: "string" }] },
+			{
+				path: "baseDefinitions",
+				type: "array",
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "definition", type: "string" },
+				],
+			},
 		],
 		fixture: {
 			target: "description",
@@ -5237,8 +5308,11 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset215,
 		scope: "feature:system/btw-user",
 		group: "core",
-		keys: [{ path: "question", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { question: "Example question" },
+		keys: [
+			{ path: "question", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "inject", type: "boolean", required: false, resolution: "session-dependent" },
+		],
+		fixture: { question: "Example question", inject: true },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/btw-user.md",
 			"packages/coding-agent/src/session/btw-turn.ts",
@@ -5255,6 +5329,19 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/checkpoint-active-notice.md",
 			"packages/coding-agent/src/session/agent-session.ts",
+		],
+	},
+	{
+		id: "system/chillax-notice.md",
+		relPath: "system/chillax-notice.md",
+		bundled: asset387,
+		scope: "feature:system/chillax-notice",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: [
+			"packages/coding-agent/src/prompts/system/chillax-notice.md",
+			"packages/coding-agent/src/modes/magic-keywords.ts",
 		],
 	},
 	{
@@ -5276,8 +5363,11 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset218,
 		scope: "feature:system/composer-prediction-user",
 		group: "core",
-		keys: [{ path: "skip", type: "string", required: true, resolution: "session-dependent" }],
-		fixture: { skip: "Example skip" },
+		keys: [
+			{ path: "skip", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "choices", type: "number", required: false, resolution: "session-dependent" },
+		],
+		fixture: { skip: "Example skip", choices: 4 },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/composer-prediction-user.md",
 			"packages/coding-agent/src/modes/controllers/composer-prediction-controller.ts",
@@ -5551,6 +5641,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "message", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "replyTo", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "interrupting", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "progress", type: "boolean", resolution: "session-dependent" },
 			{ path: "relayOnStop", type: "string", required: true, resolution: "session-dependent" },
 		],
 		fixture: {
@@ -5558,6 +5649,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			message: "Example message",
 			replyTo: "Example replyTo",
 			interrupting: true,
+			progress: false,
 			relayOnStop: "Example relayOnStop",
 		},
 		consumerHints: [
@@ -6197,6 +6289,45 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
+		id: "system/skill-notice.md",
+		relPath: "system/skill-notice.md",
+		bundled: asset388,
+		scope: "feature:system/skill-notice",
+		group: "core",
+		keys: [
+			{
+				path: "added",
+				type: "object[]",
+				required: true,
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string", required: true, resolution: "session-dependent" },
+					{ path: "description", type: "string", required: true, resolution: "session-dependent" },
+				],
+			},
+			{
+				path: "updated",
+				type: "object[]",
+				required: true,
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string", required: true, resolution: "session-dependent" },
+					{ path: "description", type: "string", required: true, resolution: "session-dependent" },
+				],
+			},
+			{ path: "removed", type: "unknown[]", required: true, resolution: "session-dependent" },
+		],
+		fixture: {
+			added: [{ name: "example-new", description: "A newly available skill" }],
+			updated: [{ name: "example-updated", description: "A revised skill description" }],
+			removed: ["example-removed"],
+		},
+		consumerHints: [
+			"packages/coding-agent/src/prompts/system/skill-notice.md",
+			"packages/coding-agent/src/session/session-tools.ts",
+		],
+	},
+	{
 		id: "system/skillful-notice.md",
 		relPath: "system/skillful-notice.md",
 		bundled: asset273,
@@ -6357,12 +6488,13 @@ export const promptAssets: readonly PromptAsset[] = [
 				children: [
 					{ path: "percent", type: "number", required: true, resolution: "session-dependent" },
 					{ path: "ago", type: "string", required: true, resolution: "session-dependent" },
+					{ path: "stage", type: "string", required: false, resolution: "session-dependent" },
 				],
 			},
 		],
 		fixture: {
 			inflight: [{ name: "Example name", path: "/workspace/example", chars: 2 }],
-			previous: { percent: 2, ago: "Example ago" },
+			previous: { percent: 2, stage: "Reviewing changes", ago: "Example ago" },
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/subagent-completion-probe.md",
@@ -6663,8 +6795,14 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "name", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "path", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "content", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "matched", type: "string", resolution: "session-dependent" },
 		],
-		fixture: { name: "Example name", path: "/workspace/example", content: "Example content" },
+		fixture: {
+			name: "Example name",
+			path: "/workspace/example",
+			content: "Example content",
+			matched: "Example match",
+		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/ttsr-interrupt.md",
 			"packages/coding-agent/src/session/ttsr-coordinator.ts",
@@ -6680,8 +6818,9 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "name", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "path", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "content", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "builtin", type: "boolean", resolution: "session-dependent" },
 		],
-		fixture: { name: "Example name", path: "/workspace/example", content: "Example content" },
+		fixture: { name: "Example name", path: "/workspace/example", content: "Example content", builtin: false },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/ttsr-tool-reminder.md",
 			"packages/coding-agent/src/session/ttsr-coordinator.ts",
@@ -6805,14 +6944,22 @@ export const promptAssets: readonly PromptAsset[] = [
 		scope: "feature:system/workflow-notice",
 		group: "core",
 		keys: [
-			{ path: "taskBatch", type: "unknown", required: true, resolution: "session-dependent" },
-			{ path: "scoutAvailable", type: "string", required: true, resolution: "session-dependent" },
-			{ path: "evalTools", type: "string", required: true, resolution: "session-dependent" },
+			{ path: "taskBatch", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "scoutAvailable", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "evalTools", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "py", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "js", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "freshAgents", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "perCallModel", type: "boolean", required: true, resolution: "session-dependent" },
 		],
 		fixture: {
-			taskBatch: "Example taskBatch",
-			scoutAvailable: "Example scoutAvailable",
-			evalTools: "Example evalTools",
+			taskBatch: true,
+			scoutAvailable: true,
+			evalTools: true,
+			py: true,
+			js: true,
+			freshAgents: true,
+			perCallModel: true,
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/workflow-notice.md",
@@ -7015,15 +7162,27 @@ export const promptAssets: readonly PromptAsset[] = [
 				required: true,
 				resolution: "session-dependent",
 				children: [
-					{ path: "[0]", type: "object", children: [{ path: "jobId", type: "string" }] },
+					{
+						path: "[0]",
+						type: "object",
+						children: [
+							{ path: "jobId", type: "string" },
+							{ path: "namedByCommand", type: "boolean" },
+							{ path: "headerLabel", type: "string" },
+						],
+					},
 					{ path: "jobId", type: "string" },
 					{ path: "label", type: "string" },
+					{ path: "namedByCommand", type: "boolean" },
+					{ path: "headerLabel", type: "string" },
 					{ path: "result", type: "string" },
 					{ path: "schemaStatus", type: "string" },
 					{ path: "schemaStatusLabel", type: "string" },
 					{ path: "schemaError", type: "string" },
 					{ path: "hasStructuredData", type: "string" },
 					{ path: "agentUrlId", type: "string" },
+					{ path: "showAgentUrl", type: "boolean" },
+					{ path: "showHistoryUrl", type: "boolean" },
 					{ path: "schemaValid", type: "string" },
 					{ path: "structuredJson", type: "string" },
 				],
@@ -7036,12 +7195,16 @@ export const promptAssets: readonly PromptAsset[] = [
 					"[0]": { jobId: "example-1" },
 					jobId: "example-1",
 					label: "Example label",
+					namedByCommand: true,
+					headerLabel: "Example command identity",
 					result: "Example result",
 					schemaStatus: "Example schemaStatus",
 					schemaStatusLabel: "Example schemaStatusLabel",
 					schemaError: "Example schemaError",
 					hasStructuredData: "Example hasStructuredData",
 					agentUrlId: "example-1",
+					showAgentUrl: true,
+					showHistoryUrl: false,
 					schemaValid: "example-1",
 					structuredJson: "{}",
 				},
@@ -7068,8 +7231,8 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset317,
 		scope: "tool:browser",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [{ path: "linux", type: "boolean", required: true, resolution: "session-dependent" }],
+		fixture: { linux: true },
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/browser.md",
 			"packages/coding-agent/src/tools/browser/prelude-definition.ts",
@@ -7267,6 +7430,27 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "autoProvision", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "spawnDefaultAgent", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "spawnAllowedAgentsText", type: "string", required: false, resolution: "session-dependent" },
+			{ path: "perCallModel", type: "boolean", required: true, resolution: "session-dependent" },
+			{
+				path: "perCallModelAdvertisement",
+				type: "object",
+				required: false,
+				resolution: "session-dependent",
+				children: [
+					{
+						path: "roles",
+						type: "object[]",
+						required: true,
+						resolution: "session-dependent",
+						children: [
+							{ path: "role", type: "string", required: true, resolution: "session-dependent" },
+							{ path: "patterns", type: "string[]", required: true, resolution: "session-dependent" },
+						],
+					},
+					{ path: "allowlist", type: "string[]", required: true, resolution: "session-dependent" },
+					{ path: "parentModelWithheld", type: "boolean", required: true, resolution: "session-dependent" },
+				],
+			},
 		],
 		fixture: {
 			py: true,
@@ -7279,6 +7463,12 @@ export const promptAssets: readonly PromptAsset[] = [
 			autoProvision: true,
 			spawnDefaultAgent: "Example spawnDefaultAgent",
 			spawnAllowedAgentsText: "Example spawnAllowedAgentsText",
+			perCallModel: true,
+			perCallModelAdvertisement: {
+				roles: [{ role: "review", patterns: ["mock/reviewer"] }],
+				allowlist: ["mock/reviewer"],
+				parentModelWithheld: false,
+			},
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/eval-agents.md",
@@ -7373,6 +7563,20 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "spawnDefaultAgent", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "spawnAllowedAgentsText", type: "string", required: false, resolution: "session-dependent" },
 			{ path: "inlineTopics", type: "string", required: false, resolution: "session-dependent" },
+			{ path: "timeoutMin", type: "number", resolution: "session-dependent" },
+			{ path: "timeoutMax", type: "number", resolution: "session-dependent" },
+			{ path: "configuredMaxTimeout", type: "number", resolution: "session-dependent" },
+			{ path: "timeoutCeiling", type: "number", resolution: "session-dependent" },
+			{ path: "toolNames", type: "string[]", resolution: "session-dependent" },
+			{
+				path: "inlinePreludes",
+				type: "object[]",
+				resolution: "session-dependent",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "documentation", type: "string" },
+				],
+			},
 			{
 				path: "preludes",
 				type: "object[]",
@@ -7396,6 +7600,12 @@ export const promptAssets: readonly PromptAsset[] = [
 			spawnDefaultAgent: "Example spawnDefaultAgent",
 			spawnAllowedAgentsText: "Example spawnAllowedAgentsText",
 			inlineTopics: "Example inlineTopics",
+			timeoutMin: 1,
+			timeoutMax: 3600,
+			configuredMaxTimeout: 300,
+			timeoutCeiling: 300,
+			toolNames: ["read"],
+			inlinePreludes: [{ name: "example", documentation: "Example prelude documentation" }],
 			preludes: [{ name: "Example name", summary: "Example summary" }],
 		},
 		consumerHints: ["packages/coding-agent/src/prompts/tools/eval.md", "packages/coding-agent/src/tools/eval.ts"],
@@ -7666,8 +7876,12 @@ export const promptAssets: readonly PromptAsset[] = [
 		bundled: asset349,
 		scope: "tool:lsp",
 		group: "core",
-		keys: [],
-		fixture: {},
+		keys: [
+			{ path: "defaultTimeoutSec", type: "number", resolution: "session-dependent" },
+			{ path: "defaultWaitSec", type: "number", resolution: "session-dependent" },
+			{ path: "maxTimeoutSec", type: "number", resolution: "session-dependent" },
+		],
+		fixture: { defaultTimeoutSec: 30, defaultWaitSec: 1, maxTimeoutSec: 300 },
 		consumerHints: ["packages/coding-agent/src/prompts/tools/lsp.md", "packages/coding-agent/src/lsp/tool.ts"],
 	},
 	{
@@ -8126,6 +8340,7 @@ export const promptAssets: readonly PromptAsset[] = [
 					{ path: "description", type: "string", required: true, resolution: "session-dependent" },
 					{ path: "readOnly", type: "boolean", required: true, resolution: "session-dependent" },
 					{ path: "blocking", type: "boolean", required: true, resolution: "session-dependent" },
+					{ path: "structured", type: "boolean", resolution: "session-dependent" },
 				],
 			},
 			{ path: "scoutAvailable", type: "boolean", required: true, resolution: "session-dependent" },
@@ -8136,12 +8351,37 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "batchEnabled", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "effortEnabled", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "legacyEffort", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "perCallModelEnabled", type: "boolean", required: true, resolution: "session-dependent" },
+			{
+				path: "perCallModelAdvertisement",
+				type: "object",
+				required: false,
+				resolution: "session-dependent",
+				children: [
+					{
+						path: "roles",
+						type: "object[]",
+						required: true,
+						resolution: "session-dependent",
+						children: [
+							{ path: "role", type: "string", required: true, resolution: "session-dependent" },
+							{ path: "patterns", type: "string[]", required: true, resolution: "session-dependent" },
+						],
+					},
+					{ path: "allowlist", type: "string[]", required: true, resolution: "session-dependent" },
+					{ path: "parentModelWithheld", type: "boolean", required: true, resolution: "session-dependent" },
+				],
+			},
 			{ path: "evalToolsEnabled", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "structured", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "asyncEnabled", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "hasBlockingAgents", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "hasModelMentions", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "ircEnabled", type: "boolean", required: true, resolution: "session-dependent" },
+			{ path: "hasStructuredAgents", type: "boolean", resolution: "session-dependent" },
+			{ path: "asyncGuidance", type: "string", resolution: "session-dependent" },
+			{ path: "file", type: "boolean", resolution: "session-dependent" },
+			{ path: "seanceGuidance", type: "string", resolution: "session-dependent" },
 			{
 				path: "routingPolicies",
 				type: "object[]",
@@ -8156,7 +8396,15 @@ export const promptAssets: readonly PromptAsset[] = [
 			},
 		],
 		fixture: {
-			agents: [{ name: "Example name", description: "Example description", readOnly: true, blocking: true }],
+			agents: [
+				{
+					name: "Example name",
+					description: "Example description",
+					readOnly: true,
+					blocking: true,
+					structured: true,
+				},
+			],
 			scoutAvailable: true,
 			spawningDisabled: true,
 			defaultAgent: "Example defaultAgent",
@@ -8165,12 +8413,22 @@ export const promptAssets: readonly PromptAsset[] = [
 			batchEnabled: true,
 			effortEnabled: true,
 			legacyEffort: true,
+			perCallModelEnabled: true,
+			perCallModelAdvertisement: {
+				roles: [{ role: "review", patterns: ["mock/reviewer"] }],
+				allowlist: ["mock/reviewer"],
+				parentModelWithheld: false,
+			},
 			evalToolsEnabled: true,
 			structured: true,
 			asyncEnabled: true,
 			hasBlockingAgents: true,
 			hasModelMentions: true,
 			ircEnabled: true,
+			hasStructuredAgents: true,
+			asyncGuidance: "Results arrive automatically.",
+			file: true,
+			seanceGuidance: "Consult saved sessions.",
 			routingPolicies: [
 				{
 					selector: "Example selector",
@@ -8312,6 +8570,19 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/vibe-wait.md",
 			"packages/coding-agent/src/tools/vibe.ts",
+		],
+	},
+	{
+		id: "tools/wait-idle.md",
+		relPath: "tools/wait-idle.md",
+		bundled: asset389,
+		scope: "tool:wait",
+		group: "core",
+		keys: [{ path: "waited", type: "string", required: true, resolution: "session-dependent" }],
+		fixture: { waited: "15s" },
+		consumerHints: [
+			"packages/coding-agent/src/prompts/tools/wait-idle.md",
+			"packages/coding-agent/src/tools/wait.ts",
 		],
 	},
 	{

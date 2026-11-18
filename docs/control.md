@@ -20,13 +20,29 @@ Read `state` before a write. Pass `if` revisions on draft and surface commands. 
 
 `app.suspend`, `app.exit` (which would close the socket before replying), external `$EDITOR`, and `/todo edit` are exempt and return an explicit `exempt_*` error. `app.clear` clears the composer without entering the human Ctrl-C double-press shutdown path. Everything else a human can do from the keyboard is reachable by `input`, `keys`, `action`, or a structured twin (`set_model`, `settings_set`, `dialog_answer`).
 
-`commands` includes the pane's TUI-only slash commands and aliases as well as RPC commands. `get_available_models` uses protocol-v2 chunking when its full catalog exceeds one transport frame.
+`commands` lists every registered slash command, each with `availability` (`headless`, or `tui` for commands that need the terminal UI), plus aliases, whatever the target's transport. `get_available_models` uses protocol-v2 chunking when its full catalog exceeds one transport frame.
+
+### Slash commands over control
+
+- On a TUI-owned session, `input` and `slash` do exactly what a human typing and pressing Enter does: the text is placed in the composer and the editor's own submit handler runs, so the same slash dispatcher, extension `input` hooks, deferred-draft handling and queueing apply. Terminal-only commands (`/settings`, `/tree`, `/hotkeys`, ...) therefore open their UI in the pane; the reply is `{ delivery: "started" }`, not the command's result. Read the effect with `state`, `dialogs` or `screen`.
+- A headless session (`rpc`, `print`) has no composer, so `input`/`slash` answer `code: "no_tui"`. Send the text as an RPC `prompt` instead: it runs through the same builtin dispatcher, headless commands run, and a `tui` command answers `code: "command_requires_tui"` without reaching the model.
+- `get_command_completions { command, prefix }` is served over `rpc` for either kind of session; see [Available commands](./rpc.md#available-commands).
+
+### Dictation over control
+
+A terminal-owned session (control role `tui`) advertises `dictation` in its `ready`/hello capabilities and serves `dictation_start { captureId }` and `dictation_stop` with the semantics of the [Dictation Sub-Protocol](./rpc.md#dictation-sub-protocol): a draft-only capture from this process's microphone with the session's `stt.*` settings, never submitting a prompt. `session.dictationEnabled` in the `hello`/`state` snapshots reports `stt.enabled`; `dictation_start` is refused while it is off.
+
+- The `dictation_state`, `dictation_transcript` and `dictation_end` frames go only to the connection that sent `dictation_start`, not to other connections. Closing that connection ends the capture and frees the microphone.
+- One capture at a time per process. `dictation_start` fails with `The terminal's own dictation is active` while the terminal's composer microphone, push-to-talk or chord recording is running, `Dictation is already active on another control connection` while another connection records, and `A dictation capture is already active` for a second start on the same connection. Live voice and dictation exclude each other as over stdio.
+- Meanwhile the terminal's own composer microphone, push-to-talk and chord refuse to start (a status line says a control client is recording). The separate Ctrl+Space xAI path is not gated.
+- `dictation_stop` from a connection that is not recording returns empty text and leaves the capture running.
+- A headless control endpoint (`rpc`, `print`) has no terminal microphone owner: it does not advertise `dictation`, and `dictation_start` answers `Dictation is unavailable on this transport`.
 
 The `hello`, `get_status`, and `state` snapshots carry `session`: the same RPC session state `get_state` returns, minus the `systemPrompt` and `dumpTools` dump fields, so a snapshot stays one frame. `state` with `target: "view"` reports the subagent the pane is focused on and adds `root` (the root session id and generation); with nothing focused, or with the default `target: "root"`, it reports the root session.
 
 Control snapshots and subscribed `queue_update` events include an exact oldest prefix of each queue: at most 256 entries and 43,690 text characters per queue. The combined queues reserve at most half of a protocol-v1 frame even with worst-case JSON escaping. They stop before the first entry that would exceed either budget; no returned queue-chip text is shortened, so it remains valid for `remove_queued_message` and `promote_queued_message`. `queuedMessageCount` and `liveSteered` remain exact even when not all entries fit. RPC `get_state` keeps the full queue; `dequeue` can retrieve a full queued message.
 
-`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, `set_subagent_thinking_level`, `set_subagent_fast`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them. Thinking-level and fast-mode changes apply to the selected running subagent's next provider request and persist across restart without changing the parent or global defaults. `get_subagents` reports the live model, effort and fast enabled/active state, including edits made from the focused Agent Hub view.
+`get_subagents`, `get_subagent_messages`, `cancel_subagent`, `steer_subagent`, `set_subagent_thinking_level`, `set_subagent_fast`, `set_subagent_model`, and `set_subagent_subscription` use the process's live subagent registry. Every connection sees the same roster, including subagents that started before it connected. `set_subagent_subscription` is per connection: lifecycle and progress frames (and, at `events`, raw subagent events) go only to connections that asked for them. Thinking-level, fast-mode and model changes apply to the selected running subagent's next provider request and persist across restart without changing the parent or global defaults. `get_subagents` reports the live model, effort and fast enabled/active state, including edits made from the focused Agent Hub view.
 
 Host tools contributed by `serve` or RPC `set_host_tools` belong to that
 authenticated connection, not to the terminal session as a whole. The effective
@@ -77,6 +93,19 @@ control publication by the session file's resolved real path. Roles can also be
 `rpc`, `acp`, or `print`. A busy session without a control endpoint cannot be
 attached; do not open it as another writer.
 An invalid creation timestamp falls back to the file's modification time.
+
+`sessions list --json --live` adds a `live` field to every entry: `null` for a
+session with no live control endpoint, or one that does not answer within about
+750 ms (unreachable is not an error), otherwise
+`{ "state": "busy" | "waiting" | "idle", "isStreaming": true, "pendingDialogs": 0, "branch": "main" }`.
+Each endpoint is probed read-only with the `ctl list` handshake, all at once, so
+a slow process costs one deadline for the whole listing and nothing is sent to any
+session. `waiting` means a pane dialog (ask or approval) is open, `busy` that the
+session is not settled (streaming, compacting, queued input or background work),
+and `idle` that it is settled. `branch` is the VCS branch of the process's
+working directory, `null` outside a repository or on a detached head. Headless
+RPC processes register no pane dialogs, so only terminal sessions report
+`waiting`. Without `--live` the output is unchanged and has no `live` field.
 
 `messageCount` counts persisted message entries across the complete journal,
 including tool results and alternate branches. It is not the length of the

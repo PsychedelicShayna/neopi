@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it, type Mock, spyOn } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as os from "node:os";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { reset as resetCapabilities } from "@oh-my-pi/pi-coding-agent/capability";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -51,9 +52,16 @@ describe("--no-context-files", () => {
 			Bun.write(tempDir.join("home/.omp/agent/AGENTS.md"), `${USER_AGENTS_MARKER}\n`),
 			Bun.write(tempDir.join("extra-claude/CLAUDE.md"), `${EXTRA_CLAUDE_MARKER}\n`),
 		]);
+		resetCapabilities();
 		authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 		authStorage.keys.setRuntime("openai", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+	});
+
+	beforeEach(() => {
+		// The shared storage guard resets directories before each test.
+		setAgentDir(tempDir.join("home/.omp/agent"));
+		resetCapabilities();
 	});
 
 	afterAll(async () => {
@@ -65,6 +73,7 @@ describe("--no-context-files", () => {
 			else process.env[key] = originalEnv[key];
 		}
 		__resetDirsFromEnvForTests();
+		resetCapabilities();
 		await tempDir.remove();
 	});
 

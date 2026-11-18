@@ -62,7 +62,9 @@ describe("AgentSession prompt admission racing abort", () => {
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
-			modelRegistry: (options.modelRegistry ?? fallbackRegistry) as never,
+			modelRegistry: options.modelRegistry
+				? ({ getAvailable: () => [model], ...options.modelRegistry } as ModelRegistry)
+				: fallbackRegistry,
 			...(options.extensionRunner ? { extensionRunner: options.extensionRunner as never } : {}),
 		});
 		if (options.clientBridge) {
@@ -113,7 +115,9 @@ describe("AgentSession prompt admission racing abort", () => {
 			expect(await pending).toBe(true);
 			expect(admitted).toBe(false);
 			expect(streamCalls).toEqual([]);
-			expect(session.agent.state.messages.some(message => JSON.stringify(message).includes("cancel me"))).toBe(false);
+			expect(session.agent.state.messages.some(message => JSON.stringify(message).includes("cancel me"))).toBe(
+				false,
+			);
 
 			await session.prompt("fresh prompt");
 			expect(streamCalls).toEqual(["started"]);

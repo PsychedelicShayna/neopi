@@ -9,9 +9,9 @@ export function isNpiExecutable(executablePath: string): boolean {
 	return NPI_EXECUTABLE_NAMES.has(executableName);
 }
 
-/** Route the fork executable's exact `update` command into a normal prompted agent session. */
+/** Route the fork executable's exact `update source` into a prompted agent session. */
 export function resolveNpiUpdateArgv(argv: string[], executablePath: string): string[] {
-	if (argv.length !== 1 || argv[0] !== "update") return argv;
+	if (argv.length !== 2 || argv[0] !== "update" || argv[1] !== "source") return argv;
 	if (!isNpiExecutable(executablePath)) return argv;
 	return ["launch", resolvePromptAsset("npi-update.md", updatePrompt).text.trim()];
 }

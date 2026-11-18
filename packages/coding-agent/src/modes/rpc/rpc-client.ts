@@ -9,7 +9,7 @@ import type { AgentEvent, AgentMessage, AgentToolResult, ThinkingLevel } from "@
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { MixtureConfigScope, MixtureDefinition } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { isRecord, ptree, readJsonl } from "@oh-my-pi/pi-utils";
+import { isRecord, ptree, readJsonl, toError } from "@oh-my-pi/pi-utils";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { FileSink } from "bun";
@@ -19,7 +19,10 @@ import type { MixtureIssue } from "../../moa/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
+import type { SessionLeaseReport } from "../../session/session-storage";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameDecoder, type RpcProtocolVersion } from "./rpc-frame";
+import type { SlashCommandCompletion } from "../../slash-commands/builtin-registry";
+import type { RpcJobLifecycleFrame, RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { RpcModel } from "./rpc-model";
@@ -72,6 +75,8 @@ import type {
 	RpcSubagentLifecycleFrame,
 	RpcSubagentMessagesResult,
 	RpcSubagentProgressFrame,
+	RpcSetSubagentModelResult,
+	RpcSubagentHistoryResult,
 	RpcSubagentSnapshot,
 	RpcSubagentSubscriptionLevel,
 	RpcToolApprovalCancel,
@@ -149,6 +154,7 @@ export type RpcToolApprovalCancelListener = (cancel: RpcToolApprovalCancel) => v
 export type RpcLiveListener = (frame: RpcLiveFrame) => void;
 export type RpcJournalEventListener = (event: RpcJournalEventFrame) => void;
 export type RpcDictationListener = (frame: RpcDictationFrame) => void;
+export type RpcJobLifecycleListener = (frame: RpcJobLifecycleFrame) => void;
 
 export interface RpcClientToolContext<TDetails = unknown> {
 	toolCallId: string;
@@ -456,6 +462,7 @@ export class RpcClient {
 	#toolApprovalCancelListeners = new Set<RpcToolApprovalCancelListener>();
 	#liveListeners = new Set<RpcLiveListener>();
 	#dictationListeners = new Set<RpcDictationListener>();
+	#jobListeners = new Set<RpcJobLifecycleListener>();
 	/** `promptAndWait` completions keyed by request id; registered before the prompt is sent. */
 	#promptResultWaiters = new Map<string, (result: RpcPromptResultFrame) => void>();
 	/** Same-id failures that arrive after the success ack removed the pending request. */
@@ -466,6 +473,7 @@ export class RpcClient {
 	#pendingHostToolCalls = new Map<string, { controller: AbortController }>();
 	#requestId = 0;
 	#protocolVersion: RpcProtocolVersion = 1;
+	#supportsBashExcludeFromContext = false;
 	#extensionUiListeners: Set<(req: RpcExtensionUIRequest) => void> = new Set();
 	#abortController = new AbortController();
 
@@ -491,6 +499,7 @@ export class RpcClient {
 		// short-circuit the new stdout reader (issue #4079).
 		this.#abortController = new AbortController();
 		this.#protocolVersion = 1;
+		this.#supportsBashExcludeFromContext = false;
 
 		const cliPath = this.options.cliPath ?? "dist/cli.js";
 		const args = ["--mode", "rpc"];
@@ -554,6 +563,7 @@ export class RpcClient {
 			for await (const line of lines) {
 				if (!readySettled && isRecord(line) && line.type === "ready") {
 					protocolV2Supported = supportsRpcProtocolV2(line);
+					this.#supportsBashExcludeFromContext = line.supportsBashExcludeFromContext === true;
 					readySettled = true;
 					readyResolve();
 					continue;
@@ -595,7 +605,7 @@ export class RpcClient {
 							});
 			await reapAfterOutputFailure(error);
 		})().catch(async (cause: unknown) => {
-			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const error = toError(cause);
 			if (!readySettled) {
 				readySettled = true;
 				readyReject(error);
@@ -647,7 +657,7 @@ export class RpcClient {
 		} catch (cause) {
 			// Startup failed after spawning the child. Reap it before returning
 			// so a retry cannot inherit a live worker or its session lock.
-			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const error = toError(cause);
 			await reapAfterOutputFailure(error);
 			throw cause;
 		} finally {
@@ -809,6 +819,29 @@ export class RpcClient {
 		return () => {
 			this.#liveListeners.delete(listener);
 		};
+	}
+
+	/** Subscribe to `job_lifecycle` frames (capability `background_jobs`) to keep a live job list and count. */
+	onJobLifecycle(listener: RpcJobLifecycleListener): () => void {
+		this.#jobListeners.add(listener);
+		return () => {
+			this.#jobListeners.delete(listener);
+		};
+	}
+
+	/** List background jobs (running and the newest settled) of this agent and its subagents. */
+	async getJobs(recentLimit?: number): Promise<RpcJobsResult> {
+		return this.#getData(await this.#send({ type: "get_jobs", recentLimit }));
+	}
+
+	/** Read a job's output snapshot from `fromByte`; pass `nextByte` and `revision` back to read on. */
+	async getJobOutput(jobId: string, fromByte?: number, revision?: string): Promise<RpcJobOutputResult> {
+		return this.#getData(await this.#send({ type: "get_job_output", jobId, fromByte, revision }));
+	}
+
+	/** Cancel a running job the session's own agent owns; false when it is not cancellable. */
+	async cancelJob(jobId: string): Promise<boolean> {
+		return this.#getData<{ cancelled: boolean }>(await this.#send({ type: "cancel_job", jobId })).cancelled;
 	}
 
 	/** Subscribe to draft-only dictation state, full preview, and terminal frames. */
@@ -1189,9 +1222,28 @@ export class RpcClient {
 		this.#getData(await this.#send({ type: "set_subagent_thinking_level", subagentId, level }));
 	}
 
+	/**
+	 * Every child of the root session's tree, live or persisted (capability `subagent_history`), oldest
+	 * first. Unlike {@link getSubagents} it survives a restart: finished, parked and aborted children stay.
+	 */
+	async getSubagentHistory(includeAdvisors = false): Promise<RpcSubagentHistoryResult> {
+		return this.#getData(await this.#send({ type: "get_subagent_history", includeAdvisors }));
+	}
+
 	/** Enable or disable fast mode only for the selected running subagent. */
 	async setSubagentFast(subagentId: string, enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
 		return this.#getData(await this.#send({ type: "set_subagent_fast", subagentId, enabled }));
+	}
+
+	/**
+	 * Switch a running subagent's model for this session only, from its next provider request. Pass a
+	 * selector (`provider/id`, fuzzy id, `@role`, optional `:level`) or an exact provider and model id.
+	 */
+	async setSubagentModel(
+		subagentId: string,
+		selection: { selector: string } | { provider: string; modelId: string },
+	): Promise<RpcSetSubagentModelResult> {
+		return this.#getData(await this.#send({ type: "set_subagent_model", subagentId, ...selection }));
 	}
 
 	/**
@@ -1266,6 +1318,24 @@ export class RpcClient {
 	async setRole(role: string): Promise<RpcSetRoleResult> {
 		const response = await this.#send({ type: "set_role", role });
 		return this.#getData<RpcSetRoleResult>(response);
+	}
+
+	/**
+	 * Cycle through the configured role models like Ctrl+P (`get_roles().cycleOrder`); `null` when
+	 * fewer than two role models are available.
+	 */
+	async cycleRole(direction: "forward" | "backward" = "forward"): Promise<RpcSetRoleResult | null> {
+		const response = await this.#send({ type: "cycle_role", direction });
+		return this.#getData<RpcSetRoleResult | null>(response);
+	}
+
+	/**
+	 * Argument completions of a slash command (`command_completions` capability): `prefix` is the argument
+	 * text typed after the command name. Empty when the command offers none.
+	 */
+	async getCommandCompletions(command: string, prefix: string): Promise<SlashCommandCompletion[]> {
+		const response = await this.#send({ type: "get_command_completions", command, prefix });
+		return this.#getData<{ items: SlashCommandCompletion[] }>(response).items;
 	}
 
 	/**
@@ -1390,10 +1460,14 @@ export class RpcClient {
 	}
 
 	/**
-	 * Execute a bash command.
+	 * Execute a bash command, optionally keeping its output out of model context.
+	 * Excluded commands require an explicitly advertised runtime capability.
 	 */
-	async bash(command: string): Promise<BashResult> {
-		const response = await this.#send({ type: "bash", command });
+	async bash(command: string, options?: { excludeFromContext?: boolean }): Promise<BashResult> {
+		if (options?.excludeFromContext === true && !this.#supportsBashExcludeFromContext) {
+			throw new Error("RPC runtime does not support bash context exclusion");
+		}
+		const response = await this.#send({ type: "bash", command, excludeFromContext: options?.excludeFromContext });
 		return this.#getData(response);
 	}
 
@@ -1419,6 +1493,15 @@ export class RpcClient {
 	 */
 	async getUsage(options: RpcUsageRequest = {}): Promise<RpcUsageResult> {
 		const response = await this.#send({ type: "get_usage", ...options });
+		return this.#getData(response);
+	}
+
+	/**
+	 * Which of `sessionIds` a running process (this one included) owns, probed
+	 * without taking ownership. Ids in neither list are free.
+	 */
+	async getSessionLease(sessionIds: string[]): Promise<SessionLeaseReport> {
+		const response = await this.#send({ type: "get_session_lease", sessionIds });
 		return this.#getData(response);
 	}
 
@@ -1944,6 +2027,13 @@ export class RpcClient {
 			return;
 		}
 
+		if (isRecord(data) && data.type === "job_lifecycle") {
+			for (const listener of this.#jobListeners) {
+				listener(data as unknown as RpcJobLifecycleFrame);
+			}
+			return;
+		}
+
 		if (isRpcDictationFrame(data)) {
 			for (const listener of this.#dictationListeners) {
 				listener(data);
@@ -2071,7 +2161,7 @@ export class RpcClient {
 		try {
 			this.#writeFrame(fullCommand, fail);
 		} catch (err) {
-			fail(err instanceof Error ? err : new Error(String(err)));
+			fail(toError(err));
 		}
 		return promise;
 	}
@@ -2150,7 +2240,7 @@ export class RpcClient {
 		const line = `${JSON.stringify(frame)}\n`;
 		// A broken stdin pipe is terminal: fail this frame's request, then stop so start() can relaunch.
 		const failed = (err: unknown) => {
-			onError?.(err instanceof Error ? err : new Error(String(err)));
+			onError?.(toError(err));
 			if (this.#process === child) void this.stop();
 		};
 		try {

@@ -773,6 +773,52 @@ impl<'de> Deserialize<'de> for Usage {
 	}
 }
 
+/// Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope.
+///
+/// Open record: declared fields are decoded leniently (a value that does not fit stays
+/// in `extra`) and every other key is kept in `extra`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ParentIrc {
+	/// Sending parent agent id.
+	pub from: Option<String>,
+	/// Message body as the parent wrote it.
+	pub body: Option<String>,
+	/// Every key not decoded into a declared field.
+	pub extra: Map<String, Value>,
+}
+
+impl Serialize for ParentIrc {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		let mut map = serializer.serialize_map(None)?;
+		if let Some(value) = &self.from {
+			map.serialize_entry("from", value)?;
+		}
+		if let Some(value) = &self.body {
+			map.serialize_entry("body", value)?;
+		}
+		for (key, value) in &self.extra {
+			match key.as_str() {
+				"from" if self.from.is_some() => continue,
+				"body" if self.body.is_some() => continue,
+				_ => {}
+			}
+			map.serialize_entry(key, value)?;
+		}
+		map.end()
+	}
+}
+
+impl<'de> Deserialize<'de> for ParentIrc {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let mut extra = Map::<String, Value>::deserialize(deserializer)?;
+		Ok(Self {
+			from: take(&mut extra, "from"),
+			body: take(&mut extra, "body"),
+			extra,
+		})
+	}
+}
+
 ///
 /// Open record: declared fields are decoded leniently (a value that does not fit stays
 /// in `extra`) and every other key is kept in `extra`.
@@ -780,6 +826,7 @@ impl<'de> Deserialize<'de> for Usage {
 pub struct UserMessage {
 	pub content: Option<MessageContent>,
 	pub timestamp: Option<f64>,
+	pub parent_irc: Option<ParentIrc>,
 	pub synthetic: Option<bool>,
 	pub steering: Option<bool>,
 	pub live_steered: Option<bool>,
@@ -798,6 +845,9 @@ impl Serialize for UserMessage {
 		}
 		if let Some(value) = &self.timestamp {
 			map.serialize_entry("timestamp", value)?;
+		}
+		if let Some(value) = &self.parent_irc {
+			map.serialize_entry("parentIrc", value)?;
 		}
 		if let Some(value) = &self.synthetic {
 			map.serialize_entry("synthetic", value)?;
@@ -821,6 +871,7 @@ impl Serialize for UserMessage {
 			match key.as_str() {
 				"content" if self.content.is_some() => continue,
 				"timestamp" if self.timestamp.is_some() => continue,
+				"parentIrc" if self.parent_irc.is_some() => continue,
 				"synthetic" if self.synthetic.is_some() => continue,
 				"steering" if self.steering.is_some() => continue,
 				"liveSteered" if self.live_steered.is_some() => continue,
@@ -841,6 +892,7 @@ impl<'de> Deserialize<'de> for UserMessage {
 		Ok(Self {
 			content: take(&mut extra, "content"),
 			timestamp: take(&mut extra, "timestamp"),
+			parent_irc: take(&mut extra, "parentIrc"),
 			synthetic: take(&mut extra, "synthetic"),
 			steering: take(&mut extra, "steering"),
 			live_steered: take(&mut extra, "liveSteered"),
@@ -2906,6 +2958,9 @@ pub struct RolesResult {
 	pub roles: Vec<RoleInfo>,
 	#[serde(rename = "activeRole", default, skip_serializing_if = "Option::is_none")]
 	pub active_role: Option<String>,
+	/// The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.
+	#[serde(rename = "cycleOrder", default = "default_roles_result_cycle_order")]
+	pub cycle_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -3928,6 +3983,9 @@ pub struct SessionState {
 	/// `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`.
 	#[serde(rename = "slowModeEnabled", default = "default_session_state_slow_mode_enabled")]
 	pub slow_mode_enabled: bool,
+	/// Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.
+	#[serde(rename = "dictationEnabled", default = "default_session_state_dictation_enabled")]
+	pub dictation_enabled: bool,
 	/// Where the active model's `/slow` lives; absent when unsupported.
 	#[serde(rename = "slowModeScope", default, skip_serializing_if = "Option::is_none")]
 	pub slow_mode_scope: Option<SlowModeScope>,
@@ -3940,6 +3998,15 @@ pub struct SessionState {
 	pub message_count: i64,
 	#[serde(rename = "queuedMessageCount", default = "default_session_state_queued_message_count")]
 	pub queued_message_count: i64,
+	/// Short machine hostname (first DNS label).
+	#[serde(default = "default_session_state_hostname")]
+	pub hostname: String,
+	/// Accumulated active-processing time, including the run in flight; idle time never counts.
+	#[serde(rename = "activeTimeMs", default = "default_session_state_active_time_ms")]
+	pub active_time_ms: f64,
+	/// Running background jobs outside the subagents count, as the TUI jobs pill counts them.
+	#[serde(rename = "runningJobCount", default = "default_session_state_running_job_count")]
+	pub running_job_count: i64,
 	/// Background jobs or deliveries can still inject a follow-up and wake the session.
 	#[serde(rename = "hasPendingAsyncWork", default = "default_session_state_has_pending_async_work")]
 	pub has_pending_async_work: bool,
@@ -3983,12 +4050,41 @@ pub struct BashResult {
 	pub artifact_id: Option<String>,
 	#[serde(rename = "artifactElidedBytes", default, skip_serializing_if = "Option::is_none")]
 	pub artifact_elided_bytes: Option<i64>,
+	/// Bytes dropped from the middle of `output`, which keeps the head and tail.
+	#[serde(rename = "elidedBytes", default, skip_serializing_if = "Option::is_none")]
+	pub elided_bytes: Option<i64>,
+	/// Lines dropped from the middle of `output`.
+	#[serde(rename = "elidedLines", default, skip_serializing_if = "Option::is_none")]
+	pub elided_lines: Option<i64>,
+	/// Bytes the per-line column cap cut from `output`, across all lines.
+	#[serde(rename = "columnDroppedBytes", default, skip_serializing_if = "Option::is_none")]
+	pub column_dropped_bytes: Option<i64>,
+	/// Lines of `output` the per-line column cap cut; the artifact holds them whole.
+	#[serde(rename = "columnTruncatedLines", default, skip_serializing_if = "Option::is_none")]
+	pub column_truncated_lines: Option<i64>,
+	/// First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it.
+	#[serde(rename = "columnTruncatedRange", default, skip_serializing_if = "Option::is_none")]
+	pub column_truncated_range: Option<LineRange>,
+	/// The per-line column cap in UTF-8 bytes, set when it cut a line.
+	#[serde(rename = "columnMax", default, skip_serializing_if = "Option::is_none")]
+	pub column_max: Option<i64>,
 	#[serde(rename = "artifactError", default, skip_serializing_if = "Option::is_none")]
 	pub artifact_error: Option<Map<String, Value>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub minimized: Option<Map<String, Value>>,
 	#[serde(rename = "workingDir", default, skip_serializing_if = "Option::is_none")]
 	pub working_dir: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub images: Option<Vec<ImageContent>>,
+	/// The embedded shell's final `ShellTrace` of the run; only when the caller asked for one.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub trace: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LineRange {
+	pub first: i64,
+	pub last: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4174,6 +4270,21 @@ pub struct SlashSubcommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandCompletion {
+	/// Replaces the argument text the host typed.
+	pub value: String,
+	pub label: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	/// Ghost text to show after the cursor.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub hint: Option<String>,
+	/// Accepting it leaves a complete command, so the host may submit at once.
+	#[serde(rename = "submitsCommand", default, skip_serializing_if = "Option::is_none")]
+	pub submits_command: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AvailableSlashCommand {
 	pub name: String,
 	pub source: SlashCommandSource,
@@ -4185,6 +4296,9 @@ pub struct AvailableSlashCommand {
 	pub input: Option<SlashCommandInput>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub subcommands: Option<Vec<SlashSubcommand>>,
+	/// `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.
+	#[serde(default = "default_available_slash_command_availability")]
+	pub availability: AvailableSlashCommandAvailability,
 }
 
 /// OMP-native session entries in append order.
@@ -4360,6 +4474,215 @@ pub struct SubagentSnapshot {
 	pub fast_mode_enabled: Option<bool>,
 	#[serde(rename = "fastModeActive", default, skip_serializing_if = "Option::is_none")]
 	pub fast_mode_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobType {
+	#[serde(rename = "bash")]
+	Bash,
+	#[serde(rename = "task")]
+	Task,
+	#[serde(rename = "eval")]
+	Eval,
+	#[serde(rename = "chronicle")]
+	Chronicle,
+}
+
+impl JobType {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Bash => "bash",
+			Self::Task => "task",
+			Self::Eval => "eval",
+			Self::Chronicle => "chronicle",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobStatus {
+	#[serde(rename = "running")]
+	Running,
+	#[serde(rename = "completed")]
+	Completed,
+	#[serde(rename = "failed")]
+	Failed,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+}
+
+impl JobStatus {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::Completed => "completed",
+			Self::Failed => "failed",
+			Self::Cancelled => "cancelled",
+		}
+	}
+}
+
+/// One background job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobInfo {
+	/// Stable `bg_N` id.
+	pub id: String,
+	pub r#type: JobType,
+	pub label: String,
+	pub status: JobStatus,
+	/// Epoch milliseconds.
+	#[serde(rename = "startedAt")]
+	pub started_at: f64,
+	/// Size in bytes of the output snapshot `get_job_output` reads.
+	#[serde(rename = "outputBytes")]
+	pub output_bytes: i64,
+	/// Full command line of a job that runs a process; `label` is cut to 120 characters.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub command: Option<String>,
+	#[serde(rename = "finishedAt", default, skip_serializing_if = "Option::is_none")]
+	pub finished_at: Option<f64>,
+	#[serde(rename = "exitCode", default, skip_serializing_if = "Option::is_none")]
+	pub exit_code: Option<i64>,
+	/// Failure text of a failed job, cut to a bounded length.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<String>,
+	/// Registry id of the agent that registered the job.
+	#[serde(rename = "ownerId", default, skip_serializing_if = "Option::is_none")]
+	pub owner_id: Option<String>,
+	/// Registry id of the subagent a task job runs.
+	#[serde(rename = "agentId", default, skip_serializing_if = "Option::is_none")]
+	pub agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobAgent {
+	pub id: String,
+	#[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobsResult {
+	pub running: Vec<JobInfo>,
+	/// Settled jobs, newest first, at most `recentLimit`.
+	pub recent: Vec<JobInfo>,
+	/// Subagents owning listed jobs, with the ancestors linking them to the root.
+	pub agents: Vec<JobAgent>,
+	/// Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`.
+	#[serde(rename = "runningCount")]
+	pub running_count: i64,
+	/// The agent the tree is for; its own jobs are the top level.
+	#[serde(rename = "rootId", default, skip_serializing_if = "Option::is_none")]
+	pub root_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobOutput {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	pub status: JobStatus,
+	#[serde(rename = "fromByte")]
+	pub from_byte: i64,
+	/// Pass as the next `fromByte` to read on.
+	#[serde(rename = "nextByte")]
+	pub next_byte: i64,
+	/// Size in bytes of the whole output snapshot.
+	#[serde(rename = "totalBytes")]
+	pub total_bytes: i64,
+	/// `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.
+	pub reset: bool,
+	pub output: String,
+	/// Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`.
+	#[serde(default = "default_job_output_revision")]
+	pub revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistoryMetrics {
+	pub tokens: f64,
+	pub requests: f64,
+	pub tools: f64,
+	pub cost: f64,
+	#[serde(rename = "durationMs")]
+	pub duration_ms: f64,
+	#[serde(rename = "contextTokens", default, skip_serializing_if = "Option::is_none")]
+	pub context_tokens: Option<f64>,
+	#[serde(rename = "contextWindow", default, skip_serializing_if = "Option::is_none")]
+	pub context_window: Option<f64>,
+}
+
+/// One child of the root session's tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistoryEntry {
+	pub id: String,
+	pub kind: SubagentHistoryEntryKind,
+	#[serde(rename = "displayName")]
+	pub display_name: String,
+	/// `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted.
+	pub status: SubagentHistoryEntryStatus,
+	/// The child's session is in memory (`running` or `idle`).
+	pub live: bool,
+	#[serde(rename = "sessionFile")]
+	pub session_file: String,
+	#[serde(rename = "createdAt")]
+	pub created_at: f64,
+	#[serde(rename = "lastActivity")]
+	pub last_activity: f64,
+	#[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_id: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub agent: Option<String>,
+	/// Persisted task gist, or the current activity of a live child.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(rename = "responseAt", default, skip_serializing_if = "Option::is_none")]
+	pub response_at: Option<f64>,
+	#[serde(rename = "acceptedAt", default, skip_serializing_if = "Option::is_none")]
+	pub accepted_at: Option<f64>,
+	#[serde(rename = "terminalAt", default, skip_serializing_if = "Option::is_none")]
+	pub terminal_at: Option<f64>,
+	/// Known only from the live roster.
+	#[serde(rename = "parentToolCallId", default, skip_serializing_if = "Option::is_none")]
+	pub parent_tool_call_id: Option<String>,
+	#[serde(rename = "resolvedModel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model: Option<String>,
+	#[serde(rename = "resolvedModelIdentity", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_model_identity: Option<String>,
+	#[serde(rename = "resolvedThinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub resolved_thinking_level: Option<ConfiguredThinkingLevel>,
+	/// Live children only.
+	#[serde(rename = "fastModeEnabled", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_enabled: Option<bool>,
+	/// Live children only.
+	#[serde(rename = "fastModeActive", default, skip_serializing_if = "Option::is_none")]
+	pub fast_mode_active: Option<bool>,
+	#[serde(rename = "modelRole", default, skip_serializing_if = "Option::is_none")]
+	pub model_role: Option<String>,
+	#[serde(rename = "readOnly", default, skip_serializing_if = "Option::is_none")]
+	pub read_only: Option<bool>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub metrics: Option<SubagentHistoryMetrics>,
+	/// Cumulative cost of the child's own session, excluding nested task results.
+	#[serde(rename = "directCost", default, skip_serializing_if = "Option::is_none")]
+	pub direct_cost: Option<f64>,
+	#[serde(rename = "outputPath", default, skip_serializing_if = "Option::is_none")]
+	pub output_path: Option<String>,
+	#[serde(rename = "patchPath", default, skip_serializing_if = "Option::is_none")]
+	pub patch_path: Option<String>,
+	#[serde(rename = "branchName", default, skip_serializing_if = "Option::is_none")]
+	pub branch_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubagentHistory {
+	/// Oldest first.
+	pub subagents: Vec<SubagentHistoryEntry>,
+	#[serde(rename = "rootSessionFile", default, skip_serializing_if = "Option::is_none")]
+	pub root_session_file: Option<String>,
+	#[serde(rename = "rootAgentId", default, skip_serializing_if = "Option::is_none")]
+	pub root_agent_id: Option<String>,
 }
 
 /// Incremental subagent transcript read.
@@ -5463,6 +5786,9 @@ pub struct ReadyEvent {
 	pub max_frame_bytes: Option<i64>,
 	#[serde(rename = "maxReassembledFrameBytes", default, skip_serializing_if = "Option::is_none")]
 	pub max_reassembled_frame_bytes: Option<i64>,
+	/// `bash` accepts `excludeFromContext`; require exactly true before sending excluded commands.
+	#[serde(rename = "supportsBashExcludeFromContext", default, skip_serializing_if = "Option::is_none")]
+	pub supports_bash_exclude_from_context: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -5726,6 +6052,16 @@ pub struct LiveTranscriptEvent {
 pub struct LiveEndEvent {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub error: Option<String>,
+}
+
+/// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobLifecycleEvent {
+	pub event: JobLifecycleEventEvent,
+	pub job: JobInfo,
+	/// Running jobs by the TUI jobs-pill rule after this transition.
+	#[serde(rename = "runningCount")]
+	pub running_count: i64,
 }
 
 /// State of one draft-only microphone capture.
@@ -6440,6 +6776,8 @@ pub enum RpcNotification {
 	LiveTranscript(LiveTranscriptEvent),
 	/// Sent exactly once when a live session ends; `error` carries the failure cause.
 	LiveEnd(LiveEndEvent),
+	/// A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.
+	JobLifecycle(JobLifecycleEvent),
 	/// State of one draft-only microphone capture.
 	DictationState(DictationStateEvent),
 	/// Full accumulated draft preview; replaces the previous preview for this capture.
@@ -6481,6 +6819,7 @@ impl RpcNotification {
 			Some("live_levels") => |value| serde_json::from_value(value).map(Self::LiveLevels),
 			Some("live_transcript") => |value| serde_json::from_value(value).map(Self::LiveTranscript),
 			Some("live_end") => |value| serde_json::from_value(value).map(Self::LiveEnd),
+			Some("job_lifecycle") => |value| serde_json::from_value(value).map(Self::JobLifecycle),
 			Some("dictation_state") => |value| serde_json::from_value(value).map(Self::DictationState),
 			Some("dictation_transcript") => |value| serde_json::from_value(value).map(Self::DictationTranscript),
 			Some("dictation_end") => |value| serde_json::from_value(value).map(Self::DictationEnd),
@@ -6513,6 +6852,7 @@ impl Serialize for RpcNotification {
 			Self::LiveLevels(member) => serialize_tagged(member, &[("type", "live_levels")], serializer),
 			Self::LiveTranscript(member) => serialize_tagged(member, &[("type", "live_transcript")], serializer),
 			Self::LiveEnd(member) => serialize_tagged(member, &[("type", "live_end")], serializer),
+			Self::JobLifecycle(member) => serialize_tagged(member, &[("type", "job_lifecycle")], serializer),
 			Self::DictationState(member) => serialize_tagged(member, &[("type", "dictation_state")], serializer),
 			Self::DictationTranscript(member) => serialize_tagged(member, &[("type", "dictation_transcript")], serializer),
 			Self::DictationEnd(member) => serialize_tagged(member, &[("type", "dictation_end")], serializer),
@@ -6553,7 +6893,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "dictation_state" | "dictation_transcript" | "dictation_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "job_lifecycle" | "dictation_state" | "dictation_transcript" | "dictation_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "journal_state" | "journal_entry" | "message_persisted" | "advisor_message" | "run_owners_joined" | "run_owners_skipped" | "chat_mode_changed" | "approval_mode_changed" | "mixture_hop_end" | "mixture_decision" | "mixture_limit" | "mixture_checkpoint" | "mixture_run_end" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "manual_compaction_start" | "manual_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "models_configuration_changed" | "themes_configuration_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -6724,6 +7064,20 @@ pub struct SetRoleParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetRoleResult {
+	pub role: String,
+	pub model: ModelInfo,
+	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub thinking_level: Option<ThinkingLevel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CycleRoleParams {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<CycleRoleParamsDirection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CycleRoleResult {
 	pub role: String,
 	pub model: ModelInfo,
 	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
@@ -7022,6 +7376,12 @@ pub struct GetSubagentsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetSubagentHistoryParams {
+	#[serde(rename = "includeAdvisors", default, skip_serializing_if = "Option::is_none")]
+	pub include_advisors: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetSubagentMessagesParams {
 	#[serde(rename = "subagentId", default, skip_serializing_if = "Option::is_none")]
 	pub subagent_id: Option<String>,
@@ -7061,6 +7421,67 @@ pub struct SetSubagentFastParams {
 	#[serde(rename = "subagentId")]
 	pub subagent_id: String,
 	pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsParams {
+	pub command: String,
+	pub prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsResult {
+	pub items: Vec<CommandCompletion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobsParams {
+	#[serde(rename = "recentLimit", default, skip_serializing_if = "Option::is_none")]
+	pub recent_limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobOutputParams {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
+	pub from_byte: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobParams {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobResult {
+	pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelParams {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelResult {
+	pub provider: String,
+	#[serde(rename = "modelId")]
+	pub model_id: String,
+	#[serde(rename = "thinkingLevel", default, skip_serializing_if = "Option::is_none")]
+	pub thinking_level: Option<ThinkingLevel>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7181,6 +7602,20 @@ pub struct SetAutoRetryParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BashParams {
 	pub command: String,
+	#[serde(rename = "excludeFromContext", default, skip_serializing_if = "Option::is_none")]
+	pub exclude_from_context: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetSessionLeaseParams {
+	#[serde(rename = "sessionIds")]
+	pub session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetSessionLeaseResult {
+	pub held: Vec<String>,
+	pub unknown: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -7911,6 +8346,24 @@ impl<'de> Deserialize<'de> for LitCompleted {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AvailableSlashCommandAvailability {
+	#[serde(rename = "headless")]
+	Headless,
+	#[serde(rename = "tui")]
+	Tui,
+}
+
+impl AvailableSlashCommandAvailability {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Headless => "headless",
+			Self::Tui => "tui",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NavigateTreeResultOutcome {
 	#[serde(rename = "navigated")]
 	Navigated,
@@ -7930,6 +8383,48 @@ impl NavigateTreeResultOutcome {
 			Self::Unchanged => "unchanged",
 			Self::Cancelled => "cancelled",
 			Self::AskReopen => "ask_reopen",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubagentHistoryEntryKind {
+	#[serde(rename = "sub")]
+	Sub,
+	#[serde(rename = "advisor")]
+	Advisor,
+}
+
+impl SubagentHistoryEntryKind {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Sub => "sub",
+			Self::Advisor => "advisor",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SubagentHistoryEntryStatus {
+	#[serde(rename = "running")]
+	Running,
+	#[serde(rename = "idle")]
+	Idle,
+	#[serde(rename = "parked")]
+	Parked,
+	#[serde(rename = "aborted")]
+	Aborted,
+}
+
+impl SubagentHistoryEntryStatus {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Running => "running",
+			Self::Idle => "idle",
+			Self::Parked => "parked",
+			Self::Aborted => "aborted",
 		}
 	}
 }
@@ -8361,6 +8856,33 @@ impl SubagentLifecyclePayloadRunKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JobLifecycleEventEvent {
+	#[serde(rename = "registered")]
+	Registered,
+	#[serde(rename = "progress")]
+	Progress,
+	#[serde(rename = "completed")]
+	Completed,
+	#[serde(rename = "failed")]
+	Failed,
+	#[serde(rename = "cancelled")]
+	Cancelled,
+}
+
+impl JobLifecycleEventEvent {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Registered => "registered",
+			Self::Progress => "progress",
+			Self::Completed => "completed",
+			Self::Failed => "failed",
+			Self::Cancelled => "cancelled",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DictationStateEventState {
 	#[serde(rename = "starting")]
 	Starting,
@@ -8434,6 +8956,24 @@ impl UpdateThemeParamsScope {
 		match self {
 			Self::Global => "global",
 			Self::Project => "project",
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CycleRoleParamsDirection {
+	#[serde(rename = "forward")]
+	Forward,
+	#[serde(rename = "backward")]
+	Backward,
+}
+
+impl CycleRoleParamsDirection {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Forward => "forward",
+			Self::Backward => "backward",
 		}
 	}
 }
@@ -8644,6 +9184,10 @@ impl GetEntriesPageParamsDirection {
 	}
 }
 
+fn default_roles_result_cycle_order() -> Vec<String> {
+	serde_json::from_str("[]").expect("valid wire default")
+}
+
 fn default_queued_messages_state_live_steered() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
 }
@@ -8688,6 +9232,10 @@ fn default_session_state_slow_mode_enabled() -> bool {
 	serde_json::from_str("false").expect("valid wire default")
 }
 
+fn default_session_state_dictation_enabled() -> bool {
+	serde_json::from_str("false").expect("valid wire default")
+}
+
 fn default_session_state_tokens_per_second() -> Option<f64> {
 	serde_json::from_str("null").expect("valid wire default")
 }
@@ -8697,6 +9245,18 @@ fn default_session_state_message_count() -> i64 {
 }
 
 fn default_session_state_queued_message_count() -> i64 {
+	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_session_state_hostname() -> String {
+	serde_json::from_str("\"\"").expect("valid wire default")
+}
+
+fn default_session_state_active_time_ms() -> f64 {
+	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_session_state_running_job_count() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
 }
 
@@ -8730,6 +9290,14 @@ fn default_session_state_goal() -> Option<GoalModeState> {
 
 fn default_token_usage_reasoning() -> i64 {
 	serde_json::from_str("0").expect("valid wire default")
+}
+
+fn default_available_slash_command_availability() -> AvailableSlashCommandAvailability {
+	serde_json::from_str("\"headless\"").expect("valid wire default")
+}
+
+fn default_job_output_revision() -> String {
+	serde_json::from_str("\"\"").expect("valid wire default")
 }
 
 fn default_auto_retry_end_event_retry_errors() -> Vec<Map<String, Value>> {
@@ -9074,7 +9642,7 @@ impl Command for UpdateThemeCommand {
 	}
 }
 
-/// Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.
+/// Query native /model ordering, scoped candidates, role aliases and model facts without selecting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryModelSelectorCommand {
 	pub query: String,
@@ -9103,6 +9671,26 @@ impl Command for SetRoleCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SetRoleResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CycleRoleCommand {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub direction: Option<CycleRoleParamsDirection>,
+}
+
+impl Command for CycleRoleCommand {
+	const NAME: &'static str = "cycle_role";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = Option<CycleRoleResult>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		match data {
+			None | Some(Value::Null) => Ok(None),
+			Some(value) => serde_json::from_value::<CycleRoleResult>(value).map(Some),
+		}
 	}
 }
 
@@ -9655,7 +10243,24 @@ impl Command for GetSubagentsCommand {
 	}
 }
 
-/// Read a subagent transcript by id or registered session file (`subagentId` wins).
+/// List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetSubagentHistoryCommand {
+	#[serde(rename = "includeAdvisors", default, skip_serializing_if = "Option::is_none")]
+	pub include_advisors: Option<bool>,
+}
+
+impl Command for GetSubagentHistoryCommand {
+	const NAME: &'static str = "get_subagent_history";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = SubagentHistory;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SubagentHistory>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GetSubagentMessagesCommand {
 	#[serde(rename = "subagentId", default, skip_serializing_if = "Option::is_none")]
@@ -9746,6 +10351,101 @@ impl Command for SetSubagentFastCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<FastModeResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetCommandCompletionsCommand {
+	pub command: String,
+	pub prefix: String,
+}
+
+impl Command for GetCommandCompletionsCommand {
+	const NAME: &'static str = "get_command_completions";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = Vec<CommandCompletion>;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetCommandCompletionsResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.items)
+	}
+}
+
+/// List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct GetJobsCommand {
+	#[serde(rename = "recentLimit", default, skip_serializing_if = "Option::is_none")]
+	pub recent_limit: Option<i64>,
+}
+
+impl Command for GetJobsCommand {
+	const NAME: &'static str = "get_jobs";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JobsResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JobsResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetJobOutputCommand {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+	#[serde(rename = "fromByte", default, skip_serializing_if = "Option::is_none")]
+	pub from_byte: Option<i64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub revision: Option<String>,
+}
+
+impl Command for GetJobOutputCommand {
+	const NAME: &'static str = "get_job_output";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = JobOutput;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<JobOutput>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CancelJobCommand {
+	#[serde(rename = "jobId")]
+	pub job_id: String,
+}
+
+impl Command for CancelJobCommand {
+	const NAME: &'static str = "cancel_job";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = bool;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<CancelJobResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.cancelled)
+	}
+}
+
+/// Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetSubagentModelCommand {
+	#[serde(rename = "subagentId")]
+	pub subagent_id: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub selector: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub provider: Option<String>,
+	#[serde(rename = "modelId", default, skip_serializing_if = "Option::is_none")]
+	pub model_id: Option<String>,
+}
+
+impl Command for SetSubagentModelCommand {
+	const NAME: &'static str = "set_subagent_model";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = SetSubagentModelResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SetSubagentModelResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 
@@ -10083,10 +10783,12 @@ impl Command for AbortRetryCommand {
 	}
 }
 
-/// Run a shell command.
+/// Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BashCommand {
 	pub command: String,
+	#[serde(rename = "excludeFromContext", default, skip_serializing_if = "Option::is_none")]
+	pub exclude_from_context: Option<bool>,
 }
 
 impl Command for BashCommand {
@@ -10125,6 +10827,23 @@ impl Command for GetSessionStatsCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SessionStats>(data.unwrap_or_else(|| Value::Object(Map::new())))
+	}
+}
+
+/// Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GetSessionLeaseCommand {
+	#[serde(rename = "sessionIds")]
+	pub session_ids: Vec<String>,
+}
+
+impl Command for GetSessionLeaseCommand {
+	const NAME: &'static str = "get_session_lease";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = GetSessionLeaseResult;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<GetSessionLeaseResult>(data.unwrap_or_else(|| Value::Object(Map::new())))
 	}
 }
 

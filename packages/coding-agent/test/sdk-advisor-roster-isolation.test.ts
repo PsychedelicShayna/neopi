@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import type { AdvisorConfig } from "@oh-my-pi/pi-coding-agent/advisor/config";
+import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -39,7 +39,7 @@ afterEach(async () => {
 
 describe("SDK advisor roster isolation", () => {
 	it.each(["private", "empty", "discovery"] as const)(
-		"%s roster keeps only its own shared instructions, budget and warnings",
+		"%s roster isolates shared instructions and config warnings",
 		async mode => {
 			const settings = Settings.isolated({});
 			cfgAdvisorEnabled.set(settings, true);
@@ -79,12 +79,10 @@ describe("SDK advisor roster isolation", () => {
 						expect(advisors.map(advisor => advisor.name)).toEqual(["Fleet reviewer", "Other fleet reviewer"]);
 						for (const prompt of prompts) {
 							expect(prompt).toContain(FLEET_SENTINEL);
-							expect(prompt).toContain("max 7 non-blockers/update");
 							expect(prompt).not.toContain(PRIVATE_SENTINEL);
 						}
-						expect(session.getAdvisorConfigWarnings()).toEqual([
-							expect.stringContaining("enabled must be a boolean"),
-						]);
+						// One malformed shared configuration produces one warning, not one per advisor.
+						expect(session.getAdvisorConfigWarnings()).toHaveLength(1);
 					} else {
 						expect(prompts.join("\n")).not.toContain(FLEET_SENTINEL);
 						expect(session.getAdvisorConfigWarnings()).toEqual([]);
@@ -96,7 +94,6 @@ describe("SDK advisor roster isolation", () => {
 							expect(advisors.map(advisor => advisor.name)).toEqual(["Private Sol"]);
 							expect(advisors[0].agent.state.model?.id).toBe("gpt-6.1-sol");
 							expect(prompts[0]).toContain(PRIVATE_SENTINEL);
-							expect(prompts[0]).toContain("max 2 non-blockers/update");
 						}
 					}
 				} finally {

@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, test, beforeEach } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -168,7 +169,10 @@ describe("model override configuration UI", () => {
 		expect(editor.list().some(entry => entry.kind === "custom" && entry.id === "ui-custom")).toBe(true);
 		panel.handleInput("/");
 		panel.handleInput("ui-custom");
-		panel.handleInput("\x1b");
+		panel.handleInput("\x1b"); // Insert → Normal: the filter still owns input
+		expect(panel.editing).toBe(true);
+		panel.handleInput("\x1b"); // restore the empty filter while retaining the selected custom model
+		expect(panel.editing).toBe(false);
 		panel.handleInput("\r");
 		panel.handleInput("g");
 		panel.handleInput("g");
@@ -303,4 +307,13 @@ describe("model override configuration UI", () => {
 		fields.back();
 		expect(values).toEqual({ input: ["image"], unknown: true });
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

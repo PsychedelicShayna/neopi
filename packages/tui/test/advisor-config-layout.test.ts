@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { TUI } from "../src/index";
 import {
 	type AdvisorConfigDeps,
@@ -108,7 +109,9 @@ describe("AdvisorConfigOverlayComponent", () => {
 				},
 			},
 		);
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G"); // Close is the last roster row.
+		overlay.handleInput("\x1b[A"); // Save & apply.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r");
 		await Bun.sleep(0);
 		expect(saved).toEqual([{ advisors: [{ name: "default", systemPrompt: "" }] }]);
@@ -117,7 +120,9 @@ describe("AdvisorConfigOverlayComponent", () => {
 		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\x7f");
 		overlay.handleInput("\x1b");
-		for (let i = 0; i < 4; i++) overlay.handleInput("\x1b[B");
+		overlay.handleInput("G");
+		overlay.handleInput("\x1b[A");
+		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "save" });
 		overlay.handleInput("\r");
 		await Bun.sleep(0);
 		expect(saved[1]).toEqual({ advisors: [] });
@@ -269,4 +274,13 @@ describe("AdvisorConfigOverlayComponent", () => {
 			}
 		});
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

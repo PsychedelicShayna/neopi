@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, expect, spyOn, test, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, expect, spyOn, test, vi, beforeEach } from "bun:test";
 import * as fs from "node:fs";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
@@ -51,7 +52,7 @@ function createHub(
 	agents: AgentRecordLike[],
 	focused: string[] = [],
 	observers = new SessionObserverRegistry(),
-	options: Partial<Pick<AgentHubDeps, "ui" | "onDone">> = {},
+	options: Partial<Pick<AgentHubDeps, "ui" | "onDone" | "inSession">> = {},
 ): AgentHubOverlayComponent {
 	return new AgentHubOverlayComponent({
 		observers,
@@ -202,6 +203,21 @@ test.each([60_000, 0])(
 	},
 );
 
+test("a selection change re-sends no roster rows, so large hubs stay responsive in Tern", () => {
+	const { hub, now } = observedWorker(60_000);
+	try {
+		const before = pickerProps(hub).items;
+		now.mockReturnValue(1_000_200);
+		hub.handleNativeEvent({ type: "select", key: "", item: "Idle" });
+		const after = pickerProps(hub);
+		expect(after.selected).toBe("Idle");
+		// The reconciler sends `items` whenever it differs; the running clock keeps ticking terminal-side.
+		expect(after.items).toEqual(before);
+	} finally {
+		hub.dispose();
+	}
+});
+
 test("a follow-up turn does not age the previous turn's snapshot across the idle gap", () => {
 	const { hub, now, emit } = observedWorker(60_000);
 	const lifecycle = { id: "Worker", agent: "task", agentSource: "bundled", index: 0 };
@@ -251,7 +267,7 @@ test("hub uses visual-line viewport scrolling without moving its selected agent"
 	}
 });
 
-test("hub search is slash-focused literal input and Esc clears its query", () => {
+test("hub search is literal and leaves Vim Insert before discarding the query", () => {
 	const onDone = vi.fn();
 	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
 	try {
@@ -260,6 +276,9 @@ test("hub search is slash-focused literal input and Esc clears its query", () =>
 		hub.handleInput("/");
 		for (const key of "hjkl/ g") hub.handleInput(key);
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
+		expect(onDone).not.toHaveBeenCalled();
 		hub.handleInput("\x1b");
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
 		expect(onDone).not.toHaveBeenCalled();
@@ -359,6 +378,43 @@ test("hub history keeps frozen ranks but ranks replacement generations and new a
 	}
 });
 
+test("hub scope counts exclude roots and other sessions, and history retains the status filter", () => {
+	const hub = createHub(
+		[
+			agent("A/root", 7, { kind: "main", status: "running" }),
+			agent("A/operator", 6, { kind: "operator", status: "running" }),
+			agent("A/running", 5, { status: "running" }),
+			agent("A/done", 4),
+			agent("A/parked", 3, { status: "parked" }),
+			agent("B/running", 2, { status: "running" }),
+		],
+		[],
+		undefined,
+		{ inSession: ref => ref.id.startsWith("A/") },
+	);
+	try {
+		const all = pickerProps(hub);
+		expect(all.items?.map(item => item.id).sort()).toEqual(["A/done", "A/parked", "A/running"]);
+		expect(all.total).toBe(3);
+		expect(all.scopes?.map(scope => ({ id: scope.id, count: scope.count }))).toEqual([
+			{ id: "all", count: 3 },
+			{ id: "running", count: 1 },
+			{ id: "done", count: 1 },
+			{ id: "parked", count: 1 },
+		]);
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "running", mods: [] });
+		const running = hub.navigationSnapshot();
+		expect(pickerProps(hub).items?.map(item => item.id)).toEqual(["A/running"]);
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "parked", mods: [] });
+		expect(pickerProps(hub).items?.map(item => item.id)).toEqual(["A/parked"]);
+		hub.restoreNavigation(running);
+		expect(pickerProps(hub).scope).toBe("running");
+		expect(pickerProps(hub).items?.map(item => item.id)).toEqual(["A/running"]);
+		expect(pickerProps(hub).total).toBe(3);
+	} finally {
+		hub.dispose();
+	}
+});
 
 test("hub native close respects focused search before closing its root", () => {
 	const onDone = vi.fn();
@@ -366,7 +422,6 @@ test("hub native close respects focused search before closing its root", () => {
 	try {
 		hub.handleInput("/");
 		hub.handleInput("alpha");
-		expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).not.toHaveBeenCalled();
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
@@ -375,4 +430,13 @@ test("hub native close respects focused search before closing its root", () => {
 	} finally {
 		hub.dispose();
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

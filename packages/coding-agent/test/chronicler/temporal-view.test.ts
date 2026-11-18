@@ -271,6 +271,258 @@ describe("chronicle temporal view", () => {
 		expect(differing).toEqual([path.relative(sessionsDir, changed.beatFile)]);
 	});
 
+	it("refreshes only the exact session's affected nodes while keeping mixed and unrelated data lossless", async () => {
+		const sessionId = "a1a1a1a1-0000-7000-8000-000000000010";
+		const alpha = await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId,
+			batches: [[atom("Alpha shared", "2026-09-08T09:00:00.000Z"), atom("Alpha later", "2026-09-08T11:00:00.000Z")]],
+		});
+		const beta = await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/beta",
+			sessionId: "b2b2b2b2-0000-7000-8000-000000000011",
+			batches: [
+				[atom("Beta shared", "2026-09-08T09:20:00.000Z"), atom("Beta separate", "2026-09-16T09:00:00.000Z")],
+			],
+		});
+		await index();
+		const before = await allNodes(root);
+		const unrelated = before.filter(node => !node.sessions.includes(sessionId));
+		const corpus = await loadChronicleCorpus(sessionsDir);
+		const changed = corpus.atoms.find(entry => entry.id === alpha.atomIds[0])!;
+		await Bun.write(
+			changed.beatFile,
+			(await Bun.file(changed.beatFile).text()).replace("Details of alpha shared", "Revised alpha"),
+		);
+		const canonical = await snapshot(sessionsDir);
+		const calls: string[] = [];
+		let sawMixedInput = false;
+		const watching: ChronicleSummarizer = {
+			identity: summarizer.identity,
+			async summarize(node, children, budget, signal) {
+				calls.push(node.key);
+				sawMixedInput ||= children.some(child => child.text.includes("Beta shared"));
+				return summarizer.summarize(node, children, budget, signal);
+			},
+		};
+		const report = await index({ sessionId, summarizer: watching });
+		expect(report.complete).toBe(true);
+		expect(report.atoms).toBe(4);
+		expect(report.sessionAtoms).toBe(2);
+		expect(calls.length).toBeGreaterThan(0);
+		expect(sawMixedInput).toBe(true);
+		const plan = buildPlan((await loadChronicleCorpus(sessionsDir)).atoms, config())!;
+		const allowed = new Set(
+			[...walkPlan(plan)].filter(node => node.sessions.includes(sessionId)).map(node => node.key),
+		);
+		for (const key of calls) expect(allowed.has(key)).toBe(true);
+		for (const change of report.changes.filter(change => change.outcome === "generated")) {
+			expect(allowed.has(change.key)).toBe(true);
+		}
+		for (const node of unrelated) expect(await readViewNode(root, node.key)).toEqual({ state: "ok", node });
+		const nodes = await allNodes(root);
+		expect(nodes.flatMap(node => node.atoms?.map(entry => entry.id) ?? []).sort()).toEqual(
+			[...alpha.atomIds, ...beta.atomIds].sort(),
+		);
+		expect(await snapshot(sessionsDir)).toEqual(canonical);
+	});
+
+	it("leaves unrelated missing and stale nodes untouched, blocks mixed ancestors, and permits a later full repair", async () => {
+		const sessionId = "a1a1a1a1-0000-7000-8000-000000000012";
+		const alpha = await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId,
+			batches: [[atom("Alpha first", "2026-09-08T09:00:00.000Z"), atom("Alpha second", "2026-09-08T11:00:00.000Z")]],
+		});
+		const beta = await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/beta",
+			sessionId: "b2b2b2b2-0000-7000-8000-000000000013",
+			batches: [[atom("Beta missing", "2026-09-16T09:00:00.000Z"), atom("Beta stale", "2026-09-16T11:00:00.000Z")]],
+		});
+		await index();
+		const corpus = await loadChronicleCorpus(sessionsDir);
+		for (const id of [alpha.atomIds[0], beta.atomIds[1]]) {
+			const changed = corpus.atoms.find(entry => entry.id === id)!;
+			await Bun.write(
+				changed.beatFile,
+				(await Bun.file(changed.beatFile).text()).replace("Details of", "Revised details of"),
+			);
+		}
+		const missingKey = "2026/09/w3/16/09";
+		const staleKey = "2026/09/w3/16/11";
+		await fs.rm(nodeDir(root, missingKey), { recursive: true });
+		const unrelatedBefore = await snapshot(nodeDir(root, "2026/09/w3"));
+		const calls: string[] = [];
+		const watching: ChronicleSummarizer = {
+			identity: summarizer.identity,
+			async summarize(node, ...args) {
+				calls.push(node.key);
+				return summarizer.summarize(node, ...args);
+			},
+		};
+		const report = await index({ sessionId, summarizer: watching });
+		for (const key of [missingKey, staleKey]) {
+			expect(report.changes.find(change => change.key === key)).toMatchObject({
+				outcome: "stale",
+				detail: "outside session scope",
+			});
+		}
+		for (const key of ["2026/09", "2026", ""]) {
+			expect(report.changes.find(change => change.key === key)?.outcome).toBe("blocked");
+		}
+		expect(report.complete).toBe(false);
+		expect((await readViewManifest(root))?.complete).toBe(false);
+		expect(calls.length).toBeGreaterThan(0);
+		expect(calls.every(key => key.startsWith("2026/09/w2/08"))).toBe(true);
+		expect(await snapshot(nodeDir(root, "2026/09/w3"))).toEqual(unrelatedBefore);
+		const repaired = await index();
+		expect(repaired.complete).toBe(true);
+		expect((await readViewManifest(root))?.complete).toBe(true);
+		expect((await allNodes(root)).flatMap(node => node.atoms?.map(entry => entry.id) ?? []).sort()).toEqual(
+			[...alpha.atomIds, ...beta.atomIds].sort(),
+		);
+	});
+
+	it("does not turn a no-atoms or prefix-only session scope into an unscoped build", async () => {
+		const sessionId = "a1a1a1a1-0000-7000-8000-000000000014";
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId,
+			batches: [[atom("First", "2026-09-08T09:00:00.000Z"), atom("Second", "2026-09-09T09:00:00.000Z")]],
+		});
+		const canonical = await snapshot(sessionsDir);
+		for (const scope of [sessionId.slice(0, 8), "no-atoms-session"]) {
+			const report = await index({ sessionId: scope });
+			expect(report.sessionAtoms).toBe(0);
+			expect(report.nodes.generated).toBe(0);
+			expect(report.nodes.stale).toBe(report.nodes.total);
+			expect(report.complete).toBe(false);
+			expect(fake.summaryCalls).toBe(0);
+		}
+		expect(await snapshot(sessionsDir)).toEqual(canonical);
+		expect((await index()).complete).toBe(true);
+	});
+
+	it("reports real scoped generation failures when the summary model is unresolved", async () => {
+		const sessionId = "a1a1a1a1-0000-7000-8000-000000000017";
+		await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId,
+			batches: [[atom("First", "2026-09-08T09:00:00.000Z"), atom("Second", "2026-09-09T09:00:00.000Z")]],
+		});
+		const report = await index({ sessionId, summarizer: undefined });
+		expect(report.complete).toBe(false);
+		expect(report.nodes.failed).toBeGreaterThan(0);
+		expect(report.changes).toContainEqual(
+			expect.objectContaining({ outcome: "failed", detail: "no chronicler-summary model resolved" }),
+		);
+		expect(fake.summaryCalls).toBe(0);
+	});
+
+	it("excludes concurrent writers through a canonical view lease before either can overwrite or prune", async () => {
+		const alpha = await writeSessionAtoms(sessionsDir, {
+			cwd: "/work/alpha",
+			sessionId: "a1a1a1a1-0000-7000-8000-000000000015",
+			batches: [[atom("First", "2026-09-08T09:00:00.000Z"), atom("Second", "2026-09-09T09:00:00.000Z")]],
+		});
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const holding: ChronicleSummarizer = {
+			identity: summarizer.identity,
+			async summarize(...args) {
+				entered.resolve();
+				await resume.promise;
+				return summarizer.summarize(...args);
+			},
+		};
+		const first = index({ summarizer: holding });
+		await entered.promise;
+		let betaIds: string[] = [];
+		try {
+			const beta = await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/beta",
+				sessionId: "b2b2b2b2-0000-7000-8000-000000000016",
+				batches: [[atom("New while indexing", "2026-10-16T09:00:00.000Z")]],
+			});
+			betaIds = beta.atomIds;
+			const alias = path.join(agentDir, "view-alias");
+			await fs.symlink(agentDir, alias, "dir");
+			const during = await snapshot(root);
+			const calls = fake.summaryCalls;
+			await expect(index({ root: path.join(alias, "chronicle") })).rejects.toThrow(/Failed to acquire lock/);
+			expect(fake.summaryCalls).toBe(calls);
+			expect(await snapshot(root)).toEqual(during);
+		} finally {
+			resume.resolve();
+			await first;
+		}
+		expect((await index()).complete).toBe(true);
+		expect((await allNodes(root)).flatMap(node => node.atoms?.map(entry => entry.id) ?? []).sort()).toEqual(
+			[...alpha.atomIds, ...betaIds].sort(),
+		);
+	});
+
+	it.each(["failure", "abort"] as const)(
+		"holds the writer lease until launched sibling writes settle after a child %s",
+		async mode => {
+			await writeSessionAtoms(sessionsDir, {
+				cwd: "/work/alpha",
+				sessionId: "a1a1a1a1-0000-7000-8000-000000000018",
+				batches: [
+					[atom("Fails first", "2026-09-08T09:00:00.000Z"), atom("Slow write", "2026-09-08T11:00:00.000Z")],
+				],
+			});
+			const original = viewModule.writeViewNode;
+			const slowEntered = Promise.withResolvers<void>();
+			const failureThrown = Promise.withResolvers<void>();
+			const resume = Promise.withResolvers<void>();
+			const controller = new AbortController();
+			const failure = new Error(`injected child ${mode}`);
+			let slowPublished = false;
+			let settled = false;
+			const spy = spyOn(viewModule, "writeViewNode").mockImplementation(async (...args) => {
+				const node = args[1];
+				if (node.key === "2026/09/w2/08/11") {
+					slowEntered.resolve();
+					await resume.promise;
+					const result = await original(...args);
+					slowPublished = true;
+					return result;
+				}
+				if (node.key === "2026/09/w2/08/09") {
+					await slowEntered.promise;
+					if (mode === "abort") controller.abort(failure);
+					failureThrown.resolve();
+					throw failure;
+				}
+				return original(...args);
+			});
+			const first = index({ signal: controller.signal }).then(
+				() => {
+					settled = true;
+					return undefined;
+				},
+				(error: unknown) => {
+					settled = true;
+					return error;
+				},
+			);
+			try {
+				await failureThrown.promise;
+				await expect(index()).rejects.toThrow(/Failed to acquire lock/);
+				expect(settled).toBe(false);
+				expect(slowPublished).toBe(false);
+			} finally {
+				resume.resolve();
+				await first;
+				spy.mockRestore();
+			}
+			expect(await first).toBe(failure);
+			expect(slowPublished).toBe(true);
+			expect((await index()).complete).toBe(true);
+		},
+	);
+
 	it("detects model, timezone, and render drift without --rebuild and repairs corrupt nodes", async () => {
 		await writeSessionAtoms(sessionsDir, {
 			cwd: "/work/alpha",

@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createAgentHubRuntime } from "@oh-my-pi/pi-coding-agent/modes/agent-hub-runtime";
 /**
  * Hub Enter contract: activating a non-remote agent row delegates to the
@@ -183,7 +184,7 @@ describe("Agent hub Enter activation", () => {
 		resetSettingsForTest();
 	});
 
-	it("navigates with hjkl and keeps literal filter text through search Esc until normal Esc closes (#35)", () => {
+	it("navigates with hjkl and cancels a literal draft after leaving Vim Insert mode (#35)", () => {
 		const { hub, doneCalls } = makeHub(async () => {}, true);
 		const [firstId, secondId] = renderedRosterIds(hub, 120);
 		expect(renderedRosterEntry(hub, firstId!, 120)).toContain("❯");
@@ -198,7 +199,9 @@ describe("Agent hub Enter activation", () => {
 		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "hjkl", focused: true } });
 		hub.handleInput("\x1b");
 		expect(doneCalls()).toBe(0);
-		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "hjkl", focused: false } });
+		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "hjkl", focused: true } });
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot()).toMatchObject({ agentFilter: { value: "", focused: false } });
 		hub.handleInput("\x1b");
 		expect(doneCalls()).toBe(1);
 		hub.dispose();
@@ -1311,4 +1314,13 @@ describe("Agent hub data refresh coalescing", () => {
 			authStorage.close();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

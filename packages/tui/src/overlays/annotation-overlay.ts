@@ -233,7 +233,7 @@ export class AnnotationOverlay implements Focusable {
 	#scrollView: ScrollView;
 	#editor: Editor;
 	readonly #keys: MenuKeyReader;
-	readonly #help = new MenuHelp(undefined, "Shift+arrows scroll faster; h/l switch panes.");
+	readonly #help = new MenuHelp(undefined, "Shift+arrows scroll faster; Left/Right switch panes.");
 	readonly #fileMenu: MenuSelection<ReviewDiffFile>;
 	readonly #fileViewport = new MenuViewport();
 	readonly #fileRows: number[];
@@ -2000,7 +2000,7 @@ export class AnnotationOverlay implements Focusable {
 				this.#hint("tui.select.confirm", "open"),
 				key("a", "file note"),
 				undo,
-				key(["h", "l"], "panes"),
+				key(["left", "right"], "panes"),
 				key("tab", "pane"),
 			];
 		}
@@ -2011,12 +2011,17 @@ export class AnnotationOverlay implements Focusable {
 				key("shift+a", this.#textSource ? "note on all" : "file note"),
 				this.#annotationCandidates().length > 0 ? key("e", "edit note") : undefined,
 				undo,
-				{ keys: [], label: "gg/G ends · Ctrl-u/d half · Ctrl-e/y view" },
-				key(["h", "l"], "panes"),
+				{ keys: [], label: "Home/End bounds · PgUp/PgDn page" },
+				key(["left", "right"], "panes"),
 				key("tab", this.#textSource ? "actions" : "pane"),
 			];
 		}
-		return [upDown("choose"), this.#hint("tui.select.confirm", "run"), key(["h", "l"], "panes"), key("tab", "pane")];
+		return [
+			upDown("choose"),
+			this.#hint("tui.select.confirm", "run"),
+			key(["left", "right"], "panes"),
+			key("tab", "pane"),
+		];
 	}
 
 	/** Keycap hint for the primary keys this overlay's keybindings bind to `actions`. */

@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import * as os from "node:os";
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { DescribeContext } from "../src/native/node";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { DailyActivityPoint, UnavailableUsageAccount } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
@@ -301,16 +302,17 @@ describe("UsageDashboardComponent", () => {
 	function dashboard(
 		reports: UsageReport[],
 		unavailableAccounts: UnavailableUsageAccount[] = [],
+		onClose: () => void = () => {},
 	): UsageDashboardComponent {
 		return new UsageDashboardComponent({
 			reports,
 			unavailableAccounts,
-			renderDetail: () => "",
+			renderDetail: () => "detail-content",
 			loadActivity: async push => {
 				push([]);
 			},
 			requestRender: () => {},
-			onClose: () => {},
+			onClose,
 		});
 	}
 
@@ -614,6 +616,42 @@ describe("UsageDashboardComponent", () => {
 			"Usage history unavailable (subprocess crashed at ~/.omp/stats.db: failed to open line 2).",
 		);
 	});
+
+	it("toggles bidirectionally between overview and detail views on tab", () => {
+		const component = dashboard([]);
+		try {
+			expect(component.render(80).join("\n")).not.toContain("detail-content");
+
+			component.handleInput("\t");
+			expect(component.render(80).join("\n")).toContain("detail-content");
+
+			component.handleInput("\t");
+			expect(component.render(80).join("\n")).not.toContain("detail-content");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("closes on escape or q from either overview or detail", () => {
+		for (const detail of [false, true]) {
+			for (const key of ["\x1b", "q"]) {
+				let closed = 0;
+				const component = dashboard([], [], () => {
+					closed++;
+				});
+				try {
+					if (detail) {
+						component.handleInput("\t");
+						expect(component.render(80).join("\n")).toContain("detail-content");
+					}
+					component.handleInput(key);
+					expect(closed).toBe(1);
+				} finally {
+					component.dispose();
+				}
+			}
+		}
+	});
 });
 
 describe("formatActivityErrorDetail", () => {
@@ -627,4 +665,13 @@ describe("formatActivityErrorDetail", () => {
 		const input = `Error: failed to open ${home}/.omp/stats.db...`;
 		expect(formatActivityErrorDetail(input, home)).toBe("Error: failed to open ~/.omp/stats.db");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

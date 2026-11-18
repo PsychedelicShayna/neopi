@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -26,7 +27,7 @@ function createSession(id: string, title: string, cwd: string, parentSessionPath
 const TAB = "\t";
 
 describe("SessionSelectorComponent scope toggle", () => {
-	it("navigates rows with j/k and preserves literal hjkl filter text until the second Escape", () => {
+	it("navigates rows with j/k and leaves Vim Insert before discarding a literal filter", () => {
 		const selected: string[] = [];
 		let cancelled = 0;
 		const selector = new SessionSelectorComponent(
@@ -41,10 +42,13 @@ describe("SessionSelectorComponent scope toggle", () => {
 		selector.handleInput("k");
 		selector.handleInput("/");
 		for (const key of "hjkl") selector.handleInput(key);
-		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "hjkl", focused: true } } });
 		selector.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "hjkl", focused: true } } });
+		selector.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "", focused: false } } });
 		selector.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});
@@ -63,7 +67,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 			{
 				loadAllSessions: async () => {
 					loads++;
-					return global;
+					return { sessions: global };
 				},
 			},
 		);
@@ -108,7 +112,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 			() => {},
 			() => {},
 			// Preloaded, so both Tab toggles apply synchronously.
-			{ allSessions: folder },
+			{ allSessions: { sessions: folder } },
 		);
 		expect(selector.render(120).join("\n")).toContain("/work/repo-wt");
 
@@ -129,7 +133,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 			session => selected.push(session),
 			() => {},
 			() => {},
-			{ loadAllSessions: async () => [remote] },
+			{ loadAllSessions: async () => ({ sessions: [remote] }) },
 		);
 
 		selector.handleInput(TAB);
@@ -147,7 +151,7 @@ describe("SessionSelectorComponent scope toggle", () => {
 		// the picker in all-projects scope). The fix removes the option, so force it
 		// via a cast to prove the component now ignores it and stays folder-scoped —
 		// without this, the test would pass against the buggy code too.
-		const opts = { allSessions: global, loadAllSessions: async () => global };
+		const opts = { allSessions: { sessions: global }, loadAllSessions: async () => ({ sessions: global }) };
 		(opts as { startInAllScope?: boolean }).startInAllScope = true;
 		const selector = new SessionSelectorComponent(
 			[],
@@ -182,4 +186,13 @@ describe("SessionSelectorComponent scope toggle", () => {
 		expect(forkLines).toHaveLength(1);
 		expect(forkLines[0]).toContain("fork");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

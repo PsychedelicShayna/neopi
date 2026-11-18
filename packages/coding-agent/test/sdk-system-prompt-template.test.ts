@@ -10,16 +10,16 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { CONFIG_DIR_NAME, TempDir } from "@oh-my-pi/pi-utils";
 
 type SystemPromptOption = string | string[] | ((defaultPrompt: string[]) => string | string[]);
-type ExplicitSystemPromptOptions = Pick<
+type SessionOverrides = Pick<
 	CreateAgentSessionOptions,
-	"systemPromptTemplate" | "customSystemPrompt" | "settings"
+	"systemPromptTemplate" | "customSystemPrompt" | "settings" | "taskDepth"
 >;
 
 async function withSession<T>(
 	nativeTemplate: string,
 	systemPrompt: SystemPromptOption,
 	fn: (session: AgentSession) => Promise<T>,
-	explicitSystemPromptOptions: ExplicitSystemPromptOptions = {},
+	overrides: SessionOverrides = {},
 ): Promise<T> {
 	using tempDir = TempDir.createSync("@omp-sdk-system-prompt-template-");
 	const cwd = tempDir.join("project");
@@ -48,7 +48,7 @@ async function withSession<T>(
 			enableLsp: false,
 			skipPythonPreflight: true,
 			systemPrompt,
-			...explicitSystemPromptOptions,
+			...overrides,
 		});
 		session = result.session;
 		return await fn(session);
@@ -70,7 +70,7 @@ describe("SDK systemPrompt replacements", () => {
 				const baseline = [...session.systemPrompt];
 				await session.setModel(getBundledModel("anthropic", "claude-opus-5"));
 				expect(session.systemPrompt[0]).toBe("BASELINE");
-				expect(session.systemPrompt[1]).toContain("Model adapter: Opus 5");
+				expect(session.systemPrompt).toHaveLength(baseline.length + 1);
 				await session.setModel(getBundledModel("openai", "gpt-4o-mini"));
 				expect(session.systemPrompt).toEqual(baseline);
 			},
@@ -114,12 +114,26 @@ describe("SDK systemPrompt replacements", () => {
 		await withSession(
 			"{{#if eagerTasks}}",
 			defaultPrompt => {
-				expect(defaultPrompt.join("\n\n")).toContain("§ Tool Policy");
+				expect(defaultPrompt.join("\n\n")).toContain("⁂ Tool Policy");
 				return "callback replacement";
 			},
 			async session => {
 				expect(session.systemPrompt).toEqual(["callback replacement"]);
 			},
 		);
+	});
+
+	it("applies task.eager to the main agent prompt only, never to subagents", async () => {
+		const render = (taskDepth: number) =>
+			withSession(
+				"{{#if eagerTasks}}EAGER{{else}}MODEL_POLICY{{/if}}",
+				defaultPrompt => defaultPrompt,
+				async session => session.systemPrompt.join("\n\n"),
+				{ settings: Settings.isolated({ "task.eager": "always" }), taskDepth },
+			);
+		expect(await render(0)).toContain("EAGER");
+		const subagentPrompt = await render(1);
+		expect(subagentPrompt).toContain("MODEL_POLICY");
+		expect(subagentPrompt).not.toContain("EAGER");
 	});
 });

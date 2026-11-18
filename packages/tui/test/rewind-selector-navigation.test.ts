@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionMessageEntryLike } from "../src/chat/transcript-entry";
 import type { TUI } from "../src/index";
@@ -76,7 +77,7 @@ describe("rewind shared menu navigation and safe history", () => {
 		}
 	});
 
-	it("clears the literal filter after Esc and only closes on the next Esc", () => {
+	it("leaves Vim Insert before discarding the literal filter, then closes from the list", () => {
 		const cancelled = vi.fn();
 		const selector = make(vi.fn(), cancelled);
 		try {
@@ -86,6 +87,9 @@ describe("rewind shared menu navigation and safe history", () => {
 			selector.handleInput("jkgG/ ");
 			selector.handleInput("\x1b[H");
 			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
+			selector.handleInput("\x1b");
+			expect(state(selector).search).toMatchObject({ value: "jkgG/ ", focused: true });
+			expect(cancelled).not.toHaveBeenCalled();
 			selector.handleInput("\x1b");
 			expect(state(selector).search).toMatchObject({ value: "", focused: false });
 			expect(cancelled).not.toHaveBeenCalled();
@@ -171,4 +175,13 @@ describe("rewind shared menu navigation and safe history", () => {
 			reopened.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

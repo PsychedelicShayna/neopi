@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { HookSelectorComponent, type HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -161,6 +162,17 @@ describe("HookSelectorComponent model slider", () => {
 		expect(rendered).toContain("Search: og");
 
 		component.handleInput("\n");
+		expect(selected).toEqual([]);
+		component.handleInput("\n");
 		expect(selected).toEqual(["OpenCode Go"]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

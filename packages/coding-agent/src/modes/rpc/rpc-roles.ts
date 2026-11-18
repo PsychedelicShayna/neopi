@@ -17,6 +17,7 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "../../config/model-resolver";
+import { cfgCycleOrder } from "../../config/model-settings";
 import {
 	formatModelRoleAlias,
 	getKnownRoleIds,
@@ -60,6 +61,8 @@ export interface RpcRoleInfo {
 export interface RpcRolesResult {
 	roles: RpcRoleInfo[];
 	activeRole?: string;
+	/** The configured `cycleOrder`: the roles `cycle_role` walks, in order (a role without an available model is skipped). */
+	cycleOrder: string[];
 }
 
 export interface RpcSetRoleResult {
@@ -86,6 +89,7 @@ type RpcRolesSession = Pick<
 	| "isCompacting"
 	| "setModel"
 	| "setThinkingLevel"
+	| "cycleRoleModels"
 >;
 
 /** Persisted role aliases visible from an explicit editing scope, excluding runtime/overlay assignments. */
@@ -191,7 +195,28 @@ export class RpcRoles {
 			};
 		});
 		const activeRole = this.activeRole();
-		return activeRole ? { roles, activeRole } : { roles };
+		const cycleOrder = this.cycleOrder();
+		return activeRole ? { roles, activeRole, cycleOrder } : { roles, cycleOrder };
+	}
+
+	/** The role order Ctrl+P walks: the `cycleOrder` setting as the TUI reads it. */
+	cycleOrder(): string[] {
+		return [...cfgCycleOrder.get(this.#session.settings)];
+	}
+
+	/**
+	 * Ctrl+P: step through the configured role models in `cycleOrder` order, from the slot the active
+	 * model occupies. Returns `null` when fewer than two role models are available. Like Ctrl+P it does
+	 * not wait out a running turn: the new model applies from the next request.
+	 */
+	async cycle(direction: "forward" | "backward"): Promise<RpcSetRoleResult | null> {
+		const session = this.#session;
+		// Discovery-backed providers can populate after startup; role models resolve against the settled catalog.
+		await session.modelRegistry.awaitBackgroundRefresh();
+		const result = await session.cycleRoleModels(this.cycleOrder(), direction);
+		if (!result) return null;
+		this.#remember(result.role);
+		return { role: result.role, model: session.model ?? result.model, thinkingLevel: session.thinkingLevel };
 	}
 
 	/** Resolve the role as authored at this editing scope, without borrowing a higher layer's assignment. */

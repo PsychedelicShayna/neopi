@@ -67,7 +67,17 @@ export const stateDefs = {
 		"resolved?": "RoleResolution",
 		hidden: "boolean",
 	},
-	RolesResult: { roles: "RoleInfo[]", "activeRole?": "string" },
+	RolesResult: {
+		roles: "RoleInfo[]",
+		"activeRole?": "string",
+		cycleOrder: absentAs(
+			doc(
+				"string[]",
+				"The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped.",
+			),
+			[],
+		),
+	},
 	ModelSelectorPerformanceSource: "'measured' | 'catalog'",
 	ModelSelectorFacts: {
 		intelligence: "number | null",
@@ -329,6 +339,13 @@ export const stateDefs = {
 			doc("boolean", "`/slow` is on for the active model; always `false` when `slowModeSupported` is `false`."),
 			false,
 		),
+		dictationEnabled: absentAs(
+			doc(
+				"boolean",
+				"Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off.",
+			),
+			false,
+		),
 		"slowModeScope?": doc("SlowModeScope", "Where the active model's `/slow` lives; absent when unsupported."),
 		"usageLimit?": doc(
 			"UsageLimitState",
@@ -337,6 +354,18 @@ export const stateDefs = {
 		tokensPerSecond: absentAs("number | null", null),
 		messageCount: absentAs("number.integer", 0),
 		queuedMessageCount: absentAs("number.integer", 0),
+		hostname: absentAs(doc("string", "Short machine hostname (first DNS label)."), ""),
+		activeTimeMs: absentAs(
+			doc("number", "Accumulated active-processing time, including the run in flight; idle time never counts."),
+			0,
+		),
+		runningJobCount: absentAs(
+			doc(
+				"number.integer",
+				"Running background jobs outside the subagents count, as the TUI jobs pill counts them.",
+			),
+			0,
+		),
 		hasPendingAsyncWork: absentAs(
 			doc("boolean", "Background jobs or deliveries can still inject a follow-up and wake the session."),
 			false,
@@ -365,10 +394,34 @@ export const stateDefs = {
 		outputBytes: "number.integer",
 		"artifactId?": "string",
 		"artifactElidedBytes?": "number.integer",
+		"elidedBytes?": doc(
+			"number.integer",
+			"Bytes dropped from the middle of `output`, which keeps the head and tail.",
+		),
+		"elidedLines?": doc("number.integer", "Lines dropped from the middle of `output`."),
+		"columnDroppedBytes?": doc(
+			"number.integer",
+			"Bytes the per-line column cap cut from `output`, across all lines.",
+		),
+		"columnTruncatedLines?": doc(
+			"number.integer",
+			"Lines of `output` the per-line column cap cut; the artifact holds them whole.",
+		),
+		"columnTruncatedRange?": doc(
+			"LineRange",
+			"First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it.",
+		),
+		"columnMax?": doc("number.integer", "The per-line column cap in UTF-8 bytes, set when it cut a line."),
 		"artifactError?": JSON_OBJECT,
+		"minimized?": JSON_OBJECT,
 		"workingDir?": "string",
 		"images?": "ImageContent[]",
+		"trace?": doc(
+			JSON_OBJECT,
+			"The embedded shell's final `ShellTrace` of the run; only when the caller asked for one.",
+		),
 	},
+	LineRange: { first: "number.integer", last: "number.integer" },
 	FastModeResult: { enabled: "boolean", active: "boolean" },
 	CompactionResult: {
 		summary: "string",
@@ -448,6 +501,13 @@ export const stateDefs = {
 	},
 	SlashCommandInput: { "hint?": "string" },
 	SlashSubcommand: { name: "string", "description?": "string", "usage?": "string" },
+	CommandCompletion: {
+		value: doc("string", "Replaces the argument text the host typed."),
+		label: "string",
+		"description?": "string",
+		"hint?": doc("string", "Ghost text to show after the cursor."),
+		"submitsCommand?": doc("boolean", "Accepting it leaves a complete command, so the host may submit at once."),
+	},
 	AvailableSlashCommand: {
 		name: "string",
 		"aliases?": "string[]",
@@ -455,6 +515,13 @@ export const stateDefs = {
 		"input?": "SlashCommandInput",
 		"subcommands?": "SlashSubcommand[]",
 		source: "SlashCommandSource",
+		availability: absentAs(
+			doc(
+				"'headless' | 'tui'",
+				'`tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`.',
+			),
+			"headless",
+		),
 	},
 	SessionEntries: doc(
 		{ entries: `${JSON_OBJECT}[]`, leafId: "string | null" },
@@ -534,6 +601,101 @@ export const stateDefs = {
 		"resolvedThinkingLevel?": "ConfiguredThinkingLevel",
 		"fastModeEnabled?": "boolean",
 		"fastModeActive?": "boolean",
+	},
+	JobType: "'bash' | 'task' | 'eval' | 'chronicle'",
+	JobStatus: "'running' | 'completed' | 'failed' | 'cancelled'",
+	JobInfo: doc(
+		{
+			id: doc("string", "Stable `bg_N` id."),
+			type: "JobType",
+			label: "string",
+			"command?": doc("string", "Full command line of a job that runs a process; `label` is cut to 120 characters."),
+			status: "JobStatus",
+			startedAt: doc("number", "Epoch milliseconds."),
+			"finishedAt?": "number",
+			"exitCode?": "number.integer",
+			"error?": doc("string", "Failure text of a failed job, cut to a bounded length."),
+			"ownerId?": doc("string", "Registry id of the agent that registered the job."),
+			"agentId?": doc("string", "Registry id of the subagent a task job runs."),
+			outputBytes: doc("number.integer", "Size in bytes of the output snapshot `get_job_output` reads."),
+		},
+		"One background job.",
+	),
+	JobAgent: { id: "string", "parentId?": "string" },
+	JobsResult: {
+		"rootId?": doc("string", "The agent the tree is for; its own jobs are the top level."),
+		running: "JobInfo[]",
+		recent: doc("JobInfo[]", "Settled jobs, newest first, at most `recentLimit`."),
+		agents: doc("JobAgent[]", "Subagents owning listed jobs, with the ancestors linking them to the root."),
+		runningCount: doc(
+			"number.integer",
+			"Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`.",
+		),
+	},
+	JobOutput: {
+		jobId: "string",
+		status: "JobStatus",
+		fromByte: "number.integer",
+		nextByte: doc("number.integer", "Pass as the next `fromByte` to read on."),
+		totalBytes: doc("number.integer", "Size in bytes of the whole output snapshot."),
+		reset: doc(
+			"boolean",
+			"`fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero.",
+		),
+		revision: absentAs(
+			doc("string", "Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`."),
+			"",
+		),
+		output: "string",
+	},
+	SubagentHistoryMetrics: {
+		tokens: "number",
+		requests: "number",
+		tools: "number",
+		cost: "number",
+		durationMs: "number",
+		"contextTokens?": "number",
+		"contextWindow?": "number",
+	},
+	SubagentHistoryEntry: doc(
+		{
+			id: "string",
+			kind: "'sub' | 'advisor'",
+			"parentId?": "string",
+			displayName: "string",
+			"agent?": "string",
+			"description?": doc("string", "Persisted task gist, or the current activity of a live child."),
+			status: doc(
+				"'running' | 'idle' | 'parked' | 'aborted'",
+				"`parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted.",
+			),
+			live: doc("boolean", "The child's session is in memory (`running` or `idle`)."),
+			sessionFile: "string",
+			createdAt: "number",
+			lastActivity: "number",
+			"responseAt?": "number",
+			"acceptedAt?": "number",
+			"terminalAt?": "number",
+			"parentToolCallId?": doc("string", "Known only from the live roster."),
+			"resolvedModel?": "string",
+			"resolvedModelIdentity?": "string",
+			"resolvedThinkingLevel?": "ConfiguredThinkingLevel",
+			"fastModeEnabled?": doc("boolean", "Live children only."),
+			"fastModeActive?": doc("boolean", "Live children only."),
+			"modelRole?": "string",
+			"readOnly?": "boolean",
+			"metrics?": "SubagentHistoryMetrics",
+			"directCost?": doc("number", "Cumulative cost of the child's own session, excluding nested task results."),
+			"outputPath?": "string",
+			"patchPath?": "string",
+			"branchName?": "string",
+		},
+		"One child of the root session's tree.",
+	),
+	SubagentHistory: {
+		"rootSessionFile?": "string",
+		"rootAgentId?": "string",
+		subagents: doc("SubagentHistoryEntry[]", "Oldest first."),
 	},
 	SubagentMessages: doc(
 		{

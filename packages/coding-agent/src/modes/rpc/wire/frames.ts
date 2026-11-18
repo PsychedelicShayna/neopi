@@ -16,6 +16,10 @@ export const frameDefs = {
 			"maxFrameBytes?": "number.integer",
 			"maxReassembledFrameBytes?": "number.integer",
 			capabilities: "string[]",
+			"supportsBashExcludeFromContext?": doc(
+				"boolean",
+				"`bash` accepts `excludeFromContext`; require exactly true before sending excluded commands.",
+			),
 		},
 		"First frame after startup; transport fields are absent on servers without protocol v2.",
 	),
@@ -121,6 +125,15 @@ export const frameDefs = {
 	LiveEndEvent: doc(
 		{ type: "'live_end'", "error?": "string" },
 		"Sent exactly once when a live session ends; `error` carries the failure cause.",
+	),
+	JobLifecycleEvent: doc(
+		{
+			type: "'job_lifecycle'",
+			event: "'registered' | 'progress' | 'completed' | 'failed' | 'cancelled'",
+			job: "JobInfo",
+			runningCount: doc("number.integer", "Running jobs by the TUI jobs-pill rule after this transition."),
+		},
+		"A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`.",
 	),
 	DictationStateEvent: doc(
 		{ type: "'dictation_state'", captureId: "string", state: "'starting' | 'recording' | 'transcribing'" },

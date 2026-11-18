@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import {
 	buildLogCopyPayload,
 	DebugLogViewerComponent,
@@ -325,4 +326,13 @@ describe("buildLogCopyPayload", () => {
 		const payload = buildLogCopyPayload(["plain", "\u001b[31mred\u001b[0m", "ok\u0007", ""]);
 		expect(payload).toBe("plain\nred\nok");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

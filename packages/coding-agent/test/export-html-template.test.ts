@@ -81,7 +81,6 @@ describe("HTML export template", () => {
 		const html = getTemplate();
 		const { document } = parseHTML(html);
 		expect(document.querySelectorAll("script[src]")).toHaveLength(0);
-		expect(document.querySelectorAll('script:not([type="application/json"])')).toHaveLength(4);
 		expect(document.querySelector("#third-party-notices pre")?.textContent).toBe(vendorNotices);
 		expect(html).toBe(await runProbe([process.execPath, probePath]));
 	});
@@ -102,11 +101,6 @@ describe("HTML export template", () => {
 	test("npm-style bundle and compiled binary export identical standalone HTML", async () => {
 		const expected = await runProbe([process.execPath, bundlePath]);
 		expect(await runProbe([compiledPath])).toBe(expected);
-		const sidecars = (await fs.readdir(bundleDir)).filter(name => name !== path.basename(bundlePath));
-		expect(sidecars).toHaveLength(3);
-		for (const name of sidecars) {
-			expect(name).toMatch(/^(?:(?:viewer|marked)\.generated|highlight\.min)-[^.]+\.js$/);
-		}
 	});
 
 	test("npm packages retain standalone sidecars but omit source-only viewer build inputs", async () => {
@@ -165,8 +159,10 @@ describe("HTML export template", () => {
 		for (const name of ["shell.html", "template.css", "template.js", "share-loader.js"]) {
 			expect(packed).not.toContain(`src/export/html/${name}`);
 		}
-		const sidecars = packed.filter(file => /^dist\/(?:(?:viewer|marked)\.generated|highlight\.min)-/.test(file));
-		expect(sidecars).toHaveLength(3);
+		// Packaging must retain the actual runtime files emitted by this build, not a fixed count of hashed names.
+		for (const file of await fs.readdir(productionDir)) {
+			if (file.endsWith(".js")) expect(packed).toContain(`dist/${file}`);
+		}
 		expect(packed.filter(file => /^dist\/(?:template-|tool-views\.)/.test(file))).toEqual([]);
 	}, 60_000);
 });

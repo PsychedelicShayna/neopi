@@ -10,6 +10,7 @@ provider "openai" {
 		unsupported-sampling-params "topK" "minP" "repetitionPenalty"
 	}
 	on-api "openai-responses" {
+		supports-websockets #true
 		unsupported-sampling-params "topK" "minP" "presencePenalty" "repetitionPenalty" "frequencyPenalty"
 	}
 	kind-apis {

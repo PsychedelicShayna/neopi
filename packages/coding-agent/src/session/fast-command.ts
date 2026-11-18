@@ -1,9 +1,16 @@
+import { serviceTierFamily } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "./agent-session";
+import type { AgentSessionHandle } from "./agent-session-handle";
 
 export const FAST_USAGE = "Usage: /fast [on|ultra|off|status]";
 
-export function formatFastModeStatus(session: AgentSession): string {
-	if (session.isUltrafastModeEnabled()) return "ultra";
+export function formatFastModeStatus(
+	session: Pick<AgentSessionHandle, "model" | "serviceTierByFamily" | "isFastModeEnabled">,
+): string {
+	const model = session.model;
+	if (model && serviceTierFamily(model) === "openai" && session.serviceTierByFamily.openai === "ultrafast") {
+		return "ultra";
+	}
 	return session.isFastModeEnabled() ? "on" : "off";
 }
 

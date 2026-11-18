@@ -91,10 +91,19 @@ export interface Usage {
 	credits?: Record<string, unknown>;
 }
 
+/** Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope. */
+export interface ParentIrc {
+	/** Sending parent agent id. */
+	from: string;
+	/** Message body as the parent wrote it. */
+	body: string;
+}
+
 export interface UserMessage {
 	role: "user";
 	content: MessageContent;
 	timestamp: number;
+	parentIrc?: ParentIrc;
 	synthetic?: boolean;
 	steering?: boolean;
 	liveSteered?: boolean;
@@ -472,6 +481,8 @@ export interface RoleInfo {
 export interface RolesResult {
 	roles: RoleInfo[];
 	activeRole?: string;
+	/** The configured cycle order: the roles `cycle_role` walks. A role without an available model is skipped. */
+	cycleOrder?: string[];
 }
 
 export type ModelSelectorPerformanceSource = "measured" | "catalog";
@@ -834,6 +845,8 @@ export interface SessionState {
 	slowModeSupported?: boolean;
 	/** `/slow` is on for the active model; always `false` when `slowModeSupported` is `false`. */
 	slowModeEnabled?: boolean;
+	/** Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off. */
+	dictationEnabled?: boolean;
 	/** Where the active model's `/slow` lives; absent when unsupported. */
 	slowModeScope?: SlowModeScope;
 	/** Usage-limit stage of the active model's account; absent outside wrap-up and low priority. */
@@ -841,6 +854,12 @@ export interface SessionState {
 	tokensPerSecond?: number | null;
 	messageCount?: number;
 	queuedMessageCount?: number;
+	/** Short machine hostname (first DNS label). */
+	hostname?: string;
+	/** Accumulated active-processing time, including the run in flight; idle time never counts. */
+	activeTimeMs?: number;
+	/** Running background jobs outside the subagents count, as the TUI jobs pill counts them. */
+	runningJobCount?: number;
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork?: boolean;
 	/** Idle with nothing queued or pending; same predicate as `session_settled`. */
@@ -867,9 +886,29 @@ export interface BashResult {
 	timedOut?: boolean;
 	artifactId?: string;
 	artifactElidedBytes?: number;
+	/** Bytes dropped from the middle of `output`, which keeps the head and tail. */
+	elidedBytes?: number;
+	/** Lines dropped from the middle of `output`. */
+	elidedLines?: number;
+	/** Bytes the per-line column cap cut from `output`, across all lines. */
+	columnDroppedBytes?: number;
+	/** Lines of `output` the per-line column cap cut; the artifact holds them whole. */
+	columnTruncatedLines?: number;
+	/** First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it. */
+	columnTruncatedRange?: LineRange;
+	/** The per-line column cap in UTF-8 bytes, set when it cut a line. */
+	columnMax?: number;
 	artifactError?: Record<string, unknown>;
+	minimized?: Record<string, unknown>;
 	workingDir?: string;
 	images?: ImageContent[];
+	/** The embedded shell's final `ShellTrace` of the run; only when the caller asked for one. */
+	trace?: Record<string, unknown>;
+}
+
+export interface LineRange {
+	first: number;
+	last: number;
 }
 
 export interface FastModeResult {
@@ -997,6 +1036,17 @@ export interface SlashSubcommand {
 	usage?: string;
 }
 
+export interface CommandCompletion {
+	/** Replaces the argument text the host typed. */
+	value: string;
+	label: string;
+	description?: string;
+	/** Ghost text to show after the cursor. */
+	hint?: string;
+	/** Accepting it leaves a complete command, so the host may submit at once. */
+	submitsCommand?: boolean;
+}
+
 export interface AvailableSlashCommand {
 	name: string;
 	source: SlashCommandSource;
@@ -1004,6 +1054,8 @@ export interface AvailableSlashCommand {
 	description?: string;
 	input?: SlashCommandInput;
 	subcommands?: SlashSubcommand[];
+	/** `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`. */
+	availability?: "headless" | "tui";
 }
 
 /** OMP-native session entries in append order. */
@@ -1114,6 +1166,120 @@ export interface SubagentSnapshot {
 	resolvedThinkingLevel?: ConfiguredThinkingLevel;
 	fastModeEnabled?: boolean;
 	fastModeActive?: boolean;
+}
+
+export type JobType = "bash" | "task" | "eval" | "chronicle";
+
+export type JobStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** One background job. */
+export interface JobInfo {
+	/** Stable `bg_N` id. */
+	id: string;
+	type: JobType;
+	label: string;
+	status: JobStatus;
+	/** Epoch milliseconds. */
+	startedAt: number;
+	/** Size in bytes of the output snapshot `get_job_output` reads. */
+	outputBytes: number;
+	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
+	command?: string;
+	finishedAt?: number;
+	exitCode?: number;
+	/** Failure text of a failed job, cut to a bounded length. */
+	error?: string;
+	/** Registry id of the agent that registered the job. */
+	ownerId?: string;
+	/** Registry id of the subagent a task job runs. */
+	agentId?: string;
+}
+
+export interface JobAgent {
+	id: string;
+	parentId?: string;
+}
+
+export interface JobsResult {
+	running: JobInfo[];
+	/** Settled jobs, newest first, at most `recentLimit`. */
+	recent: JobInfo[];
+	/** Subagents owning listed jobs, with the ancestors linking them to the root. */
+	agents: JobAgent[];
+	/** Running jobs by the TUI jobs-pill rule; equals `get_state.runningJobCount`. */
+	runningCount: number;
+	/** The agent the tree is for; its own jobs are the top level. */
+	rootId?: string;
+}
+
+export interface JobOutput {
+	jobId: string;
+	status: JobStatus;
+	fromByte: number;
+	/** Pass as the next `fromByte` to read on. */
+	nextByte: number;
+	/** Size in bytes of the whole output snapshot. */
+	totalBytes: number;
+	/** `fromByte` exceeded the snapshot, or it no longer starts with what the caller holds (`revision` mismatch), so reading restarted at zero. */
+	reset: boolean;
+	output: string;
+	/** Identifies the snapshot bytes before `nextByte`; send it back with `fromByte: nextByte`. */
+	revision?: string;
+}
+
+export interface SubagentHistoryMetrics {
+	tokens: number;
+	requests: number;
+	tools: number;
+	cost: number;
+	durationMs: number;
+	contextTokens?: number;
+	contextWindow?: number;
+}
+
+/** One child of the root session's tree. */
+export interface SubagentHistoryEntry {
+	id: string;
+	kind: "sub" | "advisor";
+	displayName: string;
+	/** `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted. */
+	status: "running" | "idle" | "parked" | "aborted";
+	/** The child's session is in memory (`running` or `idle`). */
+	live: boolean;
+	sessionFile: string;
+	createdAt: number;
+	lastActivity: number;
+	parentId?: string;
+	agent?: string;
+	/** Persisted task gist, or the current activity of a live child. */
+	description?: string;
+	responseAt?: number;
+	acceptedAt?: number;
+	terminalAt?: number;
+	/** Known only from the live roster. */
+	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	/** Live children only. */
+	fastModeEnabled?: boolean;
+	/** Live children only. */
+	fastModeActive?: boolean;
+	modelRole?: string;
+	readOnly?: boolean;
+	metrics?: SubagentHistoryMetrics;
+	/** Cumulative cost of the child's own session, excluding nested task results. */
+	directCost?: number;
+	outputPath?: string;
+	patchPath?: string;
+	branchName?: string;
+}
+
+export interface SubagentHistory {
+	/** Oldest first. */
+	subagents: SubagentHistoryEntry[];
+	rootSessionFile?: string;
+	rootAgentId?: string;
 }
 
 /** Incremental subagent transcript read. */
@@ -1694,6 +1860,8 @@ export interface ReadyEvent {
 	supportedProtocolVersions?: number[];
 	maxFrameBytes?: number;
 	maxReassembledFrameBytes?: number;
+	/** `bash` accepts `excludeFromContext`; require exactly true before sending excluded commands. */
+	supportsBashExcludeFromContext?: boolean;
 }
 
 export type PromptStatus = "completed" | "aborted" | "error";
@@ -1835,6 +2003,15 @@ export interface LiveTranscriptEvent {
 export interface LiveEndEvent {
 	type: "live_end";
 	error?: string;
+}
+
+/** A background job changed (stdio only). Progress frames are coalesced per job; foreground-backed jobs stay silent until promoted, then `registered`. */
+export interface JobLifecycleEvent {
+	type: "job_lifecycle";
+	event: "registered" | "progress" | "completed" | "failed" | "cancelled";
+	job: JobInfo;
+	/** Running jobs by the TUI jobs-pill rule after this transition. */
+	runningCount: number;
 }
 
 /** State of one draft-only microphone capture. */
@@ -2185,7 +2362,7 @@ export interface HostUriSchemeDefinition {
 }
 
 /** Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`. */
-export type RpcNotification = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent;
+export type RpcNotification = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | JobLifecycleEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent;
 
 /** Any frame the server writes to stdout (after reassembling `rpc_chunk` sequences), discriminated by `type`. */
 export type RpcServerFrame = RpcResponse | RpcHostRequest | RpcNotification;
@@ -2297,6 +2474,16 @@ export interface SetRoleParams {
 }
 
 export interface SetRoleResult {
+	role: string;
+	model: ModelInfo;
+	thinkingLevel?: ThinkingLevel;
+}
+
+export interface CycleRoleParams {
+	direction?: "forward" | "backward";
+}
+
+export interface CycleRoleResult {
 	role: string;
 	model: ModelInfo;
 	thinkingLevel?: ThinkingLevel;
@@ -2508,6 +2695,10 @@ export interface GetSubagentsResult {
 	subagents: SubagentSnapshot[];
 }
 
+export interface GetSubagentHistoryParams {
+	includeAdvisors?: boolean;
+}
+
 export interface GetSubagentMessagesParams {
 	subagentId?: string;
 	sessionFile?: string;
@@ -2535,6 +2726,47 @@ export interface SetSubagentThinkingLevelParams {
 export interface SetSubagentFastParams {
 	subagentId: string;
 	enabled: boolean;
+}
+
+export interface GetCommandCompletionsParams {
+	command: string;
+	prefix: string;
+}
+
+export interface GetCommandCompletionsResult {
+	items: CommandCompletion[];
+}
+
+export interface GetJobsParams {
+	recentLimit?: number;
+}
+
+export interface GetJobOutputParams {
+	jobId: string;
+	fromByte?: number;
+	revision?: string;
+}
+
+export interface CancelJobParams {
+	jobId: string;
+}
+
+export interface CancelJobResult {
+	cancelled: boolean;
+}
+
+export interface SetSubagentModelParams {
+	subagentId: string;
+	selector?: string;
+	provider?: string;
+	modelId?: string;
+}
+
+export interface SetSubagentModelResult {
+	provider: string;
+	modelId: string;
+	thinkingLevel?: ThinkingLevel;
+	warning?: string;
 }
 
 export interface LiveStartParams {
@@ -2624,6 +2856,16 @@ export interface SetAutoRetryParams {
 
 export interface BashParams {
 	command: string;
+	excludeFromContext?: boolean;
+}
+
+export interface GetSessionLeaseParams {
+	sessionIds: string[];
+}
+
+export interface GetSessionLeaseResult {
+	held: string[];
+	unknown: string[];
 }
 
 export interface ExportHtmlParams {
@@ -2774,6 +3016,7 @@ export interface RpcWireCommands {
 	update_theme: { params: UpdateThemeParams; result: ThemesConfiguration };
 	query_model_selector: { params: QueryModelSelectorParams; result: ModelSelectorResult };
 	set_role: { params: SetRoleParams; result: SetRoleResult };
+	cycle_role: { params: CycleRoleParams; result: CycleRoleResult | null };
 	get_models_configuration: { params: undefined; result: GetModelsConfigurationResult };
 	set_model_role_configuration: { params: SetModelRoleConfigurationParams; result: undefined };
 	set_model_role_fallbacks: { params: SetModelRoleFallbacksParams; result: undefined };
@@ -2804,11 +3047,17 @@ export interface RpcWireCommands {
 	set_subagent_subscription: { params: SetSubagentSubscriptionParams; result: SetSubagentSubscriptionResult };
 	set_event_filter: { params: SetEventFilterParams; result: SetEventFilterResult };
 	get_subagents: { params: undefined; result: GetSubagentsResult };
+	get_subagent_history: { params: GetSubagentHistoryParams; result: SubagentHistory };
 	get_subagent_messages: { params: GetSubagentMessagesParams; result: SubagentMessages };
 	cancel_subagent: { params: CancelSubagentParams; result: CancelSubagentResult };
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
 	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
+	get_command_completions: { params: GetCommandCompletionsParams; result: GetCommandCompletionsResult };
+	get_jobs: { params: GetJobsParams; result: JobsResult };
+	get_job_output: { params: GetJobOutputParams; result: JobOutput };
+	cancel_job: { params: CancelJobParams; result: CancelJobResult };
+	set_subagent_model: { params: SetSubagentModelParams; result: SetSubagentModelResult };
 	live_start: { params: LiveStartParams; result: LiveStartResult };
 	live_connect: { params: LiveConnectParams; result: LiveConnectResult };
 	live_stop: { params: undefined; result: undefined };
@@ -2832,6 +3081,7 @@ export interface RpcWireCommands {
 	bash: { params: BashParams; result: BashResult };
 	abort_bash: { params: undefined; result: undefined };
 	get_session_stats: { params: undefined; result: SessionStats };
+	get_session_lease: { params: GetSessionLeaseParams; result: GetSessionLeaseResult };
 	export_html: { params: ExportHtmlParams; result: ExportHtmlResult };
 	switch_session: { params: SwitchSessionParams; result: CancellationResult };
 	branch: { params: BranchParams; result: BranchResult };

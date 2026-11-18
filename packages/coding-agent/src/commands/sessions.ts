@@ -14,6 +14,10 @@ export default class Sessions extends Command {
 		cwd: Flags.string({ description: "Project working directory" }),
 		"session-dir": Flags.string({ description: "List exactly this directory (repeatable)", multiple: true }),
 		all: Flags.boolean({ description: "List every project", default: false }),
+		live: Flags.boolean({
+			description: "With list: add each live session's state (busy, waiting, idle) and git branch",
+			default: false,
+		}),
 		"max-messages": Flags.integer({ description: "Keep only the last N visible messages", min: 0 }),
 		scope: Flags.string({ description: "Journal entry scope", options: ["journal", "branch"] }),
 		direction: Flags.string({ description: "Paging direction", options: ["forward", "backward"] }),
@@ -43,7 +47,12 @@ export default class Sessions extends Command {
 			const result =
 				args.operation === "read"
 					? await readSessionCatalog(args.file!, flags["max-messages"])
-					: await listSessionCatalog({ cwd: flags.cwd, sessionDirs: flags["session-dir"], all: flags.all });
+					: await listSessionCatalog({
+							cwd: flags.cwd,
+							sessionDirs: flags["session-dir"],
+							all: flags.all,
+							live: flags.live,
+						});
 			process.stdout.write(`${JSON.stringify(result)}\n`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

@@ -22,6 +22,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { stripRawHttpRequestDiagnostics } from "@oh-my-pi/pi-ai/utils/http-inspector";
+import { toError } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { getMessageEntryId } from "../../session/message-entry-ids";
 import type { CostCapRefusal } from "../../session/cost-gate";
@@ -435,7 +436,7 @@ export function reportPromptResult(input: {
 		})
 		.catch(cause => {
 			input.releaseReservation?.();
-			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const error = toError(cause);
 			input.onError(error);
 			input.results.fail(input.ticket, error.message);
 		});

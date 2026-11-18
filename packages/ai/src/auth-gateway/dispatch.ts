@@ -8,12 +8,13 @@
  * broker-backed rotation policy and the same usage ledger.
  */
 import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
-import { type ApiKeyResolver, createOAuthProvenance, type ResolvedApiKey } from "../auth-retry";
+import { type ApiKeyResolver, createOAuthProvenance, NO_AUTH_SENTINEL, type ResolvedApiKey } from "../auth-retry";
 import type { AuthApiKeyOptions, AuthStorage } from "../auth-storage";
 import { oauthAccountKey, type StoredAuthCredential } from "../auth/types";
 import * as AIError from "../error";
 import { classifyGatewayError, type GatewayErrorClassification } from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
+import { getProviderDefinition } from "../registry";
 import type { Api, FetchImpl, Model, Usage } from "../types";
 import type { ClientUsageIdentity } from "../usage";
 import { deterministicUuid } from "../utils/deterministic-id";
@@ -173,7 +174,8 @@ export function gatewayRequestLogFields(
  * and its OAuth identity together (refreshing through the broker when needed).
  * Keep this selection snapshot intact even if another request replaces the
  * stored token before dispatch. Storage failures map through
- * {@link classifyGatewayError}; a provider without any credential is a 401.
+ * {@link classifyGatewayError}; a provider without any credential is a 401
+ * unless its catalog policy allows keyless requests.
  */
 export async function resolveGatewayApiKey(
 	opts: AuthGatewayCredentialOptions,
@@ -189,7 +191,11 @@ export async function resolveGatewayApiKey(
 		credentialId ??= opts.credentialId;
 		if (credentialId !== undefined) {
 			if (opts.client) {
-				return { status: 403, type: "permission_error", message: "Credential selection requires the gateway bearer" };
+				return {
+					status: 403,
+					type: "permission_error",
+					message: "Credential selection requires the gateway bearer",
+				};
 			}
 			if (!/^[1-9]\d*$/.test(credentialId) || !Number.isSafeInteger(Number(credentialId))) {
 				return { status: 400, type: "invalid_request_error", message: "Invalid X-Neopi-Credential-Id" };
@@ -220,6 +226,7 @@ export async function resolveGatewayApiKey(
 		return classified;
 	}
 	if (apiKey) return apiKey;
+	if (getProviderDefinition(model.provider)?.allowsMissingApiKey) return { apiKey: NO_AUTH_SENTINEL };
 	return {
 		status: 401,
 		type: "authentication_error",
@@ -338,6 +345,9 @@ export function buildGatewayApiKeyResolver(
 	const provenance = createOAuthProvenance();
 	provenance.record(initialKey);
 	return async ({ lastChance, error, signal, previousKey }) => {
+		if (initialKey.apiKey === NO_AUTH_SENTINEL && initialKey.credentialId === undefined) {
+			return error === undefined ? initialKey : undefined;
+		}
 		const sig = signal ?? requestSignal;
 		const rejectedAccessToken = provenance.accessFor(previousKey);
 		if (initialKey.credentialPin) {

@@ -25,6 +25,7 @@ import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent
 import { restoreSession } from "@oh-my-pi/pi-coding-agent/task/restore";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { localSession } from "../helpers/local-session";
 
 const AGENT_ID = "Restored";
 const MOCK_API_SOURCE = "test/restore-revive";
@@ -335,7 +336,7 @@ for (const level of [ThinkingLevel.High, ThinkingLevel.Off]) {
 		try {
 			expect((await restoreSession(owner)).subagents).toEqual([AGENT_ID]);
 			expect(await delivered.promise).toContain("continued with saved thinking");
-			const revived = AgentRegistry.global().get(AGENT_ID)?.session;
+			const revived = localSession(AgentRegistry.global().get(AGENT_ID)?.session);
 			expect(revived?.configuredThinkingLevel()).toBe(level);
 			expect(revived?.effortOrigin).toBe("manual");
 			expect(revived?.model?.id).toBe(mock.id);
@@ -376,14 +377,13 @@ for (const level of [ThinkingLevel.High, ThinkingLevel.Off]) {
 				artifactsDir: cwd,
 			});
 			expect(result.exitCode).toBe(0);
-			const original = AgentRegistry.global().get(AGENT_ID)?.session;
-			if (!original) throw new Error("Expected a live subagent");
+			const original = localSession(AgentRegistry.global().get(AGENT_ID)?.session);
 			original.setThinkingLevel(level);
 			expect(original.setFastMode(true)).toBe(true);
 			expect(parent.isFastModeEnabled()).toBe(false);
 			for (let revive = 0; revive < 2; revive++) {
 				await AgentLifecycleManager.global().park(AGENT_ID);
-				const session = await AgentLifecycleManager.global().ensureLive(AGENT_ID);
+				const session = localSession(await AgentLifecycleManager.global().ensureLive(AGENT_ID));
 				expect(session.configuredThinkingLevel()).toBe(level);
 				expect(session.effortOrigin).toBe("manual");
 				expect(session.isFastModeEnabled()).toBe(true);

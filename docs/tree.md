@@ -61,6 +61,8 @@ The initial viewport centers the selection. Selection motions reveal it when nee
 
 ## Keybindings inside tree selector
 
+Vim motions are opt-in through `tui.vimMode: true` (default `false`; **Vim Navigation and Editing** in `/settings`). In the list below, `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+D`/`Ctrl+U` and `Ctrl+E`/`Ctrl+Y` require Vim mode. Their ordinary arrow, Home/End and PageUp/PageDown alternatives, as well as search, activation, filters and menu history, remain available when it is off. Search and label fields keep literal editing unless modal editing is enabled by the same setting.
+
 - `j` / `k`, or `Down` / `Up`: move selection (wraps)
 - `Alt+Up` / `Alt+Down`: jump to previous/next user or assistant turn
 - `app.tree.previousBranch` / `app.tree.nextBranch` (unbound by default; bind them in [`keybindings.yml`](./keybindings.md), e.g. to `Shift+Left` / `Shift+Right`): jump to the previous/next visible branch in rendered order (wraps), across nested forks. A branch whose head is filtered out lands on its first visible descendant.
@@ -160,10 +162,10 @@ Assistant messages that contain only tool calls (no canonical text) are hidden i
 
 ### Selecting a past `ask` tool result
 
-- Interactive `/tree` reopens the original question UI instead of reusing the stale answer
+- Interactive `/tree` reopens the original form instead of reusing the stale answer
 - Cancel leaves the tree unchanged
 - A new answer is appended as a sibling tool result, preserving the old answer branch, then the agent resumes from it
-- If legacy/corrupt data cannot recover the original questions, selection falls back to a plain leaf move
+- If legacy/corrupt data cannot recover the original form `html`, selection falls back to a plain leaf move
 
 ### Selecting other nodes
 
@@ -183,7 +185,7 @@ selected node
    │
    ├─ current leaf (not ask result)? ──> close selector (no-op)
    │
-   ├─ ask tool result? ──> re-answer as a sibling branch when questions are recoverable
+   ├─ ask tool result? ──> re-answer as a sibling branch when the form is recoverable
    │
    ├─ user or ordinary custom message? ──> leaf := parentId (or root)
    │                                         + prefill only into an empty editor

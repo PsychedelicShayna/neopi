@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import { TreeSelectorComponent, type TreeSelectorNode } from "../src/overlays/tree-selector";
 import { initTheme } from "../src/theme";
 
@@ -105,6 +106,8 @@ describe("session tree shared menu navigation", () => {
 			selector.handleInput("\x1b[H");
 			expect(state(selector).tree.search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
 			selector.handleInput("\x1b");
+			expect(state(selector).tree.search).toMatchObject({ value: "jkgG/ ", focused: true });
+			selector.handleInput("\x1b");
 			expect(state(selector).tree.search).toMatchObject({ value: "", focused: false });
 			selector.handleInput("\t");
 			expect(state(selector).tree.filterMode).toBe("no-tools");
@@ -161,4 +164,13 @@ describe("session tree shared menu navigation", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 		selector.dispose();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

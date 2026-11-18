@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { setKeybindings, type Component, type TerminalFrameProvider, type TUI } from "@oh-my-pi/pi-tui";
@@ -522,8 +523,8 @@ describe("dialogs under a native surface", () => {
 		);
 		const body = () => stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
 		expect(body()).not.toContain("rm-rf~");
-		// Ctrl+O belongs to the dialog, not the draft that holds the other keys.
-		dialog.handleInput("\x0f");
+		// The tool-expansion binding belongs to the dialog, not the draft.
+		dialog.handleInput("\x1be");
 		expect(routed).toEqual([]);
 		expect(body()).toContain("rm-rf~");
 		expect(body()).toContain("secondline");
@@ -657,4 +658,13 @@ describe("dialogs under a native surface", () => {
 		await expect(cancelled).rejects.toThrow("Login cancelled");
 		expect(onComplete).toHaveBeenCalledWith(false, "Login cancelled");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

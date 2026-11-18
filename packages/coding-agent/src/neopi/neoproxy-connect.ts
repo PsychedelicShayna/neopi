@@ -1,3 +1,4 @@
+import { type ApiKeyCredential, apiKeyAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
 import { registerOAuthProvider } from "@oh-my-pi/pi-ai/oauth";
 import type { ApiKeyLoginResult, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import {
@@ -6,17 +7,35 @@ import {
 	type ProviderTlsTrust,
 	wrapFetchForProviderTls,
 } from "@oh-my-pi/pi-utils";
+import { NEOPROXY_PROVIDER_ID } from "../config/model-discovery";
 import type { ModelRegistry } from "../config/model-registry";
 import { ModelsConfigFile } from "../config/models-config";
 
 /** Validate an assigned inference key; ordinary login storage owns credential persistence. */
 export function registerNeoProxyLogin(registry: ModelRegistry, url?: string): void {
 	registerOAuthProvider({
-		id: "neoproxy",
+		id: NEOPROXY_PROVIDER_ID,
 		name: "NeoProxy",
 		loginKind: "custom",
 		login: callbacks => connect(registry, callbacks, url),
 	});
+}
+
+/**
+ * Run one NeoProxy login with `url` supplied instead of prompted (`/login
+ * neoproxy <url>`), then restore the prompting provider for later logins.
+ */
+export async function withNeoProxyLoginUrl<T>(
+	registry: ModelRegistry,
+	url: string,
+	login: () => Promise<T>,
+): Promise<T> {
+	registerNeoProxyLogin(registry, url);
+	try {
+		return await login();
+	} finally {
+		registerNeoProxyLogin(registry);
+	}
 }
 
 function serverUrl(value: string): string {
@@ -124,27 +143,96 @@ async function connect(
 	};
 	delete providers.neoproxy.apiKey;
 	callbacks.onProgress?.(
-		`${models.data.length} granted model(s). After connecting, use /model or /models to select a model or assign a role.`,
+		`${models.data.length} granted model(s). After connecting, use /model or /roles to select a model or assign a role.`,
 	);
 	if (models.data.length === 0)
 		callbacks.onProgress?.(
 			"No models are granted yet; ask your NeoProxy administrator to assign models to this key.",
 		);
 	callbacks.signal?.throwIfAborted();
+	const origin = new URL(root).origin;
+	const replaceExisting = await chooseKeyReplacement(registry, callbacks, origin, key);
+	callbacks.signal?.throwIfAborted();
 	return {
 		type: "api_key",
 		key,
-		replaceExisting: true,
-		requestOrigin: new URL(root).origin,
+		...(replaceExisting ? { replaceExisting: true as const } : {}),
+		requestOrigin: origin,
 		...(tlsTrust !== undefined ? { tlsTrust } : {}),
 		onPersisted: async () => {
 			try {
 				await file.save(config, previous);
 			} catch {
 				throw new Error(
-					"The validated NeoProxy credential was stored for the requested origin, but saving endpoint configuration did not complete. The new key remains origin-bound and cannot be sent to a different previous origin. Prior keys remain recoverable. Check the endpoint settings and reconnect after fixing the configuration write.",
+					"The validated NeoProxy credential was stored for the requested origin, but saving endpoint configuration did not complete. The new key remains origin-bound and cannot be sent to a different previous origin. Check the endpoint settings and reconnect after fixing the configuration write.",
 				);
 			}
 		},
 	};
+}
+
+/**
+ * Keys aggregate: each stored key contributes the models its administrator
+ * granted, so a new key for the same server is added beside the others unless
+ * the user explicitly replaces them. NeoProxy has one server URL and every key
+ * is bound to its server's origin, so keys for another origin can never serve
+ * the new URL and are replaced. Re-entering a stored key only refreshes it.
+ */
+async function chooseKeyReplacement(
+	registry: ModelRegistry,
+	callbacks: OAuthLoginCallbacks,
+	origin: string,
+	key: string,
+): Promise<boolean> {
+	const keys = storedNeoProxyKeys(registry);
+	const others = keys.filter(credential => credential.key !== key);
+	if (keys.some(credential => (credential.requestOrigin ?? credential.tlsTrust?.origin) !== origin)) {
+		callbacks.onProgress?.(
+			`Switching NeoProxy to ${origin}: ${others.length} stored key(s) for the previous server will be replaced; keys only work with the server that issued them.`,
+		);
+		return true;
+	}
+	if (others.length === 0) return false;
+	const answer = await callbacks.onPrompt({
+		message: `${others.length} other NeoProxy key(s) are stored for ${origin}. Press Enter to add this key beside them (models granted to every key are combined), or type replace to remove them.`,
+		placeholder: "add",
+		allowEmpty: true,
+	});
+	const choice = answer.trim().toLowerCase();
+	if (choice === "replace") return true;
+	if (choice !== "" && choice !== "add") throw new Error('Answer "add" (or press Enter) or "replace".');
+	return false;
+}
+
+function storedNeoProxyKeys(registry: ModelRegistry): ApiKeyCredential[] {
+	const stored = registry.authStorage.credentials.all().neoproxy;
+	return (Array.isArray(stored) ? stored : stored ? [stored] : []).filter(
+		(credential): credential is ApiKeyCredential => credential.type === "api_key",
+	);
+}
+
+/**
+ * `/neoproxy` status: the configured server URL, each stored key's non-secret
+ * id with the number of models it grants, and the discovery/cache state.
+ */
+export function describeNeoProxy(registry: ModelRegistry): string {
+	const loaded = ModelsConfigFile.relocate(registry.getConfigFile()).tryLoad(true);
+	const baseUrl = loaded.status === "error" ? undefined : loaded.value?.providers?.neoproxy?.baseUrl;
+	const keys = storedNeoProxyKeys(registry);
+	if (!baseUrl && keys.length === 0) {
+		return "NeoProxy is not connected. Run /login neoproxy <url> (or `npi login neoproxy --url <url>`) with an administrator-assigned API key.";
+	}
+	const models = registry.getProviderModels(NEOPROXY_PROVIDER_ID);
+	const lines = [`NeoProxy server: ${baseUrl ? baseUrl.replace(/\/v1\/?$/, "") : "(not configured)"}`];
+	lines.push(`Stored keys: ${keys.length}`);
+	for (const credential of keys) {
+		const id = apiKeyAccountKey(credential);
+		const granted = models.filter(model => model.accountAccess && Object.hasOwn(model.accountAccess, id)).length;
+		lines.push(`  ${id} (${credential.requestOrigin ?? "any origin"}): ${granted} model(s)`);
+	}
+	const state = registry.getProviderDiscoveryState(NEOPROXY_PROVIDER_ID);
+	const status = state ? `${state.status}${state.stale ? ", from cache" : ""}` : "not discovered yet";
+	lines.push(`Models: ${models.length} (${status})${state?.error ? `; last error: ${state.error}` : ""}`);
+	lines.push("Add a key: /login neoproxy · Change server: /neoproxy url <url> · Remove a key: /logout neoproxy");
+	return lines.join("\n");
 }

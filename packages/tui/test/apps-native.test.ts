@@ -1,4 +1,5 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, spyOn, beforeEach, afterEach } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { CleanseBoardModel } from "../src/apps/cleanse-board";
 import { GitTuiComponent, showGitOverlay } from "../src/apps/git/git-tui";
@@ -491,4 +492,13 @@ describe("cleanse board native", () => {
 		const lanes = described.filter(n => n.k === "agent");
 		expect(lanes.map(n => n.p)).toMatchObject([{ name: "B", status: "running", task: [{ t: "b.ts +1" }] }]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

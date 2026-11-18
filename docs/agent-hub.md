@@ -43,6 +43,8 @@ Metrics depend on the progress or persisted usage data available for that agent.
 
 ### Roster controls
 
+Vim navigation is off by default. Enable **Vim Navigation and Editing** in `/settings`, or set `tui.vimMode: true`, to use `j`/`k` and the shared Vim menu/viewer motions. Arrows, the mouse, ordinary paging, search, activation and the Hub's surface actions remain available without opting in.
+
 | Key or input                | Action                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------- |
 | `j` / `k`, `↑` / `↓`, wheel | Select an agent.                                                             |
@@ -74,7 +76,7 @@ For a normal local subagent, `Enter` or click focuses the main TUI on that agent
 
 1. Read its live transcript and tool activity.
 2. Type a message and press `Enter` to steer a running turn or prompt an idle agent.
-3. Change its model or thinking level with `Alt+P`, `/switch`, `Ctrl+P`, `Shift+Tab`, or `/effort`. These switches are session-only and leave the main session alone. `/model` and `Alt+M` open the same session-only picker, because role assignments configure the main session.
+3. Change its model or thinking level with `Alt+P`, `/model [selector]`, `Ctrl+P`, `Shift+Tab`, or `/effort`. These switches are session-only and leave the main session alone. `/roles` and `Alt+M` also open the session-only picker while a subagent is focused, because role assignments configure the main session.
 4. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
 
 Steering uses the normal prompt path, so the message and response are written to the subagent's persisted session history. While a subagent is focused, `Esc` returns to the main session; it does not interrupt the subagent.
@@ -91,7 +93,7 @@ Set `display.subagentLivePreview: true` to add a second line under each row show
 
 Enable `tui.mouse` to click live subagent cards and jump-list rows directly in the main session, without opening the Hub first. A click focuses that card's most recent agent (a jump-list row focuses its exact agent); focusing a parked agent revives it. Hovering a live target lights it up first, so you can see what a click will open.
 
-Only rows currently in the live viewport are clickable — retired transcript rows live in terminal scrollback, where clicks cannot map back to content. Enabling capture changes terminal gestures while on: text selection becomes Shift+drag and wheel scroll becomes Shift+wheel. Off by default.
+Only rows currently in the live viewport are clickable — retired transcript rows live in terminal scrollback, where clicks cannot map back to content. Enabling capture changes terminal gestures while on: text selection becomes Shift+drag, and the terminal reports wheel ticks to omp instead of scrolling, so plain wheel scrolling stops; scroll with the terminal's keyboard scrollback keys or turn capture off. Off by default.
 
 ## Persisted agents and advisors
 

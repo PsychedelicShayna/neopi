@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { initTheme } from "../src/theme/theme";
 import { ThemeSelectorComponent } from "../src/overlays/theme-selector";
@@ -98,4 +99,13 @@ describe("small selector history", () => {
 		expect(restored.navigationSnapshot()).toEqual(state);
 		expect(picked).toEqual([]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

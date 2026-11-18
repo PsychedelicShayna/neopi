@@ -4,7 +4,10 @@ import * as path from "node:path";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { getSessionCatalogCacheDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
-import { readControlEntries, type ControlRegistryOptions } from "../control/registry";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { ControlClient } from "../control/client";
+import { type ControlMetadata, readControlEntries, type ControlRegistryOptions } from "../control/registry";
+import type { ControlSnapshot } from "../control/types";
 import { readSessionExit, SESSION_EXIT_CUSTOM_TYPE, type SessionExitData } from "../session/exit-diagnostics";
 import { getMessageEntryId } from "../session/message-entry-ids";
 import { filterSessionsForPicker, listAllSessions, listSessionsReadOnly } from "../session/session-listing";
@@ -23,6 +26,70 @@ export interface SessionCatalogOptions {
 	agentDir?: string;
 	controlRegistry?: ControlRegistryOptions;
 	countCacheDir?: string;
+	/** Ask each live control endpoint what its session is doing (`--live`); adds `live` to every row. */
+	live?: boolean;
+	/** Per-endpoint deadline for `live`; an endpoint that misses it reports `live: null`. */
+	liveTimeoutMs?: number;
+	/** Fetches an endpoint's snapshot; tests substitute the socket. */
+	probeControl?: (metadata: ControlMetadata, timeoutMs: number) => Promise<ControlSnapshot>;
+}
+
+/** What a live process is doing, read from its control endpoint (`sessions list --live`). */
+export interface SessionCatalogLive {
+	/** `waiting`: a pane dialog (ask or approval) is open; `busy`: not settled; otherwise `idle`. */
+	state: "busy" | "waiting" | "idle";
+	isStreaming: boolean;
+	pendingDialogs: number;
+	/** VCS branch of the process's working directory; null outside a repository or on a detached head. */
+	branch: string | null;
+}
+
+const DEFAULT_LIVE_TIMEOUT_MS = 750;
+
+async function probeControlEndpoint(metadata: ControlMetadata, timeoutMs: number): Promise<ControlSnapshot> {
+	const client = new ControlClient({ metadata, label: "sessions-list", kind: "cli", probe: true, timeoutMs });
+	try {
+		return await client.connect();
+	} finally {
+		client.close();
+	}
+}
+
+/** The live state of one control endpoint, or null when it does not answer in time. */
+async function readLive(
+	metadata: ControlMetadata,
+	options: Pick<SessionCatalogOptions, "liveTimeoutMs" | "probeControl">,
+): Promise<SessionCatalogLive | null> {
+	const timeoutMs = options.liveTimeoutMs ?? DEFAULT_LIVE_TIMEOUT_MS;
+	let snapshot: ControlSnapshot;
+	try {
+		// The client's own handshake deadline covers connecting; this one also covers a silent endpoint.
+		const deadline = Promise.withResolvers<never>();
+		const timer = setTimeout(() => deadline.reject(new Error("control endpoint timed out")), timeoutMs);
+		try {
+			snapshot = await Promise.race([
+				(options.probeControl ?? probeControlEndpoint)(metadata, timeoutMs),
+				deadline.promise,
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	} catch {
+		return null;
+	}
+	let branch: string | null = null;
+	try {
+		branch = (await vcs.git(snapshot.cwd || metadata.cwd)?.currentBranch()) ?? null;
+	} catch {
+		// Not a repository, or the helper could not read it: the branch is simply unknown.
+	}
+	const pendingDialogs = snapshot.dialogs.length;
+	return {
+		state: pendingDialogs > 0 ? "waiting" : snapshot.busy.settled ? "idle" : "busy",
+		isStreaming: snapshot.busy.streaming,
+		pendingDialogs,
+		branch,
+	};
 }
 
 export interface SessionCatalogMessage {
@@ -83,13 +150,13 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 		sessions = (await Promise.all(dirs.map(dir => listSessionsReadOnly(dir, storage)))).flat();
 	}
 	const controls = new Map<string, { instanceId: string; role: "tui" | "rpc" | "acp" | "print"; pid: number }>();
+	const liveByFile = new Map<string, Promise<SessionCatalogLive | null>>();
 	for (const { meta } of await readControlEntries(options.controlRegistry)) {
 		if (!meta.sessionFile) continue;
-		controls.set(await canonicalPath(meta.sessionFile), {
-			instanceId: meta.instanceId,
-			role: meta.role,
-			pid: meta.pid,
-		});
+		const file = await canonicalPath(meta.sessionFile);
+		controls.set(file, { instanceId: meta.instanceId, role: meta.role, pid: meta.pid });
+		// Probes run together, so one slow endpoint costs one deadline, not one per session.
+		if (options.live) liveByFile.set(file, readLive(meta, options));
 	}
 	const seen = new Set<string>();
 	const rows = [];
@@ -115,6 +182,7 @@ export async function listSessionCatalog(options: SessionCatalogOptions = {}) {
 			firstMessage: session.firstMessage === "(no messages)" ? "" : session.firstMessage.trim().slice(0, 300),
 			inUse: session.inUse ?? null,
 			control: controls.get(file) ?? null,
+			...(options.live ? { live: (await liveByFile.get(file)) ?? null } : {}),
 		});
 	}
 	return { version: 1 as const, sessions: rows };

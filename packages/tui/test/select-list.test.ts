@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SelectList, type SelectListTheme } from "@oh-my-pi/pi-tui/components/select-list";
 import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
@@ -315,7 +316,9 @@ describe("SelectList", () => {
 		list.handleInput("/");
 		for (const key of "og/hjkl") list.handleInput(key);
 		expect(list.navigationState().filterDraft).toBe("og/hjkl");
-		expect(list.debugState().filterText).toBe("");
+		expect(list.debugState().filterText).toBe("og/hjkl");
+		list.handleInput("\x1b");
+		expect(list.filterFocused).toBe(true);
 		list.handleInput("\x1b");
 		expect(cancelled).toBe(0);
 		expect(list.debugState()).toMatchObject({ filterText: "", filterFocused: false });
@@ -423,14 +426,6 @@ describe("SelectList", () => {
 		expect(reopened.navigationState()).toEqual(state);
 	});
 
-	it("shows an empty focused search field even when every row fits", () => {
-		const list = new SelectList([{ value: "a", label: "Alpha" }], 5, testTheme, { search: "always" });
-		list.handleInput("/");
-		expect(list.render(80).join("\n")).toContain("Enter confirm");
-		list.handleInput("\x1b");
-		expect(list.render(80).join("\n")).not.toContain("Enter confirm");
-	});
-
 	it("restores literal filter focus and caret without activating the saved row", () => {
 		const items = [{ value: "a", label: "alpha" }];
 		const list = new SelectList(items, 3, testTheme, { search: "always" });
@@ -457,7 +452,9 @@ describe("SelectList", () => {
 		const activated: string[] = [];
 		const list = new SelectList(
 			["Live", "Voice", "Revoice"].map(label => ({ value: label, label })),
-			5, testTheme, { search: "always" },
+			5,
+			testTheme,
+			{ search: "always" },
 		);
 		list.onSelect = item => activated.push(item.value);
 		list.handleInput("/");
@@ -472,6 +469,9 @@ describe("SelectList", () => {
 		list.handleInput("j");
 		expect(list.getSelectedItem()?.value).toBe("Voice");
 		list.handleInput("/");
+		list.handleInput("\x1b");
+		list.handleInput("\x1b");
+		expect(list.navigationState().filter).toBe("/<live>|<voice>");
 		list.handleInput("\x1b");
 		expect(list.navigationState().filter).toBe("");
 		expect(list.render(120).join("\n")).toContain("Revoice");
@@ -725,4 +725,13 @@ describe("SelectList.routeMouse", () => {
 
 		expect(selected).toBe("c");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

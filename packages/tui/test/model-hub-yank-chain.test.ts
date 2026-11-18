@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -10,15 +10,22 @@ import {
 } from "../src/overlays/model-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/tui";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 
 const PRIMARY = "demo/primary";
 const FIRST = "demo/first:low";
 const SECOND = "demo/second";
 const hubs: ModelHubComponent[] = [];
+let previousVimMode = false;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
 beforeAll(async () => {
 	await initTheme(false);
 });
 afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 	for (const hub of hubs.splice(0)) hub.dispose();
 });
 
@@ -174,5 +181,39 @@ test("individual fallback y and uppercase Y keep their existing meanings", () =>
 	hub.handleInput("Y");
 	focus("role:slow");
 	hub.handleInput("p");
+	expect(chains.slow).toEqual([FIRST, SECOND]);
+});
+
+test("plain yank and paste cannot change the register or chains with Vim off", () => {
+	setMenuSearchVimMode(false);
+	for (const key of ["y", "Y", "p"]) {
+		const { hub, chains, focus } = createHub();
+		focus("role:default");
+		hub.handleInput("\x1by");
+		const copied = hub.navigationSnapshot().yankedFallback;
+		focus(key === "p" ? "role:smol" : "fallback:default:0");
+		hub.handleInput(key);
+		expect(hub.navigationSnapshot().yankedFallback).toEqual(copied);
+		expect(chains.smol).toBeUndefined();
+		expect(chains.default).toEqual([FIRST, SECOND]);
+		hub.handleInput("\x1b"); // leave any literal type-to-search draft before selecting the paste target
+		focus("role:smol");
+		hub.handleInput("\x1bp");
+		expect(chains.smol).toEqual([PRIMARY, FIRST, SECOND]);
+	}
+});
+
+test("Alt yank shortcuts copy individual fallbacks and complete chains with Vim off", () => {
+	setMenuSearchVimMode(false);
+	const { hub, chains, focus } = createHub();
+	focus("fallback:default:0");
+	hub.handleInput("\x1by");
+	focus("role:smol");
+	hub.handleInput("\x1bp");
+	expect(chains.smol).toEqual([FIRST]);
+	focus("fallback:default:0");
+	hub.handleInput("\x1bY");
+	focus("role:slow");
+	hub.handleInput("\x1bp");
 	expect(chains.slow).toEqual([FIRST, SECOND]);
 });

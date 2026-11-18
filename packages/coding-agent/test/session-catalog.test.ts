@@ -11,6 +11,7 @@ import {
 	type SessionCatalogMessage,
 } from "../src/cli/sessions-cli";
 import { publishControlEndpoint } from "../src/control/registry";
+import type { ControlSnapshot } from "../src/control/types";
 import { loadSessionMessagesReadOnly } from "../src/session/session-loader";
 import { sessionDirForCwd } from "../src/session/session-paths";
 
@@ -824,5 +825,91 @@ describe("read-only session catalog", () => {
 		expect(missing.code).toBe(1);
 		expect(missing.stdout).toBe("");
 		expect(JSON.parse(missing.stderr)).toMatchObject({ type: "error", code: "session_catalog_error" });
+	});
+});
+
+describe("session catalog liveness (--live)", () => {
+	async function publish(f: Awaited<ReturnType<typeof fixture>>, instanceId: string, file: string, cwd: string) {
+		return publishControlEndpoint({
+			dir: f.controlRegistry.dir,
+			role: "tui",
+			instanceId,
+			imageId: "test",
+			execPath: process.execPath,
+			gitSha: null,
+			profile: null,
+			sessionId: instanceId,
+			sessionFile: file,
+			title: null,
+			cwd,
+			tmuxPane: null,
+			tmuxSession: null,
+			tmuxWindow: null,
+			tty: null,
+			onConnection: socket => socket.destroy(),
+		});
+	}
+
+	function snapshotFor(cwd: string, state: "busy" | "waiting" | "idle"): ControlSnapshot {
+		return {
+			cwd,
+			dialogs: state === "waiting" ? [{ dialogId: "d1" }] : [],
+			busy: {
+				streaming: state === "busy",
+				compacting: false,
+				pendingSteerAndFollowUp: 0,
+				pendingAsyncWork: false,
+				settled: state !== "busy",
+			},
+		} as unknown as ControlSnapshot;
+	}
+
+	test("reports busy, waiting and idle sessions with their branch, null when unreachable or not live, and leaves default output alone", async () => {
+		const f = await fixture();
+		const repo = path.join(f.root, "repo");
+		await fs.mkdir(repo);
+		for (const args of [
+			["init", "-q", "-b", "feat/live"],
+			["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
+		]) {
+			expect(await Bun.spawn(["git", ...args], { cwd: repo }).exited).toBe(0);
+		}
+		const dir = sessionDirForCwd(f.cwd, f.sessionsRoot);
+		const files = {
+			busy: await session(dir, "busy", repo),
+			waiting: await session(dir, "waiting", f.cwd),
+			idle: await session(dir, "idle", f.cwd),
+			dead: await session(dir, "dead", f.cwd),
+			silent: await session(dir, "silent", f.cwd),
+			none: await session(dir, "none", f.cwd),
+		};
+		const cwds: Record<string, string> = { busy: repo, waiting: f.cwd, idle: f.cwd, dead: f.cwd, silent: f.cwd };
+		const publications = await Promise.all(
+			Object.entries(cwds).map(([name, cwd]) =>
+				publish(f, `${name}000000000`, files[name as keyof typeof files], cwd),
+			),
+		);
+		try {
+			const probeControl = async (metadata: { instanceId: string }) => {
+				const name = metadata.instanceId.replace("000000000", "");
+				if (name === "dead") throw new Error("unreachable");
+				if (name === "silent") return new Promise<ControlSnapshot>(() => {});
+				return snapshotFor(cwds[name], name as "busy" | "waiting" | "idle");
+			};
+			const withLive = (
+				await listSessionCatalog({ ...f, sessionDirs: [dir], live: true, liveTimeoutMs: 100, probeControl })
+			).sessions;
+			const byId = Object.fromEntries(withLive.map(row => [row.id, row.live]));
+			expect(byId.busy).toEqual({ state: "busy", isStreaming: true, pendingDialogs: 0, branch: "feat/live" });
+			expect(byId.waiting).toEqual({ state: "waiting", isStreaming: false, pendingDialogs: 1, branch: null });
+			expect(byId.idle).toEqual({ state: "idle", isStreaming: false, pendingDialogs: 0, branch: null });
+			expect(byId.dead).toBeNull();
+			expect(byId.silent).toBeNull();
+			expect(byId.none).toBeNull();
+			const plain = (await listSessionCatalog({ ...f, sessionDirs: [dir] })).sessions;
+			for (const row of plain) expect("live" in row).toBe(false);
+		} finally {
+			await Promise.all(publications.map(publication => publication.close()));
+		}
 	});
 });

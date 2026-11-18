@@ -126,7 +126,7 @@ describe("SelectorController model hub writes", () => {
 		expect(showError).not.toHaveBeenCalled();
 	});
 
-	it("rich session-only selection changes the live model without changing saved defaults or roles", async () => {
+	it("default session picker changes the live model without changing saved defaults or roles", async () => {
 		const agentDir = tempDir.join("agent");
 		const configPath = path.join(agentDir, "config.yml");
 		const original = YAML.stringify({
@@ -142,7 +142,7 @@ describe("SelectorController model hub writes", () => {
 			options = args[5] as modelHubModule.ModelHubOptions;
 			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
 		} as never);
-		controller.showModelSelector({ sessionOnly: true });
+		controller.showModelSelector({ temporaryOnly: true });
 		expect(options?.sessionOnly).toBe(true);
 		expect(options?.pinnedProviders).toEqual([]);
 		expect(callbacks?.onEditFacts).toBeUndefined();

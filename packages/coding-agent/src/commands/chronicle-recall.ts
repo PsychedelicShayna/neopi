@@ -19,16 +19,24 @@ export default class ChronicleRecall extends Command {
 		to: Flags.string({ description: "Latest time (prefixes are inclusive)" }),
 		project: Flags.string({ description: "Project path substring" }),
 		session: Flags.string({ description: "Session id or prefix" }),
-		scope: Flags.string({ description: "all (CLI default), current (PI_SESSION_ID), session, or sessions", options: ["current", "all", "session", "sessions"] }),
+		scope: Flags.string({
+			description: "all (CLI default), current (PI_SESSION_ID), session, or sessions",
+			options: ["current", "all", "session", "sessions"],
+		}),
 		sessions: Flags.string({ description: "Session id or prefix (repeatable)", multiple: true }),
 		keywords: Flags.string({ description: 'Raw transcript prefilter, e.g. (daemon AND tmux) OR "session hub"' }),
-		"keyword-case-sensitive": Flags.boolean({ description: "Match transcript keywords case-sensitively", default: false }),
+		"keyword-case-sensitive": Flags.boolean({
+			description: "Match transcript keywords case-sensitively",
+			default: false,
+		}),
 		hint: Flags.string({ description: "An adjacent event remembered from around the same time" }),
 		resolution: Flags.string({ description: "Stop at year|month|week|day|hour and list candidate periods" }),
 		node: Flags.string({ description: "Search inside this candidate period key" }),
 		budget: Flags.integer({ description: "Maximum atoms to return" }),
 		beam: Flags.integer({ description: "Branches kept per expansion" }),
-		ranker: Flags.string({ description: "model (chronicler-summary role) or lexical (no model calls)" }),
+		ranker: Flags.string({
+			description: "model (chronicler-recall role), judge (judge-role probabilities) or lexical (no model calls)",
+		}),
 		json: Flags.boolean({ char: "j", description: "Emit the full result as JSON", default: false }),
 		"agent-dir": Flags.string({ description: "Agent directory whose view to use" }),
 	};

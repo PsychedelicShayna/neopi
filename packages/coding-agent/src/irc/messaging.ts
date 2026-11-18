@@ -3,7 +3,7 @@ import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { Settings } from "../config/settings";
 import { IrcBus, ircRelayRoot } from "./bus";
-import type { AgentRegistry } from "../registry/agent-registry";
+import type { AgentRegistryApi } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
 
@@ -26,25 +26,29 @@ export function formatIncoming(msg: IrcMessage): string {
 	return `[${msg.id}] ${msg.from}${replyTag}${progressTag}: ${msg.body}`;
 }
 
-/** Session-buffered inbox drain used before parking a bus waiter. */
-export function drainPendingInbox(registry: AgentRegistry, senderId: string, from?: string): IrcMessage | undefined {
+/** Takes every message buffered in `senderId`'s session inbox before automatic injection; with `ifAny`, none unless one satisfies it. */
+export function drainPendingInbox(
+	registry: AgentRegistryApi,
+	senderId: string,
+	ifAny?: (msg: IrcMessage) => boolean,
+): IrcMessage[] {
 	const session = registry.get(senderId)?.session;
 	return typeof session?.drainPendingIrcInboxMessages === "function"
-		? session.drainPendingIrcInboxMessages(senderId, { from, limit: 1 })[0]
-		: undefined;
+		? session.drainPendingIrcInboxMessages(senderId, ifAny ? { ifAny } : undefined)
+		: [];
 }
 
-/** `wait` result carrying a consumed message. */
-export function messageResult(senderId: string, waited: IrcMessage): AgentToolResult<CoordinationDetails> {
+/** `wait` result carrying the consumed messages, oldest first. */
+export function messageResult(senderId: string, waited: IrcMessage[]): AgentToolResult<CoordinationDetails> {
 	return {
-		content: [{ type: "text", text: formatIncoming(waited) }],
+		content: [{ type: "text", text: waited.map(formatIncoming).join("\n\n") }],
 		details: { op: "wait", from: senderId, waited },
 	};
 }
 
 /** Send a direct message or broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
 export async function executeSend(
-	deps: { registry: AgentRegistry; senderId: string; sessionFileHint?: string | null },
+	deps: { registry: AgentRegistryApi; senderId: string; sessionFileHint?: string | null },
 	params: { to: string; message: string; replyTo?: string; progress?: boolean },
 ): Promise<AgentToolResult<CoordinationDetails>> {
 	const { registry, senderId, sessionFileHint } = deps;

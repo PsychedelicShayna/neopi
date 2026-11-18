@@ -10,6 +10,12 @@ import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "./builtin-registry";
 
 export type AvailableSlashCommandSource = "builtin" | "skill" | "extension" | "custom" | "mcp_prompt" | "file";
 
+/**
+ * Where a command can run. `headless` commands work in every host (RPC, ACP, the control socket and
+ * the TUI); `tui` commands need the terminal UI (selectors, dashboards, wizards) and are refused elsewhere.
+ */
+export type SlashCommandAvailability = "headless" | "tui";
+
 export interface InternalAvailableSlashCommand {
 	name: string;
 	aliases?: string[];
@@ -17,6 +23,7 @@ export interface InternalAvailableSlashCommand {
 	input?: { hint: string };
 	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
 	source: AvailableSlashCommandSource;
+	availability: SlashCommandAvailability;
 }
 
 export interface AvailableCommandsSession {
@@ -44,7 +51,6 @@ export async function buildAvailableSlashCommands(
 	};
 
 	for (const command of BUILTIN_SLASH_COMMANDS_INTERNAL) {
-		if (!command.handle) continue;
 		const hint = command.acpInputHint ?? command.inlineHint;
 		appendCommand({
 			name: command.name,
@@ -53,12 +59,15 @@ export async function buildAvailableSlashCommands(
 			input: hint ? { hint } : undefined,
 			subcommands: command.subcommands,
 			source: "builtin",
+			availability: command.handle ? "headless" : "tui",
 		});
 		// ACP dispatch resolves builtin aliases before `session.prompt()` sees the
 		// input, so a custom/file command sharing an alias would be advertised but
-		// never run. Reserve aliases here too; TUI-only builtins are skipped above,
-		// so their aliases stay available.
-		for (const alias of command.aliases ?? []) seenNames.add(alias);
+		// never run. Reserve aliases of headless builtins here too; the aliases of
+		// TUI-only builtins stay available to other commands.
+		if (command.handle) {
+			for (const alias of [...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]) seenNames.add(alias);
+		}
 	}
 
 	if (session.skillsSettings?.enableSkillCommands) {
@@ -68,6 +77,7 @@ export async function buildAvailableSlashCommands(
 				description: skill.description || `Run ${skill.name} skill`,
 				input: { hint: "arguments" },
 				source: "skill",
+				availability: "headless",
 			});
 		}
 	}
@@ -81,6 +91,7 @@ export async function buildAvailableSlashCommands(
 				description: command.description ?? "(extension command)",
 				input: { hint: "arguments" },
 				source: "extension",
+				availability: "headless",
 			});
 		}
 	}
@@ -92,6 +103,7 @@ export async function buildAvailableSlashCommands(
 			description: command.command.description,
 			input: { hint: "arguments" },
 			source,
+			availability: "headless",
 		});
 	}
 
@@ -103,16 +115,20 @@ export async function buildAvailableSlashCommands(
 			description: command.description,
 			input: command.argumentHint ? { hint: command.argumentHint } : undefined,
 			source: "file",
+			availability: "headless",
 		});
 	}
 
 	return commands;
 }
 
+/** ACP clients see only the commands they can drive; TUI-only commands are not advertised. */
 export function toAcpAvailableCommands(commands: readonly InternalAvailableSlashCommand[]): AvailableCommand[] {
-	return commands.map(command => ({
-		name: command.name,
-		description: command.description ?? "",
-		input: command.input,
-	}));
+	return commands
+		.filter(command => command.availability === "headless")
+		.map(command => ({
+			name: command.name,
+			description: command.description ?? "",
+			input: command.input,
+		}));
 }

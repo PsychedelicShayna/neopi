@@ -191,6 +191,7 @@ postmortem.register("late-owner", async () => {
 			abort: async () => {
 				fs.appendFileSync(targetFile, "abort\\n");
 			},
+			cancelAsyncJobsForShutdown: () => {},
 			dispose: async () => {
 				fs.appendFileSync(targetFile, "dispose\\n");
 			},

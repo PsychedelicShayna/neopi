@@ -46,7 +46,7 @@ import { code, compact, md, node, row, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
-import { MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
+import { getMenuSearchVimMode, MenuKeyReader, menuScrollBy } from "../components/menu-navigation";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 
 /** Key of the leading list item that replays the history older than the startup tail. */
@@ -963,10 +963,10 @@ export class CopySelectorComponent implements Component {
 			];
 		}
 		hints.push(
-			{ keys: ["ctrl+u", "ctrl+d"], label: "half page" },
+			...(getMenuSearchVimMode() ? [{ keys: ["ctrl+u", "ctrl+d"] as const, label: "half page" }] : []),
 			{ keys: ["pageUp", "pageDown"], label: "page" },
-			{ keys: ["g", "shift+g"], label: "gg/G bounds" },
-			{ keys: ["ctrl+e", "ctrl+y"], label: "view" },
+			{ keys: ["home", "end"], label: "bounds" },
+			...(getMenuSearchVimMode() ? [{ keys: ["ctrl+e", "ctrl+y"] as const, label: "view" }] : []),
 			{ keys: ["tab", "shift+tab"], label: "context" },
 			{ keys: ["space"], label: action },
 		);

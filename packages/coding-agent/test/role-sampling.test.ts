@@ -43,13 +43,17 @@ async function requestPayload(
 	settingsAware = false,
 ): Promise<Record<string, unknown>> {
 	let body: Record<string, unknown> | undefined;
+	const controller = new AbortController();
 	const options: SimpleStreamOptions = {
 		...cfgSampling.get(settings),
 		apiKey: "test-key",
 		maxTokens: 16,
+		signal: controller.signal,
 		fetch: async () => new Response(new Uint8Array(), { status: 200 }),
 		onPayload: payload => {
 			body = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+			// This test inspects request construction, not empty-stream recovery.
+			controller.abort();
 		},
 	};
 	const stream = settingsAware ? createSettingsAwareStreamFn(settings) : streamSimple;

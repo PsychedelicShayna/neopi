@@ -75,6 +75,7 @@ class ReplayTestSession {
 	sessionManager: SessionManager;
 	sessionId: string;
 	model: Model | undefined = TEST_MODEL;
+	scopedModels = [];
 	thinkingLevel: string | undefined;
 	customCommands: [] = [];
 	skills: [] = [];
@@ -101,6 +102,10 @@ class ReplayTestSession {
 	setClientBridge(_bridge: unknown): void {}
 
 	setMcpServerInstructionsSource(_source: unknown): void {}
+
+	registerSessionChangeCallback(_callback: () => void): () => void {
+		return () => {};
+	}
 
 	subscribe(_listener: (event: AgentSessionEvent) => void): () => void {
 		return () => {};

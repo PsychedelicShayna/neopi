@@ -3,7 +3,7 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register, type ScopeLike } from "../config/registry";
-import { DEFAULT_LIVE_MODEL } from "./protocol";
+import { DEFAULT_LIVE_MODEL, LIVE_MODEL_OPTIONS } from "./protocol";
 import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "./voices";
 
 export const cfgLiveModel = register({
@@ -20,7 +20,8 @@ export const cfgLiveModel = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Model",
-		description: "Codex realtime model slug; applies to the next live call",
+		description: "Model requested for the next live call; the service does not report which model answers",
+		options: LIVE_MODEL_OPTIONS,
 	},
 });
 
@@ -159,7 +160,8 @@ export const cfgLiveSubmitKeyword = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Keyword",
-		description: "Trailing phrase releases a complete request for the voice agent to answer or delegate after silence (empty disables)",
+		description:
+			"Trailing phrase releases a complete request for the voice agent to answer or delegate after silence (empty disables)",
 	},
 });
 
@@ -174,7 +176,8 @@ export const cfgLiveSubmitSilenceMs = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Submit Silence (ms)",
-		description: "Quiet after microphone speech and composer writes before a trailing keyword runs; speech must be finalized",
+		description:
+			"Quiet after microphone speech and composer writes before a trailing keyword runs; speech must be finalized",
 		options: [
 			{ value: "0", label: "Immediately" },
 			{ value: "500", label: "500 ms" },

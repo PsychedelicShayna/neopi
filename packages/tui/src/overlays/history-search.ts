@@ -421,7 +421,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			scroll: this.#nativeScroll,
 		};
 		this.#nativeHints = hintsRow([
-			{ keys: ["j", "k", "up", "down"], label: "navigate" },
+			{ keys: ["up", "down"], label: "navigate" },
 			{ keys: ENTER_KEYS, label: "select" },
 			{ keys: ["/"], label: "search" },
 			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },

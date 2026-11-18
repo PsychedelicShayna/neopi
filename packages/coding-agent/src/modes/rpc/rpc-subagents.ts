@@ -1,8 +1,12 @@
 import * as fs from "node:fs/promises";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
 import { type AgentRef, AgentRegistry } from "../../registry/agent-registry";
+import { registerPersistedSubagents, sessionFileBelongsToRoot } from "../../registry/persisted-agents";
+import { selectSubagentModel } from "../../registry/subagent-controls";
 import { getLiveSubagentFacts } from "../../registry/subagent-facts";
 import type { AgentSession } from "../../session/agent-session";
+import type { AgentSessionHandle } from "../../session/agent-session-handle";
 import type { FileEntry, SessionMessageEntry } from "../../session/session-entries";
 import { parseSessionEntries } from "../../session/session-loader";
 import { type AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
@@ -16,6 +20,9 @@ import {
 } from "../../task";
 import type { EventBus } from "../../utils/event-bus";
 import type {
+	RpcSetSubagentModelResult,
+	RpcSubagentHistoryEntry,
+	RpcSubagentHistoryResult,
 	RpcSubagentEventFrame,
 	RpcSubagentFrame,
 	RpcSubagentMessagesResult,
@@ -308,7 +315,7 @@ export type RpcSubagentBus = Pick<
 /** A running subagent from this session's roster, bound to its live registry ref. */
 export interface RpcOwnedSubagent {
 	ref: AgentRef;
-	session: AgentSession;
+	session: AgentSessionHandle;
 }
 
 /**
@@ -339,4 +346,127 @@ function resolveLiveSnapshot(snapshot: RpcSubagentSnapshot): RpcOwnedSubagent | 
 		return undefined;
 	}
 	return { ref, session: ref.session };
+}
+
+export type RpcSetSubagentModelOutcome = { ok: true; data: RpcSetSubagentModelResult } | { ok: false; message: string };
+
+/**
+ * `set_subagent_model`: the focused `/switch` for one owned running subagent. A `selector`
+ * (`provider/id`, fuzzy id, `@role`, `:level` suffix) resolves like `/switch <selector>` against the
+ * child's own registry and scope; `provider` + `modelId` name one catalog model exactly. The change is
+ * session-only and applies from the child's next request; the parent, siblings and settings are untouched.
+ */
+export async function handleRpcSetSubagentModel(
+	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
+	command: { subagentId: string; selector?: string; provider?: string; modelId?: string },
+): Promise<RpcSetSubagentModelOutcome> {
+	const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
+	if (!owned) return { ok: false, message: `Subagent not running: ${command.subagentId}` };
+	try {
+		return await selectSubagentModel(owned.session, command);
+	} catch (err) {
+		return { ok: false, message: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+/** The session surface the roster needs: its transcript (whose artifacts tree holds its children) and agent id. */
+type RpcRosterSession = Pick<AgentSession, "sessionFile" | "getAgentId">;
+
+/**
+ * Hydrate the root session's persisted children into the process registry, as the Agent Hub does, so
+ * finished, parked and aborted children survive a restart in the roster. Idempotent: already registered
+ * transcripts are left alone and unchanged ones are not reread.
+ */
+async function hydrateRoster(session: RpcRosterSession): Promise<string | undefined> {
+	const root = session.sessionFile;
+	if (!root?.endsWith(".jsonl")) return undefined;
+	await registerPersistedSubagents(AgentRegistry.global(), root, { rootAgentId: session.getAgentId() });
+	return root;
+}
+
+/** Every child of the root session's tree, live or persisted: the Agent Hub roster over RPC. */
+export async function listRpcSubagentHistory(
+	session: RpcRosterSession,
+	bus: Pick<RpcSubagentRegistry, "getSubagents"> | undefined,
+	options: { includeAdvisors?: boolean } = {},
+): Promise<RpcSubagentHistoryResult> {
+	const root = await hydrateRoster(session);
+	if (!root) return { subagents: [] };
+	const toolCallIds = new Map<string, string>();
+	for (const snapshot of bus?.getSubagents() ?? []) {
+		if (snapshot.parentToolCallId && snapshot.sessionFile)
+			toolCallIds.set(snapshot.sessionFile, snapshot.parentToolCallId);
+	}
+	const subagents: RpcSubagentHistoryEntry[] = [];
+	for (const ref of AgentRegistry.global().list()) {
+		if (ref.kind !== "sub" && !(options.includeAdvisors && ref.kind === "advisor")) continue;
+		if (!ref.sessionFile || ref.sessionFile === root || !sessionFileBelongsToRoot(ref.sessionFile, root)) continue;
+		if (ref.status === "running" && ref.kind === "sub" && ref.session === null) continue;
+		const live = ref.session ? getLiveSubagentFacts(ref.session) : undefined;
+		const history = ref.history;
+		const metrics = history?.metrics;
+		const parentToolCallId = toolCallIds.get(ref.sessionFile);
+		subagents.push({
+			id: ref.id,
+			kind: ref.kind === "advisor" ? "advisor" : "sub",
+			...(ref.parentId !== undefined ? { parentId: ref.parentId } : {}),
+			displayName: ref.displayName,
+			...(history?.agent !== undefined ? { agent: history.agent } : {}),
+			...(ref.activity !== undefined ? { description: ref.activity } : {}),
+			status: ref.status,
+			live: ref.session !== null,
+			sessionFile: ref.sessionFile,
+			createdAt: ref.createdAt,
+			lastActivity: ref.lastActivity,
+			...(ref.lifecycle?.responseAt !== undefined ? { responseAt: ref.lifecycle.responseAt } : {}),
+			...(ref.lifecycle?.acceptedAt !== undefined ? { acceptedAt: ref.lifecycle.acceptedAt } : {}),
+			...(ref.lifecycle?.terminalAt !== undefined ? { terminalAt: ref.lifecycle.terminalAt } : {}),
+			...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
+			...((live?.resolvedModel ?? history?.resolvedModel)
+				? { resolvedModel: live?.resolvedModel ?? history?.resolvedModel }
+				: {}),
+			...(live?.resolvedModelIdentity !== undefined ? { resolvedModelIdentity: live.resolvedModelIdentity } : {}),
+			...(live?.resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel: live.resolvedThinkingLevel } : {}),
+			...(live ? { fastModeEnabled: live.fastModeEnabled, fastModeActive: live.fastModeActive } : {}),
+			...(history?.modelRole !== undefined ? { modelRole: history.modelRole } : {}),
+			...(history?.readOnly !== undefined ? { readOnly: history.readOnly } : {}),
+			...(metrics
+				? {
+						metrics: {
+							tokens: metrics.tokens,
+							requests: metrics.requests,
+							tools: metrics.tools,
+							cost: metrics.cost,
+							durationMs: metrics.durationMs,
+							...(metrics.contextTokens !== undefined ? { contextTokens: metrics.contextTokens } : {}),
+							...(metrics.contextWindow !== undefined ? { contextWindow: metrics.contextWindow } : {}),
+						},
+					}
+				: {}),
+			...(history?.directCost !== undefined ? { directCost: history.directCost } : {}),
+			...(history?.outputPath !== undefined ? { outputPath: history.outputPath } : {}),
+			...(history?.patchPath !== undefined ? { patchPath: history.patchPath } : {}),
+			...(history?.branchName !== undefined ? { branchName: history.branchName } : {}),
+		});
+	}
+	subagents.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+	return { rootSessionFile: root, ...(session.getAgentId() ? { rootAgentId: session.getAgentId() } : {}), subagents };
+}
+
+/**
+ * The transcript of a persisted child of the root session's tree, by `subagentId` or `sessionFile`, so
+ * `get_subagent_messages` reads children the live roster no longer holds. Only files inside the root's
+ * artifacts tree resolve; `undefined` otherwise.
+ */
+export async function resolvePersistedSubagentFile(
+	session: RpcRosterSession,
+	selector: RpcSubagentTranscriptSelector,
+): Promise<string | undefined> {
+	const root = await hydrateRoster(session);
+	if (!root) return undefined;
+	let file: string | undefined;
+	if (selector.subagentId) file = AgentRegistry.global().get(selector.subagentId)?.sessionFile ?? undefined;
+	else if (selector.sessionFile) file = path.resolve(selector.sessionFile);
+	if (!file || !file.endsWith(".jsonl") || file === root || !sessionFileBelongsToRoot(file, root)) return undefined;
+	return file;
 }

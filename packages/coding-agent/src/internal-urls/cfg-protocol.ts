@@ -172,7 +172,7 @@ function resolveSegments(segments: readonly string[]): { path: string; leaf?: An
 	if (path === undefined) {
 		const similar = fuzzyFilter(
 			allSettings().map(candidate => candidate.id),
-			segments.join("."),
+			segments.join(" "),
 			candidate => candidate,
 		).slice(0, 8);
 		const hint = similar.length > 0 ? `\nSimilar: ${similar.join(", ")}` : "";
@@ -432,7 +432,9 @@ export class CfgProtocolHandler implements ProtocolHandler {
 			// A session sharing the persistent instance drops its own override on save, so it does not shadow.
 			const persistent = host.persistentSettings;
 			const above = ABOVE_GLOBAL.filter(
-				layer => !(layer === "env" && leaf.envFallback) && !(layer === "runtime" && settings === persistent),
+				layer =>
+					!(layer === "env" && leaf.envFallback) &&
+					!((layer === "runtime" || layer === "session") && settings === persistent),
 			);
 			const layer = saveShadowingLayer(leaf, persistent, value, above);
 			if (layer) {

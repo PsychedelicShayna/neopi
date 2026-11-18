@@ -71,7 +71,7 @@ describe("session selector picker", () => {
 					opts.deleted?.push(s.id);
 					return true;
 				},
-				loadAllSessions: async () => [today, todayToo, others, old],
+				loadAllSessions: async () => ({ sessions: [today, todayToo, others, old] }),
 				currentSessionPath: todayToo.path,
 				standalone: opts.standalone,
 			},
@@ -113,21 +113,22 @@ describe("session selector picker", () => {
 		expect(props(selector.describe(withPicker)).size).toBe("screen");
 	});
 
-	it("filters session picker results only after confirming search", () => {
-		const selector = make();
+	it("previews session search live and confirms without resuming a result", () => {
+		const resumed: string[] = [];
+		const selector = make({ resumed });
 		selector.handleInput("/");
 		type(selector, "gam");
 		const drafting = props(selector.describe(withPicker));
 		expect(drafting.query).toBe("gam");
-		expect(drafting.order).toContain(today.path);
-		expect(drafting.order).toContain(todayToo.path);
-		expect(drafting.hits).toBeUndefined();
+		expect(drafting.order).toEqual([old.path]);
+		expect(drafting.hits).toEqual({ [old.path]: [[0, 3]] });
 		selector.handleInput("\r");
 		const after = props(selector.describe(withPicker));
 		expect(after.query).toBe("gam");
 		expect(after.order).toEqual([old.path]);
 		expect(after.hits).toEqual({ [old.path]: [[0, 3]] });
 		expect(after.selected).toBe(old.path);
+		expect(resumed).toEqual([]);
 	});
 
 	it("runs pointer events down the keys' paths", async () => {
@@ -230,6 +231,13 @@ describe("session selector rename", () => {
 		expect(opened).toBeDefined();
 		expect(opened!.field.getValue()).toBe(beta.title ?? "");
 	});
+	it("opens the rename dialog on a Kitty F2 press instead of forwarding it to search", () => {
+		const { selector, beta } = makeRename({ calls: [] });
+		selector.handleInput("\x1b[Q");
+		const opened = renameDialogOf(selector);
+		expect(opened?.field.getValue()).toBe(beta.title);
+	});
+
 	it("commits on Enter via onRename and updates the row in place", async () => {
 		const renamed = { calls: [] as RenameCall[] };
 		const { selector, beta } = makeRename(renamed);
@@ -309,7 +317,8 @@ describe("history search picker", () => {
 			() => {},
 		);
 		type(search, "deploy");
-		expect(props((search.describe(withPicker).c as NativeNode[])[0]!).items).toHaveLength(2);
+		expect(props((search.describe(withPicker).c as NativeNode[])[0]!).items).toHaveLength(1);
+		expect(inserted).toEqual([]);
 		search.handleInput("\r");
 		const root = search.describe(withPicker);
 		expect(root.k).toBe("col");

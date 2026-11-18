@@ -3,7 +3,7 @@ import type { CustomMessage } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
-import { MAIN_AGENT_ID, type AgentRegistry, type RegistryEvent } from "../registry/agent-registry";
+import { MAIN_AGENT_ID, type AgentRegistryApi, type RegistryEvent } from "../registry/agent-registry";
 import {
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
@@ -51,7 +51,7 @@ export type SubagentImportanceClassifier = (
 ) => Promise<ClassifierResult>;
 export interface LiveIngestDeps {
 	session: AgentSession;
-	registry: AgentRegistry;
+	registry: AgentRegistryApi;
 	subagentEventBus: EventBus | undefined;
 	settings: LiveIngestSettingsSource;
 	sink: Pick<

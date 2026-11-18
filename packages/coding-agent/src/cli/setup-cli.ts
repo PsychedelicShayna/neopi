@@ -18,8 +18,10 @@ import { downloadSttModel, isSttModelCached } from "../stt/downloader";
 import { isSttModelKey, STT_MODEL_OPTIONS } from "../stt/models";
 import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODELS } from "../tts";
 import { selectSetupModel } from "@oh-my-pi/pi-tui/apps/setup-model-picker";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 
 import { cfgPythonInterpreter } from "../eval/settings";
+import { cfgTuiVimMode } from "../modes/settings";
 
 export type SetupComponent = "python" | "speech";
 
@@ -244,6 +246,7 @@ function buildSpeechComponents(settings: Settings, registry: ModelRegistry): Spe
  */
 async function handleSpeechSetup(flags: { json?: boolean; check?: boolean }): Promise<void> {
 	const settings = await Settings.init({ cwd: getProjectDir() });
+	setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	const registry = new ModelRegistry(authStorage, undefined, { settings });
 	const components = buildSpeechComponents(settings, registry);

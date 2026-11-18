@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { assertBaselineEmbedding, resolvePortableNativeBuild } from "./build-portable";
+import { assertBaselineNativeFiles, resolvePortableNativeBuild } from "./build-portable";
 
 describe("portable native build selection", () => {
 	test("prefers bazelisk, then bazel, otherwise cargo", () => {
@@ -8,16 +8,12 @@ describe("portable native build selection", () => {
 		expect(resolvePortableNativeBuild(() => null)).toBe("cargo");
 	});
 
-	test("accepts exactly one embedded baseline native", () => {
-		expect(() =>
-			assertBaselineEmbedding('{ variant: "baseline", filename: "pi_natives.linux-x64-baseline.node" }'),
-		).not.toThrow();
-		expect(() => assertBaselineEmbedding('{ variant: "modern" }')).toThrow("exactly one embedded baseline native");
-		expect(() => assertBaselineEmbedding('{ variant: "baseline" }, { variant: "modern" }')).toThrow(
-			"exactly one embedded baseline native",
-		);
-		expect(() => assertBaselineEmbedding("export const embeddedAddonFiles = []")).toThrow(
-			"exactly one embedded baseline native",
-		);
+	test("rejects missing or modern addons from a baseline-only portable build", () => {
+		const baseline = "pi_natives.linux-x64-baseline.node";
+		const modern = "pi_natives.linux-x64-modern.node";
+		expect(() => assertBaselineNativeFiles([baseline])).not.toThrow();
+		expect(() => assertBaselineNativeFiles([modern])).toThrow("exactly one baseline native");
+		expect(() => assertBaselineNativeFiles([baseline, modern])).toThrow("exactly one baseline native");
+		expect(() => assertBaselineNativeFiles([])).toThrow("exactly one baseline native");
 	});
 });

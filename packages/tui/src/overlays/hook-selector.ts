@@ -917,10 +917,9 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#helpText !== undefined
 				? node("text", { spans: [span(plainText(this.#helpText), "dim")], wrap: "word" }, undefined, "hints")
 				: hintsRow([
-						{ keys: ["j", "k"], label: "navigate" },
 						actionHint(["tui.select.up", "tui.select.down"], "navigate"),
 						...(this.#slider || this.#onLeftCallback || this.#onRightCallback
-							? [{ keys: ["h", "l"] as const, label: this.#slider ? "tier" : "question" }]
+							? [{ keys: ["left", "right"] as const, label: this.#slider ? "tier" : "question" }]
 							: []),
 						...(this.#selectionMarker === "checkbox"
 							? [{ keys: ["space"] as const, label: "toggle option" }]

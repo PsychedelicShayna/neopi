@@ -436,7 +436,7 @@ function isWithin(child: string, parent: string): boolean {
 }
 
 /** Real path of `target`: its nearest existing ancestor resolved through symlinks, plus the missing remainder. */
-async function realPathOf(target: string): Promise<string> {
+export async function realPathOf(target: string): Promise<string> {
 	const absolute = path.resolve(target);
 	let existing = absolute;
 	const missing: string[] = [];

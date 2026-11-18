@@ -91,7 +91,7 @@ describe("InteractiveMode todo HUD and side panel", () => {
 		term = new VirtualTerminal(120, 30);
 		composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
 		composer.start();
-		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 		composer.setRuntimeChildren([mode.chatContainer, mode.todoContainer]);
 	});
 

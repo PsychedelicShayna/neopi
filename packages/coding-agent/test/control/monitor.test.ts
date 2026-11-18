@@ -23,7 +23,8 @@ import {
 	type MonitorConnection,
 	type MonitorGrant,
 } from "../../src/control/monitor-service";
-import { AgentRegistry, type AgentRef } from "../../src/registry/agent-registry";
+import { AgentRegistry, type AgentRegistryApi, type AgentRef } from "../../src/registry/agent-registry";
+import { localSession } from "../helpers/local-session";
 import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
 import { transcriptEntryTooLargeError } from "../../src/session/transcript-slice";
@@ -48,7 +49,7 @@ async function until(condition: () => boolean, what: string): Promise<void> {
 
 interface HostFixture {
 	host: ControlHost;
-	registry: AgentRegistry;
+	registry: AgentRegistryApi;
 	root: AgentRef;
 	sub: AgentRef;
 	advisor: AgentRef;
@@ -376,7 +377,7 @@ describe("monitor capability socket boundary", () => {
 		expect(transcript.success).toBe(true);
 		expect((transcript.data as { text: string }).text).toBe("only-the-granted-sub\n");
 		const full = await fixture.connect();
-		expect(full.snapshot?.session?.sessionId).toBe(fixture.root.session?.sessionId);
+		expect(full.snapshot?.session?.sessionId).toBe(localSession(fixture.root.session).sessionId);
 		expect((await full.request({ type: "state" })).success).toBe(true);
 		const probe = await fixture.connect(undefined, true);
 		expect((await probe.request({ type: "state" })).success).toBe(true);

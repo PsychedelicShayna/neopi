@@ -3,7 +3,7 @@ import * as os from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
@@ -165,7 +165,7 @@ export interface LiveSessionControllerOptions {
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
-	/** Realtime model slug, defaulting to gpt-live-1-codex. */
+	/** Realtime model slug requested for the call, defaulting to {@link DEFAULT_LIVE_MODEL}. */
 	model?: string;
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };
@@ -189,10 +189,6 @@ export interface LiveSessionControllerOptions {
 	): LiveRecorderLike;
 	/** Caller-owned WebRTC audio; no host microphone or speaker is opened. */
 	sdpOffer?: string;
-}
-
-function errorFrom(cause: unknown): Error {
-	return cause instanceof Error ? cause : new Error(String(cause));
 }
 
 function joinDelegationContent(
@@ -462,7 +458,6 @@ export class LiveSessionController {
 		return this.#heldContext.length;
 	}
 
-
 	/**
 	 * SDP answer for the caller's peer in an `sdpOffer` session. It exists as soon as the offer is
 	 * signaled, before the control socket connects, so apply it only after `start()` resolves.
@@ -569,7 +564,7 @@ export class LiveSessionController {
 			this.#recorder = recorder;
 			this.#refreshAudioPhase();
 		} catch (cause) {
-			const error = errorFrom(cause);
+			const error = toError(cause);
 			this.#reportFailure(error);
 			await this.stop();
 			throw error;
@@ -588,7 +583,7 @@ export class LiveSessionController {
 		this.#refreshAudioPhase();
 		const transport = this.#transport;
 		if (transport) {
-			void transport.setMuted(this.#muted).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void transport.setMuted(this.#muted).catch(cause => this.#reportFailure(toError(cause)));
 		}
 	}
 
@@ -655,7 +650,7 @@ export class LiveSessionController {
 			try {
 				recorder.stop();
 			} catch (cause) {
-				cleanupError = errorFrom(cause);
+				cleanupError = toError(cause);
 			}
 		}
 		this.#recordAudioDropSummary();
@@ -668,12 +663,12 @@ export class LiveSessionController {
 			try {
 				await transport.send(buildSessionClose());
 			} catch (cause) {
-				cleanupError ??= errorFrom(cause);
+				cleanupError ??= toError(cause);
 			}
 			try {
 				await transport.close();
 			} catch (cause) {
-				cleanupError ??= errorFrom(cause);
+				cleanupError ??= toError(cause);
 			}
 		}
 
@@ -686,7 +681,7 @@ export class LiveSessionController {
 		try {
 			handler();
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -734,7 +729,7 @@ export class LiveSessionController {
 			case "delegation.created":
 				// This response hands the operator's words off rather than answering them.
 				this.#answeredTurns = undefined;
-				void this.#handleDelegation(event).catch(cause => this.#reportFailure(errorFrom(cause)));
+				void this.#handleDelegation(event).catch(cause => this.#reportFailure(toError(cause)));
 				break;
 			case "error":
 				this.#reportFailure(new Error(event.message));
@@ -1096,7 +1091,8 @@ export class LiveSessionController {
 		const released = this.#releasedReplyTurns;
 		this.#releasedReplyTurns = undefined;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = released ??
+		this.#answeredTurns =
+			released ??
 			this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(turn => turn.turn);
 	}
 
@@ -1298,14 +1294,17 @@ export class LiveSessionController {
 		const block = stripLiveKeyword(routingText, this.#blockDelegateKeyword);
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		const lastTurn = this.#tailTurn();
-		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs())
+			return false;
 		const captured = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn));
 		const preserved = captured?.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
 		const primary = voiceOnly.length
-			? captured?.text.trim() ??
+			? (captured?.text.trim() ??
 				this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
-					.map(turn => turn.text).join("\n\n").trim()
-			: captured?.text.trim() ?? (block.matched ? block.text : message);
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim())
+			: (captured?.text.trim() ?? (block.matched ? block.text : message));
 		if (!this.retireComposerSpeech(preserved)) return false;
 		this.#holdReleased = true;
 		// A pre-submit response/route belongs to the old draft, not this released request.
@@ -1326,7 +1325,12 @@ export class LiveSessionController {
 			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText);
 		} else if (block.matched) {
 			const turn: UserLedgerTurn = {
-				turn: ++this.#userLedgerTurn, text: primary, routingText, final: true, blocked: true, composerReceipt: captured?.receipt,
+				turn: ++this.#userLedgerTurn,
+				text: primary,
+				routingText,
+				final: true,
+				blocked: true,
+				composerReceipt: captured?.receipt,
 			};
 			this.#putTurn(turn);
 			this.#deliverBlockedTurn(turn);
@@ -1336,7 +1340,12 @@ export class LiveSessionController {
 		return true;
 	}
 
-	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+	#offerPendingComposer(
+		text: string,
+		forced: boolean,
+		composerReceipt?: LiveComposerReceipt,
+		routingText?: string,
+	): void {
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
@@ -1348,7 +1357,7 @@ export class LiveSessionController {
 					item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
 				},
 				forced,
-			).catch(cause => this.#reportFailure(errorFrom(cause)));
+			).catch(cause => this.#reportFailure(toError(cause)));
 			return;
 		}
 		this.#releasedReplyTurns = [turn.turn];
@@ -1364,14 +1373,16 @@ export class LiveSessionController {
 			"utf8",
 		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			void this.#queueSend(buildSessionContextAppend(
-				renderPromptAsset(
-					"live/operator-submitted-message.md",
-					operatorSubmittedMessageTemplate,
-					{ message: part },
-					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			void this.#queueSend(
+				buildSessionContextAppend(
+					renderPromptAsset(
+						"live/operator-submitted-message.md",
+						operatorSubmittedMessageTemplate,
+						{ message: part },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
 				),
-			));
+			);
 		}
 	}
 
@@ -1498,7 +1509,9 @@ export class LiveSessionController {
 	#keywordText(expanded = false): string | undefined {
 		return this.#composerText
 			? this.#composerText(expanded)
-			: this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			: this.#turnsWhere(turn => turn.claim === undefined)
+					.map(turn => turn.text)
+					.join("\n\n");
 	}
 
 	#scheduleTranscriptKeyword(): void {
@@ -1509,25 +1522,31 @@ export class LiveSessionController {
 		const text = this.#keywordText();
 		if (text !== this.#lastKeywordSubmission) this.#lastKeywordSubmission = undefined;
 		if (!text || text === this.#lastKeywordSubmission || this.#tailTurn()?.final === false) return;
-		if (!stripLiveKeyword(text, keywords.force, true).matched &&
-			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		if (
+			!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched
+		)
+			return;
 		const remaining = this.#lastComposerWrite + Math.max(keywords.silenceMs, this.#quietFloorMs()) - Date.now();
-		this.#transcriptKeywordTimer = setTimeout(() => {
-			this.#transcriptKeywordTimer = undefined;
-			const current = this.#transcriptKeywords?.();
-			if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
-			const expanded = this.#keywordText(true);
-			if (!expanded) return;
-			const force = stripLiveKeyword(text, current.force, true);
-			const submit = stripLiveKeyword(text, current.submit, true);
-			const keyword = force.matched ? current.force : current.submit;
-			if (!(force.matched || submit.matched)) return;
-			const message = stripLiveKeyword(expanded, keyword, true).text;
-			if (!message.trim()) return;
-			this.#lastKeywordSubmission = text;
-			const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
-			if (!accepted) this.#lastKeywordSubmission = undefined;
-		}, Math.max(0, remaining));
+		this.#transcriptKeywordTimer = setTimeout(
+			() => {
+				this.#transcriptKeywordTimer = undefined;
+				const current = this.#transcriptKeywords?.();
+				if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
+				const expanded = this.#keywordText(true);
+				if (!expanded) return;
+				const force = stripLiveKeyword(text, current.force, true);
+				const submit = stripLiveKeyword(text, current.submit, true);
+				const keyword = force.matched ? current.force : current.submit;
+				if (!(force.matched || submit.matched)) return;
+				const message = stripLiveKeyword(expanded, keyword, true).text;
+				if (!message.trim()) return;
+				this.#lastKeywordSubmission = text;
+				const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
+				if (!accepted) this.#lastKeywordSubmission = undefined;
+			},
+			Math.max(0, remaining),
+		);
 	}
 
 	#voiceTurnBlocked(): boolean {
@@ -1540,8 +1559,13 @@ export class LiveSessionController {
 
 	/** Holding the next input must not close native playback in the middle of an admitted reply. */
 	#voiceOutputBlocked(): boolean {
-		return this.#voiceTurnBlocked() && !this.#responding &&
-			this.#releasedReplyTurns === undefined && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
+		return (
+			this.#voiceTurnBlocked() &&
+			!this.#responding &&
+			this.#releasedReplyTurns === undefined &&
+			!this.#contextSinceResponse &&
+			this.#outputLevel <= OUTPUT_ACTIVE_LEVEL
+		);
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */
@@ -1560,7 +1584,7 @@ export class LiveSessionController {
 		for (const turn of this.#turnsWhere(turn => turn.blocked === true)) this.#deliverBlockedTurn(turn);
 		const pending = this.#pendingDelegation;
 		if (pending) {
-			void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(toError(cause)));
 		}
 		const delegation = this.#deferredVoiceDelegation;
 		this.#deferredVoiceDelegation = undefined;
@@ -1570,7 +1594,7 @@ export class LiveSessionController {
 				this.#rejectDirectDelegation(delegation.event.item.id, turn.text);
 			}
 		} else if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
-			void this.#handleDelegation(delegation.event).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#handleDelegation(delegation.event).catch(cause => this.#reportFailure(toError(cause)));
 		} else if (this.#suppressedResponse) {
 			const turns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined);
 			this.#suppressedResponse = false;
@@ -1729,7 +1753,7 @@ export class LiveSessionController {
 			if (this.#transport.pushAudio(samples)) this.#framesSent += 1;
 			else this.#framesDroppedAtNativeQueue += 1;
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -1846,7 +1870,7 @@ export class LiveSessionController {
 				pending.turns = pending.turns.filter(turn => turn !== current.turn);
 				if (pending.turns.length > 0) {
 					void this.#dispatchPendingDelegation(pending.generation).catch(cause =>
-						this.#reportFailure(errorFrom(cause)),
+						this.#reportFailure(toError(cause)),
 					);
 				} else {
 					this.#pendingDelivery?.cancel();
@@ -1896,7 +1920,7 @@ export class LiveSessionController {
 
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
-			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(toError(cause)));
 		}
 		if (
 			final &&
@@ -1963,7 +1987,7 @@ export class LiveSessionController {
 					if (turns.length) this.#acceptSpeech(blocked.text, false, turns, "turns");
 				}
 			})
-			.catch(cause => this.#reportFailure(errorFrom(cause)));
+			.catch(cause => this.#reportFailure(toError(cause)));
 	}
 
 	/** Drop a partial turn the recognizer withdrew, clearing its composer preview. A pending handoff
@@ -1982,7 +2006,7 @@ export class LiveSessionController {
 			this.#refreshAudioPhase();
 			return;
 		}
-		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
+		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(toError(cause)));
 	}
 
 	#recordAudioDropSummary(): void {
@@ -2092,7 +2116,7 @@ export class LiveSessionController {
 		});
 		this.#sendChain = sent.then(
 			() => {},
-			cause => this.#reportFailure(errorFrom(cause)),
+			cause => this.#reportFailure(toError(cause)),
 		);
 		return sent.catch(() => false);
 	}
@@ -2116,7 +2140,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onPhase(phase);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2138,7 +2162,7 @@ export class LiveSessionController {
 			this.#emittedInputLevel = input;
 			this.#emittedOutputLevel = output;
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2147,7 +2171,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onTranscript(transcript);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2155,7 +2179,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onUserSpeech?.(speech);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 

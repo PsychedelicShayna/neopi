@@ -162,6 +162,7 @@ describe("model:// session lookup", () => {
 				securityEnabled: false,
 				settingsApproval: false,
 				outReplies: false,
+				subagent: false,
 			})
 			.join("\n");
 		expect(docs).toContain("model://");

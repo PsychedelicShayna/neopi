@@ -48,6 +48,7 @@ interface FakeAcpBuiltinSession {
 	fetchUsageReports?: () => Promise<unknown>;
 	getAsyncJobSnapshot: (opts?: { recentLimit?: number }) => { running: unknown[]; recent: unknown[] } | null;
 	getAsyncJobTree: () => AsyncJobTree | null;
+	requestJobCaptions: () => void;
 	cancelAsyncJob: (id: string) => boolean;
 	formatSessionAsText: () => string;
 	dumpLlmRequestToTmpDir: () => Promise<string | undefined>;
@@ -69,7 +70,7 @@ interface FakeAcpBuiltinSession {
 	setSlashCommands(commands: unknown[]): void;
 	refreshSkillsAndCommands(): Promise<void>;
 	getTodoPhases(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
-	setTodoPhases(phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>): void;
+	commitTodoPhases(phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>): void;
 	refreshBaseSystemPrompt(): Promise<void>;
 	getHindsightSessionState(): undefined;
 	applyMemoryBackend(): Promise<void>;
@@ -166,8 +167,9 @@ function createRuntime() {
 		getTodoPhases() {
 			return this._todoPhases;
 		},
-		setTodoPhases(phases) {
+		commitTodoPhases(phases) {
 			this._todoPhases = phases;
+			fakeSessionManager.appendCustomEntry("user_todo_edit", { phases });
 		},
 		async refreshBaseSystemPrompt() {},
 		// Headless `/move` and `/wt` rebind memory for the destination project.
@@ -178,6 +180,7 @@ function createRuntime() {
 		commitMixtureWorkspaceMove() {},
 		getAsyncJobSnapshot: () => null,
 		getAsyncJobTree: () => null,
+		requestJobCaptions: () => {},
 		cancelAsyncJob: () => false,
 		formatSessionAsText: () => "",
 		dumpLlmRequestToTmpDir: async () => undefined,
@@ -790,7 +793,7 @@ describe("ACP builtin slash commands", () => {
 	});
 
 	it("model: applies known id and emits both title + config change notifications", async () => {
-		const { output, runtime, session } = createRuntime();
+		const { runtime, session } = createRuntime();
 		const available = [{ provider: "anthropic", id: "claude-3-5-sonnet", contextWindow: 200_000 }];
 		session.getAvailableModels = () => available;
 		let titleNotified = 0;
@@ -801,13 +804,12 @@ describe("ACP builtin slash commands", () => {
 		runtime.notifyConfigChanged = () => {
 			configNotified++;
 		};
-		const setModelSpy = spyOn(session, "setModel").mockResolvedValue(undefined);
+		const setModelSpy = spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
 
 		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
 
 		expect(result).toEqual({ consumed: true });
-		expect(setModelSpy).toHaveBeenCalledWith(available[0]);
-		expect(output[0]).toContain("Model set to anthropic/claude-3-5-sonnet");
+		expect(setModelSpy).toHaveBeenCalledWith(available[0], undefined);
 		expect(titleNotified).toBe(1);
 		expect(configNotified).toBe(1);
 	});

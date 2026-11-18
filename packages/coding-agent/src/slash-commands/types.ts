@@ -3,6 +3,7 @@ import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
+import type { ConversationPosition } from "../modes/utils/conversation-position";
 import type { MCPManager } from "../mcp/manager";
 import type { MCPServerConfig } from "../mcp/types";
 import type { AgentSession } from "../session/agent-session";
@@ -20,6 +21,8 @@ export interface SubcommandDef {
 export interface BuiltinSlashCommand {
 	name: string;
 	aliases?: string[];
+	/** Accepted aliases revealed by a literal prefix once no visible command name or alias shares it. */
+	hiddenAliases?: string[];
 	description: string;
 	/** Autocomplete type-indicator icon. Defaults to "action" (generic terminal glyph). */
 	icon?: SlashCommandIconName;
@@ -49,6 +52,15 @@ export interface BuiltinSlashCommand {
 	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	/** TUI inline hint replacing the declarative `subcommands` hint. */
 	getTuiInlineHint?: (argumentText: string) => string | null;
+	/**
+	 * Argument completion for hosts without a terminal (RPC `get_command_completions`), for commands whose
+	 * names come from settings. It takes precedence over the TUI completer; without it, headless hosts get
+	 * the static completer and, failing that, the declarative `subcommands`.
+	 */
+	getHeadlessCompletions?: (
+		argumentPrefix: string,
+		runtime: { settings: Settings },
+	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 }
 
 /** Parsed slash-command text after stripping the leading "/". */
@@ -143,6 +155,7 @@ export interface SlashCommandRuntime {
 	 */
 	mcpManager?: MCPManager | undefined;
 	notifyTitleChanged?: () => Promise<void> | void;
+	notifySessionPinChanged?: (sessionId: string, pinned: boolean) => Promise<void> | void;
 	/**
 	 * Push the host's view of the session config (model, thinking level, mode).
 	 *
@@ -169,6 +182,9 @@ export interface TuiSlashCommandRuntime {
 	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
 	/** The editor snapshot was cleared before asynchronous input hooks ran. */
 	draftDetached?: boolean;
+	/** Submitted with the follow-up key from this conversation position: queue behind the active run
+	 *  rather than interrupt it. */
+	followUp?: ConversationPosition;
 }
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */

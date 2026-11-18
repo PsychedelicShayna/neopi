@@ -182,12 +182,42 @@ omp auth-gateway stdio
 omp auth-gateway token   [--regenerate] [--json]
 omp auth-gateway status  [--json]
 omp auth-gateway check   [--strict] [--json]
+omp auth-gateway link    [--host=<address>] [--name=<label>] [--bind=host:port] [--json]
 ```
 
 - `serve` requires `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `config.yml`) — the gateway is itself a broker client. It fetches a live snapshot, wraps it in `RemoteAuthCredentialStore`, and constructs `AuthStorage` with the configured account pool and account policies. Unlike normal client discovery, gateway startup does not use the encrypted snapshot cache. Default bind is `127.0.0.1:4000`. The gateway token is stored at `<config-dir>/auth-gateway.token` (`0600`); `--no-auth` disables the bearer check for ordinary routes. Use that flag only on trusted loopback listeners; it does not enforce a loopback bind. NeoProxy account inventory and credential selection still require the gateway bearer, not a scoped client token.
 - Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer. An authenticated request that also carries the gateway token, or its own client token, in its URL or in a forwarded, logged, or identity header is rejected with `400` before any credential lookup. Each `auth-gateway request` log line carries the broker `credentialId` the request started on, and `client` for a [client token](#client-tokens).
 - `token` manages the token file; `--regenerate` requires a running gateway to restart before accepting the replacement. `status` checks the local token file and an authenticated broker snapshot; it does not probe the gateway listener.
 - `check` constructs its own broker-backed store and probes the credentials the gateway would use, without calling a running gateway. Without `--strict` it uses provider usage probes. `--strict` additionally tries suitable bundled chat models and can consume quota; providers with no suitable candidate (including pi-native forwarding, Bedrock, Vertex, and Cursor transports) cannot be completion-probed.
+- `link` prints one connection link for the running gateway, so a client such as NeoProxy pairs from a single paste (see [Connection links](#connection-links)).
+
+### Connection links
+
+```
+neopi-gateway://<host>:<port>[/<base-path>]?token=<bearer>&name=<label>[&tls=1]
+```
+
+- `host`, `port`: where the client reaches the gateway; IPv6 hosts are bracketed. The port is always written; parsers default a missing one to `4000`.
+- `/<base-path>`: optional prefix for a gateway behind a reverse proxy.
+- `token`: the gateway bearer, URL-encoded. The link is a secret: anyone holding it can use the gateway.
+- `name`: label for the gateway; `link` writes this machine's hostname unless `--name` is given.
+- `tls=1`: call the gateway over HTTPS (a TLS-terminating reverse proxy). Without it the base URL is `http://<host>:<port>`.
+- Clients ignore unknown query parameters. `parseAuthGatewayLink` / `formatAuthGatewayLink` in `packages/ai/src/auth-gateway/link.ts` are the reference implementation.
+
+`link` finds the gateway through `<config-dir>/auth-gateway.runtime.json`, which `serve` writes after it starts listening (`pid`, bound `hostname` and `port`, `auth` `token` or `none`, `startedAt`, `version`; `0600`) and removes on a clean shutdown. `--bind` describes another listener instead; with neither, `link` looks at the default `127.0.0.1:4000`. It confirms the listener through `GET /healthz` before printing anything:
+
+- Running: prints the link on stdout. The host is `--host`, else the bind host, else for a gateway bound to `0.0.0.0`/`::` the machine's private LAN IPv4 address (container, hypervisor and VPN interfaces are passed over), else the hostname. A loopback-bound gateway still gets a link, with a note that only programs on the same machine can use it and the `serve --bind=0.0.0.0:<port>` command that opens it to the LAN.
+- Not running: exits `1` without a link and prints the `serve` command that starts it (plus the all-interfaces variant, and a reminder when no broker is configured).
+- `--no-auth` gateway or missing token file: exits `1`; clients pair with the bearer, so restart `serve` with a token.
+
+`--json` prints `{running, link, url, host, port, name, warning?}`, or `{running: false, url, serveCommand, sharedServeCommand?, brokerConfigured}`, or `{running: true, url, error}`.
+
+Example (token shortened):
+
+```
+$ npi auth-gateway link
+neopi-gateway://192.168.1.31:4000?token=Zq3…x8&name=blackswan
+```
 
 ### Client tokens
 
@@ -227,7 +257,7 @@ omp auth-gateway check   [--strict] [--json]
 - The first output line is `{"ready": true, "version": …}`. `method` defaults to `POST` when the request has a `body`, else `GET`; every route in [Endpoints](#endpoints-1) except `/healthz` is served.
 - Requests run concurrently and answer in completion order; `id` (string or number) matches them up. A line that is not a request answers `400` with its `id` when it had one.
 - A JSON response body is embedded as JSON; a text body (the SSE of a `stream: true` request) as one string once the stream ends; anything else (audio, video) as base64 with `"encoding": "base64"`.
-- `model` takes any `--model` selector: an exact `provider/id`, a bare fuzzy name, a role (`@smol`), or a comma list whose first entry that resolves wins. An attempt that fails with a status above `400` (other than `499`) moves on along that model's `retry.fallbackChains`, the role's chain when the entry named a role; the response's `model` names the model that answered.
+- `model` accepts the same selectors as `--model`: exact `provider/id`, fuzzy names, roles (`@smol`), and comma lists. The first comma entry that resolves wins; a role `modelRoles` does not set resolves to its built-in default, as `--model` does. An attempt with a status above `400`, except `499`, moves to the next fallback, and fallbacks come only from configured `retry.fallbackChains`: a role uses its own entry (even when `modelRoles` does not set the role), else a chat role inherits the `default` chain; a role's built-in priority list never adds fallbacks, so a retry cannot move to a model you did not select. An empty role chain (`[]`) disables those fallbacks. More specific model-keyed and wildcard chains keep their precedence, and fallback models can have their own chains. The response's `model` names the model that answered.
 - The process serves until stdin ends, answers what is in flight, and exits.
 
 ### Endpoints
@@ -416,6 +446,7 @@ That ranking picks the account for a **new** session. A running session remember
 | --------------------------------- | ---------------------------------------------------------------------- | ----------------------------------- |
 | `<config-dir>/auth-broker.token`  | `omp auth-broker token` or `serve`                                     | `0600`; new parent directory `0700` |
 | `<config-dir>/auth-gateway.token` | `omp auth-gateway token` or `serve` (serve skips it under `--no-auth`) | `0600`; new parent directory `0700` |
+| `<config-dir>/auth-gateway.runtime.json` | `omp auth-gateway serve` while it listens (no secret; removed on clean shutdown) | `0600` |
 
 `<config-dir>` is `getConfigRootDir()`: `~/.omp/` by default, respecting `PI_CONFIG_DIR` and the active profile (`~/.omp/profiles/<name>/` for the default profile layout). Creating a token does not tighten permissions on an already-existing parent directory.
 

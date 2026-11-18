@@ -7,7 +7,7 @@
  */
 import type { IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger } from "@oh-my-pi/pi-utils";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import { IrcBus, ircHistorySessionId } from "./bus";
 
@@ -20,7 +20,11 @@ export const DEFAULT_IRC_OPERATOR_HANDLE = "Operator";
  * broadcast address `all` (the operator then stays unaddressable rather than
  * shadowing anyone).
  */
-export function registerIrcOperator(registry: AgentRegistry, handle: string, rootId: string): (() => void) | undefined {
+export function registerIrcOperator(
+	registry: AgentRegistryApi,
+	handle: string,
+	rootId: string,
+): (() => void) | undefined {
 	if (handle === "all" || registry.get(handle)) {
 		logger.warn("IRC operator handle is taken; the operator is not addressable", { handle });
 		return undefined;
@@ -45,6 +49,7 @@ export function registerIrcOperator(registry: AgentRegistry, handle: string, roo
  */
 export function operatorIrcLogSource(session: () => AgentSession): IrcLogSource {
 	const bus = IrcBus.global();
+	if (!(bus instanceof IrcBus)) throw new Error("Operator IRC history is only available on the main thread");
 	const registry = AgentRegistry.global();
 	return {
 		entries: () => {

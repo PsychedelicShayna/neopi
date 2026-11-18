@@ -17,17 +17,25 @@ import {
 	$env,
 	getProviderInFlightRoot,
 	isEnoent,
+	isPidAlive,
 	logger,
 	type CredentialRequestScope,
 	untilAborted,
 	wrapFetchForCredentialScope,
 } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
-import { createAuthRetryKeyState, isApiKeyResolver, resolvedApiKeyBearer, resolveNextAuthRetryKey } from "./auth-retry";
+import {
+	createAuthRetryKeyState,
+	isApiKeyResolver,
+	preferAuthRetryError,
+	resolvedApiKeyBearer,
+	resolveNextAuthRetryKey,
+} from "./auth-retry";
 import type { OAuthRequestIdentity } from "./auth/types";
 import { getEnvApiKey } from "./env-api-key";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
+import { assertProviderEnabled } from "./registry/oauth";
 import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import { reachesOfficialEndpoint } from "./providers/anthropic-state";
@@ -173,18 +181,6 @@ function providerInFlightLockDir(provider: string): string {
 	return `${providerInFlightDir(provider)}.lock`;
 }
 
-// `process.kill(pid, 0)` may throw for permission/sandbox reasons even when a
-// process exists. Treat non-ESRCH failures as alive; timestamp expiry still
-// reaps leases whose heartbeat stopped.
-function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code !== "ESRCH";
-	}
-}
-
 async function readProviderInFlightInfo(infoPath: string): Promise<ProviderInFlightLeaseInfo | null> {
 	try {
 		const content = await fs.readFile(infoPath, "utf-8");
@@ -216,7 +212,7 @@ async function writeProviderInFlightInfo(dir: string, token: string): Promise<vo
 async function isProviderInFlightDirStale(dir: string, staleMs: number): Promise<boolean> {
 	const info = await readProviderInFlightInfo(path.join(dir, "info.json"));
 	if (info) {
-		if (!isProcessAlive(info.pid)) return true;
+		if (!isPidAlive(info.pid)) return true;
 		return Date.now() - info.timestamp > staleMs;
 	}
 
@@ -239,7 +235,7 @@ async function isProviderInFlightDirStale(dir: string, staleMs: number): Promise
 async function readProviderInFlightStaleLock(lockDir: string): Promise<ProviderInFlightStaleLock | null> {
 	const infoPath = path.join(lockDir, "info.json");
 	const info = await readProviderInFlightInfo(infoPath);
-	if (info) return isProcessAlive(info.pid) ? null : { token: info.token };
+	if (info) return isPidAlive(info.pid) ? null : { token: info.token };
 
 	try {
 		const stat = await fs.stat(lockDir);
@@ -276,7 +272,14 @@ async function releaseProviderInFlightStaleLock(lockDir: string, stale: Provider
 		const stat = await fs.stat(lockDir);
 		if (stat.mtimeMs !== stale.mtimeMs || Date.now() - stat.mtimeMs <= PROVIDER_INFLIGHT_LOCK_STALE_MS) return;
 		await fs.rm(lockDir, { recursive: true, force: true });
-	} catch {}
+	} catch (error) {
+		// A concurrent reclaimer removing the stale dir first is expected, not a failure.
+		if (isEnoent(error)) return;
+		logger.warn("ai: failed to remove stale provider in-flight lock", {
+			lockDir,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 // Best-effort token-checked release. A token mismatch means another process has
@@ -286,7 +289,12 @@ async function releaseProviderInFlightLock(lockDir: string, token: string): Prom
 		const info = await readProviderInFlightInfo(path.join(lockDir, "info.json"));
 		if (!info || info.token !== token) return;
 		await fs.rm(lockDir, { recursive: true, force: true });
-	} catch {}
+	} catch (error) {
+		logger.warn("ai: failed to release provider in-flight lock", {
+			lockDir,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 async function releaseProviderInFlightLockDirIfSame(
@@ -298,7 +306,15 @@ async function releaseProviderInFlightLockDirIfSame(
 		const current = await readProviderInFlightLockIdentity(lockDir);
 		if (!isSameProviderInFlightLock(current, identity)) return;
 		await fs.rm(lockDir, { recursive: true, force: true });
-	} catch {}
+	} catch (error) {
+		// Normal contention: another process removed the lock dir between our write
+		// and this cleanup, which the caller already handles by retrying.
+		if (isEnoent(error)) return;
+		logger.warn("ai: failed to release provider in-flight lock dir", {
+			lockDir,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 // On Windows, mkdir on a lock directory another process is concurrently deleting
@@ -471,7 +487,12 @@ async function signalProviderInFlightWaitersInDir(dir: string): Promise<void> {
 	try {
 		await fs.mkdir(dir, { recursive: true });
 		await Bun.write(path.join(dir, ".wakeup"), String(Date.now()));
-	} catch {}
+	} catch (error) {
+		logger.warn("ai: failed to signal provider in-flight waiters", {
+			dir,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 async function signalProviderInFlightWaiters(provider: string): Promise<void> {
@@ -650,7 +671,9 @@ export const __providerInFlightForTesting = {
 	},
 };
 
-function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests">>(
+function withProviderInFlightLimit<
+	TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests" | "beforeDispatch">,
+>(
 	model: Model<Api>,
 	options: TOptions | undefined,
 	dispatch: (limited: boolean) => AssistantMessageEventStream,
@@ -660,7 +683,10 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 	// provider exits are covered by one wrap. Official first-party providers are
 	// exempt (see `healLeakedThinking`); healing is otherwise idempotent.
 	const limit = resolveProviderInFlightLimit(model.provider, options);
-	if (limit === undefined) return healLeakedThinking(model, dispatch(false));
+	if (limit === undefined) {
+		options?.beforeDispatch?.();
+		return healLeakedThinking(model, dispatch(false));
+	}
 
 	const outer = new AssistantMessageEventStream();
 	void (async () => {
@@ -695,6 +721,7 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 			if (options?.signal?.aborted) {
 				throw options.signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 			}
+			options?.beforeDispatch?.();
 			const inner = healLeakedThinking(model, dispatch(true));
 			let terminalEvent: AssistantMessageEvent | undefined;
 			for await (const event of inner) {
@@ -863,6 +890,8 @@ function streamDispatch<TApi extends Api>(
 	options: OptionsForApi<TApi> | undefined,
 	limited: boolean,
 ): AssistantMessageEventStream {
+	// A provider turned off in its auth rules is never called, even with a key passed in directly.
+	assertProviderEnabled(model.provider);
 	const requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, (options || {}) as StreamOptions),
@@ -943,6 +972,7 @@ function streamDispatch<TApi extends Api>(
 			return streamAnthropic(providerModel as Model<"anthropic-messages">, context, {
 				...anthropicOptions,
 				isOAuth: anthropicOptions.isOAuth ?? providerModel.isOAuth,
+				waitForTerminalDrain: limited,
 			});
 		}
 
@@ -1367,6 +1397,7 @@ function streamSimpleRequest<TApi extends Api>(
 			const retryState = createAuthRetryKeyState(lastKey);
 			let failure = await runAttempt(lastKey, credentialId, oauthIdentity, credentialScope);
 			if (!failure) return;
+			let reportedFailure = failure;
 			while (true) {
 				// Caller aborted between attempts: don't mint a fresh token or fire
 				// another doomed request — emit the captured failure instead.
@@ -1388,9 +1419,13 @@ function streamSimpleRequest<TApi extends Api>(
 				if (nextKey === undefined) break;
 				const next = await runAttempt(nextKey, nextCredentialId, nextOAuthIdentity, nextScope);
 				if (!next) return;
+				reportedFailure =
+					preferAuthRetryError(reportedFailure.error, next.error) === reportedFailure.error
+						? reportedFailure
+						: next;
 				failure = next;
 			}
-			emitFailure(failure);
+			emitFailure(reportedFailure);
 		})();
 		return outer;
 	}
@@ -1485,15 +1520,16 @@ function streamSimpleRequest<TApi extends Api>(
 	// GitLab Duo Workflow - IDE workflow protocol + WebSocket action bridge
 	if (model.api === "gitlab-duo-agent") {
 		// Does not route through withProviderInFlightLimit, so heal explicitly.
-		return withThinkingLoopGuard(model, requestOptions, opts =>
-			healLeakedThinking(
+		return withThinkingLoopGuard(model, requestOptions, opts => {
+			opts?.beforeDispatch?.();
+			return healLeakedThinking(
 				model,
 				streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 					...opts,
 					apiKey,
 				}),
-			),
-		);
+			);
+		});
 	}
 
 	// Kimi Code - route to dedicated handler that wraps OpenAI or Anthropic API
@@ -1841,9 +1877,11 @@ function mapOptionsForApi<TApi extends Api>(
 		codexSseMaxAttempts: options?.codexSseMaxAttempts,
 		providerSessionState: options?.providerSessionState,
 		parentSessionId: options?.parentSessionId,
+		statefulResponses: options?.statefulResponses,
 		minimizeEffort: options?.minimizeEffort,
 		liveSteering: options?.liveSteering,
 		maxInFlightRequests: options?.maxInFlightRequests,
+		beforeDispatch: options?.beforeDispatch,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
 		onSseEvent: options?.onSseEvent,
@@ -2050,7 +2088,7 @@ function mapOptionsForApi<TApi extends Api>(
 					forceReasoningOff: options?.forceReasoningOff,
 					textVerbosity: options?.textVerbosity,
 					promptCache: options?.promptCache,
-					statefulResponses: options?.statefulResponses,
+					preferWebsockets: options?.preferWebsockets,
 				});
 			}
 			return castApi<"openai-completions">({
@@ -2092,8 +2130,8 @@ function mapOptionsForApi<TApi extends Api>(
 				forceReasoningOff: options?.forceReasoningOff,
 				textVerbosity: options?.textVerbosity,
 				promptCache: options?.promptCache,
-				statefulResponses: options?.statefulResponses,
 				storeResponses: options?.storeResponses,
+				preferWebsockets: options?.preferWebsockets,
 			});
 
 		case "azure-openai-responses":
@@ -2104,7 +2142,6 @@ function mapOptionsForApi<TApi extends Api>(
 				serviceTier: options?.serviceTier,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				promptCache: options?.promptCache,
-				statefulResponses: options?.statefulResponses,
 				disableReasoning: options?.disableReasoning || options?.forceReasoningOff,
 				forceReasoningOff: options?.forceReasoningOff,
 			});
@@ -2117,6 +2154,7 @@ function mapOptionsForApi<TApi extends Api>(
 				serviceTier: options?.serviceTier,
 				preferWebsockets: options?.preferWebsockets,
 				codexCompaction: options?.codexCompaction,
+				codexAccessPrograms: options?.codexAccessPrograms,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
 				textVerbosity: options?.textVerbosity,
 				disableReasoning: options?.disableReasoning,
@@ -2360,6 +2398,7 @@ function mapOptionsForApi<TApi extends Api>(
 				maxTokens: options?.maxTokens,
 				reasoning,
 				disableReasoning: options?.disableReasoning || options?.forceReasoningOff,
+				disableServerSideFallback: options?.disableServerSideFallback,
 				hideThinkingSummary: options?.hideThinkingSummary,
 				textVerbosity: options?.textVerbosity,
 				serviceTier: options?.serviceTier,

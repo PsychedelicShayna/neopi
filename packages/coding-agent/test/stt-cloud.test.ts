@@ -157,10 +157,18 @@ describe("STTController cloud transcription", () => {
 				text: "please review this submit.",
 				usage: ZERO_USAGE,
 			});
-			controller = new STTController(() => ({ stop: vi.fn() }), { settings, registry: registryFor(model) });
+			let onAudio: ((error: Error | null, samples: Float32Array) => void) | undefined;
+			controller = new STTController(
+				callback => {
+					onAudio = callback;
+					return { stop: vi.fn() };
+				},
+				{ settings, registry: registryFor(model) },
+			);
 			const editor = makeEditor();
 
 			await controller.start(editor, { ...makeOptions(), manualSubmit });
+			onAudio?.(null, new Float32Array([0.25]));
 			await controller.stop();
 
 			expect(editor.commitVolatileText).toHaveBeenCalledWith("please review this submit.");

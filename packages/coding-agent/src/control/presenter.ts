@@ -3,7 +3,7 @@
  * this unset and screen/editor commands answer `no_tui`.
  */
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import type { AgentSession } from "../session/agent-session";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import type { DialogSummary, Revisions } from "./types";
 
 export interface ControlPresenter {
@@ -25,6 +25,8 @@ export interface ControlPresenter {
 	/** Rewind the session to an entry through the pane's own rewind flow. */
 	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
+	/** The terminal's own speech-to-text (composer microphone, push-to-talk, chord) is recording or starting. */
+	dictationBusy(): boolean;
 	keybindings?: {
 		get(actionId: string): string[];
 		all(): Record<string, string[]>;
@@ -39,7 +41,7 @@ export interface ControlPresenter {
 	/** Whether control.approvals may settle the open approval, and settle it. */
 	settleApproval?(id: string, approved: boolean, reason?: string): boolean;
 	/** The subagent the pane is focused on, or undefined while it shows the root session. */
-	viewTarget?(): { agentId: string; session: AgentSession } | undefined;
+	viewTarget?(): { agentId: string; session: AgentViewSession } | undefined;
 }
 
 export type RewindOutcome = { status: "rewound" | "unchanged" | "cancelled" | "invalid"; error?: string };

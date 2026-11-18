@@ -44,6 +44,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				isCompacting: false,
 				isBashRunning: false,
 				isEvalRunning: false,
+				captureSubmissionGuard: () => () => true,
 				extensionRunner: undefined,
 				prompt,
 			},
@@ -53,6 +54,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 			updatePendingMessagesDisplay: vi.fn(),
 			showError: vi.fn(),
 			withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
+			sessionManager: { getSessionId: () => "session", getLeafId: () => null },
 		} as unknown as InteractiveModeContext;
 
 		await new InputController(ctx).handleFollowUp();
@@ -91,6 +93,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				isCompacting: false,
 				isBashRunning: false,
 				isEvalRunning: false,
+				captureSubmissionGuard: () => () => true,
 				extensionRunner: undefined,
 				prompt,
 			},
@@ -100,6 +103,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 			updatePendingMessagesDisplay: vi.fn(),
 			showError: vi.fn(),
 			withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
+			sessionManager: { getSessionId: () => "session", getLeafId: () => null },
 		} as unknown as InteractiveModeContext;
 
 		await new InputController(ctx).handleFollowUp();

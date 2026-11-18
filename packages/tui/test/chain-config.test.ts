@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { TUI } from "../src/index";
 import {
@@ -411,11 +412,11 @@ describe("ChainConfigOverlayComponent", () => {
 		overlay.onNavigationVisit = page => {
 			visits.push(page);
 		};
-		press("/", "hjkl", ESC, ENTER);
+		press("/", "hjkl", ENTER, ENTER);
 		expect(overlay.navigationSnapshot().context.screen).toBe("chain");
 		press("h");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl", selectedValue: "chain:0" });
-		press(ENTER, "/", "first", ESC, "l");
+		press(ENTER, "/", "first", ENTER, "l");
 		expect(overlay.navigationSnapshot().context.screen).toBe("step");
 		const snapshot = overlay.navigationSnapshot();
 		const restored = makeOverlay({ chains: [] });
@@ -560,7 +561,7 @@ describe("ChainConfigOverlayComponent", () => {
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
 		press("g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
-		press("G", "g", "/", ESC, "g");
+		press("G", "g", "/", ESC, ESC, "g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "close" });
 		press("g");
 		expect(overlay.navigationSnapshot().content).toMatchObject({ selectedValue: "chain:0" });
@@ -610,8 +611,15 @@ describe("ChainConfigOverlayComponent", () => {
 		press("\x05");
 		expect(selectedModel()).toBe(first);
 		press("/", "hjklgG /");
-		expect(overlay.navigationSnapshot().content).toMatchObject({ query: "hjklgG /", filterFocused: true });
+		expect(overlay.navigationSnapshot().content).toMatchObject({
+			value: "hjklgG /",
+			query: "",
+			filterFocused: true,
+		});
+		press(ESC); // Insert -> Normal keeps the literal draft focused.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ value: "hjklgG /", filterFocused: true });
 		press(ESC);
+		expect(overlay.navigationSnapshot().content).toMatchObject({ value: "", query: "", filterFocused: false });
 		expect(overlay.navigationSnapshot().context.screen).toBe("model");
 		press("h");
 		expect(overlay.navigationSnapshot().context.screen).toBe("step");
@@ -669,7 +677,7 @@ describe("ChainConfigOverlayComponent", () => {
 		press("/", "hl");
 		expect(overlay.navigationSnapshot()).toMatchObject({
 			context: { screen: "thinking" },
-			content: { filter: "hl", filterFocused: true },
+			content: { filter: "", filterDraft: "hl", filterFocused: true },
 		});
 	});
 
@@ -742,11 +750,16 @@ describe("ChainConfigOverlayComponent", () => {
 				},
 			},
 		);
-		press(ENTER, DOWN, DOWN, ENTER, "/", "Reset model", ESC, " ", "l");
+		press(ENTER, DOWN, DOWN, ENTER, "/", "Reset model", ENTER, " ", "l");
 		expect(overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.model).toBe("test/model:high");
 		press(ENTER);
 		expect(overlay.navigationSnapshot().doc.chains[0]?.steps[0]?.model).toBeUndefined();
-		press(ESC, ESC, "G", " ");
+		press(ESC, ESC, ESC, "G"); // Clear Reset model, then leave step and chain.
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "list" },
+			content: { selectedValue: "close" },
+		});
+		press(" ");
 		expect(closed).toBe(0);
 		press(ENTER);
 		expect(closed).toBe(1);
@@ -825,4 +838,13 @@ describe("ChainConfigOverlayComponent", () => {
 			}
 		});
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

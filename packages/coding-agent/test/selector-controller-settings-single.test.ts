@@ -16,6 +16,7 @@ import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-relo
 import * as settingsSelector from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import * as sessionPins from "@oh-my-pi/pi-coding-agent/session/session-pins";
 import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
+import { cfgSessionModelPicker } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
@@ -109,6 +110,8 @@ function overlayUi(): {
 
 /** A context whose model picker reads a supplied current catalog. */
 function pickerContext(ui: OverlayUi, models: Model[] = [], current?: Model, settings?: Settings) {
+	settings ??= Settings.isolated();
+	cfgSessionModelPicker.override(settings, "small");
 	return createInteractiveModeContext({
 		settings,
 		session: {
@@ -167,7 +170,10 @@ describe("single-instance menus", () => {
 			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			controller.showStatusLineConfigure();
 			expect(shown).toHaveLength(1);
-			press(shown[0]!, "\r", DOWN, "l", "l"); // band → box; model past the context bar into the right side
+			press(shown[0]!, "\r", DOWN);
+			const beforeMove = await waitForDraft(statusLineDraftPath(getAgentDir()), saved => saved.selected === "model");
+			// Disabled catalog widgets retain positions too; cross the actual left-side boundary.
+			press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"));
 			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
 			press(shown[0]!, "\x13"); // Ctrl+S
 			await Bun.sleep(0);
@@ -223,7 +229,9 @@ describe("single-instance menus", () => {
 			const warning = spyOn(logger, "warn").mockImplementation(() => {});
 			try {
 				controller.showStatusLineConfigure();
-				press(shown[0]!, "\r", DOWN, "l", "s");
+				press(shown[0]!, "\r", DOWN);
+				const beforeMove = await waitForDraft(statusLineDraftPath(dir), saved => saved.selected === "model");
+				press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"), "s");
 				await failed.promise;
 				expect(handles.map(handle => handle.get(isolated))).toEqual(before);
 				expect(handles.map(handle => isolated.isConfigured(handle))).toEqual(handles.map(() => configured));
@@ -627,7 +635,8 @@ describe("single-instance menus", () => {
 			firstMessage: "Inspect the old session",
 			allMessagesText: "Inspect the old session",
 		};
-		spyOn(SessionManager, "listForPicker").mockResolvedValue([session]);
+		const listed = [session];
+		spyOn(SessionManager, "listForPicker").mockResolvedValue({ sessions: listed, complete: Promise.resolve(listed) });
 		spyOn(sessionPins, "loadPinnedSessionIds").mockResolvedValue(new Set());
 		const { ui, shown, overlayStack } = overlayUi();
 		const ctx = createInteractiveModeContext({

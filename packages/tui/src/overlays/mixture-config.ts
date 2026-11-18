@@ -443,14 +443,14 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#shortcut = shortcut;
 		const navigation =
 			screen === "list"
-				? "h/l panes · Tab pane"
+				? "←/→ panes · Tab pane"
 				: screen === "discard"
-					? "h/Esc keep editing"
+					? "←/Esc keep editing"
 					: context.page === "thinking"
-						? "h/l effort"
+						? "←/→ effort"
 						: context.page !== "field" && this.#openers.size > 0
-							? "h parent / l open"
-							: "h parent";
+							? "← parent / → open"
+							: "← parent";
 		this.#footer = active instanceof SelectList ? `${navigation} · / search · ${footer}` : footer;
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && (saved?.previewFocused ?? false);
@@ -1740,7 +1740,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			}
 		};
 		browser.onCancel = () => this.#showMember(index, position, "model");
-		this.#setScreen("model", browser, "/ search · Enter choose · h/Esc back");
+		this.#setScreen("model", browser, "/ search · Enter choose · ←/Esc back");
 	}
 
 	#assignMemberModel(index: number, position: number, selector: string, effort: string): void {

@@ -4,12 +4,8 @@ import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
-import {
-	formatModelString,
-	getModelMatchPreferences,
-	resolveCliModel,
-	type ResolveCliModelResult,
-} from "../config/model-resolver";
+import { formatModelString } from "../config/model-resolver";
+import { resolveSessionModelSelector } from "../config/session-model-selector";
 import type { Settings } from "../config/settings";
 import { cfgModelsDefaultScope } from "../config/model-settings";
 import {
@@ -60,28 +56,6 @@ export function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.statusLine.invalidate();
 	ctx.ui.requestRender();
 }
-
-/**
- * Resolve a `/model` / `/switch` selector the way `npi bench` and `--model`
- * do: exact `provider/id`, fuzzy ids (`opus`), role aliases (`@smol`, `smol`),
- * and `:level` thinking suffixes. Unqualified selectors prefer the session's
- * `--models` scope, else the authenticated set, before the full catalog.
- */
-export function resolveSessionModelSelector(
-	selector: string,
-	session: AgentSession,
-	settings: Settings,
-): ResolveCliModelResult {
-	const scoped = session.scopedModels.map(entry => entry.model);
-	return resolveCliModel({
-		cliModel: selector,
-		modelRegistry: session.modelRegistry,
-		availableModels: scoped.length > 0 ? scoped : undefined,
-		settings,
-		preferences: getModelMatchPreferences(settings),
-	});
-}
-
 
 const SLOW_UNSUPPORTED =
 	"The current model has no slow mode: /slow uses the flex tier on OpenAI/Google models and low priority on Anthropic subscriptions.";
@@ -244,14 +218,20 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		],
 		handleTui: async (command, runtime) => {
 			const [scope, verb, extra] = command.args.trim().split(/\s+/);
-			if (scope && scope !== "session" && scope !== "project" && scope !== "global" ||
-				verb && verb !== "clear" || extra || verb === "clear" && scope === "global") {
+			if (
+				(scope && scope !== "session" && scope !== "project" && scope !== "global") ||
+				(verb && verb !== "clear") ||
+				extra ||
+				(verb === "clear" && scope === "global")
+			) {
 				runtime.ctx.showWarning("Usage: /settings [session|project|global] [clear]");
 			} else if (verb === "clear" && (scope === "session" || scope === "project")) {
 				await runtime.ctx.settings.clearScope(scope);
 				runtime.ctx.showStatus(`Cleared ${scope} settings overrides.`);
 			} else {
-				runtime.ctx.showSettingsSelector(scope || undefined);
+				runtime.ctx.showSettingsSelector(
+					scope === "session" || scope === "project" || scope === "global" ? scope : undefined,
+				);
 			}
 			clearSubmittedText(runtime);
 		},
@@ -412,62 +392,25 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "model",
-		aliases: ["models"],
+		name: "roles",
+		hiddenAliases: ["models"],
 		icon: "model",
-		description: "Switch model for this session",
-		acpDescription: "Show current model selection",
+		description: "Configure model roles",
 		allowArgs: true,
 		inlineHint: "[session|project|global]",
-		getTuiAutocompleteDescription: runtime => {
-			const model = runtime.ctx.viewSession.model;
-			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
-		},
-		handle: async (command, runtime) => {
-			if (command.args) {
-				const selector = command.args.trim();
-				const resolved = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
-				const match = resolved.model;
-				if (!match) {
-					return usage(
-						`Unknown model: ${selector}. Use ACP \`session/setModel\` for picker-driven selection or list available models with /model.`,
-						runtime,
-					);
-				}
-				try {
-					await runtime.session.setModel(match);
-					if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
-					await runtime.output(`Model set to ${match.provider}/${match.id}.`);
-					await runtime.notifyTitleChanged?.();
-					await runtime.notifyConfigChanged?.();
-					return commandConsumed();
-				} catch (err) {
-					return usage(`Failed to set model: ${errorMessage(err)}`, runtime);
-				}
-			}
-
-			const model = runtime.session.model;
-			await runtime.output(
-				model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected.",
-			);
-			return commandConsumed();
-		},
 		handleTui: (command, runtime) => {
-			if (command.name === "model") {
-				runtime.ctx.showModelSelector({ sessionOnly: true });
-			} else {
-				const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
-				if (scope !== "session" && scope !== "project" && scope !== "global") {
-					runtime.ctx.showError("Usage: /models [session|project|global]");
-					return;
-				}
-				runtime.ctx.showModelSelector({ scope });
+			const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
+			if (scope !== "session" && scope !== "project" && scope !== "global") {
+				runtime.ctx.showError("Usage: /roles [session|project|global]");
+				return;
 			}
+			runtime.ctx.showModelSelector({ scope });
 			clearSubmittedText(runtime);
 		},
 	},
 	{
-		name: "switch",
+		name: "model",
+		hiddenAliases: ["switch"],
 		icon: "swap",
 		get description() {
 			return `Switch model for this session (same as ${formatKeyHint("alt+p")}); accepts fuzzy ids, provider/id, @role, :level`;
@@ -540,7 +483,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[on|ultra|off|status]",
 		subcommands: [
 			{ name: "on", description: "Enable fast mode (priority tier)" },
-			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex models that offer it)" },
+			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex and relay models that offer it)" },
 			{ name: "off", description: "Disable fast mode" },
 			{ name: "status", description: "Show fast mode status" },
 		],
@@ -782,7 +725,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpDescription: "Arm, restart, or cancel prewalk",
 		acpInputHint: "[into] | restart [from] [into] | off",
 		subcommands: [
-			{ name: "restart", description: "Return to the planning crew and re-arm the execution handoff", usage: "[from] [into]" },
+			{
+				name: "restart",
+				description: "Return to the planning crew and re-arm the execution handoff",
+				usage: "[from] [into]",
+			},
 			{ name: "off", description: "Cancel this session's handoff without changing the active model" },
 		],
 		handle: async (command, runtime) => {
@@ -806,17 +753,31 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const into = restart ? args[1] : args[0];
 			const from = restart ? args[0] : undefined;
 			const explicitTarget = into ? resolveSessionModelSelector(into, runtime.session, runtime.settings) : undefined;
-			if (explicitTarget && (!explicitTarget.model || explicitTarget.error)) return usage(explicitTarget.error ?? `Model "${into}" not found`, runtime);
+			if (explicitTarget && (!explicitTarget.model || explicitTarget.error))
+				return usage(explicitTarget.error ?? `Model "${into}" not found`, runtime);
 			const availableModels = runtime.session.scopedModels.map(entry => entry.model);
 			const execution = explicitTarget?.model
 				? { target: explicitTarget.model, thinkingLevel: explicitTarget.thinkingLevel }
-				: resolvePrewalkCrewSelection(runtime.settings, runtime.session.modelRegistry, "execution", undefined, availableModels);
+				: resolvePrewalkCrewSelection(
+						runtime.settings,
+						runtime.session.modelRegistry,
+						"execution",
+						undefined,
+						availableModels,
+					);
 			if (!execution) return usage("Prewalk execution crew unavailable.", runtime);
 			const target = { model: execution.target, thinkingLevel: execution.thinkingLevel };
-			if (!runtime.session.modelRegistry.hasConfiguredAuth(target.model)) return usage(`No API key for ${target.model.provider}/${target.model.id}`, runtime);
+			if (!runtime.session.modelRegistry.hasConfiguredAuth(target.model))
+				return usage(`No API key for ${target.model.provider}/${target.model.id}`, runtime);
 			const configuredPlanner = getPrewalkPatterns(runtime.settings, "planner").length > 0;
 			const planner = configuredPlanner
-				? resolvePrewalkCrewSelection(runtime.settings, runtime.session.modelRegistry, "planner", undefined, availableModels)
+				? resolvePrewalkCrewSelection(
+						runtime.settings,
+						runtime.session.modelRegistry,
+						"planner",
+						undefined,
+						availableModels,
+					)
 				: undefined;
 			if (!from && configuredPlanner && !planner) return usage("Prewalk planning crew unavailable.", runtime);
 			if (restart || (planner && !runtime.session.getPrewalkState())) {

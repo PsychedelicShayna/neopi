@@ -6,6 +6,29 @@ Atoms stay the only source of truth. The view is a cache: deleting it loses noth
 
 Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
 
+## Session controls: `/chron`
+
+`/chron` (or `/chron status`) shows Luna's effective state for the current session.
+
+| Command | Effect |
+| --- | --- |
+| `/chron pause` | Stop ingest while retaining her context window. `/chron resume` catches up on the paused exchange. |
+| `/chron resume` | Resume paused ingest. Does not lift a blind span; use `/chron unblind` for that. |
+| `/chron blind` | Stop ingest and exclude the exchange until `/chron unblind`, including future catch-up and backfill. |
+| `/chron unblind` | Continue after the blind marker. The blinded exchange remains excluded. |
+| `/chron off` | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
+| `/chron on` | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded. |
+| `/chron index` | Dispatch a background refresh of this session's captured atoms and their shared ancestors. |
+| `/chron recall "question"` | Dispatch the existing recall tool across sessions and deliver its result automatically. |
+
+These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
+
+Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
+
+Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
+
+`/chron recall` accepts an unquoted question or one outer single/double quote pair, and searches across sessions for historical recollections. This operator command works even when the primary agent has not been granted `chronicle_recall`; the tool's own current-session default is unchanged.
+
 ## The hierarchy
 
 ```
@@ -47,6 +70,8 @@ The view root must be dedicated to the view: index refuses a root that is, conta
 
 The report also lists canonical problems without touching atoms: malformed batches (other batches of the session are still indexed), duplicate atom ids, entries committed twice, beats citing uncommitted or missing transcript entries, missing transcripts, and `related`/`supersedes` ids that match no atom. `VIEW.json` is marked incomplete before the first write and complete only when every node settled. Exit status is 1 when a summary failed.
 
+Writers to the same shared view are mutually exclusive across CLI and session commands; a competing index job reports contention instead of overwriting or pruning another writer's output. Dry runs remain read-only.
+
 ## Recall
 
 ```
@@ -54,7 +79,7 @@ npi chronicle recall "<query>" [--scope all|current|session|sessions] [--session
                                [--keywords EXPR] [--keyword-case-sensitive]
                                [--from D] [--to D] [--project P] [--hint EVENT]
                                [--resolution year|month|week|day|hour|atom] [--node KEY]
-                               [--budget N] [--beam N] [--ranker model|lexical] [--json]
+                               [--budget N] [--beam N] [--ranker model|lexical|judge] [--json]
 ```
 
 The `chronicle_recall` tool takes the same inputs (without `beam`/`ranker`); see `docs/tools/chronicle_recall.md`. **The tool defaults to the current session.** `scope: "all"` widens it; explicit `session`, `sessions`, or `keywords` also select beyond the current session. `scope: "current"` with `keywords` keeps matching local. The standalone CLI retains its all-session default; `--scope current` uses the calling harness's `PI_SESSION_ID` and errors when no current session is available.
@@ -69,16 +94,21 @@ Recall descends coarse to fine. At each node it ranks the in-scope children's de
 - **Uncertainty**: when no atom is confident, or when an atom in another period ties the chosen one, the result says so, lists the best candidate periods, and names the follow-up that would discriminate best (a time range or an adjacent event).
 - **Evidence**: returned atoms, hint anchors, and listed neighbors are re-read from their committed batch — body, transcript path, and cited entry ids come from the store. An atom changed since indexing is marked stale and shown as it is now; a deleted one is reported instead of returned.
 
-The `model` ranker (default) uses the `chronicler-summary` role; `lexical` scores word overlap and needs no model, but it cannot match a memory described in different words.
+The `model` ranker (default) uses the `chronicler-recall` role; `lexical` scores word overlap and needs no model, but it cannot match a memory described in different words. The `judge` ranker uses the configured `judge` role through the existing state/questions protocol, including Jev's native probabilities; prose summarization remains on `chronicler-summary`.
+
+Judge routing applies `chronicler.recall.branchFloor` to child levels before keeping at most `recall.beam` branches. When a branch has no eligible children, the bounded alternate frontier supplies the next branch; `frontierFactor`, `maxHops`, `concurrency` and result limits are unchanged. Floors default to `0.2` at each level as an initial, uncalibrated routing policy, independently of the confident-atom threshold.
+
+Before a judge-ranked atom can consume a result slot or become a hint anchor, its complete current canonical body is verified separately from the hop-clipped routing description. Full bodies are never silently clipped for verification. Requests share the existing concurrency limit and are split under the shared judgment token ceiling. Missing, malformed, failed or oversized judgments fall back explicitly to lexical scoring of the supplied full text; the trace reports that fallback. An aborted request stays aborted.
 
 ## Settings
 
-All Chronicler controls are editable in **Settings > Memory > Chronicler**, with descriptions and custom numeric input. The original values remain the defaults. Capture settings control pass size, deferred flush size, context budget, prompt capture criteria and word targets, retries, watchdogs, and shutdown drain. Recall settings control ranking thresholds, search budgets, evidence length, and neighbors. Index settings control summary and routing budgets. Backfill settings control parallel sessions and coverage scans, capture and drain deadlines, and coverage polling.
+Chronicler controls are editable in **Settings > Memory > Chronicler**, with descriptions and custom numeric input; the structured `chronicler.recall.branchFloor` map is configured in the config file. The original values remain the defaults. Capture settings control pass size, deferred flush size, context budget, prompt capture criteria and word targets, retries, watchdogs, and shutdown drain. Recall settings control ranking thresholds, search budgets, evidence length, and neighbors. Index settings control summary and routing budgets. Backfill settings control parallel sessions and coverage scans, capture and drain deadlines, and coverage polling.
 
 Backfill command flags override their matching settings. Its `pollMs` setting only controls progress checks during an explicitly requested run; it does not start a backfill or refresh the index. Selection flags such as `--all`, `--force`, and `--dry-run` stay explicit per invocation.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `chronicler.notices` | `true` | Tell the primary agent when Luna's capture state changes. |
 | `chronicler.recall.enabled` | `false` | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
 | `chronicler.index.dir` | `<agentDir>/chronicle` | View root. |
 | `chronicler.index.timezone` | system zone | IANA zone for calendar buckets. |
@@ -89,8 +119,25 @@ Backfill command flags override their matching settings. Its `pollMs` setting on
 | `chronicler.index.shortNames` | `false` | Stub names `<time>-<id>.md` for restrictive filesystems. |
 | `chronicler.recall.beam` | `2` | Branches kept per expansion. |
 | `chronicler.recall.results` | `5` | Atoms per recall. |
-| `chronicler.recall.ranker` | `model` | `model` or `lexical`. |
+| `chronicler.recall.ranker` | `model` | `model`, `lexical` or `judge`. |
+| `chronicler.recall.branchFloor` | `0.2` per level | Judge routing probability floors; partial level overrides merge with defaults. |
 | `chronicler.recall.neighborhoodMinutes` | `90` | Window for adjacency and neighbors. |
+
+For example, configure judge routing without changing the existing search budgets:
+
+```toml
+[chronicler.recall]
+ranker = "judge"
+
+[chronicler.recall.branchFloor]
+year = 0.15
+month = 0.2
+week = 0.25
+day = 0.3
+hour = 0.3
+```
+
+`span`, `page` and `group` subdivisions also accept floor overrides. Atom confidence still uses `chronicler.recall.confidence`; the new map does not replace it. Native judgment cache keys include the actual routing or full-body state, so rebuilt summaries and changed atoms do not reuse answers for their previous text.
 
 ```yaml
 chronicler:
@@ -104,4 +151,4 @@ modelRoles:
   chronicler-summary: openai-codex/gpt-6-luna:low
 ```
 
-The `chronicler-summary` role writes summaries and ranks during recall. Unset, it follows the `chronicler` role, then the `slow` chain. Summaries send atom text to that model's provider, the same boundary as capture.
+The `chronicler-summary` role writes summaries; `chronicler-recall` supplies model-based recall ranking, while `judge` supplies judge-protocol ranking. Summaries and verification send atom text to their configured providers, the same disclosure boundary as capture. Session judge calls reuse the session's usage ledger, telemetry and shared cost gate.

@@ -150,9 +150,34 @@ describe("parseCommandArgs", () => {
 		expect(parseCommandArgs('"line1\nline2" second')).toEqual(["line1\nline2", "second"]);
 	});
 
-	test("should handle escaped quotes inside quoted strings", () => {
-		// Note: This implementation doesn't handle escaped quotes - backslash is literal
-		expect(parseCommandArgs('"quoted \\"text\\""')).toEqual(["quoted \\text\\"]);
+	test("should keep backslashes and inner quotes literal inside a quoted argument", () => {
+		expect(parseCommandArgs('"quoted \\"text\\""')).toEqual(['quoted \\"text\\"']);
+	});
+
+	test("should keep mid-word apostrophes literal (#18008)", () => {
+		expect(parseCommandArgs("fix the user's login bug")).toEqual(["fix", "the", "user's", "login", "bug"]);
+		expect(parseCommandArgs("don't break it")).toEqual(["don't", "break", "it"]);
+	});
+
+	test("should preserve quoted option values without merging prose apostrophes", () => {
+		expect(parseCommandArgs('demo -- tool --config="path with spaces"')).toEqual([
+			"demo",
+			"--",
+			"tool",
+			"--config=path with spaces",
+		]);
+		expect(parseCommandArgs('--model="model selector"')).toEqual(["--model=model selector"]);
+		expect(parseCommandArgs("--config='path with spaces'")).toEqual(["--config=path with spaces"]);
+		expect(parseCommandArgs("the user's login bug")).toEqual(["the", "user's", "login", "bug"]);
+	});
+
+	test("should keep a leading quote literal when no matching quote ends an argument", () => {
+		expect(parseCommandArgs("'tis the season")).toEqual(["'tis", "the", "season"]);
+		expect(parseCommandArgs('say "hi there')).toEqual(["say", '"hi', "there"]);
+	});
+
+	test("should close a quoted argument only at a quote that ends an argument", () => {
+		expect(parseCommandArgs("'don't stop' now")).toEqual(["don't stop", "now"]);
 	});
 });
 
@@ -280,6 +305,64 @@ describe("template expansion fallback", () => {
 	test("should append two fallback newlines for prompt template output even when template source ends with newline", () => {
 		const result = expandPrompt("/test-template sample", "Do something.\n");
 		expect(result).toBe("Do something.\n\nsample");
+	});
+
+	test("pastes repeated inline prompt references in message order with surrounding punctuation intact", () => {
+		const templates = [
+			{ ...createPromptTemplate("FIRST"), name: "first" },
+			{ ...createPromptTemplate("SECOND"), name: "second" },
+		];
+		expect(
+			expandPromptTemplate("Before /prompts:second then (/prompts:first), /prompts:second.\nAfter", templates),
+		).toBe("Before SECOND then (FIRST), SECOND.\nAfter");
+	});
+
+	test("does not consume inline prose, rescan pasted bodies, or expand unknown and partial names", () => {
+		const templates = [
+			{ ...createPromptTemplate("Literal /prompts:second"), name: "first" },
+			{ ...createPromptTemplate("SECOND"), name: "second" },
+			{ ...createPromptTemplate("VERSIONED"), name: "review.v2" },
+			{ ...createPromptTemplate("REVIEW"), name: "review" },
+		];
+		expect(
+			expandPromptTemplate(
+				"/prompts:first keep these words /prompts:missing /prompts:first-extra /prompts:review.v2! /prompts:review.v3",
+				templates,
+			),
+		).toBe(
+			"Literal /prompts:second keep these words /prompts:missing /prompts:first-extra VERSIONED! /prompts:review.v3",
+		);
+	});
+
+	test("keeps the legacy leading invocation and expands inline references only in its supplied arguments", () => {
+		const templates = [
+			{ ...createPromptTemplate("Review {{arguments}}"), name: "review" },
+			{ ...createPromptTemplate("SECURITY"), name: "security" },
+		];
+		expect(expandPromptTemplate("/review the change /prompts:security", templates)).toBe(
+			"Review the change SECURITY",
+		);
+	});
+
+	test("pastes inline bodies literally after legacy rendering, preserving quotes, indentation and placeholders", () => {
+		const body = '  const label = "two  words";\n    $1 $ARGUMENTS {{literal}}';
+		const templates = [
+			{ ...createPromptTemplate("Review {{arguments}}"), name: "review" },
+			{ ...createPromptTemplate(body), name: "code" },
+		];
+		expect(expandPromptTemplate("/review this /prompts:code", templates)).toBe(`Review this ${body}`);
+	});
+
+	test("expands only original references and never interprets pasted leading commands or legacy body references", () => {
+		const templates = [
+			{ ...createPromptTemplate("/prompts:other"), name: "legacy" },
+			{ ...createPromptTemplate("/legacy should remain literal"), name: "command" },
+			{ ...createPromptTemplate("OTHER"), name: "other" },
+		];
+		expect(expandPromptTemplate("/legacy", templates)).toBe("/prompts:other");
+		expect(expandPromptTemplate("/prompts:command /prompts:other", templates)).toBe(
+			"/legacy should remain literal OTHER",
+		);
 	});
 });
 

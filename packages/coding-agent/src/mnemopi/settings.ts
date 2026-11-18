@@ -2,8 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { register, type ScopeLike } from "../config/registry";
-import { cfgMemoryBackend } from "../memory-backend/settings";
+import { register } from "../config/registry";
 
 // Mnemopi local SQLite memory backend.
 export const cfgMnemopiDbPath = register({
@@ -14,7 +13,8 @@ export const cfgMnemopiDbPath = register({
 		tab: "memory",
 		group: "Mnemopi",
 		label: "Mnemopi DB Path",
-		description: "Optional SQLite DB path. Defaults to the agent memories directory.",
+		description:
+			"Optional SQLite DB path; a leading ~ is the home directory. Defaults to the agent memories directory.",
 		condition: "mnemopiActive",
 	},
 });
@@ -63,14 +63,6 @@ export const cfgMnemopiScoping = register({
 		condition: "mnemopiActive",
 	},
 });
-
-/**
- * Whether `retain`/`learn` can take `scope: "global"`: only Mnemopi with a bank every project
- * recalls (`global` or `per-project-tagged` scoping). Tools hide the option everywhere else.
- */
-export function isGlobalMemoryScopeAvailable(scope: ScopeLike): boolean {
-	return cfgMemoryBackend.get(scope) === "mnemopi" && cfgMnemopiScoping.get(scope) !== "per-project";
-}
 
 export const cfgMnemopiEmbeddingVariant = register({
 	id: "mnemopi.embeddingVariant",
@@ -233,14 +225,14 @@ export const cfgMnemopiLlmMode = register({
 		group: "Mnemopi",
 		label: "Mnemopi LLM Mode",
 		description:
-			"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
+			"Use no LLM, the online tiny model (the TINY role from /roles, else @smol), or a remote OpenAI-compatible endpoint",
 		condition: "mnemopiActive",
 		options: [
 			{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 			{
 				value: "smol",
 				label: "Online (tiny)",
-				description: "Use the online tiny model (the TINY role from /models, else @smol)",
+				description: "Use the online tiny model (the TINY role from /roles, else @smol)",
 			},
 			{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 		],

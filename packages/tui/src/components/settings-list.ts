@@ -45,6 +45,9 @@ function hasMouseRouter(component: Component): component is Component & MouseRou
 	return "routeMouse" in component && typeof component.routeMouse === "function";
 }
 
+/** Builds a row's editor from its current value; `done` closes it, with the value picked if one was. */
+export type SettingEditor = (currentValue: string, done: (selectedValue?: string) => void) => Component;
+
 export interface SettingItem {
 	/** Unique identifier for this setting */
 	id: string;
@@ -59,7 +62,12 @@ export interface SettingItem {
 	/** If provided, Enter/Space cycles through these values */
 	values?: string[];
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
-	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
+	submenu?: SettingEditor;
+	/**
+	 * A `values` row's choices as a menu: a native settings page's popup button
+	 * opens it ({@link SettingsList.openSubmenuFor}); Enter/Space still cycle.
+	 */
+	menu?: SettingEditor;
 	/** True when the displayed setting differs from its default value. */
 	changed?: boolean;
 	/** The default, as a native settings page names it in the changed dot's title. */
@@ -276,7 +284,7 @@ export class SettingsList implements Component {
 	navigationSnapshot(): SettingsListNavigationState {
 		return {
 			selectedId: this.#selection.selectedKey,
-			filter: this.#filterQuery,
+			filter: this.#search.confirmedQuery,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
 			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
@@ -291,6 +299,7 @@ export class SettingsList implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		if (this.#filterQuery !== this.#search.query) this.#setFilter(this.#search.query);
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 
@@ -323,14 +332,8 @@ export class SettingsList implements Component {
 				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
 				cursor: state.filterCursor,
 			});
-			if (
-				typeof state.submenuId === "string" &&
-				this.selectItem(state.submenuId) &&
-				this.getSelectedItem()?.submenu
-			) {
-				this.#activateItem();
-				// #activateItem reassigns the submenu that the reset above narrowed to null.
-				const submenu = this.#submenuComponent as Component | null;
+			if (typeof state.submenuId === "string") {
+				const submenu = this.openSubmenuFor(state.submenuId);
 				if (isMenuHistoryParticipant(submenu)) submenu.restoreNavigation(state.submenu);
 			}
 			this.#viewport.setTop(state.viewportTop);
@@ -486,14 +489,18 @@ export class SettingsList implements Component {
 		this.#onChange(item.id, value);
 	}
 
-	/** Opens row `id`'s submenu the way Enter does (leaving one already open for it); returns it. */
+	/**
+	 * Opens row `id`'s submenu (a cycling row's `menu`) the way Enter opens a
+	 * submenu, leaving one already open for it; returns it.
+	 */
 	openSubmenuFor(id: string): Component | undefined {
 		const open = this.openSubmenu;
 		if (open?.id === id) return open.component;
 		if (open || !this.selectItem(id)) return undefined;
 		const item = this.getSelectedItem();
-		if (!item?.submenu) return undefined;
-		this.#activateItem();
+		const editor = item?.submenu ?? item?.menu;
+		if (!item || !editor) return undefined;
+		this.#openSubmenu(item, editor);
 		return this.#submenuComponent ?? undefined;
 	}
 
@@ -1180,24 +1187,7 @@ export class SettingsList implements Component {
 		if (!item || item.heading) return;
 
 		if (item.submenu && openSubmenu) {
-			const previousSnapshot = this.navigationSnapshot();
-			// Open submenu, passing current value so it can pre-select correctly
-			this.#submenuItemId = item.id;
-			this.#submenuComponent = item.submenu(item.currentValue, (selectedValue?: string) => {
-				if (selectedValue !== undefined) {
-					item.currentValue = selectedValue;
-					this.#onChange(item.id, selectedValue);
-				}
-				this.#closeSubmenu();
-			});
-			if (isMenuHistoryParticipant(this.#submenuComponent)) {
-				this.#submenuComponent.onNavigationVisit = (page, previousSubmenu) => {
-					if (this.#restoring) return;
-					const previous = { ...this.navigationSnapshot(), submenu: previousSubmenu };
-					this.onNavigationVisit?.(page ? `${item.id}:${page}` : item.id, previous);
-				};
-			}
-			if (!this.#restoring) this.onNavigationVisit?.(item.id, previousSnapshot);
+			this.#openSubmenu(item, item.submenu);
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -1206,6 +1196,27 @@ export class SettingsList implements Component {
 			item.currentValue = newValue;
 			this.#onChange(item.id, newValue);
 		}
+	}
+
+	/** Opens `editor` for `item` with its current value (so it pre-selects); a pick updates the row and runs `onChange`. */
+	#openSubmenu(item: SettingItem, editor: SettingEditor): void {
+		const previousSnapshot = this.navigationSnapshot();
+		this.#submenuItemId = item.id;
+		this.#submenuComponent = editor(item.currentValue, (selectedValue?: string) => {
+			if (selectedValue !== undefined) {
+				item.currentValue = selectedValue;
+				this.#onChange(item.id, selectedValue);
+			}
+			this.#closeSubmenu();
+		});
+		if (isMenuHistoryParticipant(this.#submenuComponent)) {
+			this.#submenuComponent.onNavigationVisit = (page, previousSubmenu) => {
+				if (this.#restoring) return;
+				const previous = { ...this.navigationSnapshot(), submenu: previousSubmenu };
+				this.onNavigationVisit?.(page ? `${item.id}:${page}` : item.id, previous);
+			};
+		}
+		if (!this.#restoring) this.onNavigationVisit?.(item.id, previousSnapshot);
 	}
 
 	#closeSubmenu(): void {

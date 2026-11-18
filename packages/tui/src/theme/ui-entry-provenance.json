@@ -1,57 +1,88 @@
 {
-	"fork": {
-		"keybindings": [
-			"app.dictation.toggle",
-			"app.irc.viewer",
-			"app.live.destination.cycle",
-			"app.live.mute",
-			"app.message.chain",
-			"app.navigation.back",
-			"app.navigation.forward",
-			"app.repl.execute",
-			"app.repl.toggle",
-			"app.sidebar.scrollDown",
-			"app.sidebar.scrollUp",
-			"app.sidebar.toggle",
-			"tui.select.first",
-			"tui.select.halfPageDown",
-			"tui.select.halfPageUp",
-			"tui.select.last",
-			"tui.select.left",
-			"tui.select.nextContext",
-			"tui.select.prevContext",
-			"tui.select.right",
-			"tui.select.scrollDown",
-			"tui.select.scrollUp",
-			"tui.select.search",
-			"tui.select.toggle"
-		],
-		"statusSegments": ["context_bar", "live"],
-		"roles": [
-			"agent-author",
-			"chronicler",
-			"chronicler-recall",
-			"chronicler-summary",
-			"classifier",
-			"compaction",
-			"deck-inbox",
-			"effort",
-			"issues",
-			"prose",
-			"title"
-		],
-		"composerShapes": []
+	"stableRelease": {
+		"tag": "v18.10.3+build.40993232157.1",
+		"commit": "4f821b135cda8a46ab7669c8522f9e58fe4a84d0"
 	},
-	"newUpstream": {
-		"keybindings": [
-			"app.approval.approve",
-			"app.links.hint",
-			"app.local.open",
-			"app.session.pin",
-			"app.session.unpin"
-		],
-		"statusSegments": [],
-		"roles": ["widget"],
-		"composerShapes": []
-	}
+	"fork": {
+		"stable": {
+			"keybindings": [
+				"app.dictation.toggle",
+				"app.irc.viewer",
+				"app.live.destination.cycle",
+				"app.live.mute",
+				"app.message.chain",
+				"app.navigation.back",
+				"app.navigation.forward",
+				"app.repl.execute",
+				"app.repl.toggle",
+				"app.sidebar.scrollDown",
+				"app.sidebar.scrollUp",
+				"app.sidebar.toggle",
+				"tui.select.first",
+				"tui.select.halfPageDown",
+				"tui.select.halfPageUp",
+				"tui.select.last",
+				"tui.select.left",
+				"tui.select.nextContext",
+				"tui.select.prevContext",
+				"tui.select.right",
+				"tui.select.scrollDown",
+				"tui.select.scrollUp",
+				"tui.select.search",
+				"tui.select.toggle"
+			],
+			"statusSegments": [
+				"context_bar",
+				"live"
+			],
+			"roles": [
+				"agent-author",
+				"chronicler",
+				"chronicler-recall",
+				"chronicler-summary",
+				"classifier",
+				"compaction",
+				"deck-inbox",
+				"effort",
+				"issues",
+				"prose",
+				"title"
+			],
+			"composerShapes": []
+		},
+		"nightly": {
+			"keybindings": [],
+			"statusSegments": [],
+			"roles": [],
+			"composerShapes": []
+		}
+	},
+	"upstream": [
+		{
+			"version": "18.18.8",
+			"entries": {
+				"keybindings": [],
+				"statusSegments": [],
+				"roles": [],
+				"composerShapes": []
+			}
+		},
+		{
+			"version": "18.14.0",
+			"entries": {
+				"keybindings": [
+					"app.approval.approve",
+					"app.links.hint",
+					"app.local.open",
+					"app.session.pin",
+					"app.session.unpin"
+				],
+				"statusSegments": [],
+				"roles": [
+					"widget"
+				],
+				"composerShapes": []
+			}
+		}
+	]
 }

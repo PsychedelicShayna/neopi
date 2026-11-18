@@ -33,6 +33,7 @@ Behavior notes:
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
 - At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `set_ask_dialog`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. `negotiate_protocol` is also answered on arrival during startup, since it needs no session, so a bounded host handshake completes while a startup dialog is open. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
 - When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine` (announced with `plan_proposal_cancel`, `reason: "shutdown"`); accepted commands are drained, the session is disposed, and pending stdout is delivered. Normal shutdown exits with code `0`. A session-persistence failure still latched at disposal exits with code `1` after delivering its `notice` frame.
+- With `--exit-with-parent` (capability `exit_with_parent`), a host-owned process dies with its host instead of draining. The parent-death watchdog is installed (host death aborts the session, tears down MCP servers, jobs, subagents, LSP servers and eval kernels, and exits with code `129` within about two seconds). On stdin EOF the process skips the drain: it stops reading, aborts the active turn and running tool, cancels owned jobs and subagents, disposes the session and exits within ten seconds even if teardown hangs (code `129` if the ceiling is hit). Without the flag nothing changes: accepted work is drained, which `echo prompt | npi --mode rpc` scripts rely on. A control-socket connection closing never stops the process.
 - Responses/events are written as one JSON object per line.
 
 ### Capabilities
@@ -43,7 +44,7 @@ Behavior notes:
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
 | `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
 | `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
-| `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
+| `model_selector` | Read-only `query_model_selector` returns native `/model` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login-ID-scoped dialogs, explicit `allowSecretInput` / `allowTrustConfirmation` capabilities, and same-connection `cancel_login`. Capabilities never substitute for user consent. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
@@ -56,6 +57,16 @@ Behavior notes:
 | `session_journal_events` | Native journal commits, active-leaf changes, session identity changes and durable streaming-message associations. See [Native journal events](#native-journal-events). |
 | `session_tree_navigation` | Guarded native same-file `navigate_tree`, restored drafts and images, and explicit `resume_tree` acknowledgement for ask re-answers. See [Native tree navigation](#native-tree-navigation). |
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
+| `abort_and_restore_queue` | `abort_and_restore_queue` withdraws queued user input and aborts atomically (the TUI Esc); served over stdio and control. See [`abort_and_restore_queue` payload](#abort_and_restore_queue-payload). Hosts without it fall back to `abort`. |
+| `exit_with_parent` | The `--exit-with-parent` launch flag: host death or stdin EOF aborts and exits within seconds (see the stdin-closed note under Protocol above). |
+| `subagent_history` | `get_subagent_history` (the full persisted child roster) and persisted-child reads in `get_subagent_messages`. See [Subagent subscriptions](#subagent-subscriptions). |
+| `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio, and control sockets of terminal-owned sessions. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
+| `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |
+| `background_jobs` | `get_jobs`, `get_job_output`, `cancel_job` and stdio `job_lifecycle` frames. See [Background jobs](#background-jobs). |
+| `command_catalog` | Every slash command in `get_available_commands` / `available_commands_update` with its `availability`, and `command_requires_tui` refusal of terminal-only commands in `prompt`. See [Available commands](#available-commands). |
+| `command_completions` | `get_command_completions { command, prefix }`: slash-command argument completions for hosts without a terminal. See [Available commands](#available-commands). |
+| `cycle_role` | `cycle_role` command (Ctrl+P role cycling) and `get_roles.cycleOrder` ([payloads](#get_roles-and-set_role-payloads)). |
+| `set_subagent_model` | `set_subagent_model` switches an owned running subagent's model for its next request. See [Changing a running subagent's model](#changing-a-running-subagents-model). |
 
 ### Native models configuration
 
@@ -137,7 +148,8 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
   "supportedProtocolVersions": [1, 2],
   "maxFrameBytes": 1048576,
   "maxReassembledFrameBytes": 67108864,
-  "capabilities": []
+  "capabilities": [],
+  "supportsBashExcludeFromContext": true
 }
 ```
 
@@ -323,8 +335,17 @@ The TypeScript client exposes `setCacheWarming(mode): Promise<CacheWarmingMode>`
 
 ### Bash
 
-- `{ id?, type: "bash", command: string }`
+- `{ id?, type: "bash", command: string, excludeFromContext?: boolean }`
 - `{ id?, type: "abort_bash" }`
+
+`excludeFromContext: true` keeps the run out of model context, like terminal
+`!!`: the output is still returned and recorded in the transcript, where
+extensions and `get_messages` see it. Non-boolean values are rejected.
+
+Older runtimes ignore unknown fields and would share the output, so send
+`excludeFromContext: true` only when the `ready` frame has
+`supportsBashExcludeFromContext: true`. `RpcClient.bash()` enforces this; with
+the Python, Go and Rust SDKs, check `client.ready` / `Ready()` / `ready()`.
 
 `bash` is dispatched concurrently: the RPC server continues reading commands
 while the shell command runs, so `abort_bash` (or any other command) sent
@@ -337,6 +358,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 
 - `{ id?, type: "get_session_stats" }`
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
+- `{ id?, type: "get_session_lease", sessionIds: string[] }` → `data: { held: string[], unknown: string[] }`: which sessions a running NeoPi (this process included) owns, probed without taking their ownership leases. Ids in neither list are free; `unknown` ids could not be probed. `npi session lease --json -- <id>...` answers the same without an RPC child (`--` keeps ids starting with `-` from parsing as options).
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
 - `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere. `entryId` must be a user request: a user message or a user-invoked `/skill:` prompt (a `custom_message` entry); `data.text` is the request as typed, `/skill:<name> <args>` for a skill prompt
@@ -872,6 +894,7 @@ field is absent outside both stages. No event carries it, so re-read
     "percent": 0.55
   },
   "activeRole": "smol",
+  "dictationEnabled": false,
   "chatMode": "off|chat|erp|raw",
   "mode": "plan",
   "planMode": {
@@ -944,7 +967,7 @@ configuration files or substitute a bundled theme inventory.
 ### Native model selector query
 
 Send `{"type":"query_model_selector","query":"example"}` to read the native
-`/switch` filter without selecting a model or starting a turn. The same command
+`/model` filter without selecting a model or starting a turn. The same command
 is available through terminal control. Check the `model_selector` capability
 before using it.
 
@@ -985,7 +1008,8 @@ role:
       "hidden": false
     }
   ],
-  "activeRole": "smol"
+  "activeRole": "smol",
+  "cycleOrder": ["smol", "default", "slow"]
 }
 ```
 
@@ -1000,7 +1024,7 @@ role:
 - `tag` is absent for custom roles, which have no built-in tag.
 - `description` is the effective `modelTags.<id>.description` override or the
   built-in default. Custom roles have no default description. An empty string
-  deliberately clears the description. In `/models`, `D` edits this metadata
+  deliberately clears the description. In `/roles`, `D` edits this metadata
   and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
@@ -1035,6 +1059,32 @@ Failures carry a `code`, and none of them change the model:
 | `unknown_role` | `role` is not an id listed by `get_roles`. |
 | `session_busy` | The session is streaming or compacting. |
 | `role_unresolved` | No pattern in the role's chain matches an available model. |
+
+`cycleOrder` is the configured `cycleOrder` setting: the roles `cycle_role`
+walks, in order. A role in it that has no available model is skipped by the
+cycle, so the track a host draws may show more slots than the cycle visits.
+
+`cycle_role { direction? }` is the TUI's Ctrl+P: it steps `direction`
+(`"forward"`, the default, or `"backward"`) through `cycleOrder` from the slot
+the active model occupies, wrapping at the ends, and applies the next role's
+model with its configured thinking level or effort selection. Like Ctrl+P it
+is not refused while a turn runs; the model applies from the next request, and
+it writes no configuration. Success data is the `set_role` shape, or `null`
+when fewer than two roles in `cycleOrder` have an available model (the TUI's
+"Only one role model available"). The cycled role is reported as
+`get_state.activeRole`, and `config_update { model, thinkingLevel }` precedes
+the response. A failed switch, such as a model without credentials, is an
+ordinary error response, and a `direction` other than the two values is
+rejected. Advertised by the `cycle_role` capability.
+
+`hostname`, `activeTimeMs` and `runningJobCount` are the TUI status line's facts,
+advertised by the `status_facts` capability. `hostname` is the short machine
+name (first DNS label). `activeTimeMs` is the session's accumulated active
+processing time: the sum of its runs (agent start to settle) plus the run in
+flight, never idle time between turns; it starts over for a new or switched
+session. `runningJobCount` counts running background jobs the way the TUI jobs
+pill does: a task job stops counting once its subagent is itself running.
+Control snapshots carry the same fields.
 
 `chatMode` is the session's live chat mode; `off` is an ordinary coding session.
 
@@ -1579,8 +1629,34 @@ run.
 
 `get_available_commands` returns `{ commands }`, and the same array is pushed
 in `available_commands_update` frames at startup and after command metadata
-changes. Each command has `name`, `source`, and optional `aliases`,
-`description`, `input.hint`, and `subcommands`.
+changes. Each command has `name`, `source`, `availability`, and optional
+`aliases`, `description`, `input.hint`, and `subcommands`.
+
+With the `command_catalog` capability the list holds every registered command,
+not only those a headless host can run. `availability` is `"headless"` for
+commands that work in every host and `"tui"` for commands that need the
+terminal UI (selectors, dashboards, wizards, `/settings`, `/hotkeys`, ...). Hosts
+MUST read it instead of hardcoding a list: a command moves to `headless` the
+release it gains a headless handler, with no host change. Skill, extension,
+custom, MCP and file commands are always `headless`.
+
+`prompt` text that starts with `/` goes through the same builtin dispatcher the
+terminal editor uses. A `tui` command is never sent to the model: the response
+is `{ success: false, command: "prompt", error: "/settings needs the terminal UI", code: "command_requires_tui" }`
+(for `abort_and_prompt`, a `prompt_result` with `status: "error"`). An extension
+or custom command of the same name runs instead, as in the terminal. Slash text
+that names no command, such as a file path, is still ordinary chat. ACP clients
+keep receiving only the headless commands.
+
+With the `command_completions` capability, `get_command_completions { command, prefix }`
+returns `{ items }`, the argument completions a terminal user would see:
+`command` is a command name or alias (a leading `/` is ignored) and `prefix` is
+the argument text typed after it. Each item is `{ value, label, description?, hint?, submitsCommand? }`:
+`value` replaces the argument text, `hint` is ghost text, and `submitsCommand`
+means accepting it leaves a complete command. Subcommand lists and
+settings-backed names such as `/personality` names are served; completions that
+need terminal state (the model picker, local files) are not, and a command
+with none, or an unknown command, returns no items.
 
 Command discovery is intentionally an OMP dialect: Pi's `get_commands` (a
 `RpcSlashCommand[]` projection over extensions → prompt templates → skills) is
@@ -1746,6 +1822,30 @@ message entries. Only complete newline-terminated records are consumed; reuse
 If `fromByte` exceeds the current file size, reading restarts at byte zero and
 reports `reset: true`.
 
+With the `subagent_history` capability, `get_subagent_history { includeAdvisors? }`
+returns `{ rootSessionFile?, rootAgentId?, subagents }`: every child of the root
+session's tree, oldest first, live or persisted. It hydrates the session's
+artifacts tree the way the Agent Hub does, so finished and killed children
+survive a host restart, which `get_subagents` (active children only) does not.
+Each entry has `id`, `kind` (`sub`, or `advisor` when `includeAdvisors` is true),
+`parentId`, `displayName`, `agent`, `description` (persisted task gist or live
+activity), `status`, `live`, `sessionFile`, `createdAt`, `lastActivity`,
+`responseAt`/`acceptedAt`/`terminalAt`, `parentToolCallId` (only while the live
+roster knows it), the model facts `resolvedModel`, `resolvedModelIdentity`,
+`resolvedThinkingLevel`, `fastModeEnabled`/`fastModeActive` (live children),
+`modelRole`, `readOnly`, `metrics` (`tokens`, `requests`, `tools`, `cost`,
+`durationMs`, `contextTokens?`, `contextWindow?`), `directCost`, and the
+`outputPath`/`patchPath`/`branchName` artifacts when captured. `status` is the
+registry's: `running`, `idle`, `parked` (finished, resumable) or `aborted`
+(killed). The registry keeps no completed/failed split and failure detail is not
+persisted, so none is reported. Control sockets serve the command for terminal
+sessions too, with no event bus needed.
+
+With the same capability `get_subagent_messages` also reads persisted children of
+the root's artifacts tree by `subagentId` or `sessionFile`, with the same
+incremental result. Files outside the tree, and the root transcript itself, are
+rejected.
+
 ### Cancelling subagents
 
 `cancel_subagent` hard-kills one subagent currently listed by `get_subagents`
@@ -1850,6 +1950,62 @@ In the Agent Hub, focus a subagent's transcript to cycle its effort with the
 existing Shift+Tab binding or run `/fast [on|ultra|off|status]`. These controls
 target the focused session. Model switching and other mutation commands remain
 unavailable in that view.
+
+### Changing a running subagent's model
+
+`set_subagent_model` is the focused `/model` for one owned running subagent: it
+changes that session's model only, from its next provider request, without
+aborting the request in flight. The parent, siblings, saved roles and global
+settings are untouched. Give either a `selector` or an exact `provider` with
+`modelId`.
+
+```json
+{ "id": "req_4", "type": "set_subagent_model", "subagentId": "OmpWorker", "selector": "anthropic/claude-opus-4-5:high" }
+{ "id": "req_4", "type": "response", "command": "set_subagent_model", "success": true, "data": { "provider": "anthropic", "modelId": "claude-opus-4-5", "thinkingLevel": "high" } }
+{ "id": "req_5", "type": "set_subagent_model", "subagentId": "OmpWorker", "provider": "anthropic", "modelId": "claude-haiku-4-5" }
+```
+
+A `selector` resolves exactly like `/model <selector>` against the subagent's
+own model registry and scope: `provider/id`, a fuzzy id, an `@role` alias, and an
+optional `:level` suffix. Without a suffix the level a role configures for that
+model applies, else the subagent's current level is kept within what the new
+model supports. `data.thinkingLevel` is the level in effect afterwards and
+`data.warning` carries any resolver note. An unknown model, a model without
+credentials, a missing or doubled selection (`selector` together with
+`provider`/`modelId`), and an unknown, finished or foreign subagent id
+return an error and leave the subagent unchanged; `Subagent not running: <id>`
+matches the other `*_subagent` commands. The change appends a session-only
+`model_change` entry (role `temporary`) to the subagent's session file, and
+`get_subagents` reports the new model immediately.
+
+### Background jobs
+
+Advertised by the `background_jobs` capability. The data is the TUI `/jobs`
+sheet's: this agent's async jobs (bash, task, eval, chronicle) and those of the
+subagents below it, the job inspector's output, and the owner-scoped cancel that
+`proc://<id>/kill` uses. Foreground-backed jobs are hidden until promoted.
+
+```ts
+interface JobInfo {
+  id: string; // "bg_N"
+  type: "bash" | "task" | "eval" | "chronicle";
+  label: string; // cut to 120 characters
+  command?: string; // full command line of a process job
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: number; // epoch ms
+  finishedAt?: number;
+  exitCode?: number;
+  error?: string; // failed jobs, bounded
+  ownerId?: string;
+  agentId?: string; // the subagent a task job runs
+  outputBytes: number; // size of the snapshot get_job_output reads
+}
+```
+
+- `get_jobs { recentLimit? }` returns `{ rootId?, running, recent, agents, runningCount }`. `recent` holds the newest settled jobs, at most `recentLimit` (default 10, at most 50). `agents` links subagents that own listed jobs to the root. `runningCount` is the TUI jobs-pill count, equal to `get_state.runningJobCount`.
+- `get_job_output { jobId, fromByte?, revision? }` returns `{ jobId, status, fromByte, nextByte, totalBytes, reset, revision, output }`. `output` is a byte slice of the inspector's snapshot: the tail the sheet shows while the job runs, the final result or error once it settled. Offsets are UTF-8 bytes on character boundaries; pass `nextByte` as the next `fromByte` and the returned `revision` as `revision`. A reply carries at most 256 KiB. A running job's snapshot is a rolling tail the producer replaces, so an offset alone cannot distinguish appended text from different text of the same length: `revision` identifies the bytes before `nextByte`, and when a request's `revision` no longer matches the snapshot's bytes before `fromByte`, the server restarts at zero and sets `reset: true` (it is also true when `fromByte` exceeded the snapshot). A client that sends no `revision` (older clients) is trusted on the offset alone, and `revision` is empty from older servers. A host should replace, not append to, its copy when `reset` is true. An id outside the session's tree fails with `Job not found: <id>`.
+- `cancel_job { jobId }` returns `{ cancelled }`: true when it cancelled a running job the session's own agent owns, false for unknown, settled, foreign or subagent-owned jobs.
+- `job_lifecycle { event, job, runningCount }` (stdio only; control clients poll `get_jobs`) reports `registered`, `progress`, `completed`, `failed` and `cancelled`. `progress` is coalesced to at most one frame per job per 250 ms and carries no output (read it with `get_job_output`); a foreground-backed job sends nothing until promoted, then `registered`. The frames bypass `set_event_filter`.
 
 ### Side questions (`/btw`)
 
@@ -1999,7 +2155,7 @@ Extensions in RPC mode use request/response UI frames. `--no-ui` disables the ex
 
 `--mode rpc-ui` independently enables the tool UI context, including with `--no-ui`:
 
-- `ask` still sends `select` requests. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
+- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
 - Other callers using the tool UI context retain its supported dialog methods (`select`, `confirm`, `input`, `editor`, and cancellation) and presentation methods (`notify`, `setStatus`, string-array `setWidget`, `set_editor_text`, and opt-in `setTitle`). `--no-ui` is not a transport-level filter on these methods.
 - Tool approval prompts use the extension runner, not the tool UI context. Under `--no-ui`, tools requiring approval fail closed with a no-interactive-UI error rather than sending an approval dialog, just as with `--mode rpc --no-ui`.
 - MCP authentication challenges do not gain an RPC UI handler in either mode; the interactive-mode MCP auth handler is not installed.
@@ -2021,7 +2177,8 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      host hint from `ExtensionUIDialogOptions.secret`; hosts that support
      masked input should hide typed characters when `secret: true`.
    - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
-     question of one `ask` tool call:
+     question of one extension `ui.askDialog` call or questions-based `ask`
+     tool invocation:
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.
@@ -2290,6 +2447,13 @@ microphone or initializing a speech model. It does not submit a prompt,
 interpret speech submit triggers, or play audio.
 Live voice and dictation are mutually exclusive, including while either starts
 or stops.
+
+The stdio `ready` frame advertises the `dictation` capability, and so does the
+control socket's `ready`/hello for a terminal-owned session (see
+[Dictation over control](./control.md#dictation-over-control)); a headless
+control endpoint does not serve dictation and never advertises it.
+`get_state.dictationEnabled` reports `stt.enabled`, so a host can show or
+disable its control without attempting a capture.
 
 - `{ id?, type: "dictation_start", captureId: string }` starts a capture and responds when recording. `captureId` must be a non-blank string of at most 128 UTF-16 code units; the host must choose a unique ID for each capture.
 - `{ id?, type: "dictation_stop" }` stops the microphone and flushes transcription, then responds with `data: { text: string }`. With no capture it succeeds with empty text. A failure returns an error response.

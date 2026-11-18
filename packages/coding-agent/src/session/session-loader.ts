@@ -25,7 +25,7 @@ import {
 } from "./blob-store";
 import { buildSessionContext, walkSessionBranch } from "./session-context";
 import type { FileEntry, RawFileEntry, SessionEntry, SessionHeader } from "./session-entries";
-import { migrateToCurrentVersion } from "./session-migrations";
+import { hasUnindexedSessionEntries, migrateToCurrentVersion } from "./session-migrations";
 import { isExternalizableImagePosition, isPersistenceTruncatedString } from "./session-persistence";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
 import { enotdir } from "./session-storage-errors";
@@ -770,15 +770,15 @@ export function resolveBlobRefsInEntriesSync(entries: FileEntry[], blobStore: Bl
  * display transcript from one snapshot, without creating a writer/lease.
  * The final journal entry is the authoritative leaf, just as when
  * SessionManager rebuilds its entry index.
- * Pre-tree (v1) journals retain their legacy transcript, but return null native
- * entries because migration invents IDs that cannot serve as stable identities.
+ * Pre-tree or wholly unindexed journals retain their transcript, but return null
+ * native entries because migration invents IDs that cannot serve as stable identities.
  */
 export async function loadSessionBranchReadOnly(
 	filePath: string,
 ): Promise<{ entries: SessionEntry[] | null; leafId: string | null; messages: AgentMessage[] }> {
 	const entries = await loadEntriesFromFile(filePath);
 	const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-	if (header && (header.version ?? 1) < 2) {
+	if ((header && (header.version ?? 1) < 2) || hasUnindexedSessionEntries(entries)) {
 		migrateToCurrentVersion(entries);
 		return { entries: null, leafId: null, messages: await buildReadOnlySessionMessages(entries) };
 	}

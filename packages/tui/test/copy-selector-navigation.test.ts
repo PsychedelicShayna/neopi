@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, vi, beforeEach, afterEach } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionMessageEntryLike } from "../src/chat/transcript-entry";
 import type { TUI } from "../src/index";
@@ -130,4 +131,13 @@ describe("copy selector shared navigation and history", () => {
 			selector.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

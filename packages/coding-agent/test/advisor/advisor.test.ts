@@ -381,11 +381,7 @@ describe("advisor", () => {
 					name: "ask",
 					arguments: {
 						questions: [
-							{
-								id: "deploy",
-								question: "Authorize deployment?",
-								options: [{ label: "Yes" }, { label: "No" }],
-							},
+							{ id: "deploy", question: "Authorize deployment?", options: [{ label: "Yes" }, { label: "No" }] },
 						],
 					},
 				},
@@ -396,8 +392,8 @@ describe("advisor", () => {
 			role: "toolResult",
 			toolCallId: "ask-1",
 			toolName: "ask",
-			content: [{ type: "text", text: "User selected: Yes" }],
-			details: { selectedOptions: ["Yes"] },
+			content: [{ type: "text", text: 'User answers:\n{\n  "deploy": "yes"\n}' }],
+			details: { results: [{ id: "deploy", question: "Authorize deployment?", answer: "Yes" }] },
 			isError: false,
 			timestamp: 2,
 		} as unknown as AgentMessage;
@@ -409,27 +405,23 @@ describe("advisor", () => {
 				expandToolIO: true,
 			});
 
-			expect(compact).not.toContain("User selected: Yes");
+			expect(compact).not.toContain('"deploy": "yes"');
 			expect(expanded).toContain('"question": "Authorize deployment?"');
-			expect(expanded).toContain('"label": "Yes"');
-			expect(expanded).toContain("User selected: Yes");
+			expect(expanded).toContain('"label": "No"');
+			expect(expanded).toContain('"deploy": "yes"');
 		});
 
-		it("bounds long ask questions and custom answers with visible head and tail context", () => {
+		it("bounds long ask forms and answers with visible head and tail context", () => {
 			const questionEnd = "question-at-end";
 			const answerEnd = "answer-at-end";
 			const longQuestion = {
-				...(askCall as unknown as { content: { arguments: { questions: unknown[] } }[] }),
+				...(askCall as unknown as Record<string, unknown>),
 				content: [
 					{
 						...(askCall as unknown as { content: Record<string, unknown>[] }).content[0],
 						arguments: {
 							questions: [
-								{
-									id: "deploy",
-									question: `question-start ${"context ".repeat(1200)}${questionEnd}`,
-									options: [{ label: "Custom" }],
-								},
+								{ id: "answer", question: `question-start ${"context\n".repeat(1200)}${questionEnd}` },
 							],
 						},
 					},
@@ -455,18 +447,8 @@ describe("advisor", () => {
 				role: "toolResult",
 				toolCallId: "ask-orphan",
 				toolName: "ask",
-				content: [{ type: "text", text: "deploy: Yes" }],
-				details: {
-					results: [
-						{
-							id: "deploy",
-							question: "Authorize production deployment?",
-							options: ["Yes", "No"],
-							multi: false,
-							selectedOptions: ["Yes"],
-						},
-					],
-				},
+				content: [{ type: "text", text: 'User answers:\n{\n  "deploy": "yes"\n}' }],
+				details: { results: [{ id: "deploy", question: "Authorize production deployment?", answer: "Yes" }] },
 				isError: false,
 				timestamp: 2,
 			} as unknown as AgentMessage;
@@ -474,7 +456,7 @@ describe("advisor", () => {
 			const expanded = formatSessionHistoryMarkdown([orphan], { expandToolIO: true });
 
 			expect(expanded).toContain("Authorize production deployment?");
-			expect(expanded).toContain("deploy: Yes");
+			expect(expanded).toContain('"deploy": "yes"');
 		});
 
 		it("bounds expanded tool results with visible head and tail context", () => {
@@ -816,7 +798,10 @@ describe("advisor", () => {
 			);
 			for (let turn = 1; turn <= 6; turn++) {
 				tool.beginUpdate(turn);
-				const result = await tool.execute(`note-${turn}`, { note: `Missing regression ${turn}.`, severity: "concern" });
+				const result = await tool.execute(`note-${turn}`, {
+					note: `Missing regression ${turn}.`,
+					severity: "concern",
+				});
 				expect(JSON.stringify(result.content)).toContain("Queued for the configured delivery point");
 			}
 			// Even a new completed review and explicit flush cannot release held notes.
@@ -879,7 +864,10 @@ describe("advisor", () => {
 			const noise = await tool.execute("noise", { note: "Stop.", severity: "concern" });
 			expect(JSON.stringify(noise.content)).toContain("nothing actionable");
 			await tool.execute("good", { note: "The migration needs a backup.", severity: "concern" });
-			const rejected = await tool.execute("extra", { note: "The second migration needs a backup.", severity: "concern" });
+			const rejected = await tool.execute("extra", {
+				note: "The second migration needs a backup.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(rejected.content)).toContain("Dropped:");
 			expect(JSON.stringify(rejected.content)).not.toContain("Queued");
 			hold = false;
@@ -932,8 +920,11 @@ describe("advisor", () => {
 		it("moves an escalated reservation to its earlier configured delivery point without replaying it", async () => {
 			let active = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => active && severity !== "blocker");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => active && severity !== "blocker",
+			);
 			await tool.execute("pending", { note: "The migration drops users without a backup.", severity: "concern" });
 			await tool.execute("duplicate", { note: "The migration drops users without a backup.", severity: "concern" });
 			tool.beginUpdate();
@@ -946,8 +937,11 @@ describe("advisor", () => {
 
 		it("does not free a routed concern's budget when its earlier held nit escalates again", async () => {
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => severity === "nit");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => severity === "nit",
+			);
 			await tool.execute("held", { note: "The write path is unsafe.", severity: "nit" });
 			await tool.execute("live", { note: "The write path is unsafe.", severity: "concern" });
 			await tool.execute("blocker", { note: "The write path is unsafe.", severity: "blocker" });
@@ -960,8 +954,11 @@ describe("advisor", () => {
 		it("applies live timing edits selectively without resetting admission or charging the backlog twice", async () => {
 			let holdConcern = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
-				severity => severity === "nit" || severity === undefined || holdConcern);
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
+				severity => severity === "nit" || severity === undefined || holdConcern,
+			);
 			await tool.execute("nit", { note: "Rename the helper." });
 			await tool.execute("concern", { note: "The write drops the lock.", severity: "concern" });
 			holdConcern = false;
@@ -971,7 +968,10 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenCalledWith("The write drops the lock.", "concern", undefined);
 			// The new concern may displace the still-held, lower-rank nit. The
 			// routed concern keeps its slot, so another concern cannot fit.
-			const replacement = await tool.execute("replacement", { note: "Another lock is missing.", severity: "concern" });
+			const replacement = await tool.execute("replacement", {
+				note: "Another lock is missing.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(replacement.content)).toContain("Delivered.");
 			tool.flushDeferredNotes();
 			expect(onAdvice).toHaveBeenCalledTimes(2);
@@ -993,6 +993,19 @@ describe("advisor", () => {
 			expect(onAdvice).not.toHaveBeenCalled();
 			await tool.execute("new", { note: "The old conversation needs a regression.", severity: "concern" });
 			expect(onAdvice).toHaveBeenCalledTimes(1);
+		});
+
+		it("emits nothing from a cancelled review", async () => {
+			const delivered: string[] = [];
+			const tool = new AdviseTool(note => delivered.push(note));
+			const cancelled = new AbortController();
+			cancelled.abort();
+			tool.beginUpdate();
+			await tool.execute("x-0", { note: "Stale finding.", severity: "blocker" }, cancelled.signal);
+			expect(delivered).toEqual([]);
+			// Nothing was admitted either: a later review may raise it.
+			await tool.execute("x-1", { note: "Stale finding.", severity: "blocker" });
+			expect(delivered).toEqual(["Stale finding."]);
 		});
 
 		it("validates parameters using ArkType", () => {
@@ -1248,7 +1261,6 @@ describe("advisor", () => {
 				}),
 			).toBe(false);
 		});
-
 
 		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
@@ -2070,6 +2082,43 @@ describe("advisor", () => {
 			expect(promptText(promptInputs[0])).toContain("### Session update\n");
 			expect(promptText(promptInputs[0])).not.toContain("[in progress");
 			expect(updateStates).toEqual([false]);
+		});
+
+		it("supersede cancels the review in flight and holds its update for the next dispatch", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const firstStarted = Promise.withResolvers<void>();
+			const firstRelease = Promise.withResolvers<void>();
+			const secondStarted = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (promptInputs.length === 1) {
+						firstStarted.resolve();
+						await firstRelease.promise;
+					} else {
+						secondStarted.resolve();
+					}
+				},
+				abort: () => firstRelease.resolve(),
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "handoff", timestamp: 1 } as AgentMessage];
+			const runtime = new AdvisorRuntime(agent, { snapshotMessages: () => messages });
+
+			runtime.onTurnEnd(messages);
+			await firstStarted.promise;
+			expect(runtime.supersede()).toBe(true);
+			// The cancelled review no longer counts as backlog.
+			expect(await runtime.waitForCatchup(1_000, 1)).toBe(true);
+			expect(promptInputs).toHaveLength(1);
+
+			messages.push({ role: "user", content: "fix", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await secondStarted.promise;
+			const second = promptText(promptInputs[1]!);
+			expect(second).toContain("handoff");
+			expect(second).toContain("fix");
 		});
 
 		it("sends the batch when context maintenance fails", async () => {
@@ -5385,6 +5434,60 @@ describe("advisor", () => {
 				expect(promptText(input)).not.toContain("private reasoning");
 				expect(promptText(input)).toContain("answer");
 			}
+			expect(failures).toEqual([]);
+		});
+
+		it("goes straight to the model fallback when the refused batch carried no reasoning", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const failures: unknown[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let modelRefuses = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					state.error = modelRefuses ? "Refusal (bio): blocked under Anthropic's Usage Policy" : undefined;
+					state.messages.push({
+						role: "assistant",
+						content: [],
+						stopReason: modelRefuses ? "error" : "stop",
+						stopDetails: modelRefuses ? { type: "refusal", category: "bio" } : undefined,
+						errorMessage: state.error,
+						timestamp: promptInputs.length + 1,
+					} as unknown as AgentMessage);
+				},
+				abort: () => {},
+				reset: () => {},
+				rollbackTo: count => {
+					state.messages.length = count;
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages = [
+				{ role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 1 } as AgentMessage,
+			];
+			let fallbackCalls = 0;
+			const runtime = new AdvisorRuntime(
+				agent,
+				{
+					snapshotMessages: () => messages,
+					notifyFailure: error => failures.push(error),
+					onTurnError: async () => {
+						fallbackCalls++;
+						modelRefuses = false;
+						return true;
+					},
+				},
+				0,
+			);
+
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => runtime.backlog === 0);
+
+			// Stripping reasoning cannot change this batch, so the refused request is
+			// not resent byte-for-byte: refuse, switch models, the fallback answers.
+			expect(fallbackCalls).toBe(1);
+			expect(promptInputs).toHaveLength(2);
 			expect(failures).toEqual([]);
 		});
 

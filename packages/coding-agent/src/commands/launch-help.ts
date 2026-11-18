@@ -29,7 +29,9 @@ export const launchHelp = {
 			description:
 				"Plan with the configured crew, then hand off at the first edit/write after the todo list exists (default off; see prewalk.enabled)",
 		}),
-		"no-prewalk": Flags.boolean({ description: "Disable prewalk, including prewalk.auto, even if prewalk.enabled is set" }),
+		"no-prewalk": Flags.boolean({
+			description: "Disable prewalk, including prewalk.auto, even if prewalk.enabled is set",
+		}),
 		"prewalk-into": Flags.string({ description: "Override prewalk.execution for this startup session" }),
 		"plan-yolo": Flags.boolean({
 			description:
@@ -84,6 +86,10 @@ export const launchHelp = {
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
 		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
+		"exit-with-parent": Flags.boolean({
+			description:
+				"RPC modes: exit when the host dies or closes stdin, aborting the turn and stopping owned jobs and subagents within seconds (default: drain accepted work on stdin EOF)",
+		}),
 		"no-exit-with-parent": Flags.boolean({
 			description: "Print/json modes: keep running after the parent process dies (for nohup/setsid use)",
 		}),
@@ -129,6 +135,18 @@ export const launchHelp = {
 		"no-context-files": Flags.boolean({ description: "Disable context files (AGENTS.md, CLAUDE.md, ...)" }),
 		export: Flags.string({ description: "Export session file to HTML and exit" }),
 		"no-title": Flags.boolean({ description: "Disable title auto-generation" }),
+		"spinner-interval": Flags.string({
+			description:
+				"Milliseconds between spinner frames (default 80; 0 = static). Overrides tui.spinnerInterval and PI_SPINNER_INTERVAL for this run",
+		}),
+		"max-fps": Flags.string({
+			description:
+				"Repaint ceiling in frames per second (default 30; 1-120); keystroke echo keeps 30 fps. Overrides tui.maxFps and PI_MAX_FPS for this run",
+		}),
+		motion: Flags.string({
+			description:
+				"Animation preset: full (default), reduced (250 ms spinners, no shimmer or blink), or none (static). Overrides tui.motion and PI_MOTION for this run",
+		}),
 		"no-ui": Flags.boolean({
 			description: "With --mode rpc or rpc-ui: run extensions headless (rpc-ui tool UI remains enabled)",
 		}),

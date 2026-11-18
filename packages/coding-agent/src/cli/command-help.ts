@@ -27,7 +27,7 @@ export const authBrokerHelp = {
 
 export const authGatewayHelp = {
 	description:
-		"Run an auth-gateway: an HTTP forward proxy backed by the configured broker, or JSON lines on stdio with your own credentials",
+		"Run an auth-gateway: an HTTP forward proxy backed by the configured broker, or JSON lines on stdio with your own credentials; `link` prints one connection link to share it",
 } satisfies CommandMetadata;
 
 export const benchHelp = {
@@ -159,7 +159,8 @@ export const sayHelp = {
 export const searchHelp = { description: "Test web search providers" } satisfies CommandMetadata;
 
 export const sessionHelp = {
-	description: "Hand a session to another machine: pack it, unpack it, or mark the local copy moved",
+	description:
+		"Hand a session to another machine (pack, unpack, moved) or check which sessions a running omp owns (lease)",
 } satisfies CommandMetadata;
 
 export const shareHelp = {
@@ -171,6 +172,26 @@ export const setupHelp = {
 } satisfies CommandMetadata;
 
 export const shellHelp = { description: "Interactive shell console" } satisfies CommandMetadata;
+
+const NATIVE_SHELL_DESCRIPTIONS = {
+	zsh: "Run zsh 5.9 on the built-in pi-shell engine (all arguments go to zsh)",
+	bash: "Run bash 5.3 on the built-in pi-shell engine (all arguments go to bash)",
+	sh: "Run a POSIX sh on the built-in pi-shell engine (all arguments go to sh)",
+} as const;
+
+/** `omp zsh|bash|sh`: the whole command line after the word goes to the shell. */
+export function nativeShellHelp(name: keyof typeof NATIVE_SHELL_DESCRIPTIONS) {
+	return {
+		description: NATIVE_SHELL_DESCRIPTIONS[name],
+		args: {
+			args: {
+				kind: "string",
+				description: `Arguments passed to ${name} unchanged (options, -c COMMAND, a script and its arguments)`,
+				multiple: true,
+			},
+		},
+	} satisfies CommandMetadata;
+}
 
 export const skillHelp = {
 	description: "Install, search, publish, and manage skills on the Skillshare registry (skills.omp.sh)",
@@ -198,7 +219,9 @@ export const ttsrHelp = {
 	description: "Inspect and test Time-Traveling Stream Rules (TTSR)",
 } satisfies CommandMetadata;
 
-export const updateHelp = { description: "Check for and install updates" } satisfies CommandMetadata;
+export const updateHelp = {
+	description: "Show NeoPi update status, sync stable/nightly, roll back, integrate source, or update plugins",
+} satisfies CommandMetadata;
 
 export const usageHelp = {
 	description: "Show provider usage limits for every authenticated account",

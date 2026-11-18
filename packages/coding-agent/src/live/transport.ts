@@ -7,6 +7,7 @@ import {
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
 import { LiveWebRtcPeer } from "@oh-my-pi/pi-natives";
+import { toError } from "@oh-my-pi/pi-utils";
 import { generateCodexAttestation } from "./attestation";
 import {
 	buildLiveSessionPayload,
@@ -87,14 +88,15 @@ export function buildLiveSidebandUrl(callId: string): string {
 function liveSessionHeaders(
 	access: OAuthAccess,
 	sessionId: string,
-	realtimeSessionId: string,
+	voiceSessionId: string,
 	attestation: string | undefined,
 ): Record<string, string> {
 	const headers: Record<string, string> = {
 		Authorization: `Bearer ${access.accessToken}`,
 		"OpenAI-Alpha": "quicksilver=v2",
 		"User-Agent": `Codex Desktop/${CODEX_CLIENT_VERSION}`,
-		"x-session-id": realtimeSessionId,
+		"x-session-id": sessionId,
+		"voice-session-id": voiceSessionId,
 		[OPENAI_HEADERS.ORIGINATOR]: LIVE_ORIGINATOR,
 		[OPENAI_HEADERS.VERSION]: CODEX_CLIENT_VERSION,
 		[OPENAI_HEADERS.SCOPED_SESSION_ID]: sessionId,
@@ -123,7 +125,7 @@ export class CodexLiveTransport {
 	readonly #options: LiveTransportOptions;
 	#peer: LiveWebRtcPeer | undefined;
 	#sdpAnswer: string | undefined;
-	readonly #realtimeSessionId = crypto.randomUUID();
+	readonly #voiceSessionId = crypto.randomUUID();
 	#sideband: Bun.WebSocket | undefined;
 	#state: Lifecycle = "idle";
 	#connectPromise: Promise<void> | undefined;
@@ -207,7 +209,6 @@ export class CodexLiveTransport {
 			},
 			(error, message) => this.#reportFailure(error?.message ?? message),
 		);
-
 	}
 
 	async #signal(offer: string): Promise<LiveSignalingResult> {
@@ -230,7 +231,7 @@ export class CodexLiveTransport {
 		attestation: string | undefined,
 	): Promise<LiveSignalingResult> {
 		const headers = new Headers({
-			...liveSessionHeaders(access, this.#options.sessionId, this.#realtimeSessionId, attestation),
+			...liveSessionHeaders(access, this.#options.sessionId, this.#voiceSessionId, attestation),
 			Accept: "*/*",
 			"Content-Type": "application/json",
 		});
@@ -266,7 +267,7 @@ export class CodexLiveTransport {
 				await this.#openSideband(callId, access, attestation);
 				return;
 			} catch (cause) {
-				failure = cause instanceof Error ? cause : new Error(String(cause));
+				failure = toError(cause);
 				if (this.#options.signal?.aborted) throw abortReason(this.#options.signal);
 				if (attempt + 1 < SIDEBAND_CONNECT_ATTEMPTS) await Bun.sleep(200 * 2 ** attempt);
 			}
@@ -277,7 +278,7 @@ export class CodexLiveTransport {
 	async #openSideband(callId: string, access: OAuthAccess, attestation: string | undefined): Promise<void> {
 		const url = buildLiveSidebandUrl(callId);
 		const options = {
-			headers: liveSessionHeaders(access, this.#options.sessionId, this.#realtimeSessionId, attestation),
+			headers: liveSessionHeaders(access, this.#options.sessionId, this.#voiceSessionId, attestation),
 			proxy: getProxyForUrl(LIVE_PROVIDER, new URL(url)),
 		} satisfies Bun.WebSocketOptions;
 		const socket: Bun.WebSocket = Reflect.construct(WebSocket, [url, options]);

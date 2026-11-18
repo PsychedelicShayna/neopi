@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { SessionInfoOverlay } from "../src/overlays/session-info-overlay";
 import { initTheme } from "../src/theme/theme";
 import type { DescribeContext } from "../src/native/node";
@@ -45,4 +46,13 @@ describe("session information viewer navigation", () => {
 		expect(view.describe(cx).scroll?.by).toBe("end");
 		view.dispose();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { TUI } from "../src/index";
 import {
 	type MixtureConfigCallbacks,
@@ -82,7 +83,7 @@ function makeOverlay(
 		actions,
 		notices,
 		press,
-		choose: (query: string, key = ENTER) => press("/", "\x01", "\x0b", query, ESC, key),
+		choose: (query: string, key = ENTER) => press("/", "\x01", "\x0b", query, ENTER, key),
 	};
 }
 
@@ -419,7 +420,7 @@ describe("mixture menu navigation and history", () => {
 		const restored = makeOverlay({ mixtures: [] });
 		try {
 			h.press(ENTER);
-			h.press("/", "Description", "\x1b[D", ESC, "l");
+			h.press("/", "Description", "\x1b[D", ENTER, "l");
 			h.press("hjkl / draft", "\x1b[D");
 			const snapshot = h.overlay.navigationSnapshot();
 			restored.overlay.restoreNavigation(snapshot);
@@ -510,10 +511,20 @@ describe("mixture menu navigation and history", () => {
 			expect(h.overlay.navigationSnapshot().previewFocused).toBe(false);
 			expect(visits).toEqual([]);
 			h.press("/", "hjkl/ g");
-			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: true });
-			h.press(ESC);
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({
+				filter: "",
+				filterDraft: "hjkl/ g",
+				filterFocused: true,
+			});
+			h.press(ESC); // Insert -> Normal, still editing the search.
 			expect(h.actions).toEqual([]);
-			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "hjkl/ g", filterFocused: false });
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({
+				filter: "",
+				filterDraft: "hjkl/ g",
+				filterFocused: true,
+			});
+			h.press(ESC); // Cancel the draft and return to list navigation.
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
 			h.press(ESC);
 			expect(h.actions).toEqual(["close"]);
 		} finally {
@@ -581,7 +592,7 @@ describe("mixture menu navigation and history", () => {
 		try {
 			h.press(ENTER);
 			h.choose("Members");
-			h.press("/", "worker", "\x1b[D", ESC);
+			h.press("/", "worker", "\x1b[D", ENTER);
 			h.overlay.render(120);
 			h.press("G");
 			h.overlay.render(120);
@@ -646,7 +657,8 @@ describe("mixture menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().doc.mixtures).toHaveLength(1);
 			restored.press(ENTER);
 			restored.choose("Name", "l");
-			restored.press("2", ENTER, ESC);
+			restored.press("2", ENTER, ESC, ESC); // Clear the confirmed Name filter, then return to the root.
+			expect(restored.overlay.navigationSnapshot().context.page).toBe("list");
 			const root = restored.overlay.navigationSnapshot();
 			restored.press(ESC, DOWN, " ", "l");
 			expect(restored.actions).toEqual([]);
@@ -753,7 +765,7 @@ describe("mixture model continuation and pending ownership", () => {
 			h.choose("Members");
 			h.choose("writer");
 			h.choose("Model", "l");
-			h.press("/", "fixture", "\x1b[D", ESC);
+			h.press("/", "fixture", "\x1b[D", ENTER);
 			h.overlay.render(120);
 			const picker = h.overlay.navigationSnapshot().content;
 			h.press(ENTER);
@@ -857,7 +869,8 @@ describe("mixture model continuation and pending ownership", () => {
 		try {
 			h.press(ENTER);
 			h.choose("Name", "l");
-			h.press("2", ENTER, ESC);
+			h.press("2", ENTER, ESC, ESC); // Clear the confirmed Name filter, then return to the root.
+			expect(h.overlay.navigationSnapshot().context.page).toBe("list");
 			onIdle = saved.resolve;
 			h.press("s");
 			expect(h.overlay.blocksMenuHistory).toBe(true);
@@ -920,7 +933,8 @@ describe("mixture model continuation and pending ownership", () => {
 		try {
 			h.press(ENTER);
 			h.choose("Name", "l");
-			h.press("2", ENTER, ESC);
+			h.press("2", ENTER, ESC, ESC); // Clear the confirmed Name filter, then return to the root.
+			expect(h.overlay.navigationSnapshot().context.page).toBe("list");
 			recording = true;
 			h.press("a");
 			expect(h.overlay.blocksMenuHistory).toBe(true);
@@ -1014,4 +1028,13 @@ describe("mixture model continuation and pending ownership", () => {
 			restored.overlay.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

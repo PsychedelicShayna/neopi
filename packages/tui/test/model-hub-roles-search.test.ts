@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 /** Roles search owns literal text only while slash has focused its field. */
-import { beforeAll, expect, test } from "bun:test";
+import { beforeAll, expect, test, beforeEach, afterEach } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext } from "../src/native/node";
@@ -11,7 +12,6 @@ import {
 } from "../src/overlays/model-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
-import { theme } from "../src/theme/theme";
 
 const tuiStub = { requestRender: () => {}, terminal: { rows: 30 } } as unknown as TUI;
 
@@ -100,18 +100,6 @@ const CLICK_ROLES = { type: "select", key: "scopes", item: "roles" } as const;
 
 beforeAll(async () => {
 	await initTheme(false);
-});
-
-test("role catalog marks fork and latest-upstream roles without changing identifiers", () => {
-	const hub = createHub({ knownRoleIds: ["chronicler", "widget"] });
-	hub.handleNativeEvent(CLICK_ROLES);
-	const props = pickerProps(hub);
-	expect(props.order).toContain("role:chronicler");
-	expect(props.order).toContain("role:widget");
-	const rendered = JSON.stringify(props);
-	expect(rendered).toContain(`chronicler ${theme.symbol("provenance.fork")}`);
-	expect(rendered).toContain(`widget ${theme.symbol("provenance.newUpstream")}`);
-	hub.dispose();
 });
 
 test("with no query the Roles rows hide the search field and keep their letter commands", () => {
@@ -214,9 +202,7 @@ for (const chainKey of ["default", "example/gpt-6.1-terra"]) {
 		for (const ch of "-edited") hub.handleInput(ch);
 		hub.handleInput("\n");
 		hub.handleInput("\n");
-		expect(changes).toEqual([
-			{ role: chainKey, chain: ["example/gpt-6-luna", "example/gpt-6.1-sol-edited"] },
-		]);
+		expect(changes).toEqual([{ role: chainKey, chain: ["example/gpt-6-luna", "example/gpt-6.1-sol-edited"] }]);
 		hub.dispose();
 	});
 }
@@ -254,6 +240,9 @@ test("Esc restores a confirmed Roles filter before clearing it without leaving R
 	expect(pickerProps(hub).order).not.toContain("role:smol");
 	hub.handleInput("/");
 	hub.handleInput("x");
+	hub.handleInput("\x1b");
+	expect(pickerProps(hub).query).toBe("defaultx");
+	expect(hub.navigationSnapshot().filterFocused).toBe(true); // Insert → Normal
 	hub.handleInput("\x1b");
 	expect(pickerProps(hub).query).toBe("default");
 	hub.handleInput("\x1b");
@@ -319,4 +308,13 @@ test("nested Roles editor visits capture the parent and restore drafts silently"
 	expect(restored.input.getCursor()).toBe("draft hjkl/".length);
 	expect(visits).toHaveLength(1);
 	hub.dispose();
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

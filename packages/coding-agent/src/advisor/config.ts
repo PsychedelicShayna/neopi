@@ -11,6 +11,7 @@ import { writeFileAtomically } from "../utils/atomic-file";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE, ADVISOR_MAX_BUDGET_PER_UPDATE } from "./emission-guard";
 import { collectConfigCandidates, readBoundedText } from "./watchdog";
 import { materializeYamlAlias, parseYamlMappingDocument, yamlDocumentRoot } from "../config/yaml-document";
+import type { AgentAdvisor, InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 
 import {
 	ADVISOR_SESSION_SCOPES,
@@ -28,7 +29,11 @@ export {
 	ADVISOR_SYNC_BACKLOG_MODES,
 	slugifyAdvisorName,
 } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-export type { AdvisorReviewMode, AdvisorSessionScope, AdvisorSyncBacklog } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+export type {
+	AdvisorReviewMode,
+	AdvisorSessionScope,
+	AdvisorSyncBacklog,
+} from "@oh-my-pi/pi-tui/overlays/advisor-config";
 
 const WATCHDOG_ADVISOR_KEYS = [
 	"id",
@@ -146,6 +151,51 @@ type AdvisorYamlEntry = typeof advisorEntrySchema.infer;
 /** Validate inline/generated definitions through the same schema as WATCHDOG entries. */
 export function parseInlineAdvisorConfig(value: unknown): AdvisorConfig {
 	return editableAdvisorConfig(advisorEntrySchema.assert(value));
+}
+
+/** Parse a task's advisor selection without loading task-spawn or model-resolution runtime. */
+export function parseAgentAdvisor(value: unknown): AgentAdvisor | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (typeof value === "boolean") return value;
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (["true", "on", "yes"].includes(trimmed.toLowerCase())) return true;
+		if (["false", "off", "no"].includes(trimmed.toLowerCase())) return false;
+		return trimmed || undefined;
+	}
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("Advisor must be a boolean, model selector, named reference or inline definition");
+	}
+	if ("ref" in value && "inline" in value) throw new Error("Advisor cannot be both a reference and inline");
+	if ("ref" in value) {
+		if (typeof value.ref !== "string" || !value.ref.trim()) throw new Error("Advisor reference requires a name");
+		const scope = "scope" in value ? value.scope : undefined;
+		if (scope !== undefined && !["user", "project", "project-omp", "session"].includes(String(scope))) {
+			throw new Error("Invalid advisor reference scope");
+		}
+		return { ref: value.ref.trim(), ...(scope !== undefined ? { scope: scope as AdvisorConfigScope } : {}) };
+	}
+	if (!("inline" in value) || !value.inline || typeof value.inline !== "object" || Array.isArray(value.inline)) {
+		throw new Error("Advisor object requires ref or inline");
+	}
+	const inline: InlineAgentAdvisor = parseInlineAdvisorConfig({ name: "advisor", ...value.inline });
+	if ("delivery" in value.inline && value.inline.delivery !== undefined) {
+		const delivery = value.inline.delivery;
+		if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) {
+			throw new Error("Advisor delivery must map severities to timings");
+		}
+		inline.delivery = {};
+		for (const [severity, timing] of Object.entries(delivery)) {
+			if (
+				!["nit", "concern", "blocker"].includes(severity) ||
+				!["on-yield", "next-tool-call"].includes(String(timing))
+			) {
+				throw new Error(`Invalid advisor delivery: ${severity}`);
+			}
+			inline.delivery[severity as "nit" | "concern" | "blocker"] = timing as "on-yield" | "next-tool-call";
+		}
+	}
+	return { inline };
 }
 
 export function advisorDefinitionJsonSchema(): Record<string, unknown> {
@@ -297,7 +347,8 @@ function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): st
 
 /**
  * Discover advisor configs from `WATCHDOG.yml`/`WATCHDOG.yaml` files on the same
- * user + project search path as `WATCHDOG.md`. Persisted IDs distinguish even
+ * user + project search path as `WATCHDOG.md`, plus the current session's artifact
+ * directory. Persisted IDs distinguish even
  * identically named advisors; legacy entries retain name-slug precedence until
  * first save. More-specific files replace an earlier entry with the same key.
  * Top-level instructions concatenate into the shared baseline. Malformed files
@@ -437,11 +488,7 @@ export interface NamedAdvisor {
  * load order (later entries win for references without an exact scope).
  * Instructions and tools match runtime discovery; sourcePath stays exact for UI labels.
  */
-export async function listNamedAdvisors(
-	cwd: string,
-	agentDir?: string,
-	sessionDir?: string,
-): Promise<NamedAdvisor[]> {
+export async function listNamedAdvisors(cwd: string, agentDir?: string, sessionDir?: string): Promise<NamedAdvisor[]> {
 	const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 	const result: NamedAdvisor[] = [];
 	for (const file of discovered.files) {
@@ -457,7 +504,7 @@ export async function listNamedAdvisors(
 	return result;
 }
 
-/** Resolve a scope's canonical file beside its user, project, or session configuration. */
+/** Resolve the canonical user, project-root, project-.omp, or session roster file. */
 export function advisorConfigFilePath(
 	scope: AdvisorConfigScope,
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
@@ -470,9 +517,12 @@ function advisorConfigDirectory(
 	dirs: { projectDir: string; agentDir: string; sessionDir?: string },
 ): string {
 	switch (scope) {
-		case "user": return dirs.agentDir;
-		case "project": return dirs.projectDir;
-		case "project-omp": return path.join(dirs.projectDir, ".omp");
+		case "user":
+			return dirs.agentDir;
+		case "project":
+			return dirs.projectDir;
+		case "project-omp":
+			return path.join(dirs.projectDir, ".omp");
 		case "session":
 			if (!dirs.sessionDir) throw new Error("This session has no persistent artifact directory");
 			return dirs.sessionDir;
@@ -820,11 +870,42 @@ function patchWatchdogAdvisor(
 	}
 }
 
-function patchWatchdogDocument(source: string, doc: WatchdogConfigDoc, baseline?: WatchdogBaseline): string {
-	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) return serializeWatchdogConfig(doc);
+function patchWatchdogDocument(
+	source: string,
+	doc: WatchdogConfigDoc,
+	baseline?: WatchdogBaseline,
+	advisorField?: "enabled" | "id",
+): string {
+	if (!source.trim() && (!baseline || !baseline.sourceWasPresent)) {
+		if (advisorField) throw new Error("WATCHDOG source disappeared; reload before changing advisor fields");
+		return serializeWatchdogConfig(doc);
+	}
 	for (const advisor of doc.advisors) assertAdvisorCadence(advisor);
 	const document = parseYamlMappingDocument(source);
 	const root = yamlDocumentRoot(document);
+	if (advisorField) {
+		if (!baseline) throw new Error("Advisor field changes require a loaded WATCHDOG document");
+		const sequence = materializeYamlAlias(document, ["advisors"]);
+		if (!isSeq(sequence)) throw new Error("WATCHDOG advisors changed; reload before changing advisor states");
+		for (let index = 0; index < sequence.items.length; index++) {
+			materializeYamlAlias(document, ["advisors", index]);
+		}
+		const changes = baseline.origins.flatMap(origin => {
+			const advisor = doc.advisors.find(candidate => candidate === origin.advisor);
+			if (!advisor || advisor[advisorField] === origin.base[advisorField]) return [];
+			const resolved = resolveWatchdogAdvisorOrigin(document, sequence, origin, baseline.origins);
+			if (!resolved || resolved.map.get(advisorField) !== origin.base[advisorField]) {
+				throw new Error("WATCHDOG advisor changed; reload before changing advisor fields");
+			}
+			return [{ map: resolved.map, value: advisor[advisorField] }];
+		});
+		if (changes.length === 0) return source;
+		for (const change of changes) {
+			if (change.value === undefined) change.map.delete(advisorField);
+			else change.map.set(advisorField, change.value);
+		}
+		return document.toString({ lineWidth: 0 });
+	}
 	const topLevelValues = {
 		enabled: doc.enabled,
 		instructions: doc.instructions?.trim() ? doc.instructions : undefined,
@@ -986,11 +1067,17 @@ function ensureAdvisorIds(doc: WatchdogConfigDoc): void {
  * Write an editable doc under the file lock. Known fields are patched into the
  * latest document so comments, future fields, and disjoint edits survive. The
  * file is removed only when the resulting document is empty.
+ * Restricted field saves bypass identity migration and malformed-row repair;
+ * only that loaded advisor field may change, and stale targets fail atomically.
  */
-export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConfigDoc): Promise<void> {
+export async function saveWatchdogConfigFile(
+	filePath: string,
+	doc: WatchdogConfigDoc,
+	options?: { advisorField: "enabled" | "id" },
+): Promise<void> {
 	const storedBaseline = watchdogBaselines.get(doc);
 	const baseline = storedBaseline?.filePath === filePath ? storedBaseline : undefined;
-	ensureAdvisorIds(doc);
+	if (!options?.advisorField) ensureAdvisorIds(doc);
 	await withFileLock(filePath, async () => {
 		let source = "";
 		try {
@@ -1000,9 +1087,9 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 		}
 		let content: string;
 		try {
-			content = patchWatchdogDocument(source, doc, baseline);
+			content = patchWatchdogDocument(source, doc, baseline, options?.advisorField);
 		} catch (error) {
-			if (!watchdogRepairDocs.has(doc)) throw error;
+			if (options?.advisorField || !watchdogRepairDocs.has(doc)) throw error;
 			content = serializeWatchdogConfig(doc);
 		}
 		const root = yamlDocumentRoot(parseYamlMappingDocument(content));

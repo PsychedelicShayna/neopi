@@ -20,6 +20,10 @@
 	},
 	"colors": {
 		"accent": "accent",
+		"provenancePurple": "#c792ea",
+		"provenanceGold": "#e4c00f",
+		"provenanceSilver": "#b7c4d4",
+		"provenanceBronze": "#d59a6f",
 		"border": "blue",
 		"borderAccent": "cyan",
 		"borderMuted": "darkGray",

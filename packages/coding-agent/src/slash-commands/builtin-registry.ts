@@ -1,8 +1,10 @@
 import { entryProvenance } from "../config/entry-provenance";
+import type { Settings } from "../config/settings";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
+import { CHRONICLER_SLASH_COMMAND } from "./builtin-chronicler";
 import {
 	buildArgumentCompletions,
 	buildDirectoryArgumentCompletions,
@@ -52,13 +54,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
 	...BUILTIN_NEOPI_SLASH_COMMANDS,
+	CHRONICLER_SLASH_COMMAND,
 	AGENT_LAUNCHER_COMMAND,
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();
 for (const command of BUILTIN_SLASH_COMMAND_REGISTRY) {
 	BUILTIN_SLASH_COMMAND_LOOKUP.set(command.name, command);
-	for (const alias of command.aliases ?? []) {
+	for (const alias of [...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]) {
 		BUILTIN_SLASH_COMMAND_LOOKUP.set(alias, command);
 	}
 }
@@ -70,6 +73,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 	command => ({
 		name: command.name,
 		aliases: command.aliases,
+		hiddenAliases: command.hiddenAliases,
 		allowArgs: command.allowArgs === true,
 		// Getter: some descriptions name keys, formatted at read time (theme/preset may change).
 		get description() {
@@ -117,7 +121,7 @@ function materializeTuiBuiltinSlashCommand(
 	} else if (cmd.name === "local" && runtime) {
 		materialized.getArgumentCompletions = buildLocalFileArgumentCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
-	} else if (cmd.name === "switch" && runtime) {
+	} else if (cmd.name === "model" && runtime) {
 		materialized.getArgumentCompletions = buildModelSelectorCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.inlineHint) {
@@ -202,6 +206,7 @@ export async function executeBuiltinSlashCommand(
 			},
 			refreshCommands: () => ctx.refreshSlashCommandState(),
 			reloadPlugins: () => reloadTuiPluginState(ctx),
+			notifySessionPinChanged: (sessionId: string, pinned: boolean) => ctx.applySessionPin(sessionId, pinned),
 		};
 		const result = await command.handle(parsed, adapted);
 		clearSubmittedText(runtime);
@@ -209,6 +214,43 @@ export async function executeBuiltinSlashCommand(
 		return true;
 	}
 	return false;
+}
+
+/** One argument completion offered to a host without a terminal. */
+export interface SlashCommandCompletion {
+	/** Replaces the argument text the host typed. */
+	value: string;
+	label: string;
+	description?: string;
+	hint?: string;
+	/** Accepting it leaves a complete command: the host may submit at once. */
+	submitsCommand?: boolean;
+}
+
+/**
+ * Argument completions of a builtin for hosts without a terminal (RPC `get_command_completions`),
+ * the ones the TUI offers where they need no terminal state: settings-backed names, then the command's
+ * static completer, then its declarative subcommands. Empty for an unknown command or one with none.
+ */
+export async function getBuiltinCommandCompletions(
+	commandName: string,
+	argumentPrefix: string,
+	runtime: { settings: Settings },
+): Promise<SlashCommandCompletion[]> {
+	const spec = BUILTIN_SLASH_COMMAND_LOOKUP.get(commandName);
+	if (!spec) return [];
+	const items = spec.getHeadlessCompletions
+		? await spec.getHeadlessCompletions(argumentPrefix, runtime)
+		: await BUILTIN_SLASH_COMMANDS.find(command => command.name === spec.name)?.getArgumentCompletions?.(
+				argumentPrefix,
+			);
+	return (items ?? []).map(item => ({
+		value: item.value,
+		label: item.label,
+		...(item.description !== undefined ? { description: item.description } : {}),
+		...(item.hint !== undefined ? { hint: item.hint } : {}),
+		...(item.submitsCommand ? { submitsCommand: true } : {}),
+	}));
 }
 
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */

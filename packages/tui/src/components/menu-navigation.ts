@@ -83,7 +83,8 @@ export class MenuKeyReader {
 	read(data: string): MenuNavAction | "pending" | undefined {
 		const prefixed = this.#pendingG;
 		this.#pendingG = false;
-		if (matchesKey(data, "g")) {
+		const vim = getMenuSearchVimMode();
+		if (vim && matchesKey(data, "g")) {
 			if (prefixed) return { kind: "boundary", edge: "first" };
 			this.#pendingG = true;
 			return "pending";
@@ -91,22 +92,27 @@ export class MenuKeyReader {
 		const kb = this.#keybindings ?? getKeybindings();
 		if (kb.matches(data, "tui.select.cancel")) return { kind: "cancel" };
 		if (kb.matches(data, "tui.select.confirm") || data === "\n") return { kind: "confirm" };
-		if (matchesKey(data, "shift+g") || kb.matches(data, "tui.select.last")) return { kind: "boundary", edge: "last" };
+		if ((vim && matchesKey(data, "shift+g")) || kb.matches(data, "tui.select.last"))
+			return { kind: "boundary", edge: "last" };
 		if (kb.matches(data, "tui.select.first")) return { kind: "boundary", edge: "first" };
-		if (kb.matches(data, "tui.select.up") || matchesKey(data, "k") || matchesKey(data, "shift+k"))
+		if (kb.matches(data, "tui.select.up") || (vim && (matchesKey(data, "k") || matchesKey(data, "shift+k"))))
 			return { kind: "move", delta: -1 };
-		if (kb.matches(data, "tui.select.down") || matchesKey(data, "j") || matchesKey(data, "shift+j"))
+		if (kb.matches(data, "tui.select.down") || (vim && (matchesKey(data, "j") || matchesKey(data, "shift+j"))))
 			return { kind: "move", delta: 1 };
-		if (kb.matches(data, "tui.select.left") || matchesKey(data, "h") || matchesKey(data, "shift+h"))
+		if (kb.matches(data, "tui.select.left") || (vim && (matchesKey(data, "h") || matchesKey(data, "shift+h"))))
 			return { kind: "horizontal", delta: -1 };
-		if (kb.matches(data, "tui.select.right") || matchesKey(data, "l") || matchesKey(data, "shift+l"))
+		if (kb.matches(data, "tui.select.right") || (vim && (matchesKey(data, "l") || matchesKey(data, "shift+l"))))
 			return { kind: "horizontal", delta: 1 };
-		if (kb.matches(data, "tui.select.halfPageUp")) return { kind: "halfPage", delta: -1 };
-		if (kb.matches(data, "tui.select.halfPageDown")) return { kind: "halfPage", delta: 1 };
+		if ((vim || !matchesKey(data, "ctrl+u")) && kb.matches(data, "tui.select.halfPageUp"))
+			return { kind: "halfPage", delta: -1 };
+		if ((vim || !matchesKey(data, "ctrl+d")) && kb.matches(data, "tui.select.halfPageDown"))
+			return { kind: "halfPage", delta: 1 };
 		if (kb.matches(data, "tui.select.pageUp")) return { kind: "page", delta: -1 };
 		if (kb.matches(data, "tui.select.pageDown")) return { kind: "page", delta: 1 };
-		if (kb.matches(data, "tui.select.scrollUp")) return { kind: "scroll", delta: -1 };
-		if (kb.matches(data, "tui.select.scrollDown")) return { kind: "scroll", delta: 1 };
+		if ((vim || !matchesKey(data, "ctrl+y")) && kb.matches(data, "tui.select.scrollUp"))
+			return { kind: "scroll", delta: -1 };
+		if ((vim || !matchesKey(data, "ctrl+e")) && kb.matches(data, "tui.select.scrollDown"))
+			return { kind: "scroll", delta: 1 };
 		if (kb.matches(data, "tui.select.toggle")) return { kind: "toggle" };
 		if (kb.matches(data, "tui.select.prevContext")) return { kind: "context", delta: -1 };
 		if (kb.matches(data, "tui.select.nextContext")) return { kind: "context", delta: 1 };
@@ -128,7 +134,7 @@ export interface MenuSearchTheme {
 
 let menuSearchVimMode = false;
 
-/** Follow the host's editor preference, including changes while a menu is open. */
+/** Follow the host's shared Vim preference for navigation and editing, including live changes. */
 export function setMenuSearchVimMode(enabled: boolean): void {
 	menuSearchVimMode = enabled;
 }

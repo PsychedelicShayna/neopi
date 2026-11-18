@@ -30,8 +30,8 @@ app.history.search: []
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
-| `app.model.selectTemporary`  | `Alt+P`                                                               | Pick a model temporarily for this session                                                                                                                                            |
-| `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
+| `app.model.selectTemporary`  | `Alt+P`                                                               | Open the session-only model picker (`/model`): Big Pickle by default, or Small picker via `models.sessionPicker` |
+| `app.model.select`           | `Alt+M`                                                               | Open the role-management hub (`/roles`)                                                                                                                                                |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
 | `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
 | `app.navigation.back`        | `Ctrl+O`                                                              | Return to the previously visited menu (with its state) or the conversation; see [Menu navigation](#menu-navigation)                                                                 |
@@ -39,6 +39,7 @@ app.history.search: []
 | `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
 | `app.ask.hide`               | `Alt+H`                                                               | Hide a pending `ask` question to one line (the Hide button in Tern); the same key, `Enter`, or Show brings it back                                                                   |
+| `app.ask.note` | `N`, `Alt+N` | Add or edit a note on the highlighted `ask` option; dropdowns use the first key that does not type text, since letters jump to options. |
 | `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
 | `app.thinking.cycle`         | `Shift+Tab`                                                           | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
@@ -47,6 +48,7 @@ app.history.search: []
 | `app.repl.toggle`            | `Alt+Shift+R`                                                         | Toggle REPL mode between the agent and the last kernel (see `/repl`)                                                                                                                 |
 | `app.repl.execute`           | `Ctrl+Q`, `Ctrl+Enter`                                                | In REPL mode, run the composer in the selected kernel; outside REPL mode these chords stay follow-up                                                                                 |
 | `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |
+| `app.btw.inject` | Unbound | Send a `/btw` answer's steering prompt to the main session (needs `btw.inject`); assign a key in keybindings. NeoPi retains `Alt+I` for the IRC viewer. |
 | `app.retry`                  | `F5`, `Alt+R`                                                         | Retry the last failed assistant turn                                                                                                                                                 |
 | `app.display.reset`          | `Alt+L`                                                               | Reset terminal display                                                                                                                                                               |
 | `app.clipboard.copyLine`     | `Alt+Shift+L`                                                         | Copy the current line                                                                                                                                                                |
@@ -63,7 +65,7 @@ app.history.search: []
 | `app.sidebar.toggle`         | `Alt+T`                                                               | [Side panel view chord](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                        |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
-| `app.links.hint` | Unbound | Tag visible extension links for activation; assign a binding in keybindings. NeoPi retains `Alt+O` for menu history forward. |
+| `app.links.hint` | Unbound | Tag visible extension links to pick them; press the binding again or `Page Up` to browse all. Assign a binding in keybindings; NeoPi retains `Alt+O` for menu history forward. |
 | `app.approval.approve` | `Ctrl+Enter`, `Ctrl+Q` | Approve a pending tool call; Esc denies. |
 | `app.local.open` | `Alt+G` | Pick a session local file for the external editor. |
 | `app.session.pin` | `Alt+K` | Pin the selected resume-picker session. |
@@ -71,9 +73,13 @@ app.history.search: []
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
 
+Inside either session-model picker, press the configured `app.model.selectTemporary` shortcut again (normally `Alt+P`) to switch between the session model and a temporary Task-subagent override. The Task target has a red frame and a session-only cue; it does not change saved role assignments.
+
 ## Menu navigation
 
-Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+Vim navigation is **off by default**. Enable **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set `tui.vimMode: true`, to use the Vim motions below across menus, pickers, lists, overlays and viewers. The same setting enables [modal composer editing](#vim-editing-mode); there is no separate menu toggle. Changes apply to open menus as well as newly opened ones.
+
+Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focus, context switching and menu history remain available. Printable Vim motion keys are not intercepted as navigation, and Vim-only motion hints are hidden. Surface actions such as Space activation remain available in either mode. Menus normally open in navigation, not a text field; the search-first exceptions below are unchanged.
 
 | Keys | Action |
 | --- | --- |
@@ -88,11 +94,13 @@ Menus, pickers, and overlays open in normal navigation; arrows, PageUp/PageDown,
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
 
-The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. Pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom.
+The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
 
-Advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing. Inside nested configuration pages, `h` returns to the parent and `l` opens a navigable child, never an action.
+With Vim mode enabled, advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing in either mode. Inside nested configuration pages, Vim `h` returns to the parent and `l` opens a navigable child, never an action; ordinary arrow/context keys and Esc remain available without Vim mode.
 
-Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row and half-page motions still change the choice, and `Ctrl+E`/`Ctrl+Y` always scroll the viewport without selecting or submitting an answer.
+In model Roles, Vim `y`/`Y`/`p` copy an entry, copy its fallback chain, or append copied entries. `Alt+Y`, `Alt+Shift+Y` and `Alt+P` provide the same actions in either mode.
+
+Ask choices use ordinary list paging unless the selected answer's preview is taller than the viewport. For that oversized preview, PageUp/PageDown keep reading its content; row motions still change the choice. With Vim mode enabled, half-page motions also change the choice, and `Ctrl+E`/`Ctrl+Y` scroll the viewport without selecting or submitting an answer.
 
 In Ask, `a` adds a separate note to the highlighted offered option without selecting it. Repeat it for more notes, including on options you will not choose. `A` edits that option's latest note; submitting an empty edit removes that note. `n` keeps the existing single answer-level note. Option notes stay attached to their original labels when selections change and are included in review and the agent's answer.
 
@@ -106,11 +114,11 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Press `/` to enter pattern mode. Nothing filters until Enter confirms the draft and returns to navigation. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels and clears the search. Leaving the field without Enter discards its edits.
+Press `/` to enter pattern mode. Results preview the last valid draft live; Enter confirms the pattern and returns to navigation without activating a result. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels the draft and restores the confirmed pattern. With Vim enabled, the first Esc leaves Insert mode and the next cancels editing. Ctrl+C clears the search immediately. A native Close action leaves the focused search in one action in either mode. Leaving the field without Enter discards its edits.
 
-In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows normal navigation, including half-page and boundary motions, instead of pattern-entry hints.
+In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows navigation hints instead of pattern-entry hints; Vim half-page and boundary motions appear only when Vim mode is enabled.
 
-Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error and match nothing.
+Ordinary patterns use fuzzy matching, but punctuation-bearing words match their literal spelling rather than losing punctuation: `.{1000}` does not search for `1000`. Use `/pattern/` for **Vim search syntax, very-magic by default**. From navigation, type `//^claude/` then Enter: the first slash opens the field, and `/^claude/` is the pattern. The existing `/pattern` and `re:pattern` forms use the same dialect. Invalid or unsupported expressions show an inline error, retain the last valid preview, and cannot be confirmed.
 
 | Pattern text | Meaning |
 | --- | --- |
@@ -171,7 +179,7 @@ Older unqualified action names are migrated when `keybindings.yml` is loaded, bu
 
 ## Vim editing mode
 
-Off by default. Turn it on with **Vim Editing Mode** in `/settings` (Interaction → Input), or set it directly:
+Off by default. Turn it on with **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set it directly. This single setting also enables the [menu and viewer Vim motions](#menu-navigation) and modal editing in search composers:
 
 ```yaml
 tui.vimMode: true

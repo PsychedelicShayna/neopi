@@ -41,6 +41,7 @@ function harness(includeVoiceNote: () => boolean = () => true) {
 		modelRegistry: { authStorage: {} },
 		sessionId: "delegation-note-test",
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			allocateArtifactPath: async () => ({}),
 			appendCustomEntry(type: string, data: unknown) {
 				entries.push({ type, data });

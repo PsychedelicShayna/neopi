@@ -1,19 +1,20 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { tmpdir } from "node:os";
 import type { GraphObject, GraphRunRecord, GraphValue, RoutineGraph } from "@npi-deck/protocol";
 import { closeDb, getDb, openDb } from "../db/index.ts";
 import { createInbox, getInbox } from "../db/inbox.ts";
 import { createGraphRoutine, getGraphRun, listRuns, updateGraphRoutine } from "../db/routines.ts";
 import { listTasks } from "../db/tasks.ts";
-import { cardExecutionProperties } from "../card-properties.ts";
+import { cardExecutionProperties, cardFrontmatter } from "../card-properties.ts";
 import { buildRoutinesRouter } from "../routes-routines.ts";
 import { RoutinesRunner } from "../routines-runner.ts";
 import { notificationService, NotificationChannelRejectedError } from "../notifications/service.ts";
 import { executeGraph, findGraphOutput, readGraphPath } from "./graph-runner.ts";
 import { githubIssueTransport } from "./github-issues.ts";
 
-const root = "/home/shayna/.cache/npi-canary";
+const root = tmpdir();
 let home = "";
 let runner: RoutinesRunner;
 let oldHome: string | undefined;
@@ -73,6 +74,27 @@ test("production catalogue, HTTP save/reopen/run/trace and actual card service p
 	expect(cardExecutionProperties(stored.body)).toEqual({ readOnly: true, worktree: "/isolated/worktree" });
 	expect(findGraphOutput(result, "source")?.result.original).toEqual({ card: "source", value: false });
 	expect((await (await api.request(`/routines/${saved.id}/runs/${record.id}/graph`)).json() as GraphRunRecord).nodeRuns).toEqual(record.nodeRuns);
+});
+
+test("card actions import legacy bodies at persistence, retain originals and redact both metadata formats", async () => {
+	setup();
+	const sources = [
+		"---\n# original YAML\nread-only: true\npassword: private-card-body\ncustom: {empty: null}\n---\nResearch\n",
+		'+++\n# native TOML\nread-only = true\npassword = "private-card-body"\n[custom]\n[__npi]\nversion = 1\nnull_paths = ["/custom/empty"]\n+++\nResearch\n',
+	];
+	for (const [index, body] of sources.entries()) {
+		const title = `Metadata fixture ${index}`;
+		const routine = createGraphRoutine({ name: title, graph: flow("action.create-card", { title, body, properties: { worktree: "/isolated/worktree" } }) }, runner.graphRegistry);
+		await runner.fire(routine.id, "manual", { id: `metadata-${index}` });
+		const record = trace(routine.id);
+		expect(record.status).toBe("success");
+		const stored = listTasks().find(card => card.title === title)!;
+		expect(stored.body.startsWith("+++\n")).toBe(true);
+		expect(cardFrontmatter(stored.body).properties).toEqual({ "read-only": true, password: "private-card-body", custom: { empty: null }, worktree: "/isolated/worktree" });
+		expect(JSON.stringify(record)).not.toContain("private-card-body");
+		const originals = getDb().query<{ body: string }, [string]>("SELECT body FROM card_legacy_originals WHERE task_id = ?").all(stored.id);
+		expect(originals.map(row => row.body)).toEqual(index === 0 ? [body] : []);
+	}
 });
 
 test("card replay across run ids, restart, concurrent admission and explicit intentional repeats", async () => {

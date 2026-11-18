@@ -109,7 +109,6 @@ it.each([
 		const advisorStarted = Promise.withResolvers<void>();
 		const releaseAdvisor = Promise.withResolvers<void>();
 		const adviceAccepted = Promise.withResolvers<boolean>();
-		const completedReviewStarted = Promise.withResolvers<void>();
 		const continuationStarted = Promise.withResolvers<void>();
 		const releaseContinuation = Promise.withResolvers<void>();
 		const thirdTurnStart = Promise.withResolvers<void>();
@@ -154,7 +153,6 @@ it.each([
 						severity,
 					});
 				}
-				completedReviewStarted.resolve();
 				return textResponse("advisor quiet");
 			},
 		});
@@ -238,9 +236,6 @@ it.each([
 			if (continuation) {
 				await continuationStarted.promise;
 				await thirdTurnStart.promise;
-				// The queued completed review may still finish while the advisor's
-				// actual-yield continuation starts; delivery is cadence-independent.
-				await completedReviewStarted.promise;
 				expect(agent.state.isStreaming).toBe(true);
 				expect(agentStarts).toBe(2);
 				expect(turnStarts).toBe(3);

@@ -468,7 +468,7 @@ export class ModelPickerComponent implements Component {
 		}
 		const subtitle: TspPickerProps["subtitle"] = this.#configError
 			? [span(this.#configError, "error")]
-			: `${mode === "task" ? TASK_STATUS_HINT : mode === "selection" ? SELECT_ONLY_STATUS_HINT : mode === "role" ? QUICK_ROLE_STATUS_HINT : STATUS_HINT} · ${this.#browser.filterFocused ? "Enter confirm · Esc clear" : `/ search · j/k rows · Ctrl-u/d half${this.#hasTaskTarget && !this.#roleMode ? " · Tab target" : ""}`}`;
+			: `${mode === "task" ? TASK_STATUS_HINT : mode === "selection" ? SELECT_ONLY_STATUS_HINT : mode === "role" ? QUICK_ROLE_STATUS_HINT : STATUS_HINT} · ${this.#browser.filterFocused ? "Enter confirm · Esc clear" : `/ search · ↑/↓ rows · PgUp/PgDn page${this.#hasTaskTarget && !this.#roleMode ? " · Tab target" : ""}`}`;
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
 		const node = picker(
 			{
