@@ -85,17 +85,14 @@ describe("OAuth device-code polling", () => {
 		await expect(
 			login({
 				signal: controller.signal,
-				fetch: Object.assign(
-					async () =>
-						Response.json({
-							user_code: "ACTUAL-USER-CODE",
-							device_code: "private-polling-secret",
-							verification_uri: "https://example.com/verify",
-							interval: 0,
-							expires_in: 60,
-						}),
-					{ preconnect: fetch.preconnect },
-				),
+				fetch: (async () =>
+					Response.json({
+						user_code: "ACTUAL-USER-CODE",
+						device_code: "private-polling-secret",
+						verification_uri: "https://example.com/verify",
+						interval: 0,
+						expires_in: 60,
+					})) as typeof fetch,
 				onAuth: info => {
 					auth.push(info);
 					controller.abort();

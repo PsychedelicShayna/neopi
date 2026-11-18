@@ -1335,18 +1335,18 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		}
 	});
 
-	it("retires a top-clipped live placement when docked replay replaces the viewport with text", async () => {
+	it("(1d twin) a placement whose top scrolls off in the paint that draws it is archived at emit", async () => {
 		const s = scripted(10);
 		try {
 			await s.paint(() => ({ viewport: ["EDITOR"] }));
-			// The top-clipped block occupies rows 0..1 after the history append.
+			// 20 history rows retire while the block's APC lands at viewport index 1 (rows −3..1).
 			await s.paint(image => ({
 				history: lines("h", 20),
 				viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"],
 			}));
 			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
-			await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
-			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(false);
+			const commands = await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
+			expect(commands.filter(command => command.a === "d")).toEqual([]);
 		} finally {
 			s.tui.stop();
 		}
