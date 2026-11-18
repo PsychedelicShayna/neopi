@@ -92,7 +92,7 @@
 - RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
 - Linux source builds reuse verified native addons across worktrees through a shared cache; set `NPI_NATIVE_CACHE=off` to disable it.
 - Change a running subagent's reasoning level and fast mode through RPC, `npi ctl`, or its focused Agent Hub view without interrupting its turn; selections survive restart, and agent listings show current model and effort ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
-- Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug and the default remains `gpt-live-1-codex`.
+- Choose the model for the next live call with `live.model` in Settings or `/live model <slug>`; `/live model` shows the configured slug.
 - Launch named workers and advisors yourself with `/agent launch`, choose the model, supported effort, tools and orchestration, and confirm the resolved model and cost warning before spawning ([#13](https://github.com/PsychedelicShayna/neopi/issues/13)).
 - Opus 5 now receives an inspectable model-family adapter with scope discipline and effort guidance; customize or disable it independently through `npi prompts` ([#23](https://github.com/PsychedelicShayna/neopi/issues/23)).
 - Inspect, unpack, override and reset embedded prompt templates with `npi prompts`, browse the interpolation lexicon, and validate overrides with file-and-line diagnostics ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
@@ -289,6 +289,7 @@
 
 ### Changed
 
+- `/live` now requests `gpt-live-1.1-codex` by default and Settings → Providers → Services → Live Model switches between GPT Live 1.1 and GPT Live 1; the setting and `/live model` say the model is requested, because the service does not report which model answers ([#803](https://github.com/PsychedelicShayna/neopi/issues/803)).
 - Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.
 - HTML exports include the shared transcript and trace views with the current Markdown parser, while remaining self-contained and usable offline.
 - The `tts` tool now tells agents it exports a file rather than speaking the reply; using it for a conversation already covered by `speech.enabled` wastes a second synthesis. Speech documentation distinguishes this path from `omp say` playback and session-local `/voice` ([#573](https://github.com/PsychedelicShayna/neopi/issues/573)).
