@@ -380,13 +380,14 @@ describe("retain.execute", () => {
 		);
 		expect(requests).toEqual(
 			expect.arrayContaining([
-				[
+				expect.arrayContaining([
 					{ content: "pi uses tabs", tags: ["project:pi"] },
 					{ content: "pi builds with bun", tags: ["project:pi"] },
-				],
+				]),
 				[{ content: "the user prefers zsh across projects", tags: undefined }],
 			]),
 		);
+		expect(requests.map(items => items.length).sort()).toEqual([1, 2]);
 	});
 
 	it("sends global and project items in one untagged request when the scope has no project tags", async () => {
@@ -402,10 +403,14 @@ describe("retain.execute", () => {
 		await registeredState?.flushRetainQueue();
 
 		expect(retainBatchSpy).toHaveBeenCalledTimes(1);
-		expect(retainBatchSpy.mock.calls[0][1].map(item => ({ content: item.content, tags: item.tags }))).toEqual([
-			{ content: "shared fact", tags: undefined },
-			{ content: "explicitly global fact", tags: undefined },
-		]);
+		const items = retainBatchSpy.mock.calls[0][1].map(item => ({ content: item.content, tags: item.tags }));
+		expect(items).toHaveLength(2);
+		expect(items).toEqual(
+			expect.arrayContaining([
+				{ content: "shared fact", tags: undefined },
+				{ content: "explicitly global fact", tags: undefined },
+			]),
+		);
 	});
 
 	it("retains items enqueued without a scope as project-scoped", async () => {

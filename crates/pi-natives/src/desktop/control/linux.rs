@@ -215,8 +215,9 @@ impl X11 {
 				};
 				match &event {
 					Event::XkbNewKeyboardNotify(event) => {
-						// XTEST may replace the core keyboard without changing its map.
-						// A real remap or unreadable/replaced device still stops input.
+						// XTEST may replace the core keyboard without changing its
+						// map. A real remap or unreadable/replaced device still stops
+						// input.
 						if event.device_id != event.old_device_id
 							|| event.min_key_code != self.keyboard.first
 							|| event.max_key_code != self.keyboard.last
