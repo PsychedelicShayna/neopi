@@ -37,7 +37,7 @@ async function chromiumCanLaunch(): Promise<boolean> {
  * once: polling on would let a concurrent test server that grabs the freed
  * port answer `/json/version` with 200 and pass the probe falsely.
  */
-export async function chromiumCdpAvailable(executable: string, timeoutMs = 30_000): Promise<boolean> {
+export async function chromiumCdpAvailable(executable: string, timeoutMs = 5000): Promise<boolean> {
 	const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-chromium-probe-"));
 	let child: ChildProcess | undefined;
 	try {

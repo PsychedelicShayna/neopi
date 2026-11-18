@@ -75,7 +75,6 @@ class ReplayTestSession {
 	sessionManager: SessionManager;
 	sessionId: string;
 	model: Model | undefined = TEST_MODEL;
-	scopedModels = [];
 	thinkingLevel: string | undefined;
 	customCommands: [] = [];
 	skills: [] = [];

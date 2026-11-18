@@ -669,6 +669,20 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("names the provider's near ids when a deferred provider-qualified pattern stays unresolved", async () => {
+		const { session, modelFallbackMessage } = await createAgentSession(
+			buildSessionOptions("runtime-provider/runtime-modl"),
+		);
+
+		try {
+			expect(session.model).toBeUndefined();
+			expect(modelFallbackMessage).toContain('Model "runtime-provider/runtime-modl" not found');
+			expect(modelFallbackMessage).toContain("Did you mean runtime-provider/runtime-model");
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("does not resolve a disabled provider through deferred subagent model selection", async () => {
 		const settings = Settings.isolated({ disabledProviders: ["runtime-provider"] });
 		const { session, modelFallbackMessage } = await createAgentSession({

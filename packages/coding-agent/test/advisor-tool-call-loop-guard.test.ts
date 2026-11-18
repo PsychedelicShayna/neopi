@@ -342,7 +342,7 @@ describe("advisor tool-call loop guard", () => {
 		// continuation's final boundary reviews pre- and post-fix work together.
 		const completions = (context: Context) => JSON.stringify(context.messages).split("primary complete").length - 1;
 		const { reviewStarts } = createAdvisor(
-			{ "advisor.syncBacklog": "off", "advisor.delivery.concern": "on-yield" },
+			{ "advisor.syncBacklog": "off" },
 			0,
 			undefined,
 			1,

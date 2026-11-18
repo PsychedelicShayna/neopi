@@ -178,12 +178,8 @@ describe("AgentSession advisor toggle", () => {
 		it.each(["on-yield", "next-tool-call"] as const)(
 			`delivers ${severity ?? "omitted severity"} at %s without cancelling an active tool`,
 			async timing => {
-				const setting =
-					severity === "blocker"
-						? cfgAdvisorDeliveryBlocker
-						: severity === "concern"
-							? cfgAdvisorDeliveryConcern
-							: cfgAdvisorDeliveryNit;
+				const setting = severity === "blocker" ? cfgAdvisorDeliveryBlocker
+					: severity === "concern" ? cfgAdvisorDeliveryConcern : cfgAdvisorDeliveryNit;
 				setting.set(session.settings, timing);
 				const advisor = enableAdvisor();
 				vi.spyOn(advisor, "prompt").mockResolvedValue(undefined);
@@ -198,34 +194,24 @@ describe("AgentSession advisor toggle", () => {
 					originalSteer(message, options);
 					queued.resolve();
 				});
-				session.agent.setTools([
-					{
-						name: "probe",
-						label: "Probe",
-						description: "Wait for the test to release this tool.",
-						parameters: type({}),
-						interruptible: true,
-						execute: async (_id, _args, signal) => {
-							signal?.addEventListener(
-								"abort",
-								() => {
-									toolAborted = true;
-								},
-								{ once: true },
-							);
-							started.resolve();
-							await release.promise;
-							toolAborted ||= signal?.aborted === true;
-							return { content: [{ type: "text", text: "completed probe" }], details: {} };
-						},
+				session.agent.setTools([{
+					name: "probe",
+					label: "Probe",
+					description: "Wait for the test to release this tool.",
+					parameters: type({}),
+					interruptible: true,
+					execute: async (_id, _args, signal) => {
+						signal?.addEventListener("abort", () => { toolAborted = true; }, { once: true });
+						started.resolve();
+						await release.promise;
+						toolAborted ||= signal?.aborted === true;
+						return { content: [{ type: "text", text: "completed probe" }], details: {} };
 					},
-				]);
-				const mock = createMockModel({
-					responses: [
-						{ content: [{ type: "toolCall", id: "probe-1", name: "probe", arguments: {} }] },
-						{ content: ["done"] },
-					],
-				});
+				}]);
+				const mock = createMockModel({ responses: [
+					{ content: [{ type: "toolCall", id: "probe-1", name: "probe", arguments: {} }] },
+					{ content: ["done"] },
+				] });
 				session.agent.streamFn = mock.stream;
 				const running = session.prompt("Exercise delivery timing");
 				try {
@@ -249,12 +235,9 @@ describe("AgentSession advisor toggle", () => {
 				expect(mock.calls).toHaveLength(2);
 				const secondContext = JSON.stringify(mock.calls[1].context.messages);
 				expect(secondContext.includes("The probe needs a regression.")).toBe(timing === "next-tool-call");
-				expect(
-					session.messages.filter(
-						message =>
-							message.role === "custom" && String(message.content).includes("The probe needs a regression."),
-					),
-				).toHaveLength(1);
+				expect(session.messages.filter(message =>
+					message.role === "custom" && String(message.content).includes("The probe needs a regression."),
+				)).toHaveLength(1);
 			},
 		);
 	}
@@ -278,11 +261,9 @@ describe("AgentSession advisor toggle", () => {
 		expect(mock.calls).toHaveLength(2);
 		expect(JSON.stringify(mock.calls[1].context.messages)).toContain("Continue through the queued step.");
 		expect(JSON.stringify(mock.calls[1].context.messages)).not.toContain("Held until the whole run ends.");
-		expect(
-			session.messages.filter(
-				message => message.role === "custom" && String(message.content).includes("Held until the whole run ends."),
-			),
-		).toHaveLength(1);
+		expect(session.messages.filter(message =>
+			message.role === "custom" && String(message.content).includes("Held until the whole run ends."),
+		)).toHaveLength(1);
 	});
 
 	it("holds on-yield notes through a successor run queued after the final poll", async () => {
@@ -291,8 +272,9 @@ describe("AgentSession advisor toggle", () => {
 		const advise = adviseToolFor(advisor);
 		cfgAdvisorContinueSeverity.set(session.settings, "blocker");
 		const note = "Hold this note through the late-queued successor.";
-		const cards = () =>
-			session.messages.filter(message => message.role === "custom" && String(message.content).includes(note));
+		const cards = () => session.messages.filter(message =>
+			message.role === "custom" && String(message.content).includes(note),
+		);
 		let candidateYields = 0;
 		session.agent.setOnBeforeYield(async () => {
 			if (++candidateYields !== 1) return;
@@ -310,12 +292,10 @@ describe("AgentSession advisor toggle", () => {
 			});
 		});
 		const cardsAtProvider: number[] = [];
-		const mock = createMockModel({
-			handler: () => {
-				cardsAtProvider.push(cards().length);
-				return { content: ["done"] };
-			},
-		});
+		const mock = createMockModel({ handler: () => {
+			cardsAtProvider.push(cards().length);
+			return { content: ["done"] };
+		} });
 		session.agent.streamFn = mock.stream;
 		try {
 			await session.prompt("Finish before the late steer arrives");
@@ -347,20 +327,14 @@ describe("AgentSession advisor toggle", () => {
 		let providerCalls = 0;
 		session.agent.streamFn = async (requestModel, context, options) => {
 			if (++providerCalls === 1) {
-				await advise.execute("held", {
-					note: "Release this admitted concern on the next safe boundary.",
-					severity: "concern",
-				});
+				await advise.execute("held", { note: "Release this admitted concern on the next safe boundary.", severity: "concern" });
 				expect(steer).not.toHaveBeenCalled();
 				cfgAdvisorDeliveryConcern.set(session.settings, "next-tool-call");
 				await queued.promise;
 				expect(session.getAdvisorAgent()).toBe(advisor);
 				cfgAdvisorDeliveryConcern.set(session.settings, "on-yield");
 				cfgAdvisorDeliveryConcern.set(session.settings, "next-tool-call");
-				await advise.execute("repeat", {
-					note: "Release this admitted concern on the next safe boundary.",
-					severity: "concern",
-				});
+				await advise.execute("repeat", { note: "Release this admitted concern on the next safe boundary.", severity: "concern" });
 			}
 			return mock.stream(requestModel, context, options);
 		};
@@ -383,12 +357,10 @@ describe("AgentSession advisor toggle", () => {
 			await advise.execute("late-2", { note: "The second late regression is missing.", severity: "blocker" });
 		});
 		let primaryCalls = 0;
-		const mock = createMockModel({
-			handler: () => {
-				if (++primaryCalls === 2) continuationStarted.resolve();
-				return { content: ["done"] };
-			},
-		});
+		const mock = createMockModel({ handler: () => {
+			if (++primaryCalls === 2) continuationStarted.resolve();
+			return { content: ["done"] };
+		} });
 		session.agent.streamFn = mock.stream;
 		await session.prompt("Finish before the asynchronous review");
 		await reviewStarted.promise;
@@ -397,9 +369,8 @@ describe("AgentSession advisor toggle", () => {
 		await session.waitForIdle();
 		expect(review).toHaveBeenCalledTimes(1);
 		expect(mock.calls).toHaveLength(2);
-		const cards = session.messages.filter(
-			message => message.role === "custom" && String(message.content).includes("late regression"),
-		);
+		const cards = session.messages.filter(message => message.role === "custom" &&
+			String(message.content).includes("late regression"));
 		expect(cards).toHaveLength(1);
 		expect(JSON.stringify(cards[0])).toContain("first late regression");
 		expect(JSON.stringify(cards[0])).toContain("second late regression");
@@ -1590,11 +1561,9 @@ describe("AgentSession advisor toggle", () => {
 						note: "The final result still needs a regression test.",
 						severity: "nit",
 					});
-					expect(
-						quotaSession.messages.some(message =>
-							JSON.stringify(message).includes("The final result still needs a regression test."),
-						),
-					).toBe(false);
+					expect(quotaSession.messages.some(message =>
+						JSON.stringify(message).includes("The final result still needs a regression test."),
+					)).toBe(false);
 				}
 				return mock.stream(requestModel, context, options);
 			};

@@ -370,7 +370,7 @@ describe("MCP list runtime join", () => {
 
 	test("shadowed rows with the production duplicate id are not toggleable", () => {
 		const toggles: Array<{ id: string; enabled: boolean }> = [];
-		const winner = { ...mcpExtension("active"), path: "/project/.omp/mcp.json" };
+		const winner = mcpExtension("active");
 		const shadowed: Extension = {
 			...mcpExtension("shadowed"),
 			id: "mcp:github",
@@ -383,20 +383,22 @@ describe("MCP list runtime join", () => {
 			onToggle: (id, enabled) => toggles.push({ id, enabled }),
 		});
 		list.setFocused(true);
-		list.restoreNavigation({ selected: `extension:${shadowed.id}:${shadowed.path}` });
+		list.render(80);
+		list.handleClick(4);
 		expect(list.getSelectedExtension()?.state).toBe("shadowed");
 		expect(list.getSelectedExtension()?.id).toBe("mcp:github");
-		list.activateSelected();
+		list.handleClick(4);
+		list.handleInput(" ");
 		expect(toggles).toEqual([]);
 
-		list.restoreNavigation({ selected: `extension:${winner.id}:${winner.path}` });
-		list.activateSelected();
+		list.handleClick(3);
+		list.handleClick(3);
 		expect(toggles).toEqual([{ id: "mcp:github", enabled: false }]);
 	});
 
 	test("disabled shadowed loser with the production duplicate id is not toggleable", () => {
 		const toggles: Array<{ id: string; enabled: boolean }> = [];
-		const winner = { ...mcpExtension("active"), path: "/project/.omp/mcp.json" };
+		const winner = mcpExtension("active");
 		const loser: Extension = {
 			...mcpExtension("disabled"),
 			id: "mcp:github",
@@ -409,10 +411,12 @@ describe("MCP list runtime join", () => {
 			onToggle: (id, enabled) => toggles.push({ id, enabled }),
 		});
 		list.setFocused(true);
-		list.restoreNavigation({ selected: `extension:${loser.id}:${loser.path}` });
+		list.render(80);
+		list.handleClick(4);
 		expect(list.getSelectedExtension()?.state).toBe("disabled");
 		expect(list.getSelectedExtension()?.id).toBe("mcp:github");
-		list.activateSelected();
+		list.handleClick(4);
+		list.handleInput(" ");
 		expect(toggles).toEqual([]);
 
 		const rendered = Bun.stripANSI(list.render(80).join("\n"));
