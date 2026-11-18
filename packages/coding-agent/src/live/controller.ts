@@ -165,7 +165,7 @@ export interface LiveSessionControllerOptions {
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
-	/** Realtime model slug, defaulting to gpt-live-1-codex. */
+	/** Realtime model slug requested for the call, defaulting to {@link DEFAULT_LIVE_MODEL}. */
 	model?: string;
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };

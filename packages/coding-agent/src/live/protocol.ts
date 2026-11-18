@@ -1,7 +1,16 @@
 import { isRecord } from "@oh-my-pi/pi-utils";
 
-/** Default Frameless Bidi model used by Codex Desktop live calls. */
-export const DEFAULT_LIVE_MODEL = "gpt-live-1-codex";
+/** Model requested when `live.model` is unset; matches the Codex CLI's `/voice` default. */
+export const DEFAULT_LIVE_MODEL = "gpt-live-1.1-codex";
+
+/**
+ * Frameless Bidi models offered in settings. Each is a request: the service has accepted an unknown
+ * slug, and its session events do not name the model that answers a call.
+ */
+export const LIVE_MODEL_OPTIONS = [
+	{ value: DEFAULT_LIVE_MODEL, label: "GPT Live 1.1" },
+	{ value: "gpt-live-1-codex", label: "GPT Live 1" },
+];
 
 /** Maximum UTF-8 payload size accepted by each context append. */
 export const CONTEXT_CHUNK_BYTES = 500;
