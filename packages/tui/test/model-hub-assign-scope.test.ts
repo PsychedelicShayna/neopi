@@ -116,7 +116,7 @@ function startWebAssign(key: (data: string) => void): void {
 	key("\r"); // dive into the roles rows
 	key("\r"); // activate the `web` role row → selector-choice strip
 	key("\r"); // confirm "pick model…" → assign mode
-	key("\x1b[D"); // return to provider scopes without changing the pending assignment
+	key("h"); // return to provider scopes without changing the pending assignment
 }
 
 function hopToProvider(hub: ModelHubComponent, provider: string): void {

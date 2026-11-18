@@ -82,16 +82,11 @@ function weakRefToLiveSession(id: string): WeakRef<AgentSession> {
 	return new WeakRef(localSession(session));
 }
 
-/** Keep the dereferenced target out of the polling coroutine's suspended frame. */
-function isCollected(ref: WeakRef<object>): boolean {
-	Bun.gc(true);
-	return ref.deref() === undefined;
-}
-
 async function collected(ref: WeakRef<object>, deadlineMs: number): Promise<boolean> {
 	const deadline = Date.now() + deadlineMs;
 	for (;;) {
-		if (isCollected(ref)) return true;
+		Bun.gc(true);
+		if (ref.deref() === undefined) return true;
 		if (Date.now() > deadline) return false;
 		await Bun.sleep(100);
 	}

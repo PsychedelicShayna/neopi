@@ -72,10 +72,6 @@ function setup(jobs: { running: JobsPanelJob[]; recent: JobsPanelJob[] } = JOBS)
 }
 
 describe("JobsSheet", () => {
-	beforeAll(async () => {
-		await initTheme(false);
-	});
-
 	it("lists running then settled jobs, oldest first, beside the first job's detail", () => {
 		const { sheet } = setup();
 		const root = sheet.describe(CX);
