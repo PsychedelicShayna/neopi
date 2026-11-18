@@ -82,6 +82,7 @@ export type {
 } from "@oh-my-pi/pi-tui/tools/task";
 // Tools (detail types and utilities)
 export * from "./tools";
+export * from "./tools/hashline-header-path";
 export * from "./utils/github";
 export * from "./utils/parent-watchdog";
 // UI components for extensions

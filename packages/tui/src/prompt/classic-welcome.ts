@@ -13,6 +13,7 @@ export function renderClassicWelcome(
 	version: string,
 	logoColored: readonly string[],
 	renderTip: (width: number) => string[],
+	versionSuffixes?: readonly string[],
 ): string[] {
 	// Box dimensions - responsive with max width and small-terminal support
 	const maxWidth = 100;
@@ -70,9 +71,11 @@ export function renderClassicWelcome(
 	// Top border with embedded title
 	const title = ` ${PRODUCT_NAME} v${version} `;
 	const titlePrefixRaw = hChar.repeat(3);
-	const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title);
-	const titleVisLen = visibleWidth(titlePrefixRaw) + visibleWidth(title);
 	const titleSpace = boxWidth - 2;
+	const baseLength = visibleWidth(titlePrefixRaw) + visibleWidth(title);
+	const suffix = versionSuffixes?.find(form => visibleWidth(form) + 1 <= titleSpace - baseLength);
+	const titleStyled = theme.fg("dim", titlePrefixRaw) + theme.fg("muted", title) + (suffix ? `${suffix} ` : "");
+	const titleVisLen = baseLength + (suffix ? visibleWidth(suffix) + 1 : 0);
 	if (titleVisLen >= titleSpace) {
 		lines.push(tl + truncateToWidth(titleStyled, titleSpace) + tr);
 	} else {

@@ -19,10 +19,16 @@ export default class ChronicleRecall extends Command {
 		to: Flags.string({ description: "Latest time (prefixes are inclusive)" }),
 		project: Flags.string({ description: "Project path substring" }),
 		session: Flags.string({ description: "Session id or prefix" }),
-		scope: Flags.string({ description: "all (CLI default), current (PI_SESSION_ID), session, or sessions", options: ["current", "all", "session", "sessions"] }),
+		scope: Flags.string({
+			description: "all (CLI default), current (PI_SESSION_ID), session, or sessions",
+			options: ["current", "all", "session", "sessions"],
+		}),
 		sessions: Flags.string({ description: "Session id or prefix (repeatable)", multiple: true }),
 		keywords: Flags.string({ description: 'Raw transcript prefilter, e.g. (daemon AND tmux) OR "session hub"' }),
-		"keyword-case-sensitive": Flags.boolean({ description: "Match transcript keywords case-sensitively", default: false }),
+		"keyword-case-sensitive": Flags.boolean({
+			description: "Match transcript keywords case-sensitively",
+			default: false,
+		}),
 		hint: Flags.string({ description: "An adjacent event remembered from around the same time" }),
 		resolution: Flags.string({ description: "Stop at year|month|week|day|hour and list candidate periods" }),
 		node: Flags.string({ description: "Search inside this candidate period key" }),

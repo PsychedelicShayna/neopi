@@ -58,7 +58,7 @@ closed because no trusted subject-assignment registry exists yet; it does not
 claim support for independently assigned non-project subject areas.
 
 Native card-agent bearers are produced and revoked by the CardAgentRunner
-consumer in #101, not by the KB producer in #102. The consumer must mount the
+consumer in [neodeck#101](https://github.com/PsychedelicShayna/neodeck/issues/101), not by the KB producer in [neodeck#102](https://github.com/PsychedelicShayna/neodeck/issues/102). The consumer must mount the
 KB router with its live token resolver. Its actual native-worker regression
 checks distinct concurrent/run/reassignment tokens and server denial after
 completion, provider failure, cancellation, shutdown and a new in-process

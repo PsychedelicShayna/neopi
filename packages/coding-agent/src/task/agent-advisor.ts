@@ -1,40 +1,8 @@
 import type { AgentAdvisor, InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
-import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
-import { listNamedAdvisors, parseInlineAdvisorConfig } from "../advisor/config";
+import { listNamedAdvisors } from "../advisor/config";
 import { type AgentAdvisorSelection, resolveAgentAdvisorRolePattern, resolveAgentAdvisorSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import { expandAtImports } from "../discovery/at-imports";
-
-export function parseAgentAdvisor(value: unknown): AgentAdvisor | undefined {
-	if (value === undefined || value === null) return undefined;
-	if (typeof value === "boolean") return value;
-	if (typeof value === "string") {
-		const trimmed = value.trim();
-		if (["true", "on", "yes"].includes(trimmed.toLowerCase())) return true;
-		if (["false", "off", "no"].includes(trimmed.toLowerCase())) return false;
-		return trimmed || undefined;
-	}
-	if (typeof value !== "object" || Array.isArray(value)) throw new Error("Advisor must be a boolean, model selector, named reference or inline definition");
-	if ("ref" in value && "inline" in value) throw new Error("Advisor cannot be both a reference and inline");
-	if ("ref" in value) {
-		if (typeof value.ref !== "string" || !value.ref.trim()) throw new Error("Advisor reference requires a name");
-		const scope = "scope" in value ? value.scope : undefined;
-		if (scope !== undefined && !["user", "project", "project-omp", "session"].includes(String(scope))) throw new Error("Invalid advisor reference scope");
-		return { ref: value.ref.trim(), ...(scope !== undefined ? { scope: scope as AdvisorConfigScope } : {}) };
-	}
-	if (!("inline" in value) || !value.inline || typeof value.inline !== "object" || Array.isArray(value.inline)) throw new Error("Advisor object requires ref or inline");
-	const inline: InlineAgentAdvisor = parseInlineAdvisorConfig({ name: "advisor", ...value.inline });
-	if ("delivery" in value.inline && value.inline.delivery !== undefined) {
-		const delivery = value.inline.delivery;
-		if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) throw new Error("Advisor delivery must map severities to timings");
-		inline.delivery = {};
-		for (const [severity, timing] of Object.entries(delivery)) {
-			if (!["nit", "concern", "blocker"].includes(severity) || !["on-yield", "next-tool-call"].includes(String(timing))) throw new Error(`Invalid advisor delivery: ${severity}`);
-			inline.delivery[severity as "nit" | "concern" | "blocker"] = timing as "on-yield" | "next-tool-call";
-		}
-	}
-	return { inline };
-}
 
 /** Explicit definitions replace catalog discovery for this spawn only; no catalog is written. */
 export async function resolveSpawnAdvisorConfig(selection: AgentAdvisorSelection | undefined, cwd: string, agentDir?: string, sessionDir?: string): Promise<InlineAgentAdvisor[] | undefined> {

@@ -67,7 +67,10 @@ async function readLive(
 		const deadline = Promise.withResolvers<never>();
 		const timer = setTimeout(() => deadline.reject(new Error("control endpoint timed out")), timeoutMs);
 		try {
-			snapshot = await Promise.race([(options.probeControl ?? probeControlEndpoint)(metadata, timeoutMs), deadline.promise]);
+			snapshot = await Promise.race([
+				(options.probeControl ?? probeControlEndpoint)(metadata, timeoutMs),
+				deadline.promise,
+			]);
 		} finally {
 			clearTimeout(timer);
 		}

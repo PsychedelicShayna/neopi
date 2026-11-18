@@ -136,6 +136,7 @@ import type { YieldQueue } from "./yield-queue";
 
 import {
 	cfgAdvisorActivation,
+	advisorVisibleToActivationSet,
 	advisorDeliveryTiming,
 	cfgAdvisorContinueSeverity,
 	cfgAdvisorEvictStaleResults,
@@ -147,7 +148,7 @@ import {
 } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
-import { cfgRetry, cfgTierAdvisor } from "./settings";
+import { cfgProvidersOpenaiCodexDaybreak, cfgRetry, cfgTierAdvisor } from "./settings";
 
 const ADVISOR_CODEX_SSE_MAX_ATTEMPTS = 1;
 
@@ -359,6 +360,9 @@ interface ActiveAdvisor {
 	syncBacklog: AdvisorSyncBacklog | undefined;
 	/** Eligible updates since the last reset; a review is scheduled at each multiple of the interval. */
 	eligibleUpdates: number;
+	/** An advisor continuation cancelled this advisor's review of the work it
+	 *  revises: the continuation's terminal boundary owes the review instead. */
+	reviewOwed: boolean;
 	/** Primary-turn count when the latest review was scheduled; the update that
 	 *  runs from it covers work up to this turn. Notes stamped with it so merged
 	 *  deliveries can show how many turns old each review was. */
@@ -372,6 +376,15 @@ interface ActiveAdvisor {
 	 * 3-strike drop can fire.
 	 */
 	providerWaitRetries: number;
+	/**
+	 * Credential switches spent on the current failing batch, bounded by one
+	 * traversal of `provider`'s account pool. A switch only predicts a free
+	 * sibling; when retries keep landing on the same capped account, the spent
+	 * budget hands recovery to model fallback, a bounded wait, or the quota
+	 * latch (issue #17472). A fallback to another provider starts that provider's
+	 * own budget. Reset with {@link providerWaitRetries}.
+	 */
+	credentialSwitches: { provider: string; count: number } | undefined;
 	signature: string;
 }
 /** First index whose provider usage may anchor the advisor's context estimate. */
@@ -417,6 +430,7 @@ interface AdvisorRuntimeDescriptor {
 interface AdvisorCarry {
 	held: AdvisorHeldUpdates | undefined;
 	eligibleUpdates: number;
+	reviewOwed: boolean;
 }
 
 /** Options for the headless advisor drain ({@link SessionAdvisors.waitForAdvisorCatchup}). */
@@ -496,8 +510,8 @@ export interface SessionAdvisorsHost {
 	yieldQueue: YieldQueue;
 	obfuscator(): SecretObfuscator | undefined;
 	providerSessionState: Map<string, ProviderSessionState>;
-	/** Live `providers.openaiWebsockets` hint for provider calls. */
-	preferWebsockets(): boolean | undefined;
+	/** Per-model WebSocket preference from the live transport settings (Codex and standard Responses). */
+	preferWebsockets(model: Model): boolean | undefined;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
@@ -597,7 +611,7 @@ export class SessionAdvisors {
 	#advisorProviderSessionIds = new Map<string, string>();
 	#advisorCosts = new Map<string, number>();
 	/**
-	 * Slugs whose recorded spend ran on an OAuth/subscription model. Kept in
+	 * Slugs whose recorded spend ran on a subscription model. Kept in
 	 * lockstep with {@link #advisorCosts} so {@link isUsingSubscription} can
 	 * attribute historical advisor spend without rescanning the model catalog
 	 * once the advisor runtime is gone (#10131).
@@ -640,7 +654,7 @@ export class SessionAdvisors {
 	 */
 	#advisorBoundaryNotes: AdvisorNote[] = [];
 	/** Primary-turn count when the staleness header last shipped; `undefined`
-	 *  until the first merged delivery. Gates {@link ADVISOR_BOUNDARY_GUIDANCE}
+	 *  until the first merged delivery. Gates the configured boundary guidance
 	 *  to at most once per {@link ADVISOR_BOUNDARY_GUIDANCE_TURNS} turns. */
 	#advisorBoundaryGuidanceLastTurn: number | undefined;
 	#advisorInterruptImmuneTurnStart: number | undefined;
@@ -675,9 +689,10 @@ export class SessionAdvisors {
 		willContinue: boolean | undefined,
 		signal?: AbortSignal,
 	): Promise<void> {
+		const terminalBoundary = willContinue !== true;
 		// Delivery state follows primary boundaries even when review cadence skips a callback.
 		this.#advisorPrimaryWillContinue = willContinue === true;
-		this.#terminalUnwindActive = willContinue !== true;
+		this.#terminalUnwindActive = terminalBoundary;
 		this.#advisorPrimaryTurnsCompleted++;
 		// Candidate-final callbacks batch eligible next-tool-call notes only.
 		// They are not run ends: held on-yield notes cannot be released here.
@@ -685,6 +700,9 @@ export class SessionAdvisors {
 		try {
 			// A boundary of a continuation the advisor itself started is captured but
 			// never schedules a review: the next genuinely started boundary reviews it.
+			// The exception is the terminal boundary owed by an advisor whose review
+			// the continuation cancelled: scheduled whatever the cadence, and as a
+			// stand-in for the cancelled review it does not advance cadence.
 			const continuation = this.#advisorContinuation;
 			const advisorContinuation =
 				continuation !== undefined && lastPrimaryUserMessage(messages) === continuation.userMessage;
@@ -705,8 +723,10 @@ export class SessionAdvisors {
 				const reviewMode = advisor.reviewMode ?? defaultReviewMode;
 				const eligible = !advisorContinuation && !(reviewMode === "agent-end" && willContinue === true);
 				if (eligible) advisor.eligibleUpdates++;
+				const owed = advisorContinuation && terminalBoundary && advisor.reviewOwed;
+				if (terminalBoundary) advisor.reviewOwed = false;
 				const scheduled =
-					eligible && advisor.eligibleUpdates % (advisor.reviewInterval ?? defaultReviewInterval) === 0;
+					owed || (eligible && advisor.eligibleUpdates % (advisor.reviewInterval ?? defaultReviewInterval) === 0);
 				if (scheduled) {
 					scheduledAdvisors ??= [];
 					scheduledAdvisors.push(advisor);
@@ -894,8 +914,8 @@ export class SessionAdvisors {
 	}
 
 	/**
-	 * Slugs whose restored spend ran on a provider that currently authenticates
-	 * via OAuth — the persisted-spend equivalent of the live {@link isUsingSubscription}
+	 * Slugs whose restored spend ran on a provider currently using subscription
+	 * credentials — the persisted-spend equivalent of the live {@link isUsingSubscription}
 	 * check, so resumed sessions attribute subscription usage without a catalog scan.
 	 */
 	#deriveSubscriptionSlugs(
@@ -908,7 +928,7 @@ export class SessionAdvisors {
 		for (const [slug, providers] of providersBySlug) {
 			if ((costs.get(slug) ?? 0) <= 0) continue;
 			for (const provider of providers) {
-				if (auth.credentials.hasOAuth(provider)) {
+				if (auth.credentials.hasSubscription(provider)) {
 					slugs.add(slug);
 					break;
 				}
@@ -1138,11 +1158,12 @@ export class SessionAdvisors {
 			a.runtime.reset("conversation-boundary");
 			// A reset aborts any pending provider-block wait; clear its budget so the new
 			// conversation starts with a fresh retry allowance (issue #11947).
-			a.providerWaitRetries = 0;
+			this.#resetRecoveryBudgets(a);
 			this.#releaseRefusalPin(a);
 			// Resets the emission guard and every tool-side note state together.
 			a.adviseTool.resetDeliveredNotes();
 			a.eligibleUpdates = 0;
+			a.reviewOwed = false;
 			this.#attachAdvisorRecorderFeed(a);
 		}
 		this.#advisorPrimaryTurnsCompleted = 0;
@@ -1168,7 +1189,7 @@ export class SessionAdvisors {
 		if (selected && emitWarnings) {
 			const visibleIds = new Set(
 				roster
-					.filter(config => activation.scope === "project" || config.sourceScope === "user")
+					.filter(config => advisorVisibleToActivationSet(activation.scope, config.sourceScope))
 					.map(config => config.id),
 			);
 			const skipped = [...selected].filter(id => !visibleIds.has(id)).length;
@@ -1201,7 +1222,7 @@ export class SessionAdvisors {
 			const active = selected
 				? config.id !== undefined &&
 					selected.has(config.id) &&
-					(activation.scope === "project" || config.sourceScope === "user")
+					advisorVisibleToActivationSet(activation.scope, config.sourceScope)
 				: config.enabled !== false;
 			if (!active) {
 				this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
@@ -1400,6 +1421,7 @@ export class SessionAdvisors {
 				carried.set(advisor.slug, {
 					held: advisor.runtime.releaseHeld(),
 					eligibleUpdates: advisor.eligibleUpdates,
+					reviewOwed: advisor.reviewOwed,
 				});
 				stale.push(advisor);
 			}
@@ -1587,10 +1609,10 @@ export class SessionAdvisors {
 			});
 			const baseAdvisorStreamFn = this.#advisorStreamFn ?? streamSimple;
 			const advisorStreamFn: StreamFn = (requestModel, context, streamOptions) => {
-				// Read per request so a mid-session `providers.openaiWebsockets` change reaches advisors.
+				// Read per request so transport setting changes reach existing advisors.
 				const options = {
 					...streamOptions,
-					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(),
+					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(requestModel),
 				};
 				if (requestModel.api === "openai-codex-responses") {
 					return baseAdvisorStreamFn(requestModel, context, {
@@ -1820,7 +1842,7 @@ export class SessionAdvisors {
 						advisorRef.recorder.commitTurn();
 						// A completed turn ended the provider-block episode — start the next
 						// block's bounded wait budget fresh.
-						advisorRef.providerWaitRetries = 0;
+						this.#resetRecoveryBudgets(advisorRef);
 						const fallback = advisorRef.retryFallback;
 						if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
 						advisorRef.retryFallbackPendingSuccess = false;
@@ -1833,7 +1855,7 @@ export class SessionAdvisors {
 					onTurnAbandoned: () => {
 						advisorRef.recorder.abandonTurn();
 						// The dropped batch ends this episode; the next batch gets a fresh budget.
-						advisorRef.providerWaitRetries = 0;
+						this.#resetRecoveryBudgets(advisorRef);
 					},
 					notifyFailure: error => {
 						this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
@@ -1887,9 +1909,11 @@ export class SessionAdvisors {
 				reviewInterval: descriptor.reviewInterval,
 				syncBacklog: descriptor.syncBacklog,
 				eligibleUpdates: carried?.get(slug)?.eligibleUpdates ?? 0,
+				reviewOwed: carried?.get(slug)?.reviewOwed ?? false,
 				pendingCoveredTurn: 0,
 				retryFallbackPendingSuccess: false,
 				providerWaitRetries: 0,
+				credentialSwitches: undefined,
 				signature,
 			};
 			this.#refreshAdvisorProviderIdentity(advisorRef);
@@ -2004,14 +2028,13 @@ export class SessionAdvisors {
 			this.#host.yieldQueue.enqueue("advisor", { note, severity, advisor: source, turn });
 			return;
 		}
-
-		this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), channel === "steer");
+		this.#deliverAdvisorBatch(notes, formatAdvisorBatchContent(notes), channel === "steer", advisor);
 	}
 
 	/**
 	 * Merged delivery of everything routed during a terminal-boundary window.
 	 * One message per boundary, carrying every note with per-advisor and
-	 * per-severity attribution, headed by {@link ADVISOR_BOUNDARY_GUIDANCE} so
+	 * per-severity attribution, headed by the configured boundary guidance so
 	 * the primary reads stale review output critically. Steering is decided per
 	 * note by the same {@link resolveAdvisorDeliveryChannel} policy live routing
 	 * uses — user-stop suppression, headless/terminal-yield preservation, and
@@ -2094,7 +2117,7 @@ export class SessionAdvisors {
 	 *  - ACP bridges with `deferAgentInitiatedTurns`: the client cannot show an
 	 *    agent-initiated turn as busy, so idle triggers are refused (#5628 review).
 	 */
-	#deliverAdvisorBatch(notes: AdvisorNote[], content: string, steer: boolean): void {
+	#deliverAdvisorBatch(notes: AdvisorNote[], content: string, steer: boolean, producer?: ActiveAdvisor): void {
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (steer) {
 			// Plan mode preserves would-be-steering advice as a visible card:
@@ -2109,10 +2132,15 @@ export class SessionAdvisors {
 				// preserved cards must not suppress later actionable concerns.
 				this.#recordAdvisorInterruptDelivered();
 				// A steer into a run still working only redirects it; one delivered
-				// while idle or past a terminal boundary starts the continuation
-				// that must not schedule another review.
+				// while idle or past a terminal boundary starts a continuation that
+				// revises the reviewed work. It supersedes every review of that work
+				// still running or queued, so none can re-raise what is being fixed;
+				// each advisor that lost one reviews at the continuation's end instead.
 				if (!this.#host.agent.state.isStreaming || this.#terminalUnwindActive || !this.#advisorPrimaryWillContinue) {
 					this.#advisorContinuation = { userMessage: lastPrimaryUserMessage(this.#host.agent.state.messages) };
+					for (const advisor of this.#advisors) {
+						if (advisor.runtime.supersede(advisor === producer)) advisor.reviewOwed = true;
+					}
 				}
 				void this.#host
 					.sendCustomMessage(
@@ -2140,7 +2168,7 @@ export class SessionAdvisors {
 			a.runtime.reset(reason);
 			// Match the conversation-boundary re-prime: a reset must not carry a
 			// pending wait's provider-block budget into the reset conversation.
-			a.providerWaitRetries = 0;
+			this.#resetRecoveryBudgets(a);
 			if (compacted) this.#releaseRefusalPin(a);
 		}
 	}
@@ -2177,9 +2205,9 @@ export class SessionAdvisors {
 	#recordAdvisorCost(advisor: ActiveAdvisor, message: AssistantMessage): void {
 		const cost = message.usage.cost.total;
 		this.#advisorCosts.set(advisor.slug, (this.#advisorCosts.get(advisor.slug) ?? 0) + cost);
-		// Cheap in-memory OAuth-credential check; captured now so subscription
-		// attribution survives the advisor runtime being torn down (#10131).
-		if (cost > 0 && Number.isFinite(cost) && this.#host.modelRegistry.isUsingOAuth(advisor.model)) {
+		// Capture credential attribution now so subscription spend survives
+		// the advisor runtime being torn down (#10131).
+		if (cost > 0 && Number.isFinite(cost) && this.#host.modelRegistry.isUsingSubscription(advisor.model)) {
 			this.#advisorSubscriptionSlugs.add(advisor.slug);
 		}
 	}
@@ -2363,7 +2391,7 @@ export class SessionAdvisors {
 				advisor.providerSessionId,
 				{ error: message, modelId: currentModel.id, signal },
 			);
-			if (rotation.switched) return true;
+			if (rotation.switched && this.#spendCredentialSwitch(advisor, currentModel.provider)) return true;
 		}
 
 		const retryAfterMs = extractProviderRetryHint(currentModel.provider, message);
@@ -2388,7 +2416,7 @@ export class SessionAdvisors {
 					signal,
 				},
 			);
-			if (outcome.switched) return true;
+			if (outcome.switched && this.#spendCredentialSwitch(advisor, currentModel.provider)) return true;
 			usageRetryAtMs = outcome.retryAtMs;
 			usageBlockedUntilMs = outcome.blockedUntilMs;
 			usageRequestedBlockedUntilMs = outcome.requestedBlockedUntilMs;
@@ -2534,6 +2562,26 @@ export class SessionAdvisors {
 			}
 		}
 		return waitOrDecline();
+	}
+
+	/**
+	 * Spend one credential switch from the advisor's one-pool-traversal budget
+	 * (stored accounts minus the failing one), the bound the main agent puts on
+	 * account-policy rotation. Returns false once spent: the auth layer's
+	 * `switched` only says a sibling looks unblocked, not that the next request
+	 * will use it.
+	 */
+	#spendCredentialSwitch(advisor: ActiveAdvisor, provider: string): boolean {
+		const spent = advisor.credentialSwitches?.provider === provider ? advisor.credentialSwitches.count : 0;
+		if (spent >= this.#host.modelRegistry.authStorage.credentials.list(provider).length - 1) return false;
+		advisor.credentialSwitches = { provider, count: spent + 1 };
+		return true;
+	}
+
+	/** Start the next failing batch with fresh provider-wait and credential-switch budgets. */
+	#resetRecoveryBudgets(advisor: ActiveAdvisor): void {
+		advisor.providerWaitRetries = 0;
+		advisor.credentialSwitches = undefined;
 	}
 
 	/**
@@ -2857,7 +2905,8 @@ export class SessionAdvisors {
 						promptCacheKey: advisorProviderSessionId,
 						metadata: advisorMetadata,
 						providerSessionState: this.#host.providerSessionState,
-						preferWebsockets: this.#host.preferWebsockets(),
+						preferWebsockets: this.#host.preferWebsockets(candidate),
+						codexAccessPrograms: cfgProvidersOpenaiCodexDaybreak.get(this.#host.settings),
 						codexCompaction,
 					},
 				);
@@ -3230,14 +3279,14 @@ export class SessionAdvisors {
 		return cost;
 	}
 	/**
-	 * Whether advisor spend should be attributed to an OAuth/subscription plan.
+	 * Whether advisor spend should be attributed to a subscription plan.
 	 * With live advisors it reflects their current models; once the runtime is
 	 * gone it consults the attribution recorded as spend accrued, so the status
 	 * line never rescans the model catalog per render (#10131).
 	 */
 	isUsingSubscription(): boolean {
 		if (this.#advisors.length > 0) {
-			return this.#advisors.some(a => this.#host.modelRegistry.isUsingOAuth(a.model));
+			return this.#advisors.some(a => this.#host.modelRegistry.isUsingSubscription(a.model));
 		}
 		return this.#advisorSubscriptionSlugs.size > 0;
 	}
@@ -3369,7 +3418,7 @@ export class SessionAdvisors {
 				config =>
 					config.id !== undefined &&
 					activation.ids?.includes(config.id) &&
-					(activation.scope === "project" || config.sourceScope === "user"),
+					advisorVisibleToActivationSet(activation.scope, config.sourceScope),
 			)
 			.map(config => config.name);
 		return `${precedence}\n${role}: ${activation.scope}-scoped activation set replaces enabled flags. Selected advisors: ${selectedNames.length ? selectedNames.join(", ") : "none"}.`;

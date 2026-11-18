@@ -1,6 +1,12 @@
+import { isRecord } from "@oh-my-pi/pi-utils";
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import { createEvalCustomTools, describeEvalTools } from "../task/eval-tools";
-import { resolveEffectiveSubagentPolicy } from "../task/structured-subagent";
+import { resolveSpawnPolicy } from "../task/spawn-policy";
+import {
+	invalidModelSelectorReason,
+	normalizeModelSelector,
+	resolveEffectiveSubagentPolicy,
+} from "../task/structured-subagent";
 import { type WorkPoolPeekResult, type WorkPoolStatus, WorkPoolRegistry } from "../task/workpool";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -22,12 +28,8 @@ export type EvalWorkpoolResult =
 	| WorkPoolPeekResult
 	| { dropped: string[] };
 
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function requireRecord(args: unknown): Record<string, unknown> {
-	if (!isUnknownRecord(args)) throw new ToolError("workpool() arguments must be an object");
+	if (!isRecord(args)) throw new ToolError("workpool() arguments must be an object");
 	return args;
 }
 
@@ -70,9 +72,18 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 
 	if (op === "create") {
 		const agent = optionalString(record, "agent");
+		const agentSelector = agent ?? resolveSpawnPolicy(options.session.getSessionSpawns()).defaultAgent;
 		const requestedName = optionalString(record, "name");
 		const context = optionalString(record, "context");
 		const tools = optionalTools(record);
+		const model = normalizeModelSelector(record.model);
+		const modelProblem = invalidModelSelectorReason(model, "workpool()", {
+			settings: options.session.settings,
+			invocationKind: "eval",
+		});
+		if (modelProblem) throw new ToolError(modelProblem);
+		// `record.model` is untyped here; only a string survives the selector check above.
+		const perCallModel = typeof model === "string" ? model : undefined;
 		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
 			throw new ToolError("Eval-defined tools are unavailable in plan mode.");
 		}
@@ -80,7 +91,8 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 			session: options.session,
 			invocationKind: "eval",
 			assignment: `Create workpool ${requestedName ?? agent ?? "worker"}`,
-			...(agent ? { agent } : {}),
+			agent: agentSelector,
+			...(perCallModel !== undefined ? { perCallModel } : {}),
 		});
 		const customTools = tools?.length
 			? createEvalCustomTools(options.session, await describeEvalTools(options.session, tools, options.signal))
@@ -98,6 +110,8 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 		const pool = registry.create(options.session, {
 			name,
 			policy,
+			agent: agentSelector,
+			...(perCallModel !== undefined ? { model: perCallModel } : {}),
 			...(context ? { context } : {}),
 			customTools,
 		});

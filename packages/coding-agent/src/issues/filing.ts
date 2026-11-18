@@ -21,8 +21,8 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import type { AsyncJobManager } from "../async/job-manager";
-import { AgentRegistry } from "../registry/agent-registry";
+import type { AsyncJobManagerApi } from "../async/job-manager";
+import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
 import * as sdk from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { SessionManager } from "../session/session-manager";
@@ -64,7 +64,7 @@ export interface IssueFilingRequest {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	settings: Settings;
 	modelRegistry: ModelRegistry;
-	asyncJobManager: AsyncJobManager;
+	asyncJobManager: AsyncJobManagerApi;
 	ownerId: string;
 	/** Directory holding this request's agent transcripts (inside the parent session's artifacts). */
 	sessionDir: string;
@@ -196,7 +196,7 @@ function describeInventory(inventory: IssueTargetInventory) {
 }
 
 /** Keeps a finished agent's transcript in the Agent Hub, like `/tan`; an aborted one is released. */
-async function retire(registry: AgentRegistry, session: AgentSession, agentId: string, aborted: boolean) {
+async function retire(registry: AgentRegistryApi, session: AgentSession, agentId: string, aborted: boolean) {
 	if (aborted) {
 		registry.setStatus(agentId, "aborted");
 		await session.dispose();

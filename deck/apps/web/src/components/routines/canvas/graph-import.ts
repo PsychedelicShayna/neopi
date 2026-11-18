@@ -19,7 +19,7 @@
  *      the actual data dependencies the runtime evaluates.
  *
  * Inferred edges are NOT persisted. Only `layout.edges` round-trips through
- * YAML; everything else is recomputed from `spec.steps` on every import.
+ * TOML; everything else is recomputed from `spec.steps` on every import.
  */
 import type {
 	RoutineLayoutEdge,

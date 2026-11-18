@@ -10,7 +10,14 @@ import path from "node:path";
 import { $env, Snowflake } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset, compilePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
+import { modelKind } from "@oh-my-pi/pi-catalog/types";
+import {
+	resolveAgentModelSelection,
+	resolveConfiguredModelPatterns,
+	resolveExplicitModelRole,
+	getModelMatchPreferences,
+	resolveModelOverride,
+} from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import { fillRoutingPolicy, parseRoutingPolicySelector, type RoutingPolicyFields } from "../config/routing-policies";
 import {
@@ -18,6 +25,7 @@ import {
 	validateAgentCompactionThresholdOverrides,
 } from "../config/compaction-threshold";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
+import type { Settings } from "../config/settings";
 import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -30,7 +38,12 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { type ConfiguredThinkingLevel, type TaskEffort, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	type TaskEffort,
+	parseConfiguredThinkingLevel,
+} from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
@@ -50,6 +63,8 @@ import {
 	type IsolationContext,
 	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
+	nativeWorkspace,
+	type OpenWorkspace,
 	persistNestedPatches,
 	prepareIsolationContext,
 	renderIsolationSummary,
@@ -57,6 +72,7 @@ import {
 } from "./isolation-runner";
 import { generateTaskName, sanitizeAgentId } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
+import { ovnfsWorkspace } from "./ovnfs";
 import { DEFAULT_SPAWN_AGENT, resolveSpawnPolicy } from "./spawn-policy";
 import { isBundledSeance, prepareSeance, type PreparedSeanceSession } from "./seance";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
@@ -83,7 +99,16 @@ import {
 	cfgTaskIsolationEnabled,
 	cfgTaskIsolationMerge,
 	cfgTaskMaxRecursionDepth,
+	cfgTaskPerCallModel,
+	ovnfsCommand,
+	perCallModelEnabled,
 } from "./settings";
+import {
+	assertPerCallModelApproved,
+	parentModelGrantPattern,
+	PerCallModelError,
+	type PerCallModelGrants,
+} from "./model-approval";
 
 /** Final structured completion metadata returned for a schema-bearing run. */
 export type StructuredSubagentSchemaResult = StructuredSubagentOutput;
@@ -123,12 +148,30 @@ export interface StructuredSubagentRequest {
 	agent?: string;
 	/** Saved source session selected for the bundled seance agent. */
 	sourceSession?: string;
+	/**
+	 * Model chosen by host code (SDK callers, `omp cleanse --model`) or, for the
+	 * bundled seance agent, the override of its source session's saved model.
+	 * Not gated by `task.perCallModel`.
+	 */
 	model?: string | string[];
 	/** Operator launcher restrictions, independent of eval-defined custom tools. */
 	tools?: string[];
 	spawns?: string[] | "*";
 	/** Refuse a spawn hook that changes the operator-confirmed model selector. */
 	confirmedModel?: string;
+	/**
+	 * Per-call `model` from the model-facing surfaces (task items, eval `agent()`
+	 * and `workpool()`): gated by `task.perCallModel`, exact-only, and limited to
+	 * operator-approved models.
+	 */
+	perCallModel?: string;
+	/**
+	 * The model-facing `model` of a task call naming the `seance` agent. Honoured as
+	 * the source-session override only when that name resolves to the bundled seance;
+	 * a project or user agent shadowing the name gets it as a {@link perCallModel}.
+	 */
+	seanceModel?: string | string[];
+
 	/** Presence, rather than truthiness, makes this the highest-priority schema. */
 	outputSchema?: unknown;
 	schemaMode?: StructuredSubagentSchemaMode;
@@ -204,9 +247,12 @@ export interface EffectiveSubagentPolicy {
 	compactionThresholdOverride?: CompactionThresholdPair;
 	/** Exact-name `task.agentAccountPools` entry: the only OAuth accounts the child may use, per listed provider. */
 	oauthAccountPools?: OAuthAccountPools;
+	/** Absent for a per-call `model`: a requested model that cannot run fails instead of falling back to the parent's. */
 	parentActiveModelPattern?: string;
 	/** Whether the child gets the `yield` tool; see {@link StructuredSubagentRequest.structured}. */
 	structured: boolean;
+	/** Present for a per-call `model`: every model the child sends to must stay approved by these grants. */
+	perCallModelGrants?: PerCallModelGrants;
 	schema: StructuredSubagentSchemaResolution;
 	planMode: boolean;
 	isIsolated: boolean;
@@ -214,6 +260,8 @@ export interface EffectiveSubagentPolicy {
 	applyChanges: boolean;
 	enableLsp: boolean;
 	enableIrc: boolean;
+	/** Caller `effort` hint to apply; dropped when the agent's level comes from the user's `^model:level` tag. */
+	effort?: TaskEffort;
 }
 
 /** Settled child execution plus data needed by the frontends' own rendering. */
@@ -246,13 +294,21 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
+/** Stands in for the assignment while the template is formatted. */
+const ASSIGNMENT_SLOT = "\u0000assignment\u0000";
+
+/**
+ * Format only the template, then insert the assignment with its interior
+ * whitespace intact, identically for inline and file-backed instructions.
+ */
 export function renderSubagentUserPrompt(assignment: string, cwd?: string, routing?: RoutingPolicyFields): string {
+	const text = assignment.trim().replace(/\r\n?/g, "\n");
 	return renderPromptAsset(
 		"system/subagent-user-prompt.md",
 		subagentUserPromptTemplate,
-		{ assignment: assignment.trim(), routing },
+		{ assignment: ASSIGNMENT_SLOT, routing },
 		{ cwd },
-	);
+	).replace(ASSIGNMENT_SLOT, () => text);
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -334,6 +390,121 @@ function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentNam
 	}
 }
 
+/** The per-call gate's refusal for `invocationKind` calls, or `undefined` when `task.perCallModel` allows them. */
+function perCallModelDisabledReason(settings: Settings, invocationKind: "task" | "eval"): string | undefined {
+	if (perCallModelEnabled(settings, invocationKind)) return undefined;
+	const mode = cfgTaskPerCallModel.get(settings);
+	const operatorMode = cfgTaskPerCallModel.get(settings.grantAuthority());
+	// Project settings can turn the gate off but never on, so name both values when they differ.
+	const setting = mode === operatorMode ? mode : `${operatorMode}, project: ${mode}`;
+	return `Per-call model is disabled for ${invocationKind} calls (task.perCallModel: ${setting}). Omit model to use the agent's configured model.`;
+}
+
+/**
+ * A blank `model` is absence, not a selector: callers that emit JSON pad optional
+ * fields with `""` or `[]`, and whitespace alone names no model.
+ */
+export function normalizeModelSelector<T>(model: T): T | undefined {
+	if (typeof model === "string") return model.trim() === "" ? undefined : model;
+	return Array.isArray(model) && model.length === 0 ? undefined : model;
+}
+
+/**
+ * Why a per-call `model` cannot be used before dispatch: the `task.perCallModel` gate first, so a
+ * caller is never told to fix a selector it may not send, then anything but one exact
+ * `provider/model-id[:level]` selector. `undefined` when there is no problem.
+ */
+export function invalidModelSelectorReason(
+	model: unknown,
+	label: string,
+	gate: { settings: Settings; invocationKind: "task" | "eval" },
+): string | undefined {
+	if (normalizeModelSelector(model) === undefined) return undefined;
+	const disabled = perCallModelDisabledReason(gate.settings, gate.invocationKind);
+	if (disabled) return disabled;
+	if (
+		typeof model !== "string" ||
+		!/^[^\s/@,*?[\]{}]+\/[^\s,*?{}]+$/.test(model.trim()) ||
+		// Settings make a legacy `pi/<custom role>` alias read as the role it names.
+		resolveExplicitModelRole(model.trim(), gate.settings) !== undefined
+	) {
+		return `${label} has an invalid \`model\` value ${JSON.stringify(model)}. Use one exact provider/model-id selector, optionally followed by a supported :level. Role aliases, patterns, and candidate arrays are not accepted.`;
+	}
+	return undefined;
+}
+
+/** Gate, validate and approve a per-call `model`; returns the grants the running child stays held to. */
+function preflightPerCallModel(
+	request: StructuredSubagentRequest,
+	selector: unknown,
+	agent: AgentDefinition,
+	hasModelOverride: boolean,
+	userTaggedEffort: boolean,
+	parentModelPattern: string | undefined,
+	forkSelector: string | undefined,
+): PerCallModelGrants {
+	const { settings, modelRegistry } = request.session;
+	const fail = (message: string): never => {
+		throw new StructuredSubagentError("preflight", message);
+	};
+	if (request.model !== undefined) fail("A call cannot supply both a host model and a per-call model.");
+	if (forkSelector !== undefined) {
+		fail(
+			`A call cannot combine agent selector ${JSON.stringify(forkSelector)} with a per-call model. Omit model to use the fork selector, or choose a named agent for the per-call model.`,
+		);
+	}
+	const disabled = perCallModelDisabledReason(settings, request.invocationKind);
+	if (disabled) fail(disabled);
+	if (isBundledSeance(agent)) fail(`Per-call model is not supported for the \`${SEANCE_AGENT_NAME}\` agent.`);
+	if (hasModelOverride) {
+		fail(
+			`Per-call model conflicts with task.agentModelOverrides for agent "${agent.name}". Omit model to use the configured override.`,
+		);
+	}
+	if (userTaggedEffort) {
+		fail(
+			`Per-call model conflicts with the user's \`^model:level\` tag for agent "${agent.name}". Omit model to use the tagged model and effort.`,
+		);
+	}
+	const selectorProblem = invalidModelSelectorReason(selector, "The call", {
+		settings,
+		invocationKind: request.invocationKind,
+	});
+	if (selectorProblem) fail(selectorProblem);
+	const perCallModel = selector as string;
+	const grants: PerCallModelGrants = {
+		settings,
+		agentName: agent.name,
+		agentModel: agent.model,
+		agentSource: agent.source,
+		parentModelPattern,
+		matchPreferences: structuredClone(getModelMatchPreferences(settings.grantAuthority())),
+	};
+	// A cold registry is checked again in the executor once models are loaded.
+	const available = modelRegistry?.getAvailable("all");
+	if (!modelRegistry || !available?.length) return grants;
+	const model = resolveModelOverride([perCallModel], { getAvailable: () => available }, settings, {
+		exactOnly: true,
+	}).model;
+	// Discovery still running may add it; the executor checks again once the refresh settles.
+	if (!model && modelRegistry.isBackgroundRefreshPending()) return grants;
+	if (!model || modelKind(model) !== "chat") {
+		throw new StructuredSubagentError(
+			"preflight",
+			model
+				? `\`model\` ${JSON.stringify(perCallModel)} is a ${modelKind(model)} model; a subagent needs a chat model.`
+				: `No available model matches \`model\` ${JSON.stringify(perCallModel)}. Use the exact provider/model-id and a supported thinking level. Stop and report an unavailable model instead of substituting another or dropping \`model\`.`,
+		);
+	}
+	try {
+		assertPerCallModelApproved(model, grants, modelRegistry);
+	} catch (error) {
+		if (error instanceof PerCallModelError) fail(error.message);
+		throw error;
+	}
+	return grants;
+}
+
 /**
  * In-flight agent discovery, keyed by resolved cwd, the effective extension
  * roots and the provider/source toggles `discoverAgents` consults. Concurrent
@@ -375,7 +546,10 @@ function discoverAgentsShared(cwd: string, extensionRoots?: EffectiveExtensionRo
 export async function resolveEffectiveSubagentPolicy(
 	request: StructuredSubagentRequest,
 ): Promise<EffectiveSubagentPolicy> {
-	await request.session.settings.reloadFromDisk();
+	// A per-call model is approved against the operator settings behind any overlay, so reload those too.
+	await request.session.settings.reloadFromDisk({
+		includeParents: request.perCallModel !== undefined || request.seanceModel !== undefined,
+	});
 	const spawnPolicy = resolveSpawnPolicy(request.session.getSessionSpawns());
 	let selector = request.agent?.trim() || spawnPolicy.defaultAgent;
 	let routing: RoutingPolicyFields | undefined;
@@ -408,7 +582,8 @@ export async function resolveEffectiveSubagentPolicy(
 	assertDepthAndSpawnAllowed(request, selectorShaped ? DEFAULT_SPAWN_AGENT : selector);
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
-	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
+	const sessionAgents = request.session.getSessionAgents?.() ?? [];
+	const agents = [...discovery.agents, ...sessionAgents];
 	let agent = getAgent(agents, selector);
 	/** Model selector routed into the request-model channel for the generic task agent. */
 	let selectorModel: string | undefined;
@@ -466,7 +641,7 @@ export async function resolveEffectiveSubagentPolicy(
 				invocationKind: request.invocationKind,
 				agent,
 				sourceSession: request.sourceSession,
-				model: request.model,
+				model: request.seanceModel ?? request.model,
 				planMode,
 				isolationRequested: request.isolation?.requested === true,
 				hasCustomTools: (request.customTools?.length ?? 0) > 0,
@@ -480,7 +655,7 @@ export async function resolveEffectiveSubagentPolicy(
 		}
 	}
 
-const selectedAgent = {
+	const selectedAgent = {
 		...agent,
 		...(request.tools !== undefined ? { tools: request.tools } : {}),
 		...(request.spawns !== undefined ? { spawns: request.spawns } : {}),
@@ -523,7 +698,33 @@ const selectedAgent = {
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(request.session.settings));
 	const oauthAccountPools = Object.hasOwn(agentAccountPools, agentName) ? agentAccountPools[agentName] : undefined;
 	const hasPreparedSeance = preparedSeance !== undefined;
-	const parentActiveModelPattern = hasPreparedSeance ? undefined : request.session.getActiveModelString?.();
+	// A `seance` name that resolved to anything but the bundled agent is an ordinary agent: its `model` is per-call.
+	const perCallSelector: unknown = request.perCallModel ?? (isBundledSeance(agent) ? undefined : request.seanceModel);
+	const parentActiveModel = request.session.getActiveModel?.();
+	const userTaggedEffort =
+		sessionAgents.includes(agent) &&
+		agent.thinkingLevel !== undefined &&
+		agent.thinkingLevel !== AUTO_THINKING &&
+		agent.model?.[0]?.endsWith(`:${agent.thinkingLevel}`) === true;
+	const perCallModelGrants =
+		perCallSelector === undefined
+			? undefined
+			: preflightPerCallModel(
+					request,
+					perCallSelector,
+					agent,
+					Object.hasOwn(agentModelOverrides, agentName),
+					userTaggedEffort,
+					// A multi-upstream or otherwise richer parent route cannot grant a simpler selector.
+					parentActiveModel
+						? parentModelGrantPattern(parentActiveModel)
+						: request.session.getActiveModelString?.(),
+					routing || selectorModel !== undefined || callerThinkingLevel !== undefined
+						? request.agent?.trim() || spawnPolicy.defaultAgent
+						: undefined,
+				);
+	const parentActiveModelPattern =
+		hasPreparedSeance || perCallModelGrants ? undefined : request.session.getActiveModelString?.();
 	const modelResolution = {
 		requestModel: preparedSeance?.modelPatterns ?? selectorModel ?? request.model ?? routing?.model,
 		settingsOverride: hasPreparedSeance ? undefined : agentModelOverrides[agentName],
@@ -534,8 +735,11 @@ const selectedAgent = {
 	};
 	// Role identity and patterns come from one call so they cannot be derived
 	// from different sources: the expansion below discards the alias, and the
-	// child's inherited retry-fallback chain is keyed off the role.
-	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
+	// child's inherited retry-fallback chain is keyed off the role. A per-call
+	// model is already one exact selector and stays literal, never a role alias.
+	const { patterns: modelOverride, role: modelRole } = perCallModelGrants
+		? { patterns: [(perCallSelector as string).trim()], role: undefined }
+		: resolveAgentModelSelection(modelResolution);
 	if (callerThinkingLevel !== undefined) {
 		const effortPatterns = modelOverride ?? (parentActiveModelPattern ? [parentActiveModelPattern] : []);
 		try {
@@ -569,7 +773,7 @@ const selectedAgent = {
 		effectiveAgent,
 		modelOverride,
 		routing,
-		callerModelSelector: selectorModel ?? request.model ?? routing?.model,
+		callerModelSelector: (perCallSelector as string | undefined) ?? selectorModel ?? request.model ?? routing?.model,
 		callerThinkingLevel,
 		preparedSession: preparedSeance?.session,
 		modelRole,
@@ -577,6 +781,7 @@ const selectedAgent = {
 		compactionThresholdOverride,
 		oauthAccountPools,
 		parentActiveModelPattern,
+		perCallModelGrants,
 		structured,
 		schema,
 		planMode,
@@ -595,6 +800,7 @@ const selectedAgent = {
 			(request.enableIrc ??
 				(request.session.enableIrc !== false &&
 					isIrcEnabled(request.session.settings, request.session.taskDepth ?? 0))),
+		effort: userTaggedEffort ? undefined : request.effort,
 	};
 }
 
@@ -632,6 +838,9 @@ async function applySpawnHook(
 	if (spawnResult?.model === undefined) return policy;
 	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
 	if (replacement.length === 0) return policy;
+	if (policy.perCallModelGrants && (replacement.length !== 1 || replacement[0] !== policy.modelOverride?.[0])) {
+		throw new StructuredSubagentError("preflight", "The spawn hook cannot replace a per-call model.");
+	}
 	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
 }
 
@@ -702,7 +911,11 @@ function buildExecutorOptions(
 	const preparedSession = policy.preparedSession;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = request.tools !== undefined || preparedSession !== undefined || policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames =
+		request.tools !== undefined ||
+		preparedSession !== undefined ||
+		policy.planMode ||
+		session.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
@@ -735,8 +948,9 @@ function buildExecutorOptions(
 		compactionThresholdOverride: policy.compactionThresholdOverride,
 		oauthAccountPools: policy.oauthAccountPools,
 		parentActiveModelPattern: policy.parentActiveModelPattern,
+		perCallModelGrants: policy.perCallModelGrants,
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
-		effort: request.effort,
+		effort: policy.effort,
 		solutionSpace: request.solutionSpace?.trim() || undefined,
 		structured: policy.structured,
 		...(policy.schema.source === "none"
@@ -766,6 +980,7 @@ function buildExecutorOptions(
 		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
+		mcpToolScope: session.mcpToolScope,
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
@@ -781,7 +996,10 @@ function buildExecutorOptions(
 		// Root policy and module paths have separate jobs: the live policy drives
 		// recursive sub-discovery; preloaded paths only avoid re-scanning/reusing
 		// parent-bound extension instances while constructing the child.
-		extensionRoots: session.effectiveExtensionRoots?.bind(session),
+		// Forward the provider itself, never bound to `session`: the child's revive
+		// capture outlives its parking, so a bound copy would keep this parent's
+		// whole session graph alive for as long as the child can be revived.
+		extensionRoots: session.effectiveExtensionRoots,
 		preloadedExtensionPaths: restrictToolNames ? [] : session.extensionPaths,
 		preloadedPreparedExtensions: session.preparedExtensions,
 		preloadedCustomToolPaths: restrictToolNames ? [] : session.customToolPaths,
@@ -812,6 +1030,13 @@ async function loadPlanReference(
 		request.session.getPlanReferencePath?.() ?? "local://PLAN.md",
 		sessionLocalProtocolOptions(request.session),
 	);
+}
+
+/** Isolated runs work in ovnfs checkouts when `isolation.backend` is auto and ovnfs is found, else in native clones. */
+function openIsolatedWorkspace(settings: Settings): OpenWorkspace {
+	const backend = cfgIsolationBackend.get(settings);
+	const ovnfs = backend === "auto" ? ovnfsCommand(settings) : undefined;
+	return ovnfs ? ovnfsWorkspace(ovnfs) : nativeWorkspace(parseIsolationBackend(backend));
 }
 
 function buildFailureResult(
@@ -1029,7 +1254,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
-					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
+					openWorkspace: openIsolatedWorkspace(request.session.settings),
 					agentId: id,
 					mergeMode: policy.mergeMode,
 					artifactsDir: lease.artifactsDir,

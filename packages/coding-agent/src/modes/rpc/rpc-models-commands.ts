@@ -210,6 +210,7 @@ export class RpcModelsCommands {
 						controller.signal.throwIfAborted();
 						if (!identity) throw new Error("No credential was saved");
 						await session.modelRegistry.refreshProvider(provider.storeCredentialsAs ?? provider.id, "online");
+						await session.refreshScopedModels();
 						return success({ providerId: command.providerId });
 					} catch (cause) {
 						if (controller.signal.aborted)
@@ -268,12 +269,7 @@ export class RpcModelsCommands {
 				case "logout": {
 					if (typeof command.providerId !== "string" || !Number.isInteger(command.credentialId))
 						throw new Error("providerId must be a string and credentialId an integer");
-					const result = await logoutCredential(
-						session.modelRegistry,
-						command.providerId,
-						command.credentialId,
-						session.sessionId,
-					);
+					const result = await logoutCredential(session, command.providerId, command.credentialId);
 					if (!result.removed) throw new Error("This credential is no longer stored for the provider");
 					return success({ remainingSource: result.remainingSource });
 				}

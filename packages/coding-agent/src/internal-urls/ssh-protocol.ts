@@ -35,6 +35,7 @@ import {
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import sshDoc from "../prompts/internal-urls/ssh.md" with { type: "text" };
+import { decodeUtf8Text } from "../tools/read-format";
 import { contentTypeForPath, formatDirectoryListing } from "./filesystem-resource";
 import type {
 	InternalResource,
@@ -48,16 +49,6 @@ import type {
 
 /** Largest remote text file `ssh://` will materialize (mirrors the local:// cap). */
 const SSH_TEXT_MAX_BYTES = 1024 * 1024;
-
-/** Decode the whole buffer as UTF-8 text, or null if it holds a NUL or invalid byte. */
-function decodeUtf8Text(bytes: Uint8Array): string | null {
-	if (bytes.indexOf(0) !== -1) return null;
-	try {
-		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-	} catch {
-		return null;
-	}
-}
 
 /**
  * Remote absolute path from the URL. Uses `rawPathname` (pre-normalization) so

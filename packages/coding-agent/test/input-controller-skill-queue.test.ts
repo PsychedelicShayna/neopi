@@ -124,6 +124,7 @@ function createStubInputControllerContext(opts: {
 			isCompacting: opts.isCompacting ?? false,
 			isBashRunning: false,
 			isEvalRunning: false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			prompt,
 			buildUserSkillPrompt: buildSkillPromptMessage,
@@ -149,6 +150,7 @@ function createStubInputControllerContext(opts: {
 		renderOptimisticSkillMessage,
 		reconcileOptimisticSkillMessage,
 		clearOptimisticSkillMessage,
+		sessionManager: { getSessionId: () => "session", getLeafId: () => null },
 	} as unknown as InteractiveModeContext;
 
 	return {

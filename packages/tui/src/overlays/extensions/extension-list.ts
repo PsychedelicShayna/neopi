@@ -222,6 +222,7 @@ export class ExtensionList implements Component {
 
 	focusFilter(focused = true): void {
 		this.#search.focused = focused;
+		if (this.#menu.query !== this.#search.query) this.#applySearchQuery(this.#search.query);
 		this.#keys.reset();
 	}
 
@@ -259,6 +260,11 @@ export class ExtensionList implements Component {
 	/** Replace the search text (caret to end) and refilter. */
 	setSearchQuery(query: string): void {
 		this.#search.setValue(query);
+		this.#applySearchQuery(query);
+	}
+
+	/** Refilter a live draft without committing it or resetting the shared editor. */
+	#applySearchQuery(query: string): void {
 		this.#menu.setQuery(query, false);
 		this.#viewport.setTop(0);
 		this.#syncScroll();
@@ -906,14 +912,16 @@ export class ExtensionList implements Component {
 	handleClick(line: number): void {
 		const index = this.hitTest(line);
 		if (index === null) return;
+		const item = this.#menu.visibleItems[index];
+		if (!item) return;
+		const activate = index === this.#menu.selectedIndex;
+		const key = getListItemKey(item);
 		this.focusFilter(false);
-		if (index === this.#menu.selectedIndex) {
-			this.activateSelected();
-			return;
-		}
-		this.#menu.setSelectedIndex(index);
+		if (!this.#menu.visibleItems.some(item => getListItemKey(item) === key)) return;
+		this.#menu.setSelectedKey(key);
 		this.#syncScroll(true);
 		this.#notifySelectionChange();
+		if (activate) this.activateSelected();
 	}
 
 	/** Hosts route literal field input before their own pane/tab/action reader. */
@@ -921,7 +929,7 @@ export class ExtensionList implements Component {
 		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
 		if (result === "pass") return false;
-		if (before !== this.#search.query) this.setSearchQuery(this.#search.query);
+		if (before !== this.#search.query) this.#applySearchQuery(this.#search.query);
 		this.#keys.reset();
 		return true;
 	}

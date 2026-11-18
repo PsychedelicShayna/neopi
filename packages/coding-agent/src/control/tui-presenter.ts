@@ -9,6 +9,7 @@ import { encodeKeyId } from "./keys";
 import { trackMountedDialog } from "./dialogs";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "../session/agent-session";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import type { ToolApprovalVerdict } from "../extensibility/extensions/tool-approval-requester";
 import { cfgControlApprovals } from "./settings";
 import { currentControlActor, runAsControlActor } from "./actor";
@@ -45,7 +46,7 @@ export interface TuiControlSurface {
 	/** The terminal's own speech-to-text is recording or starting. */
 	dictationBusy(): boolean;
 	/** The focused subagent and its session; undefined while the root session is shown. */
-	viewTarget(): { agentId: string; session: AgentSession } | undefined;
+	viewTarget(): { agentId: string; session: AgentViewSession } | undefined;
 }
 
 /** Attach the presenter, the dialog registry, and the approval arbiter. */

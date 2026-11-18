@@ -47,6 +47,13 @@ describe("composer startup cache", () => {
 		};
 		const theme = { symbolPreset: "ascii" as const, colorBlindMode: true, darkTheme: "dark", lightTheme: "light" };
 		const status = statusFor(ThinkingLevel.High);
+		status.statusLine!.settings.leftSegments = [
+			"model",
+			"usage:anthropic:5h",
+			"usage:anthropic:7d:fable",
+			"context_bar",
+			"cache",
+		];
 
 		const writer = ComposerCache.open(dbPath);
 		writer.writeUi(project, preferences, theme);

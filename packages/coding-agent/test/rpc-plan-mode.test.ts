@@ -436,13 +436,13 @@ describe("RPC plan mode", () => {
 		const { session, planMode } = setup();
 		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
 		await planMode.setMode("plan", undefined);
-		const chosen = modelRegistry.find("anthropic", "claude-opus-4-1");
-		if (!chosen) throw new Error("Expected claude-opus-4-1 in the registry");
+		const chosen = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!chosen) throw new Error("Expected claude-opus-4-5 in the registry");
 		await session.setModel(chosen);
 
 		await planMode.setMode("default", undefined);
 
-		expect(session.model?.id).toBe("claude-opus-4-1");
+		expect(session.model?.id).toBe(chosen.id);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 	});
 

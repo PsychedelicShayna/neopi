@@ -5,6 +5,8 @@ argument-hint: <purpose, e.g. "daily summary of yesterday's PR merges">
 
 You are authoring a new routine for npi-deck's V1 pipeline engine. Build the smallest correct spec that solves the stated purpose. Don't ship a stub.
 
+Author the direct RoutineSpec object in native TOML with no spec wrapper. YAML is a read-only legacy database import boundary; new API requests use specToml. Shared reserved `[__npi]` metadata (`version = 1`, `null_paths = [JSON Pointers]`) preserves explicit JSON nulls. Use the shared codec for source generation and decoding; it keeps null, omitted values and empty strings distinct.
+
 ## 1. Understand the ask in one sentence
 
 Restate the request as `<when> <do_what> <where_does_output_go>`. Examples:
@@ -19,23 +21,22 @@ If the request is ambiguous on any of `<when>` / `<do_what>` / `<where_does_outp
 Work top-to-bottom. Default values are in parentheses.
 
 ### Trigger
-- Recurring time-based → `- cron: "0 7 * * *"` (5-field UTC; set `timezone:` if local clock matters)
-- External system poke → `- webhook: { path: /hooks/<slug>, secret_env: <ENV_VAR> }`
-- Human-driven → `- manual: {}`
+- Recurring time-based → `trigger = [{ cron = "0 7 * * *" }]` (5-field UTC; set `timezone = "America/Chicago"` if local clock matters)
+- External system poke → `trigger = [{ webhook = { path = "/hooks/<slug>", secret_env = "<ENV_VAR>" } }]`
+- Human-driven → `trigger = [{ manual = {} }]`
 - Multiple sources are fine — list every entry the engine should fire on.
 
 ### Idempotency
 If the routine should run at most once per day/hour/event window, prepend a `should_run` gate:
 
-```yaml
-- id: should_run
-  type: transform
-  body: |
-    const today = new Date().toISOString().slice(0, 10);
-    return context.state.last_run_date !== today;
+```toml
+[[steps]]
+id = "should_run"
+type = "transform"
+body = "const today = new Date().toISOString().slice(0, 10);\nreturn context.state.last_run_date !== today;\n"
 ```
 
-Then **every** later step gets `when: steps.should_run.json === true`. Final step is `set_state` writing `last_run_date: "{{ run.date }}"`. Add the cursor key to `state.declared_keys` — the validator rejects undeclared keys.
+Then **every** later step gets `when = "steps.should_run.json === true"`. Final step is `set_state` writing `last_run_date = "{{ run.date }}"`. Add the cursor key to `state.declared_keys` — the validator rejects undeclared keys.
 
 ### Steps (the body of the routine)
 
@@ -49,7 +50,7 @@ Classify each unit of work into ONE of these. Always prefer the most specific.
 | `write` | write a file to disk | `path`, `content` |
 | `http` | external URL (NOT this deck's own API) | `method`, `url` |
 | `run` | shell out to a command | `command` |
-| `set_state` | persist cross-run cursors | `state: { key: value }` |
+| `set_state` | persist cross-run cursors | `state = { key = "value" }` |
 | `wait` | sleep N seconds between polls | `duration_secs` |
 | `mcp` | MCP tool call (V1.5 — currently stubbed) | `server`, `tool`, `args` |
 
@@ -72,15 +73,15 @@ Write:
 
 Almost every routine ends by writing back into the deck. The canonical landing zone is the **inbox**:
 
-```yaml
-- id: write_to_inbox
-  type: deck
-  action: create_inbox_item
-  kind: capture
-  title: "<topic> - {{ run.date }}"
-  source: routine:<routine-name>
-  body: |
-    {{ steps.<agent_step>.stdout }}
+```toml
+[[steps]]
+id = "write_to_inbox"
+type = "deck"
+action = "create_inbox_item"
+kind = "capture"
+title = "<topic> - {{ run.date }}"
+source = "routine:<routine-name>"
+body = "{{ steps.<agent_step>.stdout }}\n"
 ```
 
 `write` (filesystem) is appropriate only when the user explicitly wants files on disk (e.g. archived weekly reports under `archive/`). For anything an agent will later read or the user wants to scroll through, **land it in the inbox**.
@@ -110,7 +111,7 @@ In `when:` and `transform.body:` (JS sandbox-mode):
 4. **Agent prompts must stay under ~30 KB rendered** — Windows `Bun.spawn(["omp", "-p", ...])` blows up past ~32 KB total argv. Use `limit:` on deck reads and project at source; do NOT pass full Task records into the prompt.
 5. **`on_failure:` defaults to `abort`** — set it to `continue` only when the rest of the routine can meaningfully proceed without this step's output.
 6. **Concurrency defaults to `skip`** — overlapping cron fires are dropped. Use `queue` only if every fire matters and order is critical; `cancel-previous` for "latest wins" semantics.
-7. **Cron is UTC unless `timezone:` is set** — set `timezone: America/Chicago` (or the user's actual zone) for any "every morning at X" routine.
+7. **Cron is UTC unless `timezone` is set** — set `timezone = "America/Chicago"` (or the user's actual zone) for any "every morning at X" routine.
 
 ## 5. Validate before you write
 
@@ -119,11 +120,12 @@ The protocol package exposes `validateRoutineSpec` which runs Ajv + cross-ref ch
 ```bash
 cd /c/Users/bryan/enclave/npi-deck
 bun -e '
-  import("yaml").then(y =>
-    import("./packages/protocol/dist/index.js").then(p => {
-      const spec = y.parse(`<your YAML here>`);
+  import("smol-toml").then(y =>
+    import("./packages/protocol/dist/index.js").then(async p => {
+      const { createSettingsTomlCodec } = await import("@npi-deck/protocol/settings-toml-codec");
+      const spec = createSettingsTomlCodec(y.parse).parseSettingsToml(`<your TOML here>`);
       const res = p.validateRoutineSpec(spec);
-      console.log(res.ok ? "OK" : JSON.stringify(res.errors, null, 2));
+      console.log(res.valid ? "OK" : JSON.stringify(res.errors, null, 2));
     })
   );
 '
@@ -136,14 +138,14 @@ If you don't have the protocol package built, the server's PATCH/POST endpoints 
 Pick ONE path:
 
 ### A. Built-in template (ships with npi-deck)
-- File: `apps/server/src/templates/<slug>.yaml`
+- File: `apps/server/src/templates/<slug>.toml`
 - Loaded at server boot, available to all installs
 - Required when the routine is part of the product itself (daily-briefing, observer-daily, etc)
 - Server must restart to pick up template changes: restart `bun run dev:server`, or Settings → Restart under the `npi-deck` launcher
 
 ### B. User routine (lives in this user's DB)
-- POST `http://127.0.0.1:1701/api/routines` with `{name, description, specYaml}`
-- Or use the visual builder: navigate to `/routines?edit=new`, paste YAML into the Spec tab, click Apply, then Save
+- POST `http://127.0.0.1:1701/api/routines` with `{name, description, specToml}`
+- Or use the visual builder: navigate to `/routines?edit=new`, paste TOML into the Spec tab, click Apply, then Save
 - Survives across server restarts (stored in `routines` table)
 
 ### Verify it ran
@@ -164,63 +166,65 @@ Failing steps show `error` / `stderrExcerpt`. The most common first-run failures
 
 Daily summary of yesterday's completed tasks landing in the inbox:
 
-```yaml
-name: daily-completions-digest
-description: Every morning, summarize yesterday's completed tasks into an inbox capture
-trigger:
-  - cron: "0 7 * * *"
-concurrency: skip
-timezone: America/Chicago
-state:
-  declared_keys: [last_digest_date]
-tags: [daily, digest]
+```toml
+name = "daily-completions-digest"
+description = "Every morning, summarize yesterday's completed tasks into an inbox capture"
+concurrency = "skip"
+timezone = "America/Chicago"
+tags = [ "daily", "digest" ]
 
-steps:
-  - id: should_run
-    type: transform
-    body: |
-      return context.state.last_digest_date !== run.date;
+[[trigger]]
+cron = "0 7 * * *"
 
-  - id: fetch_done
-    type: deck
-    when: steps.should_run.json === true
-    action: list_tasks
-    state_ref: done
-    since_hours: 24
-    limit: 25
+[state]
+declared_keys = [ "last_digest_date" ]
 
-  - id: summarize
-    type: agent
-    when: steps.should_run.json === true
-    model: claude-sonnet-4-6
-    timeout_secs: 60
-    prompt: |
-      Summarize what shipped yesterday as 3-5 markdown bullets. Skip ceremony.
+[[steps]]
+id = "should_run"
+type = "transform"
+body = "return context.state.last_digest_date !== run.date;\n"
 
-      Completed ({{ steps.fetch_done.json.length }}): {{ steps.fetch_done.json | json }}
+[[steps]]
+id = "fetch_done"
+type = "deck"
+when = "steps.should_run.json === true"
+action = "list_tasks"
+state_ref = "done"
+since_hours = 24
+limit = 25
 
-  - id: write_to_inbox
-    type: deck
-    when: steps.should_run.json === true
-    action: create_inbox_item
-    kind: capture
-    title: "Daily completions - {{ run.date }}"
-    source: routine:daily-completions-digest
-    body: |
-      {{ steps.summarize.stdout }}
+[[steps]]
+id = "summarize"
+type = "agent"
+when = "steps.should_run.json === true"
+model = "claude-sonnet-4-6"
+timeout_secs = 60
+prompt = "Summarize what shipped yesterday as 3-5 markdown bullets. Skip ceremony.\n\nCompleted ({{ steps.fetch_done.json.length }}): {{ steps.fetch_done.json | json }}\n"
 
-  - id: persist
-    type: set_state
-    when: steps.should_run.json === true
-    state:
-      last_digest_date: "{{ run.date }}"
+[[steps]]
+id = "write_to_inbox"
+type = "deck"
+when = "steps.should_run.json === true"
+action = "create_inbox_item"
+kind = "capture"
+title = "Daily completions - {{ run.date }}"
+source = "routine:daily-completions-digest"
+body = "{{ steps.summarize.stdout }}\n"
+
+[[steps]]
+id = "persist"
+type = "set_state"
+when = "steps.should_run.json === true"
+
+[steps.state]
+last_digest_date = "{{ run.date }}"
 ```
 
 Reach for this shape any time you have `read → digest → write-to-inbox` + a once-per-day cursor.
 
 ## 8. Files to consult when in doubt
 
-- Canonical example: `apps/server/src/templates/daily-briefing.yaml`
+- Canonical example: `apps/server/src/templates/daily-briefing.toml`
 - Types (source of truth): `packages/protocol/src/index.ts` — `RoutineSpec`, `RoutineStep`, `RoutineTrigger`
 - Schemas (validator): `packages/protocol/src/schemas/`
 - Step executors: `apps/server/src/routines/steps/<type>.ts` (one file per type, ~50 lines each)

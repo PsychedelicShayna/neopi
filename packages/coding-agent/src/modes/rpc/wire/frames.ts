@@ -16,6 +16,10 @@ export const frameDefs = {
 			"maxFrameBytes?": "number.integer",
 			"maxReassembledFrameBytes?": "number.integer",
 			capabilities: "string[]",
+			"supportsBashExcludeFromContext?": doc(
+				"boolean",
+				"`bash` accepts `excludeFromContext`; require exactly true before sending excluded commands.",
+			),
 		},
 		"First frame after startup; transport fields are absent on servers without protocol v2.",
 	),

@@ -4,6 +4,7 @@
  * callbacks as unsolicited `live_*` frames.
  */
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { toError } from "@oh-my-pi/pi-utils";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../live/controller";
 import {
 	cfgLiveBlockDelegateKeyword,
@@ -138,7 +139,7 @@ export class RpcLiveBridge {
 			await controller.start();
 		} catch (cause) {
 			await this.#retire(controller);
-			throw cause instanceof Error ? cause : new Error(String(cause));
+			throw toError(cause);
 		}
 		if (options.sdpOffer === undefined) return { voice };
 		const sdpAnswer = controller.sdpAnswer;

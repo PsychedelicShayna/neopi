@@ -142,9 +142,10 @@ function createHarness(options?: { hangPrompt?: boolean; asyncJobManager?: Async
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
-		sessionManager: { appendSessionInit: () => {} },
+		sessionManager: { appendSessionInit: () => {}, getCwd: () => process.cwd() },
 		getActiveToolNames: () => ["read", "yield"],
 		getEnabledToolNames: () => ["read", "yield"],
+		getMountedXdevToolNames: () => [],
 		getToolByName: () => undefined,
 		setActiveToolsByName: async () => {},
 		setWorkPoolYieldItems: () => {},
@@ -890,6 +891,7 @@ describe("runSubprocess result acceptance", () => {
 		// The parent's message reaches the idle child through the real bus and bridge, as a live send would.
 		let finish: ((error?: unknown) => void | Promise<void>) | undefined;
 		const bridge = new IrcBridge({
+			sessionManager: harness.session.sessionManager,
 			isDisposed: () => false,
 			isStreaming: () => false,
 			planModeEnabled: () => false,

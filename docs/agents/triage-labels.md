@@ -17,6 +17,7 @@ Spellings marked **proposal** remain revisable.
 | `experiment` | Tried on an `experimental/` branch; owner decision required before integration or default-branch merge |
 | `spec` | Is or contains an implementation specification |
 | `hotfix` | Urgent targeted fix to the default branch |
+| `chore` | Maintenance with no product behavior change: promotion, sync merge, formatting, CI upkeep |
 
 ## Relationships and disposition
 

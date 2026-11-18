@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { type } from "@oh-my-pi/omptype";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { agentLoop, type AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type { AgentLoopConfig } from "@oh-my-pi/pi-agent-core/types";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type {
 	ExtensionAskDialogQuestion,
@@ -14,10 +16,11 @@ import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { askToolRenderer } from "@oh-my-pi/pi-tui/tools/ask";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import * as ai from "@oh-my-pi/pi-ai";
-import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { Api, AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -31,7 +34,7 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 		hasUI: true,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "ask.notify": "off" }),
 		...overrides,
 		canPromptUser: overrides.canPromptUser ?? overrides.hasUI ?? true,
 	};
@@ -65,6 +68,7 @@ function createContext(args: {
 		dialogOptions?: any,
 	) => Promise<ExtensionAskDialogResult | undefined>;
 	abort?: () => void;
+	steeringSignal?: AbortSignal;
 }): AgentToolContext {
 	// AgentToolContext includes many runtime fields; tests only need UI + abort behavior.
 	return {
@@ -80,6 +84,7 @@ function createContext(args: {
 			) => args.editor?.(title, prefill, dialogOptions, editorOptions) ?? Promise.resolve(undefined),
 		},
 		abort: args.abort ?? (() => {}),
+		...(args.steeringSignal ? { toolCall: { steeringSignal: args.steeringSignal } } : {}),
 	} as unknown as AgentToolContext;
 }
 
@@ -98,6 +103,144 @@ beforeAll(async () => {
 	const loadedTheme = await getThemeByName("dark");
 	if (!loadedTheme) throw new Error("Expected dark theme");
 	darkTheme = loadedTheme;
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
+describe("AskTool interruption and headless behavior", () => {
+	const questions = [{ id: "store", question: "Session store?", options: [{ label: "SQLite" }, { label: "Redis" }] }];
+
+	it.each(["user", "irc", "aside", "job"])("handles %s steering without cancelling the turn", async source => {
+		const steering = new AbortController();
+		const abort = vi.fn();
+		const context = createContext({
+			steeringSignal: steering.signal,
+			abort,
+			askDialog: async (_questions, options) => {
+				steering.abort(source);
+				return options?.signal?.aborted
+					? undefined
+					: {
+							kind: "submit",
+							results: _questions.map(question => ({
+								id: question.id,
+								question: question.question,
+								options: question.options.map(option => (typeof option === "string" ? option : option.label)),
+								multi: question.multi ?? false,
+								selectedOptions: ["SQLite"],
+							})),
+						};
+			},
+		});
+		const outcome = new AskTool(createSession()).execute(
+			`call-${source}`,
+			{ questions },
+			undefined,
+			undefined,
+			context,
+		);
+		if (source === "user") {
+			await expect(outcome).rejects.toThrow("Ask interrupted by message");
+		} else {
+			expect((await outcome).details?.selectedOptions).toEqual(["SQLite"]);
+		}
+		expect(abort).not.toHaveBeenCalled();
+	});
+
+	it("delivers queued user steering while questions are open without cancelling the turn", async () => {
+		const abort = vi.fn();
+		const wake = Promise.withResolvers<void>();
+		let queued = false;
+		let closed = false;
+		const context = createContext({
+			abort,
+			askDialog: async (_questions, options) => {
+				queued = true;
+				wake.resolve();
+				const pending = Promise.withResolvers<undefined>();
+				options?.signal?.addEventListener(
+					"abort",
+					() => {
+						closed = true;
+						pending.resolve(undefined);
+					},
+					{ once: true },
+				);
+				return pending.promise;
+			},
+		});
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "ask-1", name: "ask", arguments: { questions } }] },
+				{ content: ["I will check the schema before choosing the store."] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: messages => messages as Message[],
+			getToolContext: toolCall => ({ ...context, toolCall }) as AgentToolContext,
+			hasSteeringMessages: () => queued,
+			waitForSteeringMessages: () => wake.promise,
+			getSteeringMessages: async () => {
+				if (!queued) return [];
+				queued = false;
+				return [{ role: "user", content: "Check the schema first", timestamp: Date.now() }];
+			},
+		};
+		const controller = new AbortController();
+		// Safety only: the real steering watcher must close the dialog before this fires.
+		const timer = setTimeout(() => controller.abort("ask stayed open"), 2000);
+		try {
+			const events = [];
+			for await (const event of agentLoop(
+				[{ role: "user", content: "Choose a store", timestamp: Date.now() }],
+				{ systemPrompt: ["Test"], messages: [], tools: [new AskTool(createSession())] },
+				config,
+				controller.signal,
+				mock.stream,
+			)) {
+				events.push(event);
+			}
+			expect(controller.signal.aborted).toBe(false);
+			expect(closed).toBe(true);
+			expect(abort).not.toHaveBeenCalled();
+			const result = events.find(event => event.type === "tool_execution_end" && event.toolName === "ask");
+			if (result?.type !== "tool_execution_end") throw new Error("ask did not finish");
+			expect(result.isError).toBe(true);
+			expect(JSON.stringify(result.result.content)).toContain("Ask interrupted by message");
+			expect(mock.calls).toHaveLength(2);
+			expect(mock.calls[1]?.context.messages).toContainEqual(
+				expect.objectContaining({ role: "user", content: "Check the schema first" }),
+			);
+		} finally {
+			clearTimeout(timer);
+		}
+	});
+
+	it("aborts an ordinary noninteractive session", async () => {
+		const abort = vi.fn();
+		const outcome = new AskTool(createSession()).execute("call-headless", { questions }, undefined, undefined, {
+			hasUI: false,
+			abort,
+		} as unknown as AgentToolContext);
+		await expect(outcome).rejects.toBeInstanceOf(ToolAbortError);
+		expect(abort).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a headless fork alive to answer through its final message", async () => {
+		const abort = vi.fn();
+		const outcome = new AskTool(createSession({ hasUI: false, advertiseHeadlessAsk: true })).execute(
+			"call-fork",
+			{ questions },
+			undefined,
+			undefined,
+			{ hasUI: false, abort } as unknown as AgentToolContext,
+		);
+		await expect(outcome).rejects.toBeInstanceOf(ToolError);
+		expect(abort).not.toHaveBeenCalled();
+	});
 });
 
 describe("AskTool option notes", () => {
@@ -127,6 +270,9 @@ describe("AskTool option notes", () => {
 						onCancel: vi.fn(),
 						onPrompt,
 					});
+					const visible = stripAnsi(dialog.render(100).join("\n"));
+					expect(visible).toContain("Preview canary");
+					if (multi) expect(visible).toContain("Choices");
 					const key = async (input: string) => {
 						dialog.handleInput(input);
 						await Promise.resolve();
@@ -154,8 +300,9 @@ describe("AskTool option notes", () => {
 						{
 							id: "choice",
 							question: "Choose?",
+							header: "Choices",
 							multi,
-							options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+							options: [{ label: "A", preview: "Preview canary" }, { label: "B" }, { label: "C" }],
 						},
 					],
 				},
@@ -568,9 +715,10 @@ describe("AskTool cancellation", () => {
 });
 
 describe("AskTool option descriptions", () => {
-	it("passes descriptions to the selector while returning selected labels", async () => {
+	it("keeps rich-only fields out of degraded choices and returns selected labels without display metadata", async () => {
 		const tool = new AskTool(createSession());
 		const select = vi.fn(async (_prompt: string, options: ExtensionUISelectItem[]) => {
+			expect(_prompt).not.toContain("Rich header canary");
 			expect(options[0]).toEqual({
 				label: "Use local credentials",
 				description: "Authenticate with provider keys already configured under ~/.omp.",
@@ -591,6 +739,7 @@ describe("AskTool option descriptions", () => {
 					{
 						id: "auth",
 						question: "How should authentication continue?",
+						header: "Rich header canary",
 						options: [
 							{
 								label: "Use local credentials",
@@ -599,6 +748,7 @@ describe("AskTool option descriptions", () => {
 							{
 								label: "Set up in terminal",
 								description: "Launch the terminal setup flow to add credentials before continuing.",
+								preview: "Rich preview canary",
 							},
 						],
 					},
@@ -616,6 +766,8 @@ describe("AskTool option descriptions", () => {
 		expect(result.content[0].text).toContain("User selected: Set up in terminal");
 		expect(result.details?.selectedOptions).toEqual(["Set up in terminal"]);
 		expect(result.content[0].text).not.toContain("Launch the terminal setup flow");
+		expect(result.content[0].text).not.toContain("Rich header canary");
+		expect(result.content[0].text).not.toContain("Rich preview canary");
 		expect(result.details?.options).toEqual(["Use local credentials", "Set up in terminal"]);
 	});
 
@@ -844,7 +996,6 @@ describe("AskTool custom input", () => {
 		const abort = vi.fn();
 		const controller = new AbortController();
 		const editor = vi.fn(async (_title: string, _prefill?: string, dialogOptions?: { signal?: AbortSignal }) => {
-			expect(dialogOptions?.signal).toBe(controller.signal);
 			return await new Promise<string | undefined>((_resolve, reject) => {
 				dialogOptions?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
 					once: true,
@@ -1596,64 +1747,6 @@ describe("askToolRenderer malformed call args", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
-	it("accepts new schema fields (header, preview, note) and maps them into AskToolDetails", async () => {
-		const tool = new AskTool(createSession());
-		const askDialog = vi.fn().mockResolvedValue({
-			kind: "submit",
-			results: [
-				{
-					id: "q1",
-					question: "Q1?",
-					options: ["Option A"],
-					multi: false,
-					selectedOptions: ["Option A"],
-					note: "My Custom Note",
-					timedOut: undefined,
-				},
-			],
-		});
-		const context = createContext({ askDialog });
-
-		const result = await tool.execute(
-			"call-rich-dialog",
-			{
-				questions: [
-					{
-						id: "q1",
-						question: "Q1?",
-						header: "Chip Header",
-						options: [{ label: "Option A", preview: "My Preview" }],
-					},
-				],
-			},
-			undefined,
-			undefined,
-			context,
-		);
-
-		expect(askDialog).toHaveBeenCalledTimes(1);
-		// Check that header and preview were forwarded
-		expect(askDialog.mock.calls[0][0]).toEqual([
-			{
-				id: "q1",
-				question: "Q1?",
-				header: "Chip Header",
-				options: [{ label: "Option A", preview: "My Preview" }],
-			},
-		]);
-
-		// Verify result contains details with note mapping
-		expect(result.details).toEqual({
-			question: "Q1?",
-			options: ["Option A"],
-			multi: false,
-			selectedOptions: ["Option A"],
-			customInput: undefined,
-			note: "My Custom Note",
-			timedOut: undefined,
-		});
-	});
-
 	it("names the option a note is on in the text the model reads and in single-question details", async () => {
 		const askDialog = vi.fn().mockResolvedValue({
 			kind: "submit",
@@ -2084,33 +2177,6 @@ describe("AskTool rich ask dialog", () => {
 		expect(result.details).toEqual({ chatRedirect: true, questions: ["Q1?"] });
 		expect(result.content[0]?.type).toBe("text");
 		expect((result.content[0] as { text: string }).text).toContain("chat about this");
-	});
-
-	it("ignores preview and header in degraded select path", async () => {
-		const tool = new AskTool(createSession());
-		const select = vi.fn().mockResolvedValue("Option A");
-		const context = createContext({ select });
-
-		await tool.execute(
-			"call-degraded",
-			{
-				questions: [
-					{
-						id: "q1",
-						question: "Q1?",
-						header: "Chip Header",
-						options: [{ label: "Option A", description: "Desc A", preview: "My Preview" }],
-					},
-				],
-			},
-			undefined,
-			undefined,
-			context,
-		);
-
-		expect(select).toHaveBeenCalledTimes(1);
-		// verify preview/header are NOT forwarded to select options
-		expect(select.mock.calls[0][1]).toEqual([{ label: "Option A", description: "Desc A" }, "Other (type your own)"]);
 	});
 
 	it("rejects reserved-label collision in parameters validation", async () => {

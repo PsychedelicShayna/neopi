@@ -10,7 +10,7 @@ import {
 	validateXAIBillingEndpoint,
 	validateXAIEndpoint,
 } from "../../../src/registry/oauth/xai-oauth";
-import type { OAuthController, OAuthCredentials } from "../../../src/registry/oauth/types";
+import type { OAuthAuthInfo, OAuthController, OAuthCredentials } from "../../../src/registry/oauth/types";
 import type { FetchImpl } from "../../../src/types";
 
 afterEach(() => {
@@ -341,9 +341,9 @@ describe("xAI OAuth login", () => {
 				},
 			},
 		]);
-		const authEvents: Array<{ url: string; instructions?: string }> = [];
+		const authEvents: OAuthAuthInfo[] = [];
 		const progress: string[] = [];
-		const onAuth = vi.fn((info: { url: string; instructions?: string }) => {
+		const onAuth = vi.fn((info: OAuthAuthInfo) => {
 			authEvents.push(info);
 		});
 		const onProgress = vi.fn((message: string) => {
@@ -396,13 +396,11 @@ describe("xAI OAuth login", () => {
 			device_code: DEVICE_AUTHORIZATION.device_code,
 		});
 
-		expect(authEvents).toEqual([
-			{
-				url: DEVICE_AUTHORIZATION.verification_uri_complete,
-				instructions: `Enter code: ${DEVICE_AUTHORIZATION.user_code}`,
-			},
-		]);
-		expect(authEvents[0]?.instructions).not.toMatch(/hermes/i);
+		expect(authEvents).toHaveLength(1);
+		expect(authEvents[0]).toMatchObject({
+			url: DEVICE_AUTHORIZATION.verification_uri_complete,
+			userCode: DEVICE_AUTHORIZATION.user_code,
+		});
 		expect(onManualCodeInput).not.toHaveBeenCalled();
 		expect(progress).toEqual(["Requesting device authorization...", "Waiting for device authorization..."]);
 		expect(credentials).toEqual({

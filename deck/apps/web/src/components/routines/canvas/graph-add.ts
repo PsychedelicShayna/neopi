@@ -21,7 +21,7 @@ import type {
 	RoutineStep,
 } from "@npi-deck/protocol";
 
-import { insertStep } from "../spec-yaml";
+import { insertStep } from "../spec-toml";
 import { CANVAS_DEFAULT_X, CANVAS_NODE_VERTICAL_GAP } from "./legacy-graph-types";
 
 /**

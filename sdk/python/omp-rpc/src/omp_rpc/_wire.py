@@ -361,10 +361,15 @@ class Usage(TypedDict):
     credits: NotRequired[JsonObject]
 
 
+ParentIrc = TypedDict("ParentIrc", {"from": "str", "body": "str"})
+"""Parent-agent IRC message carried by a steer; render it instead of the model-facing `content` envelope."""
+
+
 class UserMessage(TypedDict):
     role: Literal["user"]
     content: MessageContent
     timestamp: float
+    parentIrc: NotRequired[ParentIrc]
     synthetic: NotRequired[bool]
     steering: NotRequired[bool]
     liveSteered: NotRequired[bool]
@@ -1130,9 +1135,30 @@ class BashResult:
     timed_out: bool | None = None
     artifact_id: str | None = None
     artifact_elided_bytes: int | None = None
+    elided_bytes: int | None = None
+    """Bytes dropped from the middle of `output`, which keeps the head and tail."""
+    elided_lines: int | None = None
+    """Lines dropped from the middle of `output`."""
+    column_dropped_bytes: int | None = None
+    """Bytes the per-line column cap cut from `output`, across all lines."""
+    column_truncated_lines: int | None = None
+    """Lines of `output` the per-line column cap cut; the artifact holds them whole."""
+    column_truncated_range: LineRange | None = None
+    """First and last lines the column cap cut, numbered as in the artifact; absent when the numbering cannot match it."""
+    column_max: int | None = None
+    """The per-line column cap in UTF-8 bytes, set when it cut a line."""
     artifact_error: JsonObject | None = None
+    minimized: JsonObject | None = None
     working_dir: str | None = None
     images: tuple[ImageContent, ...] | None = None
+    trace: JsonObject | None = None
+    """The embedded shell's final `ShellTrace` of the run; only when the caller asked for one."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class LineRange:
+    first: int
+    last: int
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2166,6 +2192,8 @@ class ReadyEvent:
     supported_protocol_versions: tuple[int, ...] | None = None
     max_frame_bytes: int | None = None
     max_reassembled_frame_bytes: int | None = None
+    supports_bash_exclude_from_context: bool | None = None
+    """`bash` accepts `excludeFromContext`; require exactly true before sending excluded commands."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2695,6 +2723,12 @@ class LiveConnectResult:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class GetSessionLeaseResult:
+    held: tuple[str, ...]
+    unknown: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class LogoutResult:
     remaining_source: str | None = None
 
@@ -2775,6 +2809,10 @@ parse_usage_cost = cast("Decoder[UsageCost]", open_record(None, None))
 
 parse_usage = cast("Decoder[Usage]", open_record(None, None))
 """Decodes a `Usage` open record: checks the discriminator and keeps every key."""
+
+
+parse_parent_irc = cast("Decoder[ParentIrc]", open_record(None, None))
+"""Decodes a `ParentIrc` open record: checks the discriminator and keeps every key."""
 
 
 parse_user_message = cast("Decoder[UserMessage]", open_record("role", frozenset({"user"})))
@@ -3508,9 +3546,25 @@ def parse_bash_result(value: object, path: str = "BashResult") -> BashResult:
         timed_out=optional(payload, "timedOut", decode_bool, path),
         artifact_id=optional(payload, "artifactId", decode_str, path),
         artifact_elided_bytes=optional(payload, "artifactElidedBytes", decode_int, path),
+        elided_bytes=optional(payload, "elidedBytes", decode_int, path),
+        elided_lines=optional(payload, "elidedLines", decode_int, path),
+        column_dropped_bytes=optional(payload, "columnDroppedBytes", decode_int, path),
+        column_truncated_lines=optional(payload, "columnTruncatedLines", decode_int, path),
+        column_truncated_range=optional(payload, "columnTruncatedRange", parse_line_range, path),
+        column_max=optional(payload, "columnMax", decode_int, path),
         artifact_error=optional(payload, "artifactError", decode_json_object, path),
+        minimized=optional(payload, "minimized", decode_json_object, path),
         working_dir=optional(payload, "workingDir", decode_str, path),
         images=optional(payload, "images", array(parse_image_content), path),
+        trace=optional(payload, "trace", decode_json_object, path),
+    )
+
+
+def parse_line_range(value: object, path: str = "LineRange") -> LineRange:
+    payload = expect_object(value, path)
+    return LineRange(
+        first=required(payload, "first", decode_int, path),
+        last=required(payload, "last", decode_int, path),
     )
 
 
@@ -4670,6 +4724,7 @@ def parse_ready_event(value: object, path: str = "ReadyEvent") -> ReadyEvent:
         supported_protocol_versions=optional(payload, "supportedProtocolVersions", array(decode_int), path),
         max_frame_bytes=optional(payload, "maxFrameBytes", decode_int, path),
         max_reassembled_frame_bytes=optional(payload, "maxReassembledFrameBytes", decode_int, path),
+        supports_bash_exclude_from_context=optional(payload, "supportsBashExcludeFromContext", decode_bool, path),
     )
 
 
@@ -5279,6 +5334,14 @@ def parse_live_connect_result(value: object, path: str = "LiveConnectResult") ->
     )
 
 
+def parse_get_session_lease_result(value: object, path: str = "GetSessionLeaseResult") -> GetSessionLeaseResult:
+    payload = expect_object(value, path)
+    return GetSessionLeaseResult(
+        held=required(payload, "held", array(decode_str), path),
+        unknown=required(payload, "unknown", array(decode_str), path),
+    )
+
+
 def parse_logout_result(value: object, path: str = "LogoutResult") -> LogoutResult:
     payload = expect_object(value, path)
     return LogoutResult(
@@ -5584,7 +5647,7 @@ class WireClient:
         return parse_themes_configuration(self._command("update_theme", params), "update_theme")
 
     def query_model_selector(self, query: str) -> ModelSelectorResult:
-        """Query native /switch ordering, scoped candidates, role aliases and model facts without selecting."""
+        """Query native /model ordering, scoped candidates, role aliases and model facts without selecting."""
         params: dict[str, object] = {}
         params["query"] = query
         return parse_model_selector_result(self._command("query_model_selector", params), "query_model_selector")
@@ -5891,7 +5954,7 @@ class WireClient:
         return required(expect_object(self._command("cancel_job", params), "cancel_job"), "cancelled", decode_bool, "cancel_job")
 
     def set_subagent_model(self, subagent_id: str, *, selector: str | None = None, provider: str | None = None, model_id: str | None = None) -> SetSubagentModelResult:
-        """Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
+        """Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`."""
         params: dict[str, object] = {}
         params["subagentId"] = subagent_id
         if selector is not None:
@@ -6027,10 +6090,12 @@ class WireClient:
         params: dict[str, object] = {}
         self._command("abort_retry", params)
 
-    def bash(self, command: str) -> BashResult:
-        """Run a shell command."""
+    def bash(self, command: str, *, exclude_from_context: bool | None = None) -> BashResult:
+        """Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true."""
         params: dict[str, object] = {}
         params["command"] = command
+        if exclude_from_context is not None:
+            params["excludeFromContext"] = exclude_from_context
         return parse_bash_result(self._command("bash", params), "bash")
 
     def abort_bash(self) -> None:
@@ -6042,6 +6107,12 @@ class WireClient:
         """Session statistics."""
         params: dict[str, object] = {}
         return parse_session_stats(self._command("get_session_stats", params), "get_session_stats")
+
+    def get_session_lease(self, session_ids: Sequence[str]) -> GetSessionLeaseResult:
+        """Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed."""
+        params: dict[str, object] = {}
+        params["sessionIds"] = list(session_ids)
+        return parse_get_session_lease_result(self._command("get_session_lease", params), "get_session_lease")
 
     def export_html(self, output_path: str | Path | None = None) -> Path:
         """Export the session as HTML; returns the written path."""
@@ -6567,6 +6638,7 @@ __all__ = [
     "FileMentionMessage",
     "FollowUpResult",
     "GetModelsConfigurationResult",
+    "GetSessionLeaseResult",
     "GetUsageResult",
     "Goal",
     "GoalModeState",
@@ -6593,6 +6665,7 @@ __all__ = [
     "JournalIdentity",
     "JournalPage",
     "JournalStateEvent",
+    "LineRange",
     "ListMixturesResult",
     "LiveConnectResult",
     "LiveEndEvent",
@@ -6677,6 +6750,7 @@ __all__ = [
     "NotifyUiRequest",
     "OpenSessionResult",
     "OpenUrlUiRequest",
+    "ParentIrc",
     "PlanModeInfo",
     "PromoteQueuedMessageResult",
     "PromptAck",
@@ -6863,6 +6937,7 @@ __all__ = [
     "parse_file_mention_message",
     "parse_follow_up_result",
     "parse_get_models_configuration_result",
+    "parse_get_session_lease_result",
     "parse_get_usage_result",
     "parse_goal",
     "parse_goal_mode_state",
@@ -6884,6 +6959,7 @@ __all__ = [
     "parse_journal_identity",
     "parse_journal_page",
     "parse_journal_state_event",
+    "parse_line_range",
     "parse_list_mixtures_result",
     "parse_live_connect_result",
     "parse_live_end_event",
@@ -6958,6 +7034,7 @@ __all__ = [
     "parse_notify_ui_request",
     "parse_open_session_result",
     "parse_open_url_ui_request",
+    "parse_parent_irc",
     "parse_plan_mode_info",
     "parse_promote_queued_message_result",
     "parse_prompt_ack",

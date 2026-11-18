@@ -279,8 +279,12 @@ impl PlaybackStream {
 		Ok(stream)
 	}
 
-	/// Register the producer before a backend can synchronously prime its buffers.
-	fn prepare(sample_rate: u32, jitter_buffer_ms: u32) -> VoiceResult<(Self, DeviceConfig, PlaybackFill)> {
+	/// Register the producer before a backend can synchronously prime its
+	/// buffers.
+	fn prepare(
+		sample_rate: u32,
+		jitter_buffer_ms: u32,
+	) -> VoiceResult<(Self, DeviceConfig, PlaybackFill)> {
 		let sample_rate = audio_sample_rate(sample_rate)?;
 		let state = Arc::new(PlaybackState::new());
 		let queue = Arc::new(PlaybackQueue::new(sample_rate));
@@ -608,7 +612,6 @@ mod tests {
 	// period-sized local target.
 	const LOCAL_DRAIN_CALLBACKS: usize = 3 + PLAYBACK_DRAIN_MARGIN_CALLBACKS;
 
-
 	#[test]
 	fn playback_priming_cannot_drain_before_the_first_decoder_write() {
 		let (mut stream, config, mut fill) = PlaybackStream::prepare(48_000, 0).unwrap();
@@ -681,7 +684,6 @@ mod tests {
 	/// wait out the full widened `drain_callbacks` count.
 	#[test]
 	fn widened_backlog_is_not_drained_within_local_margin() {
-
 		let widened_drain_callbacks = LOCAL_DRAIN_CALLBACKS * 4;
 		let (writer, mut renderer) = renderer(widened_drain_callbacks, 0, 0);
 		drop(writer);

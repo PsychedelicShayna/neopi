@@ -70,6 +70,9 @@ export const oauthCredentialSchema: FluentType<OAuthCredential> = type({
 	"accountId?": "string",
 	"orgId?": "string",
 	"orgName?": "string",
+	"region?": "string",
+	"inferenceRegion?": "'global' | 'eu' | 'us'",
+	"activeOrganizationId?": "string",
 	"authorizedAt?": "number",
 });
 
@@ -86,6 +89,9 @@ export const remoteOauthCredentialSchema: FluentType<RemoteOAuthCredential> = ty
 	"accountId?": "string",
 	"orgId?": "string",
 	"orgName?": "string",
+	"region?": "string",
+	"inferenceRegion?": "'global' | 'eu' | 'us'",
+	"activeOrganizationId?": "string",
 	"authorizedAt?": "number",
 });
 

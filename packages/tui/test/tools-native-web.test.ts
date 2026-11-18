@@ -46,27 +46,90 @@ describe("web_search native view", () => {
 });
 
 describe("ask native view", () => {
-	it("pending call is an inline head naming the question with a waiting line", () => {
-		const view = askToolRenderer.describeCall({ question: "Pick one?\nmore", options: [{ label: "A" }] } as never);
+	it("pending call is an inline head naming the first retained question", () => {
+		const view = askToolRenderer.describeCall({
+			questions: [
+				{ id: "pick", question: "Pick one?", options: [{ label: "A" }] },
+				{ id: "why", question: "Why?", options: [] },
+			],
+		});
 		expect(view?.inline).toBe(true);
 		expect(view?.tool?.target).toBe("Pick one?");
-		expect(nodes(view?.body)).toHaveLength(1);
+		expect(view?.tool?.meta).toEqual(["2 questions"]);
 	});
 
-	it("answered result marks the chosen option and quotes custom input", () => {
+	it("pairs retained questions with their answers and distinguishes a timed-out single answer", () => {
 		const view = askToolRenderer.describeResult(
 			{
 				content: [],
-				details: { question: "Pick?", options: ["A", "B"], selectedOptions: ["B"], customInput: "own" } as never,
+				details: {
+					results: [
+						{
+							id: "db",
+							question: "Database?",
+							options: ["Postgres"],
+							multi: false,
+							selectedOptions: ["Postgres"],
+						},
+						{ id: "notes", question: "Notes", options: [], multi: false, selectedOptions: [] },
+					],
+				},
 			},
 			opts,
 		);
-		const roles = nodes(view?.body)
-			.filter(n => n.k === "row")
-			.map(n => n.p?.role);
-		expect(roles).toEqual(["omp.tool.answer.off", "omp.tool.answer", "omp.tool.answer"]);
-		const custom = nodes(view?.body).at(-1)!;
-		expect(JSON.stringify(custom)).toContain("\u201cown\u201d");
+		const sections = nodes(view?.body).filter(n => n.k === "section");
+		const answers = sections.map(section => nodes(section.c).at(-1)!);
+		expect(answers[0]?.p?.role).toBe("omp.tool.answer");
+		expect(answers[1]?.p?.tone).toBe("warning");
+		expect(JSON.stringify(answers[0])).toContain("Postgres");
+		const timedOut = askToolRenderer.describeResult(
+			{
+				content: [],
+				details: { question: "Database?", options: ["Postgres"], selectedOptions: ["Postgres"], timedOut: true },
+			},
+			opts,
+		);
+		expect(nodes(timedOut?.body).at(-1)?.p).toMatchObject({ role: "omp.tool.notice" });
+	});
+
+	it("keeps persisted option notes scoped to their retained question", () => {
+		const view = askToolRenderer.describeResult(
+			{
+				content: [],
+				details: {
+					results: [
+						{
+							id: "unrelated",
+							question: "Unrelated?",
+							options: ["First", "Second"],
+							multi: false,
+							selectedOptions: ["First"],
+						},
+						{
+							id: "db",
+							question: "Database?",
+							options: ["First", "Second"],
+							multi: false,
+							selectedOptions: ["First"],
+							optionNotes: [{ option: "Second", note: "Team standard" }],
+						},
+					],
+				},
+			},
+			opts,
+		);
+		const sections = nodes(view?.body).filter(node => node.k === "section");
+		expect(nodes(sections[0]!.c).some(node => node.p?.role === "omp.tool.context")).toBe(false);
+		const note = nodes(sections[1]!.c).at(-1)!;
+		expect(note.p?.role).toBe("omp.tool.context");
+		expect(JSON.stringify(note)).toContain("Second: ");
+		expect(JSON.stringify(note)).toContain("Team standard");
+	});
+
+	it("falls back to the result text when details are unavailable", () => {
+		const view = askToolRenderer.describeResult({ content: [{ type: "text", text: "Question unavailable" }] }, opts);
+		expect(view?.tone).toBe("warning");
+		expect(JSON.stringify(view?.body)).toContain("Question unavailable");
 	});
 });
 

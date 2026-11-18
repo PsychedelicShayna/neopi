@@ -53,17 +53,18 @@ import {
 } from "@oh-my-pi/pi-tui/prompt/word-completion";
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
 import { type AgentSession, type NavigateTreeResult, SessionBusyError } from "../../session/agent-session";
+import type { AgentSessionHandle } from "../../session/agent-session-handle";
 import type { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
+import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand, lookupTuiOnlyBuiltin } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
-import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
 import {
@@ -947,7 +948,7 @@ export async function handleRpcSteerSubagent(
 	const notRunning = `Subagent not running: ${subagentId}`;
 	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
 	if (!owned) return notRunning;
-	let session: AgentSession;
+	let session: AgentSessionHandle;
 	try {
 		session = await AgentLifecycleManager.global().ensureLive(subagentId);
 	} catch {
@@ -980,11 +981,11 @@ export async function handleRpcSteerSubagent(
 }
 
 /** Change only the owned running subagent; AgentSession persists the next-request selection. */
-export function handleRpcSetSubagentThinkingLevel(
+export async function handleRpcSetSubagentThinkingLevel(
 	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
 	subagentId: string,
 	level: ThinkingLevel,
-): string | undefined {
+): Promise<string | undefined> {
 	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
 	if (!owned) return `Subagent not running: ${subagentId}`;
 	return setSubagentThinkingLevel(owned.session, level);
@@ -2137,8 +2138,17 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				session.abortBranchSummary();
 				return success(id, "abort_branch_summary");
 
+			case "set_label": {
+				if (typeof command.entryId !== "string" || !command.entryId)
+					return error(id, "set_label", "entryId must be a non-empty string");
+				if (command.label !== undefined && typeof command.label !== "string")
+					return error(id, "set_label", "label must be a string");
+				session.sessionManager.appendLabelChange(command.entryId, command.label);
+				return success(id, "set_label");
+			}
+
 			case "set_todos": {
-				session.setTodoPhases(command.phases);
+				session.commitTodoPhases(command.phases);
 				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
 			}
 
@@ -2327,7 +2337,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
 					return error(id, command.type, "`subagentId` must be a non-empty string.");
 				}
-				const failure = handleRpcSetSubagentThinkingLevel(subagentRegistry, command.subagentId, command.level);
+				const failure = await handleRpcSetSubagentThinkingLevel(
+					subagentRegistry,
+					command.subagentId,
+					command.level,
+				);
 				return failure ? error(id, command.type, failure) : success(id, command.type);
 			}
 
@@ -2343,7 +2357,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 				const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
 				if (!owned) return error(id, command.type, `Subagent not running: ${command.subagentId}`);
-				if (!setSubagentFast(owned.session, command.enabled)) {
+				if (!(await setSubagentFast(owned.session, command.enabled))) {
 					return error(id, command.type, "Fast mode is unavailable for the subagent's current model.");
 				}
 				return success(id, command.type, {
@@ -2649,8 +2663,13 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 
 			case "bash": {
+				if (command.excludeFromContext !== undefined && typeof command.excludeFromContext !== "boolean") {
+					return error(id, "bash", "excludeFromContext must be a boolean");
+				}
 				try {
-					const result = await session.executeBash(command.command);
+					const result = await session.executeBash(command.command, undefined, {
+						excludeFromContext: command.excludeFromContext,
+					});
 					return success(id, "bash", result);
 				} catch (err) {
 					if (!(err instanceof TreeNavigationError)) throw err;
@@ -2670,6 +2689,14 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "get_session_stats": {
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_session_lease": {
+				const { sessionIds } = command;
+				if (!Array.isArray(sessionIds) || !sessionIds.every(sessionId => typeof sessionId === "string")) {
+					return error(id, "get_session_lease", "sessionIds must be an array of strings");
+				}
+				return success(id, "get_session_lease", probeSessionLeases(sessionIds));
 			}
 
 			case "get_usage": {
@@ -2863,6 +2890,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		maxFrameBytes: MAX_RPC_FRAME_BYTES,
 		maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 		capabilities: stdioCapabilities(),
+		supportsBashExcludeFromContext: true,
 	};
 	outputWriter.write(frameEncoder.encodeFrames(readyFrame));
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -3007,6 +3035,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		}
 
 		rerenderMessage(): void {
+			// No transcript is drawn in RPC mode
+		}
+
+		refreshTranscript(): void {
 			// No transcript is drawn in RPC mode
 		}
 

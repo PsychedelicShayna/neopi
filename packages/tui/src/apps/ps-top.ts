@@ -20,7 +20,7 @@ import { type Component, TUI } from "../tui";
 import type { TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { col, compact, elapsed, keyed, node, row, span, stableKey, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
-import { actionBar, actionButton } from "../native/overlay";
+import { actionBar, actionButton, iconButton, segmentedTabs } from "../native/overlay";
 import { Memo } from "../native/memo";
 import { truncateToWidth } from "../utils";
 import { APP_NAME, formatDuration } from "@oh-my-pi/pi-utils";
@@ -498,13 +498,7 @@ export class PsTopComponent implements Component {
 			);
 		} else {
 			left.push(
-				node("icon", {
-					name: "back",
-					role: "omp.app.ibtn",
-					title: "Back  esc",
-					aria: "Back",
-					actions: { click: "back" },
-				}),
+				iconButton("back", "back", "Back  esc", { aria: "Back" }),
 				text(
 					this.#view === "logs" ? `Logs · ${entry?.row.snapshot.name ?? "?"}` : (entry?.row.snapshot.name ?? "?"),
 					{
@@ -520,8 +514,7 @@ export class PsTopComponent implements Component {
 		const right: NativeNode[] = [];
 		if (this.#view === "table") {
 			right.push(
-				node(
-					"tabs",
+				segmentedTabs(
 					{
 						items: [
 							{
@@ -536,7 +529,6 @@ export class PsTopComponent implements Component {
 						active: this.#all ? "all" : "current",
 						role: "omp.app.seg",
 					},
-					undefined,
 					"scope",
 				),
 			);
@@ -556,7 +548,7 @@ export class PsTopComponent implements Component {
 						align: "center",
 						role: "omp.app.fresh",
 					}),
-			node("icon", { name: "x", role: "omp.app.ibtn", title: "Quit  q", aria: "Quit", actions: { click: "quit" } }),
+			iconButton("x", "quit", "Quit  q", { aria: "Quit" }),
 		);
 		return keyed(
 			row(

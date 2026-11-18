@@ -936,12 +936,13 @@ export function startAuthBroker(opts: AuthBrokerServerOptions): AuthBrokerServer
 				if (refreshMatch) {
 					const id = Number.parseInt(refreshMatch[1], 10);
 					const reason = url.searchParams.get("reason");
-					const refreshReason = reason === "auth-recovery" || reason === "expiry" ? reason : undefined;
+					const refreshReason =
+						reason === "auth-recovery" || reason === "expiry" || reason === "usage-probe" ? reason : undefined;
 					const parsed = await parseBody(req, credentialRefreshRequestSchema, { allowEmpty: true });
 					if (!parsed.ok) return parsed.response;
 					try {
 						const entry = await opts.storage.oauth.refresh(id, req.signal, {
-							reuseRecentMint: refreshReason !== undefined,
+							reuseRecentMint: refreshReason === "auth-recovery" || refreshReason === "expiry",
 							reason: refreshReason,
 							rejectedAccess: parsed.data.rejectedAccess,
 						});

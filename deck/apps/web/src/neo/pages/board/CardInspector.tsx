@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { MarkdownEdit } from "@/components/MarkdownEdit";
 import { ErrorState, formatRelativeTime, formatShortRelative, formatTimestamp, NeoButton, NeoLinkButton, NeoSelect, SectionLabel } from "@/components/neo";
 import { projectLabel } from "@/lib/kanban-project";
+import { cardBodyParts } from "@/lib/card-frontmatter";
 import { Markdown } from "@/lib/markdown";
 import { board, type BoardCard, type BoardColumn, type BoardEvent, type BoardLinks } from "../../client/board";
 import { AgentSwatch } from "../../components/AgentSwatch";
@@ -50,7 +51,8 @@ export function CardInspector({ card, cards, columns, onClose, onOpenCard, onCha
 	}
 	const thread = links.thread ? `/threads?thread=${encodeURIComponent(links.thread.id)}` : `/threads?card=T-${card.number}&draft=${encodeURIComponent(`About T-${card.number}: ${card.title}`)}`;
 	const holder = card.holder;
-	const content = card.body.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
+	let content = card.body;
+	try { content = cardBodyParts(card.body).content; } catch { /* Raw editing remains available for invalid TOML. */ }
 	return <DockInspector onClose={onClose} returnFocusSelector={`[data-board-card="${CSS.escape(card.id)}"]`} title={editingTitle ? <input className="neo-input neo-board-title-input" aria-label="Card title" value={title} onChange={e => setTitle(e.target.value)} onBlur={() => void saveTitle()} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} autoFocus /> : <button type="button" className="neo-board-edit-title" title="Edit title" onClick={() => setEditingTitle(true)}>{card.title}</button>} subtitle={`T-${card.number} · ${projectLabel(card.cwd)} · ${columns.find(c => c.id === card.columnId)?.name ?? "Unknown column"} · created ${formatRelativeTime(card.createdAt)}`} footer={<div className="neo-board-inspector-actions">
 		{editingBody && <div className="neo-board-actions"><NeoButton size="sm" variant="primary" disabled={busy} onClick={() => { void act(() => board.update(card.id, { body })).then(saved => { if (saved) setEditingBody(false); }); }}>Save instructions</NeoButton><NeoButton size="sm" variant="ghost" onClick={() => setEditingBody(false)}>Cancel editing</NeoButton></div>}
 		<div className="neo-board-actions">{running ? <NeoButton variant="danger" size="sm" disabled={busy} onClick={() => void act(() => board.cancel(card.id))}>Stop assignment</NeoButton> : assigning ? <NeoButton size="sm" variant="primary" disabled={busy || card.archived} onClick={() => { void act(() => board.assign(card.id, model || undefined)).then(started => { if (started) setAssigning(false); }); }}>{busy ? "Starting…" : "Start assignment"}</NeoButton> : <NeoButton size="sm" onClick={() => setAssigning(true)} disabled={busy || card.archived}>{run ? "Assign again" : "Assign an agent"}</NeoButton>}<NeoLinkButton to={thread} size="sm"><MessagesSquare size={13} />Discuss in a thread</NeoLinkButton></div>

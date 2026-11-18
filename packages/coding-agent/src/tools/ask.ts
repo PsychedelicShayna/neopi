@@ -684,6 +684,39 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			context?.abort();
 			throw new ToolAbortError("Ask tool requires interactive mode");
 		}
+		// Only a queued user message closes ask; peer IRC and background results
+		// are not answers. Keep the turn alive so the message reaches its boundary.
+		const steeringSignal = context.toolCall?.steeringSignal;
+		const userSteering = new AbortController();
+		const onSteer = () => {
+			if (steeringSignal?.reason === "user") userSteering.abort();
+		};
+		if (steeringSignal?.aborted) onSteer();
+		else steeringSignal?.addEventListener("abort", onSteer, { once: true });
+		const dialogSignal = signal ? AbortSignal.any([signal, userSteering.signal]) : userSteering.signal;
+		const abortError = (): ToolAbortError =>
+			new ToolAbortError(userSteering.signal.aborted ? "Ask interrupted by message" : "Ask input was cancelled");
+		const cancelAsk = (): never => {
+			if (userSteering.signal.aborted) throw abortError();
+			context.abort();
+			throw new ToolAbortError("Ask tool was cancelled by the user");
+		};
+		try {
+			return await this.#askQuestions(params, dialogSignal, context.ui, cancelAsk);
+		} catch (error) {
+			if (userSteering.signal.aborted && error instanceof ToolAbortError) throw abortError();
+			throw error;
+		} finally {
+			steeringSignal?.removeEventListener("abort", onSteer);
+		}
+	}
+
+	async #askQuestions(
+		params: AskParams,
+		signal: AbortSignal,
+		extensionUi: NonNullable<AgentToolContext["ui"]>,
+		cancelAsk: () => never,
+	): Promise<AgentToolResult<AskToolDetails>> {
 		// Models occasionally inject `\r` runs into string values (observed with
 		// GLM via OpenRouter); sanitize before the dialog renders or the answer
 		// echoes back into session history.
@@ -763,7 +796,6 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			}
 		}
 
-		const extensionUi = context.ui;
 		const ui: UIContext = {
 			timeoutStartsOnPresentation: extensionUi.timeoutStartsOnPresentation,
 			select: (prompt, options, dialogOptions) => extensionUi.select(prompt, options, dialogOptions),
@@ -812,10 +844,9 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						})),
 						{ timeout: timeout ?? undefined, signal, acceptImages: true },
 					);
-				const richResult = signal ? await untilAborted(signal, showRichDialog) : await showRichDialog();
+				const richResult = await untilAborted(signal, showRichDialog);
 				if (!richResult) {
-					context.abort();
-					throw new ToolAbortError("Ask tool was cancelled by the user");
+					cancelAsk();
 				}
 				if (richResult.kind === "chat") {
 					const questionText = params.questions.map(q => q.question).join("\n");
@@ -887,8 +918,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.selectedOptions.length === 0 &&
 							result.customInput === undefined)
 					) {
-						context.abort();
-						throw new ToolAbortError("Ask tool was cancelled by the user");
+						cancelAsk();
 					}
 					const details: AskToolDetails = {
 						question: result.question,
@@ -954,8 +984,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			const { optionLabels, selectedOptions, customInput, note, cancelled, timedOut } = await askQuestion(q);
 
 			if (!timedOut && (cancelled || (selectedOptions.length === 0 && customInput === undefined))) {
-				context.abort();
-				throw new ToolAbortError("Ask tool was cancelled by the user");
+				cancelAsk();
 			}
 			const details: AskToolDetails = {
 				question: q.question,
@@ -1000,8 +1029,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			} = await askQuestion(q, { previous, navigation });
 
 			if (cancelled && !timedOut) {
-				context.abort();
-				throw new ToolAbortError("Ask tool was cancelled by the user");
+				cancelAsk();
 			}
 
 			resultsByIndex[questionIndex] = {

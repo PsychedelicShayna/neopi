@@ -53,7 +53,7 @@ function sessionWith(
 		}),
 		sessionManager: SessionManager.inMemory(),
 		settings: options.settings ?? Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
-		modelRegistry: { getApiKey: async () => "test-key" } as never,
+		modelRegistry: { getApiKey: async () => "test-key", getAvailable: () => [options.model ?? model] } as never,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
 		builtInToolNames: ["read"],
 		skills: options.skills,
@@ -174,7 +174,7 @@ describe("context snapshot system prompt and skills", () => {
 		file.mockRestore();
 	});
 
-	it("clamps the System Prompt total when the shared Skills estimate exceeds the effective blocks", () => {
+	it("does not charge skill metadata absent from the effective system blocks", () => {
 		const session = sessionWith({
 			prompt: [""],
 			tools: [tool("read")],
@@ -189,12 +189,13 @@ describe("context snapshot system prompt and skills", () => {
 			],
 		});
 		const data = buildSessionContextView(session);
-		expect(category(data, "skills").tokens).toBeGreaterThan(0);
+		expect(category(data, "skills").tokens).toBe(0);
 		expect(category(data, "skills").entries).toEqual([]);
 		expect(category(data, "system-prompt")).toMatchObject({
 			tokens: 0,
 			entries: [{ id: "system-prompt/0", text: "", tokens: 0 }],
 		});
+		expect(totalTokens(data)).toBe(category(data, "built-in-tools").tokens);
 	});
 });
 

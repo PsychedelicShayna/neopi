@@ -37,6 +37,8 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 	const previousUserProfile = process.env.USERPROFILE;
 	const previousConfigDir = process.env.PI_CONFIG_DIR;
 	const previousAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+	const previousOmpProfile = process.env.OMP_PROFILE;
+	const previousPiProfile = process.env.PI_PROFILE;
 	process.env.HOME = home;
 	process.env.USERPROFILE = home;
 	delete process.env.PI_CONFIG_DIR;
@@ -47,7 +49,7 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 		return await fn({
 			cwd: tempDir.join("project"),
 			projectConfig: tempDir.join("project", CONFIG_DIR_NAME),
-			userConfig: path.join(home, CONFIG_DIR_NAME, "agent"),
+			userConfig: getAgentDir(),
 		});
 	} finally {
 		homedirSpy.mockRestore();
@@ -58,6 +60,8 @@ async function withDiscoveryHome<T>(fn: (paths: DiscoveryPaths) => Promise<T>): 
 		restoreEnvValue("PI_CONFIG_DIR", previousConfigDir);
 		setAgentDir(previousAgentDir);
 		restoreEnvValue("PI_CODING_AGENT_DIR", previousAgentDirEnv);
+		restoreEnvValue("OMP_PROFILE", previousOmpProfile);
+		restoreEnvValue("PI_PROFILE", previousPiProfile);
 		__resetDirsFromEnvForTests();
 	}
 }
@@ -206,7 +210,7 @@ describe("system prompt Handlebars templates", () => {
 			const result = await buildSystemPrompt(options(cwd));
 			const text = result.systemPrompt.join("\n\n");
 			expect(text).toContain("fallback literal prompt");
-			expect(text).not.toContain("§ Tool Policy");
+			expect(text).not.toContain("⁂ Tool Policy");
 		});
 	});
 
@@ -217,7 +221,7 @@ describe("system prompt Handlebars templates", () => {
 			const result = await buildSystemPrompt(options(cwd));
 			const text = result.systemPrompt.join("\n\n");
 			expect(text).not.toContain("TASK_BRANCH=");
-			expect(text).toContain("§ Tool Policy");
+			expect(text).toContain("⁂ Tool Policy");
 		});
 	});
 
@@ -229,7 +233,7 @@ describe("system prompt Handlebars templates", () => {
 			const result = await buildSystemPrompt(options(cwd));
 			const text = result.systemPrompt.join("\n\n");
 			expect(text).toContain("fallback literal prompt");
-			expect(text).not.toContain("§ Tool Policy");
+			expect(text).not.toContain("⁂ Tool Policy");
 		});
 	});
 

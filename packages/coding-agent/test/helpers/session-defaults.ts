@@ -8,6 +8,7 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 			return fn();
 		},
 		setActiveToolsByName: async (_toolNames: string[]) => {},
+		getMountedXdevToolNames: () => [],
 		waitForIdle: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,

@@ -160,7 +160,9 @@ export class GitHelpSheet implements Component {
 
 	render(width: number): readonly string[] {
 		const keyWidth = Math.max(
-			...shortcutGroups().flatMap(group => group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" ")))),
+			...shortcutGroups().flatMap(group =>
+				group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" "))),
+			),
 		);
 		const lines = [truncateToWidth(` ${theme.bold("Keyboard shortcuts")}`, width), ""];
 		for (const group of shortcutGroups()) {

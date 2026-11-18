@@ -1,5 +1,5 @@
 import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
-
+import chillaxNotice from "../prompts/system/chillax-notice.md" with { type: "text" };
 import jevifyNotice from "../prompts/system/jevify-notice.md" with { type: "text" };
 import orchestrateNotice from "../prompts/system/orchestrate-notice.md" with { type: "text" };
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
@@ -32,6 +32,8 @@ export interface MagicKeywordContext {
 	js: boolean;
 	/** `eval.workpool.freshAgents`: whether workpools spawn a new agent per item instead of reusing workers. */
 	freshAgents: boolean;
+	/** `task.perCallModel` admits `model` on eval `agent()`/`workpool()` (`eval` or `on`). */
+	perCallModel: boolean;
 }
 
 /** One magic keyword: trigger word, gradient, settings copy, and the notice it injects. */
@@ -42,6 +44,8 @@ export interface MagicKeyword {
 	word: string;
 	/** Editor/bubble gradient as an HSL hue sweep `[from, to]` in degrees; `to` may exceed 360 to wrap. */
 	hue: readonly [number, number];
+	/** HSL lightness sweep `[from, to]` in percent painted alongside `hue`; omitted keeps the default lightness. */
+	lightness?: readonly [number, number];
 	/** Settings panel label. */
 	label: string;
 	/** Settings panel description. */
@@ -51,10 +55,6 @@ export interface MagicKeyword {
 	/** Render the hidden notice queued ahead of the user message. */
 	notice: (context: MagicKeywordContext) => string;
 }
-
-/** Hidden notice for "ultrathink": careful multi-step reasoning. */
-
-/** Hidden notice for "jevify": bulk classification through the eval kernel's `judge()`. */
 
 /** Hidden notice for "orchestrate", naming only the tools the session actually exposes. */
 export function renderOrchestrateNotice({ tools }: Pick<MagicKeywordContext, "tools">): string {
@@ -69,8 +69,17 @@ export function renderWorkflowNotice({
 	py,
 	js,
 	freshAgents,
-}: Pick<MagicKeywordContext, "taskBatch" | "scoutAvailable" | "evalTools" | "py" | "js" | "freshAgents">): string {
-	return renderPromptAsset("system/workflow-notice.md", workflowNotice, { taskBatch, scoutAvailable, evalTools, py, js, freshAgents }, { kind: "notice" }).trim();
+	perCallModel,
+}: Pick<
+	MagicKeywordContext,
+	"taskBatch" | "scoutAvailable" | "evalTools" | "py" | "js" | "freshAgents" | "perCallModel"
+>): string {
+	return renderPromptAsset(
+		"system/workflow-notice.md",
+		workflowNotice,
+		{ taskBatch, scoutAvailable, evalTools, py, js, freshAgents, perCallModel },
+		{ kind: "notice" },
+	).trim();
 }
 
 export const MAGIC_KEYWORDS = [
@@ -82,6 +91,18 @@ export const MAGIC_KEYWORDS = [
 		description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
 		requires: [],
 		notice: () => resolvePromptAsset("system/ultrathink-notice.md", ultrathinkNotice, { kind: "notice" }).text.trim(),
+	},
+	{
+		id: "chillax",
+		word: "chillax",
+		// Cyan darkening into deep blue.
+		hue: [180, 235],
+		lightness: [62, 45],
+		label: "Chillax Keyword",
+		description:
+			"Let standalone chillax drop thinking to the model's lowest effort (models with per-message effort, even mid-turn) and append its hidden notice",
+		requires: [],
+		notice: () => resolvePromptAsset("system/chillax-notice.md", chillaxNotice, { kind: "notice" }).text.trim(),
 	},
 	{
 		id: "orchestrate",

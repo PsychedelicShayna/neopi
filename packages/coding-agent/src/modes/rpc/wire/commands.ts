@@ -138,7 +138,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "query_model_selector",
-		doc: "Query native /switch ordering, scoped candidates, role aliases and model facts without selecting.",
+		doc: "Query native /model ordering, scoped candidates, role aliases and model facts without selecting.",
 		params: { query: "string" },
 		result: "ModelSelectorResult",
 	},
@@ -433,7 +433,7 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "set_subagent_model",
-		doc: "Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
+		doc: "Switch a running subagent's model for this session only, from its next request, like the focused `/model`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
 		params: { subagentId: "string", "selector?": "string", "provider?": "string", "modelId?": "string" },
 		result: {
 			provider: "string",
@@ -522,10 +522,21 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{ name: "set_auto_retry", doc: "Enable or disable auto-retry.", params: { enabled: "boolean" } },
 	{ name: "abort_retry", doc: "Abort a pending auto-retry." },
-	{ name: "bash", doc: "Run a shell command.", params: { command: "string" }, result: "BashResult" },
+	{
+		name: "bash",
+		doc: "Run a shell command. Before excluding output, require ready.supportsBashExcludeFromContext to be true.",
+		params: { command: "string", "excludeFromContext?": "boolean" },
+		result: "BashResult",
+	},
 	{ name: "abort_bash", doc: "Abort the running shell command." },
 
 	{ name: "get_session_stats", doc: "Session statistics.", result: "SessionStats" },
+	{
+		name: "get_session_lease",
+		doc: "Which of these sessions a running process (this one included) owns, probed without taking ownership. Ids in neither list are free; `unknown` could not be probed.",
+		params: { sessionIds: "string[]" },
+		result: { held: "string[]", unknown: "string[]" },
+	},
 	{
 		name: "export_html",
 		doc: "Export the session as HTML; returns the written path.",

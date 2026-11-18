@@ -107,6 +107,22 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Primary accent color (logo, selected items, cursor)"
 				},
+				"provenancePurple": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Nightly-only NeoPi crescent marker"
+				},
+				"provenanceGold": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Newest synced upstream feature tier"
+				},
+				"provenanceSilver": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Previous synced upstream feature tier"
+				},
+				"provenanceBronze": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Third synced upstream feature tier"
+				},
 				"border": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Normal borders"
@@ -419,7 +435,7 @@
 				},
 				"ansi": {
 					"type": "array",
-					"description": "ANSI colors 0-15",
+					"description": "ANSI colors 0-15; also the palette colorful Markdown (tui.colorfulMarkdown) paints headings, emphasis, inline code and table headers from",
 					"items": { "$ref": "#/$defs/colorValue" },
 					"minItems": 16,
 					"maxItems": 16

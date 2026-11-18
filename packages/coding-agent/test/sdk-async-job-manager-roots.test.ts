@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import type { AsyncJobManagerApi } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -68,7 +68,7 @@ describe("AsyncJobManager ownership across concurrent top-level roots", () => {
 		return session;
 	}
 
-	function registerGatedJob(manager: AsyncJobManager, ownerId: string) {
+	function registerGatedJob(manager: AsyncJobManagerApi, ownerId: string) {
 		const release = Promise.withResolvers<void>();
 		const jobId = manager.register(
 			"bash",

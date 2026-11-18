@@ -23,6 +23,7 @@ import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ChroniclerHealth } from "../../chronicler/session-chronicler";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
+import type { SessionLeaseReport } from "../../session/session-storage";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import type { CacheWarmingMode } from "../../session/cache-warmer";
 import type { MessageEntryIdentity } from "../../session/message-entry-ids";
@@ -191,12 +192,13 @@ export type RpcCommand =
 	| { id?: string; type: "abort_retry" }
 
 	// Bash
-	| { id?: string; type: "bash"; command: string }
+	| { id?: string; type: "bash"; command: string; excludeFromContext?: boolean }
 	| { id?: string; type: "abort_bash" }
 
 	// Session
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "get_usage"; provider?: string; refresh?: boolean; redact?: boolean }
+	| { id?: string; type: "get_session_lease"; sessionIds: string[] }
 	| { id?: string; type: "export_html"; outputPath?: string }
 	| { id?: string; type: "switch_session"; sessionPath: string; provider?: string; modelId?: string }
 	| { id?: string; type: "branch"; entryId: string }
@@ -311,6 +313,30 @@ export interface RpcSessionState {
 	/** Current goal-mode state; `null` when the session has no goal. */
 	goal: GoalModeState | null;
 }
+
+/** Bounded home-owned facts for a watched worker; volatile meters and transcript projections stay on main. */
+export type RpcSessionControlState = Pick<
+	RpcSessionState,
+	| "steeringMode"
+	| "followUpMode"
+	| "interruptMode"
+	| "approvalMode"
+	| "sessionUsage"
+	| "chronicler"
+	| "autoCompactionEnabled"
+	| "queuedMessageCount"
+	| "runningJobCount"
+	| "hasPendingAsyncWork"
+	| "isSettled"
+	| "slowModeSupported"
+	| "slowModeEnabled"
+	| "slowModeScope"
+	| "usageLimit"
+	| "dictationEnabled"
+	| "chatMode"
+	| "mode"
+	| "planMode"
+>;
 
 /** Session modes `set_mode` switches between. */
 export type RpcMode = "default" | "plan";
@@ -557,6 +583,8 @@ export interface RpcReadyFrame {
 	maxReassembledFrameBytes: number;
 	/** Optional features this process supports; hosts gate on exact strings (see `rpc-capabilities.ts`). */
 	capabilities: string[];
+	/** `bash` accepts `excludeFromContext`; older runtimes omit this capability. Require exactly `true`. */
+	supportsBashExcludeFromContext?: boolean;
 }
 
 /**
@@ -978,6 +1006,7 @@ export type RpcResponse =
 	// Session
 	| { id?: string; type: "response"; command: "get_session_stats"; success: true; data: SessionStats }
 	| { id?: string; type: "response"; command: "get_usage"; success: true; data: RpcUsageResult }
+	| { id?: string; type: "response"; command: "get_session_lease"; success: true; data: SessionLeaseReport }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "branch"; success: true; data: { text: string; cancelled: boolean } }

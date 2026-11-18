@@ -528,7 +528,11 @@ describe("RpcInputDispatcher", () => {
 		await dispatcher.drain();
 
 		expect(started).toEqual(["active", "queued"]);
-		expect(hostToolFrames).toHaveLength(1);
+		expect(hostToolFrames.filter(frame => frame.type === "host_tool_call")).toHaveLength(1);
+		expect(hostToolFrames[1]).toMatchObject({
+			type: "host_tool_cancel",
+			targetId: hostToolFrames[0].id,
+		});
 		expect(outputs).toEqual([
 			{
 				id: "active",

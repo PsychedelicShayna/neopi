@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { adjustHsv } from "@oh-my-pi/pi-utils/color";
+import { adjustHsv, colorLuma } from "@oh-my-pi/pi-utils/color";
 import { getCustomThemesDir } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
-import { detectColorMode, resolveThemeColors } from "./color";
+import { detectColorMode, resolveThemeColors, resolveVarRefs } from "./color";
 import darkThemeJson from "./dark.json" with { type: "json" };
 import defaultThemes from "./defaults.json" with { type: "json" };
 import lightThemeJson from "./light.json" with { type: "json" };
@@ -156,6 +156,13 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 	const { mode, symbolPresetOverride, symbolCyclers, colorBlindMode } = options;
 	const colorMode = mode ?? detectColorMode();
 	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
+	// Older built-in and custom themes inherit legible marker colors without
+	// making these new tokens mandatory in their saved definitions.
+	const surfaceLuma = colorLuma(resolvedColors.statusLineBg);
+	const markerDefaults = surfaceLuma !== undefined && surfaceLuma > 0.5 ? lightThemeJson : darkThemeJson;
+	for (const key of ["provenancePurple", "provenanceGold", "provenanceSilver", "provenanceBronze"] as const) {
+		resolvedColors[key] ??= markerDefaults.colors[key];
+	}
 
 	if (colorBlindMode) {
 		const added = resolvedColors.toolDiffAdded;
@@ -189,7 +196,8 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 		...(symbolCyclers ? symbolCyclerOverrides(symbolCyclers) : undefined),
 	};
 	const spinnerFramesOverrides = normalizeSpinnerFramesOverride(themeJson.symbols?.spinnerFrames);
-	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides, spinnerFramesOverrides);
+	const ansiPalette = themeJson.terminal?.ansi?.map(color => resolveVarRefs(color, themeJson.vars ?? {}));
+	return new Theme(fgColors, bgColors, colorMode, symbolPreset, symbolOverrides, spinnerFramesOverrides, ansiPalette);
 }
 
 export async function loadTheme(name: string, options: CreateThemeOptions = {}): Promise<Theme> {

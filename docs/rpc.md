@@ -44,7 +44,7 @@ Behavior notes:
 | `get_roles` | `get_roles` / `set_role` commands and `get_state.activeRole` ([payloads](#get_roles-and-set_role-payloads)) |
 | `themes_configuration` | `get_themes_configuration`, scoped `update_theme`, and `themes_configuration_changed`. |
 | `theme_palette` | Read any installed theme's resolved palette by name with `get_theme`, without changing the selected theme. |
-| `model_selector` | Read-only `query_model_selector` returns native `/switch` matches, ordering, role aliases and row facts. |
+| `model_selector` | Read-only `query_model_selector` returns native `/model` matches, ordering, role aliases and row facts. |
 | `models_configuration` | Native provider/model catalog and scoped role/effort configuration, with expected-value write conflicts. |
 | `cancellable_login` | Login-ID-scoped dialogs, explicit `allowSecretInput` / `allowTrustConfirmation` capabilities, and same-connection `cancel_login`. Capabilities never substitute for user consent. |
 | `set_chat_mode` | Live chat-mode switching: the `set_chat_mode` command, `get_state.chatMode`, the `chat_mode_changed` event, and the `/chat` builtin in `get_available_commands`. |
@@ -148,7 +148,8 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
   "supportedProtocolVersions": [1, 2],
   "maxFrameBytes": 1048576,
   "maxReassembledFrameBytes": 67108864,
-  "capabilities": []
+  "capabilities": [],
+  "supportsBashExcludeFromContext": true
 }
 ```
 
@@ -334,8 +335,17 @@ The TypeScript client exposes `setCacheWarming(mode): Promise<CacheWarmingMode>`
 
 ### Bash
 
-- `{ id?, type: "bash", command: string }`
+- `{ id?, type: "bash", command: string, excludeFromContext?: boolean }`
 - `{ id?, type: "abort_bash" }`
+
+`excludeFromContext: true` keeps the run out of model context, like terminal
+`!!`: the output is still returned and recorded in the transcript, where
+extensions and `get_messages` see it. Non-boolean values are rejected.
+
+Older runtimes ignore unknown fields and would share the output, so send
+`excludeFromContext: true` only when the `ready` frame has
+`supportsBashExcludeFromContext: true`. `RpcClient.bash()` enforces this; with
+the Python, Go and Rust SDKs, check `client.ready` / `Ready()` / `ready()`.
 
 `bash` is dispatched concurrently: the RPC server continues reading commands
 while the shell command runs, so `abort_bash` (or any other command) sent
@@ -348,6 +358,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 
 - `{ id?, type: "get_session_stats" }`
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
+- `{ id?, type: "get_session_lease", sessionIds: string[] }` → `data: { held: string[], unknown: string[] }`: which sessions a running NeoPi (this process included) owns, probed without taking their ownership leases. Ids in neither list are free; `unknown` ids could not be probed. `npi session lease --json -- <id>...` answers the same without an RPC child (`--` keeps ids starting with `-` from parsing as options).
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
 - `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere. `entryId` must be a user request: a user message or a user-invoked `/skill:` prompt (a `custom_message` entry); `data.text` is the request as typed, `/skill:<name> <args>` for a skill prompt
@@ -956,7 +967,7 @@ configuration files or substitute a bundled theme inventory.
 ### Native model selector query
 
 Send `{"type":"query_model_selector","query":"example"}` to read the native
-`/switch` filter without selecting a model or starting a turn. The same command
+`/model` filter without selecting a model or starting a turn. The same command
 is available through terminal control. Check the `model_selector` capability
 before using it.
 
@@ -1013,7 +1024,7 @@ role:
 - `tag` is absent for custom roles, which have no built-in tag.
 - `description` is the effective `modelTags.<id>.description` override or the
   built-in default. Custom roles have no default description. An empty string
-  deliberately clears the description. In `/models`, `D` edits this metadata
+  deliberately clears the description. In `/roles`, `D` edits this metadata
   and the selected role's description appears above its rows.
 - `configured` is the raw `modelRoles` selector (lists joined with `", "`),
   absent when the role is not configured.
@@ -1942,7 +1953,7 @@ unavailable in that view.
 
 ### Changing a running subagent's model
 
-`set_subagent_model` is the focused `/switch` for one owned running subagent: it
+`set_subagent_model` is the focused `/model` for one owned running subagent: it
 changes that session's model only, from its next provider request, without
 aborting the request in flight. The parent, siblings, saved roles and global
 settings are untouched. Give either a `selector` or an exact `provider` with
@@ -1954,7 +1965,7 @@ settings are untouched. Give either a `selector` or an exact `provider` with
 { "id": "req_5", "type": "set_subagent_model", "subagentId": "OmpWorker", "provider": "anthropic", "modelId": "claude-haiku-4-5" }
 ```
 
-A `selector` resolves exactly like `/switch <selector>` against the subagent's
+A `selector` resolves exactly like `/model <selector>` against the subagent's
 own model registry and scope: `provider/id`, a fuzzy id, an `@role` alias, and an
 optional `:level` suffix. Without a suffix the level a role configures for that
 model applies, else the subagent's current level is kept within what the new
@@ -2144,7 +2155,7 @@ Extensions in RPC mode use request/response UI frames. `--no-ui` disables the ex
 
 `--mode rpc-ui` independently enables the tool UI context, including with `--no-ui`:
 
-- `ask` still sends `select` requests. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
+- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
 - Other callers using the tool UI context retain its supported dialog methods (`select`, `confirm`, `input`, `editor`, and cancellation) and presentation methods (`notify`, `setStatus`, string-array `setWidget`, `set_editor_text`, and opt-in `setTitle`). `--no-ui` is not a transport-level filter on these methods.
 - Tool approval prompts use the extension runner, not the tool UI context. Under `--no-ui`, tools requiring approval fail closed with a no-interactive-UI error rather than sending an approval dialog, just as with `--mode rpc --no-ui`.
 - MCP authentication challenges do not gain an RPC UI handler in either mode; the interactive-mode MCP auth handler is not installed.
@@ -2166,7 +2177,8 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      host hint from `ExtensionUIDialogOptions.secret`; hosts that support
      masked input should hide typed characters when `secret: true`.
    - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
-     question of one `ask` tool call:
+     question of one extension `ui.askDialog` call or questions-based `ask`
+     tool invocation:
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.

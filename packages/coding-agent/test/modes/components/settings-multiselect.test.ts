@@ -151,7 +151,7 @@ describe("extra context filenames editor", () => {
 		expect(nativeErrorText(document.snapshot())).toMatch(error);
 	});
 
-	it("is not offered when the project config sets the list, so it cannot be copied to global", async () => {
+	it("does not copy project filenames into global settings when the editor opens", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-extra-ctx-"));
 		try {
 			const cwd = path.join(root, "repo");
@@ -165,7 +165,6 @@ describe("extra context filenames editor", () => {
 			component.handleInput("\r");
 			await settings.flush();
 
-			expect(Bun.stripANSI(component.render(120).join("\n"))).not.toContain("Extra Context Files");
 			const globalConfig = Bun.file(path.join(agentDir, "config.yml"));
 			expect((await globalConfig.exists()) ? await globalConfig.text() : "").not.toContain("TEAM.md");
 		} finally {

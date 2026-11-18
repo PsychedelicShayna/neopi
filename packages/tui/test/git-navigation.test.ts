@@ -127,7 +127,10 @@ afterEach(() => {
 it("keeps help accessible by arrows without advertising disabled Vim shortcuts", () => {
 	setMenuSearchVimMode(false);
 	let back = 0;
-	const help = new GitHelpSheet(() => back++, () => back++);
+	const help = new GitHelpSheet(
+		() => back++,
+		() => back++,
+	);
 	const off = JSON.stringify(help.describe());
 	expect(off).not.toContain("Vim navigation");
 	expect(off).not.toContain("Half page up or down");

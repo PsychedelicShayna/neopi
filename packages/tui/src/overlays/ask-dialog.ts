@@ -47,6 +47,10 @@ export interface AskDialogOptionNote {
 	images?: ImageContent[];
 }
 
+/** A prompt left without submitting: what it still held, offered again when the custom answer reopens. */
+export interface AskDialogPromptDraft {
+	draft: AskDialogPromptValue;
+}
 /** Submitted answer to one dialog question. */
 export interface ExtensionAskDialogResultItem {
 	id: string;
@@ -142,12 +146,13 @@ export interface AskDialogPrompt {
 interface AskDialogCallbacks {
 	onSubmit(result: ExtensionAskDialogSubmitResult): void;
 	onCancel(): void;
-	onPrompt(prompt: AskDialogPrompt, prefill?: string): Promise<string | undefined>;
-	/** Prompt that accepts pasted images; without it, prompts use `onPrompt`. */
+	/** Resolves the submitted text; on cancel, the editor's draft, or `undefined` when none is kept. */
+	onPrompt(prompt: AskDialogPrompt, prefill?: string): Promise<string | AskDialogPromptDraft | undefined>;
+	/** Prompt that accepts pasted images; without it, prompts use `onPrompt`. Resolves like `onPrompt`. */
 	onImagePrompt?(
 		prompt: AskDialogPrompt,
 		prefill: AskDialogPromptValue | undefined,
-	): Promise<AskDialogPromptValue | undefined>;
+	): Promise<AskDialogPromptValue | AskDialogPromptDraft | undefined>;
 }
 
 /**
@@ -156,7 +161,7 @@ interface AskDialogCallbacks {
  * keys are the explicit hand-off: they release the guard for the rest of the
  * dialog's life and the draft stays parked (intact) beneath it.
  */
-interface AskDialogInputGuard {
+export interface AskDialogInputGuard {
 	isBlocked(): boolean;
 	handleInput(keyData: string): void;
 	/** Shown after the release keys while the guard holds input. */
@@ -184,6 +189,8 @@ interface QuestionState {
 	selectedOptions: Set<string>;
 	customInput: string | undefined;
 	customInputImages: ImageContent[] | undefined;
+	/** Unsubmitted custom answer left by a cancelled prompt; prefills the next one over `customInput`. */
+	customDraft: AskDialogPromptValue | undefined;
 	note: string | undefined;
 	noteImages: ImageContent[] | undefined;
 	noteRowKey: string | undefined;
@@ -465,10 +472,17 @@ function describeRowDetail(
 	return spans.length > 0 ? spans : undefined;
 }
 
+/** A prompt's outcome: the submitted value, or after a cancel the draft the host kept, if any. */
+type PromptOutcome =
+	| { submitted: true; text: string; images: ImageContent[] | undefined }
+	| { submitted: false; draft: AskDialogPromptValue | undefined };
+
 /** Normalize the result of either prompt callback. */
-function splitPromptInput(input: string | AskDialogPromptValue): { text: string; images: ImageContent[] | undefined } {
-	if (typeof input === "string") return { text: input, images: undefined };
-	return { text: input.text, images: input.images?.length ? input.images : undefined };
+function promptOutcome(result: string | AskDialogPromptValue | AskDialogPromptDraft | undefined): PromptOutcome {
+	if (result === undefined) return { submitted: false, draft: undefined };
+	if (typeof result === "string") return { submitted: true, text: result, images: undefined };
+	if ("draft" in result) return { submitted: false, draft: result.draft };
+	return { submitted: true, text: result.text, images: result.images?.length ? result.images : undefined };
 }
 
 function clearNote(state: QuestionState): void {
@@ -630,8 +644,6 @@ export class AskDialogComponent implements Component {
 	#overflowLayouts = new WeakMap<ExtensionAskDialogQuestion, Set<string>>();
 	#expanded = false;
 	#contentWidth = 76;
-	#headerExpandable = false;
-	#descExpandable = false;
 	/** Collapsed to one line (`app.ask.hide` / the Hide button) while the question stays pending. */
 	#hidden = false;
 	/** Memoized native description; dropped whenever dialog state may have changed. */
@@ -645,9 +657,8 @@ export class AskDialogComponent implements Component {
 	/** Once-a-second re-describe while the native countdown ring is shown. */
 	#ringTick: NodeJS.Timeout | undefined;
 	/**
-	 * The answer whose pick just moved the dialog on to the next question. Note annotates it, not the
-	 * next question's highlighted row, until that question is answered or any other input arrives:
-	 * a Tern click commits a single-choice row, so picking then pressing Note is the mouse flow.
+	 * The answer whose pick just advanced to the next question. Note annotates it until other input,
+	 * rather than the next unanswered question's highlighted row.
 	 */
 	#justAnswered: { questionIndex: number; rowKey: string } | undefined;
 	readonly #panel: OverlayPanel;
@@ -669,6 +680,7 @@ export class AskDialogComponent implements Component {
 				selectedOptions: new Set<string>(),
 				customInput: undefined,
 				customInputImages: undefined,
+				customDraft: undefined,
 				note: undefined,
 				noteImages: undefined,
 				noteRowKey: undefined,
@@ -837,27 +849,34 @@ export class AskDialogComponent implements Component {
 		// available within the existing height cap.
 		const totalRows = this.#dialogHeight(innerWidth, process.stdout.rows || 40);
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
-		const maxTitleRows = Math.max(1, totalRows - 5 - MIN_BODY_ROWS - tabBarRows);
-		const headerLines = this.#renderHeader(innerWidth, maxTitleRows);
-		// top border (1) + header(N) + two dividers + footer(1) + bottom
-		// border (1) = N + 5 fixed rows outside the body. Without the bottom
-		// border term the dialog overflowed the viewport by one row
-		// (PRRT_kwDOQxs0bc6OFbDY).
-		const hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
-		const fixedRows = 1 + headerLines.length + 1 + 1 + hintRows + 1;
-		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
-		this.#bodyRows = bodyRows;
-		const bodyLines = this.#isSubmitTab()
-			? this.#renderSubmitBody(innerWidth, bodyRows)
-			: this.#renderQuestionBody(innerWidth, bodyRows);
-		const footer = this.#footerHintText(bodyLines.indicator);
+		let hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
+		let headerLines: string[];
+		let bodyLines: RenderedList;
+		let footerLines: string[];
+		for (;;) {
+			// Borders and dividers cost four rows; the footer may wrap independently on each tab.
+			const maxTitleRows = Math.max(1, totalRows - 4 - hintRows - MIN_BODY_ROWS - tabBarRows);
+			headerLines = this.#renderHeader(innerWidth, maxTitleRows);
+			const fixedRows = 4 + headerLines.length + hintRows;
+			const bodyRows = Math.max(1, totalRows - fixedRows);
+			this.#bodyRows = bodyRows;
+			bodyLines = this.#isSubmitTab()
+				? this.#renderSubmitBody(innerWidth, bodyRows)
+				: this.#renderQuestionBody(innerWidth, bodyRows);
+			footerLines = menuHintLines(
+				this.#footerHintText(bodyLines.indicator),
+				innerWidth,
+				this.#guardBlocks() ? "" : undefined,
+			);
+			if (footerLines.length <= hintRows) break;
+			hintRows = footerLines.length;
+		}
 		this.#panel.title = this.#titleText();
 		this.#headerRegion.setLines(headerLines);
 		this.#bodyRegion.setLines(bodyLines.lines);
-		this.#bodyRegion.setHeight(bodyRows);
-		this.#footerRegion.setLines(
-			menuHintLines(footer, innerWidth, this.#guardBlocks() ? "" : undefined).map(line => theme.fg("dim", line)),
-		);
+		this.#bodyRegion.setHeight(this.#bodyRows);
+		this.#footerRegion.setLines(footerLines.map(line => theme.fg("dim", line)));
+		this.#footerRegion.setHeight(hintRows);
 		return this.#help.render(this.#panel.render(width), width);
 	}
 
@@ -1031,6 +1050,8 @@ export class AskDialogComponent implements Component {
 					...(detail ? { detail } : {}),
 					...(recommended ? { value: [span("Recommended")] } : {}),
 					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
+					// Notes this row without picking it, wherever the cursor is.
+					actions: { menu: ["note"] },
 				},
 				undefined,
 				rowItem.key,
@@ -1126,7 +1147,7 @@ export class AskDialogComponent implements Component {
 		});
 		const note = actionButton("Note", "note", {
 			keys: "n",
-			title: "Add a note to the highlighted answer, or to the one just picked  n",
+			title: "Add a note to the highlighted answer  n",
 		});
 		const optionNote = actionButton("Option note", "option-note", {
 			keys: "a",
@@ -1139,8 +1160,8 @@ export class AskDialogComponent implements Component {
 	 * Pointer actions: a tab click switches to it; a click on an answer row is
 	 * Enter on it (Space for a multi-select option, so it toggles; its
 	 * double-click `activate` is Enter); the action bar's Submit, Note and Skip
-	 * run what Enter (see {@link #pressEnter} for Other), `n` and Esc run on the highlighted row; Hide/Show
-	 * collapse and restore the dialog.
+	 * run Enter, Note and Esc; Note retains a just-picked answer as its target, while a row's
+	 * menu Note explicitly targets that row. Hide/Show collapse and restore the dialog.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (this.#closed || this.#promptActive) return;
@@ -1158,7 +1179,7 @@ export class AskDialogComponent implements Component {
 			// A pointer action on the dialog is an explicit hand-off from the draft.
 			this.#releaseGuardForPointer();
 			if (event.act === "submit") this.#pressEnter();
-			else if (event.act === "note") this.#pressNote();
+			else if (event.act === "note") this.#noteFromPointer(event.key);
 			else if (event.act === "option-note") this.#pressOptionNote(false);
 			return;
 		}
@@ -1219,7 +1240,7 @@ export class AskDialogComponent implements Component {
 		this.#requestRender();
 	}
 
-	/** `n`: a note on the {@link #noteTarget} row (questions only). */
+	/** `n`: a note on the just-picked answer or the highlighted row (questions only). */
 	#pressNote(): void {
 		if (this.#isSubmitTab()) return;
 		this.#countdown?.reset();
@@ -1227,10 +1248,7 @@ export class AskDialogComponent implements Component {
 		if (target) void this.#promptForNote(target.question, target.state, target.rowItem);
 	}
 
-	/**
-	 * The row a note goes to: the answer just picked while the question it moved on to is still
-	 * unanswered, else the highlighted row.
-	 */
+	/** Retain the picked answer as the note target while the next question is still unanswered. */
 	#noteTarget(): { question: ExtensionAskDialogQuestion; state: QuestionState; rowItem: QuestionRow } | undefined {
 		const active = this.#activeQuestionState();
 		if (!active) return undefined;
@@ -1243,6 +1261,25 @@ export class AskDialogComponent implements Component {
 		}
 		const rowItem = this.#questionRows(active.question)[active.state.cursorIndex];
 		return rowItem ? { question: active.question, state: active.state, rowItem } : undefined;
+	}
+
+	/**
+	 * Note from the action bar (keypath `…/note`: the usual note target) or from a row's menu (keypath
+	 * `…/q<i>/<row>`: that row, highlighted first). A menu on a list the dialog has moved past does nothing.
+	 */
+	#noteFromPointer(keypath: string): void {
+		const [listKey, rowKey] = keypath.split("/").slice(-2);
+		if (listKey && /^q\d+$/.test(listKey)) {
+			const active = this.#activeQuestionState();
+			if (!active || this.#isSubmitTab() || listKey !== `q${this.#currentQuestionIndex()}`) return;
+			const index = this.#questionRows(active.question).findIndex(row => row.key === rowKey);
+			if (index < 0) return;
+			this.#justAnswered = undefined;
+			active.state.cursorIndex = index;
+			active.state.manualScroll = false;
+			this.#requestRender();
+		}
+		this.#pressNote();
 	}
 
 	#pressOptionNote(edit: boolean): void {
@@ -1288,7 +1325,9 @@ export class AskDialogComponent implements Component {
 	 *  size is stable for the dialog's lifetime at a given terminal size. */
 	#measureHeight(width: number, termRows: number): number {
 		const maxHeight = Math.max(MIN_DIALOG_ROWS, Math.floor(termRows * DIALOG_HEIGHT_RATIO));
-		const chrome = 5; // topBorder + divider + divider + footer + bottomBorder
+		const chromeRows = (question: ExtensionAskDialogQuestion | undefined, submit: boolean): number =>
+			4 +
+			menuHintLines(this.#footerHintText("", question, submit), width, this.#guardBlocks() ? "" : undefined).length;
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
 		const mdTheme = getMarkdownTheme();
 		let needed = MIN_DIALOG_ROWS;
@@ -1316,13 +1355,13 @@ export class AskDialogComponent implements Component {
 				return total;
 			};
 			const body = listRows(width);
-			needed = Math.max(needed, chrome + headerRows + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(question, false) + headerRows + Math.max(MIN_BODY_ROWS, body));
 		}
 		if (this.#hasSubmitTab()) {
 			// Warning line + blank, one summary line per question, blank, and
 			// the Submit row; note lines added later scroll within the body.
 			const body = 2 + this.#questions.length + 2;
-			needed = Math.max(needed, chrome + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(undefined, true) + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
 		}
 		return Math.min(needed, maxHeight);
 	}
@@ -1425,51 +1464,51 @@ export class AskDialogComponent implements Component {
 			lines.push(...this.#tabBar.render(width));
 		}
 		if (this.#isSubmitTab()) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
 			lines.push(theme.bold(theme.fg("accent", "Review answers")));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
 		const question = this.#questions[questionIndex];
-		if (!question) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
-			return lines;
-		}
-		const wrapped = wrapQuestionTitle(question, width);
-		this.#headerExpandable = wrapped.length > MAX_HEADER_ROWS;
-		this.#descExpandable = questionDescriptionsOverflow(question, width);
-		const maxRows = this.#expanded ? maxTitleRows : MAX_HEADER_ROWS;
+		if (!question) return lines;
+		const maxRows = this.#expanded ? maxTitleRows : Math.min(MAX_HEADER_ROWS, maxTitleRows);
 		lines.push(...renderQuestionTitle(question, width, maxRows));
 		return lines;
 	}
 
-	#expandHint(): string {
-		if (!this.#headerExpandable && !this.#descExpandable) return "";
+	#expandHint(question = this.#questions[this.#currentQuestionIndex()]): string {
+		if (
+			!question ||
+			(wrapQuestionTitle(question, this.#contentWidth).length <= MAX_HEADER_ROWS &&
+				!questionDescriptionsOverflow(question, this.#contentWidth))
+		)
+			return "";
 		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
 	}
 
-	#footerHintText(indicator: string): string {
+	#footerHintText(
+		indicator: string,
+		question = this.#questions[this.#currentQuestionIndex()],
+		submit = this.#isSubmitTab(),
+	): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
 		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
-		if (this.#isSubmitTab()) {
+		if (inputGuard && this.#guardBlocks())
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
+		if (submit) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
 		}
-		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
 		const enterAction = this.#questions.length > 1 ? "next" : "submit";
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
 			: `${enter} select · ${formatKeyHint("n")} note`;
 		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
-		const expand = this.#expandHint();
+		const expand = this.#expandHint(question);
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
 			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
@@ -1673,7 +1712,7 @@ export class AskDialogComponent implements Component {
 	#openPrompt(
 		prompt: AskDialogPrompt,
 		prefill: AskDialogPromptValue | undefined,
-	): Promise<string | AskDialogPromptValue | undefined> {
+	): Promise<string | AskDialogPromptValue | AskDialogPromptDraft | undefined> {
 		return this.callbacks.onImagePrompt
 			? this.callbacks.onImagePrompt(prompt, prefill)
 			: this.callbacks.onPrompt(prompt, prefill?.text);
@@ -1687,11 +1726,21 @@ export class AskDialogComponent implements Component {
 		this.#promptActive = true;
 		this.#keys.reset();
 		try {
+			// A cancelled edit's draft wins over the submitted answer it was revising.
 			const prefill =
-				state.customInput === undefined ? undefined : { text: state.customInput, images: state.customInputImages };
+				state.customDraft ??
+				(state.customInput === undefined
+					? undefined
+					: { text: state.customInput, images: state.customInputImages });
 			const result = await this.#openPrompt({ title: "Custom answer", question: question.question }, prefill);
-			if (result === undefined || this.#closed) return;
-			const input = splitPromptInput(result);
+			if (this.#closed) return;
+			const input = promptOutcome(result);
+			if (!input.submitted) {
+				const draft = input.draft;
+				state.customDraft = draft && (draft.text.trim() !== "" || draft.images?.length) ? draft : undefined;
+				return;
+			}
+			state.customDraft = undefined;
 			if (input.text.trim() === "") {
 				// Submitting an empty value unselects the custom answer.
 				state.customInput = undefined;
@@ -1735,8 +1784,9 @@ export class AskDialogComponent implements Component {
 				{ title: `Note for ${rowItem.label}`, question: question.question },
 				prefill,
 			);
-			if (result === undefined || this.#closed) return;
-			const note = splitPromptInput(result);
+			if (this.#closed) return;
+			const note = promptOutcome(result);
+			if (!note.submitted) return;
 			state.note = note.text;
 			state.noteImages = note.images;
 			state.noteRowKey = rowItem.key;
@@ -1764,8 +1814,9 @@ export class AskDialogComponent implements Component {
 				{ title: `Option note for ${option}`, question: question.question },
 				previous ? { text: previous.note, images: previous.images } : undefined,
 			);
-			if (result === undefined || this.#closed) return;
-			const value = splitPromptInput(result);
+			if (this.#closed) return;
+			const value = promptOutcome(result);
+			if (!value.submitted) return;
 			if (value.text.trim() === "" && !value.images?.length) {
 				if (index >= 0) state.optionNotes.splice(index, 1);
 			} else {

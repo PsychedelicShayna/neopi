@@ -18,12 +18,19 @@ const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
 authStorage.keys.setRuntime("anthropic", "test-key");
 const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
-const askQuestions = [{ id: "target", question: "Where?", options: [{ label: "staging" }, { label: "prod" }] }];
+const askQuestions = [
+	{
+		id: "target",
+		question: "Where?",
+		options: [{ label: "staging" }, { label: "prod" }],
+		recommended: 0,
+	},
+];
 const mock = createMockModel({
 	// A prompt mentioning "slow" announces with a notice that its model call is in flight, then
 	// streams until the test aborts it.
-	// "seed-ask" calls `ask` (not registered here, so it records an error result) with questions
-	// a picker could reopen; "seed-bad-ask" calls it with arguments no picker could use.
+	// "seed-ask" records an unregistered `ask` call with recoverable questions;
+	// "seed-bad-ask" records arguments that cannot be reopened.
 	handler: context => {
 		const last = JSON.stringify(context.messages.at(-1)?.content);
 		if (last.includes("seed-ask") || last.includes("seed-bad-ask")) {

@@ -99,6 +99,21 @@ describe("ExtensionList mouse routing", () => {
 		expect(list.getSelectedExtension()?.id).toBe("skill:alpha");
 		expect(seen).toEqual(["skill:alpha", "skill:beta", "skill:alpha"]);
 	});
+
+	test("clicking a filtered row cancels the draft without selecting a different row", () => {
+		const toggles: string[] = [];
+		const list = buildList(
+			id => toggles.push(id),
+			() => {},
+		);
+		for (const char of "/beta") list.handleInput(char);
+		list.render(40);
+		list.handleClick(2);
+		expect(list.navigationSnapshot().search).toMatchObject({ value: "", query: "", focused: false });
+		expect(list.pickerView().items.map(item => item.label)).toEqual(["alpha", "beta", "gamma"]);
+		expect(list.getSelectedExtension()?.name).toBe("beta");
+		expect(toggles).toEqual(["skill:beta"]);
+	});
 });
 
 describe("ExtensionList menu navigation", () => {

@@ -50,11 +50,11 @@ Before designing agents, sub-agents, advisors, roles, lifecycle or interfaces,
 read `docs/agents/philosophy.md`: one kind of agent, roles as templates,
 restrictions as named properties.
 
-Exact argv `npi update` launches the fork-specific interactive update session
+Exact argv `npi update source` launches the fork-specific interactive update session
 from `packages/coding-agent/src/prompts/npi-update.md`; the executable basename
-and exact argument list gate that rewrite. `npi update --check`,
-`npi update --help`, and any additional arguments keep the ordinary
-update-command behavior.
+and exact argument list gate that rewrite. Binary status, checks, channel sync
+and rollback use the early updater CLI; plugin updates remain
+`npi update --plugins`.
 
 
 ### Package Structure
@@ -91,6 +91,7 @@ nothing here requires confirmation beyond it. Repository specifics:
 
 ## Code Quality
 
+- New commands, settings, or interactive TUI features: MUST follow [Feature provenance](docs/agents/development.md#feature-provenance).
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
@@ -335,6 +336,7 @@ For the bash tool specifically:
 - **Cargo parallelism**: always pass `-j 6` to cargo builds (e.g. `cargo build -j 6`,
   `bun run build:native` should use `CARGO_BUILD_JOBS=6`). The machine has 20 cores;
   unbounded cargo eats all of them and starves the session.
+- `bun check`'s Rust half runs only when the branch changed a Rust-affecting file (`*.rs`, `crates/`, Cargo/toolchain files) since its merge base with `upstream/main` or `origin/main`, committed or not; it always runs in GitHub Actions, when that cannot be determined (e.g. shallow clone), or with `OMP_FORCE_RUST_TASKS=1`.
 
 ## Rust Build Profiles
 

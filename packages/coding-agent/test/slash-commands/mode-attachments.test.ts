@@ -54,6 +54,7 @@ function createHarness(
 			queuedMessageCount: 0,
 			customCommands: [],
 			promptTemplates: [],
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: {
 				hasHandlers: (event: string) => event === "input",
 				emitInput: vi.fn(async () => inputResult),

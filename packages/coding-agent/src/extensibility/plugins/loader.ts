@@ -16,7 +16,8 @@ import {
 	normalizePathForComparison,
 } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
-import { registerPluginCacheInvalidator, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { registerPluginCacheInvalidator } from "../../discovery/plugin-cache-invalidators";
 import { findExtensionDirectoryIndex, resolveExtensionDirectory } from "../extensions/directory-resolution";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
@@ -463,20 +464,6 @@ export async function getAllPluginCommandPaths(cwd: string): Promise<string[]> {
 
 	for (const plugin of plugins) {
 		paths.push(...resolvePluginCommandPaths(plugin));
-	}
-
-	return paths;
-}
-
-/**
- * Get all extension module paths from all enabled plugins.
- */
-export async function getAllPluginExtensionPaths(cwd: string): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd);
-	const paths: string[] = [];
-
-	for (const plugin of plugins) {
-		paths.push(...resolvePluginExtensionPaths(plugin));
 	}
 
 	return paths;

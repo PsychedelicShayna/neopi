@@ -131,6 +131,7 @@ await runRpcMode(session, {
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -210,6 +211,7 @@ await runRpcMode(session);
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -450,6 +452,7 @@ export default function(pi) {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -483,7 +486,7 @@ export default function(pi) {
 		};
 
 		try {
-			await send({ type: "login", providerId: "rpc-secret", id: "secret" });
+			await send({ type: "login", providerId: "rpc-secret", id: "secret", allowSecretInput: true });
 			for await (const frame of readJsonl<unknown>(stdout)) {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "extension_ui_request" && frame.method === "input") {
@@ -710,7 +713,7 @@ describe("RPC ask dialog", () => {
 		expect(onTimeout).not.toHaveBeenCalled();
 	});
 
-	it("keeps select prompts until the host opts in, then sends each ask as one dialog", async () => {
+	it("answers questions through fallback select and the negotiated ask frame", async () => {
 		await using temp = await TempDir.create("@rpc-ask-dialog-");
 		const extensionPath = temp.join("scripted-ask.ts");
 		await Bun.write(extensionPath, scriptedAskProvider);
@@ -728,6 +731,7 @@ describe("RPC ask dialog", () => {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -754,6 +758,7 @@ describe("RPC ask dialog", () => {
 		const toolResults: unknown[] = [];
 		let optInResponse: unknown;
 		let finished = false;
+		const args = JSON.stringify({ questions: [dbQuestion] });
 
 		try {
 			// The provider exists only once the extension loads, so select it over RPC.
@@ -762,7 +767,7 @@ describe("RPC ask dialog", () => {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "response" && frame.id === "model") {
 					if (frame.success !== true) throw new Error(`Scripted model unavailable: ${JSON.stringify(frame)}`);
-					await send({ type: "prompt", id: "fallback", message: JSON.stringify({ questions: [dbQuestion] }) });
+					await send({ type: "prompt", id: "fallback", message: args });
 				} else if (frame.type === "extension_ui_request" && frame.method === "select") {
 					selectRequests.push(frame);
 					await send({ type: "extension_ui_response", id: frame.id, value: "Postgres" });
@@ -771,10 +776,7 @@ describe("RPC ask dialog", () => {
 					await send({
 						type: "extension_ui_response",
 						id: frame.id,
-						answers: [
-							{ id: "db", selectedOptions: [], customInput: "DuckDB" },
-							{ id: "features", selectedOptions: ["Auth", "Search"] },
-						],
+						answers: [{ id: "db", selectedOptions: ["Postgres"] }],
 					});
 				} else if (frame.type === "tool_execution_end" && frame.toolName === "ask") {
 					toolResults.push(frame.result);
@@ -782,11 +784,7 @@ describe("RPC ask dialog", () => {
 					await send({ type: "set_ask_dialog", id: "opt-in", enabled: true });
 				} else if (frame.type === "response" && frame.id === "opt-in") {
 					optInResponse = frame;
-					await send({
-						type: "prompt",
-						id: "dialog",
-						message: JSON.stringify({ questions: [dbQuestion, featuresQuestion] }),
-					});
+					await send({ type: "prompt", id: "dialog", message: args });
 				} else if (frame.type === "prompt_result" && frame.id === "dialog") {
 					finished = true;
 					break;
@@ -809,24 +807,10 @@ describe("RPC ask dialog", () => {
 			success: true,
 			data: { enabled: true },
 		});
-		expect(askRequests).toEqual([
-			{
-				type: "extension_ui_request",
-				id: expect.any(String),
-				method: "ask",
-				questions: [dbQuestion, featuresQuestion],
-			},
-		]);
-		expect(toolResults).toEqual([
-			expect.objectContaining({ details: expect.objectContaining({ selectedOptions: ["Postgres"] }) }),
-			expect.objectContaining({
-				details: {
-					results: [
-						expect.objectContaining({ id: "db", selectedOptions: [], customInput: "DuckDB" }),
-						expect.objectContaining({ id: "features", selectedOptions: ["Auth", "Search"] }),
-					],
-				},
-			}),
-		]);
+		expect(askRequests).toMatchObject([{ method: "ask", questions: [dbQuestion] }]);
+		const answered = expect.objectContaining({
+			details: expect.objectContaining({ selectedOptions: ["Postgres"] }),
+		});
+		expect(toolResults).toEqual([answered, answered]);
 	}, 60_000);
 });

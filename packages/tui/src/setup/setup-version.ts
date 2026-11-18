@@ -5,7 +5,8 @@
  * Kept in its own dependency-free module so the cold-launch gate in `main.ts`
  * can answer "is the stored setup version stale?" without statically importing
  * the full wizard — every scene (sign-in/OAuth, web search, theme previews) plus
- * the overlay component and their TUI deps. MUST equal `max(scene.minVersion)`
- * across `ALL_SCENES`; the setup scene selection tests guard this invariant.
+ * the overlay component and their TUI deps. Must be at least the highest scene
+ * `minVersion`; keep it monotonic when removing scenes. Version 3 was the
+ * removed upstream omp auto-update question.
  */
-export const CURRENT_SETUP_VERSION = 2;
+export const CURRENT_SETUP_VERSION = 3;

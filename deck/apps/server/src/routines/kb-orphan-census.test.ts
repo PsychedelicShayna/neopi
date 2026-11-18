@@ -39,7 +39,7 @@ function setup(kb: Record<string, string>): string {
 	return createV1Routine({
 		name: loaded.spec.name,
 		description: loaded.spec.description ?? "",
-		specYaml: loaded.specYaml,
+		specToml: loaded.specToml,
 		spec: loaded.spec,
 		enabled: false,
 	}).id;

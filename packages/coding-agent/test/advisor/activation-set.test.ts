@@ -182,6 +182,15 @@ describe("role-bound advisor activation", () => {
 		expect(active.isAdvisorActive()).toBe(false);
 	});
 
+	it("session role sets can select project advisors instead of being treated as user sets", async () => {
+		const settings = Settings.isolated({ "advisor.enabled": true });
+		settings.writeScopeValue(cfgRoleSettings, { session: { "advisor.activationSet": ["project-id"] } }, "session");
+		settings.setActiveRole("session");
+		const active = start(settings);
+		expect(active.liveAdvisors().map(advisor => advisor.name)).toEqual(["Project"]);
+		expect(cfgAdvisorActivation.get(settings).scope).toBe("session");
+	});
+
 	it("loads existing settings without the feature and persists nullable activation sets in their source layers", async () => {
 		const agentDir = path.join(directory, "agent");
 		await Bun.write(path.join(agentDir, "config.yml"), "advisor:\n  enabled: true\n");

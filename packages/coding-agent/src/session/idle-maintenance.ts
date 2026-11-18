@@ -167,8 +167,8 @@ export class IdleMaintenance {
 	}
 
 	/**
-	 * Nothing is live, admitted, queued or scheduled. Background work may still wake the session: that holds
-	 * back only idle compaction (see {@link #isSettled}), as it did before the scheduler owned this work.
+	 * Nothing is live, admitted, queued or scheduled. Background work may still wake the session;
+	 * both recap and idle compaction additionally require {@link #isSettled}.
 	 */
 	#isQuiet(): boolean {
 		const session = this.#session;
@@ -217,13 +217,14 @@ export class IdleMaintenance {
 			if (!isCurrent()) return;
 		}
 		if (this.#isBlocked() || !this.#isQuiet()) return;
-		this.#armRecap();
-		// Compacting while a background result is still due would rewrite the context that result wakes into.
+		// Both recap and compaction wait for settlement: a background job can still wake the session and
+		// invalidate what either would produce.
 		const settled = await waitForSessionSettlement(session, {
 			isCurrent,
 			scheduledTurn: this.#options.scheduledTurn,
 		});
 		if (!settled || this.#isBlocked()) return;
+		this.#armRecap();
 		this.#armCompaction();
 	}
 
@@ -315,7 +316,7 @@ export class IdleMaintenance {
 		this.#recapTimer = undefined;
 		if (!this.#pending?.recap || this.#recapRun) return;
 		if (this.#isBlocked()) return;
-		if (!this.#isQuiet()) {
+		if (!this.#isSettled()) {
 			this.#schedule();
 			return;
 		}
@@ -339,14 +340,19 @@ export class IdleMaintenance {
 				this.#complete(pending, "recap");
 				return;
 			}
-			const promptText = renderPromptAsset("system/recap-user.md", idleRecapPrompt, {
-				goal: this.#goalText() ?? "",
-				task: nextActionableTask(session.getTodoPhases())?.content ?? "",
-			}, { cwd: session.sessionManager.getCwd(), kind: "notice" });
+			const promptText = renderPromptAsset(
+				"system/recap-user.md",
+				idleRecapPrompt,
+				{
+					goal: this.#goalText() ?? "",
+					task: nextActionableTask(session.getTodoPhases())?.content ?? "",
+				},
+				{ cwd: session.sessionManager.getCwd(), kind: "notice" },
+			);
 			const { replyText } = await session.runEphemeralTurn({ promptText, signal: run.signal });
 			if (this.#recapRun !== run || run.signal.aborted) return;
 			if (this.#isBlocked()) return;
-			if (!this.#isQuiet()) {
+			if (!this.#isSettled()) {
 				this.#recapRun = undefined;
 				this.#schedule();
 				return;

@@ -11,9 +11,10 @@ import {
 import type { Settings } from "../config/settings";
 import type { ContextUsage } from "../extensibility/extensions/types";
 import template from "../prompts/system/agent-telemetry.md" with { type: "text" };
-import type { AgentRegistry } from "../registry/agent-registry";
+import type { AgentRegistryApi } from "../registry/agent-registry";
 import { cfgTelemetryAgentContext, cfgTelemetryThresholdEvents, cfgTelemetryToolResults } from "../telemetry-settings";
 import type { AgentSession } from "./agent-session";
+import { isLocalAgentSession } from "./agent-session-handle";
 import { readToolExecutionStart } from "./exit-diagnostics";
 import { getSessionCompactionBoundaries } from "./context-usage-runtime";
 import type { SessionEntry } from "./session-entries";
@@ -69,7 +70,7 @@ export interface AgentTelemetryHost {
 		| "getAdvisorCost"
 	>;
 	settings: Settings;
-	registry?: AgentRegistry;
+	registry?: AgentRegistryApi;
 	agentId?: string;
 	entries(): readonly SessionEntry[];
 }
@@ -168,7 +169,11 @@ export function inspectAgentTelemetry(
 			agents: refs.map(ref => ({
 				id: ref.id,
 				status: ref.status,
-				context: ref.session?.getContextUsage() ?? null,
+				context: ref.session
+					? ((isLocalAgentSession(ref.session)
+							? ref.session.getContextUsage()
+							: ref.session.getSessionStats().contextUsage) ?? null)
+					: null,
 				usage: ref.session
 					? agentUsageFromMessages(ref.session.messages)
 					: (ref.history?.metrics?.agentUsage ?? null),

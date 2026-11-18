@@ -253,6 +253,10 @@ class NumericSettingsField extends Container {
 	}
 }
 
+/** An enum setting's values as choices, each labelled by its value. */
+function enumOptions(def: SettingDef & { type: "enum" }): SelectItem[] {
+	return def.values.map(value => ({ value, label: value }));
+}
 /**
  * Single-choice setting field backed by the shared select form field.
  * Preserves the current selection, live async previews, footer previews,
@@ -1243,7 +1247,7 @@ export class SettingsSelectorComponent implements Component {
 			case "boolean":
 				return { k: "switch", on: value === true };
 			case "enum":
-				return { k: "choice", value: shown, options: def.values.map(v => ({ value: v, label: v })) };
+				return { k: "choice", value: shown, options: enumOptions(def) };
 			case "submenu": {
 				const labels = numberSteps(def);
 				if (labels) {
@@ -1406,9 +1410,14 @@ export class SettingsSelectorComponent implements Component {
 			case "boolean":
 				if (typeof value === "boolean") list.applyValue(id, String(value));
 				return;
-			case "enum":
-				if (typeof value === "string") list.applyValue(id, value);
+			case "enum": {
+				if (typeof value !== "string") return;
+				// A committed native pick closes the menu, even while its filter owns Escape.
+				const open = list.openSubmenu;
+				if (open?.id === id && open.component instanceof SelectFormField) open.component.selectList.onCancel?.();
+				list.applyValue(id, value);
 				return;
+			}
 			case "submenu": {
 				const choice =
 					typeof value === "number"
@@ -1840,7 +1849,13 @@ export class SettingsSelectorComponent implements Component {
 				return { ...item, currentValue: currentValue ? "true" : "false", values: ["true", "false"] };
 
 			case "enum":
-				return { ...item, currentValue: String(currentValue ?? ""), values: [...def.values] };
+				return {
+					...item,
+					currentValue: String(currentValue ?? ""),
+					values: [...def.values],
+					menu: (cv, done) =>
+						createSettingsSelectField(def.label, def.description, enumOptions(def), cv, done, () => done()),
+				};
 
 			case "submenu":
 				return {

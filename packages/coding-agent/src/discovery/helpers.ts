@@ -35,9 +35,10 @@ import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
 import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
-import { parseAgentAdvisor } from "../task/agent-advisor";
+import { parseAgentAdvisor } from "../advisor/config";
 
 import { realpathIfExists, resolveContainedPath } from "./contained-path";
+import { invalidateDependentPluginCaches } from "./plugin-cache-invalidators";
 import { buildPluginDirRoot } from "./plugin-dir-roots";
 
 /**
@@ -1231,13 +1232,6 @@ const pluginRootsCache = new Map<string, PluginRootsCacheEntry>();
  */
 const registeredPluginRootIds = new Map<string, string>();
 
-const pluginCacheInvalidators = new Set<() => void>();
-
-/** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
-export function registerPluginCacheInvalidator(invalidator: () => void): void {
-	pluginCacheInvalidators.add(invalidator);
-}
-
 /** The registry files {@link listClaudePluginRoots} reads for `home` and `cwd`. */
 async function resolvePluginRegistryFiles(home: string, cwd: string | undefined) {
 	const claudeConfigDir = resolveClaudePaths(home).configDir;
@@ -1569,7 +1563,7 @@ async function loadClaudePluginRoots({
  */
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
-	for (const invalidate of pluginCacheInvalidators) invalidate();
+	invalidateDependentPluginCaches();
 	preloadedPluginRoots = [...injectedPluginDirRoots];
 	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
 	if (lastPreloadHome) {

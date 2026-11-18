@@ -61,6 +61,7 @@ function createContext() {
 			isBashRunning: false,
 			isEvalRunning: false,
 			isEvalLanguageRunning: () => false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			prompt,
 			queuedMessageCount: 0,

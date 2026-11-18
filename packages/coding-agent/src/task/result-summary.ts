@@ -71,37 +71,45 @@ export function formatTaskResultSummary(
 	// A stopped agent stays messageable; tell the parent so it can resume via
 	// irc instead of redoing the work. Isolated runs are parked without a
 	// reviver (their worktree is gone), so they must not read as resumable.
-	const resumable = result.aborted && !result.isolated && ["idle", "parked"].includes(AgentRegistry.global().get(result.id)?.status ?? "");
+	const resumable =
+		result.aborted &&
+		!result.isolated &&
+		["idle", "parked"].includes(AgentRegistry.global().get(result.id)?.status ?? "");
 	const render = (truncated: boolean): string =>
-		renderPromptAsset("tools/task-summary.md", taskSummaryTemplate, {
-			agentName: result.agent,
-			id: result.id,
-			status,
-			duration: formatDuration(options.totalDurationMs),
-			abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
-			error: error === undefined ? undefined : escapeHarnessTags(error),
-			effortPolicy: result.effortPolicy
-				? {
-						model: result.effortPolicy.model,
-						requested: result.effortPolicy.requested ?? result.effortPolicy.model,
-						origin: result.effortPolicy.origin ?? "default",
-						supported: result.effortPolicy.supported.join(", ") || "none",
-						permitted: result.effortPolicy.permitted.join(", ") || "none",
-						rule: result.effortPolicy.selector ?? "none",
-						alternatives: result.effortPolicy.alternatives.join(", ") || "none",
-					}
-				: undefined,
-			resumable,
-			preview: escapeHarnessTags(truncated ? previewHead(output) : output),
-			truncated,
-			meta: result.outputMeta
-				? {
-						lineCount: result.outputMeta.lineCount,
-						charSize: formatBytes(result.outputMeta.charCount),
-					}
-				: undefined,
-			mergeSummary: options.mergeSummary === undefined ? "" : escapeHarnessTags(options.mergeSummary),
-		}, { cwd: options.cwd, kind: "notice" });
+		renderPromptAsset(
+			"tools/task-summary.md",
+			taskSummaryTemplate,
+			{
+				agentName: result.agent,
+				id: result.id,
+				status,
+				duration: formatDuration(options.totalDurationMs),
+				abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
+				error: error === undefined ? undefined : escapeHarnessTags(error),
+				effortPolicy: result.effortPolicy
+					? {
+							model: result.effortPolicy.model,
+							requested: result.effortPolicy.requested ?? result.effortPolicy.model,
+							origin: result.effortPolicy.origin ?? "default",
+							supported: result.effortPolicy.supported.join(", ") || "none",
+							permitted: result.effortPolicy.permitted.join(", ") || "none",
+							rule: result.effortPolicy.selector ?? "none",
+							alternatives: result.effortPolicy.alternatives.join(", ") || "none",
+						}
+					: undefined,
+				resumable,
+				preview: escapeHarnessTags(truncated ? previewHead(output) : output),
+				truncated,
+				meta: result.outputMeta
+					? {
+							lineCount: result.outputMeta.lineCount,
+							charSize: formatBytes(result.outputMeta.charCount),
+						}
+					: undefined,
+				mergeSummary: options.mergeSummary === undefined ? "" : escapeHarnessTags(options.mergeSummary),
+			},
+			{ cwd: options.cwd, kind: "notice" },
+		);
 	if (result.outputPath === undefined) return render(false);
 	if (outputCharCount > INLINE_OUTPUT_CHARS) return render(true);
 	const whole = render(false);

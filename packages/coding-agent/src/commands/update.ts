@@ -6,34 +6,40 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { updateHelp as commandHelp } from "../cli/command-help";
 import * as pluginCli from "../cli/plugin-cli";
-import * as updateCli from "../cli/update-cli";
-import { CliUsageError } from "../cli/usage-error";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { runNeoPiUpdate } from "../cli/neopi-updater";
+import { resolveNpiUpdateArgv } from "../cli/npi-update";
+import { runCli } from "../cli-main";
 
 export default class Update extends Command {
 	static description = commandHelp.description;
 	static flags = {
-		force: Flags.boolean({ char: "f", description: "Force update", default: false }),
-		check: Flags.boolean({ char: "c", description: "Check for updates without installing", default: false }),
+		check: Flags.boolean({
+			char: "c",
+			description: "Only check plugin updates when used with --plugins",
+			default: false,
+		}),
 		plugins: Flags.boolean({ char: "l", description: "Update installed plugins", default: false }),
-		canary: Flags.boolean({ description: "Switch to the canary channel and update", default: false }),
-		stable: Flags.boolean({ description: "Switch back to the stable channel", default: false }),
 	};
 
-	static examples = [`${APP_NAME} update`, `${APP_NAME} update --check`, `${APP_NAME} update --canary`];
+	static examples = [
+		`${APP_NAME} update`,
+		`${APP_NAME} update stable`,
+		`${APP_NAME} update nightly`,
+		`${APP_NAME} update rollback 2`,
+		`${APP_NAME} update source`,
+		`${APP_NAME} update --plugins --check`,
+	];
 
 	async run(): Promise<void> {
-		const { flags } = await this.parse(Update);
-		await initTheme();
-		if (flags.canary && flags.stable) throw new CliUsageError("--canary and --stable are mutually exclusive");
-		if (flags.plugins) {
+		if (this.argv.includes("--plugins") || this.argv.includes("-l")) {
+			const { flags } = await this.parse(Update);
 			await pluginCli.runPluginCommand({ action: "upgrade", args: [], flags: flags.check ? { dryRun: true } : {} });
-		} else {
-			await updateCli.runUpdateCommand({
-				force: flags.force,
-				check: flags.check,
-				channel: flags.canary ? "canary" : flags.stable ? "stable" : undefined,
-			});
+			return;
 		}
+		if (this.argv.length === 1 && this.argv[0] === "source") {
+			await runCli(resolveNpiUpdateArgv(["update", "source"], "npi"));
+			return;
+		}
+		await runNeoPiUpdate(this.argv);
 	}
 }

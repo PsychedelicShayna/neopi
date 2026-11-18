@@ -762,7 +762,10 @@ describe("SettingsList", () => {
 				{ id: "count", label: "Count 1000", currentValue: "0" },
 				{ id: "gpt", label: "GPT model", currentValue: "" },
 			],
-			5, testTheme, () => changes++, () => cancelled++,
+			5,
+			testTheme,
+			() => changes++,
+			() => cancelled++,
 		);
 		const output = () => list.render(120).join("\n");
 		list.handleInput("/");
@@ -797,7 +800,10 @@ describe("SettingsList", () => {
 		setMenuSearchVimMode(vim);
 		const list = new SettingsList(
 			[{ id: "alpha", label: "Alpha", currentValue: "" }],
-			5, testTheme, () => {}, () => {},
+			5,
+			testTheme,
+			() => {},
+			() => {},
 		);
 		list.handleInput("/");
 		list.handleInput("nothing matches");

@@ -7,6 +7,7 @@ import { formatGroupedPaths, hasFsCode, isEnoent, untilAborted } from "@oh-my-pi
 import { InternalUrlRouter, sessionResolveContext } from "../internal-urls";
 import { InternalUrlFilesystem, type UrlFileStat } from "../internal-urls/url-filesystem";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { glob as ovnfsGlob } from "../ovnfs/search";
 import globDescription from "../prompts/tools/glob.md" with { type: "text" };
 import { truncateHead } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { sessionDelegationBias } from "../task/prompt-policy";
@@ -32,7 +33,7 @@ import { ToolAbortError, throwIfAborted } from "./tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
-import { cfgTaskDisabledAgents } from "../task/settings";
+import { cfgTaskDisabledAgents, ovnfsCommand } from "../task/settings";
 
 const findSchema = type({
 	"path?": "string",
@@ -100,8 +101,8 @@ export interface GlobToolOptions {
 	operations?: GlobOperations;
 	/** Remap slash-only paths to the session cwd before root-search validation. */
 	rootPathAlias?: boolean;
-	/** Native glob binding. Override only in tests. */
-	nativeGlob?: typeof natives.glob;
+	/** Glob backend (`natives.glob`, answered by the ovnfs daemon inside its mount). Override only in tests. */
+	nativeGlob?: typeof ovnfsGlob;
 	/** Filesystem stat used before native scans. Override only in tests. */
 	stat?: typeof fs.promises.stat;
 	/** Native and user-facing scan timeout. Override only in tests. */
@@ -166,7 +167,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 
 	readonly #customOps?: GlobOperations;
 	readonly #rootPathAlias: boolean;
-	readonly #nativeGlob: typeof natives.glob;
+	readonly #nativeGlob: typeof ovnfsGlob;
 	readonly #stat: typeof fs.promises.stat;
 	readonly #timeoutMs: number;
 
@@ -176,7 +177,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 	) {
 		this.#customOps = options?.operations;
 		this.#rootPathAlias = options?.rootPathAlias === true;
-		this.#nativeGlob = options?.nativeGlob ?? natives.glob;
+		this.#nativeGlob = options?.nativeGlob ?? ovnfsGlob;
 		this.#stat = options?.stat ?? fs.promises.stat;
 		this.#timeoutMs = options?.timeoutMs ?? DEFAULT_GLOB_TIMEOUT_MS;
 		if (!Number.isFinite(this.#timeoutMs) || this.#timeoutMs <= 0) {
@@ -211,7 +212,10 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 			const effectivePaths = scopedPaths.length > 0 ? scopedPaths : ["."];
 			const rawPatternInputs = this.#customOps
 				? effectivePaths
-				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, { splitter: parseFindPattern });
+				: await expandDelimitedPathEntries(effectivePaths, this.session.cwd, {
+						splitter: parseFindPattern,
+						mixedLocalPaths: true,
+					});
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
 			const aliasResolvedPatterns = this.#rootPathAlias
 				? rawPatterns.map(pattern => (/^\/+$/.test(pattern) ? "." : pattern))
@@ -591,6 +595,7 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 							filesystem: urlFilesystem.shellFilesystem(),
 						},
 						makeOnMatch(formatTargetMatch),
+						ovnfsCommand(this.session.settings),
 					);
 					throwIfAborted(signal);
 					const out: Array<{ path: string; mtime: number }> = [];

@@ -42,6 +42,98 @@ describe("CombinedAutocompleteProvider", () => {
 	});
 
 	describe("slash commands", () => {
+		it("reveals hidden alias prefixes only after visible name and alias prefixes run out", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "roles", hiddenAliases: ["legacy"], description: "Configure assignments" },
+				{ name: "logs", aliases: ["legend"], description: "Inspect events" },
+			]);
+			for (const [input, expected] of [
+				["/", ["roles", "logs"]],
+				["/leg", ["legend"]],
+				["/lega", ["legacy"]],
+				["/legacy", ["legacy"]],
+			] as const) {
+				const asyncResult = await provider.getSuggestions([input], 0, input.length);
+				const syncResult = provider.trySyncSlashCompletion(input);
+				expect(asyncResult?.items.map(item => item.value)).toEqual([...expected]);
+				expect(syncResult).toEqual(asyncResult);
+			}
+			expect(provider.trySyncSlashCompletion("/legacy")?.items[0]?.description).toBe("Configure assignments");
+		});
+
+		it("reveals models despite fuzzy command matches in both completion paths", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "model", description: "Select a model" },
+				{ name: "modelpreset", description: "Save and switch model presets" },
+				{ name: "moa", description: "Configure ensembles of models" },
+				{ name: "loadout", description: "Load model roles" },
+				{ name: "roles", hiddenAliases: ["models"], description: "Manage model role assignments" },
+			]);
+			for (const input of ["/", "/m", "/model", "/models", "/MoDeLs"]) {
+				const result = await provider.getSuggestions([input], 0, input.length);
+				expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+				if (input.toLowerCase() === "/models") {
+					expect(result?.items[0]).toMatchObject({
+						value: "models",
+						description: "Manage model role assignments",
+					});
+					expect(result?.items.some(item => item.value === "modelpreset")).toBe(true);
+				} else {
+					expect(result?.items.some(item => item.value === "models")).toBe(false);
+				}
+			}
+		});
+
+		it("does not let fuzzy descriptions or skill names suppress a literal hidden alias prefix", async () => {
+			for (const competitor of [
+				{ name: "other", description: "switch tasks" },
+				{ name: "skill:switch", description: "Change branches" },
+			]) {
+				const provider = new CombinedAutocompleteProvider([
+					{ name: "model", hiddenAliases: ["switch"], description: "Choose a model" },
+					competitor,
+				]);
+				for (const input of ["/swit", "/switch"]) {
+					const result = await provider.getSuggestions([input], 0, input.length);
+					expect(result?.items).toContainEqual(
+						expect.objectContaining({ value: "switch", description: "Choose a model" }),
+					);
+					expect(provider.trySyncSlashCompletion(input)).toEqual(result);
+				}
+				expect(provider.trySyncSlashCompletion("/swt")?.items.some(item => item.value === "switch")).toBeFalsy();
+			}
+		});
+
+		it("retains argument completion through a hidden alias", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{
+					name: "roles",
+					hiddenAliases: ["models"],
+					getArgumentCompletions: () => [{ value: "project", label: "project" }],
+				},
+			]);
+			const input = "/models pro";
+			expect((await provider.getSuggestions([input], 0, input.length))?.items.map(item => item.value)).toEqual([
+				"project",
+			]);
+		});
+
+		it("completes explicit prompt references anywhere without replacing surrounding text or earlier references", async () => {
+			const provider = new CombinedAutocompleteProvider([
+				{ name: "prompts:review", description: "Review changes" },
+				{ name: "model", description: "Switch model" },
+			]);
+			const lines = ["Earlier /prompts:review", "Now use /prompts:rev and keep this"];
+			const cursorCol = "Now use /prompts:rev".length;
+			const result = await provider.getSuggestions(lines, 1, cursorCol);
+			expect(result?.prefix).toBe("/prompts:rev");
+			expect(result?.items.map(item => item.value)).toEqual(["prompts:review"]);
+			const applied = provider.applyCompletion(lines, 1, cursorCol, result!.items[0]!, result!.prefix);
+			expect(applied.lines).toEqual(["Earlier /prompts:review", "Now use /prompts:review  and keep this"]);
+			expect(applied.cursorLine).toBe(1);
+			expect(applied.cursorCol).toBe("Now use /prompts:review ".length);
+		});
+
 		it("suggests only skill commands after prose", async () => {
 			const provider = new CombinedAutocompleteProvider(
 				[

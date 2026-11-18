@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { readFile } from "../capability/fs";
 import { isContainedResolved, realpathIfExists, resolveContainedPath } from "./contained-path";
-import { registerPluginCacheInvalidator } from "./helpers";
+import { registerPluginCacheInvalidator } from "./plugin-cache-invalidators";
 
 /** Canonical `plugin.json` `$schema` identifier for Agent Plugins 1.0.0 (spec §5.2). */
 export const AGENT_PLUGIN_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";

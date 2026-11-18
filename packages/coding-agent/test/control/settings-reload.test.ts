@@ -7,7 +7,7 @@ import { ControlClient } from "../../src/control/client";
 import { publishControlEndpoint, readControlEntries, type ControlPublication } from "../../src/control/registry";
 import { broadcastSettingsReload } from "../../src/control/settings-reload";
 
-const children: Bun.Subprocess[] = [];
+const children: Bun.Subprocess<"pipe", "ignore", "pipe">[] = [];
 const clients: ControlClient[] = [];
 let dir: string | undefined;
 let stalled: ControlPublication | undefined;

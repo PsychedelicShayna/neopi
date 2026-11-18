@@ -302,16 +302,17 @@ describe("UsageDashboardComponent", () => {
 	function dashboard(
 		reports: UsageReport[],
 		unavailableAccounts: UnavailableUsageAccount[] = [],
+		onClose: () => void = () => {},
 	): UsageDashboardComponent {
 		return new UsageDashboardComponent({
 			reports,
 			unavailableAccounts,
-			renderDetail: () => "",
+			renderDetail: () => "detail-content",
 			loadActivity: async push => {
 				push([]);
 			},
 			requestRender: () => {},
-			onClose: () => {},
+			onClose,
 		});
 	}
 
@@ -614,6 +615,42 @@ describe("UsageDashboardComponent", () => {
 		expect(contentLine).toContain(
 			"Usage history unavailable (subprocess crashed at ~/.omp/stats.db: failed to open line 2).",
 		);
+	});
+
+	it("toggles bidirectionally between overview and detail views on tab", () => {
+		const component = dashboard([]);
+		try {
+			expect(component.render(80).join("\n")).not.toContain("detail-content");
+
+			component.handleInput("\t");
+			expect(component.render(80).join("\n")).toContain("detail-content");
+
+			component.handleInput("\t");
+			expect(component.render(80).join("\n")).not.toContain("detail-content");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("closes on escape or q from either overview or detail", () => {
+		for (const detail of [false, true]) {
+			for (const key of ["\x1b", "q"]) {
+				let closed = 0;
+				const component = dashboard([], [], () => {
+					closed++;
+				});
+				try {
+					if (detail) {
+						component.handleInput("\t");
+						expect(component.render(80).join("\n")).toContain("detail-content");
+					}
+					component.handleInput(key);
+					expect(closed).toBe(1);
+				} finally {
+					component.dispose();
+				}
+			}
+		}
 	});
 });
 

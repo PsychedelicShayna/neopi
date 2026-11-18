@@ -9,11 +9,7 @@ import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:te
 import { Effort } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
-import {
-	AgentsHubComponent,
-	type AgentsHubDeps,
-	type HubAgent,
-} from "../src/overlays/agents-hub";
+import { AgentsHubComponent, type AgentsHubDeps, type HubAgent } from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
@@ -127,9 +123,13 @@ async function createHub(
 				listAdvisors: async () => [],
 				parse: raw => JSON.parse(raw),
 				serialize: definition => JSON.stringify(definition),
-				generate: async () => { throw new Error("Not used by navigation tests"); },
+				generate: async () => {
+					throw new Error("Not used by navigation tests");
+				},
 			},
-			saveDefinition: async () => { throw new Error("Not used by navigation tests"); },
+			saveDefinition: async () => {
+				throw new Error("Not used by navigation tests");
+			},
 			...overrides,
 		},
 		{ onCancel: () => (cancelled = true) },
@@ -466,7 +466,6 @@ describe("AgentsHub native events", () => {
 		expect(list.k === "list" && list.p?.selected).toBe("agent:project:dev");
 	});
 });
-
 
 describe("AgentsHub navigation history", () => {
 	test("body viewport moves one line independently and row motions reveal its selection", async () => {
