@@ -2067,18 +2067,15 @@ export class SessionAdvisors {
 			notes,
 			content,
 			this.#primaryRunActive && !this.#terminalUnwindActive
-				? notes.some(
-						n =>
-							resolveAdvisorDeliveryChannel({
-								severity: n.severity,
-								continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
-								autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
-								preserveOnly: this.#preserveAdvisorAdvice,
-								streaming: this.#host.agent.state.isStreaming && !this.#preserveTerminalYieldAdvice,
-								aborting: this.#host.abortInProgress(),
-								interruptImmuneTurnActive: this.#isAdvisorInterruptImmuneTurnActive(),
-							}) === "steer",
-					)
+				? notes.some(n => resolveAdvisorDeliveryChannel({
+						severity: n.severity,
+						continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
+						autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+						preserveOnly: this.#preserveAdvisorAdvice,
+						streaming: this.#host.agent.state.isStreaming && !this.#preserveTerminalYieldAdvice,
+						aborting: this.#host.abortInProgress(),
+						interruptImmuneTurnActive: this.#isAdvisorInterruptImmuneTurnActive(),
+					}) === "steer")
 				: notes.some(n => this.#continuesFinishedRun(n.severity)),
 		);
 	}
@@ -2093,11 +2090,8 @@ export class SessionAdvisors {
 	 * independent of the exact unwind state.
 	 */
 	#continuesFinishedRun(severity: AdvisorSeverity | undefined): boolean {
-		if (
-			this.#advisorContinuation?.userMessage === lastPrimaryUserMessage(this.#host.agent.state.messages) &&
-			this.#advisorContinuation !== undefined
-		)
-			return false;
+		if (this.#advisorContinuation?.userMessage === lastPrimaryUserMessage(this.#host.agent.state.messages) &&
+			this.#advisorContinuation !== undefined) return false;
 		const continueSeverity = cfgAdvisorContinueSeverity.get(this.#host.settings);
 		if (!meetsAdvisorSeverity(severity, continueSeverity)) return false;
 		const channel = resolveAdvisorDeliveryChannel({
@@ -2142,11 +2136,7 @@ export class SessionAdvisors {
 				// revises the reviewed work. It supersedes every review of that work
 				// still running or queued, so none can re-raise what is being fixed;
 				// each advisor that lost one reviews at the continuation's end instead.
-				if (
-					!this.#host.agent.state.isStreaming ||
-					this.#terminalUnwindActive ||
-					!this.#advisorPrimaryWillContinue
-				) {
+				if (!this.#host.agent.state.isStreaming || this.#terminalUnwindActive || !this.#advisorPrimaryWillContinue) {
 					this.#advisorContinuation = { userMessage: lastPrimaryUserMessage(this.#host.agent.state.messages) };
 					for (const advisor of this.#advisors) {
 						if (advisor.runtime.supersede(advisor === producer)) advisor.reviewOwed = true;
@@ -2231,12 +2221,8 @@ export class SessionAdvisors {
 				// Direct prompts do not enter AdvisorRuntime's drain or notifyIdle.
 				// Keep their notes batched until the advisor finishes, just as a
 				// managed review does, without mistaking a fresh runtime for busy.
-				if (
-					advisor.runtime.backlog === 0 &&
-					!this.#primaryRunActive &&
-					this.#terminalUnwindActive &&
-					!this.#advisorTerminalBoundaryOpen
-				) {
+				if (advisor.runtime.backlog === 0 && !this.#primaryRunActive &&
+					this.#terminalUnwindActive && !this.#advisorTerminalBoundaryOpen) {
 					this.#flushAdvisorBoundaryNotes();
 				}
 				return;
@@ -2271,6 +2257,7 @@ export class SessionAdvisors {
 		advisor.thinkingLevel = nextThinkingLevel;
 		return nextThinkingLevel;
 	}
+
 
 	#canReplayAdvisorHistory(advisor: ActiveAdvisor, model: Model): boolean {
 		return advisor.agent.state.messages.every(
@@ -3037,6 +3024,7 @@ export class SessionAdvisors {
 		this.#preserveTerminalYieldAdvice = false;
 		this.#preserveAdvisorAdvice = false;
 	}
+
 
 	async #waitForPendingAdvisorCardEvents(timeoutMs: number): Promise<boolean> {
 		const deadline = Date.now() + Math.max(0, timeoutMs);

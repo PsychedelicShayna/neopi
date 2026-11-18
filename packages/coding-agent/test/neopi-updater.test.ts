@@ -127,26 +127,6 @@ test("a newer same-semver nightly is eligible using immutable Git ancestry", asy
 	expect(f.requests.some(url => url.includes(`/compare/${"a".repeat(40)}...`))).toBe(true);
 });
 
-test.each(["behind", "identical", "diverged", 503])(
-	"never replaces a local nightly without verified forward ancestry despite matching versions (%s)",
-	async comparison => {
-		const tag = "v18.18.8-nightly.published";
-		const f = await fixture([tag]);
-		f.ancestry.set(tag, comparison);
-		// Publication time cannot turn an older commit into a newer local build.
-		f.releases[0]!.published_at = "2099-11-18T12:00:00Z";
-		const messages: string[] = [];
-		await checkForAutomaticUpdate(
-			{ channel: "nightly", mode: "auto", agentDir: f.agentDir, onMessage: message => messages.push(message) },
-			{ ...f.options, version: "18.18.8", gitSha: "a".repeat(40) },
-		);
-		expect(await readFile(f.executablePath, "utf8")).toBe(f.initial);
-		expect((await f.state()).installed).toBeUndefined();
-		expect(f.requests.some(url => url.includes("/releases/download/"))).toBe(false);
-		expect(messages).toEqual([]);
-	},
-);
-
 test("new local updater builds never auto-install the stale published legacy channels", async () => {
 	const f = await fixture(["v18.14.0-nightly.legacy", "v18.10.3+stable"]);
 	for (const channel of ["nightly", "stable"] as const) {

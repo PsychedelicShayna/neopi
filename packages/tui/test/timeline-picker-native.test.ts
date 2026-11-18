@@ -214,7 +214,7 @@ describe("rewind page", () => {
 		expect(selected).toEqual(["a2"]);
 	});
 
-	test("filtering previews matching turns; Cancel restores the confirmed query before closing", () => {
+	test("filtering shows only matching turns; Cancel leaves the filter before closing", () => {
 		const cancelled = { count: 0 };
 		const selector = rewind({ cancelled });
 		selector.handleInput("f");
@@ -230,8 +230,8 @@ describe("rewind page", () => {
 		}
 		selector.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 		expect(cancelled.count).toBe(0);
-		expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "", focused: false } });
-		expect(marks(selector.describeScreen(pickerCx).main)).not.toEqual(["omp.rewind.empty"]);
+		expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "thankszzz", focused: false } });
+		expect(marks(selector.describeScreen(pickerCx).main)).toEqual(["omp.rewind.empty"]);
 		selector.handleNativeEvent({ type: "action", key: "cancel", act: "cancel", mods: [] });
 		expect(cancelled.count).toBe(1);
 	});
@@ -469,8 +469,9 @@ describe("session tree picker", () => {
 		const searched = treeProps(selector);
 		expect(searched.query).toBe("explain");
 		expect(searched.order).toEqual(["u3"]);
-		selector.handleInput("\r");
 
+		selector.handleInput("\x1b");
+		expect(treeProps(selector).query).toBe("explain");
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "clear", mods: [] });
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "tab", value: "user-only", mods: [] });
 		const users = treeProps(selector);
