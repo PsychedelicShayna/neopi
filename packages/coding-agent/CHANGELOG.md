@@ -12,6 +12,7 @@
 
 ### Added
 
+- Select the `judge` Chronicler recall ranker for Jev-style probability routing, configurable per-level branch floors and complete-atom verification, with explicit lexical fallback and the existing bounded search budgets ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - Role advisor activation sets can be edited in `/advisor configure`, including persisted session sets whose scope is preserved when selecting project advisors ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
 - Complete `/prompts:<name>` references anywhere in a message and paste multiple prompt-template bodies in the order written, while preserving the existing leading `/<name> [args]` invocation.
