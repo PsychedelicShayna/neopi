@@ -732,6 +732,8 @@ exit 64
 		if (!zshPath) {
 			return;
 		}
+		// Suppress zsh-newuser-install in the disposable home.
+		fs.writeFileSync(path.join(tempDir, ".zshrc"), "");
 		cfgShellPath.set(Settings.instance, zshPath);
 		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
 			shell: zshPath,

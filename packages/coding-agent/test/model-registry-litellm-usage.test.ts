@@ -2,11 +2,18 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
+import { providerEntries } from "@oh-my-pi/pi-catalog/compat/providers";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-const AMBIENT_ENV = ["LITELLM_API_KEY", "LITELLM_BASE_URL"] as const;
+const AMBIENT_ENV = [
+	...new Set([
+		"LITELLM_API_KEY",
+		"LITELLM_BASE_URL",
+		...Object.values(providerEntries()).flatMap(p => p.envVars ?? []),
+	]),
+];
 
 function gatewayAlias(host: string, apiKey: string, discoveryType = "litellm") {
 	return { api: "openai-completions", baseUrl: `https://${host}/v1`, apiKey, discovery: { type: discoveryType } };
@@ -35,7 +42,7 @@ describe("ModelRegistry LiteLLM usage registration", () => {
 	beforeEach(async () => {
 		for (const key of AMBIENT_ENV) {
 			ambient.set(key, Bun.env[key]);
-			delete Bun.env[key];
+			Bun.env[key] = "";
 		}
 		tempDir = TempDir.createSync("@omp-litellm-usage-");
 		probes = [];

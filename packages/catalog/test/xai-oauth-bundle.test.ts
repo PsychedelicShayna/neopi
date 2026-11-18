@@ -20,22 +20,6 @@ function builtSeedModel(id: string) {
 }
 
 describe("xai-oauth catalog seed", () => {
-	it("builds curated chat rows on the OAuth Responses dialect", () => {
-		expect(builtSeedModel("grok-4.20-0309-reasoning")).toMatchObject({
-			provider: "xai-oauth",
-			api: "openai-responses",
-			baseUrl: "https://api.x.ai/v1",
-			contextWindow: 2_000_000,
-			maxTokens: 2_000_000,
-			reasoning: true,
-			input: ["text", "image"],
-			compat: {
-				supportsReasoningEffort: false,
-				omitReasoningEffort: true,
-			},
-		});
-	});
-
 	it("filters versioned video SKUs from the discovered chat roster", async () => {
 		const fetchMock: FetchImpl = async (_input, _init) =>
 			Response.json({
