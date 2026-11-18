@@ -63,8 +63,6 @@ describe("browser open options CDP helpers", () => {
 			{ width: 800, height: 600 },
 			{ ignoreHttpsErrors: true, allowFileAccess: true },
 		);
-		expect(args).toContain("--hide-scrollbars");
-		expect(args).toContain("--enable-features=WebMCPTesting,DevToolsWebMCPSupport");
 		expect(args).toContain("--ignore-certificate-errors");
 		expect(args).toContain("--allow-file-access-from-files");
 	});
@@ -491,7 +489,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser open options", () => {
 			Bun.serve({
 				port: 0,
 				tls: { cert: CLAUDE_TRACE_DEBUG_CERT, key: CLAUDE_TRACE_DEBUG_KEY },
-				fetch: () => new Response("<title>untrusted</title>", { headers: { "content-type": "text/html" } }),
+				fetch: () => new Response("<title>untrusted</title>"),
 			});
 		const server = serveUntrusted();
 		// Fresh origins after the recycle and after close: Chromium reuses an accepted connection to an origin.

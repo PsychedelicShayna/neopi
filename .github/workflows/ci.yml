@@ -190,7 +190,6 @@ jobs:
            if: steps.changes.outputs.selected == 'true'
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Record and load the staged workspace native addon
            id: native
            if: steps.changes.outputs.selected == 'true'
@@ -354,10 +353,9 @@ jobs:
               path: MODULE.bazel.lock
 
    # Rust validation (tests, clippy, rustfmt) runs on non-PR events only.
-   # Native-changing PRs are rare enough that they do not warrant PR-side
-   # Rust validation or a PR-side addon build (see native_addons): Rust is
-   # validated post-merge on main (kata remote cache, warm) and again at
-   # release. A skipped required check still satisfies branch protection.
+   # PRs reuse exact-source native addons or build them on a cache miss.
+   # The broader Rust tests, clippy, and rustfmt validation remain post-merge
+   # on main and at release.
    rust_validate:
       name: Validate Rust workspace (bazel)
       if: github.event_name != 'pull_request'
@@ -396,17 +394,10 @@ jobs:
 
    # Provides the linux-x64 addon pair every downstream TS job installs.
    #
-   # PRs never build. They restore the pair main built for the same native
-   # sources from actions/cache (key = hash of every native build input:
-   # toolchain and build settings plus crates/** and BUILD.bazel). With no
-   # exact entry (the PR changes native inputs, or main has not built this
-   # state yet) they take main's newest entry, and with no entry at all the
-   # latest npm release. The workspace loader skips its version sentinel for
-   # workspace loads, so any of these load under a newer checkout. Testing
-   # against main's build instead of the last release keeps merged-but-
-   # unreleased native fixes from failing every PR that did not touch Rust
-   # (a merged grep fix plus its TS test failed 75 PR runs against the
-   # 18.3.1 addon). Only main saves; see the save step for why.
+   # PRs restore main's pair only when every native build input matches:
+   # toolchain and build settings plus crates/** and BUILD.bazel. A cache
+   # miss builds the current sources; older main/npm addons can load but
+   # lack exports required by this checkout. Only main saves; see below.
    #
    # Main (kata, cluster remote cache) builds only the pair here so the TS
    # fan-out starts as soon as it links; native_addons_cross builds every
@@ -419,10 +410,6 @@ jobs:
       permissions:
          contents: read
          actions: write
-      outputs:
-         # "<artifact-relative path>=<sha256>" pairs; kata consumers restore
-         # these from the in-cluster stash (see native-artifacts).
-         stash: ${{ steps.stage.outputs.stash }}
       steps:
          - uses: actions/checkout@v4
          - name: Compute native addon cache key
@@ -436,7 +423,7 @@ jobs:
               echo "prefix=natives-linux-x64-v1-" >> "$GITHUB_OUTPUT"
               echo "key=natives-linux-x64-v1-$NATIVE_INPUTS_HASH" >> "$GITHUB_OUTPUT"
 
-         # ---- PR path: main-built addons from actions/cache, else npm ----
+         # ---- PR path: exact-source main-built addons from actions/cache ----
          # `ci-natives` is a plain workspace-relative path on purpose: the
          # cache version hashes the literal path list, so kata (save) and
          # hosted (restore) must spell it identically, and upload-artifact
@@ -448,47 +435,25 @@ jobs:
            with:
               path: ci-natives
               key: ${{ steps.natives-key.outputs.key }}
-              restore-keys: |
-                 ${{ steps.natives-key.outputs.prefix }}
-         - name: Fetch release native addons (npm)
-           if: github.event_name == 'pull_request' && steps.natives-cache.outputs.cache-matched-key == ''
-           shell: bash
-           run: |
-              set -euo pipefail
-              version="$(jq -r .version packages/natives/package.json)"
-              tarball="$(npm view "@oh-my-pi/pi-natives-linux-x64@${version}" dist.tarball)"
-              if [[ -z "$tarball" ]]; then
-                echo "::error::@oh-my-pi/pi-natives-linux-x64@${version} is not published"
-                exit 1
-              fi
-              echo "Fetching $tarball"
-              curl -fsSL --retry 3 "$tarball" | tar -xz -C "$RUNNER_TEMP"
-              mkdir -p ci-natives/natives-linux-x64-baseline ci-natives/natives-linux-x64-modern
-              cp "$RUNNER_TEMP/package/pi_natives.linux-x64-baseline.node" ci-natives/natives-linux-x64-baseline/
-              cp "$RUNNER_TEMP/package/pi_natives.linux-x64-modern.node" ci-natives/natives-linux-x64-modern/
-         # Make the addon source visible whenever it is not source-matched,
-         # instead of leaving a reviewer to wonder which addons the tests ran.
          - name: Report native addon source
            if: github.event_name == 'pull_request'
            shell: bash
            env:
               EXACT: ${{ steps.natives-cache.outputs.cache-hit }}
-              MATCHED: ${{ steps.natives-cache.outputs.cache-matched-key }}
+              KEY: ${{ steps.natives-key.outputs.key }}
            run: |
               if [ "$EXACT" = true ]; then
-                echo "Using main's addons for this exact native source state ($MATCHED)."
-              elif [ -n "$MATCHED" ]; then
-                echo "::notice title=Native addons not source-matched::No main build matches this PR's native sources; testing against main's newest addon build ($MATCHED). Native changes are validated post-merge on main and at release."
+                echo "Using main's addons for this exact native source state ($KEY)."
               else
-                echo "::notice title=Native addons from npm::No main-built addon cache entry is available; testing against the latest npm release addons."
+                echo "No exact native source cache entry ($KEY); building this checkout."
               fi
 
-         # ---- main path: bazel build of the linux-x64 pair ----
+         # ---- main and PR cache misses: build the linux-x64 pair ----
          - id: cache
-           if: github.event_name != 'pull_request'
+           if: github.event_name != 'pull_request' || steps.natives-cache.outputs.cache-hit != 'true'
            uses: ./.github/actions/bazel-cache
          - name: Build linux-x64 native addons
-           if: github.event_name != 'pull_request'
+           if: github.event_name != 'pull_request' || steps.natives-cache.outputs.cache-hit != 'true'
            run: |
               set -eo pipefail
               if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
@@ -511,7 +476,7 @@ jobs:
          # thousands of actions is the failure mode that made CI slow — make
          # it visible in the run summary instead of discovering it weeks in.
          - name: Report bazel cache stats
-           if: github.event_name != 'pull_request'
+           if: github.event_name != 'pull_request' || steps.natives-cache.outputs.cache-hit != 'true'
            shell: bash
            run: |
               # Bazel runs with --color=yes (config=ci); strip ANSI before
@@ -544,52 +509,6 @@ jobs:
               "$loader" "$RUNNER_TEMP/smoke-addons.js" \
                 "$PWD/ci-natives/natives-linux-x64-baseline/pi_natives.linux-x64-baseline.node" \
                 "$PWD/ci-natives/natives-linux-x64-modern/pi_natives.linux-x64-modern.node"
-         # Kata test jobs download ~120 MB of artifact over the node's NAT
-         # egress (44-68 s per job, on the critical path). Every kata pod
-         # mounts the shared runner-cache PVC at /opt/bazel-repo-cache (the
-         # xwin cache already lives there), so stash the pair content-addressed
-         # beside it; the native-artifacts action restores and re-verifies it
-         # and falls back to the artifact on any miss. Best-effort: a stash
-         # failure only costs consumers the download.
-         - name: Stage native addons for consumers
-           id: stage
-           shell: bash
-           run: |
-              set -euo pipefail
-              stash=""
-              for f in ci-natives/natives-linux-x64-*/*.node; do
-                sha="$(sha256sum "$f" | cut -d' ' -f1)"
-                stash="$stash ${f#ci-natives/}=$sha"
-              done
-              echo "stash=${stash# }" >> "$GITHUB_OUTPUT"
-              stash_dir=/opt/bazel-repo-cache/ci-natives
-              if [ -z "${BAZEL_REMOTE_USER:-}" ] || [ ! -w /opt/bazel-repo-cache ]; then
-                echo "No in-cluster stash on this runner; consumers download the artifact."
-                exit 0
-              fi
-              if ! mkdir -p "$stash_dir"; then
-                echo "::warning title=Native addon stash::cannot create $stash_dir; consumers will download the artifact"
-                exit 0
-              fi
-              # Consumers of a run need its entries for minutes; two days
-              # covers re-runs while bounding the PVC footprint.
-              find "$stash_dir" -type f -mmin +2880 -delete 2>/dev/null || true
-              for entry in ${stash# }; do
-                rel="${entry%%=*}"
-                sha="${entry##*=}"
-                dest="$stash_dir/$sha.node"
-                if [ -f "$dest" ]; then
-                  touch "$dest"
-                  continue
-                fi
-                tmp="$stash_dir/.$sha.$$.tmp"
-                if cp "ci-natives/$rel" "$tmp" && mv -f "$tmp" "$dest"; then
-                  echo "stashed $rel -> $dest"
-                else
-                  rm -f "$tmp"
-                  echo "::warning title=Native addon stash::could not stash $rel; consumers will download the artifact"
-                fi
-              done
          # Only main saves: an entry saved on any other ref is readable by
          # that ref alone yet counts against the shared 10 GB repo quota,
          # whose LRU eviction has already cost the darwin release archives.
@@ -732,7 +651,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test coding-agent native/unit bucket
            env:
               OMP_TEST_CONCURRENCY: "4"
@@ -751,7 +669,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test workspace packages (TS)
            env:
               OMP_TEST_CONCURRENCY: "4"
@@ -769,7 +686,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test coding-agent singleton/global-state bucket
            # Keep global Settings/env/fake-timer tests serial; native addon
            # artifacts are still available like every other coding-agent bucket.
@@ -787,7 +703,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test native/TUI/browser-ish packages (TS)
            env:
               OMP_TEST_CONCURRENCY: "4"
@@ -805,7 +720,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test coding-agent UI/TUI bucket
            env:
               OMP_TEST_CONCURRENCY: "2"
@@ -823,7 +737,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Test coding-agent runtime bucket
            # Runtime/session tests import native-backed barrels too; keep this
            # separate for concurrency, not as a native-free guardrail.
@@ -843,7 +756,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: CLI smoke test
            run: bun run ci:test:smoke
 
@@ -858,7 +770,6 @@ jobs:
          - uses: ./.github/actions/native-artifacts
            with:
               targets: linux-x64-baseline linux-x64-modern
-              stash: ${{ needs.native_addons.outputs.stash }}
          - name: Install method smoke tests
            env:
               OMP_INSTALL_TEST_SKIP_NATIVE_BUILD: "1"
