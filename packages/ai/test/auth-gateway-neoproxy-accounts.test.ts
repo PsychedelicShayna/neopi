@@ -233,7 +233,7 @@ describe("NeoProxy authenticated account source", () => {
 
 	test("inventory requires the gateway bearer even when legacy unauthenticated mode is enabled", async () => {
 		fixture = await boot();
-		for (const headers of [{}, { authorization: "Bearer wrong" }]) {
+		for (const headers of [new Headers(), new Headers({ authorization: "Bearer wrong" })]) {
 			const response = await fetch(`${fixture.gateway.url}/v1/neoproxy/accounts`, { headers });
 			expect(response.status).toBe(401);
 			expect(await response.text()).not.toContain("private-key");

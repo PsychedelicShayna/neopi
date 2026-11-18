@@ -18,20 +18,30 @@ export function createAdvisorGenerator(options: {
 		modelRegistry: options.modelRegistry,
 		cwd: options.cwd,
 		schema: advisorDefinitionJsonSchema,
-		validateFields: fields => { parseInlineAdvisorConfig(fields); },
-		systemPrompt: () => renderPromptAsset("advisor/generate-system.md", systemTemplate, {
-			schema: JSON.stringify(advisorDefinitionJsonSchema(), null, 2),
-			tools: options.availableToolNames,
-		}),
-		requestPrompt: request => renderPromptAsset("advisor/generate-request.md", requestTemplate, {
-			bases: JSON.stringify(request.baseDefinitions ?? [], null, 2),
-			comment: request.comment ?? "",
-			definition: JSON.stringify(request.definition, null, 2),
-		}),
+		validateFields: fields => {
+			parseInlineAdvisorConfig(fields);
+		},
+		systemPrompt: () =>
+			renderPromptAsset("advisor/generate-system.md", systemTemplate, {
+				schema: JSON.stringify(advisorDefinitionJsonSchema(), null, 2),
+				tools: options.availableToolNames,
+			}),
+		requestPrompt: request =>
+			renderPromptAsset("advisor/generate-request.md", requestTemplate, {
+				bases: JSON.stringify(request.baseDefinitions ?? [], null, 2),
+				comment: request.comment ?? "",
+				definition: JSON.stringify(request.definition, null, 2),
+			}),
 	});
 	return {
 		async generate(bases: readonly AdvisorConfig[], comment: string, signal: AbortSignal): Promise<AdvisorConfig> {
-			const result = await generator.generate({ definition: {}, target: "all", baseDefinitions: bases, comment, signal });
+			const result = await generator.generate({
+				definition: {},
+				target: "all",
+				baseDefinitions: bases,
+				comment,
+				signal,
+			});
 			return parseInlineAdvisorConfig(result.fields);
 		},
 		dispose: () => generator.dispose(),

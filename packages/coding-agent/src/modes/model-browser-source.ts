@@ -45,12 +45,14 @@ export function createModelBrowserSource(
 ): ModelHubSource {
 	return {
 		editingScope,
-		getRoleScopeNote: editingScope ? role => {
-			const details = settings.getModelRoleScopeDetails(role, editingScope);
-			return details.shadowed
-				? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
-				: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
-		} : undefined,
+		getRoleScopeNote: editingScope
+			? role => {
+					const details = settings.getModelRoleScopeDetails(role, editingScope);
+					return details.shadowed
+						? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
+						: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
+				}
+			: undefined,
 		get revision() {
 			return settings.revision;
 		},
@@ -110,10 +112,14 @@ export function createModelBrowserSource(
 		},
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),
-		getRoleEffortSelection: role => editingScope === "session"
-			? settings.getSessionRoleEffortSelection(role)
-			: editingScope === "project" ? settings.getProjectRoleEffortSelection(role)
-				: editingScope === "global" ? settings.getGlobalRoleEffortSelection(role) : settings.getRoleEffortSelection(role),
+		getRoleEffortSelection: role =>
+			editingScope === "session"
+				? settings.getSessionRoleEffortSelection(role)
+				: editingScope === "project"
+					? settings.getProjectRoleEffortSelection(role)
+					: editingScope === "global"
+						? settings.getGlobalRoleEffortSelection(role)
+						: settings.getRoleEffortSelection(role),
 		getRoleTokenBudget: role => {
 			if (!editingScope) return settings.getRoleSetting(role, cfgCompactionThresholdTokens);
 			const entries = settings.readScopeValue(cfgRoleSettings, editingScope) as RoleSettings | undefined;
@@ -121,10 +127,14 @@ export function createModelBrowserSource(
 			return typeof value === "number" ? value : undefined;
 		},
 		getFallbackEffortSelection: (role, selector) => cfgFallbackEffortSelections.get(settings)[role]?.[selector],
-		getModelRole: role => editingScope === "session"
-			? settings.getSessionModelRole(role)
-			: editingScope === "project" ? settings.getProjectModelRole(role)
-				: editingScope === "global" ? settings.getGlobalModelRole(role) : settings.getModelRole(role),
+		getModelRole: role =>
+			editingScope === "session"
+				? settings.getSessionModelRole(role)
+				: editingScope === "project"
+					? settings.getProjectModelRole(role)
+					: editingScope === "global"
+						? settings.getGlobalModelRole(role)
+						: settings.getModelRole(role),
 		getSessionModelRole: role => settings.getSessionModelRole(role),
 		getProjectModelRole: role => settings.getProjectModelRole(role),
 		getGlobalModelRole: role => settings.getGlobalModelRole(role),

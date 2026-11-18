@@ -219,7 +219,11 @@ describe("advisor auto thinking level", () => {
 
 	for (const { name, unverified, revertPolicy } of [
 		{ name: "classifies independently with no revert", unverified: false, revertPolicy: "never" },
-		{ name: "classifies during cooldown and restores fixed effort", unverified: false, revertPolicy: "cooldown-expiry" },
+		{
+			name: "classifies during cooldown and restores fixed effort",
+			unverified: false,
+			revertPolicy: "cooldown-expiry",
+		},
 		{ name: "leaves unverified thinking unset", unverified: true, revertPolicy: "never" },
 	] as const) {
 		it(`a fixed-effort advisor on an :auto fallback ${name}`, async () => {

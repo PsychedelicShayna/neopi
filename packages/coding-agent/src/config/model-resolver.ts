@@ -1516,7 +1516,10 @@ export function resolveAgentAdvisorSelection(
 	if (override) {
 		const lowered = override.toLowerCase();
 		if (lowered === "off" || lowered === "false") return undefined;
-		if (lowered === "on" || lowered === "true") return typeof options.agentAdvisor === "object" ? { definition: options.agentAdvisor } : { model: agentPattern };
+		if (lowered === "on" || lowered === "true")
+			return typeof options.agentAdvisor === "object"
+				? { definition: options.agentAdvisor }
+				: { model: agentPattern };
 		return { model: override };
 	}
 	if (options.agentAdvisor === true) return {};
