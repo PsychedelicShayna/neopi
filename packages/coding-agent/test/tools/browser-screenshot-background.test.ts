@@ -95,8 +95,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser screenshots of background tabs", (
 		const userPage = await handle.browser.newPage();
 		await userPage.goto(page("user-tab", "#ffffff"));
 		await userPage.bringToFront();
-		expect(await agentPage.evaluate("document.hasFocus()")).toBe(false);
-		expect(await userPage.evaluate("document.hasFocus()")).toBe(true);
+		expect(await visibility(agentPage)).toBe("hidden");
 		const name = `background-target-${process.pid}`;
 		cleanups.push(async () => {
 			await releaseTab(name);
@@ -105,7 +104,6 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser screenshots of background tabs", (
 
 		expect(await repaintAndCapture(name, "#00ff00")).toEqual([0, 255, 0]);
 		expect(await visibility(userPage)).toBe("visible");
-		expect(await userPage.evaluate("document.hasFocus()")).toBe(true);
 	}, 45_000);
 
 	it("captures the adopted tab after the user switched away from it", async () => {

@@ -550,7 +550,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("relay tab ownership", () => {
 				manifest_version: 3,
 				name: "Stand-in vault",
 				version: "1.0",
-				content_scripts: [{ matches: ["http://127.0.0.1/*"], js: ["content.js"], run_at: "document_start" }],
+				content_scripts: [{ matches: ["http://127.0.0.1/*"], js: ["content.js"] }],
 				web_accessible_resources: [{ resources: ["menu.html"], matches: ["http://127.0.0.1/*"] }],
 			}),
 		);
@@ -577,23 +577,14 @@ document.addEventListener("keydown", event => {
 		const user = await fixture.browser.newPage();
 		await user.goto(`${fixture.origin}/login?who=user`);
 		await user.focus("#pw");
-		await user
-			.waitForFrame(frame => frame.url().startsWith("chrome-extension://"))
-			.catch(error => {
-				throw new Error("User-tab vault menu did not become an extension frame", { cause: error });
-			});
+		await user.waitForFrame(frame => frame.url().startsWith("chrome-extension://"));
 		const relay = await acquireBrowser({ kind: "relay", cdpUrl: fixture.cdpUrl }, { cwd: process.cwd() });
 		const name = `relay-vault-${process.pid}`;
 		try {
 			const { tab } = await acquireTab(name, relay, { target: "Login driven", timeoutMs: 20_000 });
 			await releaseTab(name, { keepPage: true });
-			await driven.bringToFront();
 			await driven.focus("#pw");
-			await driven
-				.waitForFrame(frame => frame.url().startsWith("chrome-extension://"))
-				.catch(error => {
-					throw new Error("Driven-tab vault menu did not become an extension frame", { cause: error });
-				});
+			await driven.waitForFrame(frame => frame.url().startsWith("chrome-extension://"));
 			const refused = await rejectionOf(acquireTab(name, relay, { target: "Login driven", timeoutMs: 20_000 }));
 			expect(String(refused)).toContain("Cannot access a chrome-extension:// URL of different extension");
 			expect(String(refused)).toContain("Chrome did not identify");
