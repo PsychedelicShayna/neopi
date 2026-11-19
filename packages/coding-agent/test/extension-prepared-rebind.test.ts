@@ -129,6 +129,8 @@ describe("prepared extension rebinding", () => {
 			// An in-process subagent inherits exactly the parent's prepared extensions.
 			const { session: child } = await createAgentSession({
 				...base,
+				// Subagents carry their own registry id; the fork rejects a second live "Main".
+				agentId: "PreparedChild",
 				sessionManager: SessionManager.inMemory(directory),
 				eventBus: childEventBus,
 				preloadedPreparedExtensions: parent.preparedExtensions,

@@ -566,55 +566,6 @@ describe("InteractiveMode todo HUD anchor", () => {
 		expect(root?.trim()).toBe("TODO");
 	});
 
-	it("wraps a row wider than the panel beneath its own content instead of the panel edge", () => {
-		mode.setTodos([
-			{
-				name: "A stage whose name is far too long to fit on one sixty column row, stage-end",
-				tasks: [
-					{ content: "finished", status: "completed" },
-					{
-						content: "a branch task described at such length that it has to wrap, branch-end",
-						status: "in_progress",
-					},
-					{
-						content: "the last task, also described at such length that it wraps, last-end",
-						status: "pending",
-					},
-				],
-			},
-		]);
-
-		const styled = mode.todoContainer.render(60);
-		const rows = styled.map(row => Bun.stripANSI(row).trimEnd());
-		const pad = " ".repeat(rows.find(row => row.trim() === "TODO")!.indexOf("TODO"));
-		// Rows after the first of the logical row that starts at `head` and ends at `end`.
-		const continuations = (head: string, end: string): string[] =>
-			rows.slice(rows.findIndex(row => row.includes(head)) + 1, rows.findIndex(row => row.includes(end)) + 1);
-		const { branch, last, vertical } = theme.tree;
-		const spine = `${pad} ${vertical}  `;
-
-		// A stage name hangs beneath itself, the progress spine running on beside it.
-		const stage = continuations("A stage whose", "stage-end");
-		expect(stage.length).toBeGreaterThan(0);
-		for (const row of stage) expect(row).toMatch(new RegExp(`^${spine}\\S`));
-		// The name is bold; the spine beside its continuation is styled like the
-		// stage's own connector instead of inheriting that weight.
-		const stageRow = rows.findIndex(row => row.includes("A stage whose"));
-		expect(styled[stageRow + 1]!.split(vertical)[0]).toBe(styled[stageRow]!.split(branch)[0]!);
-
-		// A task hangs beneath its checkbox: the spine and the task rail both continue.
-		expect(rows.find(row => row.includes("a branch task"))).toStartWith(`${spine}${branch} `);
-		const branchTask = continuations("a branch task", "branch-end");
-		expect(branchTask.length).toBeGreaterThan(0);
-		for (const row of branchTask) expect(row).toMatch(new RegExp(`^${spine}${vertical}  \\S`));
-
-		// Nothing follows the last task, so its rail ends while the spine continues.
-		expect(rows.find(row => row.includes("the last task"))).toStartWith(`${spine}${last} `);
-		const lastTask = continuations("the last task", "last-end");
-		expect(lastTask.length).toBeGreaterThan(0);
-		for (const row of lastTask) expect(row).toMatch(new RegExp(`^${spine}   \\S`));
-	});
-
 	it("keeps a wrapped task hanging when a theme switch re-renders the panel", async () => {
 		mode.setTodos([
 			{

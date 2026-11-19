@@ -275,12 +275,16 @@ body { margin: 0; }
 		}
 	}
 
+	// The fork keeps browser.screenshotMaxWidth/Height (default 1024) as operator ceilings over upstream's
+	// model-aware edge; these cases cover that edge itself, so they lift the ceilings out of its way.
+	const UNCAPPED = { maxWidth: 8192, maxHeight: 8192 };
+
 	// Scale 0 keeps the browser's own device scale (1 in headless Chromium).
 	test.each([1.25, 2, 0])(
 		"a screenshot at device scale %p is in CSS pixels, so a position read off it clicks there",
 		async scale => {
 			await withoutBackendOverrides(async () => {
-				const invoke = createHost();
+				const invoke = createHost(UNCAPPED);
 				const name = `screenshot-click-${crypto.randomUUID()}`;
 				try {
 					await invoke({
@@ -310,7 +314,7 @@ body { margin: 0; }
 		const model = getBundledModel("anthropic", "claude-sonnet-4-6");
 		if (!model) throw new Error("Expected bundled anthropic/claude-sonnet-4-6");
 		await withoutBackendOverrides(async () => {
-			const invoke = createHost(undefined, model);
+			const invoke = createHost(UNCAPPED, model);
 			const name = `screenshot-model-${crypto.randomUUID()}`;
 			try {
 				await invoke({
@@ -347,6 +351,8 @@ body { margin: 0; }
 					"browser.cmux": false,
 					"browser.tern": false,
 					"async.enabled": false,
+					"browser.screenshotMaxWidth": UNCAPPED.maxWidth,
+					"browser.screenshotMaxHeight": UNCAPPED.maxHeight,
 				}),
 				getEvalSessionId: () => "browser-screenshot-eval",
 				getEvalPreludes: () => [prelude],
@@ -375,7 +381,7 @@ await tab.close();`,
 
 	test("a viewport past the size cap arrives scaled, and positions on that image still click there", async () => {
 		await withoutBackendOverrides(async () => {
-			const invoke = createHost();
+			const invoke = createHost(UNCAPPED);
 			const name = `screenshot-click-${crypto.randomUUID()}`;
 			const title = async () =>
 				valueFrom<string>(await invoke({ action: "call", name, chain: [{ method: "title", args: [] }] }));

@@ -47,11 +47,8 @@ function assistant(text: string, stopReason: string): AgentMessage {
 	return { role: "assistant", stopReason, testText: text } as unknown as AgentMessage;
 }
 
-function agentEnd(
-	messages: AgentMessage[],
-	flags: { isTerminal?: boolean; hasFinalResponse?: boolean } = {},
-): AgentSessionEvent {
-	return { type: "agent_end", messages, ...flags } as unknown as AgentSessionEvent;
+function agentEnd(messages: AgentMessage[]): AgentSessionEvent {
+	return { type: "agent_end", messages } as unknown as AgentSessionEvent;
 }
 
 function delegation(id: string, _text: string): LiveServerEvent {
@@ -164,6 +161,7 @@ function makeHarness(options?: {
 			},
 		},
 		modelRegistry: { authStorage: {} },
+		settings: Settings.isolated(),
 		sessionId: "live-race-test",
 		sessionManager: {
 			getCwd: () => process.cwd(),
@@ -2423,9 +2421,13 @@ describe("live controller delegation ownership", () => {
 			type: "message_end",
 			message: assistant("still running checks", "toolUse"),
 		} as AgentSessionEvent);
-		h.fireSession(
-			agentEnd([assistant("background checks started", "stop")], { isTerminal: false, hasFinalResponse: true }),
-		);
+		h.fireSession({
+			type: "agent_pause",
+			messages: [assistant("background checks started", "stop")],
+			yielded: true,
+			hasFinalResponse: true,
+			awaiting: true,
+		});
 		expect(h.controller.heldContextCount()).toBe(1);
 		h.fireOutputLevel(0.5);
 		await settle();

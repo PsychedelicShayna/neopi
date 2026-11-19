@@ -56,6 +56,8 @@ function makeHostContext(sessionId: string): InteractiveModeContext {
 				header: { type: "session" as const, id: sessionId, timestamp: "2026-11-10T00:00:00Z", cwd: "/tmp" },
 				entries: [],
 			}),
+			// The fork's collab host listens through SessionManager.subscribeEntries.
+			subscribeEntries: () => () => {},
 			onEntryAppended: undefined,
 		},
 		session: {

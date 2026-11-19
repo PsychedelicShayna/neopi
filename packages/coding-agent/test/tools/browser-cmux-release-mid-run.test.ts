@@ -675,7 +675,9 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 		const result = await runInTab("screenshot-scale", {
 			code: "const shot = await tab.screenshot(); await tab.clickAt(1000, 100); return shot;",
 			timeoutMs: 5_000,
-			session: makeSession("/tmp"),
+			// The fork's browser.screenshotMaxWidth/Height ceilings (default 1024) would shrink the 2000px image this
+			// case reads positions off; lift them so it covers upstream's CSS-pixel mapping alone.
+			session: makeSession("/tmp", undefined, { maxWidth: 8192, maxHeight: 8192 }),
 		});
 		const text = result.displays.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 		expect(text).toContain(note);

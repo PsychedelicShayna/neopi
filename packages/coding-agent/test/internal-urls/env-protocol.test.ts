@@ -113,10 +113,9 @@ describe("env:// session environment", () => {
 		const context = { session: fixture() };
 		await expect(router.resolve("env://EDITOR")).rejects.toThrow("owning session");
 		await expect(router.write("env://EDITOR", "vim")).rejects.toThrow("owning session");
-		await expect(
-			new WriteTool(context.session).execute("missing-content", { path: "env://EDITOR" } as never),
-		).rejects.toThrow("content is required");
-		await expect(router.write("env://EDITOR/unset", "unexpected", context)).rejects.toThrow("Omit content");
+		// The write schema requires content (upstream d7ac7581d4), so a missing payload never reaches the handler.
+		expect(() => new WriteTool(context.session).parameters.assert({ path: "env://EDITOR" })).toThrow("content");
+		await expect(router.write("env://EDITOR/unset", "unexpected", context)).rejects.toThrow("empty content");
 		await expect(router.write("env://EDITOR", "a\0b", context)).rejects.toThrow("NUL");
 		for (const url of ["env://EDITOR/path", "env://EDITOR?save=true", "env://BAD-NAME", "env://EDITOR#fragment"]) {
 			await expect(router.resolve(url, context)).rejects.toThrow("Use env://");

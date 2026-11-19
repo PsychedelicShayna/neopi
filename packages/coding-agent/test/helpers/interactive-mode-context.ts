@@ -114,7 +114,8 @@ export function createSessionStub(
 		ttsrManager: undefined,
 		extensionRunner: undefined,
 		effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
-		modelRegistry: {},
+		// EventController wires this registry into the vocalizer, which resolves the speech role from it.
+		modelRegistry: { getAvailable: () => [] },
 		getToolByName: () => undefined,
 		hasBuiltInTool: () => true,
 		getLastAssistantMessage: () => undefined,

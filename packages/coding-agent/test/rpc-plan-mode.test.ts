@@ -732,18 +732,23 @@ describe("RPC plan mode", () => {
 		expect(respond("unknown", "approve")).toEqual([]);
 	});
 
-	it("without set_mode, reports plan transitions from other paths but installs no proposal handler", async () => {
-		const { session, planMode, frames, propose } = setup();
+	it("without set_mode, reports plan transitions and uses the session fallback without an RPC proposal handler", async () => {
+		const { session, planMode, frames, propose, writePlan } = setup();
+		await writePlan("demo", "# Demo plan\n\nImplement the change.");
 
-		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "iterative" });
+		session.setPlanModeState({ enabled: true, planFilePath: "local://demo-plan.md", workflow: "iterative" });
 
-		expect(frames).toEqual([{ type: "mode_changed", mode: "plan", planFilePath: "local://PLAN.md" }]);
+		expect(frames).toEqual([{ type: "mode_changed", mode: "plan", planFilePath: "local://demo-plan.md" }]);
 		expect(planMode.state).toEqual({
 			mode: "plan",
-			planMode: { planFilePath: "local://PLAN.md", workflow: "iterative" },
+			planMode: { planFilePath: "local://demo-plan.md", workflow: "iterative" },
 		});
-		expect(session.peekPlanProposalHandler()).toBeUndefined();
-		await expect(propose("demo")).rejects.toThrow("No plan is awaiting approval");
+		// Upstream 3b80c09933 makes xd://propose work without a host handler.
+		expect(session.peekPlanProposalHandler()).toBeDefined();
+		expect(await propose("demo")).toEqual({
+			content: [{ type: "text", text: "Plan ready for review." }],
+			details: { planFilePath: "local://demo-plan.md", title: "demo", planExists: true },
+		});
 		expect(frames.some(frame => frame.type === "plan_proposal_request")).toBe(false);
 	});
 });

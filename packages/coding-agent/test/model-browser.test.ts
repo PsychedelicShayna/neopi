@@ -275,7 +275,9 @@ describe("ModelBrowser search ranking", () => {
 				"ollama/gemma-4",
 				"ollama/qwen3.8:27b",
 			]);
-			expect(ranked[3]).toBe("openai/gpt-6-sol");
+			// The fork's menu search keeps punctuation-bearing words literal (83c8cc6130), so the
+			// whole-text pass needs "ol/" itself and adds no "...-sol" row behind them.
+			expect(ranked).toHaveLength(3);
 		});
 
 		test("an exact provider outranks a recently used provider it prefixes", () => {

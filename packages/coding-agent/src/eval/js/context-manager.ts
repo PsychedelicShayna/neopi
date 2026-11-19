@@ -225,6 +225,7 @@ export async function executeInVmContext(options: {
 		const inFlight = resettingSessions.get(sessionKey);
 		if (inFlight) await inFlight.catch(() => undefined);
 	}
+	const ownerId = options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined;
 	const session = await acquireSession(
 		sessionKey,
 		{
@@ -236,9 +237,12 @@ export async function executeInVmContext(options: {
 		},
 		options.session,
 		options.timeoutMs,
-		options.ownerId ?? options.session.getEvalKernelOwnerId?.() ?? undefined,
+		ownerId,
 	);
-	if (!options.reset && lostSessions.delete(sessionKey)) {
+	// Only an owner that held the dead VM's state hears the loss; a new owner never had any.
+	const lostOwners = options.reset ? undefined : lostSessions.get(sessionKey);
+	if (lostOwners && (ownerId === undefined || lostOwners.size === 0 || lostOwners.has(ownerId))) {
+		lostSessions.delete(sessionKey);
 		options.runState.onText?.(`${formatKernelRestartNotice("JS worker")}\n`);
 	}
 	const result = await runOnce(session, options);

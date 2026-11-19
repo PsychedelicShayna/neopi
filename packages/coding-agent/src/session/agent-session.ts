@@ -1304,6 +1304,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#runEpoch = 0;
 	/** The last core `agent_end` handed to {@link #endLoop}; a failed maintenance pass ends any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
+	/** A run is open: from its first `agent_start` until its `agent_end` (see {@link isRunActive}). */
+	#runActive = false;
 	/** The open run's latest loop end; undefined while that loop is live or still routing. */
 	#loopEnd: LoopEnd | undefined;
 	/** Settles when the open run ends or is abandoned; see {@link waitForRunEnd}. */
@@ -1600,7 +1602,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly #runOwnerScope = new AsyncLocalStorage<readonly string[]>();
 	#pendingRunOwners = new Set<string>();
 	#agentStartCount = 0;
-	#runActive = false;
+	/** A model loop is streaming (`agent_start` to its `agent_end`); owners noted meanwhile join it. Distinct from the open run, which spans pauses. */
+	#loopActive = false;
 	/**
 	 * Brackets owned by a client-submitted prompt (`#prompt`) only: claimed
 	 * synchronously at submission, before any dispatch preprocessing await, and
@@ -1818,7 +1821,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	#noteRunOwners(owners: readonly string[]): void {
 		if (owners.length === 0) return;
-		if (this.#runActive) {
+		if (this.#loopActive) {
 			this.#emit({ type: "run_owners_joined", owners: [...owners], agentStarts: this.#agentStartCount });
 			return;
 		}
@@ -1845,7 +1848,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// finishing has its bracket reset by it and ends here.
 		if (epoch === this.#inFlightEpoch) this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
 		if (this.#promptInFlightCount !== 0) return;
-		if (!this.#runActive && this.#pendingRunOwners.size > 0) {
+		if (!this.#loopActive && this.#pendingRunOwners.size > 0) {
 			this.#emit({ type: "run_owners_skipped", owners: this.#takeRunOwners(), reason: "skipped:no-run" });
 		}
 		this.yieldQueue.requestIdleFlush();
@@ -4356,12 +4359,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return true;
 	}
 
-	/** A run is open: from its first `agent_start` until its `agent_end`, paused stretches included. */
 	/** Something outside the model can still resume this session (see {@link wakeSources}). */
 	hasPendingAsyncWork(): boolean {
 		return this.#wakeSources() !== undefined;
 	}
 
+	/** A run is open: from its first `agent_start` until its `agent_end`, paused stretches included. */
 	get isRunActive(): boolean {
 		return this.#runActive;
 	}
@@ -5589,7 +5592,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let runOwners: string[] | undefined;
 		if (event.type === "agent_start") {
 			this.#agentStartCount++;
-			this.#runActive = true;
+			this.#loopActive = true;
 			runOwners = this.#takeRunOwners();
 			this.#activeAgentPromptGeneration = eventPromptGeneration;
 			// A run resumed from an unpaired assistant tail (retry of a failed tool
@@ -5597,7 +5600,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#runToolCallIds = new Set(event.resumedToolCallIds);
 			this.#prunedTerminalFailure = undefined;
 			this.#advisors.onPrimaryAgentStart();
-			this.#models.settleAutoThinkingLevel();
+			// A retry fallback classifies Auto at its first model call (see the before-model-call
+			// hook); settling here first would pin the provisional level and skip that classification.
+			if (!this.#recovery.hasActiveRetryFallback) this.#models.settleAutoThinkingLevel();
 			// The previous loop's end lost the race to this start: announce its pause first,
 			// so every subscriber sees it before the next loop.
 			if (this.#loopEnd) this.#pauseLoop(this.#loopEnd);
@@ -5606,7 +5611,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#runEpoch++;
 			this.#maintenance.noteTurnStarted();
 		} else if (event.type === "agent_end") {
-			this.#runActive = false;
+			this.#loopActive = false;
 		}
 		// This must happen before event fan-out awaits: streamed tool-call deltas
 		// can otherwise queue validation that a delayed turn-start reset erases.
@@ -6953,7 +6958,23 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		};
 		this.#loopEnd = end;
 		if (options?.continuing) this.#pauseLoop(end);
+		else if (this.#isTerminalLoopEnd()) {
+			// The run's final loop: the primary's advisors review it now, while the
+			// prompt still owns the session, so a continuation they steer joins this
+			// run instead of starting a detached one after it ends.
+			this.#advisors.onPrimaryAgentEnd();
+		}
 		this.#scheduleRunCheck();
+	}
+
+	/** Nothing resumes the run after this loop: no live loop, queued input, or outside work. */
+	#isTerminalLoopEnd(): boolean {
+		if (this.agent.state.isStreaming || this.#wakeSources()) return false;
+		return !(
+			!this.#queuedMessageDrainBlocked &&
+			this.#canAutoContinueForFollowUp(true) &&
+			this.agent.hasQueuedMessages()
+		);
 	}
 
 	#openRun(): void {
@@ -17131,8 +17152,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (!apiKey) {
 				throw new Error(`No API key for ${model.provider}`);
 			}
-			// The summary is stored as a branch summary entry; only the spend needs journaling.
-			const journal = journalCompletion(this.sessionManager, { purpose: "branch-summary", usageOnly: true });
+			// Journal spend without moving the leaf reserved for navigation, including on abort.
+			const journal = journalCompletion(this.sessionManager, {
+				purpose: "branch-summary",
+				usageOnly: true,
+				preserveActiveLeaf: true,
+			});
 			const result = await generateBranchSummary(entriesToSummarize, {
 				cwd: this.sessionManager.getCwd(),
 				model,

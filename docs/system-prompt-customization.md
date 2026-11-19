@@ -164,6 +164,14 @@ means exposed but not currently referenced, not forbidden. `keys <asset>` shows
 the same contract for one template. Live identity exposes only `username` and
 `firstName` from the OS account, not hostname or home directory.
 
+The exposed contracts and canned fixtures are maintained in
+`packages/coding-agent/src/prompts/catalog.ts`; the lexicon itself is computed
+from those contracts and the shipped templates, not generated into a separate
+file. When a renderer gains or renames a context field, update its catalog
+contract and fixture alongside the asset. Nested array fields, first-call eval
+guides, platform-specific notices, and task lifecycle flags follow the actual
+renderer context, not just the variables present before an upstream merge.
+
 `npi prompts check` validates installed overrides or supplied files, asset ids,
 and globs. It also accepts agent prompt bodies with `--agents` or `--scope
 agent-body`. `--fixture <json>` supplies representative context. Static checks

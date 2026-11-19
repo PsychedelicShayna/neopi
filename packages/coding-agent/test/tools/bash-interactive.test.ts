@@ -67,17 +67,17 @@ describe("runInteractiveBashPty", () => {
 			// What the launch environment itself gives the program for the guarded names.
 			const launch = await probe({ OMP_PTY_PROBE: "from-session" });
 
-			// What the session shell exports while it runs a command nobody can answer.
+			// What the session shell exports while it runs a command nobody can answer. The fork's
+			// guards never force TERM=dumb (b0024cd3c5), so TERM is not among them.
 			const output = await probe({
 				OMP_PTY_PROBE: "from-session",
-				TERM: "dumb",
 				CI: "true",
 				NO_COLOR: "1",
 				GIT_EDITOR: "true",
 				GPG_TTY: "not a tty",
 			});
 
-			// The restored launcher environment supplies TERM once the guard value is dropped.
+			// The restored launcher environment supplies TERM.
 			const hostTerm = getOriginalProcessEnv().TERM ?? "xterm-256color";
 			expect(output).toContain(`probe=from-session term=${hostTerm}`);
 			expect(output).toContain("tty=yes");

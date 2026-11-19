@@ -75,7 +75,8 @@ function stepSession(answer: (prompt: string, child: Child) => void, tools: stri
 		},
 	};
 	const session = {
-		...createSessionDefaults(),
+		// Fork run ownership: the executor only reads events after its owned agent_start.
+		...createSessionDefaults(emit),
 		state: { messages },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,

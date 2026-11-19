@@ -68,10 +68,11 @@ describe("settings-gated tools in a live session", () => {
 		await session.runToolRegistryMutation(async () => {});
 	}
 
-	/** Tool names on the system prompt's `# Tool Inventory` line. */
+	/** Tool names in the fork system prompt's inventory list. */
 	function promptToolNames(session: AgentSession): string[] {
 		const prompt = session.systemPrompt.join("\n");
-		return prompt.split("\n# Tool Inventory\n")[1]?.split("\n", 1)[0]?.split(", ") ?? [];
+		const inventory = prompt.split("\n# Tool Inventory\n")[1]?.split("\n\n", 1)[0] ?? "";
+		return Array.from(inventory.matchAll(/^- [^:\n]+: `([^`]+)`$/gm), match => match[1]);
 	}
 
 	it("removes and restores grep in the request tools and system prompt", async () => {

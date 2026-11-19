@@ -1339,7 +1339,10 @@ export class SessionAdvisors {
 			if (decision?.disclosure && emitWarnings)
 				this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 			const requestedLevel = autoThinking
-				? automaticThinkingLevel(model, decision?.candidates[0] ?? ThinkingLevel.Low)
+				? automaticThinkingLevel(
+						model,
+						(decision ? this.#provisionalAutoLevel(model, decision.candidates) : undefined) ?? ThinkingLevel.Low,
+					)
 				: (decision?.level ?? thinkingLevel ?? ThinkingLevel.Medium);
 			const resolvedLevel = resolveThinkingLevelForModel(model, requestedLevel);
 			const advisorThinkingLevel: ThinkingLevel = resolvedLevel ?? ThinkingLevel.Inherit;
@@ -2313,6 +2316,16 @@ export class SessionAdvisors {
 		return nextThinkingLevel;
 	}
 
+	/**
+	 * Provisional effort of an Auto advisor on `model`: the lowest permitted effort, which a
+	 * per-review classification then raises. Unverified thinking is never classified, so such
+	 * a model follows the primary's current effort instead.
+	 */
+	#provisionalAutoLevel(model: Model, candidates: readonly ThinkingEffort[]): ThinkingLevel | undefined {
+		if (model.thinking?.unverified) return this.#host.agent.state.thinkingLevel ?? ThinkingLevel.Off;
+		return candidates[0];
+	}
+
 	#canReplayAdvisorHistory(advisor: ActiveAdvisor, model: Model): boolean {
 		return advisor.agent.state.messages.every(
 			message =>
@@ -2379,7 +2392,9 @@ export class SessionAdvisors {
 					autoThinking ? (autoSelection ?? { mode: "auto" }) : { mode: "fixed", level: thinkingToApply },
 					"role",
 				);
-				thinkingToApply = (autoThinking ? decision.candidates[0] : decision.level) ?? ThinkingLevel.Inherit;
+				thinkingToApply =
+					(autoThinking ? this.#provisionalAutoLevel(primaryModel, decision.candidates) : decision.level) ??
+					ThinkingLevel.Inherit;
 				if (decision.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 			} catch (error) {
 				if (!(error instanceof EffortPolicyError)) throw error;
@@ -2570,7 +2585,9 @@ export class SessionAdvisors {
 							autoThinking ? (autoSelection ?? { mode: "auto" }) : { mode: "fixed", level: requested },
 							"fallback",
 						);
-						nextRequested = (autoThinking ? decision.candidates[0] : decision.level) ?? ThinkingLevel.Inherit;
+						nextRequested =
+							(autoThinking ? this.#provisionalAutoLevel(candidate, decision.candidates) : decision.level) ??
+							ThinkingLevel.Inherit;
 						if (decision.disclosure) this.#host.emitNotice("warning", decision.disclosure, "effort-policy");
 					} catch (policyError) {
 						if (!(policyError instanceof EffortPolicyError)) throw policyError;

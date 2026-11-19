@@ -529,6 +529,7 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 		registry.syncSessionStatus(ref.id, session);
 		attachIrcWakeTurnMonitor(session, {
 			id: ref.id,
+			taskDepth,
 			agent: persistedAgentDefinition(ref.displayName, init),
 			completionProbe: isCompletionProbeEnabled(spec.settings, taskDepth - 1),
 			...softRequestBudgetFor(persistedAgentName(ref.displayName, init), spec.settings),
@@ -541,10 +542,20 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 			// dir), not the live root session's, matching the spawn callers (#11563).
 			artifactsDir: path.dirname(sessionFile),
 		});
+		pendingManager.handOff();
+		return session;
 	} catch (error) {
 		mcpFollower?.dispose();
-		await session.dispose();
+		// Leave the exact parked generation retriable after any partial initialization failure.
+		if (registry.get(ref.id) === expectedRef && expectedRef.session === session) {
+			registry.detachSession(ref.id, session);
+			registry.setStatus(ref.id, "parked", expectedRef);
+		}
+		try {
+			await session.dispose();
+		} catch (disposeError) {
+			logger.warn("Failed to dispose a partially revived subagent", { error: String(disposeError) });
+		}
 		throw error;
 	}
-	return session;
 }

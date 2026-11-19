@@ -87,6 +87,8 @@ function createContext() {
 		fileSlashCommands: new Set<string>(),
 		skillCommands: new Map(),
 		isKnownSlashCommand: () => false,
+		// The fork warns on unknown `/name` input; the picker registers `/btw`.
+		slashCommandNames: new Set(["btw"]),
 		handleEvalCommand,
 		handleBashCommand,
 		handleBtwCommand,

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgSessionModelPicker } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
@@ -100,8 +101,12 @@ function overlayUi(): {
 	return { shown, setFocus, overlayStack, ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused } };
 }
 
+/** The compact model picker context: the fork's session `/model` opens it only with `models.sessionPicker: small`. */
 function pickerContext(ui: OverlayUi) {
+	const settings = Settings.isolated();
+	cfgSessionModelPicker.override(settings, "small");
 	return createInteractiveModeContext({
+		settings,
 		session: {
 			model: undefined,
 			scopedModels: [],

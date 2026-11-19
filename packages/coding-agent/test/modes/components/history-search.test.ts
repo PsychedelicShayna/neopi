@@ -47,7 +47,7 @@ function type(component: HistorySearchComponent, text: string): void {
 }
 
 describe("HistorySearchComponent", () => {
-	it("deletes the selected result only when Delete is at the end of the query", () => {
+	it("keeps Delete a text edit in the query field and deletes the selected entry from list navigation", () => {
 		const storage = fakeStorage([makeEntry(1, "alpha one"), makeEntry(2, "alpha two")]);
 		const component = new HistorySearchComponent(
 			storage,
@@ -58,7 +58,12 @@ describe("HistorySearchComponent", () => {
 		component.handleInput("\x1b[D");
 		component.handleInput("\x1b[3~");
 		expect(storage.getRecent(10).map(entry => entry.prompt)).toEqual(["alpha one", "alpha two"]);
+		// Delete at the end of the field is still a text edit, not an entry delete.
 		component.handleInput("a");
+		component.handleInput("\x1b[3~");
+		expect(storage.getRecent(10).map(entry => entry.prompt)).toEqual(["alpha one", "alpha two"]);
+		// Enter confirms the query and hands the keys to the list, where Delete removes the selected entry.
+		component.handleInput("\r");
 		component.handleInput("\x1b[B");
 		component.handleInput("\x1b[3~");
 		expect(storage.getRecent(10).map(entry => entry.prompt)).toEqual(["alpha one"]);

@@ -1861,9 +1861,10 @@ export class SessionMaintenance {
 				// `xd://` mount notice, an SDK/RPC steer) was suppressed while disconnected
 				// (issue #5800). Unlike `/new`/switchSession, compaction preserves the agent
 				// queues, so nothing else resumes them: re-drain now that the listener is back
-				// and `isCompacting` is false, or the queued turn hangs until the next prompt.
-				this.#host.drainStrandedQueuedMessages();
+				// and `isCompacting` is false (the barrier is cleared first: it alone still
+				// reports compacting here), or the queued turn hangs until the next prompt.
 				this.#manualCompactionCleanup = undefined;
+				this.#host.drainStrandedQueuedMessages();
 				manualCompactionCleanup.resolve();
 				// An inherited resume was earned by the pass that committed it; this
 				// pass's own outcome (hook cancel, summarizer failure) only decides the

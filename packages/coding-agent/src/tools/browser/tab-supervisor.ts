@@ -396,13 +396,13 @@ class PageSessionLostError extends ToolError {
 	}
 }
 /**
- * Chrome refused a relay tab's re-adoption over another extension's frame. The tab is not closed for that: it stays
- * open as it is, and the next call on it re-adopts it.
+ * Chrome refused a relay tab's re-adoption over another extension's frame or another debugger. omp never touches
+ * that frame; the tab is not closed for that: it stays open as it is, and the next call on it re-adopts it.
  */
 class TabHeldOutError extends ToolError {
 	constructor(context?: string) {
 		super(
-			`${context ? `${context}. ` : ""}omp could not reattach to the tab: ${DEBUGGER_DETACH_REFUSAL}, and that frame was still there after omp cleared it. omp kept the tab open as it is, and the next call on it reattaches to it; if that call fails the same way, the frame stays until the user closes it in Chrome (Escape, or a click elsewhere on the page)`,
+			`${context ? `${context}. ` : ""}omp could not reattach to the tab: ${DEBUGGER_DETACH_REFUSAL}. omp kept the tab open as it is, and the next call on it reattaches to it; if that call fails the same way, the frame or debugger stays until the user closes it in Chrome (Escape or a click elsewhere on the page closes an extension menu)`,
 		);
 	}
 }

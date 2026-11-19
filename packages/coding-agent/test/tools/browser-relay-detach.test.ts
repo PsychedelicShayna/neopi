@@ -804,7 +804,9 @@ describe("relay tabs Chrome detaches omp from", () => {
 		"still lets go of a tab Chrome refuses for any other reason, until its address changes",
 		async () => {
 			const ext = await openRelayTab();
-			ext.refuseAttach = "Another debugger is already attached to the tab with id: 1.";
+			// The fork's DEBUGGER_ACCESS_REFUSAL keeps "another debugger is already attached" with the
+			// foreign-frame refusal (no frame neutralization), so a different refusal stands for "any other reason".
+			ext.refuseAttach = "Cannot access a chrome:// URL";
 			const evaluating = ext.hanging();
 			const stalled = invoke({ action: "run", ...HANG }).catch((error: unknown) => error);
 			await evaluating;

@@ -194,6 +194,7 @@ describe("SelectorController model selector writes", () => {
 		options.onClose();
 	});
 
+	/** Opens the alt+p picker: the fork's session `/model` opens it only with `models.sessionPicker: small` (default: the hub). */
 	function openModelPicker(controller: SelectorController): {
 		callbacks: modelPickerModule.ModelPickerCallbacks;
 		options: modelPickerModule.ModelPickerOptions;
@@ -215,7 +216,10 @@ describe("SelectorController model selector writes", () => {
 
 	it("shows and keeps the session's own level on its current model, not its role's", async () => {
 		const sonnet = model("claude-sonnet-4-5");
-		const settings = Settings.isolated({ modelRoles: { default: "anthropic/claude-sonnet-4-5:high" } });
+		const settings = Settings.isolated({
+			modelRoles: { default: "anthropic/claude-sonnet-4-5:high" },
+			"models.sessionPicker": "small",
+		});
 		const { controller, showError } = start(settings, sonnet);
 		session!.setThinkingLevel(Effort.Low);
 		const first = openModelPicker(controller);
@@ -236,7 +240,7 @@ describe("SelectorController model selector writes", () => {
 
 	it("shows auto's resolved level once a turn settles it, and an untouched pick keeps auto", async () => {
 		const sonnet = model("claude-sonnet-4-5");
-		const { controller, showError } = start(Settings.isolated(), sonnet);
+		const { controller, showError } = start(Settings.isolated({ "models.sessionPicker": "small" }), sonnet);
 		vi.spyOn(session!.agent, "prompt").mockResolvedValue(undefined);
 		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
 		session!.setThinkingLevel(AUTO_THINKING);
@@ -255,18 +259,32 @@ describe("SelectorController model selector writes", () => {
 		expect(showError).not.toHaveBeenCalled();
 	});
 
-	it("carries the session's level to a picked model, clamped to its ladder, over a role's level for it", async () => {
-		const settings = Settings.isolated({ modelRoles: { smol: "anthropic/claude-opus-4-5:low" } });
+	it("carries the session's manual level to a picked model over a role's level for it, refusing one its ladder lacks", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { smol: "anthropic/claude-opus-4-5:low" },
+			"models.sessionPicker": "small",
+		});
 		const { controller, showError } = start(settings, model("claude-opus-4-7"));
 		session!.setThinkingLevel(Effort.Max);
 
+		// The fork validates a manual level against the target (effort replacement mode): Opus 4.5 tops
+		// out at xhigh, so a max session is refused rather than silently clamped.
+		const refused = openModelPicker(controller);
+		await refused.callbacks.onPick(model("claude-opus-4-5"), "anthropic/claude-opus-4-5", { overContext: false });
+		expect(session!.model?.id).toBe("claude-opus-4-7");
+		expect(session!.configuredThinkingLevel()).toBe(Effort.Max);
+		expect(showError).toHaveBeenCalledWith(
+			"Thinking effort max is not supported by anthropic/claude-opus-4-5. Supported efforts: minimal, low, medium, high, xhigh",
+		);
+		refused.callbacks.onCancel();
+
+		// A level on its ladder carries over, not the smol role's low.
+		session!.setThinkingLevel(Effort.XHigh);
 		const { callbacks } = openModelPicker(controller);
 		await callbacks.onPick(model("claude-opus-4-5"), "anthropic/claude-opus-4-5", { overContext: false });
-
-		// Opus 4.5 tops out at xhigh: the nearest level to max, not the smol role's low.
 		expect(session!.model?.id).toBe("claude-opus-4-5");
 		expect(session!.configuredThinkingLevel()).toBe(Effort.XHigh);
-		expect(showError).not.toHaveBeenCalled();
+		expect(showError).toHaveBeenCalledTimes(1);
 	});
 
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {

@@ -45,6 +45,8 @@ describe("Eval first-call guide messages", () => {
 		const { session } = await createAgentSession({
 			cwd: dir,
 			agentDir: dir,
+			// Sessions stay live until afterAll; the fork rejects concurrent top-level sessions sharing an agent id.
+			agentId: `GuideSession${sessions.length}`,
 			modelRegistry,
 			sessionManager,
 			toolNames,

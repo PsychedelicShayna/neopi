@@ -28,7 +28,7 @@ import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import { reasonShows, type SpotlightReason, spotlightDetails } from "@oh-my-pi/pi-tui/chat/spotlight";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { APP_NAME, removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const tmpDirs: string[] = [];
 
@@ -357,7 +357,7 @@ describe("spotlight access denial", () => {
 		client.warm();
 		await resolve.mock.results.at(-1)?.value;
 		expect(sent).toHaveLength(1);
-		expect(sent[0]).toStartWith("omp/");
+		expect(sent[0]).toStartWith(`${APP_NAME}/`);
 		expect(denied).toEqual(["This Stencil account does not have Stencil Cloud access yet."]);
 
 		token = "admitted-account";

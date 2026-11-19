@@ -18,7 +18,12 @@ import {
 	logger,
 	prompt,
 } from "@oh-my-pi/pi-utils";
-import { compilePromptAsset, renderPromptAsset, resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import {
+	compilePromptAsset,
+	renderPromptAsset,
+	renderPromptAssetTracked,
+	resolvePromptAsset,
+} from "@oh-my-pi/pi-utils/prompt-assets";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -41,7 +46,7 @@ import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" w
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import userAppendPromptTemplate from "./prompts/system/user-append.md" with { type: "text" };
-import type { SystemPromptSources } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import type { SystemPromptSource, SystemPromptSources } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { ActiveRepoContext } from "@oh-my-pi/pi-tui/status-line/host";
 import { XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { resolveActiveRepoContext } from "./utils/active-repo-context";
@@ -711,7 +716,7 @@ export interface BuildSystemPromptOptions {
 export interface BuildSystemPromptResult {
 	/** Ordered system prompt blocks. Providers should preserve entries as distinct messages/blocks. */
 	systemPrompt: string[];
-	/** Context files and skills located in `systemPrompt`; absent while prompt-asset rendering records no sources. */
+	/** Context files and skills located in rendered blocks; omitted for prompts with no tracked rendering. */
 	sources?: SystemPromptSources;
 	/**
 	 * Names of `xd://` devices whose catalog/protocol section this prompt renders.
@@ -721,6 +726,39 @@ export interface BuildSystemPromptResult {
 	 * a catalog the prompt already carries (issue #7139).
 	 */
 	xdevCatalogNames?: readonly string[];
+}
+
+type SourceIdentity = Pick<SystemPromptSource, "id" | "kind" | "label" | "path">;
+
+/** Trim project-block whitespace without invalidating tracked UTF-16 offsets. */
+function trimTracked(rendered: prompt.TrackedRender): prompt.TrackedRender {
+	const text = rendered.text.trim();
+	const lead = rendered.text.length - rendered.text.trimStart().length;
+	return {
+		text,
+		ranges: rendered.ranges.map(ranges =>
+			ranges
+				.filter(range => range.start >= lead && range.end <= lead + text.length)
+				.map(range => ({ start: range.start - lead, end: range.end - lead })),
+		),
+	};
+}
+
+/** Attribute each tracked occurrence to its provider-facing prompt block. */
+function trackedSources(
+	rendered: prompt.TrackedRender,
+	block: number,
+	identities: readonly SourceIdentity[],
+): SystemPromptSource[] {
+	return rendered.ranges.flatMap((ranges, index) =>
+		ranges.map(({ start, end }, occurrence) => ({
+			...identities[index]!,
+			id: occurrence === 0 ? identities[index]!.id : `${identities[index]!.id}-${occurrence + 1}`,
+			block,
+			start,
+			end,
+		})),
+	);
 }
 
 /** Compile on each read so overrides reload while inserted Markdown remains literal. */
@@ -1124,6 +1162,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// A fence a file leaves open is closed at its end, so it never leaves the rest of the prompt unformatted.
 	const promptContextFiles = contextFiles.map(file => ({ ...file, content: prompt.closeCodeFence(file.content) }));
+	const sourceItems = [...promptContextFiles, ...filteredSkills];
+	const sourceIdentities: SourceIdentity[] = [
+		...promptContextFiles.map((file, index) => ({
+			id: `instruction-${index}`,
+			kind: "instruction-files" as const,
+			label: file.path,
+		})),
+		...filteredSkills.map((skill, index) => ({
+			id: `skill-${index}`,
+			kind: "skills" as const,
+			label: skill.name,
+			path: skill.filePath,
+		})),
+	];
 	const environment = getEnvironmentInfo();
 	const data = buildSystemPromptContext({
 		systemPromptCustomization: effectiveSystemPromptCustomization,
@@ -1179,29 +1231,33 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		writeTransportOnly,
 		subagent,
 	});
-	let rendered: string;
+	let rendered: prompt.TrackedRender;
 	try {
 		rendered =
 			resolvedSystemPromptTemplate !== undefined && !resolvedCustomPrompt
-				? prompt.render(resolvedSystemPromptTemplate, data)
-				: renderPromptAsset(
+				? prompt.renderTracked(resolvedSystemPromptTemplate, data, sourceItems)
+				: renderPromptAssetTracked(
 						resolvedCustomPrompt ? "system/custom-system-prompt.md" : "system/system-prompt.md",
 						resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate,
 						data,
+						sourceItems,
 						{ cwd: resolvedCwd },
 					);
 	} catch (error) {
 		if (resolvedSystemPromptTemplate === undefined) throw error;
-		if (!hasDiscoveredTemplate) {
+		if (options.systemPromptTemplate !== undefined) {
 			throw new Error(`Invalid system prompt template: ${String(error)}`, { cause: error });
 		}
-		logger.warn("Ignoring invalid discovered system prompt template; using the bundled prompt", {
+		logger.warn("Ignoring invalid system prompt template file; using the bundled prompt", {
 			error: String(error),
 		});
 		resolvedSystemPromptTemplate = undefined;
-		rendered = renderPromptAsset("system/system-prompt.md", systemPromptTemplate, data, { cwd: resolvedCwd });
+		rendered = renderPromptAssetTracked("system/system-prompt.md", systemPromptTemplate, data, sourceItems, {
+			cwd: resolvedCwd,
+		});
 	}
-	const systemPrompt = [rendered];
+	const systemPrompt = [rendered.text];
+	const sources = trackedSources(rendered, 0, sourceIdentities);
 	const modelPreset = renderModelPreset(options.activeModel, resolvedCwd);
 	if (modelPreset) systemPrompt.push(modelPreset);
 	for (const prelude of evalPreludes) {
@@ -1213,25 +1269,29 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// `<project-context>` block after every static block, so sessions in
 	// different directories share the static prefix and the Anthropic head
 	// cache breakpoint lands right before this block.
-	const projectPrompt = renderPromptAsset(
-		"system/project-prompt.md",
-		projectPromptTemplate,
-		{
-			...data,
-			activeRepoContext: activeRepoContextPrompt,
-		},
-		{ cwd: resolvedCwd },
-	).trim();
-	if (projectPrompt) {
-		systemPrompt.push(projectPrompt);
+	const projectPrompt = trimTracked(
+		renderPromptAssetTracked(
+			"system/project-prompt.md",
+			projectPromptTemplate,
+			{
+				...data,
+				activeRepoContext: activeRepoContextPrompt,
+			},
+			sourceItems,
+			{ cwd: resolvedCwd },
+		),
+	);
+	if (projectPrompt.text) {
+		sources.push(...trackedSources(projectPrompt, systemPrompt.length, sourceIdentities));
+		systemPrompt.push(projectPrompt.text);
 	}
 
 	// Claim delivery only when the rendered block 0 actually carries the xd://
 	// section, so a template that references {{xdevDocs}} keeps mount-notice
 	// dedupe while one that omits it stays honest.
 	const xdevCatalogNames =
-		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.includes("xd://")
+		!resolvedCustomPrompt && xdevTools.length > 0 && rendered.text.includes("xd://")
 			? xdevTools.map(mounted => mounted.name)
 			: undefined;
-	return { systemPrompt, xdevCatalogNames };
+	return { systemPrompt, xdevCatalogNames, sources: { blocks: systemPrompt.slice(), sources } };
 }

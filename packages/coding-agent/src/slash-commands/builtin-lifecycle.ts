@@ -900,4 +900,5 @@ async function rescopeHeadlessToCwd(runtime: SlashCommandRuntime, cwd: string): 
 	await rescopeSessionToCwd(runtime.session, runtime.settings, cwd);
 	await runtime.session.rebindMixturesForCwd(cwd, true);
 	await runtime.refreshCommands?.();
+	await runtime.reloadPlugins();
 }

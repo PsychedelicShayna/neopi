@@ -9,7 +9,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
+import { cfgEffortPolicyMode, cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -346,6 +346,9 @@ describe("AgentSession role model thinking behavior", () => {
 			initialThinkingLevel: Effort.High,
 			modelRoles: {},
 		});
+		// Upstream's provisional Auto level (the model's preferred effort) is the legacy policy's;
+		// replacement mode starts Auto at the lowest permitted effort instead.
+		cfgEffortPolicyMode.set(sessionSettings, "legacy");
 		const model = buildModel({
 			id: "unlisted-reasoner",
 			name: "Unlisted Reasoner",
@@ -824,7 +827,8 @@ describe("AgentSession role model thinking behavior", () => {
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			streamFn: mock.stream,
 		});
-		sessionSettings = Settings.isolated({ "compaction.enabled": false });
+		// Legacy policy: the provisional Auto level is upstream's preferred effort, not the lowest permitted one.
+		sessionSettings = Settings.isolated({ "compaction.enabled": false, "effort.mode": "legacy" });
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),

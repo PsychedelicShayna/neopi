@@ -3857,12 +3857,13 @@ export class SessionManager {
 	/** Record usage on its initiating branch without moving a successor branch or session. */
 	appendModelUsage(
 		usage: ModelUsageRecord,
-		owner: { sessionId: string; parentId: string | null },
+		owner: { sessionId: string; parentId: string | null; preserveActiveLeaf?: boolean },
 	): string | undefined {
 		if (this.#sessionId !== owner.sessionId || (owner.parentId !== null && !this.#index.has(owner.parentId))) {
 			return undefined;
 		}
 		const activeLeafId = this.#index.leafId();
+		const preserveActiveLeaf = owner.preserveActiveLeaf === true || activeLeafId !== owner.parentId;
 		const entry: ModelUsageEntry = {
 			type: "model_usage",
 			id: generateId(this.#takenEntryIds),
@@ -3870,11 +3871,11 @@ export class SessionManager {
 			timestamp: nowIso(),
 			runtime: currentRuntimeIdentity(),
 			...usage,
-			...(activeLeafId !== owner.parentId ? { activeLeafId } : {}),
+			...(preserveActiveLeaf ? { activeLeafId } : {}),
 		};
 		this.#recordEntry(entry);
 		// Through #setLeaf so an in-flight atomic batch restores this leaf, not the usage entry, on rollback.
-		if (activeLeafId !== owner.parentId) this.#setLeaf(activeLeafId);
+		if (preserveActiveLeaf) this.#setLeaf(activeLeafId);
 		return entry.id;
 	}
 

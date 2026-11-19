@@ -1711,6 +1711,9 @@ the leaf. The ordinary `abort` command can cancel pending remote navigation,
 including its summary. Navigation starts in input order but settles in the
 background so cancellation remains reachable. No internal `sessionContext` is
 sent on the wire.
+Summary model-usage records are journaled without advancing the active leaf, so
+accounting neither invalidates navigation's expected-leaf guard nor moves the
+session when summarization is aborted.
 
 For native ask re-answering, send `allowAskReopen: true`. A probe returns
 `outcome: "ask_reopen"` with `reopenAsk`, without moving the leaf or claiming

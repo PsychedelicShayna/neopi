@@ -69,7 +69,7 @@ describe("run status OSC 7501 reporting", () => {
 			report(
 				`state=blocked:kind=question:app=npi:msg=${Buffer.from("Which branch? main or dev?").toString("base64")}`,
 			),
-			report("state=working:app=omp"),
+			report("state=working:app=npi"),
 			report("state=done:app=npi"),
 			report(`state=error:app=npi:msg=${Buffer.from("boom").toString("base64")}`),
 			report("state=error:app=npi"),
@@ -126,14 +126,14 @@ describe("run status OSC 7501 reporting", () => {
 			report("state=working:app=npi"),
 			report(`state=blocked:kind=permission:app=npi:msg=${Buffer.from("Approve the command?").toString("base64")}`),
 			report(`state=blocked:kind=permission:app=npi:msg=${Buffer.from("Approve the command?").toString("base64")}`),
-			report("state=working:app=omp"),
-			report("state=done:app=omp"),
+			report("state=working:app=npi"),
+			report("state=done:app=npi"),
 		]);
 	});
 
 	it("reports the newest open wait over the run's own transitions, then the run's current status", () => {
 		const blocked = (msg: string) =>
-			report(`state=blocked:kind=question:app=omp:msg=${Buffer.from(msg).toString("base64")}`);
+			report(`state=blocked:kind=question:app=npi:msg=${Buffer.from(msg).toString("base64")}`);
 		setRunStatus({ state: "working" });
 		const first = holdBlockedStatus({ state: "blocked", kind: "question", msg: "Use Postgres?" });
 		// The run ends under the open wait: the user is still being asked.
@@ -143,7 +143,7 @@ describe("run status OSC 7501 reporting", () => {
 		first();
 
 		expect(writes).toEqual([
-			report("state=working:app=omp"),
+			report("state=working:app=npi"),
 			blocked("Use Postgres?"),
 			blocked("Deploy now?"),
 			blocked("Use Postgres?"),

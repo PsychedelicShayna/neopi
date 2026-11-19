@@ -447,6 +447,7 @@ describe("/annotate contracts", () => {
 			editor,
 			editorContainer,
 			closeLinkBrowser: vi.fn(),
+			hookCustomComponents: new Set(),
 		} as unknown as InteractiveModeContext);
 		ctx.ui.custom = controller.showHookCustom.bind(controller);
 		try {

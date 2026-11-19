@@ -64,6 +64,8 @@ export interface CompletionJournalOptions {
 	role?: string;
 	/** Journal usage and timing only, for a call whose result the session already stores (a compaction summary). */
 	usageOnly?: boolean;
+	/** Record spend without changing a leaf reserved by an in-progress tree navigation. */
+	preserveActiveLeaf?: boolean;
 }
 
 /** Receives each settled attempt of a side-channel completion, with the user-turn text it was sent. */
@@ -82,7 +84,11 @@ export function journalCompletion(
 	options: CompletionJournalOptions,
 ): CompletionJournal | undefined {
 	if (!isModelUsageLedger(manager)) return undefined;
-	const owner = { sessionId: manager.getSessionId(), parentId: manager.getLeafId() };
+	const owner = {
+		sessionId: manager.getSessionId(),
+		parentId: manager.getLeafId(),
+		preserveActiveLeaf: options.preserveActiveLeaf,
+	};
 	return (message, prompt) => {
 		try {
 			manager.appendModelUsage(

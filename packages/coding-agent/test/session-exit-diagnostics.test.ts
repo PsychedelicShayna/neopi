@@ -21,6 +21,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SessionInUseError } from "@oh-my-pi/pi-coding-agent/session/session-lease";
 import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 
 const SESSION_MANAGER_MODULE = path.join(import.meta.dir, "../src/session/session-manager.ts");
@@ -247,7 +248,7 @@ describe("session exit diagnostics", () => {
 		).toBe(false);
 	});
 
-	it("does not fork a session another live process owns when this process only loaded it", async () => {
+	it("rejects loading a session another live process owns without forking or modifying it", async () => {
 		tempDir = TempDir.createSync("@pi-unowned-session-exit-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -286,24 +287,13 @@ describe("session exit diagnostics", () => {
 			const { value } = await owner.stdout.getReader().read();
 			expect(new TextDecoder().decode(value)).toBe("ready\n");
 
-			// This process only loads the session to read its history, then exits.
-			const sessionManager = await SessionManager.open(sessionFile, tempDir.path(), undefined, {
-				suppressBreadcrumb: true,
-			});
-			const agent = new Agent({
-				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
-				convertToLlm,
-			});
-			session = new AgentSession({
-				agent,
-				sessionManager,
-				settings: Settings.isolated({ "compaction.enabled": false }),
-				modelRegistry,
-			});
-			await session.dispose();
-			session = undefined;
-
-			expect(sessionManager.getSessionFile()).toBe(sessionFile);
+			// The fork claims its lifetime lease at open, not at the first write.
+			// A read-only upstream open is deliberately not part of this contract.
+			const before = await Bun.file(sessionFile).text();
+			await expect(
+				SessionManager.open(sessionFile, tempDir.path(), undefined, { suppressBreadcrumb: true }),
+			).rejects.toBeInstanceOf(SessionInUseError);
+			expect(await Bun.file(sessionFile).text()).toBe(before);
 			expect(fs.readdirSync(tempDir.path()).filter(name => name.endsWith(".jsonl"))).toEqual([
 				path.basename(sessionFile),
 			]);
