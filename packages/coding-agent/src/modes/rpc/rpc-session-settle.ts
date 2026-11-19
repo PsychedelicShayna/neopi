@@ -1,11 +1,12 @@
 /**
  * Session quiescence for RPC mode: separates "the agent yielded" (a yielded
  * `agent_pause` or `agent_end`, reported by `prompt_result`) from "the session is
- * done" (the run ended and nothing is live, queued or scheduled).
+ * done" (the run ended and nothing is live, queued, scheduled or running in the
+ * background that could inject a message and wake it again).
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { isSessionSettled, type SessionSettleState } from "../../session/session-settle";
+import { isSessionSettled, type SessionSettleHost, waitForSessionSettlement } from "../../session/session-settle";
 import type { RpcSessionSettledFrame } from "./rpc-types";
 
 /**
@@ -38,20 +39,21 @@ async function nextMacrotask(): Promise<void> {
 
 /**
  * Emits `session_settled` once per stretch of agent activity, after the run's
- * `agent_end` and its `prompt_result` frames. Re-checks on every `agent_end` and
- * after session transitions.
+ * `agent_end`, its `prompt_result` frames, and background work that could wake
+ * the session has drained. Re-checks on every `agent_end` and after session
+ * transitions.
  */
 export class RpcSessionSettleWatcher {
 	/** Agent activity since the last `session_settled`. */
 	#active = false;
 	#checking = false;
 	#recheck = false;
-	readonly #session: SessionSettleState;
+	readonly #session: SessionSettleHost;
 	readonly #output: (frame: RpcSessionSettledFrame) => void;
 	readonly #scheduledTurn: RpcScheduledTurnProbe | undefined;
 
 	constructor(
-		session: SessionSettleState,
+		session: SessionSettleHost,
 		output: (frame: RpcSessionSettledFrame) => void,
 		scheduledTurn?: RpcScheduledTurnProbe,
 	) {
@@ -74,8 +76,9 @@ export class RpcSessionSettleWatcher {
 	}
 
 	/**
-	 * Settle the current stretch of activity if the session is quiet. An open run
-	 * is left alone: its own `agent_end` triggers the next check.
+	 * Settle the current stretch of activity if the session is quiet, waiting out
+	 * background work that will wake it. An open run is left alone: its own
+	 * `agent_end` triggers the next check.
 	 */
 	async check(): Promise<void> {
 		if (this.#checking) {
@@ -90,6 +93,12 @@ export class RpcSessionSettleWatcher {
 				// after it, and session_settled must follow them.
 				await nextMacrotask();
 				await nextMacrotask();
+				if (this.#active) {
+					await waitForSessionSettlement(this.#session, {
+						isCurrent: () => this.#active,
+						scheduledTurn: this.#scheduledTurn,
+					});
+				}
 			} while (this.#recheck);
 			if (!this.#active || !isSessionSettled(this.#session, this.#scheduledTurn)) return;
 			this.#active = false;

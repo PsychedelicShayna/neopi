@@ -988,11 +988,16 @@ export class ModelControls {
 	 * Settle auto on the level a starting run thinks at when no classification
 	 * resolved it (IRC wakes, resumed runs, agent-originated and synthetic turns),
 	 * so readers stop showing auto as pending while the agent runs at a concrete
-	 * level. The next user turn still reclassifies.
+	 * level. The replacement policy starts auto on a concrete level, `off`
+	 * included, and settles there; the legacy policy keeps upstream's rule and
+	 * settles only a reasoning effort. The next user turn still reclassifies.
 	 */
 	settleAutoThinkingLevel(): void {
 		if (!this.#autoThinking || this.#autoResolvedLevel !== undefined) return;
-		const effort = toReasoningEffort(this.#thinkingLevel);
+		const effort =
+			this.#thinkingLevel === ThinkingLevel.Off && cfgEffortPolicyMode.get(this.#host.settings) === "replacement"
+				? ThinkingLevel.Off
+				: toReasoningEffort(this.#thinkingLevel);
 		if (effort !== undefined) this.#resolveAutoThinkingLevel(effort);
 	}
 

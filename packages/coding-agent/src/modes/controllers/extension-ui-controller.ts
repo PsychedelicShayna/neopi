@@ -962,17 +962,16 @@ export class ExtensionUiController {
 	#skipNotice(): string | undefined {
 		if (!this.#draftSkipsAsk()) return undefined;
 		const back = this.ctx.keybindings.getKeys("app.thinking.cycle")[0];
-		return this.ctx.editor.focused && back
+		return this.ctx.ui.getFocused() === this.ctx.editor && back
 			? `${ASK_SKIP_NOTICE} · ${formatKeyHint(back)} answers them`
 			: ASK_SKIP_NOTICE;
 	}
 
 	/**
-	 * Shows a local ask above the composer, which stays: natively (Tern) at the transcript's end, in rows
-	 * just over it. The ask takes the keys unless the composer holds a draft, whose sending skips it;
-	 * Shift+Tab, Tab past the ask's last stop and clicks move the keys between them.
+	 * Keep composer drafts protected even when they arrive after the dialog opens (dictation, a late paste):
+	 * while the draft holds text, the ask passes typing to it. The composer shows its cursor then, unless it
+	 * already holds the keys itself.
 	 */
-	/** Keep composer drafts protected even when they arrive after the dialog opens (dictation, a late paste). */
 	#draftInputGuard(): AskDialogInputGuard {
 		const draftEditor = this.ctx.editor;
 		return {
@@ -980,18 +979,23 @@ export class ExtensionUiController {
 			handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
 			hint: "Finish or clear the current prompt to answer",
 			syncPresentation: blocked => {
-				draftEditor.focused = blocked;
+				if (this.ctx.ui.getFocused() !== draftEditor) draftEditor.focused = blocked;
 			},
 		};
 	}
 
+	/**
+	 * Shows a local ask above the composer, which stays: natively (Tern) at the transcript's end, in rows
+	 * just over it. The ask always takes the keys; its input guard ({@link #draftInputGuard}) passes draft
+	 * typing through to the composer, so the user can type while being asked. Shift+Tab, Tab past the
+	 * ask's last stop and clicks move the keys between them.
+	 */
 	#mountAsk(dialog: Component): AskSlot {
 		this.ctx.closeLinkBrowser();
 		this.#ask = dialog;
 		this.ctx.askContainer.addChild(dialog);
 		this.ctx.statusLine.setAwaitingAnswer(true);
-		if (this.ctx.editor.getText().trim()) this.ctx.ui.requestRender();
-		else this.focusAsk();
+		this.focusAsk();
 		return {
 			restore: () => {
 				this.ctx.editorContainer.clear();
@@ -1034,6 +1038,7 @@ export class ExtensionUiController {
 					settle({ data, ...(notes.length ? { notes } : {}), timedOut: true });
 				},
 				onSubmit: (data, notes) => settle({ data, ...(notes.length ? { notes } : {}) }),
+				inputGuard: this.#draftInputGuard(),
 				onCancel: () => settle(undefined),
 				acceptImages: dialogOptions?.acceptImages === true,
 				onPasteImage: () => this.ctx.handleImagePaste(),

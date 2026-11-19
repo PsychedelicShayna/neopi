@@ -2,11 +2,11 @@
  * Idle maintenance owned by one session: the idle recap and idle compaction that run once the
  * session has been quiet for a while and its owner does not hold them back.
  *
- * A stretch of activity ends at the run's `agent_end` (published once per run, after every wake
- * source is gone). Recap and idle compaction are armed once that run has unwound and nothing is
- * admitted, queued or scheduled. New activity, compaction, a session transition or disposal
- * invalidates everything captured before it: timers, the settling check and an in-flight recap, so
- * a late reply can never be announced.
+ * A stretch of activity ends at the run's `agent_end`. Recap and idle compaction are armed once
+ * that run has unwound, nothing is admitted, queued or scheduled, and no background job or delivery
+ * (one started even while idle) can still wake the session. New activity, compaction, a session
+ * transition or disposal invalidates everything captured before it: timers, the settling check and
+ * an in-flight recap, so a late reply can never be announced.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isPromptCachePersistent } from "@oh-my-pi/pi-catalog/compat/prompt-cache-persistent";
@@ -24,7 +24,7 @@ import {
 	cfgCompactionIdleThresholdTokens,
 	cfgCompactionIdleTimeoutSeconds,
 } from "./context-settings";
-import { isSessionSettled, type SessionSettleState } from "./session-settle";
+import { isSessionSettled, type SessionSettleHost, waitForSessionSettlement } from "./session-settle";
 
 /** Probes the owner of the session supplies. Both are re-read whenever work could start. */
 export interface IdleMaintenanceOptions {
@@ -37,7 +37,7 @@ export interface IdleMaintenanceOptions {
 }
 
 /** The session surface idle maintenance reads and drives. */
-export type IdleMaintenanceSession = SessionSettleState &
+export type IdleMaintenanceSession = SessionSettleHost &
 	Pick<
 		AgentSession,
 		| "settings"
@@ -165,13 +165,28 @@ export class IdleMaintenance {
 		return this.#options.isBlocked?.() === true || session.isCompacting || session.isSessionTransitioning;
 	}
 
-	/** No run is open, live, admitted, queued or scheduled. */
+	/**
+	 * No run is open, live, admitted, queued or scheduled. Background work may still wake the session;
+	 * both recap and idle compaction additionally require {@link #isSettled}.
+	 */
+	#isQuiet(): boolean {
+		const session = this.#session;
+		return (
+			!session.isRunActive &&
+			!session.isStreaming &&
+			!session.hasAdmittedSubmission &&
+			session.queuedMessageCount === 0 &&
+			this.#options.scheduledTurn?.() !== true
+		);
+	}
+
+	/** Quiet, and no background job or delivery can wake the session. */
 	#isSettled(): boolean {
 		return isSessionSettled(this.#session, this.#options.scheduledTurn);
 	}
 
 	#recapWanted(): boolean {
-		return cfgRecap.get(this.#session.settings).enabled && !this.#isBlocked() && this.#isSettled();
+		return cfgRecap.get(this.#session.settings).enabled && !this.#isBlocked() && this.#isQuiet();
 	}
 
 	#contextTokens(): number {
@@ -201,7 +216,14 @@ export class IdleMaintenance {
 			await session.waitForAdmittedSubmissions();
 			if (!isCurrent()) return;
 		}
-		if (this.#isBlocked() || !this.#isSettled()) return;
+		if (this.#isBlocked() || !this.#isQuiet()) return;
+		// Both recap and compaction wait for settlement: a background job can still wake the session and
+		// invalidate what either would produce.
+		const settled = await waitForSessionSettlement(session, {
+			isCurrent,
+			scheduledTurn: this.#options.scheduledTurn,
+		});
+		if (!settled || this.#isBlocked()) return;
 		this.#armRecap();
 		this.#armCompaction();
 	}

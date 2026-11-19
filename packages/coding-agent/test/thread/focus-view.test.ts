@@ -388,9 +388,8 @@ describe("focused view of a worker-homed agent session", () => {
 		const working = buildRpcSessionState(remote, { includeDump: false });
 		expect(working.isStreaming).toBe(false);
 		expect(working.hasPendingAsyncWork).toBe(true);
-		// Upstream run lifecycle (0730879325): settle reads the open run, not background jobs; an
-		// idle job opens no run, so the session stays settled while the job is pending.
-		expect(working.isSettled).toBe(true);
+		// A job started while idle can still wake the session, so it is not settled until the job ends.
+		expect(working.isSettled).toBe(false);
 		expect(jobs.cancel(ownJob, { ownerId: "W2" })).toBe(false);
 		viewPatches = 0;
 		await probe.progressIdleJob(ownJob, "progress one");

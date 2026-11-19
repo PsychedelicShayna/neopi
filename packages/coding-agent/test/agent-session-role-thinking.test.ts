@@ -854,6 +854,41 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
 	});
 
+	it("settles replacement-policy auto on its starting level, off included, when a run starts without a user turn", async () => {
+		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const mock = createMockModel({ provider: "anthropic", handler: async () => ({ content: ["ack"] }) });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: mock.stream,
+		});
+		// The default replacement policy starts Auto at the lowest permitted effort: off on this model.
+		sessionSettings = Settings.isolated({ "compaction.enabled": false });
+		expect(cfgEffortPolicyMode.get(sessionSettings)).toBe("replacement");
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: sessionSettings,
+			modelRegistry,
+			thinkingLevel: AUTO_THINKING,
+		});
+		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
+		expect(session.thinkingLevel).toBe("off");
+		expect(thinkingLevelWord(session)).toBe(AUTO_THINKING);
+
+		// An IRC wake runs the agent without a user turn to classify: Auto must stop showing as pending.
+		await session.sendCustomMessage(
+			{ customType: "irc:incoming", content: "ping", display: false },
+			{ triggerTurn: true },
+		);
+		await session.waitForIdle();
+
+		expect(classifierSpy).not.toHaveBeenCalled();
+		expect(session.autoResolvedThinkingLevel()).toBe("off");
+		expect(thinkingLevelWord(session)).toBe("off");
+		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+	});
+
 	it("maps ultrathink prompts to the model's highest supported level, clamped below max", async () => {
 		const model = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		await createSession({

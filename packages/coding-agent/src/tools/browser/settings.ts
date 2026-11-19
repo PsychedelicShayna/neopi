@@ -5,9 +5,10 @@
 import { APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { register } from "../../config/registry";
 
+/** Unset or 0 leaves screenshots at upstream's model-aware size; a positive integer caps them. */
 function validateScreenshotDimension(value: unknown, setting: string): void {
-	if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) {
-		throw new Error(`${setting} must be a positive integer`);
+	if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)) {
+		throw new Error(`${setting} must be a non-negative integer (0 or unset = no cap)`);
 	}
 }
 
@@ -154,26 +155,28 @@ export const cfgBrowserIdleCloseSec = register({
 export const cfgBrowserScreenshotMaxWidth = register({
 	id: "browser.screenshotMaxWidth",
 	type: "number",
-	default: 1024,
+	default: undefined,
 	validate: value => validateScreenshotDimension(value, "browser.screenshotMaxWidth"),
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
 		label: "Browser Screenshot Width",
-		description: "Maximum width in pixels for browser screenshots sent to the model",
+		description:
+			"Optional cap in pixels on the width of browser screenshots sent to the model. Unset or 0 = no cap: screenshots follow the model-aware size (up to 2000px, by the active model's image limits) and diff captures stay at 1024px. A set value caps both.",
 	},
 });
 
 export const cfgBrowserScreenshotMaxHeight = register({
 	id: "browser.screenshotMaxHeight",
 	type: "number",
-	default: 1024,
+	default: undefined,
 	validate: value => validateScreenshotDimension(value, "browser.screenshotMaxHeight"),
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
 		label: "Browser Screenshot Height",
-		description: "Maximum height in pixels for browser screenshots sent to the model",
+		description:
+			"Optional cap in pixels on the height of browser screenshots sent to the model. Unset or 0 = no cap: screenshots follow the model-aware size (up to 2000px, by the active model's image limits) and diff captures stay at 1024px. A set value caps both.",
 	},
 });
 

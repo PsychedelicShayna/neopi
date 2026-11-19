@@ -697,7 +697,7 @@ Consumers must ignore unknown event kinds.
 
 ### Yield vs settled
 
-For agent-invoking work, a prompt's `prompt_result` reports the **agent yield**: it finished its turn (`agent_end` with `yielded: true`), or the prompt was aborted before dispatch or by a session transition. Local-only results and pre-dispatch errors do not require an `agent_end`. The **session is done** only when nothing can wake it again — no run is live or admitted, no steer/follow-up is queued, and no background job (auto-backgrounded `bash`, async `task`, `eval`) or pending delivery will inject its result and start a follow-up turn.
+For agent-invoking work, a prompt's `prompt_result` reports the **agent yield**: it finished its turn (`agent_end` with `yielded: true`), or the prompt was aborted before dispatch or by a session transition. Local-only results and pre-dispatch errors do not require an `agent_end`. The **session is done** only when nothing can wake it again — no run is open, live or admitted, no steer/follow-up is queued, and no background job (auto-backgrounded `bash`, async `task`, `eval`, including one started while the session was idle) or pending delivery will inject its result and start a follow-up turn.
 
 - `session_settled` is written once per stretch of agent activity, when the session becomes done. If background work was pending at the yield, OMP waits it out; any follow-up runs it triggers stream normally (`agent_start` … `agent_end`) before `session_settled`. It always follows the `prompt_result` frames of the final yield, and is not emitted for prompts that never reached the agent.
 - `prompt_result.sessionSettled` answers the same question at the yield, so a host can tear down immediately when it is `true`.

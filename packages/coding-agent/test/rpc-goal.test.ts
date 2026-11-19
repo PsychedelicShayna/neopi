@@ -575,6 +575,8 @@ describe("RpcGoalController continuation gate", () => {
 			hasAdmittedSubmission: false,
 			queuedMessageCount: 0,
 			isRunActive: false,
+			hasPendingAsyncWork: () => false,
+			settleAsyncWork: async () => {},
 			getPlanModeState: () => undefined,
 			getGoalModeState: () => goalState,
 			setGoalModeState: (state: GoalModeState | undefined) => {

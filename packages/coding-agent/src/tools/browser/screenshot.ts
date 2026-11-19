@@ -22,11 +22,19 @@ import type { PointerFrame, PointerSpace } from "./pointer-space";
 import type { RunOutput } from "./run-output";
 import type { ScreenshotLimits, ScreenshotResult, SessionSnapshot } from "./tab-protocol";
 
-/** Model-image budget for diff captures, honoring `browser.screenshotMaxWidth`/`MaxHeight`. */
+/** Upstream's fixed model-image edge for diff captures, used when no operator cap is set. */
+const DIFF_SCREENSHOT_EDGE = 1024;
+
+/** An operator cap from `browser.screenshotMaxWidth`/`MaxHeight`: unset or 0 means none. */
+function operatorCap(value: number | undefined): number | undefined {
+	return value !== undefined && value > 0 ? value : undefined;
+}
+
+/** Model-image budget for diff captures: upstream's 1024px edge, or the operator's cap when one is set. */
 export function browserScreenshotResizeOptions(session: SessionSnapshot): ImageResizeOptions {
 	return {
-		maxWidth: session.browserScreenshotMaxWidth ?? 1024,
-		maxHeight: session.browserScreenshotMaxHeight ?? 1024,
+		maxWidth: operatorCap(session.browserScreenshotMaxWidth) ?? DIFF_SCREENSHOT_EDGE,
+		maxHeight: operatorCap(session.browserScreenshotMaxHeight) ?? DIFF_SCREENSHOT_EDGE,
 		maxBytes: 150 * 1024,
 		jpegQuality: 70,
 		excludeWebP: session.excludeWebP,
@@ -337,10 +345,10 @@ export async function emitScreenshot(
 	// Within the byte budget every tool image gets: encoding quality gives way before the image's size does.
 	const resized = await resizeImage(
 		{ bytes: capture.bytes, mimeType: capture.mimeType },
-		// `browser.screenshotMaxWidth`/`MaxHeight` are operator ceilings on top of the model-visible edge.
+		// `browser.screenshotMaxWidth`/`MaxHeight` are opt-in operator ceilings on top of the model-visible edge.
 		{
-			maxWidth: Math.min(edge, session.browserScreenshotMaxWidth ?? edge),
-			maxHeight: Math.min(edge, session.browserScreenshotMaxHeight ?? edge),
+			maxWidth: Math.min(edge, operatorCap(session.browserScreenshotMaxWidth) ?? edge),
+			maxHeight: Math.min(edge, operatorCap(session.browserScreenshotMaxHeight) ?? edge),
 			jpegQuality: 70,
 			excludeWebP: session.excludeWebP,
 		},

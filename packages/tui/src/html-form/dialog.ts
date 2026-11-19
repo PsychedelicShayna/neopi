@@ -28,6 +28,9 @@
  * {@link HtmlFormDialog.keyHints} under the panel. Notes use `n` on
  * option rows and Alt+n on dropdowns, without selecting the option.
  * With a `timeout`, inactivity submits the current values through `onTimeout`.
+ * While the composer holds a draft (`inputGuard`), typing goes to it until ↑/↓
+ * or a click takes the form, and printable text an option row, Submit or the
+ * hidden row has no use for starts that draft, so typing is never swallowed.
  *
  * @example
  * const dialog = new HtmlFormDialog(parseHtmlForm(html), {
@@ -75,6 +78,7 @@ import { isNativeRendering } from "../native/state";
 import { compactImageAttachments, formatVisionMarker, PLACEHOLDER_REGEX } from "../prompt/composer-attachments";
 import { classifyImagePaste } from "../prompt/custom-editor";
 import { OrderedPastes } from "../prompt/ordered-pastes";
+import type { AskDialogInputGuard } from "../overlays/ask-dialog";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import { getEditorTheme, type ThemeColor, theme } from "../theme/theme";
@@ -141,6 +145,12 @@ export interface HtmlFormDialogOptions {
 	claimKeys?(): void;
 	/** Esc, or Tab past Submit: the host hands the keyboard to the composer under the form. */
 	releaseKeys?(): void;
+	/**
+	 * The composer's draft, as the ask dialog's: while it holds text, typing reaches it until ↑/↓ (or a
+	 * pointer action) hands the keyboard to the form, and printable text the focused stop has no use for
+	 * (on an option row, Submit, or the hidden row) goes to it, so typing is never swallowed.
+	 */
+	inputGuard?: AskDialogInputGuard;
 	onSubmit(data: HtmlFormData, notes: OptionNote[]): void;
 	onCancel(): void;
 }
@@ -454,9 +464,11 @@ export class HtmlFormDialog implements Component, Focusable {
 	readonly #errors = new Map<FormField, string>();
 	readonly #panel: OverlayPanel;
 	readonly #body = new PanelRows();
-	/** The skip notice's warning row, under the body while there is one. */
+	/** The skip notice's warning row and the draft guard's hint row, under the body while there are any. */
 	readonly #notice = new PanelRows();
 	#focused = false;
+	/** Set once the user explicitly takes the form (↑/↓, or a pointer action) while a draft held typing. */
+	#guardReleased = false;
 	#focus = 0;
 	/** First column row the rows' body shows. */
 	#scrollOffset = 0;
@@ -666,8 +678,18 @@ export class HtmlFormDialog implements Component, Focusable {
 			this.#options.releaseKeys?.();
 			return;
 		}
+		const guard = this.#options.inputGuard;
+		if (guard && this.#guardBlocks()) {
+			if (matchesSelectUp(data) || matchesSelectDown(data)) {
+				this.#guardReleased = true;
+				this.#syncControlFocus();
+			} else guard.handleInput(data);
+			return;
+		}
 		if (this.#hidden) {
+			// Hidden, the form waits and the composer takes the typing; Enter on an empty composer shows it.
 			if (getKeybindings().matches(data, "tui.select.confirm")) this.#setHidden(false);
+			else guard?.handleInput(data);
 			return;
 		}
 		const confirm = getKeybindings().matches(data, "tui.select.confirm");
@@ -711,6 +733,7 @@ export class HtmlFormDialog implements Component, Focusable {
 		}
 		if (stop.kind === "submit") {
 			if (confirm) this.#submit();
+			else this.#typeToComposer(data);
 			return;
 		}
 		if (this.#matchesNoteKey(data, false)) {
@@ -726,11 +749,35 @@ export class HtmlFormDialog implements Component, Focusable {
 			// Enter alone never leaves the group empty.
 			if (!stop.field.multi || this.#checked.get(stop.field)?.size === 0) this.#toggle(stop.field, stop.option);
 			this.#moveField(1);
+			return;
 		}
+		this.#typeToComposer(data);
+	}
+
+	/** Printable text the focused stop has no use for starts (or continues) the composer's draft. */
+	#typeToComposer(data: string): void {
+		const guard = this.#options.inputGuard;
+		if (guard && extractPrintableText(data) !== undefined) guard.handleInput(data);
+	}
+
+	/** True while the composer's draft owns typing (see {@link HtmlFormDialogOptions.inputGuard}). */
+	#guardBlocks(): boolean {
+		return !this.#guardReleased && (this.#options.inputGuard?.isBlocked() ?? false);
+	}
+
+	/** How to answer while the draft owns typing; undefined while it does not. */
+	#guardHint(): string | undefined {
+		const guard = this.#options.inputGuard;
+		if (!guard || !this.#guardBlocks()) return undefined;
+		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${guard.hint}`;
 	}
 
 	/** Clicks on folded fields, their pills, option rows and the action bar of the native description. */
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#guardBlocks()) {
+			this.#guardReleased = true;
+			this.#syncControlFocus();
+		}
 		this.#options.claimKeys?.();
 		this.#resetCountdown();
 		this.#changed();
@@ -777,19 +824,28 @@ export class HtmlFormDialog implements Component, Focusable {
 	}
 
 	render(width: number): readonly string[] {
+		// The draft's cursor shows while it owns typing, though the form holds the TUI's focus.
+		const blocked = this.#guardBlocks();
+		this.#options.inputGuard?.syncPresentation?.(blocked);
+		this.#syncControlFocus();
 		if (this.#hidden) return this.#renderHidden(width);
 		const innerWidth = Math.max(1, width - 4);
 		const skip = this.#options.skipNotice?.();
-		// The notice takes a body row, so the panel keeps its height while it comes and goes.
-		const rows = Math.max(1, this.#bodyRows(innerWidth) - (skip ? 1 : 0));
-		const highlight = this.#focused ? this.#focus : -1;
+		const guardHint = this.#guardHint();
+		const notice = [
+			...(skip ? [theme.fg("warning", `⚠ ${sanitize(skip).replace(/\s+/g, " ")}`)] : []),
+			...(guardHint ? [theme.fg("dim", guardHint)] : []),
+		];
+		// The notices take body rows, so the panel keeps its height while they come and go.
+		const rows = Math.max(1, this.#bodyRows(innerWidth) - notice.length);
+		const highlight = this.#focused && !blocked ? this.#focus : -1;
 		let layout = this.#layout(innerWidth, this.#focus, highlight);
 		// An overflowing column gives the scrollbar a column.
 		if (layout.lines.length > rows && innerWidth > 1) layout = this.#layout(innerWidth - 1, this.#focus, highlight);
 		this.#panel.title = this.#titleText();
 		this.#body.setLines(this.#renderBody(layout, rows, innerWidth));
 		this.#body.setHeight(rows);
-		this.#notice.setLines(skip ? [theme.fg("warning", `⚠ ${sanitize(skip).replace(/\s+/g, " ")}`)] : []);
+		this.#notice.setLines(notice);
 		return this.#panel.render(width);
 	}
 
@@ -808,10 +864,13 @@ export class HtmlFormDialog implements Component, Focusable {
 	 * toggles); the focused text field is its live `Input`/`Editor`.
 	 */
 	describe(_cx: DescribeContext): NativeNode {
+		const blocked = this.#guardBlocks();
+		this.#options.inputGuard?.syncPresentation?.(blocked);
+		this.#syncControlFocus();
 		// Other answers are typed into the terminal's own inputs, which don't pass through handleInput.
 		const others = [...this.#others.values()].map(input => input.getValue()).join("\0");
 		const skip = this.#options.skipNotice?.();
-		const key = `${this.#version}\0${others}\0${skip ?? ""}`;
+		const key = `${this.#version}\0${blocked}\0${others}\0${skip ?? ""}`;
 		if (this.#native?.key === key) return this.#native.node;
 		const described = this.#describeForm(skip);
 		this.#native = { key, node: described };
@@ -1451,7 +1510,7 @@ export class HtmlFormDialog implements Component, Focusable {
 
 	#syncControlFocus(): void {
 		const stop = this.#stops[this.#focus];
-		const live = this.#focused && !this.#hidden && !this.#noteEditor;
+		const live = this.#focused && !this.#hidden && !this.#noteEditor && !this.#guardBlocks();
 		const active = stop?.kind === "text" ? stop.field : undefined;
 		const other = stop?.kind === "other" ? stop.field : undefined;
 		for (const [field, input] of this.#inputs) input.focused = live && field === active;
@@ -1524,8 +1583,14 @@ export class HtmlFormDialog implements Component, Focusable {
 	#renderHidden(width: number): readonly string[] {
 		const hideKey = editorKey("app.ask.hide");
 		const enter = formatKeyHint("enter");
-		const show = hideKey ? `${hideKey}/${enter}` : enter;
-		const hints = [`${show} show`, `${editorKey("tui.select.cancel")} composer`];
+		const guardHint = this.#guardHint();
+		// While a draft owns typing, Enter goes to the draft, so only the hide key restores.
+		const show = guardHint ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
+		const hints: string[] = [];
+		if (guardHint) hints.push(guardHint);
+		else if (this.#options.inputGuard) hints.push("type to write a message");
+		if (show) hints.push(`${show} show`);
+		hints.push(`${editorKey("tui.select.cancel")} composer`);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
 		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
 		const room = Math.max(1, width - visibleWidth(label) - visibleWidth(hint) - 1);
@@ -2180,7 +2245,9 @@ export class HtmlFormDialog implements Component, Focusable {
 				actionButton("Save", "save-note", { keys: "enter" }),
 			]);
 		}
-		const lead = this.#remaining !== undefined ? `Submits these answers in ${this.#remaining}s` : undefined;
+		const lead =
+			this.#guardHint() ??
+			(this.#remaining !== undefined ? `Submits these answers in ${this.#remaining}s` : undefined);
 		const stop = this.#stops[this.#focus]!;
 		const [noteKey] = this.#noteKeys(stop.kind === "select");
 		return actionBar([
