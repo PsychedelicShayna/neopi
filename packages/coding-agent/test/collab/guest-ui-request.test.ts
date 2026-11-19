@@ -821,7 +821,7 @@ function makeAskHostContext(): InteractiveModeContext {
 	// complex interface that is only partially exercised.
 	const stub = {
 		...base,
-		editorContainer: { clear: () => {}, addChild: () => {} },
+		editorContainer: { children: [], clear: () => {}, addChild: () => {} },
 		askContainer: { addChild: () => {}, removeChild: () => {} },
 		editor: { getText: () => "", setText: () => {} },
 		closeLinkBrowser: () => {},

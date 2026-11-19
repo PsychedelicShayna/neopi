@@ -1359,7 +1359,7 @@ describe("html form", () => {
 		it("hides to one row and back by key in rows; natively the key leaves the card alone", () => {
 			const { form } = dialog(DB_FORM);
 			form.handleInput("\x1bh"); // Alt+H
-			expect(plain(form)).toEqual([expect.stringContaining("⎋ composer")]);
+			expect(plain(form)).toEqual([expect.stringContaining("Alt+H show · Alt+X cancel")]);
 			form.handleInput(DOWN); // ignored while hidden
 			form.handleInput(ENTER); // shows it again
 			expect(form.render(100).length).toBeGreaterThan(1);

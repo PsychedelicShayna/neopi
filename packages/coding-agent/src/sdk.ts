@@ -3124,6 +3124,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					attribution: "agent",
 					timestamp: Date.now(),
 				}),
+			sendUserMessage: content => session.sendUserMessage(content),
 			peekQueueInvoker: () => session.peekQueueInvoker(),
 			peekPendingInvoker: () => session.peekPendingInvoker(),
 			clearPendingInvokers: () => session.clearPendingInvokers(),

@@ -645,8 +645,6 @@ const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
 /** Status-line slot of the link-hint mode prompt; the `omp:` prefix keeps it apart from extension keys. */
 const LINK_HINT_STATUS_KEY = "omp:link-hints";
 const DEFAULT_WORKING_MESSAGE = "Working…";
-/** The composer's hint while an ask waits above it. */
-const ASK_COMPOSER_HINT = "↑ answer the questions above, or type here to skip them";
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
 const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
 
@@ -5538,8 +5536,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Placeholder for the empty composer; see `COMPOSER_HINTS` for the registered hints. */
 	#composerHint(): string | undefined {
 		// An ask above holding the keys: its key hints; the keys here: what typing does.
-		const ask = this.#extensionUiController.composerAsk();
-		if (ask) return this.#extensionUiController.askKeyHints() ?? ASK_COMPOSER_HINT;
+		const askHint = this.#extensionUiController.askComposerHint();
+		if (askHint) return askHint;
 		return resolveComposerHint({
 			runningAgents: this.#runningSubagentCount,
 			focusedOnAgent: this.focusedAgentId !== undefined,
@@ -10567,6 +10565,18 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	focusAsk(): boolean {
 		return this.#extensionUiController.focusAsk();
+	}
+
+	toggleAskHidden(): boolean {
+		return this.#extensionUiController.toggleAskHidden();
+	}
+
+	cancelAsk(): boolean {
+		return this.#extensionUiController.cancelAsk();
+	}
+
+	askBlocksRun(): boolean {
+		return this.#extensionUiController.askBlocksRun();
 	}
 
 	get isBtwFocused(): boolean {

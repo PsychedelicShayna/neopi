@@ -692,6 +692,16 @@ export class InputController {
 				return;
 			}
 
+			// The agent waits on an ask above the composer: interrupting the turn would cancel it. Esc keeps
+			// the composer's meaning (Vim's Normal mode took it before here); the ask's own key cancels it.
+			if (!this.ctx.focusedAgentId && this.ctx.askBlocksRun()) {
+				this.ctx.lastEscapeTime = 0;
+				this.ctx.showStatus(
+					`The questions stay open · ↑ answers them · ${appKey(this.ctx.keybindings, "app.ask.cancel")} cancels them`,
+				);
+				return;
+			}
+
 			if (this.ctx.loopModeEnabled) {
 				// Esc suspends the loop even mid-iteration: abort the live turn,
 				// then drop the captured prompt so the 800ms auto-resubmit never
@@ -933,6 +943,17 @@ export class InputController {
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.irc.viewer")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showIrcViewer());
+		}
+		// The ask above the composer answers to its keys from here too, in every composer state.
+		for (const key of this.ctx.keybindings.getKeys("app.ask.hide")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				if (!this.ctx.toggleAskHidden()) this.ctx.showStatus("No question is waiting");
+			});
+		}
+		for (const key of this.ctx.keybindings.getKeys("app.ask.cancel")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				if (!this.ctx.cancelAsk()) this.ctx.showStatus("No question is waiting");
+			});
 		}
 
 		// Double-tap left arrow on an empty editor: opens the agent hub from the
