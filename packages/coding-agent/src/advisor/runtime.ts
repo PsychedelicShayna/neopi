@@ -3,7 +3,7 @@ import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-a
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
 import { MIXTURE_TRACE_MESSAGE_TYPE } from "@oh-my-pi/pi-tui/overlays/mixture-types";
-import { logger } from "@oh-my-pi/pi-utils";
+import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import { isEvalStateContext } from "../eval/state";
 import {
 	collectNativeReplayRegexSecretValues,
@@ -19,6 +19,10 @@ import {
 } from "../session/session-history-format";
 import { ADVISOR_RENDER_OPTIONS, advisorToolIOTransform, renderAdvisorDeltaChunks } from "./delta-split";
 import { fingerprintMessage } from "./message-fingerprint";
+
+/** Upper bound for one advisor retry sleep, including a provider `Retry-After` hint. */
+const ADVISOR_RETRY_MAX_DELAY_MS = 30_000;
+const ADVISOR_RETRY_JITTER_RATIO = 0.25;
 
 /**
  * Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core
@@ -368,6 +372,20 @@ export class AdvisorRuntime {
 		private readonly retryDelayMs = 1000,
 	) {
 		this.#includeThinking = host.includeThinking !== false;
+	}
+
+	/**
+	 * Sleep before re-prompting after consecutive failure `attempt` (1-based): `retryDelayMs`
+	 * doubled per failure with downward jitter, raised to a provider retry hint
+	 * (`Retry-After`, `retry-after-ms=…`) carried in the error text. A fixed 1 s retry kept a
+	 * rate-limited router saturated while several sessions retried in lockstep.
+	 */
+	#retryDelayFor(attempt: number, failureText: string): number {
+		if (this.retryDelayMs <= 0) return 0;
+		const backoff = Math.min(this.retryDelayMs * 2 ** (attempt - 1), ADVISOR_RETRY_MAX_DELAY_MS);
+		const jittered = backoff * (1 - Math.random() * ADVISOR_RETRY_JITTER_RATIO);
+		const hint = extractRetryHint(undefined, failureText);
+		return hint === undefined ? jittered : Math.max(jittered, Math.min(hint, ADVISOR_RETRY_MAX_DELAY_MS));
 	}
 
 	get backlog(): number {
@@ -1732,11 +1750,15 @@ export class AdvisorRuntime {
 								wip,
 								overflowRecovery: recoveringOverflow || undefined,
 							});
-							if (this.retryDelayMs <= 0) {
+							const retryDelayMs = this.#retryDelayFor(
+								this.#consecutiveFailures,
+								`${err instanceof Error ? err.message : String(err)} ${terminalFailure?.errorMessage ?? ""}`,
+							);
+							if (retryDelayMs <= 0) {
 								await Bun.sleep(0);
 							} else {
 								try {
-									await raceWithSignal(Bun.sleep(this.retryDelayMs), iterationAbort.signal);
+									await raceWithSignal(Bun.sleep(retryDelayMs), iterationAbort.signal);
 								} catch (sleepError) {
 									if (!iterationAbort.signal.aborted) throw sleepError;
 								}

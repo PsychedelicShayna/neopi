@@ -14,7 +14,6 @@ export * from "./build-info";
 // Prompt templates
 export type * from "./config/prompt-templates";
 export * from "./config/prompt-templates";
-export type { SkillsSettings } from "./extensibility/settings";
 export type { RetrySettings } from "./session/settings";
 export { Settings, settings } from "./config/settings";
 // Eval tool bridge for extension-provided eval backends (works in source and
@@ -91,3 +90,8 @@ export {
 	HookInputComponent as ExtensionInputComponent,
 	HookSelectorComponent as ExtensionSelectorComponent,
 };
+// Helpers and setting handles for extensions, so they need not import internal paths
+export * from "@oh-my-pi/pi-tui/chrome/form-theme";
+export * from "@oh-my-pi/pi-tui/native/spans";
+export * from "@oh-my-pi/pi-tui/tools/xd-url";
+export { cfgExtensionTranscriptPresenters, type SkillsSettings } from "./extensibility/settings";

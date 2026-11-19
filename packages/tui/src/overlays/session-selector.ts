@@ -151,6 +151,12 @@ const PREVIEW_EXCERPT_CHARS = 1200;
 const PREVIEW_SETTLE_MS = 60;
 const DAY_MS = 86_400_000;
 const PINNED_GROUP = { id: "pinned", label: "Pinned" };
+/** Search Input actions that delete backward: on a typed query they edit it even when bound to `app.session.delete`. */
+const SEARCH_BACKWARD_DELETE = [
+	"tui.editor.deleteCharBackward",
+	"tui.editor.deleteWordBackward",
+	"tui.editor.deleteToLineStart",
+] as const;
 
 /** Day group of a session's last modification, relative to local midnight today. */
 function sessionDayGroup(modified: Date, startOfToday: number): { id: string; label: string } {
@@ -203,6 +209,20 @@ function sessionPreview(session: SessionSelectorEntry, forkedFrom: string | unde
 	]);
 }
 
+/** BCP 47 tag from the POSIX locale variables (`LC_ALL`, then `LC_TIME`, then `LANG`), or `undefined` to use the runtime default. */
+export function systemDateLocale(env: Readonly<Record<string, string | undefined>>): string | undefined {
+	const raw = env.LC_ALL || env.LC_TIME || env.LANG;
+	const tag = raw?.replace(/[.@].*$/, "").replace(/_/g, "-");
+	if (!tag || tag === "C" || tag === "POSIX") return undefined;
+	try {
+		return Intl.DateTimeFormat.supportedLocalesOf(tag)[0];
+	} catch {
+		return undefined;
+	}
+}
+
+const dateLocale = systemDateLocale(process.env);
+
 /** Absolute dates of week-old sessions; `toLocaleDateString` goes through Intl on every call. */
 const localeDateCache = new WeakMap<Date, { time: number; text: string }>();
 
@@ -222,7 +242,7 @@ function formatSessionDate(date: Date): string {
 
 	const cached = localeDateCache.get(date);
 	if (cached?.time === time) return cached.text;
-	const text = date.toLocaleDateString();
+	const text = date.toLocaleDateString(dateLocale);
 	localeDateCache.set(date, { time, text });
 	return text;
 }
@@ -614,6 +634,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	#lastFilterQuery = "";
 	/** Bumped whenever the visible session set may have changed (native memo key). */
 	#itemsVersion = 0;
+	/** Window start index retained across renders for edge-triggered scrolling. Unset until first render to seed centered. */
+	#scrollStartIndex: number | undefined = undefined;
 	/** Per-row line heights of the visible list for the ANSI window, reused until the set changes. */
 	#rowHeights: { items: readonly T[]; length: number; version: number; heights: readonly number[] } | undefined;
 	#itemsNative:
@@ -808,6 +830,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const queryChanged = query !== this.#lastFilterQuery;
 		this.#hadFilterQuery = tokens.length > 0;
 		this.#lastFilterQuery = query;
+		if (queryChanged) this.#scrollStartIndex = undefined;
 		if (tokens.length === 0) {
 			const items = this.#pinnedFirst(this.#allSessions);
 			const keepIndex = Math.min(this.#menu.selectedIndex, Math.max(0, items.length - 1));
@@ -1034,7 +1057,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (selected) this.onSelect?.(selected);
 	}
 
-	/** Delete / Backspace on an empty query: ask the parent to confirm deleting the selected session. */
+	/** `app.session.delete`: ask the parent to confirm deleting the selected session. */
 	requestDelete(): void {
 		const selected = this.#menu.selectedItem;
 		if (selected) this.onDeleteRequest?.(selected);
@@ -1599,8 +1622,6 @@ export interface SessionSelectorOptions<T extends SessionSelectorEntry = Session
 	allSessions?: SessionListing<T>;
 	/** Picker heading; defaults to "Resume Session". */
 	title?: string;
-	/** Primary action label; defaults to "Resume" (ANSI footer defaults to "select"). */
-	actionLabel?: string;
 	/** Fixed scope label, or false to omit the scope suffix. */
 	scopeLabel?: string | false;
 	/**
@@ -1687,7 +1708,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#extraFooterRows = 0;
 	readonly #fillHeight: boolean;
 	readonly #title: string;
-	readonly #actionLabel: string;
 	readonly #scopeLabel: string | false | undefined;
 	/** What `#messageContainer` shows, for the native description. */
 	#message: SessionPickerMessage | undefined;
@@ -1747,7 +1767,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
 		this.#title = options.title ?? "Resume Session";
-		this.#actionLabel = options.actionLabel ?? "Resume";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
 		this.#scopeLabel = options.scopeLabel;
@@ -2330,7 +2349,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	/**
 	 * `lg` cards sheet (`screen` for the standalone app): sessions grouped by
 	 * day (ranked flat while searching), the selected session's preview, the
-	 * delete confirm strip, and the actions of the keys Enter, Delete/Backspace,
+	 * delete confirm strip, and the actions of the keys Enter, `app.session.delete`,
 	 * F2 (rename), the pin keys (Pin / Unpin, whichever applies to the selected
 	 * session), Tab (the scope toggle, labelled with the scope it switches
 	 * to) and Esc. Untitled unless the caller named it; the placeholder says the scope.
@@ -2358,7 +2377,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", this.#actionLabel, "enter", { primary: true })];
+		const actions = [pickerAction("resume", "Resume", "enter", { primary: true })];
 		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "delete"));
 		if (this.#onRename) actions.push(pickerAction("rename", "Rename", "f2"));
 		const pin = this.#pinAction();
@@ -2465,7 +2484,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	/**
 	 * Picker pointer events run the keys' paths: a row click selects (arrows),
-	 * a second click or `Resume` resumes (Enter), `Delete` asks (Delete),
+	 * a second click or `Resume` resumes (Enter), `Delete` asks (`app.session.delete`),
 	 * `Rename` renames (F2), `Pin` / `Unpin` flips the pin, the tab or `All projects` toggles scope (Tab),
 	 * `Close` cancels (Esc), and the confirm strip answers the delete dialog (Yes / Esc).
 	 */

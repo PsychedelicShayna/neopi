@@ -18,12 +18,14 @@ import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
  */
 import { type AssistantMessage, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import speechRewritePrompt from "../prompts/system/speech-rewrite.md" with { type: "text" };
 import voicePostprocessPrompt from "../prompts/system/voice-postprocess.md" with { type: "text" };
+import { journalCompletion, type ModelUsageLedger } from "../session/model-usage-journal";
 
 // Rewrite budget: a paragraph in, a spoken paragraph (usually shorter) out.
 // Always reserve enough room to survive backends that ignore `disableReasoning`
@@ -42,6 +44,9 @@ export interface SpeechEnhancerDeps {
 	registry: ModelRegistry;
 	sessionId: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+	getSessionProvider?: () => string | undefined;
+	/** The session being spoken; each rewrite request is journaled there as `speech-rewrite`. */
+	usageLedger?: Partial<ModelUsageLedger>;
 }
 
 function extractText(content: AssistantMessage["content"]): string {
@@ -94,21 +99,29 @@ export class SpeechEnhancer {
 			// `@tiny` expands a configured `modelRoles.tiny` and otherwise falls
 			// through tiny's alias to the smol priority chain — unlike bare role
 			// lookup, this resolves even with no roles configured.
-			const model = resolveModelRoleValue("@tiny", roleCandidatePool("tiny", settings, registry), {
+			const pool = roleCandidatePool("tiny", settings, registry);
+			const eligible = cfgOffline.get(settings)
+				? pool.filter(candidate => candidate.provider === this.#deps.getSessionProvider?.())
+				: pool;
+			const model = resolveModelRoleValue("@tiny", eligible, {
 				settings,
 				matchPreferences: getModelMatchPreferences(settings),
 			}).model;
-			if (!model) return null;
+			if (!model || (cfgOffline.get(settings) && model.provider !== this.#deps.getSessionProvider?.())) return null;
 			const apiKey = await registry.getApiKey(model, sessionId);
 			if (!apiKey) return null;
 			// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
 			const metadata = this.#deps.metadataResolver?.(model.provider);
 			let completionSignal = signal;
+			const journal = journalCompletion(this.#deps.usageLedger, { purpose: "speech-rewrite", role: "tiny" });
 			const response = await retryTransientCompletion(
-				() => {
+				async () => {
+					if (cfgOffline.get(settings) && model.provider !== this.#deps.getSessionProvider?.()) {
+						throw new Error("Speech rewrite provider no longer matches the active session provider.");
+					}
 					const timeout = AbortSignal.timeout(REWRITE_TIMEOUT_MS);
 					completionSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-					return completeSimple(
+					const attempt = await completeSimple(
 						model,
 						{
 							systemPrompt: [systemPrompt],
@@ -123,6 +136,11 @@ export class SpeechEnhancer {
 							signal: completionSignal,
 						},
 					);
+					// Reported per attempt: a transient retry was billed too and would otherwise be replaced.
+					// An on-device model bills nothing and its failure may never have reached the worker,
+					// so only a rewrite it produced is journaled.
+					if (model.api !== "local-inference" || attempt.stopReason === "stop") journal?.(attempt, text);
+					return attempt;
 				},
 				{ signal, provider: model.provider },
 			);

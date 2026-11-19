@@ -53,7 +53,7 @@ describe("env:// session environment", () => {
 		expect(text(await read.execute("read", { path: "env://VISUAL" }))).toContain('"value": " nvim --wait "');
 		await write.execute("empty", { path: "env://VISUAL", content: "" });
 		expect(text(await read.execute("empty-read", { path: "env://VISUAL" }))).toContain('"value": ""');
-		await write.execute("unset", { path: "env://VISUAL/unset" });
+		await write.execute("unset", { path: "env://VISUAL/unset", content: "" });
 		const missing = text(await read.execute("missing", { path: "env://VISUAL" }));
 		expect(missing).toContain('"state": "unset"');
 		expect(missing).not.toContain('"value"');
@@ -75,13 +75,15 @@ describe("env:// session environment", () => {
 		const session = fixture({ API_KEY: "abc" });
 		const router = new InternalUrlRouter();
 		const resource = await router.resolve("env://API_KEY", { session });
-		expect(JSON.parse(resource.content)).toMatchObject({ state: "set", value: "<redacted>" });
+		expect(JSON.parse(String(resource.content))).toMatchObject({ state: "set", value: "<redacted>" });
 		const receipt = await router.write("env://API_KEY", "another-secret", { session });
 		if (!receipt) throw new Error("Missing environment write receipt.");
 		expect(text(receipt)).not.toContain("another-secret");
 		expect(session.environment?.get("API_KEY")).toBe("another-secret");
 		await router.write("env://DATABASE_URL", "postgres://user:abc@localhost/db", { session });
-		expect(JSON.parse((await router.resolve("env://DATABASE_URL", { session })).content).value).toBe("<redacted>");
+		expect(JSON.parse(String((await router.resolve("env://DATABASE_URL", { session })).content)).value).toBe(
+			"<redacted>",
+		);
 	});
 
 	it("requires exec approval and respects explicit deny", () => {
@@ -111,9 +113,9 @@ describe("env:// session environment", () => {
 		const context = { session: fixture() };
 		await expect(router.resolve("env://EDITOR")).rejects.toThrow("owning session");
 		await expect(router.write("env://EDITOR", "vim")).rejects.toThrow("owning session");
-		await expect(new WriteTool(context.session).execute("missing-content", { path: "env://EDITOR" })).rejects.toThrow(
-			"content is required",
-		);
+		await expect(
+			new WriteTool(context.session).execute("missing-content", { path: "env://EDITOR" } as never),
+		).rejects.toThrow("content is required");
 		await expect(router.write("env://EDITOR/unset", "unexpected", context)).rejects.toThrow("Omit content");
 		await expect(router.write("env://EDITOR", "a\0b", context)).rejects.toThrow("NUL");
 		for (const url of ["env://EDITOR/path", "env://EDITOR?save=true", "env://BAD-NAME", "env://EDITOR#fragment"]) {
@@ -145,7 +147,7 @@ describe("env:// session environment", () => {
 		session.settings = settings;
 		session.environment = undefined;
 		const resource = await new InternalUrlRouter().resolve("env://EDITOR", { session });
-		expect(JSON.parse(resource.content).name).toBe("EDITOR");
+		expect(JSON.parse(String(resource.content)).name).toBe("EDITOR");
 	});
 
 	it.skipIf(process.platform === "win32")(

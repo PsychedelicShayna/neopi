@@ -129,7 +129,6 @@ import asset121 from "../if-bench/prompts/cat-directive.md" with { type: "text" 
 import asset122 from "../if-bench/prompts/system.md" with { type: "text" };
 import asset123 from "../if-bench/prompts/turn.md" with { type: "text" };
 import asset124 from "./internal-urls/agent.md" with { type: "text" };
-import asset125 from "./internal-urls/artifact.md" with { type: "text" };
 import asset126 from "./internal-urls/cfg.md" with { type: "text" };
 import asset127 from "./internal-urls/compaction.md" with { type: "text" };
 import internalEnvironment from "./internal-urls/env.md" with { type: "text" };
@@ -349,7 +348,6 @@ import asset335 from "./tools/github.md" with { type: "text" };
 import asset336 from "./tools/glob.md" with { type: "text" };
 import asset337 from "./tools/goal.md" with { type: "text" };
 import asset338 from "./tools/grep.md" with { type: "text" };
-import asset339 from "./tools/ida.md" with { type: "text" };
 import asset340 from "./tools/image-attachment-describe-system.md" with { type: "text" };
 import asset341 from "./tools/image-attachment-describe.md" with { type: "text" };
 import asset342 from "./tools/image-gen.md" with { type: "text" };
@@ -2871,19 +2869,6 @@ export const promptAssets: readonly PromptAsset[] = [
 		consumerHints: [
 			"packages/coding-agent/src/prompts/internal-urls/agent.md",
 			"packages/coding-agent/src/internal-urls/agent-protocol.ts",
-		],
-	},
-	{
-		id: "internal-urls/artifact.md",
-		relPath: "internal-urls/artifact.md",
-		bundled: asset125,
-		scope: "feature:internal-urls/artifact",
-		group: "core",
-		keys: [],
-		fixture: {},
-		consumerHints: [
-			"packages/coding-agent/src/prompts/internal-urls/artifact.md",
-			"packages/coding-agent/src/internal-urls/artifact-protocol.ts",
 		],
 	},
 	{
@@ -7681,16 +7666,6 @@ export const promptAssets: readonly PromptAsset[] = [
 			scoutAvailable: true,
 		},
 		consumerHints: ["packages/coding-agent/src/prompts/tools/grep.md", "packages/coding-agent/src/tools/grep.ts"],
-	},
-	{
-		id: "tools/ida.md",
-		relPath: "tools/ida.md",
-		bundled: asset339,
-		scope: "tool:ida",
-		group: "core",
-		keys: [],
-		fixture: {},
-		consumerHints: ["packages/coding-agent/src/prompts/tools/ida.md", "packages/coding-agent/src/tools/ida.ts"],
 	},
 	{
 		id: "tools/image-attachment-describe-system.md",

@@ -29,6 +29,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { fixedAdvisorTools } from "./helpers/agent-session-setup";
 
 type Frame = Record<string, unknown>;
 
@@ -125,7 +126,7 @@ describe("RPC plan mode", () => {
 			modelRegistry,
 			toolRegistry: registry,
 			builtInToolNames: ["read", "write"],
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 			xdev,
 		});
 		const frames: Frame[] = [];

@@ -41,7 +41,6 @@ export class EnvProtocolHandler implements ProtocolHandler {
 			payload: "verbatim",
 			scope: "workspace",
 			tier: () => "exec",
-			contentOptional: url => target(url).unset,
 		},
 	};
 

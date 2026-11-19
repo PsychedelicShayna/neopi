@@ -1,19 +1,20 @@
 /**
- * Focused subagent views allow chat, viewer-scoped /btw, /export, /jobs and /usage,
+ * Focused subagent views allow chat, viewer-scoped /btw, /copy, /export, /jobs and /usage,
  * effort controls, and session-only /fast. Other slash-command mutations,
  * including /usage reset and /jobs kill, still require returning to main.
  *
  * Failure mode if this regresses: allowed commands silently do nothing (or steer
- * the agent), exports use the main transcript, or focused effort/fast controls
- * change the main session instead of the viewed agent.
+ * the agent), /copy or exports read the main transcript, or focused effort/fast
+ * controls change the main session instead of the viewed agent.
  */
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { setSubagentFast } from "@oh-my-pi/pi-coding-agent/registry/subagent-controls";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 
 function createSessionControls() {
 	let thinkingLevel: ThinkingLevel = ThinkingLevel.Low;
@@ -351,6 +352,25 @@ describe("focused subagent view slash commands", () => {
 		expect(mainControls.setFastMode).toHaveBeenCalledWith(true);
 		expect(childControls.setFastMode).not.toHaveBeenCalled();
 		expect(raw.showStatus).toHaveBeenCalledWith("Fast mode enabled.");
+	});
+
+	it("copies the focused agent's last code block with /copy code instead of steering the agent", async () => {
+		const copySpy = spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const codeMessage = (code: string) =>
+			({
+				role: "assistant",
+				content: [{ type: "text", text: `\`\`\`ts\n${code}\n\`\`\`` }],
+			}) as unknown as AgentMessage;
+		const focused = createFocusedContext();
+		Object.assign(focused.raw.session, { messages: [codeMessage("const main = 1;")] });
+		Object.assign(focused.raw.viewSession, { messages: [codeMessage("const worker = 1;")] });
+		const controller = new InputController(focused.ctx);
+		controller.setupEditorSubmitHandler();
+		focused.editor.setText("/copy code");
+		await focused.ctx.editor.onSubmit?.("/copy code");
+
+		expect(copySpy).toHaveBeenCalledWith("const worker = 1;");
+		expect(focused.prompt).not.toHaveBeenCalled();
 	});
 
 	it("answers a side file command from the focused view and releases its draft", async () => {
