@@ -151,12 +151,6 @@ const PREVIEW_EXCERPT_CHARS = 1200;
 const PREVIEW_SETTLE_MS = 60;
 const DAY_MS = 86_400_000;
 const PINNED_GROUP = { id: "pinned", label: "Pinned" };
-/** Search Input actions that delete backward: on a typed query they edit it even when bound to `app.session.delete`. */
-const SEARCH_BACKWARD_DELETE = [
-	"tui.editor.deleteCharBackward",
-	"tui.editor.deleteWordBackward",
-	"tui.editor.deleteToLineStart",
-] as const;
 
 /** Day group of a session's last modification, relative to local midnight today. */
 function sessionDayGroup(modified: Date, startOfToday: number): { id: string; label: string } {
@@ -634,8 +628,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	#lastFilterQuery = "";
 	/** Bumped whenever the visible session set may have changed (native memo key). */
 	#itemsVersion = 0;
-	/** Window start index retained across renders for edge-triggered scrolling. Unset until first render to seed centered. */
-	#scrollStartIndex: number | undefined = undefined;
 	/** Per-row line heights of the visible list for the ANSI window, reused until the set changes. */
 	#rowHeights: { items: readonly T[]; length: number; version: number; heights: readonly number[] } | undefined;
 	#itemsNative:
@@ -830,7 +822,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const queryChanged = query !== this.#lastFilterQuery;
 		this.#hadFilterQuery = tokens.length > 0;
 		this.#lastFilterQuery = query;
-		if (queryChanged) this.#scrollStartIndex = undefined;
 		if (tokens.length === 0) {
 			const items = this.#pinnedFirst(this.#allSessions);
 			const keepIndex = Math.min(this.#menu.selectedIndex, Math.max(0, items.length - 1));
@@ -1057,7 +1048,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (selected) this.onSelect?.(selected);
 	}
 
-	/** `app.session.delete`: ask the parent to confirm deleting the selected session. */
+	/** Delete in the list (or the picker's Delete action): ask the parent to confirm deleting the selected session. */
 	requestDelete(): void {
 		const selected = this.#menu.selectedItem;
 		if (selected) this.onDeleteRequest?.(selected);
@@ -2349,7 +2340,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	/**
 	 * `lg` cards sheet (`screen` for the standalone app): sessions grouped by
 	 * day (ranked flat while searching), the selected session's preview, the
-	 * delete confirm strip, and the actions of the keys Enter, `app.session.delete`,
+	 * delete confirm strip, and the actions of the keys Enter, Delete,
 	 * F2 (rename), the pin keys (Pin / Unpin, whichever applies to the selected
 	 * session), Tab (the scope toggle, labelled with the scope it switches
 	 * to) and Esc. Untitled unless the caller named it; the placeholder says the scope.
@@ -2484,7 +2475,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	/**
 	 * Picker pointer events run the keys' paths: a row click selects (arrows),
-	 * a second click or `Resume` resumes (Enter), `Delete` asks (`app.session.delete`),
+	 * a second click or `Resume` resumes (Enter), `Delete` asks (Delete),
 	 * `Rename` renames (F2), `Pin` / `Unpin` flips the pin, the tab or `All projects` toggles scope (Tab),
 	 * `Close` cancels (Esc), and the confirm strip answers the delete dialog (Yes / Esc).
 	 */

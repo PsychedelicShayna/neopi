@@ -140,12 +140,6 @@ describe("system prompt tool inventory", () => {
 		return text.slice(inventoryStart, inventoryEnd);
 	}
 
-	/** Tool names on the compact inventory line. */
-	function inventoryNames(text: string): string[] {
-		const [, names = ""] = inventoryFrom(text).trim().split("\n");
-		return names.split(", ");
-	}
-
 	async function renderMountedWebSearch(opts: {
 		nativeTools: boolean;
 		directDefinition: boolean;
@@ -441,7 +435,9 @@ describe("system prompt tool inventory", () => {
 			nativeTools: true,
 			inlineToolDescriptors: false,
 		});
-		expect(inventoryFrom(systemPrompt.join("\n\n")).trim()).toBe("# Tool Inventory\napply_patch, read");
+		expect(inventoryFrom(systemPrompt.join("\n\n")).trim()).toBe(
+			"# Tool Inventory\n- Edit: `apply_patch`\n- Read: `read`",
+		);
 	});
 
 	it("does not construct descriptor records for a compact native inventory", async () => {
@@ -488,7 +484,9 @@ describe("system prompt tool inventory", () => {
 			nativeTools: true,
 			inlineToolDescriptors: false,
 		});
-		expect(inventoryFrom(systemPrompt.join("\n\n")).trim()).toBe("# Tool Inventory\napply_patch, read");
+		expect(inventoryFrom(systemPrompt.join("\n\n")).trim()).toBe(
+			"# Tool Inventory\n- Edit: `apply_patch`\n- Read: `read`",
+		);
 		expect(Array.from(reads.values())).toEqual([
 			{ label: 1, wireName: 1, description: 0, parameters: 0, examples: 0 },
 			{ label: 1, wireName: 1, description: 0, parameters: 0, examples: 0 },
@@ -497,7 +495,8 @@ describe("system prompt tool inventory", () => {
 
 	it("renders a compact name list only when native tools are active and descriptors stay in schemas", async () => {
 		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
-		expect(inventoryNames(text)).toEqual(["read", "bash"]);
+		expect(text).toContain("- Read: `read`");
+		expect(text).toContain("- Bash: `bash`");
 		// No full per-tool sections in list mode.
 		expect(text).not.toContain("namespace functions");
 		expect(text).not.toContain("Reads files from disk.");
@@ -570,7 +569,7 @@ describe("system prompt tool inventory", () => {
 		expect(text).toContain("type read = (_: {");
 		expect(text).toContain("type bash = (_: {");
 		expect(text).toContain("Reads files from disk.");
-		expect(text).not.toContain("\nread, bash");
+		expect(text).not.toContain("- Read: `read`");
 		// The legacy `<tool>` wrapper is gone.
 		expect(text).not.toContain("<tool name=");
 	});
@@ -579,7 +578,7 @@ describe("system prompt tool inventory", () => {
 		const text = await render({ nativeTools: true, inlineToolDescriptors: true });
 		expect(text).toContain("type read = (_: {");
 		expect(text).toContain("Executes a shell command.");
-		expect(text).not.toContain("\nread, bash");
+		expect(text).not.toContain("- Read: `read`");
 	});
 
 	it.each([
@@ -588,8 +587,8 @@ describe("system prompt tool inventory", () => {
 	] as const)("omits xd-only tools from the %s inventory", async (_mode, nativeTools) => {
 		const { text, inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: false });
 
-		expect(inventory).toContain(nativeTools ? "\nread" : "type read = (_: {");
-		expect(inventory).not.toContain(nativeTools ? "web_search" : "type web_search = (");
+		expect(inventory).toContain(nativeTools ? "`read`" : "type read = (_: {");
+		expect(inventory).not.toContain(nativeTools ? "`web_search`" : "type web_search = (");
 		expect(text).toContain("# xd:// Tool Devices");
 		expect(text).toContain("Mounted web search documentation.");
 	});
@@ -600,7 +599,7 @@ describe("system prompt tool inventory", () => {
 	] as const)("keeps direct tools that share an xd device name in the %s inventory", async (_mode, nativeTools) => {
 		const { inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: true });
 
-		expect(inventory).toContain(nativeTools ? "\nread, web_search" : "type web_search = (");
+		expect(inventory).toContain(nativeTools ? "- Direct Web: `web_search`" : "type web_search = (");
 		if (!nativeTools) expect(inventory).toContain(DIRECT_WEB_SEARCH.description);
 	});
 
@@ -638,7 +637,13 @@ describe("system prompt tool inventory", () => {
 			rules: [],
 			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
 		});
-		expect(inventoryNames(systemPrompt.join("\n\n"))).toEqual([...DEFAULT_SYSTEM_PROMPT_TOOL_NAMES]);
+		const inventory = inventoryFrom(systemPrompt.join("\n\n"));
+		for (const toolName of DEFAULT_SYSTEM_PROMPT_TOOL_NAMES) {
+			expect(inventory).toContain(`- \`${toolName}\``);
+		}
+		expect(inventory).not.toContain("- `browser`");
+		expect(inventory).not.toContain("- `task`");
+		expect(inventory).not.toContain("- `eval`");
 	});
 
 	it("omits eval prompt guidance when every eval backend is disabled", async () => {
@@ -679,7 +684,9 @@ describe("system prompt tool inventory", () => {
 			skills: [],
 			tools: [SDK_TOOL],
 		});
-		expect(inventoryNames(systemPrompt.join("\n\n"))).toEqual(["sdk_custom"]);
+		const inventory = inventoryFrom(systemPrompt.join("\n\n"));
+		expect(inventory).toContain("- SDK Custom: `sdk_custom`");
+		expect(inventory).not.toContain("- `read`");
 	});
 
 	it("SDK wrapper omits skill guidance with an explicit empty tool list", async () => {

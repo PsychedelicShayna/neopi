@@ -704,9 +704,11 @@ export class ModelPickerComponent implements Component {
 			...(this.#configError ? { title: "Switch model", subtitle: [span(this.#configError, "error")] } : {}),
 			empty: mode === "role" ? `No quick roles in the ${cycleKey} cycle` : "No models available",
 			// No action bar: click/Enter pick, Esc and the head's esc keycap close; the
-			// Task-subagent toggle sits in the head.
-			actions:
-				this.#taskModeKey !== undefined && mode !== "role"
+			// Task-subagent toggle sits in the head. An open `/` search shows only its
+			// Enter confirm (menu navigation: confirming never picks a row).
+			actions: this.#browser.filterFocused
+				? [pickerAction("searchConfirm", "Search", "enter", { primary: true })]
+				: this.#taskModeKey !== undefined && mode !== "role"
 					? [
 							pickerAction("task", "Task / Main", this.#taskModeKey, {
 								on: mode === "task",

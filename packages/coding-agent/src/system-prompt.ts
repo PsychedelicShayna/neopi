@@ -1193,6 +1193,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		workspaceTree,
 		hasSkillUriAccess,
 		internalUrls: InternalUrlRouter.instance().describe(schemeHost),
+		internalUrlReference: InternalUrlRouter.instance().reference(),
 		skills: filteredSkills,
 		rules: rules ?? [],
 		alwaysApplyRules: injectedAlwaysApplyRules,

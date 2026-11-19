@@ -2031,7 +2031,8 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [chat, image], scoped: true });
 
 			enterRolesView(hub);
-			hub.handleInput("f"); // add a fallback for the first role (default)
+			hub.handleInput("f"); // add a fallback for the first role (default): model or pattern
+			hub.handleInput("\n"); // pick model
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("Adding fallback for");
 			expect(rendered).toContain("chat-model");
@@ -2043,10 +2044,12 @@ describe("ModelHub", () => {
 			const image = makeModel("test", "image-model", 128_000, undefined, "image");
 			const { hub } = createHub({ models: [chat, image], scoped: true });
 
+			hub.handleInput("/");
 			for (const ch of "chat-model") hub.handleInput(ch);
+			hub.handleInput("\n"); // confirm the search
 			hub.handleInput("\n"); // open the strip for chat-model
-			hub.handleInput(LEFT); // retry-fallback
-			hub.handleInput(LEFT); // fallbacks:test/*
+			hub.handleInput("G"); // retry-fallback
+			hub.handleInput(UP); // fallbacks:test/*
 			hub.handleInput("\n");
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("Adding fallback for test/*");

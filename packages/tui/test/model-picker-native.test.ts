@@ -745,7 +745,12 @@ test("quick role search previews its mode live but Enter only confirms without p
 	expect(p.order).toEqual([]);
 	expect(p.query).toBe("@default");
 	picker.handleInput("\t");
-	expect(props(picker.describe(withPicker)).title).toBe("Switch model");
+	// Tab inside the search neither cycles a scope nor flips the target.
+	expect(props(picker.describe(withPicker))).toMatchObject({
+		noun: "roles",
+		query: "@default",
+		placeholder: "Search, @ for roles…",
+	});
 	picker.handleInput("\r");
 	p = props(picker.describe(withPicker));
 	expect(p.noun).toBe("roles");
@@ -916,8 +921,8 @@ test("a provider scope lists only its models, Tab cycles scopes, and the active 
 	expect(rowIds(p).toSorted()).toEqual(["openai/gpt-5.6", "openai/gpt-5.6-mini"]);
 	expect(p.total).toBe(2);
 
-	// Search applies within the scope.
-	for (const char of "mini") picker.handleInput(char);
+	// Search applies within the scope (menu navigation: `/` opens the search).
+	for (const char of "/mini") picker.handleInput(char);
 	const searched = props(picker.describe(withPicker));
 	expect(rowIds(searched)).toEqual(["openai/gpt-5.6-mini"]);
 	// The row shows the model id alone (its provider in the tooltip); the hit marks the id.
@@ -927,6 +932,7 @@ test("a provider scope lists only its models, Tab cycles scopes, and the active 
 	expect(row?.title?.startsWith("openai")).toBe(true);
 	const [[from, to]] = searched.hits?.["openai/gpt-5.6-mini"] ?? [[0, 0]];
 	expect(label.slice(from, to)).toBe("mini");
+	picker.handleInput("\r"); // confirm the search before the Clear action
 	quickAct(picker, "clear");
 
 	quickAct(picker, "scope", "provider:openai");
@@ -941,6 +947,7 @@ test("a provider scope lists only its models, Tab cycles scopes, and the active 
 	expect(props(picker.describe(withPicker)).scope).toBe("provider:openai");
 
 	// `@` quick roles drop the scopes and come back to All.
+	picker.handleInput("/");
 	picker.handleInput("@");
 	expect(props(picker.describe(withPicker)).scopes).toBeUndefined();
 	picker.handleInput("\x7f");
@@ -1009,7 +1016,7 @@ test("the thinking slider is session-only: none in task mode or among quick role
 	quickAct(picker, "task");
 	expect(props(picker.describe(withPicker)).level).toBeNull();
 	quickAct(picker, "task");
-	picker.handleInput("@");
+	for (const key of "/@\r") picker.handleInput(key); // search `@`, confirmed: the quick roles list
 	const p = props(picker.describe(withPicker));
 	expect(p.level).toBeNull();
 	expect(p.scopes).toBeUndefined();
@@ -1073,11 +1080,12 @@ test("quick picker keeps literal search separate from navigation and restores it
 	picker.handleInput("\x1b"); // leave Normal search before invoking navigation actions
 	picker.handleNativeEvent({ type: "action", key: "", act: "clear", mods: [] });
 	const session = picker.navigationSnapshot();
-	picker.handleInput("\t");
-	expect(props(picker.describe(withPicker)).title).toBe("Switch task model");
+	// Tab is the provider scope; the task-mode key flips the target.
+	picker.handleInput("\x1bp");
+	expect(props(picker.describe(withPicker)).placeholder).toBe("Search Task models…");
 	const task = picker.navigationSnapshot();
 	picker.restoreNavigation(session);
-	expect(props(picker.describe(withPicker)).title).toBe("Switch model");
+	expect(props(picker.describe(withPicker)).placeholder).toBe("Search, @ for roles…");
 	picker.restoreNavigation(task);
 	expect(picker.navigationSnapshot()).toEqual(task);
 	picker.handleInput(" ");

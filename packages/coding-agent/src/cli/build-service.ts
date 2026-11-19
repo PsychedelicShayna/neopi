@@ -76,10 +76,13 @@ export interface BuildProduct {
 	fileName(host: BuildHost, version: string): string;
 }
 
-/** omp's standalone binary, named like its GitHub release asset: `omp-darwin-arm64`, `omp-windows-x64.exe`. */
+/**
+ * omp's standalone binary, named like its GitHub release asset: `omp-darwin-arm64`, `omp-windows-x64.exe`.
+ * The service publishes omp's own files, so the name is omp's, not this build's APP_NAME.
+ */
 export const OMP_BUILD: BuildProduct = {
 	id: "omp",
-	fileName: host => `${APP_NAME}-${host.asset}${host.windows ? ".exe" : ""}`,
+	fileName: host => `omp-${host.asset}${host.windows ? ".exe" : ""}`,
 };
 
 /** The build service target and release file platform for a platform, architecture, and libc. */

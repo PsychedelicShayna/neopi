@@ -687,21 +687,30 @@ describe("runSubprocess yield reminders", () => {
 	});
 
 	it("collects each stopped loop's output once across pauses and the run end", async () => {
+		// Every loop of the run reports the dispatching owner on agent_start.runOwners, as
+		// AgentSession does for continuations scheduled inside withRunOwner (#171).
+		let runOwner: string | undefined;
+		const loopStart = () => ({ type: "agent_start", runOwners: runOwner ? [runOwner] : [] }) as AgentSessionEvent;
 		const session = createMockSession(({ promptIndex, emit, state }) => {
 			if (promptIndex > 1) return;
 			const first = createAssistantStopMessage("First.");
 			const second = createAssistantStopMessage("Second.");
-			emit({ type: "agent_start" } as AgentSessionEvent);
+			emit(loopStart());
 			state.messages.push(first);
 			emit({ type: "message_end", message: first });
 			emit({ type: "agent_pause", messages: [first], yielded: false, awaiting: false });
-			emit({ type: "agent_start" } as AgentSessionEvent);
+			emit(loopStart());
 			state.messages.push(second);
 			emit({ type: "message_end", message: second });
 			emit({ type: "agent_pause", messages: [second], yielded: true, awaiting: true });
 			// Nothing woke the paused run: it ends with the paused loop's messages again.
 			emit({ type: "agent_end", messages: [second] });
 		});
+		const withRunOwner = session.withRunOwner.bind(session);
+		session.withRunOwner = <T>(owner: string | undefined, fn: () => T): T => {
+			runOwner ??= owner;
+			return withRunOwner(owner, fn);
+		};
 		mockCreateAgentSession(session);
 
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-pause-output", outputSchema: {} });

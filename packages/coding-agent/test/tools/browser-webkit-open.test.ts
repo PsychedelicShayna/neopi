@@ -9,6 +9,7 @@ import * as launch from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import * as registry from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
 import * as supervisor from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { createFakeHost, type FakeHost, type FakeHostMode, isProcessAlive } from "./webkit-fake-host";
 
 // Ambient browser env of the developer's shell (and of an omp running the suite) must not pick the backend.
@@ -107,7 +108,7 @@ describe("browser.open on omp's WebKit host", () => {
 		const host = await useFakeHost();
 		const sessionA = makeSession("session-a");
 		const text = await open(sessionA, "wk-a1");
-		expect(text).toStartWith('Opened tab "wk-a1" on omp\'s headless WebKit browser');
+		expect(text).toStartWith(`Opened tab "wk-a1" on ${PRODUCT_NAME}'s headless WebKit browser`);
 		// The host reports its views as not shown; that is not the Tern "not on screen" situation.
 		expect(text).not.toContain("Not on screen");
 		await open(sessionA, "wk-a2");
@@ -207,9 +208,9 @@ describe("browser.open on omp's WebKit host", () => {
 		process.env.TERN_PANE_SOCKET = `${host.dir}/no-tern.sock`;
 		process.env.TERN_PANE = "3";
 		const text = await open(makeSession("session-tern"), "wk-after-tern");
-		expect(text).toStartWith('Opened tab "wk-after-tern" on omp\'s headless WebKit browser');
+		expect(text).toStartWith(`Opened tab "wk-after-tern" on ${PRODUCT_NAME}'s headless WebKit browser`);
 		expect(text).toContain("Tern cannot show a browser here");
-		expect(text).toContain("opened omp's WebKit browser instead");
+		expect(text).toContain(`opened ${PRODUCT_NAME}'s WebKit browser instead`);
 	});
 
 	it("goes on to Chromium when neither Tern nor the WebKit host can open the tab", async () => {
@@ -222,7 +223,9 @@ describe("browser.open on omp's WebKit host", () => {
 		// Both notes say where the tab ended up, not where the first fallback meant to go.
 		expect(text).toMatch(/Tern cannot show a browser here \(.*\); opened Chromium instead/);
 		expect(text).toMatch(
-			/omp's WebKit browser could not take this open \(.*exited with code 3.*\); opened Chromium instead/,
+			new RegExp(
+				`${PRODUCT_NAME}'s WebKit browser could not take this open \\(.*exited with code 3.*\\); opened Chromium instead`,
+			),
 		);
 	});
 

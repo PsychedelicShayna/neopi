@@ -50,6 +50,7 @@ export const systemPromptContextFixture = {
 	},
 	hasSkillUriAccess: true,
 	internalUrls: ["skill://<name>: installed skills"],
+	internalUrlReference: ["proc://<id>/streams lists a bash job's pipes."],
 	skills: [
 		{
 			name: "review",

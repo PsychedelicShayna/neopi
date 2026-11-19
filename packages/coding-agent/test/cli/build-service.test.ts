@@ -9,7 +9,7 @@ import {
 	parseBuildAnswer,
 	resolveBuildHost,
 } from "@oh-my-pi/pi-coding-agent/cli/build-service";
-import { TempDir, VERSION } from "@oh-my-pi/pi-utils";
+import { APP_NAME, TempDir, VERSION } from "@oh-my-pi/pi-utils";
 
 const fileName = "omp-darwin-arm64";
 const host: BuildHost = { target: "macos-arm64", asset: "darwin-arm64", windows: false };
@@ -138,7 +138,7 @@ describe("fetchBuild", () => {
 		expect(requests[0].url).toBe(
 			"https://build.test/api/products/omp/latest/macos-arm64?channel=canary&from_version=18.8.8",
 		);
-		expect(requests[0].userAgent).toBe(`omp/${VERSION}`);
+		expect(requests[0].userAgent).toBe(`${APP_NAME}/${VERSION}`);
 		expect(requests[0].signal).toBeInstanceOf(AbortSignal);
 		expect(build.patch?.fromVersion).toBe("18.8.8");
 	});

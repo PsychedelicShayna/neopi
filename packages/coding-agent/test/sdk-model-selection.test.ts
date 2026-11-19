@@ -2009,13 +2009,17 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			sessionManager.appendMessage({ role: "user", content: "continue", timestamp: Date.now() });
 			return sessionManager;
 		};
-		// Bare resume, and a subagent revival that re-supplies its role selector.
+		// Bare resume, and a subagent revival that re-supplies its role selector together with the
+		// persisted thinking options, as the fork's executor and persisted-revive paths do.
 		for (const modelPattern of [undefined, "anthropic/claude-sonnet-4-5:high"]) {
+			const sessionManager = transcript();
 			const { session } = await createAgentSession({
 				...buildResumeOptions(),
-				sessionManager: transcript(),
+				sessionManager,
 				settings: Settings.isolated({ modelRoles: { default: "anthropic/claude-sonnet-4-5:high" } }),
-				...(modelPattern ? { modelPattern } : {}),
+				...(modelPattern
+					? { modelPattern, ...executorModule.restoredSubagentThinkingOptions(sessionManager) }
+					: {}),
 			});
 			try {
 				expect(`${session.model?.provider}/${session.model?.id}`).toBe("anthropic/claude-sonnet-4-5");

@@ -256,6 +256,8 @@ describe("live session offline mode", () => {
 		const session = {
 			modelRegistry: { authStorage: noCodexLogin },
 			model: { provider: "anthropic" },
+			messages: [],
+			sessionManager: { getCwd: () => process.cwd() },
 			settings,
 			sessionId: "s1",
 			subscribe: () => () => {},

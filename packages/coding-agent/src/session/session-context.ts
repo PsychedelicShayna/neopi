@@ -355,7 +355,14 @@ export function buildSessionContext(
 	// `:level` suffix) must not outlive it either. Snapshot the level in effect
 	// before the first hop; it wins unless a later change (user pick, restore,
 	// non-fallback model switch) superseded the hop's own entry.
-	let preFallbackThinking: { thinkingLevel: string | undefined; configured: string | undefined } | undefined;
+	let preFallbackThinking:
+		| {
+				thinkingLevel: string | undefined;
+				configured: string | undefined;
+				effortOrigin: EffortOrigin | undefined;
+				autoSelection: EffortSelection | undefined;
+		  }
+		| undefined;
 	let thinkingFromFallbackHop = false;
 	let hasThinkingEntry = false;
 	let previous: SessionEntry | undefined;
@@ -372,7 +379,7 @@ export function buildSessionContext(
 			if (entry.resolvedModelIsFallback !== true) {
 				preFallbackThinking = undefined;
 			} else if (!preFallbackThinking && hasThinkingEntry) {
-				preFallbackThinking = { thinkingLevel, configured: configuredThinkingLevel };
+				preFallbackThinking = { thinkingLevel, configured: configuredThinkingLevel, effortOrigin, autoSelection };
 			}
 			// New format: { model: "provider/id", role?: string }
 			if (entry.model) {
@@ -410,6 +417,8 @@ export function buildSessionContext(
 	if (preFallbackThinking && thinkingFromFallbackHop) {
 		thinkingLevel = preFallbackThinking.thinkingLevel;
 		configuredThinkingLevel = preFallbackThinking.configured;
+		effortOrigin = preFallbackThinking.effortOrigin;
+		autoSelection = preFallbackThinking.autoSelection;
 	}
 
 	if (options?.model && !options.transcript) {

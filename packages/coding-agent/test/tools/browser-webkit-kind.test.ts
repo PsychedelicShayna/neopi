@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resolveBrowserKind, resolveWebKitKind, type WebKitKind } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 
 let root: string;
 /** An engine directory holding an executable host. */
@@ -151,10 +152,10 @@ describe("resolveBrowserKind with omp's WebKit host", () => {
 
 		// Required and unavailable is an error, never a quiet Chromium.
 		expect(() => resolveBrowserKind(required, session(), { PI_BROWSER_WEBKIT_PATH: emptyDir })).toThrow(
-			/app: "webkit" requires omp's WebKit engine/,
+			`app: "webkit" requires ${PRODUCT_NAME}'s WebKit engine`,
 		);
 		expect(() => resolveBrowserKind(required, session(), { ...env, PI_BROWSER_WEBKIT: "0" })).toThrow(
-			/app: "webkit" requires omp's WebKit engine/,
+			`app: "webkit" requires ${PRODUCT_NAME}'s WebKit engine`,
 		);
 		// Nothing an open asks for sends a required open elsewhere: a window it cannot show fails when it is shown.
 		expect(resolveBrowserKind({ ...required, headed: true }, session(), env).kind).toBe("webkit");

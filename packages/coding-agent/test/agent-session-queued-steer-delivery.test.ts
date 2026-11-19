@@ -436,7 +436,8 @@ describe("AgentSession queued steer delivery", () => {
 			expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("new spoken request");
 		} finally {
 			releaseOld.resolve();
-			await withTimeout(session.waitForIdle(), 2_000, "Queued request did not finish");
+			// The final answer relays on the run's terminal agent_end, which follows idle.
+			await withTimeout(session.waitForRunEnd(), 2_000, "Queued request did not finish");
 			await controller.stop();
 			unsubscribe();
 		}

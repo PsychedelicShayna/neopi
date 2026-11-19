@@ -4710,17 +4710,21 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
 	});
 }
 
-/** Persisted control edits outrank the spawn selector's effort suffix on every revival. */
+/**
+ * Persisted control edits outrank the spawn selector's effort suffix on every revival. A level a
+ * retry-fallback hop applied ends with that hop, as `buildSessionContext` reports it.
+ */
 export function restoredSubagentThinkingOptions(
 	manager: SessionManager,
 ): Pick<CreateAgentSessionOptions, "thinkingLevel" | "thinkingOrigin" | "autoSelection"> {
-	const entry = manager.getBranch().findLast(entry => entry.type === "thinking_level_change");
-	if (!entry || entry.type !== "thinking_level_change") return {};
+	if (!manager.getBranch().some(entry => entry.type === "thinking_level_change")) return {};
+	const context = manager.buildSessionContext();
 	return {
 		thinkingLevel:
-			parseConfiguredThinkingLevel(entry.configured) ?? parseConfiguredThinkingLevel(entry.thinkingLevel ?? "off"),
-		thinkingOrigin: entry.effortOrigin,
-		autoSelection: entry.autoSelection,
+			parseConfiguredThinkingLevel(context.configuredThinkingLevel) ??
+			parseConfiguredThinkingLevel(context.thinkingLevel ?? "off"),
+		thinkingOrigin: context.effortOrigin,
+		autoSelection: context.autoSelection,
 	};
 }
 
