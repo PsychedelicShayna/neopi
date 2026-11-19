@@ -461,6 +461,10 @@ describe("ExtensionUiController form dialog", () => {
 		harness.handleInput("\x1b");
 		expect(harness.getFocused()).toBe(harness.editor);
 		expect(harness.askContainer.children).toEqual([dialog]);
+		// The form's draft guard leaves the composer's own focus alone while the composer holds the keys.
+		dialog.render(80);
+		expect(harness.editor.focused).toBe(true);
+		expect(harness.controller.askHoldsKeys()).toBe(false);
 
 		dialog.handleNativeEvent({ type: "action", key: "actions/cancel", act: "cancel", mods: [] });
 		expect(await pending).toBeUndefined();
@@ -534,7 +538,7 @@ describe("ExtensionUiController form dialog", () => {
 			expect(harness.controller.composerAsk()).toBeUndefined();
 		});
 
-		it("takes the keys even over a draft the user is typing; the draft stays", async () => {
+		it("takes the keys over a draft the user is typing; draft typing reaches the composer until ↑/↓", async () => {
 			const harness = makeHarness();
 			harness.editor.setText("half typed");
 			const pending = harness.controller.showFormDialog(html);
@@ -542,9 +546,75 @@ describe("ExtensionUiController form dialog", () => {
 			expect(dialog).toBeInstanceOf(HtmlFormDialog);
 			expect(harness.editorContainer.children).toEqual([harness.editor]);
 			expect(harness.controller.composerAsk()).toBe("skip");
+			// The composer shows its cursor while its draft owns typing, so it does not draw faint.
+			dialog!.render(80);
+			expect(harness.editor.focused).toBe(true);
+			expect(harness.controller.askHoldsKeys()).toBe(false);
+			expect(stripVTControlCharacters(dialog!.render(80).join("\n"))).toContain(
+				"Finish or clear the current prompt to answer",
+			);
+			// Space and `n` would toggle and open a note on the form; with a draft they are text.
+			harness.handleInput("!");
+			harness.handleInput(" ");
+			harness.handleInput("n");
+			expect(harness.editor.getText()).toBe("half typed! n");
+
+			// ↓ hands the keyboard to the form; the draft stays parked beneath it.
+			harness.handleInput("\x1b[B");
+			dialog!.render(80);
+			expect(harness.editor.focused).toBe(false);
+			expect(harness.controller.askHoldsKeys()).toBe(true);
+			harness.handleInput("\x1b[B");
+			harness.handleInput(" ");
+			harness.handleInput("\t");
+			harness.handleInput("\r");
+			expect(await pending).toEqual({ data: { db: "postgres" } });
+			expect(harness.editor.getText()).toBe("half typed! n");
+		});
+
+		it("passes printable text an option row has no use for to the composer, which then owns typing", async () => {
+			const harness = makeHarness();
+			const pending = harness.controller.showFormDialog(html);
+			const dialog = harness.getFocused();
+			expect(dialog).toBeInstanceOf(HtmlFormDialog);
+			for (const key of "hello now") harness.handleInput(key);
+			expect(harness.editor.getText()).toBe("hello now");
+			expect(harness.getFocused()).toBe(dialog);
+			expect(harness.controller.composerAsk()).toBe("skip");
+
+			// With the draft sent (cleared), the form answers again.
+			harness.editor.setText("");
+			harness.handleInput("\r");
+			harness.handleInput("\r");
+			expect(await pending).toEqual({ data: { db: "sqlite" } });
+		});
+
+		it("passes typing to the composer while the form is hidden; Enter on an empty composer shows it", async () => {
+			const harness = makeHarness();
+			const pending = harness.controller.showFormDialog(html);
+			const dialog = harness.getFocused();
+			if (!(dialog instanceof HtmlFormDialog)) throw new Error("Expected the form dialog");
+			harness.handleInput("\x1bh"); // Alt+H hides
+			expect(stripVTControlCharacters(dialog.render(120).join("\n"))).toContain("type to write a message");
+			harness.handleInput("h");
+			harness.handleInput("i");
+			expect(harness.editor.getText()).toBe("hi");
+
+			harness.editor.setText("");
+			harness.handleInput("\r");
+			expect(stripVTControlCharacters(dialog.render(120).join("\n"))).toContain("SQLite");
 			act(dialog, "cancel");
 			expect(await pending).toBeUndefined();
-			expect(harness.editor.getText()).toBe("half typed");
+		});
+
+		it("protects a draft that lands after the form opened (dictation)", async () => {
+			const harness = makeHarness();
+			const pending = harness.controller.showFormDialog(html);
+			harness.editor.setText("dictated words");
+			harness.handleInput("!");
+			expect(harness.editor.getText()).toBe("dictated words!");
+			act(harness.getFocused(), "cancel");
+			expect(await pending).toBeUndefined();
 		});
 
 		it("reports what was answered when a message closes the form", async () => {

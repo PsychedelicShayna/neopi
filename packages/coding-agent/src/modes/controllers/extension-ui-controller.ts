@@ -1038,6 +1038,7 @@ export class ExtensionUiController {
 					settle({ data, ...(notes.length ? { notes } : {}), timedOut: true });
 				},
 				onSubmit: (data, notes) => settle({ data, ...(notes.length ? { notes } : {}) }),
+				inputGuard: this.#draftInputGuard(),
 				onCancel: () => settle(undefined),
 				acceptImages: dialogOptions?.acceptImages === true,
 				onPasteImage: () => this.ctx.handleImagePaste(),
