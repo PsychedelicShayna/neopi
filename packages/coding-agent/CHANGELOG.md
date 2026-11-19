@@ -164,6 +164,10 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Typing is never swallowed while an ask or HTML form waits above the composer: the ask takes the keys even over a draft, draft typing (including a dictated draft that lands later) reaches the composer until ↑/↓ or a click takes the questions, and printable text an HTML form's option row, Submit or hidden row cannot use starts the composer's draft.
+- A session with a background job, even one started while idle, no longer reports settled (`isSettled`, `prompt_result.sessionSettled`, `session_settled`); recap and idle compaction wait for that work as before the v19.0.0 sync.
+- Auto effort under the default replacement policy settles on its starting level, `off` included, so IRC wakes and other runs without a user prompt stop showing Auto as pending.
+- A long TODO HUD or side-panel row wraps beneath its own text, with the spine and task rail running on, instead of continuing at the panel's left edge.
 - ACP clients now see the `--models` scope in their model picker, like the TUI's scoped `/models` list, instead of every model from every configured provider, which clients that cap the list (T3 Code keeps 256) truncated.
 - RPC clients can set and clear transcript entry labels with `set_label` instead of receiving an unknown-command error.
 - `cfg://` typo suggestions recognize dotted setting paths, and saving a session setting no longer warns about the session override that the save itself clears.
@@ -290,6 +294,7 @@
 
 ### Changed
 
+- `browser.screenshotMaxWidth` and `browser.screenshotMaxHeight` are opt-in: unset or 0 (the default) leaves browser screenshots at the model-aware size and diff captures at 1024px; a positive value still caps them.
 - `/live` now requests `gpt-live-1.1-codex` by default and Settings → Providers → Services → Live Model switches between GPT Live 1.1 and GPT Live 1; the setting and `/live model` say the model is requested, because the service does not report which model answers ([#803](https://github.com/PsychedelicShayna/neopi/issues/803)).
 - Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.
 - HTML exports include the shared transcript and trace views with the current Markdown parser, while remaining self-contained and usable offline.
