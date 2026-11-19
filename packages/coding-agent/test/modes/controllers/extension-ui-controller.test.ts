@@ -534,21 +534,17 @@ describe("ExtensionUiController form dialog", () => {
 			expect(harness.controller.composerAsk()).toBeUndefined();
 		});
 
-		it("leaves the keys with a draft the user is typing when the form lands; Shift+Tab's way takes them", async () => {
+		it("takes the keys even over a draft the user is typing; the draft stays", async () => {
 			const harness = makeHarness();
 			harness.editor.setText("half typed");
 			const pending = harness.controller.showFormDialog(html);
-			expect(harness.getFocused()).toBe(harness.editor);
+			const dialog = harness.getFocused();
+			expect(dialog).toBeInstanceOf(HtmlFormDialog);
 			expect(harness.editorContainer.children).toEqual([harness.editor]);
 			expect(harness.controller.composerAsk()).toBe("skip");
-			expect(harness.controller.askHoldsKeys()).toBe(false);
-			harness.handleInput("!");
-			expect(harness.editor.getText()).toBe("half typed!");
-			expect(harness.controller.focusAsk()).toBe(true);
-			expect(harness.controller.askHoldsKeys()).toBe(true);
-			act(harness.getFocused(), "cancel");
+			act(dialog, "cancel");
 			expect(await pending).toBeUndefined();
-			expect(harness.editor.getText()).toBe("half typed!");
+			expect(harness.editor.getText()).toBe("half typed");
 		});
 
 		it("reports what was answered when a message closes the form", async () => {
@@ -586,6 +582,26 @@ describe("ExtensionUiController editor UI", () => {
 
 		expect(harness.editor.getText()).toBe("hello");
 		expect(harness.requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes the keys even over a draft, passing draft typing through to the composer", async () => {
+		const harness = makeHarness();
+		harness.editor.setText("half typed");
+		const questions: ExtensionAskDialogQuestion[] = [
+			{ id: "confirm", question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] },
+		];
+		const pending = harness.controller.showAskDialog(questions);
+		const ask = harness.askContainer.children[0];
+		expect(ask).toBeInstanceOf(AskDialogComponent);
+		expect(harness.getFocused()).toBe(ask);
+		harness.handleInput("!");
+		expect(harness.editor.getText()).toBe("half typed!");
+		ask?.render?.(80);
+		expect(harness.editor.focused).toBe(true);
+		harness.handleInput("\x1b");
+		expect(await pending).toBeUndefined();
+		expect(harness.getFocused()).toBe(harness.editor);
+		expect(harness.editor.getText()).toBe("half typed!");
 	});
 
 	it("keeps a populated prompt visible and routes input to it until the draft is cleared", async () => {
