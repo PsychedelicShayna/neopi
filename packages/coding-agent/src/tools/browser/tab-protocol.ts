@@ -59,7 +59,7 @@ export interface ScreenshotLimits {
 export interface SessionSnapshot {
 	cwd: string;
 	browserScreenshotDir?: string;
-	/** Internal tab reuse has no tool-session settings; captures use the 1024px default when absent. */
+	/** Opt-in operator caps (`browser.screenshotMaxWidth`/`MaxHeight`); unset or 0 leaves upstream's sizing. */
 	browserScreenshotMaxWidth?: number;
 	browserScreenshotMaxHeight?: number;
 	/** Force non-WebP screenshot encoding (e.g. for Ollama). Unset honors `OMP_NO_WEBP`. */
