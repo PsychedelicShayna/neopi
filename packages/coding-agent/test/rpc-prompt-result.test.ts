@@ -19,6 +19,8 @@ function createHarness() {
 		hasAdmittedSubmission: false,
 		queuedMessageCount: 0,
 		isRunActive: false,
+		hasPendingAsyncWork: () => false,
+		settleAsyncWork: async () => {},
 	};
 	const results = new RpcPromptResults(session, frame => frames.push(frame));
 	return { frames, session, results };
@@ -232,10 +234,31 @@ describe("RpcPromptResults", () => {
 		]);
 	});
 
+	test("reports the session unsettled while a background job can still wake it", async () => {
+		const { frames, session, results } = createHarness();
+		const ticket = results.begin("req_bg");
+		results.observe(agentStart);
+		// The run is over, but a job (started even while idle) will deliver and wake the session.
+		session.hasPendingAsyncWork = () => true;
+		results.observe(agentEnd([assistant({ stopReason: "stop" })]));
+		results.settle(ticket);
+		await flushFrames();
+
+		expect(frames).toEqual([
+			{ type: "prompt_result", id: "req_bg", agentInvoked: true, status: "completed", sessionSettled: false },
+		]);
+	});
+
 	test("writes prompt_result after output queued synchronously with the settle", async () => {
 		const frames: object[] = [];
 		const results = new RpcPromptResults(
-			{ isRunActive: false, isStreaming: false, hasAdmittedSubmission: false, queuedMessageCount: 0 },
+			{
+				isRunActive: false,
+				isStreaming: false,
+				hasAdmittedSubmission: false,
+				queuedMessageCount: 0,
+				hasPendingAsyncWork: () => false,
+			},
 			frame => frames.push(frame),
 		);
 		results.completeLocal(results.begin("req_6"));
@@ -255,6 +278,7 @@ describe("RpcPromptResults", () => {
 			hasAdmittedSubmission: false,
 			queuedMessageCount: 0,
 			isRunActive: false,
+			hasPendingAsyncWork: () => false,
 		};
 		const gate: { refusal?: CostCapRefusal } = {};
 		const results = new RpcPromptResults(session, frame => frames.push(frame), undefined, {

@@ -6,14 +6,25 @@ const agentStart: AgentSessionEvent = { type: "agent_start" };
 const yieldedPause: AgentSessionEvent = { type: "agent_pause", messages: [], yielded: true, awaiting: true };
 const agentEnd: AgentSessionEvent = { type: "agent_end", messages: [] };
 
-/** Session whose run and live-loop state the test drives. */
+/** Session whose run, live-loop and background-work state the test drives. */
 function createSession() {
-	return {
+	const backgroundDone = Promise.withResolvers<void>();
+	const session = {
 		isRunActive: false,
 		isStreaming: false,
 		hasAdmittedSubmission: false,
 		queuedMessageCount: 0,
+		pendingAsyncWork: false,
+		settleCalls: 0,
+		hasPendingAsyncWork() {
+			return this.pendingAsyncWork;
+		},
+		async settleAsyncWork() {
+			this.settleCalls++;
+			await backgroundDone.promise;
+		},
 	};
+	return { session, finishBackgroundWork: backgroundDone.resolve };
 }
 
 async function settleLoop(): Promise<void> {
@@ -26,7 +37,7 @@ async function settleLoop(): Promise<void> {
 
 describe("RpcSessionSettleWatcher", () => {
 	test("a paused run settles only at its agent_end", async () => {
-		const session = createSession();
+		const { session } = createSession();
 		const frames: object[] = [];
 		const watcher = new RpcSessionSettleWatcher(session, frame => frames.push(frame));
 
@@ -52,7 +63,7 @@ describe("RpcSessionSettleWatcher", () => {
 	});
 
 	test("does not settle while another run is live, then settles on that run's end once", async () => {
-		const session = createSession();
+		const { session } = createSession();
 		const frames: object[] = [];
 		const watcher = new RpcSessionSettleWatcher(session, frame => frames.push(frame));
 
@@ -71,6 +82,27 @@ describe("RpcSessionSettleWatcher", () => {
 		await settleLoop();
 
 		// One stretch of activity settles once, even with a repeated end.
+		expect(frames).toEqual([{ type: "session_settled" }]);
+	});
+
+	test("a run that ends with background work pending settles only after that work drains", async () => {
+		const { session, finishBackgroundWork } = createSession();
+		const frames: object[] = [];
+		const watcher = new RpcSessionSettleWatcher(session, frame => frames.push(frame));
+
+		// The run ends, but a job (started even while idle) can still wake the session.
+		session.pendingAsyncWork = true;
+		watcher.observe(agentStart);
+		watcher.observe(agentEnd);
+		await settleLoop();
+		expect(frames).toEqual([]);
+		expect(session.settleCalls).toBe(1);
+
+		// The job delivers and nothing remains.
+		session.pendingAsyncWork = false;
+		finishBackgroundWork();
+		await settleLoop();
+
 		expect(frames).toEqual([{ type: "session_settled" }]);
 	});
 });
