@@ -22,9 +22,10 @@
  * validates and submits or opens the first question to fix, PgUp/PgDn (←/→ on
  * choices) open the previous or next question. Esc (outside an open dropdown or
  * note) and Tab on Submit hand the keys to the composer under the form
- * (`releaseKeys`), where Esc interrupts the turn and so cancels the ask. In rows,
+ * (`releaseKeys`), where Esc keeps the composer's meaning and never cancels the ask;
+ * `app.ask.cancel` cancels it from either. In rows,
  * ↑ on a question's first row first scrolls up to its head when that is cut off,
- * `app.ask.hide` collapses the form to one row, and the host draws
+ * `app.ask.hide` collapses the form to one row (handing the keys to the composer), and the host draws
  * {@link HtmlFormDialog.keyHints} under the panel. Notes use `n` on
  * option rows and Alt+n on dropdowns, without selecting the option.
  * With a `timeout`, inactivity submits the current values through `onTimeout`.
@@ -660,9 +661,12 @@ export class HtmlFormDialog implements Component, Focusable {
 	handleInput(data: string): void {
 		this.#resetCountdown();
 		this.#changed();
+		if (getKeybindings().matches(data, "app.ask.cancel")) {
+			this.#cancel();
+			return;
+		}
 		if (getKeybindings().matches(data, "app.ask.hide")) {
-			// Natively the form sits in the transcript, hiding nothing: there is nothing to hide it from.
-			if (!isNativeRendering()) this.#setHidden(!this.#hidden);
+			this.setHidden(!this.#hidden);
 			return;
 		}
 		if (this.#noteEditor && !this.#hidden) {
@@ -673,7 +677,7 @@ export class HtmlFormDialog implements Component, Focusable {
 			this.#dropdownInput(this.#open, data);
 			return;
 		}
-		// Esc hands the keys to the composer, where Esc interrupts the turn and so cancels the ask.
+		// Esc hands the keys to the composer, where it keeps the composer's meaning.
 		if (matchesSelectCancel(data)) {
 			this.#options.releaseKeys?.();
 			return;
@@ -688,7 +692,7 @@ export class HtmlFormDialog implements Component, Focusable {
 		}
 		if (this.#hidden) {
 			// Hidden, the form waits and the composer takes the typing; Enter on an empty composer shows it.
-			if (getKeybindings().matches(data, "tui.select.confirm")) this.#setHidden(false);
+			if (getKeybindings().matches(data, "tui.select.confirm")) this.setHidden(false);
 			else guard?.handleInput(data);
 			return;
 		}
@@ -1561,13 +1565,35 @@ export class HtmlFormDialog implements Component, Focusable {
 		else this.#choose(field, option);
 	}
 
-	#setHidden(hidden: boolean): void {
-		if (this.#hidden === hidden) return;
+	/** Whether the rows' form is collapsed to one row (`app.ask.hide`) while it stays pending. */
+	get hidden(): boolean {
+		return this.#hidden;
+	}
+
+	/**
+	 * Collapses the form to one row, handing the keys to the composer, or shows it again. Natively the form
+	 * sits in the transcript, hiding nothing: there is nothing to hide it from.
+	 */
+	setHidden(hidden: boolean): void {
+		if (this.#hidden === hidden || isNativeRendering()) return;
 		this.#hidden = hidden;
 		// A hidden form takes no new paste (see acceptsImages), but one already reserved still lands
 		// in its note, and an Enter held behind it still saves.
 		this.#open = undefined;
 		this.#syncControlFocus();
+		this.#changed();
+		if (hidden) this.#options.releaseKeys?.();
+	}
+
+	/**
+	 * The host brought the keys to the form because the user asked for it (↑ from the composer, Shift+Tab,
+	 * `app.ask.hide`, a click): it shows again, and a composer draft no longer holds typing.
+	 */
+	engage(): void {
+		this.#guardReleased = true;
+		this.setHidden(false);
+		this.#syncControlFocus();
+		this.#changed();
 	}
 
 	/** The question in focus (else the first) for the hidden row, with how many more there are. */
@@ -1579,18 +1605,14 @@ export class HtmlFormDialog implements Component, Focusable {
 		return more > 0 ? `${question} (+${more} more)` : question;
 	}
 
-	/** Hidden: one row in the composer's place, the title, the question clipped to fit, and how to bring it back. */
+	/**
+	 * Hidden: one row in the composer's place, the title, the question clipped to fit, and how to bring it back.
+	 * The composer holds the keys meanwhile, so the hints name the keys that work from there.
+	 */
 	#renderHidden(width: number): readonly string[] {
-		const hideKey = editorKey("app.ask.hide");
-		const enter = formatKeyHint("enter");
-		const guardHint = this.#guardHint();
-		// While a draft owns typing, Enter goes to the draft, so only the hide key restores.
-		const show = guardHint ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
-		const hints: string[] = [];
-		if (guardHint) hints.push(guardHint);
-		else if (this.#options.inputGuard) hints.push("type to write a message");
-		if (show) hints.push(`${show} show`);
-		hints.push(`${editorKey("tui.select.cancel")} composer`);
+		const showKey = editorKey("app.ask.hide");
+		const cancelKey = editorKey("app.ask.cancel");
+		const hints = [showKey && `${showKey} show`, cancelKey && `${cancelKey} cancel`].filter(Boolean);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
 		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
 		const room = Math.max(1, width - visibleWidth(label) - visibleWidth(hint) - 1);

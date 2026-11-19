@@ -265,6 +265,13 @@ export interface ExtensionUIDialogOptions {
 	 */
 	onAbandon?: (given: ExtensionFormDialogResult) => void;
 	/**
+	 * Ask dialogs: set by a caller whose dialog outlives a message the user sends (the `ask` tool), so the
+	 * composer says sending keeps the questions open rather than skipping them. Aborts once the caller
+	 * stops waiting on the answer: the dialog stays open and still settles its promise when answered or
+	 * cancelled, but no longer holds the run, its blocked status, or the dialogs queued behind it.
+	 */
+	detach?: AbortSignal;
+	/**
 	 * Host hint to mask entered characters in `input` dialogs.
 	 * Enforced by the interactive TUI (masked as bullets), forwarded on RPC `input`
 	 * requests for hosts that honor it, and rejected (`undefined`) in ACP mode where

@@ -8,7 +8,15 @@ import type {
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { ToolConversationState } from "./tool-state";
-import type { FetchImpl, ImageContent, Message, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
+import type {
+	FetchImpl,
+	ImageContent,
+	Message,
+	Model,
+	ServiceTierByFamily,
+	TextContent,
+	ToolChoice,
+} from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManagerApi } from "../async/job-manager";
 import type { NotifyBatch } from "../async/notify";
@@ -600,6 +608,11 @@ export interface ToolSession {
 	buildToolChoice?(toolName: string): ToolChoice | undefined;
 	/** Steer a hidden custom message into the conversation (e.g. a preview reminder). */
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
+	/**
+	 * Deliver content as the user's own message: it steers a running turn and starts one when idle. The
+	 * `ask` tool sends the answers to questions the user kept open past a message they sent.
+	 */
+	sendUserMessage?(content: (TextContent | ImageContent)[]): Promise<void>;
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by
 	 *  the `xd://resolve` and `xd://reject` dispatch to reach the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;

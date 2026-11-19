@@ -235,9 +235,10 @@ describe("dialogs under a native surface", () => {
 		]);
 	});
 
-	it("ask: hidden while a draft owns input, Enter stays with the draft and only the hide key restores", () => {
+	it("ask: hidden, the composer holds the keys; Enter shows it only once no draft owns typing", () => {
 		let draft = "half-typed";
 		const routed: string[] = [];
+		const released = vi.fn();
 		const dialog = new AskDialogComponent(
 			QUESTIONS,
 			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: async () => undefined },
@@ -247,20 +248,23 @@ describe("dialogs under a native surface", () => {
 					handleInput: key => routed.push(key),
 					hint: "typing edits your prompt",
 				},
+				releaseKeys: released,
 			},
 		);
 		const line = () => stripVTControlCharacters(dialog.render(200).join("\n"));
 
 		dialog.handleInput("\x1bh");
+		// Hiding hands the keys to the composer (#818).
+		expect(released).toHaveBeenCalledTimes(1);
 		// A Submit delivered after Hide is stale: it must not hand input to the question.
 		dialog.handleNativeEvent({ type: "action", key: "x", act: "submit", mods: [] });
-		expect(line()).not.toContain("/⏎ show");
+		expect(line()).toContain("Alt+H show");
+		expect(line()).toContain("Alt+X cancel");
 		dialog.handleInput(ENTER);
 		expect(routed).toEqual([ENTER]);
 		expect(dialog.render(200)).toHaveLength(1);
 
 		draft = "";
-		expect(line()).toContain("/⏎ show");
 		dialog.handleInput("\x1bh");
 		expect(dialog.render(200).length).toBeGreaterThan(1);
 	});

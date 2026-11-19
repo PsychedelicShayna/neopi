@@ -775,8 +775,14 @@ export interface InteractiveModeContext {
 	handleIssueCommand(prose: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
-	/** Gives the keys to the ask waiting above the composer; false when none waits. */
+	/** Gives the keys to the ask waiting above the composer, showing it; false when none waits. */
 	focusAsk(): boolean;
+	/** `app.ask.hide` from the composer: hides the ask waiting above it, or shows it with the keys; false when none waits. */
+	toggleAskHidden(): boolean;
+	/** `app.ask.cancel` from the composer: closes the ask waiting above it unanswered; false when none waits. */
+	cancelAsk(): boolean;
+	/** Whether the agent waits on the ask above the composer; Esc in the composer then never interrupts the turn. */
+	askBlocksRun(): boolean;
 	/** The composer talks to a `/btw` note (Tern): plain drafts go to its topic as follow-ups. */
 	readonly isBtwFocused: boolean;
 	/** Sends a draft to the focused `/btw` note's topic; false when no follow-up started. */
