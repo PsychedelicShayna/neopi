@@ -7,6 +7,7 @@ import {
 	showGitOverlay as showOverlay,
 } from "@oh-my-pi/pi-tui/apps/git/git-tui";
 import { generateGitCommit } from "../commit/conventional/service";
+import type { ModelUsageLedger } from "../session/model-usage-journal";
 import { aiStage } from "./git-tui/ai-stage";
 import { AvatarLoader } from "./git-tui/avatar";
 import { GitModel } from "./git-tui/state";
@@ -16,6 +17,8 @@ export interface GitTuiOptions {
 	cwd?: string;
 	/** Pin the view to one commit (any rev-parse-able revision). */
 	revision?: string;
+	/** Session the overlay opened on; generated commit messages are journaled there. */
+	usageLedger?: Partial<ModelUsageLedger>;
 }
 
 async function createHost(options: GitTuiOptions): Promise<GitTuiHost> {
@@ -32,7 +35,7 @@ async function createHost(options: GitTuiOptions): Promise<GitTuiHost> {
 		model: new GitModel(root, { pinnedSha }),
 		createAvatarSource: onReady => new AvatarLoader(onReady),
 		aiStage,
-		generateCommitMessage: generateGitCommit,
+		generateCommitMessage: request => generateGitCommit({ ...request, usageLedger: options.usageLedger }),
 	};
 }
 

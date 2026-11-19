@@ -1,13 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import { SESSION_DELETE_REARM_MS, SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
+import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { SESSION_DELETE_REARM_MS } from "@oh-my-pi/pi-tui/overlays/session-selector";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
+const previousKeybindings = getKeybindings();
+
 beforeAll(async () => {
 	await initTheme();
+	// The app installs its keymap before any picker opens; `getKeybindings()` alone knows only `tui.*` actions.
+	setKeybindings(KeybindingsManager.inMemory());
 });
 
 afterAll(async () => {
+	setKeybindings(previousKeybindings);
 	await initTheme();
 });
 

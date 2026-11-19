@@ -10,6 +10,7 @@ import type { EffectiveExtensionRoots, SourceMeta } from "../capability/types";
 import type { MCPServer } from "../discovery";
 import { loadCapability } from "../discovery";
 import { readMCPConfigFile } from "./config-writer";
+import { builtinDropFor, type MCPDroppedServer, type MCPTransformContext } from "./transforms";
 import type { MCPConfigFile, MCPServerConfig } from "./types";
 
 /** Options for loading MCP configs */
@@ -24,6 +25,11 @@ export interface LoadMCPConfigsOptions {
 	extensionRoots?: EffectiveExtensionRoots;
 	/** Server name globs to admit; empty or absent admits every server. */
 	includeServers?: readonly string[];
+	/**
+	 * What the session offers natively, so built-in transforms (`./transforms`) can drop
+	 * the servers it makes redundant. Omitted: no built-in transform applies.
+	 */
+	builtinTransforms?: MCPTransformContext;
 }
 
 /** Result of loading MCP configs */
@@ -34,6 +40,8 @@ export interface LoadMCPConfigsResult {
 	exaApiKeys: string[];
 	/** Source metadata for each server */
 	sources: Record<string, SourceMeta>;
+	/** Servers a built-in transform dropped, by name; absent when there are none. */
+	dropped?: Record<string, MCPDroppedServer>;
 	/**
 	 * `includeServers` entries without glob metacharacters that name no
 	 * available server (unconfigured, disabled, or denylisted).
@@ -200,11 +208,30 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 	// Allowlist misses are suppressed like disabled servers, for the same
 	// dedupe reason: they keep their name but never shadow an admitted server.
 	const allowlist = compileMCPAllowlist(options?.includeServers);
+	//
+	// A built-in drop suppresses the same way, as if the entry said
+	// `enabled: false`, except that an explicit enable outranks it. Items arrive
+	// highest priority first, so only the first entry of a name is the one that
+	// would have connected; a drop of a later one is not worth reporting.
+	const transformContext = options?.builtinTransforms;
+	const claimed = new Set<string>();
+	let dropped: Record<string, MCPDroppedServer> | undefined;
 	const suppressServer = (server: MCPServer & { _source: SourceMeta }): boolean => {
+		const owner = !claimed.has(server.name);
+		claimed.add(server.name);
 		if (disabledServers.has(server.name)) return true;
-		if (server.enabled === false && !forcedEnabled.has(server.name)) return true;
+		const forced = forcedEnabled.has(server.name);
+		if (server.enabled === false && !forced) return true;
 		if (!allowlist.admits(server.name)) return true;
-		return false;
+		if (!transformContext || forced || server.enabled === true) return false;
+		const drop = builtinDropFor(server, transformContext);
+		if (!drop) return false;
+		if (owner) {
+			dropped ??= {};
+			dropped[server.name] = { reason: drop.reason, source: server._source };
+			logger.debug("Built-in MCP transform dropped a server", { server: server.name, transform: drop.id });
+		}
+		return true;
 	};
 
 	const result = await loadCapability<MCPServer>(mcpCapability.id, {
@@ -262,7 +289,9 @@ export async function loadAllMCPConfigs(cwd: string, options?: LoadMCPConfigsOpt
 		sources = browserResult.sources;
 	}
 
-	return { configs, exaApiKeys, sources, unmatchedIncludes };
+	const loaded: LoadMCPConfigsResult = { configs, exaApiKeys, sources, unmatchedIncludes };
+	if (dropped) loaded.dropped = dropped;
+	return loaded;
 }
 
 /** Pattern to match Exa MCP servers */

@@ -92,6 +92,31 @@ function deferTitle() {
 	return { started, response, generate };
 }
 
+// v19 usage journaling records completed local inference even when its rename is discarded.
+function titleUsage(parentId: string | null, reply: string) {
+	return expect.objectContaining({
+		type: "model_usage",
+		parentId,
+		purpose: "title",
+		api: "local-inference",
+		provider: "local",
+		model: DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY,
+		stopReason: "stop",
+		completion: {
+			prompt: "<chat>\n<user>\nRepair cache invalidation after writes\n</user>\n</chat>",
+			reply,
+		},
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	});
+}
+
 afterEach(async () => {
 	try {
 		await session?.dispose();
@@ -335,6 +360,7 @@ for (const mode of ["TUI", "headless"] as const) {
 			const otherFile = other.getSessionFile()!;
 			await other.close();
 			const { started, response } = deferTitle();
+			const titleParentId = sessionManager.getLeafId();
 			const pending = execute("/rename");
 			try {
 				await Promise.race([started.promise, pending]);
@@ -344,7 +370,10 @@ for (const mode of ["TUI", "headless"] as const) {
 				response.resolve("Stale title from before switching");
 				await pending;
 				expect(session.sessionName).toBeUndefined();
-				expect(sessionManager.getEntries()).toEqual(entries);
+				expect(sessionManager.getEntries()).toEqual([
+					...entries,
+					titleUsage(titleParentId, "Stale title from before switching"),
+				]);
 				expect(output).not.toHaveBeenCalled();
 			} finally {
 				response.resolve(null);
@@ -356,18 +385,24 @@ for (const mode of ["TUI", "headless"] as const) {
 			const { session, sessionManager, execute } = createRuntime(mode);
 			await sessionManager.setSessionName("My chosen title", "user");
 			const { started, response, generate } = deferTitle();
+			const titleParentId = sessionManager.getLeafId();
 			const pending = execute("/rename");
 			try {
 				await Promise.race([started.promise, pending]);
 				expect(generate).toHaveBeenCalledTimes(1);
 				await execute("/rename My chosen title");
 				const entries = sessionManager.getEntries();
+				const activeLeafId = sessionManager.getLeafId();
 
 				response.resolve("Stale generated title");
 				await pending;
 
 				expect(session.sessionName).toBe("My chosen title");
-				expect(sessionManager.getEntries()).toEqual(entries);
+				expect(sessionManager.getEntries()).toEqual([
+					...entries,
+					titleUsage(titleParentId, "Stale generated title"),
+				]);
+				expect(sessionManager.getLeafId()).toBe(activeLeafId);
 			} finally {
 				response.resolve(null);
 				await pending;
@@ -403,6 +438,7 @@ it("suppresses confirmation when the prompt is cancelled during title notificati
 it("releases the RPC command while title inference runs in the background and preserves a newer rename", async () => {
 	const { session, sessionManager, runtime } = createRuntime("headless");
 	const { started, response } = deferTitle();
+	const titleParentId = sessionManager.getLeafId();
 	let backgroundTask: Promise<void> | undefined;
 	runtime.runCommandInBackground = task => {
 		backgroundTask = task();
@@ -416,12 +452,14 @@ it("releases the RPC command while title inference runs in the background and pr
 		await started.promise;
 		await executeAcpBuiltinSlashCommand("/rename My newer RPC title", runtime);
 		const entries = sessionManager.getEntries();
+		const activeLeafId = sessionManager.getLeafId();
 
 		response.resolve("Stale generated title");
 		await backgroundTask;
 
 		expect(session.sessionName).toBe("My newer RPC title");
-		expect(sessionManager.getEntries()).toEqual(entries);
+		expect(sessionManager.getEntries()).toEqual([...entries, titleUsage(titleParentId, "Stale generated title")]);
+		expect(sessionManager.getLeafId()).toBe(activeLeafId);
 	} finally {
 		response.resolve(null);
 		await dispatched;

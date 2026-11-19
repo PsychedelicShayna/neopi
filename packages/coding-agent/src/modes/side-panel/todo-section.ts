@@ -47,8 +47,6 @@ export function formatTodoLine(todo: TodoItem, prefix: string, matched: boolean)
 			return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		case "abandoned":
 			return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
-		case "blocked":
-			return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
 		default:
 			if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 			return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;

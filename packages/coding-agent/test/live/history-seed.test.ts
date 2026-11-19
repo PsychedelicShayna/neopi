@@ -126,6 +126,7 @@ function harness(
 		session: {
 			messages,
 			modelRegistry: { authStorage: {} },
+			settings: Settings.isolated(),
 			sessionId: "history-seed-test",
 			sessionManager: { getCwd: () => process.cwd() },
 			subscribe: () => () => {},

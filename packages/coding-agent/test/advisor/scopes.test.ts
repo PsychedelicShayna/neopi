@@ -18,6 +18,7 @@ import { AgentStorage } from "../../src/session/agent-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { fixedAdvisorTools } from "../helpers/agent-session-setup";
 
 let root: string;
 let agentDir: string;
@@ -124,7 +125,7 @@ describe("persisted advisor file scopes", () => {
 			sessionManager: SessionManager.create(cwd, root),
 			settings,
 			modelRegistry: new ModelRegistry(auth),
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 			advisorConfigs: initial.advisors,
 		});
 		try {

@@ -16,7 +16,7 @@ export class OwnerScopedSessionKeys {
 	): string {
 		if (ownerId === undefined) return baseKey;
 		const forks = this.#forksByOwner.get(ownerId);
-		if (forks?.has(baseKey)) return `${baseKey}\0fork\0${ownerId}`;
+		if (forks?.has(baseKey)) return OwnerScopedSessionKeys.forkKey(baseKey, ownerId);
 		if (!reset) return baseKey;
 		const base = getOwners(baseKey);
 		if (!base || (!base.hasFallbackOwner && base.ownerIds.size === 1 && base.ownerIds.has(ownerId))) {
@@ -24,10 +24,22 @@ export class OwnerScopedSessionKeys {
 		}
 		if (forks) forks.add(baseKey);
 		else this.#forksByOwner.set(ownerId, new Set([baseKey]));
+		return OwnerScopedSessionKeys.forkKey(baseKey, ownerId);
+	}
+
+	/** The key a forked owner's session lives under. */
+	static forkKey(baseKey: string, ownerId: string): string {
 		return `${baseKey}\0fork\0${ownerId}`;
 	}
 
-	disposeByOwner(ownerId: string): void {
+	/** Forget `ownerId`'s forks, except those whose base key `keep` accepts (sessions disposal is leaving alive). */
+	disposeByOwner(ownerId: string, keep?: (baseKey: string) => boolean): void {
+		const forks = this.#forksByOwner.get(ownerId);
+		if (!forks) return;
+		if (keep) {
+			for (const baseKey of Array.from(forks)) if (!keep(baseKey)) forks.delete(baseKey);
+			if (forks.size > 0) return;
+		}
 		this.#forksByOwner.delete(ownerId);
 	}
 

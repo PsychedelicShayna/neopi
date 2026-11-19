@@ -314,7 +314,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		return (text === skillDoc ? text : renderPrompt(text)).trim();
 	}
 
-	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource<string | Buffer>> {
 		let target: LocatedSkillTarget;
 		try {
 			target = await locateSkillTarget(url, context, false);

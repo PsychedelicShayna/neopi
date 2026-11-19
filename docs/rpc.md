@@ -383,7 +383,7 @@ its usage cache and in-flight coalescing with the status line and `/usage`:
 back-to-back requests make one upstream fetch.
 `handoff` fails while a response is streaming. On success, its payload is `{ savedPath? }` or `null` when no handoff was produced. Session transitions (`new_session`, `switch_session`, `branch`, `fork`, `open_session`) report cancellation when an extension prevents the transition.
 
-`fork` moves the process onto a new session file and returns `{ cancelled }`; read the new `sessionFile`/`sessionId` with `get_state`. With `entryId` (any `message` entry from `get_entries`, such as a user or assistant message), the new file holds the root-to-entry path including that entry plus the session's artifacts, so kept `artifact://` references still resolve, and its header's `parentSession` is the old session file. When `entryId` sits inside an assistant tool-call batch (the assistant message itself, or one of its tool results), the cut extends through the batch's recorded tool results so the fork never ends on tool calls whose results were dropped. This runs `session_before_branch`/`session_branch` hooks with reason `"fork"`, and the hook's `entryId` is the last kept entry. Without `entryId` it copies the whole session and its artifacts (`/fork`), records the old session id as `parentSession`, runs `session_before_switch`/`session_switch` with reason `"fork"`, and reports `cancelled: true` when the session is not persisted. A non-message `entryId` fails. Both variants fail with `code: "session_busy"` while a response is streaming or bash, eval, compaction, handoff, or retry work is running, including work that starts while the fork's hooks or flushes are awaited; a refused fork keeps the current session, its transcript, and its queued next-turn messages and background jobs. The Python client exposes `fork(entry_id=None) -> CancellationResult`.
+`fork` moves the process onto a new session file and returns `{ cancelled }`; read the new `sessionFile`/`sessionId` with `get_state`. With `entryId` (any `message` entry from `get_entries`, such as a user or assistant message), the new file holds the root-to-entry path including that entry plus the session's artifacts (spills included), so kept `local://N.log` references still resolve, and its header's `parentSession` is the old session file. When `entryId` sits inside an assistant tool-call batch (the assistant message itself, or one of its tool results), the cut extends through the batch's recorded tool results so the fork never ends on tool calls whose results were dropped. This runs `session_before_branch`/`session_branch` hooks with reason `"fork"`, and the hook's `entryId` is the last kept entry. Without `entryId` it copies the whole session and its artifacts (`/fork`), records the old session id as `parentSession`, runs `session_before_switch`/`session_switch` with reason `"fork"`, and reports `cancelled: true` when the session is not persisted. A non-message `entryId` fails. Both variants fail with `code: "session_busy"` while a response is streaming or bash, eval, compaction, handoff, or retry work is running, including work that starts while the fork's hooks or flushes are awaited; a refused fork keeps the current session, its transcript, and its queued next-turn messages and background jobs. The Python client exposes `fork(entry_id=None) -> CancellationResult`.
 
 - `provider` keeps only reports for that provider id (case-insensitive). An
   unknown id yields `reports: []` with `success: true`.
@@ -1194,8 +1194,8 @@ contains `"rpc"`; this covers both `--mode rpc` and `--mode rpc-ui`. When enable
 `create`/`resume` and each terminal `agent_end` decide whether to start another goal
 turn, sent as a hidden `goal-continuation` message.
 - The turn starts once the yielding run has fully unwound. At that moment the goal
-  must still be active, the session idle with nothing queued, plan mode off, open
-  todos not all blocked, and the session not being disposed.
+  must still be active, the session idle with nothing queued, plan mode off, and
+  the session not being disposed.
 - While the turn is decided but not yet started, `get_state.isSettled`,
   `prompt_result.sessionSettled` and `session_settled` treat the session as busy.
   `session_settled` follows if the continuation is abandoned.
@@ -1335,9 +1335,9 @@ fallback when enabling fails.
 ### `set_todos` payload
 
 Replaces the todo state for the current session and returns `{ todoPhases }`. The list is recorded on the current session branch and restored when that branch is reloaded, compacted, or resumed, like an interactive `/todo` edit.
-Phases use `{ name, tasks }`; tasks retain `{ content, status, blocker? }`. There
+Phases use `{ name, tasks }`; tasks retain `{ content, status }`. There
 are no phase or task IDs. Status is `"pending"`, `"in_progress"`, `"completed"`,
-`"abandoned"`, or `"blocked"`. Snapshot cloning drops extra fields, including
+or `"abandoned"`. Snapshot cloning drops extra fields, including
 task `details` and `notes`.
 
 ```json
@@ -1459,7 +1459,7 @@ Scheme names are trimmed and lowercased and must match `[a-z][a-z0-9+.-]*`.
 replaces the entire previous set — schemes missing from the new list are
 unregistered; an empty list clears all host schemes.
 
-Every built-in scheme (`local://`, `skill://`, `artifact://`, `security://`,
+Every built-in scheme (`local://`, `skill://`, `security://`,
 `mcp://`, …) is reserved: RPC hosts cannot register or shadow one, and the
 request fails with `Host URI scheme is reserved by OMP: <scheme>://`.
 
@@ -1539,13 +1539,14 @@ Each command replaces the whole filter state: omitting `messageUpdates` resets i
 
 `yielded` is `true` when the agent finished its turn: the end is terminal, or the session resumes only for queued input or background-job results. It is `false` while the agent continues its own work (retry, compaction continuation, stop-time reminders). Frames from older runtimes omit it; treat those as yielded only when terminal.
 
-`isTerminal: false` means a continuation or possible async delivery remains.
-`awaitingAsyncWork: true` identifies a non-terminal end whose only possible
-resume is a background-job result; cancelled or suppressed delivery may mean
-no follow-up run occurs. The optional fields keep older frames terminal-compatible
-when `isTerminal` is absent. Use `yielded` for a prompt's yield and
-`session_settled` for quiescence, rather than assuming every non-terminal end
-guarantees another turn.
+`isTerminal: false` means the run goes on: a continuation, queued input or
+outside work resumes it. `awaitingAsyncWork: true` identifies a non-terminal end
+whose only possible resume is outside work: a background-job result, a message
+from a child agent still running, or a queued peer message. Every run ends with
+exactly one terminal `agent_end`, also when that outside work goes away without
+resuming it (a cancelled job, a child that finishes without writing back). The
+optional fields keep older frames terminal-compatible when `isTerminal` is
+absent. Use `yielded` for a prompt's yield and `session_settled` for quiescence.
 
 ### Progress events
 
@@ -1581,7 +1582,8 @@ A `compact` call refused before it starts (another compaction is running, or
 
 Each refresh handed to the provider stream emits one start and one matching end
 (a session disposed mid-refresh emits no end).
-Warm-or-stop decisions that do not send a request emit neither. These are
+Decisions that send no refresh (stop, or bridging the wait with compaction) emit
+neither. These are
 session events, so **both types must be listed in `set_event_filter` when a filter
 is active** to observe complete refresh lifecycles:
 
@@ -1589,12 +1591,14 @@ is active** to observe complete refresh lifecycles:
 {
   type: "cache_warming_start";
   phase: "streaming" | "idle";
+  method: "prewarm" | "replay"; // max_tokens 0 pre-warm, or a one-token replay
   provider: string;
   model: string; // model id
 }
 {
   type: "cache_warming_end";
   phase: "streaming" | "idle"; // same phase as the matching start
+  method: "prewarm" | "replay"; // same method as the matching start
   provider: string;
   model: string;
   outcome: "hit" | "miss" | "error" | "aborted";
@@ -1605,7 +1609,9 @@ is active** to observe complete refresh lifecycles:
 
 - `hit`: the refresh read cached tokens without writing a new cache entry.
 - `miss`: it read no cached tokens or wrote cache tokens; warming stops.
-- `error`: no response was available or the response reported an error; warming stops.
+- `error`: no response was available or the response reported an error; warming stops, except that
+  a `prewarm` the endpoint rejects (HTTP 400) is followed by a `replay` start/end pair in the same
+  slot, and the model is replayed for the rest of the session.
 - `aborted`: the run was cancelled or replaced while the refresh was in flight.
 
 `usage` is present only when the refresh was recorded as a `model_usage` entry
@@ -1705,6 +1711,9 @@ the leaf. The ordinary `abort` command can cancel pending remote navigation,
 including its summary. Navigation starts in input order but settles in the
 background so cancellation remains reachable. No internal `sessionContext` is
 sent on the wire.
+Summary model-usage records are journaled without advancing the active leaf, so
+accounting neither invalidates navigation's expected-leaf guard nor moves the
+session when summarization is aborted.
 
 For native ask re-answering, send `allowAskReopen: true`. A probe returns
 `outcome: "ask_reopen"` with `reopenAsk`, without moving the leaf or claiming
@@ -2155,7 +2164,7 @@ Extensions in RPC mode use request/response UI frames. `--no-ui` disables the ex
 
 `--mode rpc-ui` independently enables the tool UI context, including with `--no-ui`:
 
-- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
+- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`. Each `ask` prompt's `title` can span several lines: the form's context text for that field (paragraphs, lists, `<pre>` blocks, tables) separated by blank lines, then the field's question on the last line.
 - Other callers using the tool UI context retain its supported dialog methods (`select`, `confirm`, `input`, `editor`, and cancellation) and presentation methods (`notify`, `setStatus`, string-array `setWidget`, `set_editor_text`, and opt-in `setTitle`). `--no-ui` is not a transport-level filter on these methods.
 - Tool approval prompts use the extension runner, not the tool UI context. Under `--no-ui`, tools requiring approval fail closed with a no-interactive-UI error rather than sending an approval dialog, just as with `--mode rpc --no-ui`.
 - MCP authentication challenges do not gain an RPC UI handler in either mode; the interactive-mode MCP auth handler is not installed.
@@ -2172,6 +2181,17 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      description, emits a positionally aligned
      `optionDetails: Array<{ description?: string }>` array. Hosts that do not
      render descriptions can continue using `options` alone.
+     When the caller supplies them, it also carries `initialIndex?: number`
+     (option to focus first), `selectionMarker?: "radio" | "checkbox"`,
+     `checkedIndices?: number[]` (options currently checked in a checkbox
+     list) and `markableCount?: number` (leading options that get a marker;
+     trailing ones are actions, such as the `ask` tool's "Done selecting";
+     absent means every option when `selectionMarker` is set). The `ask`
+     tool's "Other" row is marked and appears in `checkedIndices` once a custom
+     answer is entered.
+     The `ask` tool's checkbox fallback re-sends `select` after
+     every toggle, so `checkedIndices` is the authoritative checked state; a
+     host that ignores it cannot show which options are already checked.
    - `input` carries `title: string` and optional `placeholder?: string`,
      `timeout?: number`, and `secret?: boolean`. `secret` is an unnegotiated
      host hint from `ExtensionUIDialogOptions.secret`; hosts that support
@@ -2437,6 +2457,35 @@ Live frames are not session events: `set_event_filter` never drops them.
 
 Closing stdin, or `pi.shutdown()`, stops an active live session before the
 process exits.
+
+### Custom live endpoint
+
+Live sessions signal Codex with the session's ChatGPT (Codex) sign-in. Set
+`live.endpoint` to a server's base URL (for example `http://127.0.0.1:8080/v1`)
+to run every live session (`/live`, `live_start`, `live_connect`, extension
+`startLive`) on that server instead; no Codex sign-in is needed, and offline mode
+(`models.offline`) allows it. Empty uses Codex. The server speaks the public
+OpenAI Realtime WebRTC API relative to the base:
+
+1. `POST {base}/realtime/calls` with the SDP offer as the body
+   (`Content-Type: application/sdp`); the response body is the SDP answer and
+   its `Location` header names the call, whose last path segment is the call ID
+   (`/v1/realtime/calls/rtc_123` → `rtc_123`). Only 307/308 redirects to the same
+   origin are followed.
+2. A WebSocket at `{base}/realtime?call_id=<id>` (`http` → `ws`, `https` → `wss`;
+   a trailing slash and any query on the base are kept). omp's first message there is
+   `{ "type": "session.update", "session": { "type": "realtime", "instructions", "audio": { "output": { "voice" } }, "delegation": { "type": "client" } } }`;
+   the server picks the model. The session then runs the same events as on Codex:
+   `session.started`/`session.updated`, `input_transcript.added`,
+   `output_transcript.added`, `turn.done`, `delegation.created` and `error` from the
+   server, `delegation.context.append`, `session.context.append` and `session.close`
+   from omp.
+
+`live.apiKey`, when set, is sent as `Authorization: Bearer <key>` on both
+requests and only to this endpoint; Codex credentials and attestation are never
+sent there. Like provider API keys in `models.yml`, it is a literal, the name of
+an environment variable, or `!command` whose output is the key. `live.voice` is
+passed through unchanged, so set it to a voice the server accepts.
 
 ## Dictation Sub-Protocol
 

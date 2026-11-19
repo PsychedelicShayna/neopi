@@ -183,6 +183,7 @@ export const messageDefs = {
 		"details?": "unknown",
 		"attribution?": "Attribution",
 		timestamp: "number",
+		"excludeFromContext?": "boolean",
 	},
 	HookMessage: {
 		role: "'hookMessage'",
