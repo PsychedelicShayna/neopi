@@ -35,7 +35,6 @@ import {
 	Loader,
 	Markdown,
 	minFrameIntervalMs,
-	SEGMENT_RESET,
 	Spacer,
 	setTerminalTextSizing,
 	setTuiTight,
@@ -282,9 +281,15 @@ import {
 	setTranscriptPresenters,
 } from "@oh-my-pi/pi-tui/chat/transcript-presentation";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
-import { wrapTreeLine } from "@oh-my-pi/pi-tui/render/hanging-wrap";
 import { WidthAwareText } from "@oh-my-pi/pi-tui/render/width-aware-text";
-import { activePhase, formatTodoLine, renderTodoLines, TODO_LINE_BUDGET, TodoSection } from "./side-panel/todo-section";
+import {
+	activePhase,
+	formatTodoLine,
+	renderTodoTree,
+	TODO_LINE_BUDGET,
+	TodoSection,
+	wrapTodoTree,
+} from "./side-panel/todo-section";
 import { AgentsSection } from "./side-panel/agents-section";
 import { IrcSection } from "./side-panel/irc-section";
 import { SidePanelController } from "./controllers/side-panel-controller";
@@ -5846,14 +5851,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
-		const lines = renderTodoLines({
+		const tree = renderTodoTree({
 			phases: this.todoPhases,
 			expanded: this.todoExpanded,
 			activeDescs,
 			budget: TODO_LINE_BUDGET,
 		});
-		if (lines.length === 0) return;
-		this.todoContainer.addChild(new Text(["", theme.bold(theme.fg("accent", "TODO")), ...lines].join("\n"), 1, 0));
+		if (!tree) return;
+		const title = theme.bold(theme.fg("accent", "TODO"));
+		// The formatter outlives a theme switch (`ui.invalidate()` re-runs it without rebuilding the rows),
+		// so it keeps the theme the rows were styled with: `wrapTreeLine` finds a connector by its styled bytes.
+		const rowTheme = theme;
+		this.todoContainer.addChild(
+			new WidthAwareText(width => ["", title, ...wrapTodoTree(tree, width, rowTheme)].join("\n"), 1, 0),
+		);
 
 		const baseIdx = expanded ? 0 : activeIdx;
 		const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + subsequentStageCap);
