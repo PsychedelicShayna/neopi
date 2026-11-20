@@ -407,6 +407,33 @@ describe("single-instance menus", () => {
 		expect(setFocus).toHaveBeenLastCalledWith(overlays[0]);
 	});
 
+	it.each([
+		["/settings", "session"],
+		["/settings global", "global"],
+	])("opens %s at %s scope", async (command, scope) => {
+		const themes = Promise.resolve(["dark"]);
+		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
+		const opened = vi.fn();
+		spyOn(settingsSelector, "SettingsSelectorComponent").mockImplementation(function (
+			context: settingsSelector.SettingsRuntimeContext,
+		) {
+			opened(context.settings.scope);
+			return { render: () => [], dispose: () => {} };
+		} as never);
+		const { ui } = overlayUi();
+		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated(),
+			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
+			ui,
+		});
+		const controller = new SelectorController(ctx);
+		ctx.showSettingsSelector = scope => controller.showSettingsSelector(scope);
+
+		await executeBuiltinSlashCommand(command, { ctx });
+		await themes;
+		expect(opened).toHaveBeenCalledWith(scope);
+	});
+
 	it("distinguishes unsupported settings reload hosts from failed reloads", async () => {
 		const themes = Promise.resolve(["dark"]);
 		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);

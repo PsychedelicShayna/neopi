@@ -295,6 +295,7 @@
 
 ### Changed
 
+- `/settings` and `/roles` open at session scope by default; set `settings.defaultScope` or `models.defaultScope` to `project` or `global` for a wider default ([#760](https://github.com/PsychedelicShayna/neopi/issues/760)).
 - `browser.screenshotMaxWidth` and `browser.screenshotMaxHeight` are opt-in: unset or 0 (the default) leaves browser screenshots at the model-aware size and diff captures at 1024px; a positive value still caps them.
 - `/live` now requests `gpt-live-1.1-codex` by default and Settings → Providers → Services → Live Model switches between GPT Live 1.1 and GPT Live 1; the setting and `/live model` say the model is requested, because the service does not report which model answers ([#803](https://github.com/PsychedelicShayna/neopi/issues/803)).
 - Model Hub regression tests now cover the shipped compact navigation hints, separate assignment strips, and live search previews; runtime behavior is unchanged.

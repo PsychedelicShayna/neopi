@@ -142,7 +142,7 @@ export const cfgModelsDefaultScope = register({
 	id: "models.defaultScope",
 	type: "enum",
 	values: ["session", "project", "global"] as const,
-	default: "global",
+	default: "session",
 	ui: {
 		tab: "model",
 		group: "Prompt",
