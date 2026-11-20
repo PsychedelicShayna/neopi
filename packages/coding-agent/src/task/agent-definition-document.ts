@@ -33,5 +33,7 @@ export function serializeAgentDefinitionDocument(definition: AgentDefinitionDraf
 				!["source", "filePath", "disabled", "overrideModel", "prewalkOverride", "advisorOverride"].includes(key),
 		),
 	);
-	return `---\n${YAML.stringify(metadata).trimEnd()}\n---\n\n${systemPrompt.trim()}\n`;
+	// Block style keeps saved definitions readable and diffable; Bun pads keys that open a block with a space.
+	const frontMatter = YAML.stringify(metadata, null, 2).replace(/ +$/gm, "").trimEnd();
+	return `---\n${frontMatter}\n---\n\n${systemPrompt.trim()}\n`;
 }

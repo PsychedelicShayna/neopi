@@ -62,7 +62,12 @@ import {
 	type MenuSearchState,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
-import { AgentDefinitionEditor, type AgentDefinitionDraft, type AgentEditorDeps } from "./agent-definition-editor";
+import {
+	AgentDefinitionEditor,
+	type AgentDefinitionDraft,
+	type AgentDefinitionInspection,
+	type AgentEditorDeps,
+} from "./agent-definition-editor";
 
 /** One agent with its per-agent settings overrides resolved for display. */
 export interface HubAgent extends AgentDefinitionDraft {
@@ -127,12 +132,16 @@ export interface AgentsHubDeps {
 	setAgentDisabled: (name: string, options: { disabled: boolean }) => void;
 	/** Persist one agent's override for `property`; `undefined` clears it. Other agents are untouched. */
 	setAgentOverride: (property: PropertyKind, name: string, value: string | undefined) => void;
-	editor: Omit<AgentEditorDeps, "existing" | "save">;
+	editor: Omit<AgentEditorDeps, "existing" | "save" | "remove" | "createMissing" | "inspect" | "browserSource">;
 	saveDefinition: (
 		scope: "project" | "user",
 		definition: AgentDefinitionDraft,
 		original?: HubAgent,
 	) => Promise<string>;
+	/** Delete the file backing a user or project definition. */
+	deleteDefinition?: (agent: HubAgent) => Promise<void>;
+	/** Effective facts and findings for a draft; `original` is the definition being edited, if any. */
+	inspectDefinition?: (definition: AgentDefinitionDraft, original?: HubAgent) => AgentDefinitionInspection;
 	dispose?: () => void;
 }
 
@@ -677,13 +686,27 @@ export class AgentsHubComponent implements Component {
 			this.#tui,
 			{
 				...this.#deps.editor,
+				browserSource: this.#deps.browserSource,
+				getAvailableModels: this.#deps.editor.getAvailableModels ?? this.#deps.getAvailableModels,
 				existing: this.#allAgents,
 				saveScopeEditable: !agent?.filePath || agent.source === "bundled",
-				save: async (definition, scope) => {
-					const filePath = await this.#deps.saveDefinition(scope, definition, agent);
+				save: async (definition, scope, options) => {
+					const filePath = await this.#deps.saveDefinition(scope, definition, options?.asCopy ? undefined : agent);
 					this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
 					await this.#reload();
 				},
+				remove:
+					agent?.filePath && agent.source !== "bundled" && this.#deps.deleteDefinition
+						? async () => {
+								await this.#deps.deleteDefinition!(agent);
+								this.#notice = `Deleted agent ${agent.name} (${shortenPath(agent.filePath!)})`;
+								await this.#reload();
+							}
+						: undefined,
+				createMissing: name => this.#beginCreateFlow(undefined, { name, description: "", systemPrompt: "" }),
+				inspect: this.#deps.inspectDefinition
+					? definition => this.#deps.inspectDefinition!(definition, agent)
+					: undefined,
 			},
 			draft ?? agent ?? { name: "", description: "", systemPrompt: "" },
 			() => {

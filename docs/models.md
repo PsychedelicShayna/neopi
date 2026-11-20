@@ -1001,8 +1001,8 @@ write one. `D` edits the selected role's description in
 `modelTags.<role>.description`. The top row shows it on one truncated line.
 An empty description hides the text without restoring the default.
 
-The `agent-author` role creates agent definitions in the agents hub. Until assigned,
-agent creation keeps using the foreground model. The `compaction` role overrides
+The `agent-author` role authors agent definition prose wherever agents can be generated (today the
+`/agents` definition editor). Until assigned, agent creation keeps using the foreground model. The `compaction` role overrides
 the summarizer used by soft compaction without switching the foreground model.
 Until assigned, compaction keeps its existing model-specific and active-model
 fallback order.

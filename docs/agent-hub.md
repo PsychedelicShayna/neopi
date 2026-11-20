@@ -145,7 +145,7 @@ You are not listed in the Agent Hub, and collab guests do not get an id of their
 
 Agent Hub is the human-facing live session view. Adjacent commands and internal URLs serve narrower purposes:
 
-`/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
+`/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection. Its definition editor (Ctrl-G on an agent, or **+ New agent**) lists every manifest field beside a live preview of the effective model, tools, spawn policy, output contract, prewalk and advisor, the problems found, and the file as it will be saved. Each field opens its own picker; `r` regenerates the highlighted field with the `agent-author` role, `R` with a comment; `c` saves a copy and Delete removes a user or project definition file.
 
 - `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.

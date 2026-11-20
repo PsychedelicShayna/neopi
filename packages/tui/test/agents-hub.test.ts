@@ -11,6 +11,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import { AgentsHubComponent, type AgentsHubDeps, type HubAgent } from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
+import { uiProvenanceSuffix } from "../src/theme/provenance";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 
@@ -327,7 +328,7 @@ describe("AgentsHub definition editing", () => {
 	test("Ctrl-G opens the same rich editor for existing definitions and Esc returns to selection", async () => {
 		const { hub } = await createHub(new TestSettings());
 		hub.handleInput("\x07");
-		expect(pickerProps(hub).title).toBe("Edit dev");
+		expect(pickerProps(hub).title).toBe(`Edit dev${uiProvenanceSuffix("features", "agent-definition-editor")}`);
 		expect(pickerProps(hub).items?.map(item => item.id)).toContain("tools");
 		hub.handleInput("\x1b");
 		expect(pickerProps(hub).selected).toBe("agent:project:dev");

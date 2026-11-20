@@ -5084,6 +5084,7 @@ export const promptAssets: readonly PromptAsset[] = [
 				children: [
 					{ path: "name", type: "string" },
 					{ path: "description", type: "string" },
+					{ path: "readOnly", type: "boolean" },
 				],
 			},
 			{
@@ -5096,11 +5097,52 @@ export const promptAssets: readonly PromptAsset[] = [
 					{ path: "scope", type: "string" },
 				],
 			},
+			{
+				path: "agents",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+					{ path: "source", type: "string" },
+					{ path: "spawns", type: "string" },
+					{ path: "readOnly", type: "boolean" },
+				],
+			},
+			{
+				path: "skills",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+				],
+			},
+			{
+				path: "roles",
+				type: "array",
+				required: true,
+				resolution: "runtime-only",
+				children: [
+					{ path: "id", type: "string" },
+					{ path: "name", type: "string" },
+					{ path: "description", type: "string" },
+				],
+			},
+			{ path: "maxRecursionDepth", type: "number", required: true, resolution: "runtime-only" },
 		],
 		fixture: {
 			fieldSchema: '{"type":"object","properties":{"name":{"type":"string"}}}',
-			tools: [{ name: "read", description: "Read files" }],
+			tools: [{ name: "read", description: "Read files", readOnly: true }],
 			advisors: [{ name: "reviewer", scope: "project" }],
+			agents: [
+				{ name: "scout", description: "Fast read-only research", source: "bundled", spawns: "", readOnly: true },
+			],
+			skills: [{ name: "tdd", description: "Test-first development" }],
+			roles: [{ id: "smol", name: "Smol", description: "Fast model" }],
+			maxRecursionDepth: 2,
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/agent-fields-system.md",

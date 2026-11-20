@@ -8,6 +8,7 @@ import { Settings, resetSettingsForTest } from "../src/config/settings";
 import { createAgentFieldGenerator, type AgentFieldGenerator } from "../src/task/agent-generation";
 import { BUILTIN_TOOLS, type Tool, type ToolSession } from "../src/tools";
 import { toolSummary } from "../src/tools/xdev";
+import { READ_ONLY_TOOL_NAMES } from "@oh-my-pi/pi-coding-agent/task/read-only-policy";
 import {
 	agentDefinitionFieldSchema as fieldSchema,
 	type AgentAdvisor,
@@ -79,6 +80,7 @@ describe("agent field generation harness context", () => {
 			},
 			tools: () => [...registry.values()].map(tool => ({ name: tool.name, description: toolSummary(tool) })),
 			advisors: async () => [{ name: "velvet", scope: "project-omp" }],
+			readOnlyTools: READ_ONLY_TOOL_NAMES,
 		});
 	});
 	afterEach(async () => {
@@ -104,7 +106,8 @@ describe("agent field generation harness context", () => {
 		expect(system).toContain('"autoloadSkills"');
 		for (const name of ["read", "bash"]) {
 			const tool = registry.get(name)!;
-			expect(system).toContain(`- ${name}:`);
+			expect(system).toMatch(/- read\b.*readOnly=true/);
+			expect(system).toMatch(/- bash\b.*readOnly=false/);
 			expect(system).toContain(toolSummary(tool));
 		}
 		expect(system).toContain("velvet (project-omp)");

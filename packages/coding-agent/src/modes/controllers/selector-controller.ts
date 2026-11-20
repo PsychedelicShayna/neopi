@@ -1655,6 +1655,8 @@ export class SelectorController {
 						model => this.ctx.session.effectiveServiceTier(model),
 						{
 							tools: () => this.ctx.session.getAllToolInfos(),
+							skills: () =>
+								this.ctx.session.skills.map(skill => ({ name: skill.name, description: skill.description })),
 							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
 							externalEditor: text => {
 								const env = this.ctx.session.environment.snapshot();

@@ -125,7 +125,7 @@ const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
 	slow: "Reasoning model for thorough analysis.",
 	vision: "Reads images when the active model cannot.",
 	plan: "Writes and reviews plans in plan mode.",
-	"agent-author": "Creates agent definitions in the agents hub.",
+	"agent-author": "Authors agent definition prose, wherever agents can be generated.",
 	compaction: "Summarizes session history during soft compaction.",
 	commit: "Writes commit messages.",
 	tiny: "Small model for lightweight background jobs.",
@@ -134,7 +134,8 @@ const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
 	task: "Default model for delegated agent tasks.",
 	advisor: "Reviews the active agent's work and offers a second opinion.",
 	chronicler: "Captures session events for the Chronicler.",
-	"chronicler-summary": "Writes Chronicler summaries in the background.",
+	"chronicler-summary":
+		"Summarizes Chronicler index nodes when an index is requested with /chron index or the chronicle index command; nothing indexes automatically.",
 	"chronicler-recall": "Ranks Chronicler recall results while you wait.",
 	classifier:
 		"Ranks live subagents for spoken updates and checks operator authorization for flagged model-and-effort deployments.",

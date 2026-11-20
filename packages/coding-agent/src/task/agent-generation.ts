@@ -39,6 +39,19 @@ export interface AgentFieldGeneratorOptions extends Omit<
 	/** Read all host registry tools, using the central toolSummary helper for descriptions. */
 	tools: () => readonly AgentGenerationTool[];
 	advisors?: () => Promise<readonly AgentGenerationAdvisor[]>;
+	/** Every discovered definition, so a design can reference real spawn targets. */
+	agents?: () => readonly {
+		name: string;
+		description: string;
+		source: string;
+		spawns?: string[] | "*";
+		tools?: string[];
+	}[];
+	skills?: () => readonly { name: string; description?: string }[];
+	roles?: () => readonly { id: string; label: string; description?: string }[];
+	/** Built-in tools the harness classifies as read-only. */
+	readOnlyTools?: ReadonlySet<string>;
+	maxRecursionDepth?: () => number;
 }
 
 /** One authoring API for field regeneration, whole definitions, and selected-reference mixes. */
@@ -67,6 +80,9 @@ export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions): 
 		...options,
 		schema,
 		validateFields: fields => {
+			// Preflight rejects schema-less boolean or null outputs, so a generated one could never dispatch.
+			if (fields.output === true || fields.output === null)
+				throw new Error("Generated output must be a JSON Schema or JTD object, or omitted.");
 			if (fields.output !== undefined) {
 				const validation = buildOutputValidator(fields.output);
 				if (validation.error) throw new Error(`Invalid generated output schema: ${validation.error}`);
@@ -78,8 +94,25 @@ export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions): 
 				generationSystem,
 				{
 					fieldSchema: JSON.stringify(schema(), null, 2),
-					tools: options.tools(),
+					tools: options
+						.tools()
+						.map(tool => ({ ...tool, readOnly: options.readOnlyTools?.has(tool.name) ?? false })),
 					advisors: (await options.advisors?.()) ?? [],
+					agents: (options.agents?.() ?? []).map(agent => ({
+						name: agent.name,
+						description: agent.description,
+						source: agent.source,
+						spawns: Array.isArray(agent.spawns) ? agent.spawns.join(", ") : (agent.spawns ?? ""),
+						readOnly:
+							!!agent.tools?.length && agent.tools.every(tool => options.readOnlyTools?.has(tool) ?? false),
+					})),
+					skills: options.skills?.() ?? [],
+					roles: (options.roles?.() ?? []).map(role => ({
+						id: role.id,
+						name: role.label,
+						description: role.description,
+					})),
+					maxRecursionDepth: options.maxRecursionDepth?.() ?? 2,
 				},
 				{ cwd: options.cwd },
 			),

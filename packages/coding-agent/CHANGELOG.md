@@ -12,6 +12,8 @@
 
 ### Added
 
+- The `/agents` definition editor is rebuilt on the `/advisor configure` pattern: every manifest field gets its own picker (ordered model fallbacks with the model browser and effort step, tool and spawn checklists, prewalk and advisor choices, the output-schema editor), beside a live preview of what the harness will do with the definition, the problems it would hit, and the file as saved; definitions can also be saved as a copy or deleted, and a missing spawn target can be created next ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
+- The agent author now sees the existing agent types, installed skills, model roles, read-only tool classification and spawn depth cap, so generated definitions reference real spawn targets, skills and roles.
 - Select the `judge` Chronicler recall ranker for Jev-style probability routing, configurable per-level branch floors and complete-atom verification, with explicit lexical fallback and the existing bounded search budgets ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - Role advisor activation sets can be edited in `/advisor configure`, including persisted session sets whose scope is preserved when selecting project advisors ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
@@ -164,6 +166,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.
 - Model refreshes retain warm catalog snapshots when `models.yml` is unchanged or absent, still re-mint explicitly requested command credentials, and cooperatively normalize large discovered rosters before atomically publishing them ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - A named advisor's `@file` instructions are expanded once when an agent definition spawns it; nested references are no longer re-resolved against the wrong directory ([#655](https://github.com/PsychedelicShayna/neopi/issues/655)).
 - A pending ask no longer steals the keyboard ([#818](https://github.com/PsychedelicShayna/neopi/issues/818)): typing the ask or HTML form has no use for (and any typing over a composer draft) moves to the composer and stays there; ↓ or Tab past the ask's last control, or hiding it, lands in the composer, and ↑ from the composer's top or Shift+Tab goes back. In the composer Esc keeps its own meaning (Vim's Normal mode) and never cancels a question the agent is waiting on; the new `app.ask.cancel` key (Alt+X) cancels from the ask or the composer, and Esc still cancels while the keys are inside the ask. `app.ask.hide` (Alt+H) now hides and shows the ask from every composer state, including after `/btw`.
@@ -297,6 +300,8 @@
 
 ### Changed
 
+- The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.
+- The Chronicler summary role's description now says it summarizes index nodes only when `/chron index` or the chronicle index command runs; nothing indexes automatically.
 - `/settings` and `/roles` open at session scope by default; set `settings.defaultScope` or `models.defaultScope` to `project` or `global` for a wider default ([#760](https://github.com/PsychedelicShayna/neopi/issues/760)).
 - `browser.screenshotMaxWidth` and `browser.screenshotMaxHeight` are opt-in: unset or 0 (the default) leaves browser screenshots at the model-aware size and diff captures at 1024px; a positive value still caps them.
 - `/live` now requests `gpt-live-1.1-codex` by default and Settings → Providers → Services → Live Model switches between GPT Live 1.1 and GPT Live 1; the setting and `/live model` say the model is requested, because the service does not report which model answers ([#803](https://github.com/PsychedelicShayna/neopi/issues/803)).
