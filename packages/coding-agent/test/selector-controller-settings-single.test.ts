@@ -10,11 +10,15 @@ import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import * as activityClient from "@oh-my-pi/pi-coding-agent/stats/activity-client";
 import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-reload";
+import { SessionEnvironment } from "@oh-my-pi/pi-coding-agent/session/environment";
+import * as externalEditor from "@oh-my-pi/pi-coding-agent/utils/external-editor";
 import * as settingsSelector from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import {
+	cfgAutoResume,
+	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgStatusLinePreset,
 	cfgStatusLineLeftSegments,
@@ -432,6 +436,47 @@ describe("single-instance menus", () => {
 		await executeBuiltinSlashCommand(command, { ctx });
 		await themes;
 		expect(opened).toHaveBeenCalledWith(scope);
+	});
+
+	it("flushes and reloads the session settings sidecar with Ctrl+G after switching scope with Ctrl+S", async () => {
+		const themes = Promise.resolve(["dark"]);
+		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
+		let editorInput: string | undefined;
+		const openEditor = spyOn(externalEditor, "openEditorOnPath").mockImplementation(async (_command, filePath) => {
+			editorInput = await Bun.file(filePath).text();
+			await Bun.write(filePath, editorInput.replace("colorBlindMode: false", "colorBlindMode: true"));
+			return 0;
+		});
+		const editorClosed = Promise.withResolvers<void>();
+		const agentDir = getAgentDir();
+		await fs.mkdir(agentDir, { recursive: true });
+		const dir = await fs.mkdtemp(path.join(agentDir, "settings-open-"));
+		try {
+			const settings = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
+			const sidecar = path.join(dir, "session/settings.yml");
+			await Bun.write(sidecar, "colorBlindMode: false\n");
+			await settings.attachSessionFile(path.join(dir, "session.jsonl"));
+			settings.writeScopeValue(cfgAutoResume, true, "session");
+			const { ui, shown } = overlayUi();
+			const environment = new SessionEnvironment({ VISUAL: "test-editor" });
+			const ctx = createInteractiveModeContext({
+				settings,
+				session: { environment, getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
+				ui: { ...ui, stop: () => {}, start: () => editorClosed.resolve() },
+			});
+			new SelectorController(ctx).showSettingsSelector("project");
+			await themes;
+			press(shown[0]!, "\x13", "\x07"); // Ctrl+S, Ctrl+G
+			await editorClosed.promise;
+			expect(openEditor).toHaveBeenCalledWith("test-editor", sidecar, environment.snapshot());
+			expect(editorInput).toContain("autoResume: true");
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("distinguishes unsupported settings reload hosts from failed reloads", async () => {

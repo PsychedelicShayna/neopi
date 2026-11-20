@@ -19,7 +19,10 @@ async function fixture(): Promise<{ dir: string; files: ConfigViewFiles }> {
 	return {
 		dir,
 		files: {
-			settings: { getConfigFile: scope => path.join(dir, scope === "project" ? "project" : "user", "config.yaml") },
+			settings: {
+				getConfigFile: scope => path.join(dir, scope === "project" ? "project" : "user", "config.yaml"),
+				mirrorState: () => ({ sessionSettingsPath: undefined }),
+			},
 			models: { getConfigFile: () => path.join(dir, "custom-models.yml") },
 		},
 	};
@@ -38,6 +41,9 @@ describe("configuration view file mapping", () => {
 	test("maps global/project settings and model sections to their real storage files", async () => {
 		const { dir, files } = await fixture();
 		expect(await resolveConfigViewFile({ kind: "settings" }, files)).toBe(path.join(dir, "user/config.yaml"));
+		expect(await resolveConfigViewFile({ kind: "settings", scope: "global" }, files)).toBe(
+			path.join(dir, "user/config.yaml"),
+		);
 		expect(await resolveConfigViewFile({ kind: "settings", scope: "project" }, files)).toBe(
 			path.join(dir, "project/config.yaml"),
 		);
@@ -49,6 +55,22 @@ describe("configuration view file mapping", () => {
 		expect(await resolveConfigViewFile({ kind: "models", section: "overrides" }, files)).toBe(
 			path.join(dir, "custom-models.yml"),
 		);
+	});
+
+	test("maps session settings to the attached sidecar, created or not", async () => {
+		const { dir, files } = await fixture();
+		const settings = Settings.isolated();
+		const target = { kind: "settings", scope: "session" } as const;
+		const resolve = () => resolveConfigViewFile(target, { ...files, settings });
+		expect(await resolve()).toBeUndefined();
+
+		await settings.attachSessionFile(path.join(dir, "session.jsonl"));
+		const sidecar = path.join(dir, "session/settings.yml");
+		expect(await resolve()).toBe(sidecar);
+
+		await Bun.write(sidecar, "colorBlindMode: true\n");
+		await Bun.write(path.join(dir, "session/settings.toml"), "colorBlindMode = false\n");
+		expect(await resolve()).toBe(sidecar);
 	});
 
 	test("selects canonical or legacy main settings TOML and ignores unsupported TOML families", async () => {

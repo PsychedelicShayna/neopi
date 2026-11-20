@@ -4,9 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
 import { createSettingsHost } from "../src/config/settings-ui";
-import { cfgSettingsDefaultScope, cfgAutoResume } from "../src/modes/settings";
+import { cfgAutoResume, cfgColorBlindMode, cfgSettingsDefaultScope } from "../src/modes/settings";
 import { cfgModelRoles } from "../src/config/model-settings";
 import { SESSION_SETTINGS_QUIT_CHOICES, settleSessionSettingsOnQuit } from "../src/config/session-settings-quit";
+import { cfgHindsightApiToken } from "../src/hindsight/settings";
+import { cfgProvidersMaxInFlightRequests } from "../src/session/settings";
 
 let root: string;
 beforeEach(async () => {
@@ -56,6 +58,49 @@ describe("settings scopes", () => {
 		expect(cfgAutoResume.get(cleared)).toBe(false);
 	});
 
+	it("keeps external sidecar changes and flushed session edits across a later save", async () => {
+		const settings = await sessionSettings();
+		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
+		settings.writeScopeValue(cfgAutoResume, true, "session");
+		expect(settings.hasUnsavedSessionSettings).toBe(true);
+		await settings.saveSessionSettings();
+
+		const persisted = await Bun.file(sidecar).text();
+		await Bun.write(sidecar, `${persisted.trimEnd()}\ncolorBlindMode: true\n`);
+		const changes: boolean[] = [];
+		const stop = settings.onEffectiveChange([cfgColorBlindMode], () => changes.push(cfgColorBlindMode.get(settings)));
+		try {
+			await settings.reloadSessionSettings();
+			expect(settings.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+			expect(changes).toEqual([true]);
+			expect(settings.hasUnsavedSessionSettings).toBe(false);
+		} finally {
+			stop();
+		}
+
+		settings.writeScopeValue(cfgSettingsDefaultScope, "project", "session");
+		await settings.saveSessionSettings();
+		const resumed = await sessionSettings();
+		expect(resumed.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+		expect(resumed.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({ value: true, source: "session" });
+	});
+
+	it("leaves the session layer unchanged when an external sidecar edit fails validation", async () => {
+		const settings = await sessionSettings();
+		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
+		settings.writeScopeValue(cfgAutoResume, true, "session");
+		await settings.saveSessionSettings();
+		await Bun.write(sidecar, "autoResume: false\nnotASetting: true\n");
+
+		await expect(settings.reloadSessionSettings()).rejects.toThrow('Unknown setting "notASetting"');
+		expect(settings.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+		expect(settings.hasUnsavedSessionSettings).toBe(false);
+	});
+
 	it("edits the selected layer while shadow details retain all three values", () => {
 		const settings = Settings.isolated();
 		settings.writeScopeValue(cfgSettingsDefaultScope, "project", "project");
@@ -78,6 +123,75 @@ describe("settings scopes", () => {
 		expect(host.scope).toBe("session");
 		host.cycleScope?.();
 		expect(host.scope).toBe("global");
+	});
+
+	it("resolves file values only through the selected scope, even when a runtime value wins", () => {
+		const setting = cfgSettingsDefaultScope;
+		const settings = Settings.isolated();
+		const view = settings.overlay({ [setting.id]: "project" });
+		const host = createSettingsHost(view, "project");
+		expect(setting.get(view)).toBe("project");
+		expect(host.resolve?.(setting.id)).toEqual({ value: "session", source: undefined });
+
+		settings.writeScopeValue(setting, "global", "global");
+		settings.writeScopeValue(setting, "session", "session");
+		expect(host.resolve?.(setting.id)).toEqual({ value: "global", source: "global" });
+		expect(host.get(setting.id)).toBe("global");
+
+		host.cycleScope?.();
+		expect(host.resolve?.(setting.id)).toEqual({ value: "session", source: "session" });
+		expect(host.get(setting.id)).toBe("session");
+	});
+
+	it("never resolves a credential from its environment variable", () => {
+		const previous = Bun.env.HINDSIGHT_API_TOKEN;
+		try {
+			Bun.env.HINDSIGHT_API_TOKEN = "env-only-test-token";
+			const settings = Settings.isolated();
+			const host = createSettingsHost(settings, "session");
+			expect(cfgHindsightApiToken.get(settings)).toBe("env-only-test-token");
+			expect(host.resolve?.(cfgHindsightApiToken.id)).toEqual({ value: undefined, source: undefined });
+			expect(host.get(cfgHindsightApiToken.id)).toBeUndefined();
+		} finally {
+			if (previous === undefined) delete Bun.env.HINDSIGHT_API_TOKEN;
+			else Bun.env.HINDSIGHT_API_TOKEN = previous;
+		}
+	});
+
+	it("ignores explicit config overlays when resolving a file scope", async () => {
+		const setting = cfgSettingsDefaultScope;
+		const cwd = path.join(root, "project");
+		const overlay = path.join(root, "overlay.yml");
+		await fs.mkdir(cwd);
+		await Bun.write(overlay, "settings:\n  defaultScope: project\n");
+		const settings = await Settings.loadReadOnly({
+			cwd,
+			agentDir: path.join(root, "profile"),
+			configFiles: [overlay],
+		});
+		settings.writeScopeValue(setting, "global", "global");
+		const host = createSettingsHost(settings, "session");
+		expect(setting.provenance(settings)).toBe("overlay");
+		expect(host.resolve?.(setting.id)).toEqual({ value: "global", source: "global" });
+	});
+
+	it("merges provider limits while exposing only the project map for edits", () => {
+		const setting = cfgProvidersMaxInFlightRequests;
+		const settings = Settings.isolated();
+		settings.writeScopeValue(setting, { a: 2 }, "global");
+		settings.writeScopeValue(setting, { b: 3 }, "project");
+		const host = createSettingsHost(settings, "project");
+		expect(host.resolve?.(setting.id)).toEqual({ value: { a: 2, b: 3 }, source: "project" });
+		expect(host.own?.(setting.id)).toEqual({ b: 3 });
+
+		host.set(setting.id, { b: 4 });
+		settings.writeScopeValue(setting, { a: 5 }, "global");
+		expect(host.own?.(setting.id)).toEqual({ b: 4 });
+		expect(host.resolve?.(setting.id)).toEqual({ value: { a: 5, b: 4 }, source: "project" });
+
+		host.unset(setting.id);
+		expect(host.own?.(setting.id)).toBeUndefined();
+		expect(host.resolve?.(setting.id)).toEqual({ value: { a: 5 }, source: "global" });
 	});
 
 	it("model role writes to lower scopes do not override a session selection", () => {
