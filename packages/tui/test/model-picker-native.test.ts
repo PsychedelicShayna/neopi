@@ -1,5 +1,5 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
-import { afterEach, beforeAll, expect, test, beforeEach } from "bun:test";
+import { afterEach, beforeAll, expect, spyOn, test, beforeEach, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
@@ -8,6 +8,7 @@ import type { DescribeContext, NativeChild, NativeNode } from "../src/native/nod
 import { plainText } from "../src/native/spans";
 import {
 	ModelHubComponent,
+	resetProviderAutoRefreshGuard,
 	type HubEffortRule,
 	type ModelHubRegistry,
 	type ModelHubSource,
@@ -420,6 +421,37 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	expect(props(hub.describe(withPicker)).query).toBe("");
 	act("close");
 	expect(calls.cancel).toBe(1);
+});
+
+test.each(["F5", "pointer Refresh"])("a scoped hub skips automatic refresh but honors %s", action => {
+	const modelRegistry = registry(MODELS);
+	const refreshProvider = spyOn(modelRegistry, "refreshProvider");
+	resetProviderAutoRefreshGuard();
+	vi.useFakeTimers();
+	try {
+		const hub = new ModelHubComponent(
+			ui,
+			source({ default: "demo/demo" }, ["demo/demo"]),
+			modelRegistry,
+			MODELS.map(entry => ({ model: entry })),
+			{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+		);
+		hubs.push(hub);
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:openai", mods: [] });
+		expect(props(hub.describe(withPicker)).scope).toBe("provider:openai");
+		vi.advanceTimersByTime(1);
+		expect(refreshProvider).not.toHaveBeenCalled();
+
+		if (action === "F5") hub.handleInput("\x1b[15~");
+		else hub.handleNativeEvent({ type: "action", key: "", act: "refresh", mods: [] });
+		vi.advanceTimersByTime(1);
+		expect(refreshProvider).toHaveBeenCalledTimes(1);
+		expect(refreshProvider).toHaveBeenCalledWith("openai", "online", { refreshCommandCredentials: true });
+	} finally {
+		vi.useRealTimers();
+		resetProviderAutoRefreshGuard();
+		refreshProvider.mockRestore();
+	}
 });
 
 test("the Roles view picker names the active preset and ctrl+←/→ switches it", () => {

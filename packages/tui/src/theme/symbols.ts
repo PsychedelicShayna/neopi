@@ -277,6 +277,7 @@ export type SymbolKey =
 	| "tab.shell"
 	| "tab.tools"
 	| "tab.memory"
+	| "tab.chronicler"
 	| "tab.tasks"
 	| "tab.providers"
 	// Tool identity icons
@@ -678,6 +679,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"tab.shell": "💻",
 	"tab.tools": "🔧",
 	"tab.memory": "🧠",
+	"tab.chronicler": "📖",
 	"tab.tasks": "📦",
 	"tab.providers": "🌐",
 	// Tool identity icons (per-tool signature glyph on the success header)
@@ -1167,6 +1169,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tab.shell": "󰆍",
 	"tab.tools": "󰠭",
 	"tab.memory": "󰧑",
+	"tab.chronicler": "󰂺",
 	"tab.tasks": "󰐱",
 	"tab.providers": "󰖟",
 	// Tool identity icons (per-tool signature glyph on the success header)
@@ -1492,6 +1495,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"tab.shell": "[S]",
 	"tab.tools": "[T]",
 	"tab.memory": "[Y]",
+	"tab.chronicler": "[C]",
 	"tab.tasks": "[K]",
 	"tab.providers": "[P]",
 	// Tool identity icons (per-tool signature glyph on the success header)

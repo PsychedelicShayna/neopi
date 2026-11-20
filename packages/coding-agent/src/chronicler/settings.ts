@@ -17,7 +17,7 @@ function numberSetting(id: string, value: number, label: string, description: st
 			}
 		},
 		ui: {
-			tab: "memory",
+			tab: "chronicler",
 			group: "Chronicler",
 			label,
 			description,
@@ -33,7 +33,7 @@ export const cfgChroniclerEnabled = register({
 	allowAsk: true,
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Chronicler capture",
 		description:
@@ -45,7 +45,7 @@ export const cfgChroniclerNotices = register({
 	type: "boolean",
 	default: true,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Tell the primary agent",
 		description:
@@ -57,7 +57,7 @@ export const cfgChroniclerRecallEnabled = register({
 	type: "boolean",
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Chronicler recall tool",
 		description:
@@ -69,7 +69,7 @@ export const cfgChroniclerIndexDir = register({
 	type: "string",
 	default: undefined,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Index directory",
 		description: "Derived temporal view directory. Empty uses the agent directory's chronicle folder.",
@@ -80,7 +80,7 @@ export const cfgChroniclerIndexTimezone = register({
 	type: "string",
 	default: undefined,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Index timezone",
 		description: "IANA timezone for calendar buckets. Empty uses the system timezone.",
@@ -118,7 +118,7 @@ export const cfgChroniclerIndexShortNames = register({
 	type: "boolean",
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Short index filenames",
 		description: "Omit title slugs from derived atom filenames for restrictive filesystems.",
@@ -195,7 +195,7 @@ export const cfgChroniclerRecallRanker = register({
 	values: ["model", "lexical", "judge"] as const,
 	default: "model",
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Recall ranker",
 		description:
@@ -224,6 +224,15 @@ export const cfgChroniclerRecallBranchFloor = register({
 				);
 			}
 		}
+	},
+	ui: {
+		tab: "chronicler",
+		group: "Chronicler",
+		label: "Recall branch floors",
+		description:
+			'Minimum judge score by temporal level. Enter a JSON object such as {"day": 0.3}, with probabilities from 0 to 1. Unspecified levels inherit.',
+		warning:
+			"Higher floors can prune relevant branches before their atoms are checked. The defaults are uncalibrated.",
 	},
 });
 export const cfgChroniclerRecallNeighborhoodMinutes = numberSetting(

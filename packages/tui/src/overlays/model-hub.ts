@@ -1700,8 +1700,9 @@ export class ModelHubComponent implements Component {
 	}
 
 	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
-		if (this.#scopedModels.length > 0 || !providerId) return;
 		const force = options?.force === true;
+		// A scoped hub never auto-refreshes (that froze it); an explicit Refresh still runs.
+		if (!providerId || (this.#scopedModels.length > 0 && !force)) return;
 		if (force) {
 			const pending = this.#scheduledProviderRefreshes.get(providerId);
 			if (pending) {
@@ -5636,11 +5637,7 @@ export class ModelHubComponent implements Component {
 				? pickerAction("modelFacts", "Model facts", "f6")
 				: undefined;
 		const refresh =
-			this.#scopedModels.length > 0
-				? undefined
-				: entry.kind === "provider" && !entry.locked
-					? pickerAction("refresh", "Refresh provider", "f5")
-					: undefined;
+			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
 		const refreshAll =
 			this.#scopedModels.length > 0 ? undefined : pickerAction("refreshAll", "Refresh all", "ctrl+f5");
 		if (this.#assigning !== null) {

@@ -632,7 +632,9 @@ class ProviderLimitsSubmenu extends Container {
 		this.#keys.reset();
 		if (!this.#restoringNavigation && this.#listField) this.#listNavigation = this.#listField.navigationSnapshot();
 		this.#editingProvider = provider;
-		const limits = this.#settings.normalizeProviderLimits(this.#settings.get("providers.maxInFlightRequests"));
+		const path = "providers.maxInFlightRequests";
+		const settings = this.#settings;
+		const limits = settings.normalizeProviderLimits(settings.own ? settings.own(path) : settings.get(path));
 		this.clear();
 		this.#listField = undefined;
 		this.addChild(
@@ -652,12 +654,7 @@ class ProviderLimitsSubmenu extends Container {
 					return undefined;
 				},
 				onSubmit: value => {
-					const settings = this.#settings;
-					const next = {
-						...(settings.own
-							? settings.normalizeProviderLimits(settings.own("providers.maxInFlightRequests"))
-							: limits),
-					};
+					const next = { ...(settings.own ? settings.normalizeProviderLimits(settings.own(path)) : limits) };
 					const trimmed = value.trim();
 					if (trimmed === "") {
 						delete next[provider];
@@ -667,12 +664,8 @@ class ProviderLimitsSubmenu extends Container {
 						next[provider] = Math.max(1, Math.floor(limit));
 					}
 					const normalized = this.#settings.validateProviderLimits(next);
-					this.#settings.set("providers.maxInFlightRequests", normalized);
-					this.#onChange(
-						settings.own
-							? settings.normalizeProviderLimits(settings.get("providers.maxInFlightRequests"))
-							: normalized,
-					);
+					settings.set(path, normalized);
+					this.#onChange(settings.own ? settings.normalizeProviderLimits(settings.get(path)) : normalized);
 					this.#requestRender?.();
 				},
 				onCancel: () => {
@@ -914,9 +907,15 @@ export class SettingsSelectorComponent implements Component {
 	/** Refresh existing lists: setItems preserves their cursor, filter, viewport and open editor. */
 	#refreshReloadedSettings(): void {
 		const edit = this.#editingSetting;
-		if (edit && JSON.stringify(this.#context.settings.get(edit.path)) !== edit.baseline) edit.changedElsewhere = true;
+		if (edit && JSON.stringify(this.#getSettingEditValue(edit.path)) !== edit.baseline) edit.changedElsewhere = true;
 		this.#refreshItems();
 		this.#context.requestRender?.();
+	}
+
+	#getSettingEditValue(path: string): unknown {
+		const settings = this.#context.settings;
+		if (settings.own && getSettingDef(settings.entries, path)?.schemaType === "record") return settings.own(path);
+		return settings.get(path);
 	}
 
 	#editSetting(
@@ -926,7 +925,7 @@ export class SettingsSelectorComponent implements Component {
 	): Component {
 		this.#editingSetting = {
 			path,
-			baseline: JSON.stringify(this.#context.settings.get(path)),
+			baseline: JSON.stringify(this.#getSettingEditValue(path)),
 			changedElsewhere: false,
 		};
 		return build(value => {
@@ -1899,8 +1898,7 @@ export class SettingsSelectorComponent implements Component {
 				return {
 					...item,
 					currentValue: this.#formatTextInputValue(def, currentValue),
-					submenu: (cv, done) =>
-						this.#editSetting(def.path, done, finish => this.#createTextInput(def, cv, finish)),
+					submenu: (_cv, done) => this.#editSetting(def.path, done, finish => this.#createTextInput(def, finish)),
 				};
 
 			case "providerLimits":
@@ -2090,11 +2088,7 @@ export class SettingsSelectorComponent implements Component {
 	/**
 	 * Create a text input submenu for a string or structured setting.
 	 */
-	#createTextInput(
-		def: SettingDef & { type: "text" },
-		_currentValue: string,
-		done: (value?: string) => void,
-	): Component {
+	#createTextInput(def: SettingDef & { type: "text" }, done: (value?: string) => void): Component {
 		this.#textInputActive = true;
 		const wrappedDone = (value?: string) => {
 			this.#textInputActive = false;
@@ -2103,7 +2097,7 @@ export class SettingsSelectorComponent implements Component {
 		return createSettingsTextField(
 			def.label,
 			def.description,
-			this.#formatTextInputEditValue(def.path, this.#context.settings.get(def.path)),
+			this.#formatTextInputEditValue(def.path, this.#getSettingEditValue(def.path)),
 			def.secret,
 			value => {
 				// An empty field removes the persisted value so the setting inherits again.

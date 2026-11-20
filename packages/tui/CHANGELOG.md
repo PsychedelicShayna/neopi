@@ -57,6 +57,7 @@
 
 ### Fixed
 
+- Editing a record in project or session settings preserves inheritance for entries you don't override.
 - Hidden command aliases such as `/models` reveal with their descriptions after visible name prefixes run out, even when fuzzy candidates remain.
 - The startup model-switching tip names `/model`, and the agent model picker points to `/roles` for provider configuration.
 

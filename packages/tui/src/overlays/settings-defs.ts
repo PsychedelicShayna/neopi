@@ -8,6 +8,7 @@ export type SettingTab =
 	| "interaction"
 	| "context"
 	| "memory"
+	| "chronicler"
 	| "files"
 	| "shell"
 	| "tools"
@@ -24,6 +25,7 @@ export const SETTING_TABS: SettingTab[] = [
 	"interaction",
 	"context",
 	"memory",
+	"chronicler",
 	"files",
 	"shell",
 	"tools",
@@ -38,6 +40,7 @@ export const TAB_METADATA: Record<SettingTab, TabMetadata> = {
 	interaction: { label: "Interaction", icon: "tab.interaction" },
 	context: { label: "Context", icon: "tab.context" },
 	memory: { label: "Memory", icon: "tab.memory" },
+	chronicler: { label: "Chronicler", icon: "tab.chronicler" },
 	files: { label: "Files", icon: "tab.files" },
 	shell: { label: "Shell", icon: "tab.shell" },
 	tools: { label: "Tools", icon: "tab.tools" },
@@ -52,6 +55,7 @@ export const TAB_LEADS: Record<SettingTab, string> = {
 	interaction: "Input, approvals, notifications, speech and what happens at startup.",
 	context: "What the model sees, and when and how the conversation compacts.",
 	memory: "What omp remembers across sessions and where it keeps it.",
+	chronicler: "Capture session history, build the Chronicle index, and recall past events.",
 	files: "How files are read, summarized and edited, and the language servers.",
 	shell: "The bash tool and the eval runtimes.",
 	tools: "Which tools the model has, their limits and the external integrations.",
@@ -86,7 +90,8 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Settings",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
-	memory: ["General", "Chronicler", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
+	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
+	chronicler: ["Chronicler"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Runtimes"],
 	tools: [

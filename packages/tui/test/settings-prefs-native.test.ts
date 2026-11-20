@@ -250,6 +250,12 @@ const LIMITS: SettingsDisplayEntry = {
 	defaultValue: {},
 	ui: { tab: "providers", label: LIMITS_LABEL, description: "" },
 };
+const BRANCH_FLOOR: SettingsDisplayEntry = {
+	path: "chronicler.recall.branchFloor",
+	type: "record",
+	defaultValue: {},
+	ui: { tab: "chronicler", label: "Branch floor", description: "", editor: "json" },
+};
 const COLOR_BLIND = "display.colorBlind";
 const RISKY = "display.risky";
 
@@ -258,7 +264,7 @@ function scopedSettings(
 	project: Record<string, unknown>,
 	scope: SettingsFileScope = "project",
 ) {
-	const entries = [...ENTRIES, LIMITS];
+	const entries = [...ENTRIES, LIMITS, BRANCH_FLOOR];
 	const layers: Record<SettingsFileScope, Map<string, unknown>> = {
 		global: new Map(Object.entries(global)),
 		project: new Map(Object.entries(project)),
@@ -266,13 +272,14 @@ function scopedSettings(
 	};
 	const own = layers[scope];
 	const resolve = (path: string): SettingsResolution => {
-		let value = entries.find(entry => entry.path === path)?.defaultValue;
+		const entry = entries.find(entry => entry.path === path);
+		let value = entry?.defaultValue;
 		let source: SettingsFileScope | undefined;
 		for (const layer of SETTINGS_FILE_SCOPES) {
 			const settings = layers[layer];
 			if (settings.has(path)) {
 				const stored = settings.get(path);
-				value = path === LIMITS.path ? { ...providerLimits(value), ...providerLimits(stored) } : stored;
+				value = entry?.type === "record" ? Object.assign({}, value, stored) : stored;
 				source = layer;
 			}
 			if (layer === scope) break;
@@ -281,6 +288,7 @@ function scopedSettings(
 	};
 	const writes: [string, unknown][] = [];
 	const unsets: string[] = [];
+	let reload: (() => void) | undefined;
 	const settings: SettingsHost = {
 		entries,
 		scope,
@@ -288,6 +296,12 @@ function scopedSettings(
 		resolve,
 		// Like the real host (readScopeValue uses ??): a key stored as null reads as undefined.
 		own: path => own.get(path) ?? undefined,
+		onReload: listener => {
+			reload = listener;
+			return () => {
+				reload = undefined;
+			};
+		},
 		set: (path, value) => {
 			writes.push([path, value]);
 			own.set(path, value);
@@ -299,7 +313,14 @@ function scopedSettings(
 		normalizeProviderLimits: providerLimits,
 		validateProviderLimits: providerLimits,
 	};
-	return { ...harness({}, { entries, settings }), writes, unsets, global: layers.global };
+	return {
+		...harness({}, { entries, settings }),
+		writes,
+		unsets,
+		global: layers.global,
+		project: layers.project,
+		reload: () => reload?.(),
+	};
 }
 
 function ansiRow(selector: SettingsSelectorComponent, label: string): string {
@@ -401,6 +422,39 @@ describe("settings as a native prefs page", () => {
 		global.set(LIMITS.path, { a: 7 });
 		selector.refreshValues();
 		expect(ansiRow(selector, LIMITS_LABEL)).toContain("a: 7, b: 5");
+	});
+
+	it("does not seed a project provider edit with its inherited limit", () => {
+		const { selector, writes } = scopedSettings({ [LIMITS.path]: { a: 2 } }, { [LIMITS.path]: { b: 3 } });
+		send(selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
+		send(selector, { type: "activate", key: "", item: LIMITS.path });
+		selector.handleInput(ENTER); // Edit provider a; its limit is inherited.
+		selector.handleInput(ENTER); // Submit without adding a project override.
+		expect(writes).toEqual([[LIMITS.path, { b: 3 }]]);
+		expect(ansiRow(selector, LIMITS_LABEL)).toContain("a: 2, b: 3");
+	});
+
+	it("edits only the project record and flags external changes to that scope", () => {
+		const { path } = BRANCH_FLOOR;
+		const { selector, writes, global, project, reload } = scopedSettings(
+			{ [path]: { year: 0.8 } },
+			{ [path]: { day: 0.25 } },
+		);
+		send(selector, { type: "action", key: "", act: "page", value: "chronicler", mods: [] });
+		expect(row(prefs(selector).props, path).control).toMatchObject({ value: '{"year":0.8,"day":0.25}' });
+		send(selector, { type: "activate", key: "", item: path });
+		expect(prefs(selector).props.editing?.draft).toBe('{"day":0.25}');
+		for (const key of ["\x01", "\x0b", '{"day":0.5}']) selector.handleInput(key);
+		global.set(path, { year: 0.9 });
+		reload();
+		expect(prefs(selector).props.lead).not.toContain("changed elsewhere");
+		project.set(path, { day: 0.4 });
+		reload();
+		expect(prefs(selector).props.lead).toContain("changed elsewhere");
+		expect(prefs(selector).props.editing?.draft).toBe('{"day":0.5}');
+		selector.handleInput(ENTER);
+		expect(writes).toEqual([[path, { day: 0.5 }]]);
+		expect(row(prefs(selector).props, path).control).toMatchObject({ value: '{"year":0.9,"day":0.5}' });
 	});
 
 	it("falls back to the overlay card when the terminal lacks prefs", () => {

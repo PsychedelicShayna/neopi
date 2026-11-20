@@ -31,7 +31,7 @@ describe("Chronicler settings", () => {
 		expect(chronicler.length).toBeGreaterThan(10);
 		for (const setting of chronicler) {
 			expect(setting.get(settings)).toEqual(setting.default);
-			expect(setting.ui?.tab).toBe("memory");
+			expect(setting.ui?.tab).toBe("chronicler");
 			expect(setting.ui?.group).toBe("Chronicler");
 			expect(setting.ui?.description.length).toBeGreaterThan(0);
 			if (setting.definition.type === "number") {

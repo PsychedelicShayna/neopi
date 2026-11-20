@@ -9,7 +9,7 @@ export const cfgChroniclerBackfillConcurrency = register({
 			throw new Error("chronicler.backfill.concurrency must be a positive integer");
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Backfill parallel sessions",
 		description:
@@ -28,7 +28,7 @@ export const cfgChroniclerBackfillScanConcurrency = register({
 			throw new Error("chronicler.backfill.scanConcurrency must be a positive integer");
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Backfill parallel coverage scans",
 		description:
@@ -47,7 +47,7 @@ export const cfgChroniclerBackfillTimeoutMs = register({
 			throw new Error("chronicler.backfill.timeoutMs must be a nonnegative number");
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Backfill capture deadline (ms)",
 		description:
@@ -66,7 +66,7 @@ export const cfgChroniclerBackfillDrainMs = register({
 			throw new Error("chronicler.backfill.drainMs must be a nonnegative number");
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Backfill final drain (ms)",
 		description:
@@ -85,7 +85,7 @@ export const cfgChroniclerBackfillPollMs = register({
 			throw new Error("chronicler.backfill.pollMs must be at least 1 millisecond");
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Backfill coverage poll (ms)",
 		description:
