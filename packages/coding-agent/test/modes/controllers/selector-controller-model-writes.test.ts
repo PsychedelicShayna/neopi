@@ -18,8 +18,10 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { Component } from "@oh-my-pi/pi-tui";
 import * as modelHubModule from "@oh-my-pi/pi-tui/overlays/model-hub";
 import * as modelPickerModule from "@oh-my-pi/pi-tui/overlays/model-picker";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
@@ -55,7 +57,8 @@ describe("SelectorController model selector writes", () => {
 		tempDir.removeSync();
 	});
 
-	function start(settings: Settings, initial: Model): { controller: SelectorController; showError: () => unknown } {
+	function start(settings: Settings, initial: Model) {
+		let overlay: Component | undefined;
 		const live = new AgentSession({
 			agent: new Agent({ initialState: { model: initial, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(),
@@ -69,12 +72,17 @@ describe("SelectorController model selector writes", () => {
 			createInteractiveModeContext({
 				session: live,
 				settings,
-				ui: { showOverlay: () => ({ hide: () => {}, setHidden: () => {}, isHidden: () => false }) },
+				ui: {
+					showOverlay: component => {
+						overlay = component;
+						return { hide: () => {}, setHidden: () => {}, isHidden: () => false };
+					},
+				},
 				keybindings: { getKeys: () => [], getDisplayString: () => "" },
 				showError,
 			}),
 		);
-		return { controller, showError };
+		return { controller, showError, getOverlay: () => overlay };
 	}
 
 	function openModelHub(controller: SelectorController, scope?: SettingsScope): modelHubModule.ModelHubCallbacks {
@@ -128,6 +136,61 @@ describe("SelectorController model selector writes", () => {
 			default: { "compaction.thresholdTokens": null },
 		});
 		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("cycles /roles through all scopes and writes to the selected layer", async () => {
+		await initTheme(false);
+		const settings = await Settings.init({ inMemory: true });
+		for (const [scope, budget] of [
+			["global", 96000],
+			["project", 120000],
+			["session", 144000],
+		] as const) {
+			settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": budget } }, scope);
+		}
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-opus-4-5", undefined, "global");
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-sonnet-4-5", undefined, "project");
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-opus-4-5", undefined, "session");
+		const { controller, showError, getOverlay } = start(settings, model("claude-opus-4-5"));
+		controller.showModelSelector({ scope: "global" });
+		const hub = getOverlay();
+		if (!(hub instanceof modelHubModule.ModelHubComponent)) throw new Error("model hub was not opened");
+		try {
+			const render = () => Bun.stripANSI(hub.render(220).join("\n"));
+			for (const key of ["\x1b[A", "\r"]) hub.handleInput(key);
+			expect(render()).toContain("Ctrl+S cycle scope");
+			expect(render()).toContain("budget 96,000");
+
+			hub.handleInput("\x13");
+			expect(render()).toContain("budget 120,000");
+			expect(render()).toMatch(/Smol[^\n]*anthropic\/claude-sonnet-4-5/i);
+			hub.handleInput("b");
+			hub.handleInput("\x13");
+			expect(render()).toContain("Models · project");
+			for (const key of ["\x01", "\x0b", ..."64000", "\r"]) hub.handleInput(key);
+			expect(render()).toContain("budget 64,000");
+			for (const key of ["\x1b[B", "x"]) hub.handleInput(key);
+			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/claude-opus-4-5");
+			expect(settings.getProjectModelRole("smol")).toBeUndefined();
+			expect(settings.getSessionModelRole("smol")).toBe("anthropic/claude-opus-4-5");
+
+			hub.handleInput("\x13");
+			expect(render()).toContain("budget 144,000");
+			hub.handleNativeEvent({ type: "action", key: "", act: "cycleScope", mods: [] });
+			expect(render()).toContain("budget 96,000");
+			expect(settings.readScopeValue(cfgRoleSettings, "global")).toEqual({
+				default: { "compaction.thresholdTokens": 96000 },
+			});
+			expect(settings.readScopeValue(cfgRoleSettings, "project")).toEqual({
+				default: { "compaction.thresholdTokens": 64000 },
+			});
+			expect(settings.readScopeValue(cfgRoleSettings, "session")).toEqual({
+				default: { "compaction.thresholdTokens": 144000 },
+			});
+			expect(showError).not.toHaveBeenCalled();
+		} finally {
+			hub.dispose();
+		}
 	});
 
 	it("default session picker changes the live model without changing saved defaults or roles", async () => {

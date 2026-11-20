@@ -1908,7 +1908,7 @@ export class SelectorController {
 	 * entry — used when reopening the hub after a /login round-trip.
 	 */
 	#showModelHub(hubOptions: { initialProviderId?: string; sessionOnly?: boolean; scope?: SettingsScope }): void {
-		const editingScope = hubOptions.scope ?? cfgModelsDefaultScope.get(this.ctx.settings);
+		const initialScope = hubOptions.scope ?? cfgModelsDefaultScope.get(this.ctx.settings);
 		const menuKind = hubOptions.sessionOnly ? "session-model-hub" : "model-hub";
 		if (this.#focusOpenMenu(menuKind)) return;
 		let closed = false;
@@ -1923,13 +1923,14 @@ export class SelectorController {
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
+		const source = createModelBrowserSource(
+			this.ctx.settings,
+			model => this.ctx.session.effectiveServiceTier(model),
+			hubOptions.sessionOnly ? undefined : initialScope,
+		);
 		const hub = new ModelHubComponent(
 			this.ctx.ui,
-			createModelBrowserSource(
-				this.ctx.settings,
-				model => this.ctx.session.effectiveServiceTier(model),
-				hubOptions.sessionOnly ? undefined : editingScope,
-			),
+			source,
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
@@ -1960,22 +1961,20 @@ export class SelectorController {
 							done();
 							this.#showModelFacts(provider, model?.id);
 						},
-				onOpenConfigFile:
-					hubOptions.sessionOnly || editingScope === "session"
-						? undefined
-						: (section, scope) =>
-								this.#openConfigFile(
-									{
-										kind: "models",
-										section,
-										scope:
-											scope === "session" ? undefined : (scope ?? (editingScope as "global" | "project")),
-									},
-									async () => {
-										await this.ctx.settings.reloadFromDisk();
-										await this.ctx.session.modelRegistry.refresh("offline");
-									},
-								),
+				onOpenConfigFile: hubOptions.sessionOnly
+					? undefined
+					: (section, scope) =>
+							this.#openConfigFile(
+								{
+									kind: "models",
+									section,
+									scope: scope === "session" ? undefined : scope,
+								},
+								async () => {
+									await this.ctx.settings.reloadFromDisk();
+									await this.ctx.session.modelRegistry.refresh("offline");
+								},
+							),
 				onAssign: async (
 					model,
 					role,
@@ -1984,8 +1983,8 @@ export class SelectorController {
 					scope: ModelRoleSelectionScope | undefined,
 					selection,
 				) => {
+					const targetScope = scope ?? source.editingScope ?? initialScope;
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const targetScope = scope ?? editingScope;
 					const selectorValue = selector ?? `${model.provider}/${model.id}`;
 					const scopeLabel = `${targetScope} `;
 					const defaultStatusLabel = `${scopeLabel}default`;
@@ -2066,8 +2065,8 @@ export class SelectorController {
 					}
 				},
 				onUnassign: async (role, scope?: ModelRoleSelectionScope) => {
+					const targetScope = scope ?? source.editingScope ?? initialScope;
 					const releaseDefaultMutation = role === "default" ? await this.#acquireDefaultRoleMutation() : undefined;
-					const targetScope = scope ?? editingScope;
 					const scopeLabel = `${targetScope} `;
 					try {
 						const previousEffectiveRoleValue =
@@ -2187,6 +2186,7 @@ export class SelectorController {
 				},
 				onRoleTokenBudgetChange: (role, value) => {
 					try {
+						const editingScope = source.editingScope ?? initialScope;
 						if (value !== undefined) cfgCompactionThresholdTokens.assertRoleWritable(value);
 						const entries = (this.ctx.settings.readScopeValue(cfgRoleSettings, editingScope) ??
 							{}) as RoleSettings;
