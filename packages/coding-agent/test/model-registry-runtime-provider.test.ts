@@ -66,6 +66,35 @@ describe("ModelRegistry runtime provider registration", () => {
 		maxTokens: 8192,
 	};
 
+	function holdDiscoverySlices() {
+		const ready = Promise.withResolvers<void>();
+		const released = Promise.withResolvers<void>();
+		const originalSetImmediate = globalThis.setImmediate;
+		let held = false;
+		let clock = 0;
+		// Spend the slice budget at every checkpoint, even with only two rows.
+		const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => (clock += 10));
+		const holdImmediate = <Args extends unknown[]>(callback: (...args: Args) => void, ...args: Args) => {
+			if (held) return originalSetImmediate(callback, ...args);
+			held = true;
+			return originalSetImmediate(() => {
+				ready.resolve();
+				void released.promise.then(() => callback(...args));
+			});
+		};
+		const timers: { setImmediate: typeof holdImmediate } = globalThis;
+		const immediateSpy = vi.spyOn(timers, "setImmediate").mockImplementation(holdImmediate);
+		return {
+			ready: ready.promise,
+			release: released.resolve,
+			restore() {
+				released.resolve();
+				immediateSpy.mockRestore();
+				clockSpy.mockRestore();
+			},
+		};
+	}
+
 	const streamSimple: NonNullable<ProviderConfigInput["streamSimple"]> = () =>
 		({}) as unknown as AssistantMessageEventStream;
 
@@ -198,6 +227,147 @@ describe("ModelRegistry runtime provider registration", () => {
 		expect(registry.find("my-gateway", "mismatched")).toBeUndefined();
 		expect(registry.find("my-gateway", "gpt-image-2")).toMatchObject({ kind: "image" });
 	});
+
+	test("overlapping discovery builds publish complete snapshots without losing another provider", async () => {
+		const secondFetch = Promise.withResolvers<void>();
+		for (const provider of ["slice-a", "slice-b"]) {
+			registry.registerProvider(
+				provider,
+				{
+					baseUrl: `https://${provider}.example.com/v1`,
+					api: "openai-completions",
+					apiKey: "literal-key",
+					fetchDynamicModels: async () => {
+						if (provider === "slice-b") secondFetch.resolve();
+						return [
+							{ ...baseModel, id: "first" },
+							{ ...baseModel, id: "last" },
+						];
+					},
+				},
+				"ext://runtime",
+			);
+		}
+		registry.getAll();
+		const slices = holdDiscoverySlices();
+		const refreshes = [registry.refreshDiscoverableProviders(["slice-a"], "online")];
+		try {
+			await slices.ready;
+			refreshes.push(registry.refreshDiscoverableProviders(["slice-b"], "online"));
+			await secondFetch.promise;
+			// Let the second pass queue its landing while the first is still held.
+			const turn = Promise.withResolvers<void>();
+			setImmediate(turn.resolve);
+			await turn.promise;
+			expect(getProviderModels(registry, "slice-a")).toEqual([]);
+			expect(getProviderModels(registry, "slice-b")).toEqual([]);
+			slices.release();
+			await Promise.all(refreshes);
+			expect(getProviderModels(registry, "slice-a").map(model => model.id)).toEqual(["first", "last"]);
+			expect(getProviderModels(registry, "slice-b").map(model => model.id)).toEqual(["first", "last"]);
+		} finally {
+			slices.restore();
+			await Promise.all(refreshes);
+		}
+	});
+
+	test.each(["openai", "openai-codex"] as const)(
+		"%s runtime takeover during credential lookup publishes only the selected manager's catalog",
+		async provider => {
+			registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => Response.json({ data: [{ id: "superseded-model" }] }),
+			});
+			registry.registerProvider(provider, { apiKey: "old-key" }, "ext://runtime");
+			registry.getAll();
+			const waiting = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			const peek = vi.spyOn(authStorage.keys, "peek").mockImplementation(async providerId => {
+				if (providerId === provider) {
+					waiting.resolve();
+					await released.promise;
+					return "old-key";
+				}
+				return undefined;
+			});
+			const refreshing = registry.refresh("online");
+			try {
+				await waiting.promise;
+				registry.registerProvider(
+					provider,
+					{
+						baseUrl: "https://replacement.example.com/v1",
+						api: "openai-completions",
+						apiKey: "replacement-key",
+						fetchDynamicModels: async () => [{ ...baseModel, id: "replacement-model" }],
+					},
+					"ext://runtime",
+				);
+				released.resolve();
+				await refreshing;
+				expect(getProviderModels(registry, provider).map(model => model.id)).toEqual(["replacement-model"]);
+				expect(registry.find(provider, "replacement-model")?.baseUrl).toBe("https://replacement.example.com/v1");
+			} finally {
+				released.resolve();
+				peek.mockRestore();
+				await refreshing;
+			}
+		},
+	);
+
+	test.each(["reload", "unregister"] as const)(
+		"%s during a yielded discovery build cannot publish stale provider state",
+		async change => {
+			registry.registerProvider(
+				"yielded-provider",
+				{
+					baseUrl: "https://yielded.example.com/v1",
+					api: "openai-completions",
+					apiKey: "literal-key",
+					fetchDynamicModels: async () => [
+						{ ...baseModel, id: "first" },
+						{ ...baseModel, id: "last" },
+					],
+				},
+				"ext://runtime",
+			);
+			registry.getAll();
+			const slices = holdDiscoverySlices();
+			const refreshing = registry.refreshDiscoverableProviders(["yielded-provider"], "online");
+			let reloading: Promise<void> | undefined;
+			try {
+				await slices.ready;
+				expect(getProviderModels(registry, "yielded-provider")).toEqual([]);
+				if (change === "reload") {
+					fs.writeFileSync(
+						modelsJsonPath,
+						JSON.stringify({
+							providers: {
+								"new-static": {
+									baseUrl: "https://new.example.com/v1",
+									api: "openai-completions",
+									apiKey: "literal-key",
+									models: [{ ...baseModel, id: "new-static-model" }],
+								},
+							},
+						}),
+					);
+					reloading = registry.refresh("offline");
+				} else {
+					registry.unregisterProvider("yielded-provider");
+				}
+				slices.release();
+				await Promise.all([refreshing, reloading]);
+				expect(getProviderModels(registry, "yielded-provider").map(model => model.id)).toEqual(
+					change === "reload" ? ["first", "last"] : [],
+				);
+				if (change === "reload")
+					expect(registry.find("new-static", "new-static-model")?.baseUrl).toBe("https://new.example.com/v1");
+			} finally {
+				slices.restore();
+				await Promise.all([refreshing, reloading]);
+			}
+		},
+	);
 
 	test("registerProvider rebuilds inferred computer capability after OpenAI runtime reroutes", async () => {
 		const modelId = "gpt-5.4";
@@ -1340,7 +1510,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		).toBeUndefined();
 	});
 
-	test("provider-scoped lookups do not intern other providers' transient projections", async () => {
+	test("scoped lookups cannot publish another provider's temporary OAuth metadata", async () => {
 		const anthropicId = registry.getAll().find(model => model.provider === "anthropic")?.id;
 		await authStorage.credentials.set("changing-provider", {
 			type: "oauth",
@@ -1348,7 +1518,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
-		let projectionCount = 0;
+		let name = "initial";
 		registry.registerProvider(
 			"changing-provider",
 			{
@@ -1361,23 +1531,22 @@ describe("ModelRegistry runtime provider registration", () => {
 					login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
 					refreshToken: async credentials => credentials,
 					getApiKey: credentials => credentials.access,
-					modifyModels: models => {
-						projectionCount += 1;
-						return models.map(model =>
-							model.provider === "changing-provider"
-								? { ...model, name: `projection-${projectionCount}` }
-								: model,
-						);
-					},
+					modifyModels: models =>
+						models.map(model => (model.provider === "changing-provider" ? { ...model, name } : model)),
 				},
 			},
 			"ext://oauth",
 		);
-
-		const refreshPromise = registry.refresh("offline");
+		// A real config transition invalidates scoped snapshots, independent of
+		// whether refreshing an unchanged catalog needs another projection.
+		fs.writeFileSync(modelsJsonPath, JSON.stringify({ providers: {} }));
+		const refreshing = registry.refresh("offline");
+		name = "temporary";
 		expect(registry.find("anthropic", anthropicId!)).toBeDefined();
-		expect(registry.find("changing-provider", "runtime-model")?.name).toBe("projection-3");
-		await refreshPromise;
+		name = "committed";
+		expect(registry.find("changing-provider", "runtime-model")?.name).toBe("committed");
+		await refreshing;
+		expect(getProviderModels(registry, "changing-provider")[0]?.name).toBe("committed");
 	});
 
 	test("registering another provider reapplies whole-catalog modifyModels projections", async () => {

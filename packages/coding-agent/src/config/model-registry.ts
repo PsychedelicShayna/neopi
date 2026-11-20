@@ -236,12 +236,20 @@ interface ConfiguredModelDiscoveryResult {
 /** One configured provider's discovery outcome within a discovery pass. */
 type ConfiguredDiscoveryPassResult = ConfiguredModelDiscoveryResult & { provider: DiscoveryProviderConfig };
 
+type BuiltInDiscoveryPassResult = BuiltInDiscoveryResult & {
+	runtimeRegistrations: ReadonlyMap<string, ModelRegistryRegisterChange>;
+};
+
 /** What a discovery pass lands against the current configuration. */
 interface RuntimeDiscoveryLanding {
 	/** Discovered rows in merge order: configured providers still configured, then built-in managers. */
 	discovered: Model<Api>[];
 	/** Configured providers whose runtime rows the pass replaces. */
 	replacedConfiguredProviders: string[];
+	/** Built-in providers with authoritative results for their current registration. */
+	builtInAuthoritativeProviders: Set<string>;
+	/** Built-in providers whose current registration's results replace runtime rows. */
+	builtInReplaceRuntimeProviders: Set<string>;
 	/** Every provider whose runtime layer the pass rewrites. */
 	touchedProviders: Set<string>;
 }
@@ -538,7 +546,7 @@ export class ModelRegistry {
 	get modelConfig(): ModelConfigEditor {
 		return (this.#modelConfigEditor ??= new ModelConfigEditor(this.#modelsConfigFile));
 	}
-	#lastStaticLoadMtime: number | null = null;
+	#lastStaticLoadMtime: number | null | undefined;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -756,7 +764,9 @@ export class ModelRegistry {
 		if (options?.refreshCommandCredentials) {
 			if (providerId) this.#invalidateProviderCommandConfigs(providerId);
 			else this.#invalidateAllCommandConfigs();
-			this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
+			// Re-mint command results without discarding the warm catalog.
+			// A changed models.yml still reloads and preserves live discoveries.
+			this.#reloadStaticModels({ preserveRuntimeDiscovery: true });
 			return;
 		}
 		this.#reloadStaticModels();
@@ -1106,7 +1116,7 @@ export class ModelRegistry {
 
 	async #runPolicyReapply(): Promise<void> {
 		try {
-			this.#lastStaticLoadMtime = null;
+			this.#lastStaticLoadMtime = undefined;
 			await this.refresh("offline");
 		} finally {
 			this.#policyReapply = undefined;
@@ -1457,8 +1467,19 @@ export class ModelRegistry {
 	#reloadStaticModels(options?: { force?: boolean; preserveRuntimeDiscovery?: boolean }): void {
 		const currentMtime = this.#modelsConfigFile.getMtimeMs();
 		const staticConfigUnchanged = currentMtime === this.#lastStaticLoadMtime;
-		if (!options?.force && currentMtime !== null && staticConfigUnchanged) {
-			// Models config unchanged since last load; reloading would be redundant.
+		if (!options?.force && staticConfigUnchanged) {
+			// Config is unchanged, but OAuth credentials can change independently.
+			// A modifier can touch any provider, including cached lazy lookups.
+			if (this.#runtimeModelModifiers.size > 0) {
+				this.#internedStaticModels.clear();
+				this.#providerLookupSnapshots.clear();
+				if (this.#hasFullSnapshot) {
+					this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+				}
+				// Resend the catalog layer so mirrors reapply modifiers too.
+				this.#mirroredDiscovery = undefined;
+				this.#scheduleMirrorFlush();
+			}
 			return;
 		}
 		// Inside a runtime-change entry point the mirror replays the reload with the change itself.
@@ -2780,11 +2801,12 @@ export class ModelRegistry {
 
 	/**
 	 * What a discovery pass lands against the current configuration. Results of
-	 * configured providers dropped from models.yml while the pass ran are left out.
+	 * configured providers dropped from models.yml or built-in providers with
+	 * superseded runtime registrations are left out.
 	 */
 	#runtimeDiscoveryLanding(
 		configuredDiscoveryResults: readonly ConfiguredDiscoveryPassResult[],
-		builtInDiscovery: BuiltInDiscoveryResult,
+		builtInDiscovery: BuiltInDiscoveryPassResult,
 	): RuntimeDiscoveryLanding {
 		const currentDiscoverableProviders = new Set(this.#discoverableProviders);
 		const currentConfiguredDiscoveryResults = configuredDiscoveryResults.filter(result =>
@@ -2794,12 +2816,28 @@ export class ModelRegistry {
 		const replacedConfiguredProviders = currentConfiguredDiscoveryResults.flatMap(result =>
 			result.replaceRuntimeModels ? [result.provider.provider] : [],
 		);
-		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
+		const currentRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
+		const isCurrentRegistration = (provider: string) =>
+			builtInDiscovery.runtimeRegistrations.get(provider) === currentRegistrations.get(provider);
+		const builtInModels = builtInDiscovery.models.filter(model => isCurrentRegistration(model.provider));
+		const builtInAuthoritativeProviders = new Set(
+			[...builtInDiscovery.authoritativeProviders].filter(isCurrentRegistration),
+		);
+		const builtInReplaceRuntimeProviders = new Set(
+			[...builtInDiscovery.replaceRuntimeProviders].filter(isCurrentRegistration),
+		);
+		const discovered = [...configuredDiscovered, ...builtInModels];
 		const touchedProviders = new Set(discovered.map(model => model.provider));
 		for (const provider of replacedConfiguredProviders) touchedProviders.add(provider);
-		for (const provider of builtInDiscovery.replaceRuntimeProviders) touchedProviders.add(provider);
-		for (const provider of builtInDiscovery.authoritativeProviders) touchedProviders.add(provider);
-		return { discovered, replacedConfiguredProviders, touchedProviders };
+		for (const provider of builtInReplaceRuntimeProviders) touchedProviders.add(provider);
+		for (const provider of builtInAuthoritativeProviders) touchedProviders.add(provider);
+		return {
+			discovered,
+			replacedConfiguredProviders,
+			builtInAuthoritativeProviders,
+			builtInReplaceRuntimeProviders,
+			touchedProviders,
+		};
 	}
 
 	/**
@@ -2814,7 +2852,7 @@ export class ModelRegistry {
 	 */
 	#prepareRuntimeDiscoveryLanding(
 		configuredDiscoveryResults: readonly ConfiguredDiscoveryPassResult[],
-		builtInDiscovery: BuiltInDiscoveryResult,
+		builtInDiscovery: BuiltInDiscoveryPassResult,
 	): Promise<void> | undefined {
 		const { discovered, touchedProviders } = this.#runtimeDiscoveryLanding(
 			configuredDiscoveryResults,
@@ -2863,18 +2901,21 @@ export class ModelRegistry {
 	 */
 	#landRuntimeDiscoveries(
 		configuredDiscoveryResults: readonly ConfiguredDiscoveryPassResult[],
-		builtInDiscovery: BuiltInDiscoveryResult,
+		builtInDiscovery: BuiltInDiscoveryPassResult,
 		providerFilter: ReadonlySet<string> | undefined,
 	): void {
 		this.#captureCatalogMetrics(builtInDiscovery.models, providerFilter === undefined);
-		const { discovered, replacedConfiguredProviders, touchedProviders } = this.#runtimeDiscoveryLanding(
-			configuredDiscoveryResults,
-			builtInDiscovery,
-		);
+		const {
+			discovered,
+			replacedConfiguredProviders,
+			builtInAuthoritativeProviders,
+			builtInReplaceRuntimeProviders,
+			touchedProviders,
+		} = this.#runtimeDiscoveryLanding(configuredDiscoveryResults, builtInDiscovery);
 		if (
 			discovered.length === 0 &&
-			builtInDiscovery.authoritativeProviders.size === 0 &&
-			builtInDiscovery.replaceRuntimeProviders.size === 0 &&
+			builtInAuthoritativeProviders.size === 0 &&
+			builtInReplaceRuntimeProviders.size === 0 &&
 			replacedConfiguredProviders.length === 0
 		) {
 			return;
@@ -2890,12 +2931,12 @@ export class ModelRegistry {
 			),
 		);
 		const authoritativeProviders = providersWithAuthoritativeProjectCatalog(discoveredModels);
-		for (const provider of builtInDiscovery.authoritativeProviders) {
+		for (const provider of builtInAuthoritativeProviders) {
 			authoritativeProviders.add(provider);
 		}
 
 		const replacedProviderSet = new Set(replacedConfiguredProviders);
-		for (const provider of builtInDiscovery.replaceRuntimeProviders) {
+		for (const provider of builtInReplaceRuntimeProviders) {
 			replacedProviderSet.add(provider);
 			this.#replacedCacheProviders.add(provider);
 			this.#cachedStandardModelsByProvider.delete(provider);
@@ -3230,16 +3271,21 @@ export class ModelRegistry {
 	async #discoverBuiltInProviderModels(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
-	): Promise<BuiltInDiscoveryResult> {
+	): Promise<BuiltInDiscoveryPassResult> {
 		// Skip providers already handled by configured discovery (e.g. user-configured ollama with discovery.type)
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(p => p.provider));
-		const managerOptions = await this.#collectBuiltInModelManagerOptions(
+		const { options: managerOptions, runtimeRegistrations } = await this.#collectBuiltInModelManagerOptions(
 			strategy,
 			providerFilter,
 			configuredDiscoveryProviders,
 		);
 		if (managerOptions.length === 0) {
-			return { models: [], authoritativeProviders: new Set(), replaceRuntimeProviders: new Set() };
+			return {
+				models: [],
+				authoritativeProviders: new Set(),
+				replaceRuntimeProviders: new Set(),
+				runtimeRegistrations,
+			};
 		}
 		const writesBefore = getModelCacheWriteStats();
 		const discoveries = await Promise.all(
@@ -3270,7 +3316,7 @@ export class ModelRegistry {
 				replaceRuntimeProviders.add(provider);
 			}
 		}
-		return { models, authoritativeProviders, replaceRuntimeProviders };
+		return { models, authoritativeProviders, replaceRuntimeProviders, runtimeRegistrations };
 	}
 
 	/**
@@ -3351,7 +3397,10 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter: ReadonlySet<string> | undefined,
 		configuredDiscoveryProviders: ReadonlySet<string>,
-	): Promise<ModelManagerOptions<Api>[]> {
+	): Promise<{
+		options: ModelManagerOptions<Api>[];
+		runtimeRegistrations: ReadonlyMap<string, ModelRegistryRegisterChange>;
+	}> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
 			resolveKey: (value: string | undefined) => string | undefined;
@@ -3451,6 +3500,7 @@ export class ModelRegistry {
 		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
 		const standardProviderKeys = await Promise.all(
@@ -3476,9 +3526,13 @@ export class ModelRegistry {
 				),
 			),
 		);
+		// Options and their registration identities are selected without yielding,
+		// after credential awaits; replacements during those awaits belong to this pass.
+		const runtimeRegistrations = new Map(this.#runtimeRegistrations.map(change => [change.name, change]));
 		const options: ModelManagerOptions<Api>[] = [];
 		for (let i = 0; i < standardProviderDescriptors.length; i++) {
 			const descriptor = standardProviderDescriptors[i];
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) continue;
 			const apiKey = standardProviderKeys[i];
 			const hasExplicitVllmConfig =
 				descriptor.providerId === "vllm" &&
@@ -3519,6 +3573,7 @@ export class ModelRegistry {
 
 		for (let i = 0; i < enabledSpecialProviderDescriptors.length; i++) {
 			const descriptor = enabledSpecialProviderDescriptors[i];
+			if (this.#runtimeModelManagers.has(descriptor.providerId)) continue;
 			const key = descriptor.resolveKey(specialKeys[i]);
 			if (!isAuthenticated(key)) {
 				continue;
@@ -3563,7 +3618,7 @@ export class ModelRegistry {
 				);
 			}
 		}
-		return options;
+		return { options, runtimeRegistrations };
 	}
 
 	async #discoverWithModelManager(
