@@ -1468,7 +1468,18 @@ export class ModelRegistry {
 		const currentMtime = this.#modelsConfigFile.getMtimeMs();
 		const staticConfigUnchanged = currentMtime === this.#lastStaticLoadMtime;
 		if (!options?.force && staticConfigUnchanged) {
-			// Models config unchanged since last load; reloading would be redundant.
+			// Config is unchanged, but OAuth credentials can change independently.
+			// A modifier can touch any provider, including cached lazy lookups.
+			if (this.#runtimeModelModifiers.size > 0) {
+				this.#internedStaticModels.clear();
+				this.#providerLookupSnapshots.clear();
+				if (this.#hasFullSnapshot) {
+					this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
+				}
+				// Resend the catalog layer so mirrors reapply modifiers too.
+				this.#mirroredDiscovery = undefined;
+				this.#scheduleMirrorFlush();
+			}
 			return;
 		}
 		// Inside a runtime-change entry point the mirror replays the reload with the change itself.
