@@ -2,14 +2,14 @@ name: Warm bun store cache
 
 # Produces the shared `bun-<os>-<lockhash>` store entry PR jobs restore. PR jobs
 # restore it but never save (per-PR-ref copies of the ~500 MB store once ate
-# ~9.4 GB of the 10 GB repo cache quota), bun-install's save half only runs on
-# non-PR events, and main CI jobs run on vmon (omp-ci template store, no
-# GitHub cache), so this is the sole GitHub-hosted producer. Triggers only on pushes
-# that can change the entry.
+# ~9.4 GB of the 10 GB repo cache quota). The composite action saves only on
+# neopi, the default promoted branch whose cache PRs can restore. This hosted
+# producer warms it when a promoted dependency snapshot changes; nightly
+# self-hosted jobs also retain their bind-mounted Bun store.
 
 on:
    push:
-      branches: [main]
+      branches: [neopi]
       paths:
          - "bun.lock"
          - ".github/actions/bun-install/**"

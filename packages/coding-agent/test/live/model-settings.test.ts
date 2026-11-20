@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getSettingsForTab } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { Settings } from "../../src/config/settings";
+import { createSettingsHost } from "../../src/config/settings-ui";
 import * as attestation from "../../src/live/attestation";
 import { LiveSessionController, type LiveSessionControllerOptions } from "../../src/live/controller";
 import { buildLiveSessionPayload } from "../../src/live/protocol";
@@ -31,7 +33,7 @@ it("round-trips live.model through config YAML and builds the configured session
 	await fs.mkdir(cwd);
 	await Bun.write(path.join(agentDir, "config.yml"), "setupVersion: 999999\n");
 	const settings = await Settings.init({ cwd, agentDir });
-	expect(cfgLiveModel.get(settings)).toBe("gpt-live-1-codex");
+	expect(cfgLiveModel.get(settings)).toBe("gpt-live-1.1-codex");
 	expect(cfgLiveVoice.get(settings)).toBe("sol");
 	cfgLiveModel.set(settings, "custom-live-model");
 	await settings.flush();
@@ -52,7 +54,22 @@ it("round-trips live.model through config YAML and builds the configured session
 	}
 });
 
-it("sends a non-default live.model through the real controller and transport signaling payload", async () => {
+it("offers GPT Live 1.1 and GPT Live 1 in the settings panel, each stored as the requested model", () => {
+	state = beginSettingsTest();
+	const settings = Settings.isolated();
+	const def = getSettingsForTab(createSettingsHost(settings).entries, "providers").find(
+		candidate => candidate.path === "live.model",
+	);
+	if (def?.type !== "submenu") throw new Error("live.model must render as a picker");
+	const slugs = def.options.map(option => option.value);
+	expect(slugs).toEqual(["gpt-live-1.1-codex", "gpt-live-1-codex"]);
+	for (const slug of slugs) {
+		cfgLiveModel.set(settings, slug);
+		expect(buildLiveSessionPayload("", "sol", cfgLiveModel.get(settings)).model).toBe(slug);
+	}
+});
+
+it("sends a non-default live.model and the call correlation headers through the real controller and transport", async () => {
 	state = beginSettingsTest();
 	const settings = Settings.isolated({ "live.model": "configured-live-model-wire", "live.voice": "sol" });
 	const authStorage = createInMemoryAuthStorage();
@@ -62,12 +79,14 @@ it("sends a non-default live.model through the real controller and transport sig
 	});
 	vi.spyOn(attestation, "generateCodexAttestation").mockResolvedValue(undefined);
 	let signaling: unknown;
+	let signalingHeaders = new Headers();
 	const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
 		Object.assign(
 			async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 				expect(String(input)).toContain("/codex/realtime/calls");
 				if (typeof init?.body !== "string") throw new Error("Expected JSON signaling body");
 				signaling = JSON.parse(init.body);
+				signalingHeaders = new Headers(init.headers);
 				return new Response("offline signaling fixture", { status: 418 });
 			},
 			{
@@ -106,6 +125,11 @@ it("sends a non-default live.model through the real controller and transport sig
 			sdp: "v=0 offline caller offer",
 			session: { model: "configured-live-model-wire", audio: { output: { voice: "sol" } } },
 		});
+		// Upstream correlates the call with the thread and names each voice session separately.
+		expect(signalingHeaders.get("x-session-id")).toBe("configured-live-model-wire");
+		expect(signalingHeaders.get("voice-session-id")).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
 	} finally {
 		try {
 			await controller.stop();

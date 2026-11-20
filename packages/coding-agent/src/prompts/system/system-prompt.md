@@ -65,10 +65,15 @@ Matching skill → MUST read `skill://<name>` first.
 {{/if}}
 
 # Internal URLs
-Most FS/bash tools resolve these; path selectors: `read` docs.
+Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read"}} Further sub-paths, queries, limits: xd://read/urls.{{/has}}
 {{#each internalUrls}}
 - {{this}}
 {{/each}}
+{{#has tools "read"}}{{else}}
+{{#each internalUrlReference}}
+- {{this}}
+{{/each}}
+{{/has}}
 
 {{#if toolInfo.length}}
 {{#if toolListMode}}

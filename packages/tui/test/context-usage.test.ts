@@ -212,8 +212,8 @@ describe("deferred tool schema accounting", () => {
  * inputs.
  */
 describe("computeNonMessageTokens / computeNonMessageBreakdown memoization", () => {
-	function makeSession(systemPrompt: string[], tools: unknown[] = []) {
-		return { systemPrompt, agent: { state: { tools } } };
+	function makeSession(systemPrompt: string[], tools: unknown[] = [], skills: unknown[] = []) {
+		return { systemPrompt, agent: { state: { tools } }, skills };
 	}
 
 	it("recomputes when the system prompt reference changes and caches otherwise", () => {
@@ -277,36 +277,75 @@ describe("computeNonMessageTokens / computeNonMessageBreakdown memoization", () 
 });
 
 /**
- * Contract: missing tool descriptions or system-prompt sections still produce
- * finite token estimates. Extensions can contribute tools whose descriptions
- * are absent at runtime (issue #9331).
+ * Contract: Skills and Instruction files count exactly the source ranges the prompt build recorded,
+ * through the same attribution `/context` uses; a source whose block changed after the build is
+ * counted with its block instead.
+ */
+describe("computeNonMessageBreakdown prompt sources", () => {
+	const skillLine = "- vis: small visible skill";
+	const file = '<file path="/r/AGENTS.md">\nRules\n</file>';
+	const blocks = [`You are an agent.\n${skillLine}\nEnd.`, `Context:\n${file}`];
+	const systemPromptSources = {
+		blocks,
+		sources: [
+			{ id: "skill-0", kind: "skills" as const, label: "vis", block: 0, start: 18, end: 18 + skillLine.length },
+			{
+				id: "instruction-0",
+				kind: "instruction-files" as const,
+				label: "/r/AGENTS.md",
+				block: 1,
+				start: 9,
+				end: 9 + file.length,
+			},
+		],
+	};
+	const session = (systemPrompt: string[]) =>
+		({ systemPrompt, agent: { state: { tools: [] } }, systemPromptSources }) as never;
+
+	it("counts recorded sources apart from their blocks", () => {
+		const b = computeNonMessageBreakdown(session(blocks), tokenizer);
+		expect(b).toMatchObject({
+			skillsTokens: tokenizer.countTokens(skillLine),
+			instructionFilesTokens: tokenizer.countTokens(file),
+			systemPromptTokens: tokenizer.countTokens("You are an agent.\n\nEnd."),
+			systemContextTokens: tokenizer.countTokens("Context:\n"),
+		});
+	});
+
+	it("counts a source with its block once that block changed after the build", () => {
+		const changed = [`${blocks[0]}\nhook addition`, blocks[1]!];
+		const b = computeNonMessageBreakdown(session(changed), tokenizer);
+		expect(b.skillsTokens).toBe(0);
+		expect(b.systemPromptTokens).toBe(tokenizer.countTokens(changed[0]!));
+		expect(b.instructionFilesTokens).toBe(tokenizer.countTokens(file));
+	});
+	it("without recorded sources, counts each <skills> block of the first prompt block as Skills", () => {
+		const skillsBlock = "<skills>\n- vis: small visible skill\n</skills>";
+		const prompt = `You are an agent.\n${skillsBlock}\nEnd.`;
+		const b = computeNonMessageBreakdown(
+			{ systemPrompt: [prompt], agent: { state: { tools: [] } } } as never,
+			tokenizer,
+		);
+		expect(b.skillsTokens).toBe(tokenizer.countTokens(skillsBlock));
+		expect(b.systemPromptTokens).toBe(tokenizer.countTokens(prompt) - b.skillsTokens);
+		expect(b.instructionFilesTokens).toBe(0);
+	});
+});
+
+/**
+ * Contract: a tool or system-prompt section with a missing (`undefined`) description/text must not
+ * crash the token estimate. Extensions can contribute tools whose `description` is absent at runtime
+ * (the field is typed `string` but the extension API does not enforce it); before the guard, the
+ * `undefined` fragment reached the tokenizer and threw, killing every subagent before its first turn
+ * (issue #9331). Each path must instead yield a finite, non-negative estimate.
  */
 describe("non-message estimates tolerate a missing description", () => {
 	const readTool = { name: "read", description: "read files", parameters: {} };
 
-	it("estimateToolSchemaTokens does not throw on an undefined tool description", () => {
-		const tokens = estimateToolSchemaTokens(
-			[{ name: "lens_tool", description: undefined, parameters: {} } as never],
-			tokenizer,
-		);
-		expect(Number.isFinite(tokens)).toBe(true);
-		expect(tokens).toBeGreaterThanOrEqual(0);
-	});
-
-	it("computeNonMessageBreakdown does not throw on an undefined skill description", () => {
-		const session = {
-			systemPrompt: ["You are an agent."],
-			agent: { state: { tools: [readTool] } },
-			skills: [{ name: "lens", description: undefined, filePath: "/s/l.md" }],
-		} as never;
-		const b = computeNonMessageBreakdown(session, tokenizer);
-		expect(Number.isFinite(b.skillsTokens)).toBe(true);
-		expect(b.skillsTokens).toBeGreaterThanOrEqual(0);
-	});
 	it("computeNonMessageBreakdown does not throw on an undefined system-context section", () => {
 		const session = {
 			systemPrompt: ["primary prompt", undefined, "trailing context"],
-			agent: { state: { tools: [] } },
+			agent: { state: { tools: [readTool] } },
 		} as never;
 		const b = computeNonMessageBreakdown(session, tokenizer);
 		expect(Number.isFinite(b.systemContextTokens)).toBe(true);

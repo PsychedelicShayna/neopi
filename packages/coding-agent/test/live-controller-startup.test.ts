@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { LiveSessionController } from "../src/live/controller";
 import { LivePersonaStore, type LivePersonaState } from "../src/live/personas";
+import { Settings } from "../src/config/settings";
 import type { AgentSession } from "../src/session/agent-session";
 
 afterEach(() => vi.restoreAllMocks());
@@ -30,6 +31,7 @@ describe("live startup cancellation", () => {
 				session: {
 					messages: [],
 					modelRegistry: { authStorage: {} },
+					settings: Settings.isolated(),
 					sessionId: "startup-cancellation-test",
 					sessionManager: { getCwd: () => process.cwd() },
 					subscribe: () => () => {},

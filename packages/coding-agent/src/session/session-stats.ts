@@ -327,12 +327,10 @@ export class SessionStatsTracker {
 		const rawContextWindow = options?.contextWindow ?? this.#host.model()?.contextWindow ?? 0;
 		const contextWindow = Number.isFinite(rawContextWindow) && rawContextWindow > 0 ? rawContextWindow : 0;
 		const settings = this.#host.session.settings;
-		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(
-			this.#host.session,
-			this.#tokenizer,
-			settings?.revision,
-		);
-		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
+		const { skillsTokens, instructionFilesTokens, toolsTokens, systemContextTokens, systemPromptTokens } =
+			computeNonMessageBreakdown(this.#host.session, this.#tokenizer, settings?.revision);
+		const categoryNonMessageTokens =
+			skillsTokens + instructionFilesTokens + toolsTokens + systemContextTokens + systemPromptTokens;
 		const current = {
 			nonMessageTokens: computeNonMessageTokens(this.#host.session, this.#tokenizer, settings?.revision),
 			toolSchemaTokens: toolsTokens,
@@ -419,6 +417,7 @@ export class SessionStatsTracker {
 			systemPromptTokens,
 			systemToolsTokens: toolsTokens,
 			systemContextTokens,
+			instructionFilesTokens,
 			skillsTokens,
 			messagesTokens: Math.max(0, usedTokens - categoryNonMessageTokens),
 		};

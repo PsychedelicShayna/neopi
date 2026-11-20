@@ -3,8 +3,8 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register, type ScopeLike } from "../config/registry";
-import { DEFAULT_LIVE_MODEL } from "./protocol";
-import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS, LIVE_VOICE_VALUES } from "./voices";
+import { DEFAULT_LIVE_MODEL, LIVE_MODEL_OPTIONS } from "./protocol";
+import { DEFAULT_LIVE_VOICE, LIVE_VOICE_OPTIONS } from "./voices";
 
 export const cfgLiveModel = register({
 	id: "live.model",
@@ -20,20 +20,20 @@ export const cfgLiveModel = register({
 		tab: "providers",
 		group: "Services",
 		label: "Live Model",
-		description: "Codex realtime model slug; applies to the next live call",
+		description: "Model requested for the next live call; the service does not report which model answers",
+		options: LIVE_MODEL_OPTIONS,
 	},
 });
 
 export const cfgLiveVoice = register({
 	id: "live.voice",
-	type: "enum",
-	values: LIVE_VOICE_VALUES,
+	type: "string",
 	default: DEFAULT_LIVE_VOICE,
 	ui: {
 		tab: "providers",
 		group: "Services",
 		label: "Live Voice",
-		description: "Voice used by Codex-backed realtime voice sessions",
+		description: "Voice of realtime voice sessions; a custom live endpoint may take other names (set in config)",
 		options: LIVE_VOICE_OPTIONS,
 	},
 });
@@ -189,7 +189,47 @@ export const cfgLiveSubmitSilenceMs = register({
 	},
 });
 
+function validateLiveEndpoint(raw: unknown): void {
+	if (typeof raw !== "string" || !raw.trim()) return;
+	let protocol: string;
+	try {
+		protocol = new URL(raw.trim()).protocol;
+	} catch {
+		throw new Error(`live.endpoint must be an http(s) URL, got ${JSON.stringify(raw)}`);
+	}
+	if (protocol !== "http:" && protocol !== "https:") {
+		throw new Error(`live.endpoint must be an http(s) URL, got ${JSON.stringify(raw)}`);
+	}
+}
+
+export const cfgLiveEndpoint = register({
+	id: "live.endpoint",
+	type: "string",
+	default: undefined,
+	validate: validateLiveEndpoint,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Endpoint",
+		description:
+			"Base URL of an OpenAI Realtime WebRTC-compatible server (e.g. http://127.0.0.1:8080/v1) used for live voice instead of Codex; empty uses Codex",
+	},
+});
+
+export const cfgLiveApiKey = register({
+	id: "live.apiKey",
+	type: "string",
+	default: undefined,
+	credential: true,
+	ui: {
+		tab: "providers",
+		group: "Services",
+		label: "Live Endpoint API Key",
+		description: "Bearer key sent only to the live endpoint: a literal, an environment variable name, or !command",
+	},
+});
+
 /** The voice a live session uses: an explicit choice, else the `live.voice` setting, else the default. */
 export function resolveLiveVoice(scope: ScopeLike, voice?: string): string {
-	return voice?.trim() || cfgLiveVoice.get(scope) || DEFAULT_LIVE_VOICE;
+	return voice?.trim() || cfgLiveVoice.get(scope).trim() || DEFAULT_LIVE_VOICE;
 }

@@ -79,6 +79,7 @@ class LazyFakeSession {
 	sessionId: string;
 	agent: { sessionId: string; waitForIdle: () => Promise<void> };
 	model: Model | undefined = TEST_MODEL;
+	scopedModels: AgentSession["scopedModels"] = [];
 	thinkingLevel: string | undefined;
 	customCommands: [] = [];
 	extensionRunner = undefined;

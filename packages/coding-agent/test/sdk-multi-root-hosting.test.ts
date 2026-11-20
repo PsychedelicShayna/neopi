@@ -49,7 +49,11 @@ function toolCall(name: string, args: Record<string, unknown>): ToolCall {
 	return { type: "toolCall", id: `call-${name}-${Bun.nanoseconds()}`, name, arguments: args };
 }
 
-/** Roots answer plain text; subagents optionally spawn one nested `Research`, then yield. */
+/**
+ * Roots answer plain text; subagents optionally spawn one nested `Research`, then yield. Spawns carry a
+ * permissive `outputSchema: {}`: under the schema-only yield contract only schema-bound children get
+ * the `yield` tool this scripted model uses to tell a subagent from a root.
+ */
 function reply(context: Context): AssistantMessage {
 	const yieldTool = (context.tools ?? []).find(tool => tool.name === "yield");
 	const message = createAssistantMessage(yieldTool ? "" : "ack");
@@ -65,7 +69,7 @@ function reply(context: Context): AssistantMessage {
 	const keySchema = (yieldTool.parameters as { properties?: { key?: { enum?: number[] } } }).properties?.key;
 	message.content = [
 		assignment.includes(NEST) && !spawned
-			? toolCall("task", { name: "Research", agent: "task", task: "LEAF work" })
+			? toolCall("task", { name: "Research", agent: "task", task: "LEAF work", outputSchema: {} })
 			: toolCall(
 					"yield",
 					keySchema?.enum ? { key: keySchema.enum[0], data: { report: "pooled" } } : { data: { report: "done" } },
@@ -213,7 +217,7 @@ describe("two simultaneous top-level roots (issue #121)", () => {
 	async function spawn(root: Root, task: string): Promise<string> {
 		const result = await root.session
 			.getToolByName("task")!
-			.execute(`call-${Bun.nanoseconds()}`, { name: "Research", agent: "task", task });
+			.execute(`call-${Bun.nanoseconds()}`, { name: "Research", agent: "task", task, outputSchema: {} });
 		const jobId = (result.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
 		if (!jobId) throw new Error(`task did not start async: ${JSON.stringify(result.content)}`);
 		return jobId;
