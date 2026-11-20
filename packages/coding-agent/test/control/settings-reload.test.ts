@@ -26,7 +26,7 @@ afterEach(async () => {
 	else process.env.PI_CONTROL_DIR = previousControlDir;
 });
 
-test("every Apply reaches all receivers repeatedly, project targets are isolated, and dead sockets time out", async () => {
+test("global Apply repeats, project and session reloads are isolated, and dead sockets time out", async () => {
 	dir = await fs.mkdtemp(path.join(os.tmpdir(), "settings-reload-"));
 	const registry = path.join(dir, "ctl");
 	const profile = path.join(dir, "profile");
@@ -35,16 +35,23 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 	await Bun.write(path.join(profile, "config.yml"), "theme:\n  dark: titanium\n");
 	previousControlDir = process.env.PI_CONTROL_DIR;
 	process.env.PI_CONTROL_DIR = registry;
-	for (const cwd of projects) {
+	for (const [i, cwd] of projects.entries()) {
 		await fs.mkdir(cwd, { recursive: true });
 		children.push(
-			Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../fixtures/settings-reload-host.ts")], {
-				cwd,
-				env: { ...process.env, PI_CODING_AGENT_DIR: profile, PI_CONTROL_DIR: registry },
-				stdin: "pipe",
-				stdout: "ignore",
-				stderr: "pipe",
-			}),
+			Bun.spawn(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "../fixtures/settings-reload-host.ts"),
+					...(i < 2 ? ["--session"] : []),
+				],
+				{
+					cwd,
+					env: { ...process.env, PI_CODING_AGENT_DIR: profile, PI_CONTROL_DIR: registry },
+					stdin: "pipe",
+					stdout: "ignore",
+					stderr: "pipe",
+				},
+			),
 		);
 	}
 	const deadline = Date.now() + 15000;
@@ -81,8 +88,41 @@ test("every Apply reaches all receivers repeatedly, project targets are isolated
 			// Receiver identity is independent of logical vs physical cwd spelling.
 			value: children.slice(0, 2).some(child => child.pid === entries[i].meta.pid) ? "anthracite" : "titanium",
 		});
+	const [targetIndex, peerIndex] = children
+		.slice(0, 2)
+		.map(child => entries.findIndex(({ meta }) => meta.pid === child.pid));
+	const target = clients[targetIndex];
+	const peer = clients[peerIndex];
+	const colorBlindMode = { type: "settings_get", path: "colorBlindMode" };
+	const reloadSession = { type: "reload_settings", scope: "session" };
+	expect((await target.request(colorBlindMode)).data).toEqual({ path: "colorBlindMode", value: false });
+	for (const i of [targetIndex, peerIndex]) {
+		const sessionFile = entries[i].meta.sessionFile;
+		if (!sessionFile?.endsWith(".jsonl")) throw new Error("reload fixture needs a persisted session");
+		await Bun.write(path.join(sessionFile.slice(0, -6), "settings.yml"), "colorBlindMode: true\n");
+	}
+	await Bun.write(path.join(projects[0], ".omp/config.yml"), "theme:\n  dark: dark\n");
+	expect(await target.request(reloadSession)).toMatchObject({ success: true, data: { applied: true } });
+	expect((await target.request(colorBlindMode)).data).toEqual({ path: "colorBlindMode", value: true });
+	expect((await peer.request(colorBlindMode)).data).toEqual({ path: "colorBlindMode", value: false });
+	expect(await peer.request(reloadSession)).toMatchObject({ success: true, data: { applied: true } });
+	expect((await peer.request(colorBlindMode)).data).toEqual({ path: "colorBlindMode", value: true });
+	expect(await target.request({ type: "reload_settings", scope: "runtime" })).toMatchObject({
+		success: false,
+		code: "invalid_value",
+		error: "Reload scope must be global, project, or session",
+	});
 	expect(await broadcastSettingsReload("session")).toEqual({ notified: 0, failed: 0, unsupported: 0 });
 	const mismatched = clients.find((_client, i) => entries[i].meta.pid === children[2].pid)!;
+	expect(await mismatched.request(reloadSession)).toMatchObject({
+		success: false,
+		code: "invalid_value",
+		error: "This host has no session file",
+	});
+	expect((await target.request({ type: "settings_get", path: "theme.dark" })).data).toEqual({
+		path: "theme.dark",
+		value: "anthracite",
+	});
 	expect(
 		(await mismatched.request({ type: "reload_settings", scope: "project", projectDir: projects[0] })).data,
 	).toEqual({ applied: false });

@@ -952,11 +952,19 @@ export class ControlHost {
 				await this.#switchModel(connection, frame);
 				return;
 			case "reload_settings": {
-				if (frame.scope !== "global" && frame.scope !== "project") {
+				if (frame.scope !== "global" && frame.scope !== "project" && frame.scope !== "session") {
 					this.#reply(connection, frame, {
 						success: false,
 						code: "invalid_value",
-						error: "Reload scope must be global or project",
+						error: "Reload scope must be global, project, or session",
+					});
+					return;
+				}
+				if (frame.scope === "session" && !this.#options.session.sessionFile) {
+					this.#reply(connection, frame, {
+						success: false,
+						code: "invalid_value",
+						error: "This host has no session file",
 					});
 					return;
 				}
@@ -977,7 +985,8 @@ export class ControlHost {
 						return;
 					}
 				}
-				await this.#options.session.settings.applySettingsReload();
+				if (frame.scope === "session") await this.#options.session.settings.recheckSettingsFiles("session");
+				else await this.#options.session.settings.applySettingsReload();
 				this.#reply(connection, frame, { success: true, data: { applied: true } });
 				return;
 			}

@@ -1646,13 +1646,14 @@ export class Settings {
 		this.#replaceSessionLayer(filePath, loaded, file.stamp);
 	}
 
-	/** Reconcile external file changes before opening the settings editor. */
-	async recheckSettingsFiles(): Promise<void> {
+	/** Reconcile external file changes, optionally limited to the bound session sidecar. */
+	async recheckSettingsFiles(scope?: "session"): Promise<void> {
 		// Worker mirrors never read from disk. The interactive editor runs on the owner.
 		if (this.#mirror) return;
-		await this.#parent?.recheckSettingsFiles();
+		if (scope !== "session") await this.#parent?.recheckSettingsFiles();
 		await this.#exclusive("recheck", async () => {
 			await this.#recheckSessionSettings();
+			if (scope === "session") return;
 			const [global, project] = await Promise.all([
 				checkSettingsFiles(this.#globalSettingsFiles.keys(), this.#globalSettingsFiles),
 				checkSettingsFiles(this.#projectSettingsFiles.keys(), this.#projectSettingsFiles),

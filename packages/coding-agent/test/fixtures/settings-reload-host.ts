@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -16,10 +17,13 @@ const session = new AgentSession({
 		initialState: { model, systemPrompt: [], tools: [] },
 		streamFn: model.stream,
 	}),
-	sessionManager: SessionManager.inMemory(process.cwd()),
+	sessionManager: process.argv.includes("--session")
+		? SessionManager.create(process.cwd(), path.join(process.env.PI_CODING_AGENT_DIR!, "sessions"))
+		: SessionManager.inMemory(process.cwd()),
 	settings,
 	modelRegistry: new ModelRegistry(auth, `${process.env.PI_CODING_AGENT_DIR}/models.yml`),
 });
+await settings.attachSessionFile(session.sessionFile);
 const host = new ControlHost({ session, role: "rpc" });
 await host.start();
 host.markReady();
