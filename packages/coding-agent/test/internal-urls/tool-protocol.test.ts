@@ -76,7 +76,7 @@ describe("tool:// enabled catalog", () => {
 	it("exposes wire schemas, examples and restrictions without invoking the tool or policy", async () => {
 		const { session, device, counts } = fixture();
 		const resource = await new InternalUrlRouter().resolve("tool://checkpoint", { session });
-		expect(schemaFromDocs(resource.content)).toEqual(toolWireSchema(device));
+		expect(schemaFromDocs(String(resource.content))).toEqual(toolWireSchema(device));
 		expect(resource.content).toContain(JSON.stringify(device.examples, null, 2));
 		expect(resource.content).toContain("Only inspect project files.");
 		expect(resource.content).toContain("Load mode: discoverable");
@@ -108,7 +108,7 @@ describe("tool:// enabled catalog", () => {
 		tools.set("checkpoint", replacement);
 		const resource = await router.resolve("tool://checkpoint", { session });
 		expect(resource.content).toContain("Replacement docs");
-		expect(schemaFromDocs(resource.content)).toEqual(toolWireSchema(replacement));
+		expect(schemaFromDocs(String(resource.content))).toEqual(toolWireSchema(replacement));
 	});
 
 	it("works without XD enabled and falls back to active plus mounted names for factory consumers", async () => {

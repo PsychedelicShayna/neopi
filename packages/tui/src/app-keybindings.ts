@@ -39,6 +39,7 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
+	"app.ask.cancel": true;
 	"app.ask.note": true;
 	"app.approval.approve": true;
 	"app.editor.external": true;
@@ -162,6 +163,11 @@ export const KEYBINDINGS = {
 	"app.ask.hide": {
 		defaultKeys: "alt+h",
 		description: "Hide or show a pending ask dialog",
+	},
+	"app.ask.cancel": {
+		// Esc cancels only while the keys are inside the ask; from the composer it keeps its own meaning.
+		defaultKeys: "alt+x",
+		description: "Cancel a pending ask dialog",
 	},
 	"app.ask.note": {
 		// Dropdowns keep printable keys for type-ahead, so they take the first non-printable key.

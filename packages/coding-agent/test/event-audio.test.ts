@@ -38,9 +38,13 @@ function player(warnings: string[]): EventSoundPlayer {
 
 describe("event audio classification", () => {
 	test("distinguishes async pause from final completion", () => {
-		expect(sessionAudioEvents({ type: "agent_end", messages: [], isTerminal: false })).toEqual(["agent.pause"]);
-		expect(sessionAudioEvents({ type: "agent_end", messages: [], awaitingAsyncWork: true })).toEqual(["agent.pause"]);
-		expect(sessionAudioEvents({ type: "agent_end", messages: [], isTerminal: true })).toEqual(["agent.complete"]);
+		expect(sessionAudioEvents({ type: "agent_pause", messages: [], yielded: true, awaiting: false })).toEqual([
+			"agent.pause",
+		]);
+		expect(sessionAudioEvents({ type: "agent_pause", messages: [], yielded: true, awaiting: true })).toEqual([
+			"agent.pause",
+		]);
+		expect(sessionAudioEvents({ type: "agent_end", messages: [] })).toEqual(["agent.complete"]);
 	});
 
 	test("does not call a partially failed multi-file edit a tool success", () => {

@@ -58,7 +58,7 @@ logSink.write("entry");
 
 let output = "";
 try {
-	const result = await new Shell().run({ command: "sh -c 'ls -l /proc/$$/fd'", cwd: ${JSON.stringify(root)} }, (_err, chunk) => {
+	const result = await new Shell().run({ command: "/bin/sh -c 'ls -l /proc/$$/fd'", cwd: ${JSON.stringify(root)} }, (_err, chunk) => {
 		output += chunk;
 	});
 	if (result.exitCode !== 0) throw new Error("Descriptor listing failed: " + output);

@@ -183,6 +183,11 @@ interface AskDialogOptions {
 	 * ignores the key.
 	 */
 	passthrough?(keyData: string): boolean;
+	/**
+	 * Hands the keyboard to the composer below the dialog: ↓ past the last answer, Tab past the last
+	 * tab, or hiding the question. The question stays pending.
+	 */
+	releaseKeys?(): void;
 }
 
 interface QuestionState {
@@ -765,11 +770,12 @@ export class AskDialogComponent implements Component {
 		this.#native = undefined;
 		if (keyData !== "n" && keyData !== "N") this.#justAnswered = undefined;
 		const inputGuard = this.options.inputGuard;
+		// The composer owns typing while a draft holds it or the question is hidden; the keys are then the
+		// composer's, Esc included, so it never cancels a question the user is not looking at.
+		const composerOwns = inputGuard !== undefined && (this.#guardBlocks() || this.#hidden);
 		// Proxied draft text wins over remapped menu actions.
-		if (inputGuard && (this.#guardBlocks() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
-			this.#keys.reset();
-			inputGuard.handleInput(keyData);
-			this.#requestRender();
+		if (composerOwns && extractPrintableText(keyData) !== undefined) {
+			this.#toComposer(keyData);
 			return;
 		}
 		if (!this.#guardBlocks() && !this.#hidden && this.#help.handleInput(keyData)) {
@@ -781,12 +787,17 @@ export class AskDialogComponent implements Component {
 			this.#keys.reset();
 			return;
 		}
-		if (matchesSelectCancel(keyData)) {
+		if (getKeybindings().matches(keyData, "app.ask.cancel")) {
 			this.#finishCancel();
 			return;
 		}
+		if (matchesSelectCancel(keyData)) {
+			if (composerOwns) this.#toComposer(keyData);
+			else this.#finishCancel();
+			return;
+		}
 		if (getKeybindings().matches(keyData, "app.ask.hide")) {
-			this.#setHidden(!this.#hidden);
+			this.setHidden(!this.#hidden);
 			return;
 		}
 		// Expand before the draft-input guard so the expansion action can reveal a truncated
@@ -804,25 +815,26 @@ export class AskDialogComponent implements Component {
 				this.#releaseGuard();
 				return;
 			}
-			inputGuard?.handleInput(keyData);
-			this.#requestRender();
+			this.#toComposer(keyData);
 			return;
 		}
 		if (this.#hidden) {
 			this.#keys.reset();
-			// Hidden, the question waits and the composer takes the typing; Enter on
-			// an empty composer brings the question back.
+			// Hidden, the question waits and the composer takes the typing; Enter brings the question back.
 			if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-				this.#setHidden(false);
-			} else if (inputGuard) {
-				inputGuard.handleInput(keyData);
-				this.#requestRender();
-			}
+				this.setHidden(false);
+			} else this.#toComposer(keyData);
 			return;
 		}
 		const action = this.#keys.read(keyData);
 		if (action === "pending") return;
 		if (action && (action.kind === "context" || action.kind === "horizontal")) {
+			// Tab past the last tab (the Review tab, or the only question) goes down to the composer.
+			const onLastTab = !this.#hasSubmitTab() || this.#isSubmitTab();
+			if (action.kind === "context" && action.delta > 0 && onLastTab && this.options.releaseKeys) {
+				this.#releaseKeys();
+				return;
+			}
 			if (this.#hasSubmitTab()) {
 				this.#switchTab(action.delta);
 				this.#requestRender();
@@ -830,8 +842,53 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (this.#isSubmitTab()) {
-			if (action) this.#handleSubmitTabInput(action);
+			if (action && action.kind !== "search") this.#handleSubmitTabInput(action);
+			// Printable text the review has no use for starts (or continues) the composer's draft.
+			else if (extractPrintableText(keyData) !== undefined) this.#toComposer(keyData);
 		} else this.#handleQuestionInput(keyData, action);
+	}
+
+	/** Whether the question is collapsed to one line (`app.ask.hide`) while it stays pending. */
+	get hidden(): boolean {
+		return this.#hidden;
+	}
+
+	/**
+	 * Collapses the question to one line or shows it again. Hiding hands the keys to the composer
+	 * ({@link AskDialogOptions.releaseKeys}); the question stays pending either way.
+	 */
+	setHidden(hidden: boolean): void {
+		if (this.#hidden === hidden) return;
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
+		this.#hidden = hidden;
+		this.#countdown?.reset();
+		this.#requestRender();
+		if (hidden) this.options.releaseKeys?.();
+	}
+
+	/**
+	 * The host brought the keys to the question because the user asked for it (↑ from the composer,
+	 * Shift+Tab, `app.ask.hide`): it shows again, and a composer draft no longer holds typing.
+	 */
+	engage(): void {
+		this.#guardReleased = true;
+		this.#native = undefined;
+		this.setHidden(false);
+		this.#requestRender();
+	}
+
+	/** A key that belongs to the composer: the input guard takes it there. */
+	#toComposer(keyData: string): void {
+		this.#keys.reset();
+		this.options.inputGuard?.handleInput(keyData);
+		this.#requestRender();
+	}
+
+	#releaseKeys(): void {
+		this.#keys.reset();
+		this.options.releaseKeys?.();
+		this.#requestRender();
 	}
 
 	render(width: number): readonly string[] {
@@ -994,7 +1051,8 @@ export class AskDialogComponent implements Component {
 			...(hideKey ? { keys: hideKey } : {}),
 			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		// Hidden, the composer holds the keys and Esc is its own: the ask's cancel key skips.
+		const cancelKey = getKeybindings().getKeys("app.ask.cancel")[0];
 		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
@@ -1109,7 +1167,8 @@ export class AskDialogComponent implements Component {
 	 * shows its hint in place of the answer actions.
 	 */
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		// While a draft owns typing, Esc is the composer's: the ask's cancel key skips.
+		const cancelKey = getKeybindings().getKeys(blocked ? "app.ask.cancel" : "tui.select.cancel")[0];
 		const skip = actionButton("Skip", "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
@@ -1172,7 +1231,7 @@ export class AskDialogComponent implements Component {
 				return;
 			}
 			if (event.act === "hide" || event.act === "show") {
-				this.#setHidden(event.act === "hide");
+				this.setHidden(event.act === "hide");
 				return;
 			}
 			if (this.#hidden) return;
@@ -1371,15 +1430,6 @@ export class AskDialogComponent implements Component {
 		return this.#isSubmitTab() ? title : `${title} · a add option note · A edit latest`;
 	}
 
-	#setHidden(hidden: boolean): void {
-		if (this.#hidden === hidden) return;
-		this.#keys.reset();
-		this.#nativeScroll = undefined;
-		this.#hidden = hidden;
-		this.#countdown?.reset();
-		this.#requestRender();
-	}
-
 	/** True while a draft that predates the dialog still owns typing. */
 	#guardBlocks(): boolean {
 		return !this.#guardReleased && (this.options.inputGuard?.isBlocked() ?? false);
@@ -1403,19 +1453,14 @@ export class AskDialogComponent implements Component {
 		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
 	}
 
-	/** Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to bring it back. */
+	/**
+	 * Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to
+	 * bring it back. The composer holds the keys meanwhile, so the hints name the keys that work from there.
+	 */
 	#renderHidden(width: number): readonly string[] {
-		const hideKey = editorKey("app.ask.hide");
-		const enter = formatKeyHint("enter");
-		const inputGuard = this.options.inputGuard;
-		const blocked = this.#guardBlocks();
-		// While a draft owns input, Enter goes to the draft, so only the hide key restores.
-		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
-		const hints: string[] = [];
-		if (blocked && inputGuard) hints.push(this.#guardHint(inputGuard));
-		else if (inputGuard) hints.push("type to write a message");
-		if (show) hints.push(`${show} show`);
-		hints.push(`${editorKey("tui.select.cancel")} cancel`);
+		const showKey = editorKey("app.ask.hide");
+		const cancelKey = editorKey("app.ask.cancel");
+		const hints = [showKey && `${showKey} show`, cancelKey && `${cancelKey} cancel`].filter(Boolean);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
 		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
 		const question = this.#questions[this.#currentQuestionIndex()];
@@ -1496,8 +1541,9 @@ export class AskDialogComponent implements Component {
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
+		// While the draft owns typing, Esc is the composer's: the ask's own cancel key cancels.
 		if (inputGuard && this.#guardBlocks())
-			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${editorKey("app.ask.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		if (submit) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
@@ -1602,6 +1648,16 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (action?.kind === "move" || action?.kind === "boundary") {
+			// ↓ past the last answer goes down to the composer.
+			if (
+				action.kind === "move" &&
+				action.delta > 0 &&
+				state.cursorIndex >= rows.length - 1 &&
+				this.options.releaseKeys
+			) {
+				this.#releaseKeys();
+				return;
+			}
 			state.cursorIndex =
 				action.kind === "move"
 					? clamp(state.cursorIndex + action.delta, 0, Math.max(0, rows.length - 1))
@@ -1624,8 +1680,11 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (action?.kind === "confirm") this.#commitRow(question, state, rowItem, true);
-		else if (action?.kind === "toggle" && question.multi && rowItem.kind === "option") {
-			this.#commitRow(question, state, rowItem, false);
+		else if (action?.kind === "toggle") {
+			if (question.multi && rowItem.kind === "option") this.#commitRow(question, state, rowItem, false);
+		} else if (extractPrintableText(keyData) !== undefined) {
+			// Printable text the question has no use for starts (or continues) the composer's draft.
+			this.#toComposer(keyData);
 		}
 	}
 
@@ -1674,7 +1733,11 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (this.#submitLayoutDirty) this.render(this.#contentWidth + 4);
-		if (!this.#submitView?.handleMenuAction(action)) return;
+		if (!this.#submitView?.handleMenuAction(action)) {
+			// ↓ past the end of the review goes down to the composer.
+			if (action.kind === "move" && action.delta > 0 && this.options.releaseKeys) this.#releaseKeys();
+			return;
+		}
 		this.#submitScrollOffset = this.#submitView.getScrollOffset();
 		this.#queueNativeScroll(action, "review");
 		this.#requestRender();

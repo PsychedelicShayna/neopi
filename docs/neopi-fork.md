@@ -111,7 +111,7 @@ Landed from 22–26 Aug 2026.
 
 The voice model is Iris, separate from the coding agent. Relays stay silent unless addressed. Live handoffs steer without cancelling active work by default; spoken responses may continue while background jobs keep the session awake. Crew IRC and provisional reasoning use a speakable channel, live personas resolve transport instructions, and speakable chunks truncate on Unicode code points.
 
-Use `/live model` to show the configured realtime model slug, or `/live model <slug>` to save a new one for the next call. Settings > Providers > Services > Live Model edits the same `live.model` setting. The default remains `gpt-live-1-codex`; selecting a different model does not interrupt an active call. RPC live calls use the same setting.
+Use `/live model` to show the requested realtime model slug, or `/live model <slug>` to save a new one for the next call. Settings > Providers > Services > Live Model edits the same `live.model` setting and offers GPT Live 1.1 (`gpt-live-1.1-codex`, the default) and GPT Live 1 (`gpt-live-1-codex`). The slug is a request: in testing the service accepted an unknown slug, and its session events did not name the model that answered. Selecting a different model does not interrupt an active call. RPC live calls use the same setting.
 
 Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`, `21b0e7cf7e`, `6983ee1a60`, `990964437a`, `4eb5e2594f`, `a991cf58d0`.
 

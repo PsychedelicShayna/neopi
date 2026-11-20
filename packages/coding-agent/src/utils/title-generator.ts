@@ -21,6 +21,7 @@ import { isNativeRendering, onNativeRenderingChange } from "@oh-my-pi/pi-tui/nat
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
 import { $env, isTerminalHeadless, isWsl, logger } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
 
 import { roleCandidatePool } from "../config/model-roles";
@@ -159,6 +160,8 @@ function getTitleModels(
 	role: "title" | "tiny" = "title",
 ): Model<Api>[] {
 	// A mixture never titles a session: it only runs as the primary agent's model.
+	const offline = cfgOffline.get(settings);
+	if (offline && !currentModel?.provider) return [];
 	const availableModels = roleCandidatePool(role, settings, registry).filter(model => !isMixtureModel(model));
 	const sessionModel = currentModel && !isMixtureModel(currentModel) ? currentModel : undefined;
 	if (availableModels.length === 0) return [];
@@ -168,9 +171,21 @@ function getTitleModels(
 		settings,
 		availableModels,
 	).map(candidate => candidate.model);
+	if (offline) {
+		const seen = new Set(models.map(formatModelStringWithRouting));
+		const sameProviderModels = availableModels.filter(model => model.provider === currentModel?.provider);
+		for (const { model } of collectOnlineTinyCandidates(["tiny", "commit", "smol"], settings, sameProviderModels)) {
+			const key = formatModelStringWithRouting(model);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			models.push(model);
+		}
+	}
 	if (
 		sessionModel &&
-		(models.length === 0 || cfgRetryModelFallback.get(settings) !== false) &&
+		(models.length === 0 ||
+			(offline && !models.some(model => model.provider === sessionModel.provider)) ||
+			cfgRetryModelFallback.get(settings) !== false) &&
 		!models.some(model => formatModelStringWithRouting(model) === formatModelStringWithRouting(sessionModel))
 	) {
 		// Append the session model separately, without applying title-role defaults.
@@ -182,14 +197,53 @@ function getTitleModels(
 			models.push(model);
 		}
 	}
-	return models;
+	return offline ? models.filter(model => model.provider === currentModel?.provider) : models;
 }
 
 /**
- * Receives each title request the provider billed, for the caller's usage
- * ledger. Must not throw: accounting never fails a title.
+ * Receives each title request that ran, with the user-turn text it was sent, for the caller's
+ * usage ledger: every attempt a provider billed, and a local model's title, which bills nothing.
+ * Must not throw: accounting never fails a title.
  */
-export type TitleUsageReporter = (message: AssistantMessage) => void;
+export type TitleUsageReporter = (message: AssistantMessage, prompt: string) => void;
+
+/** Hand one title attempt to the caller's ledger. Best-effort: accounting never fails a title. */
+function reportTitleAttempt(
+	onUsage: TitleUsageReporter | undefined,
+	message: AssistantMessage,
+	prompt: string,
+	context: Record<string, unknown>,
+): void {
+	try {
+		onUsage?.(message, prompt);
+	} catch (err) {
+		logger.debug("title-generator: usage report failed", {
+			...context,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
+/** An assistant message for `model` that no provider metered: an assistant prefill, or a local worker's reply. */
+export function unmeteredMessage(model: Model<Api>, text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
 
 /**
  * Generate a title for a session based on the first user message.
@@ -208,8 +262,9 @@ export type TitleUsageReporter = (message: AssistantMessage) => void;
  * @param credentialSourceSessionId Optional foreground session whose selected
  *   OAuth credential should seed an isolated title-request session.
  * @param role Workload role; task labels retain tiny rather than the session-title assignment.
- * @param onUsage Optional reporter for every title attempt the provider billed,
- *   so the caller can record its usage on the session's cost ledger.
+ * @param onUsage Optional reporter for every title attempt the provider billed
+ *   and for a local model's title, so the caller can journal the request on
+ *   the session's cost ledger.
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -259,6 +314,7 @@ export async function generateSessionTitle(
 	// fails (download missing, runtime crash, abort, or no output), leave the
 	// session untitled rather than advancing into a paid fallback candidate.
 	try {
+		const started = performance.now();
 		let localTitle: string | null;
 		if (signal) {
 			localTitle = await tinyTitleClient.generate(
@@ -281,6 +337,14 @@ export async function generateSessionTitle(
 			});
 			return null;
 		}
+		// A null result may never have reached the worker (failed model, abort), so only a
+		// produced title is journaled.
+		reportTitleAttempt(
+			onUsage,
+			{ ...unmeteredMessage(firstModel, localTitle), duration: Math.round(performance.now() - started) },
+			formatTitleUserMessage(firstMessage),
+			{ titleSessionId: sessionId, model: firstModel.id },
+		);
 		return localTitle;
 	} catch (err) {
 		logger.warn("title-generator: local tiny model errored; skipping (no online fallback)", {
@@ -394,7 +458,11 @@ async function generateTitleOnlineWithModels(
 			logger.debug("title-generator: request", { ...modelContext, maxTokens });
 
 			const messages: Message[] = [{ role: "user", content: userMessage, timestamp: Date.now() }];
-			if (model.supportsAssistantPrefill) messages.push(titlePrefill(model));
+			// Open the `<title>` marker as a trailing assistant turn on hosts that continue it
+			// verbatim. Some Ollama chat templates (LFM2.5) open a reasoning channel regardless
+			// of the disable flag, burning the whole output budget on thinking and never emitting
+			// a title. Committing the marker first skips the reasoning channel entirely.
+			if (model.supportsAssistantPrefill) messages.push(unmeteredMessage(model, "<title>"));
 
 			const response = await retryTransientCompletion(
 				async () => {
@@ -419,19 +487,11 @@ async function generateTitleOnlineWithModels(
 						},
 					);
 					// Every attempt that reached the provider was billed, failures included,
-					// so a transient retry must not discard the attempt it replaced. Reporting
-					// is best-effort: accounting can never fail the title.
-					try {
-						onUsage?.(message);
-					} catch (err) {
-						logger.debug("title-generator: usage report failed", {
-							...modelContext,
-							error: err instanceof Error ? err.message : String(err),
-						});
-					}
+					// so a transient retry must not discard the attempt it replaced.
+					reportTitleAttempt(onUsage, message, userMessage, modelContext);
 					return message;
 				},
-				{ signal, provider: model.provider },
+				{ signal, provider: model.provider, baseUrl: model.baseUrl },
 			);
 
 			if (response.stopReason === "aborted" || signal?.aborted) {
@@ -490,33 +550,6 @@ async function generateTitleOnlineWithModels(
 		}
 	}
 	return null;
-}
-
-/**
- * Open the `<title>` marker as a trailing assistant turn on hosts that continue
- * it verbatim (`Model.supportsAssistantPrefill`). Some Ollama chat templates
- * (LFM2.5) open a reasoning channel regardless of the disable flag, burning the
- * whole output budget on thinking and never emitting a title. Committing the
- * marker first skips the reasoning channel entirely.
- */
-function titlePrefill(model: Model<Api>): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text: "<title>" }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
 }
 
 function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): string {

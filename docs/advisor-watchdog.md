@@ -232,7 +232,7 @@ The threshold does not bypass stop/abort suppression, immunity, plan mode, or cl
 Session/client constraints can preserve a note whose normal delivery path is steering:
 
 - **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
-- **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
+- **ACP with deferred agent-initiated turns:** when the bridge reports `deferAgentInitiatedTurns` (no client prompt is open), an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
 
 The three delivery channels are **aside** (non-interrupting boundary delivery during immunity), **steer** (wait-mode steering or an allowed continuation), and **preserve** (a visible card without waking the primary). Advisor steering never cancels in-flight tools or generation.
 

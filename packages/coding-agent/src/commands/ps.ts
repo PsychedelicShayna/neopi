@@ -1,5 +1,5 @@
 /**
- * Inspect and control daemon-broker supervised processes from outside the harness.
+ * Inspect and control the omp daemon's units from outside the harness.
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
@@ -7,34 +7,38 @@ import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { psHelp as commandHelp } from "../cli/command-help";
 import { type PsAction, type PsCommandArgs, runPsCommand } from "../cli/ps-cli";
 
-const ACTIONS: PsAction[] = ["list", "info", "logs", "stop", "kill", "restart"];
+const ACTIONS: PsAction[] = ["list", "info", "logs", "stop", "kill", "restart", "send", "mode"];
 
 export default class Ps extends Command {
 	static description = commandHelp.description;
 
 	static args = {
 		action: Args.string({
-			description: "list (default), info, logs, stop, kill, or restart",
+			description: "list (default), info, logs, stop, kill, restart, send, or mode",
 			required: false,
 			options: ACTIONS,
 		}),
 		name: Args.string({
-			description: "Process name (required for every action except list)",
+			description: "Unit id, key, or label (required for every action except list)",
+			required: false,
+		}),
+		value: Args.string({
+			description: "send: input for the unit's stdin; mode: persist, session, or detached",
 			required: false,
 		}),
 	};
 
 	static flags = {
-		all: Flags.boolean({ char: "a", description: "Also list other projects and exited global services (list)" }),
+		all: Flags.boolean({ char: "a", description: "List every scope, including other projects and sessions (list)" }),
 		json: Flags.boolean({ char: "j", description: "Emit machine-readable JSON" }),
 		plain: Flags.boolean({ description: "Static listing instead of the interactive monitor (list)" }),
 		dir: Flags.string({ description: "Target another project directory instead of the current one" }),
-		global: Flags.string({ description: "Target a machine-global service scope (e.g. browser-relay)" }),
 		follow: Flags.boolean({ char: "f", description: "Keep streaming new output (logs)" }),
 		head: Flags.boolean({ description: "Read from the beginning instead of the tail (logs)" }),
 		lines: Flags.integer({ char: "n", description: "Number of log lines, max 1000 (logs)" }),
 		grep: Flags.string({ description: "Regex filter applied to log lines (logs)" }),
 		timeout: Flags.integer({ description: "Grace period in seconds before hard kill (stop)" }),
+		signal: Flags.string({ description: "Signal to deliver: SIGINT, SIGTERM, SIGHUP, SIGQUIT, or SIGKILL (send)" }),
 	};
 
 	static examples = [
@@ -43,7 +47,10 @@ export default class Ps extends Command {
 		`${APP_NAME} ps logs web --follow`,
 		`${APP_NAME} ps stop web`,
 		`${APP_NAME} ps kill web`,
-		`${APP_NAME} ps info relay --global browser-relay`,
+		`${APP_NAME} ps send web 'rs\\n'`,
+		`${APP_NAME} ps send web --signal SIGINT`,
+		`${APP_NAME} ps mode web persist`,
+		`${APP_NAME} ps info web`,
 	];
 
 	async run(): Promise<void> {
@@ -51,17 +58,18 @@ export default class Ps extends Command {
 		const cmd: PsCommandArgs = {
 			action: (args.action ?? "list") as PsAction,
 			name: args.name,
+			value: args.value,
 			flags: {
 				all: flags.all ?? false,
 				json: flags.json ?? false,
 				plain: flags.plain ?? false,
 				dir: flags.dir,
-				global: flags.global,
 				follow: flags.follow ?? false,
 				head: flags.head ?? false,
 				lines: flags.lines,
 				grep: flags.grep,
 				timeout: flags.timeout,
+				signal: flags.signal,
 			},
 		};
 		await runPsCommand(cmd);

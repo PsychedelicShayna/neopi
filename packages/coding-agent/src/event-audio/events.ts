@@ -152,8 +152,9 @@ export function sessionAudioEvents(event: AgentSessionEvent, toolArgs?: unknown)
 	const direct = SESSION_IDS[event.type];
 	if (direct) return [direct];
 	switch (event.type) {
+		case "agent_pause":
+			return ["agent.pause"];
 		case "agent_end": {
-			if (event.isTerminal === false || event.awaitingAsyncWork) return ["agent.pause"];
 			const message = event.messages.findLast(candidate => candidate.role === "assistant");
 			if (message?.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted")) {
 				const failure = assistantFailure(message);

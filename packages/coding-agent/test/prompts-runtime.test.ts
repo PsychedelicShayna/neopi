@@ -139,11 +139,13 @@ describe("built-in prompt runtime boundaries", () => {
 	it("keeps bundled provider bytes when no override is installed", async () => {
 		await withPromptHome(async cwd => {
 			const original = prompt.render.bind(prompt);
+			const originalTracked = prompt.renderTracked.bind(prompt);
 			let context: Record<string, unknown> | undefined;
-			const render = spyOn(prompt, "render").mockImplementation((template, data) => {
+			// The system prompt renders through the source-tracked path (renderPromptAssetTracked).
+			const render = spyOn(prompt, "renderTracked").mockImplementation((template, data, items) => {
 				if (data && typeof data === "object" && "MAX_CONCURRENCY" in data)
 					context ??= data as Record<string, unknown>;
-				return original(template, data);
+				return originalTracked(template, data, items);
 			});
 			try {
 				const result = await buildSystemPrompt(options(cwd));

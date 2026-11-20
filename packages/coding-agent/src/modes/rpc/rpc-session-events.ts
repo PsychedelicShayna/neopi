@@ -16,6 +16,7 @@ import {
 import type { SessionManager } from "../../session/session-manager";
 import type { SessionJournalEvent, SessionJournalIdentity } from "../../session/session-journal-events";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { toWireEvent, type WireSessionEvent } from "../../session/loop-end-wire";
 import type {
 	RpcAgentSessionEventFrame,
 	RpcDeltaAssistantMessageEvent,
@@ -228,7 +229,7 @@ export class RpcSessionEventForwarder {
 		)
 			return;
 		const generation = this.#bindingGeneration;
-		const frame = this.#stamp(event);
+		const frame = this.#stamp(toWireEvent(event));
 		if (event.type === "message_end" && frame.type === "message_end" && this.#manager) {
 			this.#endedMessages.set(getMessageEntrySource(event.message), { messageId: frame.messageId, generation });
 		}
@@ -244,7 +245,7 @@ export class RpcSessionEventForwarder {
 		this.#output(frame);
 	}
 
-	#stamp(event: AgentSessionEvent): RpcAgentSessionEventFrame {
+	#stamp(event: WireSessionEvent): RpcAgentSessionEventFrame {
 		switch (event.type) {
 			case "message_start": {
 				const messageId = this.#mintMessageId(event.message);

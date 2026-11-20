@@ -19,6 +19,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { fixedAdvisorTools } from "../helpers/agent-session-setup";
 
 const roster: AdvisorConfig[] = [
 	{ id: "shared-id", name: "Shared", sourceScope: "user" },
@@ -67,7 +68,7 @@ describe("role-bound advisor activation", () => {
 			sessionManager: manager,
 			modelRegistry: new ModelRegistry(auth, path.join(directory, "models.yml")),
 			advisorConfigs: configs,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		return session;
 	}
