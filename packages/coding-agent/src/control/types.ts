@@ -8,6 +8,7 @@
  */
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { SettingsScope } from "../config/settings";
 import type {
 	RpcCommand,
 	RpcHostToolDefinition,
@@ -208,6 +209,8 @@ interface ControlBase {
 	if?: RevisionExpectation;
 }
 
+type SettingsWriteScope = SettingsScope | "persist" | "runtime";
+
 export type ControlOnlyCommand =
 	| (ControlBase & {
 			type: "hello";
@@ -288,10 +291,10 @@ export type ControlOnlyCommand =
 			path: string;
 			value: unknown;
 			member?: string;
-			scope?: "persist" | "runtime";
+			scope?: SettingsWriteScope;
 			layer?: "user" | "project";
 	  })
-	| (ControlBase & { type: "settings_unset"; path: string; member?: string; scope?: "persist" | "runtime" })
+	| (ControlBase & { type: "settings_unset"; path: string; member?: string; scope?: SettingsWriteScope })
 	| (ControlBase & { type: "reload_settings"; scope: "global" | "project" | "session"; projectDir?: string })
 	| (ControlBase & { type: "keybindings_get"; actionId?: string })
 	| (ControlBase & { type: "keybindings_set"; actionId: string; keys: string[] })

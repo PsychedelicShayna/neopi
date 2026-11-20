@@ -6,13 +6,12 @@
  * by the host before this adapter commits.
  */
 import { lookup, type AnySetting } from "../config/registry";
-import type { Settings } from "../config/settings";
+import type { Settings, SettingsScope } from "../config/settings";
 
-export interface SettingsWrite {
-	path: string;
+interface SettingsWrite {
+	scope: SettingsScope | "runtime";
 	member?: string;
-	value?: unknown;
-	runtime?: boolean;
+	value: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,39 +26,25 @@ export function readSetting(settings: Settings, path: string, member?: string): 
 	return isRecord(value) ? value[member] : undefined;
 }
 
-export function writeSetting(settings: Settings, write: SettingsWrite): { path: string; value: unknown } {
-	const setting = lookup(write.path);
-	if (!setting) throw new Error(`unknown setting ${write.path}`);
-	if (write.member) {
-		writeMember(settings, setting, write.member, write.value, write.runtime === true);
-	} else if (write.runtime) {
-		setting.override(settings, write.value as never);
-	} else if (write.value === undefined) {
-		setting.unset(settings);
-	} else {
-		setting.set(settings, write.value as never);
+export async function writeSetting(settings: Settings, setting: AnySetting, write: SettingsWrite): Promise<void> {
+	const { member, scope, value } = write;
+	let next = value;
+	if (member) {
+		const current =
+			scope === "runtime" ? settings.readRuntimeOverrideValue(setting) : settings.readScopeValue(setting, scope);
+		const record = isRecord(current) ? current : {};
+		if (value === undefined) {
+			delete record[member];
+			next = Object.keys(record).length === 0 ? undefined : record;
+		} else {
+			next = { ...record, [member]: value };
+		}
 	}
-	return { path: write.path, value: readSetting(settings, write.path, write.member) };
-}
-
-function writeMember(settings: Settings, setting: AnySetting, member: string, value: unknown, runtime: boolean): void {
-	if (setting.id === "modelRoles" && "setModelRole" in settings) {
-		(settings as Settings).setModelRole(member, value === undefined ? undefined : String(value));
+	if (scope === "runtime") {
+		setting.override(settings, next);
 		return;
 	}
-	const current = setting.get(settings);
-	const record = isRecord(current) ? { ...current } : {};
-	if (value === undefined) delete record[member];
-	else record[member] = value;
-	if (runtime) setting.override(settings, record as never);
-	else setting.set(settings, record as never);
-}
-
-export function unsetSetting(settings: Settings, path: string, member?: string): void {
-	if (member) writeSetting(settings, { path, member, value: undefined });
-	else {
-		const setting = lookup(path);
-		if (!setting) throw new Error(`unknown setting ${path}`);
-		setting.unset(settings);
-	}
+	settings.writeScopeValue(setting, next, scope);
+	if (scope === "session") await settings.saveSessionSettings();
+	else await settings.flush();
 }

@@ -13,7 +13,7 @@ import { BUILD_INFO } from "../build-info";
 import followUpWarning from "../prompts/control-follow-up-warning.md" with { type: "text" };
 import { lookup } from "../config/registry";
 import { resolveSessionModelSelector } from "../config/session-model-selector";
-import { readSetting, unsetSetting, writeSetting } from "./settings-adapter";
+import { readSetting, writeSetting } from "./settings-adapter";
 import { RpcPromptResults } from "../modes/rpc/rpc-prompt-results";
 import { RpcRoles } from "../modes/rpc/rpc-roles";
 import {
@@ -993,7 +993,7 @@ export class ControlHost {
 			case "settings_get":
 			case "settings_set":
 			case "settings_unset":
-				this.#settings(connection, frame);
+				await this.#settings(connection, frame);
 				return;
 			case "commands": {
 				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
@@ -1496,7 +1496,7 @@ export class ControlHost {
 		if (this.#currentIdentityKey() !== this.#identityKey) this.#refreshIdentity();
 	}
 
-	#settings(connection: ControlConnection, frame: Record<string, unknown>): void {
+	async #settings(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
 		const session = this.#options.session;
 		const path = typeof frame.path === "string" ? frame.path : "";
 		const type = String(frame.type);
@@ -1512,8 +1512,9 @@ export class ControlHost {
 			this.#reply(connection, frame, { success: false, error: `unknown setting ${path}`, code: "unknown_setting" });
 			return;
 		}
+		const secretInputDisabled = () => setting.isCredential && cfgControlSecretInput.get(session.settings) !== true;
 		if (type === "settings_get") {
-			if (setting.isCredential && cfgControlSecretInput.get(session.settings) !== true) {
+			if (secretInputDisabled()) {
 				this.#reply(connection, frame, {
 					success: false,
 					error: "credential settings stay in the pane",
@@ -1539,19 +1540,69 @@ export class ControlHost {
 			});
 			return;
 		}
-		const member = typeof frame.member === "string" ? frame.member : undefined;
+		// A supplied member must name one entry; treating a malformed one as absent would erase the whole map.
+		if (
+			frame.member !== undefined &&
+			(typeof frame.member !== "string" || frame.member === "" || setting.type !== "record")
+		) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "member must be a non-empty string on a record setting",
+				code: "invalid_value",
+			});
+			return;
+		}
+		// A set without a value would otherwise become an unset.
+		if (frame.type === "settings_set" && !("value" in frame)) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "settings_set requires a value",
+				code: "invalid_value",
+			});
+			return;
+		}
+		const member = frame.member;
+		const scope = frame.scope === undefined || frame.scope === "persist" ? "global" : frame.scope;
+		if (scope !== "runtime" && scope !== "global" && scope !== "project" && scope !== "session") {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "Unknown settings write scope",
+				code: "invalid_value",
+			});
+			return;
+		}
+		if (scope === "session" && !session.sessionFile?.endsWith(".jsonl")) {
+			this.#reply(connection, frame, {
+				success: false,
+				error: "This host has no session file",
+				code: "invalid_value",
+			});
+			return;
+		}
+		const hideValue = secretInputDisabled();
 		try {
-			if (type === "settings_unset") unsetSetting(session.settings, path, member);
-			else writeSetting(session.settings, { path, member, value: frame.value, runtime: frame.scope === "runtime" });
+			await writeSetting(session.settings, setting, {
+				scope,
+				member,
+				value: type === "settings_unset" ? undefined : frame.value,
+			});
 			this.#notify(connection, `settings ${path}`);
 			this.#reply(connection, frame, {
 				success: true,
-				data: { path, member, value: readSetting(session.settings, path, member) },
+				data:
+					hideValue || secretInputDisabled()
+						? { path, member }
+						: { path, member, value: readSetting(session.settings, path, member) },
 			});
 		} catch (error) {
 			this.#reply(connection, frame, {
 				success: false,
-				error: error instanceof Error ? error.message : String(error),
+				error:
+					hideValue || secretInputDisabled()
+						? `Cannot write credential setting ${path}`
+						: error instanceof Error
+							? error.message
+							: String(error),
 				code: "invalid_value",
 			});
 		}

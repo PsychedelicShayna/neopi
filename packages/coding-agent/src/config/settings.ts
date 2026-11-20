@@ -1526,6 +1526,11 @@ export class Settings {
 		);
 	}
 
+	/** Raw value owned by this instance's runtime override layer. */
+	readRuntimeOverrideValue(setting: AnySetting): unknown {
+		return structuredClone(getByPath(this.#overrides, setting.segments));
+	}
+
 	/** Resolve a setting at a file scope without using the non-file layers. */
 	resolveFileScopeValue(setting: AnySetting, scope: SettingsFileScope): SettingsResolution {
 		const { layers, merged } = this.#fileScopeView(scope);

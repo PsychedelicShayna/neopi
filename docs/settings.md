@@ -40,6 +40,8 @@ Control clients can request an immediate durable refresh with `reload_settings`,
 
 Reloading preserves higher-precedence project, CLI, and session/runtime overrides. A global change hidden by one of those overrides is not a missed notification.
 
+Control `settings_set` and `settings_unset` write to the addressed host's `global`, `project`, or `session` file layer. The default is `global`; `persist` is its compatibility alias. Session writes require a persisted session. Use `scope: "runtime"` to edit only the host's in-memory override. Member edits change only the selected layer, and removing its last member removes the setting from that layer. These commands do not broadcast a reload; other hosts may still pick up shared-file changes through their normal file watchers. Credential write replies omit the value when `control.secretInput` is off.
+
 
 ## Config file formats
 
