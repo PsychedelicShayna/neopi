@@ -740,19 +740,22 @@ interface KittyCommand {
 	p: number | undefined;
 }
 
+/** Every Kitty graphics APC's control fields and exclusive end offset, in order. */
+function kittyAPCs(data: string): { fields: Map<string, string>; end: number }[] {
+	return Array.from(data.matchAll(/\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\/g), match => ({
+		fields: new Map(match[1]!.split(",").map(field => field.split("=") as [string, string])),
+		end: match.index + match[0].length,
+	}));
+}
+
 /** Every Kitty graphics command in `data`, in order. */
 function kittyCommands(data: string): KittyCommand[] {
-	const commands: KittyCommand[] = [];
-	for (const match of data.matchAll(/\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\/g)) {
-		const fields = new Map(match[1]!.split(",").map(field => field.split("=") as [string, string]));
-		commands.push({
-			a: fields.get("a"),
-			d: fields.get("d"),
-			i: Number(fields.get("i")),
-			p: fields.has("p") ? Number(fields.get("p")) : undefined,
-		});
-	}
-	return commands;
+	return kittyAPCs(data).map(({ fields }) => ({
+		a: fields.get("a"),
+		d: fields.get("d"),
+		i: Number(fields.get("i")),
+		p: fields.has("p") ? Number(fields.get("p")) : undefined,
+	}));
 }
 
 /** A transcript image block; `live` keeps it an active (non-retirable) block. */
@@ -1241,6 +1244,10 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 	const originalGraphics = { ...getKittyGraphics() };
 	let originalCells: CellDimensions;
 
+	// Opaque 40×40 PNG: the payload must match the source geometry used for clipping.
+	const placementPng =
+		"iVBORw0KGgoAAAANSUhEUgAAACgAAAAoCAIAAAADnC86AAAAMUlEQVR42u3NQQkAAAgEsItiFPunMIolBD+D/ZfpehGxWCwWi8VisVgsFovFYrH4zgJXNdBqJrTKAgAAAABJRU5ErkJggg==";
+
 	beforeEach(() => {
 		originalCells = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
@@ -1270,7 +1277,7 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		let nextId = 1;
 		tui.setFrameProvider({ renderFrame: () => plan(), acknowledgeHistory: () => {} });
 		const image = new Image(
-			PNG,
+			placementPng,
 			"image/png",
 			{ fallbackColor: text => text },
 			{ maxWidthCells: 5, maxHeightCells: 5, budget: tui.imageBudget, imageKey: "scripted" },
@@ -1311,7 +1318,7 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 			return kittyCommands(writes.join(""));
 		};
 		tui.start();
-		return { term, tui, id, paint, dockedReplay, settle: () => scheduler.settle(term) };
+		return { term, tui, id, paint, dockedReplay, writes, settle: () => scheduler.settle(term) };
 	}
 
 	const lines = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, i) => `${prefix}${i}`);
@@ -1335,19 +1342,44 @@ describe("Composer side panel: placement accounting (scripted provider)", () => 
 		}
 	});
 
-	it("keeps a newly drawn, top-clipped placement mutable until replay replaces it", async () => {
+	it("(1d twin) keeps a newly drawn, top-clipped placement mutable until replay replaces it", async () => {
 		const s = scripted(10);
 		try {
 			await s.paint(() => ({ viewport: ["EDITOR"] }));
-			// The APC at viewport index 1 clips the block to its bottom two rows.
-			// That visible slice stays on screen; its omitted source rows never enter history.
-			await s.paint(image => ({
-				history: lines("h", 20),
-				viewport: [...image.slice(-2), ...lines("t", 7), "EDITOR"],
-			}));
-			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(true);
+			// 20 history rows retire, but the renderer only paints the bottom two rows of the image.
+			const visibleRows = 2;
+			await s.paint(image => {
+				expect(image).toHaveLength(5);
+				return { history: lines("h", 20), viewport: [...image.slice(-visibleRows), ...lines("t", 7), "EDITOR"] };
+			});
+			const placement = s.term.graphicsPlacements().find(entry => entry.imageId === s.id)!;
+			expect(placement).toMatchObject({ row: 8, numRows: visibleRows });
+			const bytes = s.writes.join("");
+			const apc = kittyAPCs(bytes).find(
+				({ fields }) =>
+					fields.get("a") === "p" &&
+					fields.get("i") === String(s.id) &&
+					fields.get("p") === String(placement.placementId),
+			);
+			expect(apc?.fields.get("r")).toBe("2");
+			expect(apc?.fields.get("y")).toBe("24");
+			expect(apc?.fields.get("h")).toBe("16");
+
+			// The VT records the placement row at emission. Replay the bytes in two
+			// parts to measure how far the actual footprint moved after that point.
+			const emissionEnd = apc!.end;
+			const replay = new VirtualTerminal(s.term.columns, s.term.rows, 1000);
+			replay.write(bytes.slice(0, emissionEnd));
+			const before = replay.getBufferPosition().baseY;
+			replay.write(bytes.slice(emissionEnd));
+			const scrolled = replay.getBufferPosition().baseY - before;
+			expect(scrolled).toBe(8);
+			const top = placement.row - scrolled;
+			expect([top, top + placement.numRows - 1]).toEqual([0, 1]);
 			const commands = await s.dockedReplay(image => [...lines("h", 20), ...image, ...lines("t", 7)]);
-			expect(commands.filter(command => command.a === "d")).toEqual([{ a: "d", d: "i", i: s.id, p: 1 }]);
+			expect(commands.filter(command => command.a === "d")).toEqual([
+				{ a: "d", d: "i", i: s.id, p: placement.placementId },
+			]);
 			expect(s.term.graphicsPlacements().some(entry => entry.imageId === s.id)).toBe(false);
 		} finally {
 			s.tui.stop();
