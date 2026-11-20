@@ -92,7 +92,7 @@ async function fixture(expired: boolean) {
 		row,
 		fingerprint,
 		requests,
-		async assertRotated() {
+		async assertRotated(refreshReason: "proactive_expiry" | "unauthorized_recovery") {
 			expect(requests).toEqual([
 				{
 					method: "POST",
@@ -102,6 +102,7 @@ async function fixture(expired: boolean) {
 						grant_type: "refresh_token",
 						client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
 						refresh_token: FAKE_REFRESH,
+						refresh_reason: refreshReason,
 					},
 				},
 			]);
@@ -132,7 +133,7 @@ test("expired pinned OAuth returns the rotated token without changing its siblin
 		forceRefresh: true,
 	});
 	expect(key).toBe(NEXT_ACCESS);
-	await f.assertRotated();
+	await f.assertRotated("proactive_expiry");
 });
 
 test("switch-bound 401 recovery rotates the same credential without using its sibling", async () => {
@@ -153,5 +154,5 @@ test("switch-bound 401 recovery rotates the same credential without using its si
 		lastChance: false,
 	});
 	expect(recovered).toEqual({ apiKey: NEXT_ACCESS, credentialId: f.row.id });
-	await f.assertRotated();
+	await f.assertRotated("unauthorized_recovery");
 });

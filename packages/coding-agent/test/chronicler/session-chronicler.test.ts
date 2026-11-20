@@ -59,6 +59,7 @@ import {
 	readChroniclerBlindMetadata,
 	writeChroniclerBlindMetadata,
 } from "../../src/chronicler/blind-metadata";
+import { fixedAdvisorTools } from "../helpers/agent-session-setup";
 
 const FINISH_TOOL = "finish_chronicle";
 const CAPTURE_MODEL_ID = "chronicler-mock";
@@ -1881,7 +1882,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		scripts.push(beatPass(), beatPass(), beatPass());
@@ -2125,7 +2126,7 @@ describe("SessionChronicler capture runtime", () => {
 				sessionManager: manager,
 				settings: newSettings(),
 				modelRegistry,
-				advisorTools: [],
+				advisorTools: fixedAdvisorTools(),
 			});
 			session.subscribe(() => {});
 			sessions.push({ session, manager, marker: "owned intention number " + index });
@@ -2216,7 +2217,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		scripts.push(ackPass());
@@ -2244,7 +2245,13 @@ describe("SessionChronicler capture runtime", () => {
 		});
 		const settings = newSettings();
 		cfgRetryEnabled.override(settings, false);
-		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, advisorTools: [] });
+		const session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			settings,
+			modelRegistry,
+			advisorTools: fixedAdvisorTools(),
+		});
 		session.subscribe(() => {});
 		scripts.push(beatPass());
 		try {
@@ -2338,7 +2345,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		for (let index = 0; index < 6; index++) scripts.push(beatPass());
@@ -2439,7 +2446,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 			extensionRunner,
 		});
 		session.subscribe(() => {});

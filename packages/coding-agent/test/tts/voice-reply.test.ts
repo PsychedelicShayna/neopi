@@ -17,15 +17,26 @@ const player = () => ({ start() {}, write(_pcm: Float32Array) {}, setGain() {}, 
 
 test("explicit voice reply preserves markup and bypasses disabled/enhanced streaming preferences", async () => {
 	auth = await AuthStorage.create(":memory:");
+	// Local speech runs on Phonon's streaming worker now that paced Kokoro is gone.
 	const settings = Settings.isolated({
 		"speech.enabled": false,
 		"speech.enhanced": true,
 		"tts.pacing": false,
-		modelRoles: { speech: "local/kokoro-paced" },
+		modelRoles: { speech: "local/phonon-31m" },
 	});
 	const registry = new ModelRegistry(auth, undefined, { settings });
-	const pending = Promise.withResolvers<{ pcm: Float32Array; sampleRate: number }>();
-	const synth = spyOn(ttsClient, "synthesize").mockImplementation(() => pending.promise);
+	const pending = Promise.withResolvers<void>();
+	const pushed: string[] = [];
+	const stream = spyOn(ttsClient, "synthesizeStream").mockImplementation(() => ({
+		push(segment) {
+			pushed.push(segment);
+		},
+		end() {},
+		chunks: (async function* () {
+			await pending.promise;
+			yield { index: 0, text: pushed.join(" "), pcm: new Float32Array([0.2]), sampleRate: 24000 };
+		})(),
+	}));
 	const vocalizer = new Vocalizer(player);
 	const text = "Read **this** and `that`.";
 	const speaking = vocalizer.speakReply(
@@ -34,10 +45,10 @@ test("explicit voice reply preserves markup and bypasses disabled/enhanced strea
 		new AbortController().signal,
 	);
 	expect(vocalizer.isSpeaking()).toBe(true);
-	pending.resolve({ pcm: new Float32Array([0.2]), sampleRate: 24000 });
+	pending.resolve();
 	await speaking;
-	expect(synth.mock.calls.map(call => call[1]).join(" ")).toBe(text);
-	expect(synth.mock.calls[0]![0]).toBe("kokoro-paced");
+	expect(pushed.join(" ")).toBe(text);
+	expect(stream.mock.calls[0]![0]).toBe("phonon-31m");
 	expect(vocalizer.isSpeaking()).toBe(false);
 });
 

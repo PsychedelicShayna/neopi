@@ -119,10 +119,12 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start Codex-backed realtime voice mode or choose its model",
+		description: "Start Codex-backed realtime voice mode or choose the model it requests",
 		allowArgs: true,
 		inlineHint: "[model [slug]]",
-		subcommands: [{ name: "model", description: "Show or set the model for the next live call", usage: "[slug]" }],
+		subcommands: [
+			{ name: "model", description: "Show or set the model requested for the next live call", usage: "[slug]" },
+		],
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			const { verb, rest } = parseSubcommand(command.args);
@@ -130,7 +132,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					if (rest) cfgLiveModel.set(runtime.ctx.settings, rest);
 					runtime.ctx.showStatus(
-						`Live model: ${cfgLiveModel.get(runtime.ctx.settings)}${rest ? " (applies to the next live call)" : ""}`,
+						`Requested live model: ${cfgLiveModel.get(runtime.ctx.settings)} (${rest ? "applies to the next live call" : "the service does not report which model answers"})`,
 					);
 				} catch (error) {
 					runtime.ctx.showError(errorMessage(error));

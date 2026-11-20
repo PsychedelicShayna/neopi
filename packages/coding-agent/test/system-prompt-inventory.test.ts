@@ -227,7 +227,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("renders skill URL guidance when an override declares a skill URI reader", async () => {
@@ -254,7 +254,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("override-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("snapshots every full metadata getter once per rebuild and keeps fresh values", async () => {
@@ -707,8 +707,8 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("# Inventory");
-		expect(text).not.toContain("- `read`");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("# Tool Inventory");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("does not treat a custom tool named read as a skill URI reader", async () => {
@@ -731,7 +731,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("Custom instructions.");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps skill URL guidance for a custom declared skill URI reader", async () => {
@@ -762,7 +762,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("fetch-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("keeps skill URL guidance for a mounted skill URI reader", async () => {
@@ -777,7 +777,7 @@ describe("system prompt tool inventory", () => {
 		const text = await renderPrompt({ toolNames: directNames, tools });
 
 		expect(text).toContain("mounted-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when compact projection drops the mounted reader", async () => {
@@ -787,7 +787,7 @@ describe("system prompt tool inventory", () => {
 		const text = await renderPrompt({ toolNames: [], tools });
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when no skills are loaded", async () => {
@@ -803,7 +803,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps real provider tool definitions free of skill URL guidance", async () => {
@@ -835,7 +835,7 @@ describe("system prompt tool inventory", () => {
 			tools,
 		});
 
-		expect(systemPrompt.join("\n\n")).toContain("`skill://<name>`");
+		expect(systemPrompt.join("\n\n")).toContain("skill://<name>");
 	});
 
 	it("keeps visible skills when no tools map is provided", async () => {
@@ -879,7 +879,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("bash-only-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when glob is the only active resolver", async () => {
@@ -903,7 +903,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("glob-only-skill");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps hidden skills out of the catalog while preserving URL guidance", async () => {
@@ -928,7 +928,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("hidden-workflow");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("preserves hidden skill URL guidance with a custom prompt", async () => {
@@ -955,7 +955,7 @@ describe("system prompt tool inventory", () => {
 
 		expect(text).toContain("Custom instructions.");
 		expect(text).not.toContain("hidden-workflow");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance from a custom prompt without loaded skills", async () => {
@@ -972,7 +972,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("Custom instructions.");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("omits the read-only scout delegation gate when scout is unavailable", async () => {
@@ -1016,11 +1016,32 @@ describe("system prompt tool inventory", () => {
 			inlineToolDescriptors: false,
 		};
 		const withoutTodo = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash"] })).systemPrompt.join("\n\n");
-		expect(withoutTodo).not.toContain("todo-only turn");
+		expect(withoutTodo).not.toContain("Update todos");
 
 		const withTodo = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash", "todo"] })).systemPrompt.join(
 			"\n\n",
 		);
-		expect(withTodo).toContain("todo-only turn");
+		expect(withTodo).toContain("Update todos");
+	});
+
+	// A session without `read` cannot open `xd://read/urls`, so the grammar that link stands for must ship inline.
+	it("links the internal URL reference only while read can fetch it", async () => {
+		const opts = {
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			tools: TOOLS,
+			nativeTools: true,
+			inlineToolDescriptors: false,
+		};
+		const withRead = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash"] })).systemPrompt.join("\n\n");
+		expect(withRead).toContain("xd://read/urls");
+		expect(withRead).not.toContain("named service");
+
+		const withoutRead = (await buildSystemPrompt({ ...opts, toolNames: ["bash"] })).systemPrompt.join("\n\n");
+		expect(withoutRead).not.toContain("xd://read/urls");
+		expect(withoutRead).toContain("named service");
 	});
 });

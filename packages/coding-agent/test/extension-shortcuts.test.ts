@@ -125,12 +125,12 @@ describe("extension shortcuts", () => {
 			undefined,
 			pi => {
 				pi.registerShortcut("ctrl+C" as KeyId, { handler: noop });
-				pi.registerShortcut("alt+X" as KeyId, { handler: noop });
+				pi.registerShortcut("alt+Z" as KeyId, { handler: noop });
 			},
 			noop,
 		);
-		expect([...runner.getShortcuts().keys()]).toEqual(["alt+x"]);
-		expect(second!.getShortcutConflict("alt+x")).toEqual({ kind: "extension", extensionPath: "ext-0" });
+		expect([...runner.getShortcuts().keys()]).toEqual(["alt+z"]);
+		expect(second!.getShortcutConflict("alt+z")).toEqual({ kind: "extension", extensionPath: "ext-0" });
 	});
 
 	it("binds only the last registration of a chord in any spelling, and reports that one", async () => {

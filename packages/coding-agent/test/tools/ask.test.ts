@@ -115,6 +115,7 @@ describe("AskTool interruption and headless behavior", () => {
 	it.each(["user", "irc", "aside", "job"])("handles %s steering without cancelling the turn", async source => {
 		const steering = new AbortController();
 		const abort = vi.fn();
+		const sent: unknown[] = [];
 		const context = createContext({
 			steeringSignal: steering.signal,
 			abort,
@@ -134,7 +135,14 @@ describe("AskTool interruption and headless behavior", () => {
 						};
 			},
 		});
-		const outcome = new AskTool(createSession()).execute(
+		const delivered = Promise.withResolvers<void>();
+		const session = createSession({
+			sendUserMessage: async content => {
+				sent.push(content);
+				delivered.resolve();
+			},
+		});
+		const outcome = await new AskTool(session).execute(
 			`call-${source}`,
 			{ questions },
 			undefined,
@@ -142,14 +150,19 @@ describe("AskTool interruption and headless behavior", () => {
 			context,
 		);
 		if (source === "user") {
-			await expect(outcome).rejects.toThrow("Ask interrupted by message");
+			// The user's message reaches the model now; the questions stay open and answer later.
+			expect(JSON.stringify(outcome.content)).toContain("These questions stay open");
+			await delivered.promise;
+			expect(JSON.stringify(sent)).toContain("Answers to the questions you asked earlier");
+			expect(JSON.stringify(sent)).toContain("SQLite");
 		} else {
-			expect((await outcome).details?.selectedOptions).toEqual(["SQLite"]);
+			expect(outcome.details?.selectedOptions).toEqual(["SQLite"]);
+			expect(sent).toEqual([]);
 		}
 		expect(abort).not.toHaveBeenCalled();
 	});
 
-	it("delivers queued user steering while questions are open without cancelling the turn", async () => {
+	it("delivers queued user steering while the questions stay open, without cancelling the turn", async () => {
 		const abort = vi.fn();
 		const wake = Promise.withResolvers<void>();
 		let queued = false;
@@ -204,12 +217,13 @@ describe("AskTool interruption and headless behavior", () => {
 				events.push(event);
 			}
 			expect(controller.signal.aborted).toBe(false);
-			expect(closed).toBe(true);
+			// The question stays pending: its dialog is not closed by the message.
+			expect(closed).toBe(false);
 			expect(abort).not.toHaveBeenCalled();
 			const result = events.find(event => event.type === "tool_execution_end" && event.toolName === "ask");
 			if (result?.type !== "tool_execution_end") throw new Error("ask did not finish");
-			expect(result.isError).toBe(true);
-			expect(JSON.stringify(result.result.content)).toContain("Ask interrupted by message");
+			expect(result.isError).toBe(false);
+			expect(JSON.stringify(result.result.content)).toContain("These questions stay open");
 			expect(mock.calls).toHaveLength(2);
 			expect(mock.calls[1]?.context.messages).toContainEqual(
 				expect.objectContaining({ role: "user", content: "Check the schema first" }),

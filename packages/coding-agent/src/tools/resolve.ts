@@ -26,6 +26,7 @@ import {
 import type { AgentToolResult, CustomMessage } from "@oh-my-pi/pi-agent-core";
 
 import { parseXdUrl, XD_URL_PREFIX } from "@oh-my-pi/pi-tui/tools/xd-url";
+import { splitUrlScheme } from "@oh-my-pi/pi-tui/tools/url-scheme-host";
 
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import resolveReminderPrompt from "../prompts/system/resolve-device-reminder.md" with { type: "text" };
@@ -33,6 +34,7 @@ import resolveReminderPrompt from "../prompts/system/resolve-device-reminder.md"
 import type { ToolSession } from ".";
 
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { unwrapHashlineHeaderPath } from "./hashline-header-path";
 import type { XdevDispatch } from "./xdev";
 
 /** The plain-text resolution device URLs (`xd://resolve`, …). */
@@ -83,6 +85,14 @@ export function isPreviewResolutionToolCall(toolCall: { name: string; arguments?
 export function isProposeToolCall(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
 	const path = toolCallWritePath(toolCall);
 	return path !== undefined && parseXdUrl(path)?.name === PROPOSE_DEVICE_NAME;
+}
+
+/** Exposes dispatched device names so loop exemptions need not exempt every write. */
+export function writeDeviceName(toolCall: { name: string; arguments?: Record<string, unknown> }): string | undefined {
+	const path = toolCallWritePath(toolCall);
+	if (path === undefined) return undefined;
+	const target = unwrapHashlineHeaderPath(path);
+	return splitUrlScheme(target)?.scheme === "xd" ? (parseXdUrl(target)?.name ?? undefined) : undefined;
 }
 
 /**

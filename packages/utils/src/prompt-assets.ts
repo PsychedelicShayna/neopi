@@ -4,7 +4,7 @@ import { getAgentDir, getProjectAgentDir, getProjectDir } from "./dirs";
 import { isEnoent, isEnotdir } from "./fs-error";
 import * as logger from "./logger";
 import { LRUCache } from "./lru";
-import { compile, render, type TemplateContext } from "./prompt";
+import { compile, render, renderTracked, type TemplateContext, type TrackedRender } from "./prompt";
 import { parseTemplate, TemplateSyntaxError } from "./template";
 
 export type PromptAssetSource = "project" | "user" | "bundled";
@@ -233,6 +233,22 @@ export function renderPromptAsset(
 		return render(asset.text, context);
 	} catch (error) {
 		return render(renderFallback(id, bundled, asset, options, error), context);
+	}
+}
+
+/** Render effective asset text while tracking item ranges, with the same override/fallback policy as renderPromptAsset. */
+export function renderPromptAssetTracked(
+	id: string,
+	bundled: string,
+	context: TemplateContext,
+	items: readonly object[],
+	options: PromptAssetOptions = {},
+): TrackedRender {
+	const asset = resolvePromptAsset(id, bundled, options);
+	try {
+		return renderTracked(asset.text, context, items);
+	} catch (error) {
+		return renderTracked(renderFallback(id, bundled, asset, options, error), context, items);
 	}
 }
 
