@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,8 +25,9 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import * as utils from "@oh-my-pi/pi-utils";
 import { createTestSession } from "./utilities";
 
-const model = { provider: "test", id: "model", contextWindow: 200_000 } as Model;
+const model = { provider: "test", id: "model", contextWindow: 200_000, input: ["text"] } as Model;
 const scratch: string[] = [];
+beforeEach(() => resetSettingsForTest());
 afterEach(async () => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
@@ -34,9 +35,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-	const root = path.join(process.env.HOME!, ".cache/npi-canary");
-	await fs.mkdir(root, { recursive: true });
-	const dir = await fs.mkdtemp(path.join(root, "compaction-controls-"));
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "compaction-controls-"));
 	scratch.push(dir);
 	return dir;
 }

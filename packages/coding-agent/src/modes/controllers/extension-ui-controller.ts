@@ -18,6 +18,7 @@ import type {
 	ExtensionContextActions,
 	ExtensionCustomOptions,
 	ExtensionError,
+	ExtensionFormDialogResult,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
@@ -31,24 +32,42 @@ import type {
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { cfgExtensionAssistantTextRenderers } from "../../extensibility/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import {
+	type AskDialogInputGuard,
 	type AskDialogPrompt,
+	type AskDialogPromptDraft,
 	type AskDialogPromptValue,
 	AskDialogComponent,
 	normalizeDialogQuestions,
 } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { installExtensionComposerShape } from "@oh-my-pi/pi-tui/overlays/composer-shape-registry";
+import {
+	choiceValue,
+	fieldError,
+	fieldQuestions,
+	type HtmlFormData,
+	type HtmlFormValue,
+	textValue,
+} from "@oh-my-pi/pi-tui/html-form/data";
+import { HtmlFormDialog } from "@oh-my-pi/pi-tui/html-form/dialog";
+import {
+	type ChoiceField,
+	type HtmlForm,
+	parseHtmlForm,
+	spansText,
+	type TextField,
+} from "@oh-my-pi/pi-tui/html-form/parse";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { boundPromptTitle, HookEditorComponent, type HookEditorOptions } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { extensionLinkClicksAvailable } from "@oh-my-pi/pi-tui/render/extension-links";
 import { HookSelectorComponent, type HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
-import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
+import type { ComposerOwner, InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
+import { type BlockedKind, type BlockedStatus, holdBlockedStatus } from "../../utils/run-status";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
@@ -70,6 +89,43 @@ function guestAskHelpText(enterAction: string, extra = ""): string {
 const ASK_OTHER_OPTION = "Other (type your own)";
 const ASK_CHAT_OPTION = "Chat about this";
 const ASK_NEXT_OPTION = "Next →";
+/** What an inline ask warns while sending the composer's draft would skip it. */
+const ASK_SKIP_NOTICE = "Sending your message skips these questions";
+/** The empty composer's placeholder under an ask whose sending skips it. */
+const ASK_SKIP_HINT = "↑ answer the questions above, or type here to skip them";
+/** The empty composer's placeholder under an ask that stays open past a message (`ExtensionUIDialogOptions.detach`). */
+const ASK_STEER_HINT = "↑ answer the questions above · a message sent from here reaches the agent and keeps them open";
+
+/** The ask shown above the composer and what the composer's keys can do with it; see `#mountAsk`. */
+interface MountedAsk {
+	readonly component: AskDialogComponent | HtmlFormDialog;
+	/** Closes it unanswered (`app.ask.cancel`, or a newer ask replacing a detached one). */
+	readonly cancel: () => void;
+	/** Its caller keeps it open past a message the user sends (`ExtensionUIDialogOptions.detach`). */
+	readonly keepsOpenOnSteer: boolean;
+	/** Its caller stopped waiting on it: it no longer holds the run, and other dialogs may show meanwhile. */
+	detached: boolean;
+	/**
+	 * Closes a nested prompt it opened in the composer's place, putting the composer back, so another dialog
+	 * can take that place while the detached ask stays open.
+	 */
+	closePrompt?: () => void;
+}
+
+/**
+ * Where a local ask shows; see `#mountAsk`. The composer's place (`editorContainer`) holds the composer, a
+ * nested prompt of the ask's, or (while a detached ask stays open) another dialog, which the ask leaves alone.
+ */
+interface AskSlot {
+	/** After its nested prompt `prompt` finished: the composer back in its place, the keys to the ask. */
+	restore(prompt: Component): void;
+	/** Its caller stopped waiting on it; see {@link MountedAsk.detached}. */
+	detach(): void;
+	/** Whether the composer holds its place, where a nested prompt of the ask's may go. */
+	composerInPlace(): boolean;
+	/** Takes the ask down and gives the composer its place (unless another dialog holds it) and the keys back. */
+	unmount(prompt: Component | undefined): void;
+}
 
 function withTerminalLauncher(uiContext: ExtensionUIContext, hasUI: boolean): ExtensionUIContext {
 	if (!hasUI || uiContext.openTerminal) return uiContext;
@@ -88,14 +144,9 @@ async function editDialogExternally(text: string, env: Record<string, string>): 
 	return command ? openInEditor(command, text, { env }) : null;
 }
 
-interface CollabDialogWinner {
+interface CollabWinner<T> {
 	source: "local" | "remote";
-	value: string | undefined;
-}
-
-interface CollabAskDialogWinner {
-	source: "local" | "remote";
-	value: ExtensionAskDialogResult | undefined;
+	value: T | undefined;
 }
 /** Tagged result from a guest UI request, distinguishing a real answer (even
  *  one whose literal value is "unavailable"), an explicit guest cancel, and a
@@ -103,6 +154,12 @@ interface CollabAskDialogWinner {
  *  `string | "unavailable" | undefined` channel that let a guest answer of
  *  "unavailable" collide with the transport sentinel. */
 type GuestUiResult = { kind: "answered"; value: string } | { kind: "cancelled" } | { kind: "unavailable" };
+
+/** A guest's answer to one form field: its value (none for an unchecked choice), a cancel, or no guest. */
+type GuestFieldResult =
+	| { kind: "answered"; value: HtmlFormValue | undefined }
+	| { kind: "cancelled" }
+	| { kind: "unavailable" };
 
 function toWireSelectOptions(options: ExtensionUISelectItem[]): CollabUiSelectItem[] {
 	return options.map(option =>
@@ -142,6 +199,8 @@ export class ExtensionUiController {
 	// the rest queue. See `#presentDialog`.
 	#dialogActive = false;
 	#dialogQueue: Array<() => void> = [];
+	/** The local ask shown above the composer (`#mountAsk`). */
+	#ask: MountedAsk | undefined;
 	/**
 	 * The steering messages that last denied an approval. Steering waits for the tool batch to
 	 * end, so while any of them is still pending, later approvals of that batch (an exclusive call
@@ -173,28 +232,19 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * Redraw every transcript component of the reply sent at `timestamp` (one per tool-call segment).
-	 * A plain terminal cannot repaint rows it already moved into scrollback, so a reply with retired
-	 * rows rebuilds the scrollback, as the thinking-visibility toggle does; one still in the live
-	 * viewport (and any block in Tern's native view) just repaints.
+	 * Redraw every transcript component of the reply sent at `timestamp` (one per tool-call segment),
+	 * and the link browser's copy while it is open. A plain terminal cannot repaint rows it already
+	 * moved into scrollback, so a reply with retired rows rebuilds the scrollback, as the
+	 * thinking-visibility toggle does (once the link browser closes, if it covers the screen); one
+	 * still in the live viewport (and any block in Tern's native view) just repaints.
 	 */
 	#rerenderAssistantMessage(timestamp: number): void {
 		if (!cfgExtensionAssistantTextRenderers.get(this.ctx.settings)) return;
-		const native = isNativeRendering();
-		let redrawn = false;
-		let retired = false;
-		for (const child of this.ctx.chatContainer.children) {
-			if (!(child instanceof AssistantMessageComponent)) continue;
-			if (!child.rerenderMessage(timestamp)) continue;
-			redrawn = true;
-			retired ||= !native && !this.ctx.chatContainer.canRemoveBlock(child);
-		}
-		if (retired) {
-			this.ctx.chatContainer.resetStableEmission();
-			this.ctx.ui.resetDisplay();
-		} else if (redrawn) {
-			this.ctx.ui.requestRender();
-		}
+		this.ctx.rerenderInLinkBrowser(timestamp);
+		this.ctx.redrawTranscriptBlocks(
+			this.ctx.chatContainer.children,
+			child => child instanceof AssistantMessageComponent && child.rerenderMessage(timestamp),
+		);
 	}
 
 	/**
@@ -209,10 +259,12 @@ export class ExtensionUiController {
 			confirm: (title, message, dialogOptions) => this.showHookConfirm(title, message, dialogOptions),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
 			askDialog: (questions, dialogOptions) => this.showAskDialog(questions, dialogOptions),
+			formDialog: (html, dialogOptions) => this.showFormDialog(html, dialogOptions),
 			approve: (prompt, dialogOptions) => this.showCollabAwareApproval(prompt, dialogOptions),
 			notify: (message, type) => this.showHookNotify(message, type),
 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
 			rerenderMessage: timestamp => this.#rerenderAssistantMessage(timestamp),
+			refreshTranscript: ids => this.ctx.refreshTranscriptPresentation(new Set(ids)),
 			getLinkClicksAvailable: extensionLinkClicksAvailable,
 			setStatus: (key, text) => this.setHookStatus(key, text),
 			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
@@ -307,6 +359,7 @@ export class ExtensionUiController {
 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
 			sessionModes: this.ctx.sessionModes,
+			keybindings: this.ctx.keybindings,
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
@@ -472,29 +525,20 @@ export class ExtensionUiController {
 	}
 
 	#rebuildHookWidgets(): void {
-		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove, true, true);
-		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow, false, false);
+		// The margin above the editor is the top gap, or a plain spacer over hook
+		// widgets; either way it stays in the one billed root, so installing a
+		// widget never moves that row out of the retirement baseline.
+		this.ctx.editorTopGapContainer.clear();
+		this.ctx.editorTopGapContainer.addChild(
+			this.#hookWidgetsAbove.size === 0 ? new EditorTopGap(() => this.ctx.statusRowOccupied) : new Spacer(1),
+		);
+		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerAbove, this.#hookWidgetsAbove);
+		this.#renderHookWidgetContainer(this.ctx.hookWidgetContainerBelow, this.#hookWidgetsBelow);
 		this.ctx.ui.requestRender();
 	}
 
-	#renderHookWidgetContainer(
-		container: Container,
-		widgets: Map<string, ExtensionUiComponent>,
-		spacerWhenEmpty: boolean,
-		leadingSpacer: boolean,
-	): void {
+	#renderHookWidgetContainer(container: Container, widgets: Map<string, ExtensionUiComponent>): void {
 		container.clear();
-
-		if (widgets.size === 0) {
-			if (spacerWhenEmpty) {
-				container.addChild(new EditorTopGap(() => this.ctx.statusRowOccupied));
-			}
-			return;
-		}
-
-		if (leadingSpacer) {
-			container.addChild(new Spacer(1));
-		}
 		for (const widget of widgets.values()) {
 			container.addChild(widget);
 		}
@@ -542,6 +586,7 @@ export class ExtensionUiController {
 			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			openPlanReview: () => this.ctx.openPlanReview({ fromExtension: true }),
 			sessionModes: this.ctx.sessionModes,
+			keybindings: this.ctx.keybindings,
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
@@ -694,7 +739,7 @@ export class ExtensionUiController {
 		title: string,
 		options: ExtensionUISelectItem[],
 		dialogOptions?: InteractiveSelectorDialogOptions,
-		extra?: { slider?: HookSelectorSlider },
+		extra?: { slider?: HookSelectorSlider; kind?: BlockedKind },
 	): Promise<string | undefined> {
 		const request: CollabUiRequestDraft = {
 			kind: "select",
@@ -705,6 +750,7 @@ export class ExtensionUiController {
 			checkedIndices: dialogOptions?.checkedIndices ? [...dialogOptions.checkedIndices] : undefined,
 			markableCount: dialogOptions?.markableCount,
 			helpText: dialogOptions?.helpText,
+			...(extra?.kind === "permission" ? { approval: true } : {}),
 		};
 		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
 			this.showHookSelector(title, options, { ...dialogOptions, signal }, extra),
@@ -745,6 +791,7 @@ export class ExtensionUiController {
 			kind: "select",
 			title: prompt.full,
 			options: approvalChoiceLabels(prompt),
+			approval: true,
 		};
 		const session = this.ctx.session;
 		const agent = session.agent;
@@ -772,7 +819,7 @@ export class ExtensionUiController {
 		const signal = dialogOptions?.signal ? AbortSignal.any([dialogOptions.signal, steered.signal]) : steered.signal;
 		try {
 			const choice = await this.#raceCollabDialog(request, signal, localSignal =>
-				this.#presentDialog(localSignal, settle => {
+				this.#presentDialog({ kind: "permission", msg: prompt.compact }, localSignal, settle => {
 					const editor = this.ctx.editor;
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
@@ -800,6 +847,7 @@ export class ExtensionUiController {
 							},
 						},
 					);
+					this.ctx.closeLinkBrowser();
 					this.ctx.editorContainer.clear();
 					this.ctx.editorContainer.addChild(dialog);
 					this.ctx.editorContainer.addChild(editor);
@@ -808,9 +856,11 @@ export class ExtensionUiController {
 					editor.focused = true;
 					// Its submissions steer this (main) session, even from a focused agent's view.
 					this.ctx.approvalOwnsComposer = true;
+					const releaseComposerOwner = this.#claimComposerOwner(dialog, () => true);
 					this.ctx.ui.requestRender();
 					return () => {
 						this.ctx.approvalOwnsComposer = false;
+						releaseComposerOwner();
 						dialog.dispose();
 						this.ctx.editorContainer.clear();
 						this.ctx.editorContainer.addChild(editor);
@@ -834,23 +884,443 @@ export class ExtensionUiController {
 		// strings/arrays here instead of throwing inside `sanitizeCarriageReturns`
 		// on the guest path or taking down the local render.
 		const normalized = normalizeDialogQuestions(questions);
+		return this.#raceGuestDialog(
+			dialogOptions,
+			options => this.#showLocalAskDialog(normalized, options),
+			(host, signal) => this.#runGuestAskDialog(host, normalized, signal),
+		);
+	}
+
+	/**
+	 * An agent-written HTML form in the composer's place ({@link HtmlFormDialog}). A collab
+	 * guest answers it field by field — a select per choice group, an editor per text field —
+	 * and the first side to finish wins, as {@link showAskDialog}.
+	 */
+	async showFormDialog(
+		html: string,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<ExtensionFormDialogResult | undefined> {
+		const form = parseHtmlForm(html);
+		return this.#raceGuestDialog(
+			dialogOptions,
+			options => this.#showLocalFormDialog(form, options),
+			(host, signal) => this.#runGuestForm(host, form, signal),
+		);
+	}
+
+	/**
+	 * Race a local multi-step dialog against its guest mirror. First answer (or
+	 * cancel) wins and aborts the other side; a guest `unavailable` leaves the
+	 * local dialog running and returns its eventual result.
+	 */
+	async #raceGuestDialog<T>(
+		dialogOptions: ExtensionUIDialogOptions | undefined,
+		local: (dialogOptions: ExtensionUIDialogOptions | undefined) => Promise<T | undefined>,
+		remote: (host: CollabHost, signal: AbortSignal) => Promise<T | "unavailable" | undefined>,
+	): Promise<T | undefined> {
 		const host = this.ctx.collabHost;
-		if (!host) return this.#showLocalAskDialog(normalized, dialogOptions);
+		if (!host) return local(dialogOptions);
 		const localAbort = new AbortController();
 		const remoteAbort = new AbortController();
 		const parentSignal = dialogOptions?.signal;
 		const localSignal = parentSignal ? AbortSignal.any([parentSignal, localAbort.signal]) : localAbort.signal;
 		const remoteSignal = parentSignal ? AbortSignal.any([parentSignal, remoteAbort.signal]) : remoteAbort.signal;
-		const localWinner = this.#showLocalAskDialog(normalized, { ...dialogOptions, signal: localSignal }).then(
-			(value): CollabAskDialogWinner => ({ source: "local", value }),
-		);
-		const remoteWinner: Promise<CollabAskDialogWinner> = this.#runGuestAskDialog(host, normalized, remoteSignal).then(
-			result => (result === "unavailable" ? localWinner : { source: "remote", value: result }),
+		const localWinner = local({ ...dialogOptions, signal: localSignal }).then((value): CollabWinner<T> => ({
+			source: "local",
+			value,
+		}));
+		const remoteWinner: Promise<CollabWinner<T>> = remote(host, remoteSignal).then(result =>
+			result === "unavailable" ? localWinner : { source: "remote", value: result },
 		);
 		const winner = await Promise.race([localWinner, remoteWinner]);
 		if (winner.source === "remote") localAbort.abort();
 		else remoteAbort.abort();
 		return winner.value;
+	}
+
+	/**
+	 * What the composer shows about the ask waiting above it: `pending` while one waits, `skip` while
+	 * sending its draft would skip it; undefined with no ask or with the composer talking to a `/btw` note.
+	 */
+	composerAsk(): "pending" | "skip" | undefined {
+		if (!this.#ask || this.ctx.isBtwFocused) return undefined;
+		return this.#draftSkipsAsk() ? "skip" : "pending";
+	}
+
+	/** The empty composer's placeholder under the ask: the ask's own keys while it holds them, else what typing here does. */
+	askComposerHint(): string | undefined {
+		const ask = this.#ask;
+		if (!ask || this.ctx.isBtwFocused) return undefined;
+		if (this.askHoldsKeys() && ask.component instanceof HtmlFormDialog) return ask.component.keyHints();
+		return ask.keepsOpenOnSteer ? ASK_STEER_HINT : ASK_SKIP_HINT;
+	}
+
+	/** Whether an ask waits above the composer while the keys are away from the composer (it draws faint). */
+	askHoldsKeys(): boolean {
+		return this.#ask !== undefined && !this.ctx.editor.focused;
+	}
+
+	/**
+	 * Whether an ask holds the run: the agent waits on its answer. Esc in the composer then keeps the
+	 * composer's meaning instead of interrupting the turn, which would cancel the ask.
+	 */
+	askBlocksRun(): boolean {
+		return this.#ask !== undefined && !this.#ask.detached;
+	}
+
+	/**
+	 * Gives the keys to the ask waiting above the composer, which the user brought them to on purpose
+	 * (↑ from the composer's top, Shift+Tab, `app.ask.hide`, a click): it shows, and a composer draft no
+	 * longer holds typing. False when none waits.
+	 */
+	focusAsk(): boolean {
+		const ask = this.#ask;
+		if (!ask) return false;
+		ask.component.engage();
+		this.ctx.ui.setFocus(ask.component);
+		this.ctx.ui.requestRender();
+		return true;
+	}
+
+	/** `app.ask.hide` outside the ask: hides the ask waiting above the composer, or shows it with the keys. False when none waits. */
+	toggleAskHidden(): boolean {
+		const ask = this.#ask;
+		if (!ask) return false;
+		if (ask.component.hidden) return this.focusAsk();
+		ask.component.setHidden(true);
+		// Natively a form sits in the transcript and does not hide: the key brings the keys to it instead.
+		if (!ask.component.hidden) return this.focusAsk();
+		this.ctx.ui.requestRender();
+		return true;
+	}
+
+	/** `app.ask.cancel` outside the ask: closes the ask waiting above the composer unanswered. False when none waits. */
+	cancelAsk(): boolean {
+		const ask = this.#ask;
+		if (!ask) return false;
+		ask.cancel();
+		return true;
+	}
+
+	/** Gives the keys to the composer (↓ or Tab past an ask's last stop, hiding it, the ask closing). */
+	#focusComposer(): void {
+		this.ctx.ui.setFocus(this.ctx.editor);
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Whether sending the composer's draft now skips the ask shown: a plain message, which reaches the
+	 * agent as the user's and closes the ask, not a command, a shell run or a `/btw` follow-up. An ask
+	 * that stays open past a message is never skipped.
+	 */
+	#draftSkipsAsk(): boolean {
+		if (
+			!this.#ask ||
+			this.#ask.keepsOpenOnSteer ||
+			this.ctx.isBtwFocused ||
+			this.ctx.isBashMode ||
+			this.ctx.isPythonMode ||
+			this.ctx.isBtwMode
+		)
+			return false;
+		const draft = this.ctx.editor.getText().trim();
+		return draft.length > 0 && !draft.startsWith("/");
+	}
+
+	/** The ask's warning while sending the composer's draft would skip it, with the key back to it. */
+	#skipNotice(): string | undefined {
+		if (!this.#draftSkipsAsk()) return undefined;
+		const back = this.ctx.keybindings.getKeys("app.thinking.cycle")[0];
+		return this.ctx.ui.getFocused() === this.ctx.editor && back
+			? `${ASK_SKIP_NOTICE} · ${formatKeyHint(back)} answers them`
+			: ASK_SKIP_NOTICE;
+	}
+
+	/**
+	 * Keep composer drafts protected even when they arrive after the dialog opens (dictation, a late paste):
+	 * while the draft holds text, the ask passes typing to it. A key passed on takes the keys to the
+	 * composer with it, where it means what it means there (Esc: Vim's Normal mode, Enter: send), so typing
+	 * goes on in the composer. The composer shows its cursor while the ask still holds the keys.
+	 */
+	#draftInputGuard(): AskDialogInputGuard {
+		const draftEditor = this.ctx.editor;
+		return {
+			isBlocked: () => draftEditor.getText().length > 0,
+			handleInput: (keyData: string) => {
+				this.#focusComposer();
+				// The draft pipeline (text, Vim modes, submit): editor-slot shortcuts stay off for the key that crossed over.
+				draftEditor.handleDraftEdit(keyData);
+			},
+			hint: "Finish or clear the current prompt to answer",
+			syncPresentation: blocked => {
+				if (this.ctx.ui.getFocused() !== draftEditor) draftEditor.focused = blocked;
+			},
+		};
+	}
+
+	/**
+	 * Shows a local ask above the composer, which stays: natively (Tern) at the transcript's end, in rows
+	 * just over it. The ask takes the keys; its input guard ({@link #draftInputGuard}) hands typing it has
+	 * no use for to the composer, so the user can always type while being asked. ↓ or Tab past the ask's
+	 * last stop and hiding it give the composer the keys; ↑ from the composer's top, Shift+Tab, the hide key
+	 * and clicks bring them back.
+	 *
+	 * A newer ask replaces one whose caller stopped waiting on it ({@link MountedAsk.detached}). While a
+	 * detached ask stays open another dialog may take the composer's place; the ask then leaves that place
+	 * and the keys alone.
+	 */
+	#mountAsk(
+		component: AskDialogComponent | HtmlFormDialog,
+		options: { cancel: () => void; keepsOpenOnSteer: boolean; closePrompt?: () => void },
+	): AskSlot {
+		this.ctx.closeLinkBrowser();
+		if (this.#ask?.detached) this.#ask.cancel();
+		const ask: MountedAsk = { component, ...options, detached: false };
+		this.#ask = ask;
+		this.ctx.askContainer.addChild(component);
+		this.ctx.statusLine.setAwaitingAnswer(true);
+		this.ctx.ui.setFocus(component);
+		this.ctx.ui.requestRender();
+		const putComposerBack = (): void => {
+			this.ctx.editorContainer.clear();
+			this.ctx.editorContainer.addChild(this.ctx.editor);
+		};
+		return {
+			restore: prompt => {
+				// Another dialog took the place while the detached ask stays open.
+				if (!this.ctx.editorContainer.children.includes(prompt)) return;
+				putComposerBack();
+				this.ctx.ui.setFocus(component);
+				this.ctx.ui.requestRender();
+			},
+			detach: () => {
+				ask.detached = true;
+				this.ctx.ui.requestRender();
+			},
+			composerInPlace: () => this.ctx.editorContainer.children[0] === this.ctx.editor,
+			unmount: prompt => {
+				if (this.#ask === ask) this.#ask = undefined;
+				this.ctx.askContainer.removeChild(component);
+				this.ctx.statusLine.setAwaitingAnswer(this.#ask !== undefined);
+				const place = this.ctx.editorContainer.children[0];
+				if (place !== undefined && place !== this.ctx.editor && place !== prompt) {
+					// Another dialog holds the composer's place: leave it, and its keys.
+					if (this.ctx.ui.getFocused() === component) this.ctx.ui.setFocus(place);
+					this.ctx.ui.requestRender();
+					return;
+				}
+				putComposerBack();
+				this.#focusComposer();
+			},
+		};
+	}
+
+	/** Registers `component` as the composer's owner; the returned release clears it only if it is still registered. */
+	#claimComposerOwner(component: Component, owns: () => boolean): () => void {
+		const owner: ComposerOwner = { component, owns };
+		this.ctx.composerOwner = owner;
+		return () => {
+			if (this.ctx.composerOwner === owner) this.ctx.composerOwner = undefined;
+		};
+	}
+
+	#showLocalFormDialog(
+		form: HtmlForm,
+		dialogOptions: ExtensionUIDialogOptions | undefined,
+	): Promise<ExtensionFormDialogResult | undefined> {
+		const first = form.fields.find(field => field.name);
+		const prompt = { kind: "question", msg: first && fieldQuestions(form).get(first) } as const;
+		const detachSignal = dialogOptions?.detach;
+		return this.#presentDialog<ExtensionFormDialogResult>(
+			prompt,
+			dialogOptions?.signal,
+			settle => {
+				const dialog = new HtmlFormDialog(form, {
+					tui: this.ctx.ui,
+					cwd: this.ctx.sessionManager.getCwd(),
+					timeout: dialogOptions?.timeout,
+					onTimeout: (data, notes) => {
+						dialogOptions?.onTimeout?.();
+						settle({ data, ...(notes.length ? { notes } : {}), timedOut: true });
+					},
+					onSubmit: (data, notes) => settle({ data, ...(notes.length ? { notes } : {}) }),
+					inputGuard: this.#draftInputGuard(),
+					onCancel: () => settle(undefined),
+					acceptImages: dialogOptions?.acceptImages === true,
+					onPasteImage: () => this.ctx.handleImagePaste(),
+					onPasteImagePath: path => this.ctx.handleImagePathPaste(path),
+					skipNotice: () => this.#skipNotice(),
+					claimKeys: () => this.focusAsk(),
+					releaseKeys: () => this.#focusComposer(),
+				});
+				const slot = this.#mountAsk(dialog, {
+					cancel: () => settle(undefined),
+					keepsOpenOnSteer: detachSignal !== undefined,
+				});
+				const unwatch = this.#watchDetach(slot, detachSignal);
+				return () => {
+					unwatch();
+					// Closed by its signal (a message sent instead, the turn aborted): what was answered goes along.
+					if (dialogOptions?.signal?.aborted) {
+						const given = dialog.givenAnswers();
+						if (given) dialogOptions.onAbandon?.(given);
+					}
+					slot.unmount(undefined);
+					dialog.dispose();
+				};
+			},
+			undefined,
+			detachSignal,
+		);
+	}
+
+	/** Marks `slot` detached once `signal` aborts (`ExtensionUIDialogOptions.detach`); returns the unsubscribe. */
+	#watchDetach(slot: AskSlot, signal: AbortSignal | undefined): () => void {
+		if (!signal) return () => {};
+		const onDetach = (): void => slot.detach();
+		if (signal.aborted) onDetach();
+		else signal.addEventListener("abort", onDetach, { once: true });
+		return () => signal.removeEventListener("abort", onDetach);
+	}
+
+	/**
+	 * A guest's run through the form: every named field in order, each choice
+	 * group as a select (defaults preselected), each text field as an editor
+	 * prefilled with its value and re-asked until it passes the form's rules.
+	 */
+	async #runGuestForm(
+		host: CollabHost,
+		form: HtmlForm,
+		signal: AbortSignal,
+	): Promise<ExtensionFormDialogResult | "unavailable" | undefined> {
+		const questions = fieldQuestions(form);
+		const data: HtmlFormData = Object.fromEntries(form.hidden);
+		for (const field of form.fields) {
+			if (!field.name) continue;
+			const question = sanitizeCarriageReturns(questions.get(field) ?? field.name);
+			const result =
+				field.kind === "choice"
+					? await this.#runGuestFormChoice(host, field, question, signal)
+					: await this.#runGuestFormText(host, field, question, signal);
+			if (result.kind === "unavailable") return "unavailable";
+			if (result.kind === "cancelled") return undefined;
+			if (result.value !== undefined) data[field.name] = result.value;
+		}
+		return { data };
+	}
+
+	async #runGuestFormChoice(
+		host: CollabHost,
+		field: ChoiceField,
+		question: string,
+		signal: AbortSignal,
+	): Promise<GuestFieldResult> {
+		const enabled = field.options.flatMap((option, index) => (option.disabled ? [] : [index]));
+		// Nothing a guest could pick: the group contributes nothing, as in the local form.
+		if (enabled.length === 0 && !field.other) return { kind: "answered", value: undefined };
+		const checked = new Set(enabled.filter(index => field.options[index]!.checked));
+		const labels = disambiguateDisplayLabels(
+			enabled.map(index => {
+				const option = field.options[index]!;
+				return sanitizeCarriageReturns(spansText(option.label).trim() || option.value);
+			}),
+			[ASK_OTHER_OPTION, ASK_NEXT_OPTION],
+		);
+		// Radio and checkbox groups end with a free-text Other row.
+		const rows = field.other ? [...labels, ASK_OTHER_OPTION] : labels;
+		if (!field.multi) {
+			// Several checked radios: the last wins, as in the local form.
+			const preselected = enabled.findLastIndex(index => checked.has(index));
+			while (true) {
+				const choice = await this.#requestGuestUiString(
+					host,
+					{
+						kind: "select",
+						title: question,
+						options: rows,
+						initialIndex: Math.max(0, preselected),
+						selectionMarker: "radio",
+						helpText: guestAskHelpText("select"),
+					},
+					signal,
+				);
+				if (choice.kind !== "answered") return choice;
+				if (field.other && choice.value === ASK_OTHER_OPTION) {
+					const typed = await this.#requestGuestOtherText(host, question, signal);
+					if (typed.kind === "unavailable") return typed;
+					// A cancelled or blank Other answer re-shows the options.
+					if (typed.kind === "cancelled" || !typed.value.trim()) continue;
+					return { kind: "answered", value: choiceValue(field, new Set(), typed.value) };
+				}
+				const picked = enabled[labels.indexOf(choice.value)];
+				return { kind: "answered", value: choiceValue(field, new Set(picked === undefined ? [] : [picked])) };
+			}
+		}
+		let other: string | undefined;
+		while (true) {
+			// Mirror the local form's required check: Next appears once something is checked.
+			const canSubmit = !field.required || checked.size > 0 || other !== undefined;
+			const checkedIndices = enabled.flatMap((index, row) => (checked.has(index) ? [row] : []));
+			if (other !== undefined) checkedIndices.push(labels.length);
+			const choice = await this.#requestGuestUiString(
+				host,
+				{
+					kind: "select",
+					title: question,
+					options: canSubmit ? [...rows, ASK_NEXT_OPTION] : rows,
+					selectionMarker: "checkbox",
+					checkedIndices,
+					markableCount: rows.length,
+					helpText: guestAskHelpText("toggle", canSubmit ? `${ASK_NEXT_OPTION} continue  ` : ""),
+				},
+				signal,
+			);
+			if (choice.kind !== "answered") return choice;
+			if (choice.value === ASK_NEXT_OPTION) return { kind: "answered", value: choiceValue(field, checked, other) };
+			if (field.other && choice.value === ASK_OTHER_OPTION) {
+				if (other !== undefined) {
+					other = undefined;
+					continue;
+				}
+				const typed = await this.#requestGuestOtherText(host, question, signal);
+				if (typed.kind === "unavailable") return typed;
+				// A cancelled or blank Other answer leaves Other unchecked.
+				if (typed.kind === "answered" && typed.value.trim()) other = typed.value;
+				continue;
+			}
+			const toggled = enabled[labels.indexOf(choice.value)];
+			if (toggled === undefined) continue;
+			if (!checked.delete(toggled)) checked.add(toggled);
+		}
+	}
+
+	/** A guest's free-text "Other" answer to a choice group, on one line. */
+	async #requestGuestOtherText(host: CollabHost, question: string, signal: AbortSignal): Promise<GuestUiResult> {
+		const input = await this.#requestGuestUiString(host, { kind: "editor", title: question }, signal);
+		return input.kind === "answered" ? { kind: "answered", value: input.value.replace(/[\r\n]+/g, " ") } : input;
+	}
+
+	async #runGuestFormText(
+		host: CollabHost,
+		field: TextField,
+		question: string,
+		signal: AbortSignal,
+	): Promise<GuestFieldResult> {
+		let text = field.value;
+		let error: string | undefined;
+		while (true) {
+			const input = await this.#requestGuestUiString(
+				host,
+				{ kind: "editor", title: error ? `${question} (${error})` : question, prefill: text },
+				signal,
+			);
+			if (input.kind !== "answered") return input;
+			// A single-line input cannot hold line breaks.
+			text = field.multiline ? input.value : input.value.replace(/[\r\n]+/g, " ");
+			const value = textValue(field, text);
+			error = fieldError(field, value);
+			if (!error) return { kind: "answered", value };
+		}
 	}
 
 	#showLocalAskDialog(
@@ -863,144 +1333,152 @@ export class ExtensionUiController {
 			title: "Ask",
 			convert: value => controlAnswerToAskResult(questions, value),
 		};
-		return this.#presentDialog<ExtensionAskDialogResult>(dialogOptions?.signal, settle => {
-			let promptEditor: HookEditorComponent | undefined;
-			let promptResolve: ((value: AskDialogPromptValue | undefined) => void) | undefined;
-			let closed = false;
-			const draftEditor = this.ctx.editor;
-			// The composer stays mounted beneath the question and keeps its draft:
-			// a non-empty draft owns typing until it is sent or cleared, and hiding
-			// the question hands typing to it (issue #303).
-			const inputGuard = {
-				isBlocked: () => draftEditor.getText().length > 0,
-				handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
-				hint: "Finish or clear the current prompt to answer",
-				// Show the draft's insertion cursor while it owns input; drop it
-				// once the draft clears and the ask controls take over.
-				syncPresentation: () => {
-					draftEditor.focused = draftEditor.getText().length > 0;
-				},
-			};
-			// Speech input must start, stop and deliver into the composer while a
-			// question is up, or a running recording could only end by cancelling it.
-			const passthrough = (keyData: string): boolean => {
-				for (const action of ASK_PASSTHROUGH_ACTIONS) {
-					if (getKeybindings().matches(keyData, action)) return this.ctx.runAppAction(action);
-				}
-				return false;
-			};
+		const prompt = { kind: "question", msg: questions[0]?.question } as const;
+		const detachSignal = dialogOptions?.detach;
+		return this.#presentDialog<ExtensionAskDialogResult>(
+			prompt,
+			dialogOptions?.signal,
+			settle => {
+				let promptEditor: HookEditorComponent | undefined;
+				// The nested prompt in the composer's place, from opening until the composer is back.
+				let placedPrompt: HookEditorComponent | undefined;
+				let promptResolve: ((value: AskDialogPromptValue | AskDialogPromptDraft | undefined) => void) | undefined;
+				let closed = false;
+				const inputGuard = this.#draftInputGuard();
+				const passthrough = (keyData: string): boolean => {
+					for (const action of ASK_PASSTHROUGH_ACTIONS) {
+						if (getKeybindings().matches(keyData, action)) return this.ctx.runAppAction(action);
+					}
+					return false;
+				};
+				// After a nested prompt took the composer's place: the composer back, the keys to the ask.
+				const restoreAskDialog = (finished: HookEditorComponent): void => {
+					if (!closed) slot.restore(finished);
+					if (placedPrompt === finished) placedPrompt = undefined;
+				};
 
-			const restoreAskDialog = (): void => {
-				if (closed || !askDialog) return;
-				this.ctx.editorContainer.clear();
-				this.ctx.editorContainer.addChild(askDialog);
-				// Keep the draft editor mounted beneath the restored ask, matching the
-				// initial presentation: the guard re-blocks whenever the draft is
-				// non-empty (e.g. a failed submit restored its text while a nested
-				// prompt was open), and routed input must land on a visible surface.
-				this.ctx.editorContainer.addChild(this.ctx.editor);
-				this.ctx.ui.setFocus(askDialog);
-				this.ctx.ui.requestRender();
-			};
+				const finishPrompt = (value: AskDialogPromptValue | AskDialogPromptDraft | undefined): void => {
+					const resolvePrompt = promptResolve;
+					const finished = promptEditor;
+					promptResolve = undefined;
+					promptEditor?.dispose();
+					promptEditor = undefined;
+					resolvePrompt?.(value);
+					// Let AskDialog apply the answer and clear its prompt guard before
+					// making the dialog visible and interactive again. This single-hop
+					// deferral relies on #promptForCustomInput/#promptForNote clearing
+					// #promptActive in the synchronous resume after their lone
+					// `await this.#openPrompt(...)` (no await before the `finally`); adding one
+					// there reopens the drop-Enter race, so revisit this deferral then.
+					if (finished) queueMicrotask(() => restoreAskDialog(finished));
+				};
 
-			const finishPrompt = (value: AskDialogPromptValue | undefined): void => {
-				const resolvePrompt = promptResolve;
-				promptResolve = undefined;
-				promptEditor?.dispose();
-				promptEditor = undefined;
-				resolvePrompt?.(value);
-				// Let AskDialog apply the answer and clear its prompt guard before
-				// making the dialog visible and interactive again. This single-hop
-				// deferral relies on #promptForCustomInput/#promptForNote clearing
-				// #promptActive in the synchronous resume after their lone
-				// `await this.#openPrompt(...)` (no await before the `finally`); adding one
-				// there reopens the drop-Enter race, so revisit this deferral then.
-				queueMicrotask(restoreAskDialog);
-			};
+				const openPrompt = (
+					prompt: AskDialogPrompt,
+					prefill: string | undefined,
+					options: HookEditorOptions,
+				): boolean => {
+					// A detached ask leaves the composer's place to another dialog holding it.
+					if (!slot.composerInPlace()) {
+						this.ctx.showStatus("Finish the open prompt first");
+						return false;
+					}
+					promptEditor = new HookEditorComponent(
+						this.ctx.ui,
+						prompt.title,
+						prefill,
+						(text, images) => finishPrompt({ text, images }),
+						(text, images) => finishPrompt({ draft: { text, images } }),
+						{
+							promptStyle: true,
+							externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
+							question: prompt.question,
+							...options,
+						},
+					);
+					placedPrompt = promptEditor;
+					this.ctx.closeLinkBrowser();
+					this.ctx.editorContainer.clear();
+					this.ctx.editorContainer.addChild(promptEditor);
+					this.ctx.ui.setFocus(promptEditor);
+					this.ctx.ui.requestRender();
+					return true;
+				};
 
-			const openPrompt = (
-				prompt: AskDialogPrompt,
-				prefill: string | undefined,
-				options: HookEditorOptions,
-			): void => {
-				promptEditor = new HookEditorComponent(
-					this.ctx.ui,
-					prompt.title,
-					prefill,
-					(text, images) => finishPrompt({ text, images }),
-					() => finishPrompt(undefined),
+				const promptForText = (
+					prompt: AskDialogPrompt,
+					prefill?: string,
+				): Promise<string | AskDialogPromptDraft | undefined> => {
+					if (closed) return Promise.resolve(undefined);
+					const { promise, resolve } = Promise.withResolvers<string | AskDialogPromptDraft | undefined>();
+					promptResolve = value => resolve(value === undefined || "draft" in value ? value : value.text);
+					if (!openPrompt(prompt, prefill, {})) finishPrompt(undefined);
+					return promise;
+				};
+
+				const promptWithImages = (
+					prompt: AskDialogPrompt,
+					prefill: AskDialogPromptValue | undefined,
+				): Promise<AskDialogPromptValue | AskDialogPromptDraft | undefined> => {
+					if (closed) return Promise.resolve(undefined);
+					const { promise, resolve } = Promise.withResolvers<
+						AskDialogPromptValue | AskDialogPromptDraft | undefined
+					>();
+					promptResolve = resolve;
+					const opened = openPrompt(prompt, prefill?.text, {
+						acceptImages: true,
+						images: prefill?.images,
+						onPasteImage: () => this.ctx.handleImagePaste(),
+						onPasteImagePath: path => this.ctx.handleImagePathPaste(path),
+					});
+					if (!opened) finishPrompt(undefined);
+					return promise;
+				};
+
+				const askDialog = new AskDialogComponent(
+					questions,
 					{
-						promptStyle: true,
-						externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
-						question: prompt.question,
-						...options,
+						onSubmit: result => settle(result),
+						onCancel: () => settle(undefined),
+						onPrompt: promptForText,
+						onImagePrompt: dialogOptions?.acceptImages ? promptWithImages : undefined,
+					},
+					{
+						timeout: dialogOptions?.timeout,
+						onTimeout: dialogOptions?.onTimeout,
+						tui: this.ctx.ui,
+						inputGuard,
+						passthrough,
+						releaseKeys: () => this.#focusComposer(),
 					},
 				);
-				this.ctx.editorContainer.clear();
-				this.ctx.editorContainer.addChild(promptEditor);
-				this.ctx.ui.setFocus(promptEditor);
-				this.ctx.ui.requestRender();
-			};
-
-			const promptForText = (prompt: AskDialogPrompt, prefill?: string): Promise<string | undefined> => {
-				if (closed) return Promise.resolve(undefined);
-				const { promise, resolve } = Promise.withResolvers<string | undefined>();
-				promptResolve = value => resolve(value?.text);
-				openPrompt(prompt, prefill, {});
-				return promise;
-			};
-
-			const promptWithImages = (
-				prompt: AskDialogPrompt,
-				prefill: AskDialogPromptValue | undefined,
-			): Promise<AskDialogPromptValue | undefined> => {
-				if (closed) return Promise.resolve(undefined);
-				const { promise, resolve } = Promise.withResolvers<AskDialogPromptValue | undefined>();
-				promptResolve = resolve;
-				openPrompt(prompt, prefill?.text, {
-					acceptImages: true,
-					images: prefill?.images,
-					onPasteImage: () => this.ctx.handleImagePaste(),
-					onPasteImagePath: path => this.ctx.handleImagePathPaste(path),
+				const slot = this.#mountAsk(askDialog, {
+					cancel: () => settle(undefined),
+					keepsOpenOnSteer: detachSignal !== undefined,
+					closePrompt: () => {
+						const placed = placedPrompt;
+						if (!placed) return;
+						if (promptEditor) finishPrompt(undefined);
+						slot.restore(placed);
+						placedPrompt = undefined;
+					},
 				});
-				return promise;
-			};
+				const unwatch = this.#watchDetach(slot, detachSignal);
 
-			const askDialog = new AskDialogComponent(
-				questions,
-				{
-					onSubmit: result => settle(result),
-					onCancel: () => settle(undefined),
-					onPrompt: promptForText,
-					onImagePrompt: dialogOptions?.acceptImages ? promptWithImages : undefined,
-				},
-				{
-					timeout: dialogOptions?.timeout,
-					onTimeout: dialogOptions?.onTimeout,
-					tui: this.ctx.ui,
-					inputGuard,
-					passthrough,
-				},
-			);
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(askDialog);
-			this.ctx.editorContainer.addChild(this.ctx.editor);
-			this.ctx.ui.setFocus(askDialog);
-			this.ctx.ui.requestRender();
-
-			return () => {
-				closed = true;
-				askDialog?.dispose();
-				promptEditor?.dispose();
-				promptResolve?.(undefined);
-				promptResolve = undefined;
-				promptEditor = undefined;
-				this.ctx.editorContainer.clear();
-				this.ctx.editorContainer.addChild(this.ctx.editor);
-				this.ctx.ui.setFocus(this.ctx.editor);
-				this.ctx.ui.requestRender();
-			};
-		});
+				return () => {
+					unwatch();
+					closed = true;
+					askDialog.dispose();
+					promptEditor?.dispose();
+					promptResolve?.(undefined);
+					promptResolve = undefined;
+					promptEditor = undefined;
+					slot.unmount(placedPrompt);
+				};
+			},
+			undefined,
+			detachSignal,
+		);
 	}
 
 	/**
@@ -1026,9 +1504,9 @@ export class ExtensionUiController {
 		);
 		if (!remote) return local(signal);
 		const localWinner = local(signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal).then(
-			(value): CollabDialogWinner => ({ source: "local", value }),
+			(value): CollabWinner<string> => ({ source: "local", value }),
 		);
-		const remoteWinner: Promise<CollabDialogWinner> = remote.then(result =>
+		const remoteWinner: Promise<CollabWinner<string>> = remote.then(result =>
 			result.kind === "answered" ? { source: "remote", value: result.value } : localWinner,
 		);
 		const winner = await Promise.race([localWinner, remoteWinner]);
@@ -1192,16 +1670,16 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * Show a selector for hooks.
+	 * Show a selector for hooks; it reports a `question` unless `extra.kind` says otherwise.
 	 */
 	showHookSelector(
 		title: string,
 		options: ExtensionUISelectItem[],
 		dialogOptions?: InteractiveSelectorDialogOptions,
-		extra?: { slider?: HookSelectorSlider },
+		extra?: { slider?: HookSelectorSlider; kind?: BlockedKind },
 	): Promise<string | undefined> {
 		this.#nextDialog = { family: "extension", kind: "select", title };
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#presentDialog({ kind: extra?.kind ?? "question", msg: title }, dialogOptions?.signal, settle => {
 			const maxVisible = Math.max(4, Math.min(15, this.ctx.ui.terminal.rows - 12));
 			this.ctx.hookSelector = new HookSelectorComponent(
 				title,
@@ -1239,6 +1717,7 @@ export class ExtensionUiController {
 					slider: extra?.slider,
 				},
 			);
+			this.ctx.closeLinkBrowser();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.hookSelector);
 			this.ctx.ui.setFocus(this.ctx.hookSelector);
@@ -1266,7 +1745,9 @@ export class ExtensionUiController {
 		message: string,
 		dialogOptions?: InteractiveSelectorDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions);
+		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions, {
+			kind: "permission",
+		});
 		return result === "Yes";
 	}
 
@@ -1279,7 +1760,7 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<string | undefined> {
 		this.#nextDialog = { family: "extension", kind: "input", title };
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#presentDialog({ kind: "question", msg: title }, dialogOptions?.signal, settle => {
 			this.ctx.hookInput = new HookInputComponent(
 				title,
 				placeholder,
@@ -1292,6 +1773,7 @@ export class ExtensionUiController {
 					tui: this.ctx.ui,
 				},
 			);
+			this.ctx.closeLinkBrowser();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.hookInput);
 			this.ctx.ui.setFocus(this.ctx.hookInput);
@@ -1322,7 +1804,7 @@ export class ExtensionUiController {
 		editorOptions?: { promptStyle?: boolean },
 	): Promise<string | undefined> {
 		this.#nextDialog = { family: "extension", kind: "editor", title };
-		return this.#presentDialog(dialogOptions?.signal, settle => {
+		return this.#presentDialog({ kind: "question", msg: title }, dialogOptions?.signal, settle => {
 			this.ctx.hookEditor = new HookEditorComponent(
 				this.ctx.ui,
 				title,
@@ -1334,6 +1816,7 @@ export class ExtensionUiController {
 					externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
 				},
 			);
+			this.ctx.closeLinkBrowser();
 			this.ctx.editorContainer.clear();
 			this.ctx.editorContainer.addChild(this.ctx.hookEditor);
 			this.ctx.ui.setFocus(this.ctx.hookEditor);
@@ -1445,6 +1928,7 @@ export class ExtensionUiController {
 					return;
 				}
 				editorReplaced = true;
+				this.ctx.closeLinkBrowser();
 				this.ctx.editorContainer.clear();
 				this.ctx.editorContainer.addChild(component);
 				this.ctx.ui.setFocus(component);
@@ -1520,22 +2004,24 @@ export class ExtensionUiController {
 	}
 
 	#sendExtensionMessage: SendMessageHandler = (message, options) => {
+		const normalized = normalizeCustomMessagePayload(message);
+		// A row kept out of context never starts a turn, whatever its options ask (see `sendCustomMessage`).
 		const startsTurn =
-			options?.triggerTurn === true ||
-			options?.deliverAs === "steer" ||
-			options?.deliverAs === "followUp" ||
-			options?.deliverAs === "aside";
+			normalized.excludeFromContext !== true &&
+			(options?.triggerTurn === true ||
+				options?.deliverAs === "steer" ||
+				options?.deliverAs === "followUp" ||
+				options?.deliverAs === "aside");
 		if (startsTurn && this.#rejectGuestExtensionTurn()) return;
 		const wasStreaming = this.ctx.session.isStreaming;
 		const messageCountBefore = this.ctx.session.messages.length;
-		const normalized = normalizeCustomMessagePayload(message);
 		this.ctx.session
 			.sendCustomMessage(normalized, options)
 			.then(() => {
 				// `deliverAs: "nextTurn"` without a trigger is the one idle arm that appends
 				// to the session silently (no message_start/message_end), so nothing else
 				// paints it and nothing else in the transcript changed.
-				const silentAppend = options?.deliverAs === "nextTurn" && options.triggerTurn !== true;
+				const silentAppend = options?.deliverAs === "nextTurn" && !startsTurn;
 				this.#applyCustomMessageDisplay(wasStreaming, normalized, silentAppend ? messageCountBefore : undefined);
 			})
 			.catch((err: unknown) => {
@@ -1545,10 +2031,16 @@ export class ExtensionUiController {
 
 	/** Every `sendUserMessage` form prompts or queues a user turn (see `AgentSession.sendUserMessage`). */
 	#sendExtensionUserMessage: SendUserMessageHandler = (content, options) => {
-		if (this.#rejectGuestExtensionTurn()) return;
-		this.ctx.session.sendUserMessage(content, options).catch((err: unknown) => {
+		if (this.#rejectGuestExtensionTurn()) {
+			const denied = Promise.reject(new Error("Extension-initiated turns are host-only during a collab session"));
+			denied.catch(() => {});
+			return denied;
+		}
+		const task = this.ctx.session.sendUserMessage(content, options);
+		task.catch((err: unknown) => {
 			this.ctx.showError(`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
+		return task;
 	};
 
 	/**
@@ -1599,8 +2091,16 @@ export class ExtensionUiController {
 	 * presented at a time and the rest queue (FIFO). `settle` (or an abort) hides
 	 * the current dialog and hands the surface to the next queued request. A request
 	 * whose signal aborts before its turn resolves `undefined` and is never shown.
+	 *
+	 * While presented, the dialog reports the run as `blocked` on `prompt` (OSC 7501 and the title): nothing it
+	 * gates goes on until the user answers. Whether that needs an alert is the terminal's call.
+	 *
+	 * `detachSignal` (`ExtensionUIDialogOptions.detach`) aborts once the caller stops waiting on the answer:
+	 * the dialog stays presented and still settles, but releases the blocked status and the queue, so the next
+	 * dialog may show meanwhile (a detached ask leaves the composer's place to it).
 	 */
 	#presentDialog<T = string>(
+		prompt: Omit<BlockedStatus, "state">,
 		signal: AbortSignal | undefined,
 		present: (settle: (value: T | undefined) => void) => () => void,
 		meta?: {
@@ -1610,6 +2110,7 @@ export class ExtensionUiController {
 			schema?: unknown;
 			convert?: (value: unknown) => unknown;
 		},
+		detachSignal?: AbortSignal,
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		const described = meta ?? this.#nextDialog;
@@ -1618,20 +2119,37 @@ export class ExtensionUiController {
 		let started = false;
 		let hide: (() => void) | undefined;
 		let dialogId: string | undefined;
+		let release: (() => void) | undefined;
+		let detached = false;
 
 		function onAbort(): void {
 			settle(undefined);
 		}
 
+		const onDetach = (): void => {
+			if (settled || !started || detached) return;
+			detached = true;
+			this.#dialogActive = false;
+			release?.();
+			release = undefined;
+			this.#advanceDialogQueue();
+		};
+
 		const settle = (value: T | undefined): void => {
 			if (settled) return;
 			settled = true;
 			signal?.removeEventListener("abort", onAbort);
+			detachSignal?.removeEventListener("abort", onDetach);
 			if (dialogId) dialogRegistry()?.close(dialogId);
 			if (started) {
 				hide?.();
-				this.#dialogActive = false;
-				this.#advanceDialogQueue();
+				// Detached, it gave up the surface already; another dialog may hold it now.
+				if (!detached) {
+					this.#dialogActive = false;
+					// Present the next dialog before releasing this one, so no `working`/`done` report slips out between.
+					this.#advanceDialogQueue();
+					release?.();
+				}
 			}
 			resolve(value);
 		};
@@ -1672,14 +2190,21 @@ export class ExtensionUiController {
 					})
 				: undefined;
 			dialogId = opened?.dialogId;
+			// Held before `present` so a synchronous settle still releases it.
+			release = holdBlockedStatus({ state: "blocked", ...prompt });
 			try {
+				// A detached ask still open leaves the composer's place to this dialog.
+				if (this.#ask?.detached) this.#ask.closePrompt?.();
 				hide = present(settle);
+				// The caller stopped waiting while this dialog was queued.
+				if (detachSignal?.aborted) onDetach();
 			} catch (error) {
 				settled = true;
 				signal?.removeEventListener("abort", onAbort);
 				this.#dialogActive = false;
-				reject(error);
 				this.#advanceDialogQueue();
+				release();
+				reject(error);
 			}
 		};
 
@@ -1688,6 +2213,7 @@ export class ExtensionUiController {
 			return promise;
 		}
 		signal?.addEventListener("abort", onAbort, { once: true });
+		detachSignal?.addEventListener("abort", onDetach, { once: true });
 
 		if (this.#dialogActive) {
 			this.#dialogQueue.push(startPresentation);

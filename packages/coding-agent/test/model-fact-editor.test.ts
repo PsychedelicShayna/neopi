@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, test, beforeEach } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { CURSOR_MARKER, getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
@@ -342,4 +343,13 @@ describe("model fact editor", () => {
 		await Promise.resolve();
 		expect(saved[0]!.sources).toEqual(["extension-only"]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

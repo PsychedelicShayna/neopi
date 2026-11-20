@@ -1,9 +1,9 @@
-import { beforeAll, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, it, beforeEach, afterEach } from "bun:test";
 import { initTheme } from "../src/theme/theme";
 import { LogoutAccountSelectorComponent } from "../src/overlays/logout-account-selector";
 import { ResetUsageSelectorComponent, type ResetUsageAccount } from "../src/overlays/reset-usage-selector";
 import { OAuthSelectorComponent } from "../src/overlays/oauth-selector";
-import type { DescribeContext } from "../src/native/node";
 import { PICKER_KEY } from "../src/native/picker";
 
 beforeAll(async () => {
@@ -78,14 +78,6 @@ it("reset requires explicit double Enter even after history restoration", () => 
 	expect(picked[0]?.target.credentialId).toBe(19);
 });
 
-const nativePickerContext: DescribeContext = {
-	cols: 100,
-	reduceMotion: false,
-	dark: true,
-	supports: () => true,
-	feature: () => true,
-};
-
 it.each([
 	[
 		"provider",
@@ -133,11 +125,19 @@ it.each([
 	});
 	selector.handleInput("/");
 	selector.handleInput("hjkl/ g");
-	expect(JSON.stringify(selector.describe(nativePickerContext))).toContain("Back to list");
 	const close = { type: "action", key: PICKER_KEY, act: "close", mods: [] } as const;
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(0);
 	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "", query: "", focused: false } });
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(1);
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

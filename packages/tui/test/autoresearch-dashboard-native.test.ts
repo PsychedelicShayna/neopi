@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import {
 	type AutoresearchDashboardRuntime,
 	createDashboardController,
@@ -165,4 +166,13 @@ describe("autoresearch dashboard sheet", () => {
 		expect(lines).toContain("autoresearch: Speed up the parser");
 		expect(lines).toContain("Best: 20ms (#2)");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

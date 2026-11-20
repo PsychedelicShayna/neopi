@@ -67,7 +67,7 @@ export class IrcViewerComponent implements Component {
 	readonly #unsubscribe: () => void;
 	readonly #filter = new MenuSearchField();
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp("jk gg/G C-u d e y", "G follows the newest messages.");
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", "End follows the newest messages.");
 	/** Index into the filtered entries; the last entry while following. */
 	#selected = 0;
 	/** Stable anchor when an earlier send finishes after the selected message. */

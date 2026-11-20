@@ -65,7 +65,9 @@ export async function buildAvailableSlashCommands(
 		// input, so a custom/file command sharing an alias would be advertised but
 		// never run. Reserve aliases of headless builtins here too; the aliases of
 		// TUI-only builtins stay available to other commands.
-		if (command.handle) for (const alias of command.aliases ?? []) seenNames.add(alias);
+		if (command.handle) {
+			for (const alias of [...(command.aliases ?? []), ...(command.hiddenAliases ?? [])]) seenNames.add(alias);
+		}
 	}
 
 	if (session.skillsSettings?.enableSkillCommands) {

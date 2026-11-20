@@ -4,23 +4,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { cfgSessionModelPicker } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
-import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import * as activityClient from "@oh-my-pi/pi-coding-agent/stats/activity-client";
 import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-reload";
+import { SessionEnvironment } from "@oh-my-pi/pi-coding-agent/session/environment";
+import * as externalEditor from "@oh-my-pi/pi-coding-agent/utils/external-editor";
 import * as settingsSelector from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import * as sessionPins from "@oh-my-pi/pi-coding-agent/session/session-pins";
-import { cfgTaskAgentModelOverrides } from "@oh-my-pi/pi-coding-agent/task/settings";
-import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import {
+	cfgAutoResume,
+	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgStatusLinePreset,
 	cfgStatusLineLeftSegments,
@@ -80,11 +78,13 @@ interface OverlayUi {
 function overlayUi(): {
 	ui: OverlayUi;
 	shown: Component[];
+	mounted: Promise<Component>;
 	setFocus: OverlayUi["setFocus"];
 	overlayStack: TUI["overlayStack"];
 } {
 	const overlayStack: TUI["overlayStack"] = [];
 	const shown: Component[] = [];
+	const mounted = Promise.withResolvers<Component>();
 	let focused: Component | null = null;
 	const setFocus = vi.fn<(component: Component | null) => void>(component => {
 		focused = component;
@@ -93,6 +93,7 @@ function overlayUi(): {
 		const entry = { component, options, preFocus: null, hidden: false, released: false };
 		overlayStack.push(entry);
 		shown.push(component);
+		mounted.resolve(component);
 		return {
 			hide: () => {
 				const at = overlayStack.indexOf(entry);
@@ -104,26 +105,31 @@ function overlayUi(): {
 			isHidden: () => entry.hidden,
 		};
 	};
-	return { shown, setFocus, overlayStack, ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused } };
+	return {
+		shown,
+		mounted: mounted.promise,
+		setFocus,
+		overlayStack,
+		ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused },
+	};
 }
 
-/** A context whose model picker reads a supplied current catalog. */
-function pickerContext(ui: OverlayUi, models: Model[] = [], current?: Model, settings?: Settings) {
+/** The compact model picker context: the fork's session `/model` opens it only with `models.sessionPicker: small`. */
+function pickerContext(ui: OverlayUi) {
+	const settings = Settings.isolated();
+	cfgSessionModelPicker.override(settings, "small");
 	return createInteractiveModeContext({
 		settings,
 		session: {
-			model: current,
+			model: undefined,
 			scopedModels: [],
 			getContextUsage: () => undefined,
 			effectiveServiceTier: () => undefined,
 			getRoleModelCycle: () => undefined,
-			resolveTemporaryModelThinkingLevel: () => undefined,
-			setModelTemporary: vi.fn(async () => {}),
-			applyRoleModel: vi.fn(async () => {}),
 			modelRegistry: {
 				getError: () => undefined,
-				getAvailable: () => models,
-				getAll: () => models,
+				getAvailable: () => [],
+				getAll: () => [],
 				refreshIfStale: async () => false,
 			},
 		},
@@ -167,7 +173,10 @@ describe("single-instance menus", () => {
 			expect(shown[0]).toBeInstanceOf(StatusLineConfigOverlayComponent);
 			controller.showStatusLineConfigure();
 			expect(shown).toHaveLength(1);
-			press(shown[0]!, "\r", DOWN, "l", "l"); // band → box; model past the context bar into the right side
+			press(shown[0]!, "\r", DOWN);
+			const beforeMove = await waitForDraft(statusLineDraftPath(getAgentDir()), saved => saved.selected === "model");
+			// Disabled catalog widgets retain positions too; cross the actual left-side boundary.
+			press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"));
 			expect(syncComposerShape).toHaveBeenLastCalledWith("box");
 			press(shown[0]!, "\x13"); // Ctrl+S
 			await Bun.sleep(0);
@@ -223,7 +232,9 @@ describe("single-instance menus", () => {
 			const warning = spyOn(logger, "warn").mockImplementation(() => {});
 			try {
 				controller.showStatusLineConfigure();
-				press(shown[0]!, "\r", DOWN, "l", "s");
+				press(shown[0]!, "\r", DOWN);
+				const beforeMove = await waitForDraft(statusLineDraftPath(dir), saved => saved.selected === "model");
+				press(shown[0]!, ...Array.from({ length: beforeMove.left.length }, () => "\x1b[C"), "s");
 				await failed.promise;
 				expect(handles.map(handle => handle.get(isolated))).toEqual(before);
 				expect(handles.map(handle => isolated.isConfigured(handle))).toEqual(handles.map(() => configured));
@@ -386,12 +397,14 @@ describe("single-instance menus", () => {
 		const themes = Promise.resolve(["dark"]);
 		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
 		const overlays: Component[] = [];
+		const mounted = Promise.withResolvers<void>();
 		const setFocus = vi.fn<(component: Component | null) => void>();
 		const ctx = createInteractiveModeContext({
 			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
 			ui: {
 				showOverlay: (component: Component, _options?: OverlayOptions): OverlayHandle => {
 					overlays.push(component);
+					mounted.resolve();
 					return { hide: () => {}, setHidden: () => {}, isHidden: () => false };
 				},
 				setFocus,
@@ -401,12 +414,78 @@ describe("single-instance menus", () => {
 
 		controller.showSettingsSelector();
 		controller.showSettingsSelector();
-		// The controller's continuation was queued first, so the menu is mounted.
-		await themes;
+		await mounted.promise;
 		expect(overlays).toHaveLength(1);
 		controller.showSettingsSelector();
 		expect(overlays).toHaveLength(1);
 		expect(setFocus).toHaveBeenLastCalledWith(overlays[0]);
+	});
+
+	it.each([
+		["/settings", "session"],
+		["/settings global", "global"],
+	])("opens %s at %s scope", async (command, scope) => {
+		const themes = Promise.resolve(["dark"]);
+		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
+		const opened = vi.fn();
+		spyOn(settingsSelector, "SettingsSelectorComponent").mockImplementation(function (
+			context: settingsSelector.SettingsRuntimeContext,
+		) {
+			opened(context.settings.scope);
+			return { render: () => [], dispose: () => {} };
+		} as never);
+		const { ui, mounted } = overlayUi();
+		const ctx = createInteractiveModeContext({
+			settings: Settings.isolated(),
+			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
+			ui,
+		});
+		const controller = new SelectorController(ctx);
+		ctx.showSettingsSelector = scope => controller.showSettingsSelector(scope);
+
+		await executeBuiltinSlashCommand(command, { ctx });
+		await mounted;
+		expect(opened).toHaveBeenCalledWith(scope);
+	});
+
+	it("flushes and reloads the session settings sidecar with Ctrl+G after switching scope with Ctrl+S", async () => {
+		const themes = Promise.resolve(["dark"]);
+		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
+		let editorInput: string | undefined;
+		const openEditor = spyOn(externalEditor, "openEditorOnPath").mockImplementation(async (_command, filePath) => {
+			editorInput = await Bun.file(filePath).text();
+			await Bun.write(filePath, editorInput.replace("colorBlindMode: false", "colorBlindMode: true"));
+			return 0;
+		});
+		const editorClosed = Promise.withResolvers<void>();
+		const agentDir = getAgentDir();
+		await fs.mkdir(agentDir, { recursive: true });
+		const dir = await fs.mkdtemp(path.join(agentDir, "settings-open-"));
+		try {
+			const settings = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
+			const sidecar = path.join(dir, "session/settings.yml");
+			await Bun.write(sidecar, "colorBlindMode: false\n");
+			await settings.attachSessionFile(path.join(dir, "session.jsonl"));
+			settings.writeScopeValue(cfgAutoResume, true, "session");
+			const { ui, mounted } = overlayUi();
+			const environment = new SessionEnvironment({ VISUAL: "test-editor" });
+			const ctx = createInteractiveModeContext({
+				settings,
+				session: { environment, getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
+				ui: { ...ui, stop: () => {}, start: () => editorClosed.resolve() },
+			});
+			new SelectorController(ctx).showSettingsSelector("project");
+			press(await mounted, "\x13", "\x07"); // Ctrl+S, Ctrl+G
+			await editorClosed.promise;
+			expect(openEditor).toHaveBeenCalledWith("test-editor", sidecar, environment.snapshot());
+			expect(editorInput).toContain("autoResume: true");
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("distinguishes unsupported settings reload hosts from failed reloads", async () => {
@@ -422,14 +501,14 @@ describe("single-instance menus", () => {
 			callbacks = args[1] as settingsSelector.SettingsCallbacks;
 			return { render: () => [], dispose: () => {} };
 		} as never);
-		const { ui } = overlayUi();
+		const { ui, mounted } = overlayUi();
 		const ctx = createInteractiveModeContext({
 			settings: Settings.isolated(),
 			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
 			ui,
 		});
 		new SelectorController(ctx).showSettingsSelector("global");
-		await themes;
+		await mounted;
 		expect(await callbacks?.onApply?.("session")).toBe("Session scope is local — no broadcast needed");
 		expect(broadcast).not.toHaveBeenCalled();
 		expect(await callbacks?.onApply?.("global")).toBe("Applied to 2 sessions; 1 need restart/upgrade; 1 failed");
@@ -450,105 +529,6 @@ describe("single-instance menus", () => {
 		shown[0]?.handleInput?.("\x1b");
 		controller.showModelSelector({ temporaryOnly: true });
 		expect(shown).toHaveLength(2);
-	});
-
-	it("replaces an ordinary picker with selection-only and ignores stale picker input", () => {
-		const { ui, shown } = overlayUi();
-		const model = createMockModel({ provider: "openai", id: "selection-target" }).model;
-		const hostModel = createMockModel({ provider: "anthropic", id: "host-model" }).model;
-		const ctx = pickerContext(ui, [model], hostModel, Settings.isolated());
-		cfgTaskAgentModelOverrides.override(ctx.settings, { task: "kept/task-model" });
-		const taskDefaults = structuredClone(cfgTaskAgentModelOverrides.get(ctx.settings));
-		const selected = vi.fn();
-		const controller = new SelectorController(ctx);
-
-		controller.showModelSelector({ temporaryOnly: true });
-		const ordinaryPicker = shown[0]!;
-		controller.showModelSelector({
-			selectOnly: {
-				currentSelector: `${model.provider}/${model.id}`,
-				onSelect: selected,
-			},
-		});
-		const selectionPicker = shown[1]!;
-		expect(ui.overlayStack).toHaveLength(1);
-		expect(ui.overlayStack.at(-1)?.component).toBe(selectionPicker);
-
-		ordinaryPicker.handleInput?.("\r");
-		expect(ctx.session.setModelTemporary).not.toHaveBeenCalled();
-		selectionPicker.handleInput?.("\r");
-
-		expect(selected).toHaveBeenCalledWith(`${model.provider}/${model.id}`);
-		expect(ctx.session.setModelTemporary).not.toHaveBeenCalled();
-		expect(ctx.session.applyRoleModel).not.toHaveBeenCalled();
-		expect(cfgTaskAgentModelOverrides.get(ctx.settings)).toEqual(taskDefaults);
-
-		controller.showModelSelector({
-			selectOnly: { currentSelector: `${model.provider}/${model.id}`, onSelect: selected },
-		});
-		shown[2]?.handleInput?.("\x1b");
-		expect(selected).toHaveBeenCalledTimes(1);
-	});
-
-	it("replaces selection-only with an ordinary session model picker", () => {
-		const { ui, shown } = overlayUi();
-		const model = createMockModel({ provider: "openai", id: "session-target" }).model;
-		const hostModel = createMockModel({ provider: "anthropic", id: "host-model" }).model;
-		const ctx = pickerContext(ui, [model], hostModel);
-		const selected = vi.fn();
-		const controller = new SelectorController(ctx);
-
-		controller.showModelSelector({
-			selectOnly: {
-				currentSelector: `${model.provider}/${model.id}`,
-				onSelect: selected,
-			},
-		});
-		const selectionPicker = shown[0]!;
-		controller.showModelSelector({ temporaryOnly: true });
-		expect(shown).toHaveLength(2);
-		expect(ui.overlayStack).toHaveLength(1);
-
-		selectionPicker.handleInput?.("\r");
-		expect(selected).not.toHaveBeenCalled();
-		expect(ctx.session.setModelTemporary).not.toHaveBeenCalled();
-		shown[1]?.handleInput?.("\r");
-
-		expect(selected).not.toHaveBeenCalled();
-		expect(ctx.session.setModelTemporary).toHaveBeenCalledWith(model, undefined);
-	});
-
-	it("uses only the newest callbacks for repeated selection-only picker requests", () => {
-		const { ui, shown } = overlayUi();
-		const model = createMockModel({ provider: "openai", id: "selection-target" }).model;
-		const selector = `${model.provider}/${model.id}`;
-		const controller = new SelectorController(pickerContext(ui, [model]));
-		const oldSelect = vi.fn();
-		const latestSelect = vi.fn();
-
-		controller.showModelSelector({ selectOnly: { currentSelector: selector, onSelect: oldSelect } });
-		const oldPicker = shown[0]!;
-		controller.showModelSelector({ selectOnly: { currentSelector: selector, onSelect: latestSelect } });
-		expect(ui.overlayStack).toHaveLength(1);
-
-		oldPicker.handleInput?.("\r");
-		expect(oldSelect).not.toHaveBeenCalled();
-		expect(latestSelect).not.toHaveBeenCalled();
-		shown[1]?.handleInput?.("\r");
-		expect(oldSelect).not.toHaveBeenCalled();
-		expect(latestSelect).toHaveBeenCalledWith(selector);
-
-		controller.showModelSelector({
-			selectOnly: { currentSelector: selector, onSelect: vi.fn() },
-		});
-		const stalePicker = shown[2]!;
-		controller.showModelSelector({
-			selectOnly: { currentSelector: selector, onSelect: vi.fn() },
-		});
-		stalePicker.handleInput?.("\x1b");
-		expect(ui.overlayStack).toHaveLength(1);
-		shown[3]?.handleInput?.("\x1b");
-		expect(ui.overlayStack).toHaveLength(0);
 	});
 
 	it("raises an open model picker another overlay covers instead of focusing it hidden", () => {
@@ -613,49 +593,5 @@ describe("single-instance menus", () => {
 		shown[0]?.handleInput?.("\x1b");
 		controller.showUsageDashboard(reports);
 		expect(shown).toHaveLength(2);
-	});
-
-	it("selects a seance source without resuming", async () => {
-		const session: SessionInfo = {
-			path: "/repo/.omp/sessions/source.jsonl",
-			id: "source",
-			cwd: "/repo",
-			created: new Date(1),
-			modified: new Date(2),
-			messageCount: 1,
-			size: 16,
-			firstMessage: "Inspect the old session",
-			allMessagesText: "Inspect the old session",
-		};
-		spyOn(SessionManager, "listForPicker").mockResolvedValue([session]);
-		spyOn(sessionPins, "loadPinnedSessionIds").mockResolvedValue(new Set());
-		const { ui, shown, overlayStack } = overlayUi();
-		const ctx = createInteractiveModeContext({
-			ui: { ...ui, terminal: { rows: 24 } },
-			session: { switchSession: vi.fn(async () => true) },
-			sessionManager: {
-				getCwd: () => "/repo",
-				getSessionDir: () => "/repo/.omp/sessions",
-				getSessionFile: () => undefined,
-			},
-		});
-		const controller = new SelectorController(ctx);
-		const resume = spyOn(controller, "handleResumeSession").mockResolvedValue(true);
-		const overlayCountAtSelection: number[] = [];
-		const selected = vi.fn(async (_session: SessionInfo) => {
-			overlayCountAtSelection.push(overlayStack.length);
-		});
-
-		await controller.showSessionSelector(undefined, selected);
-
-		const selector = shown[0] as SessionSelectorComponent<SessionInfo>;
-		selector.handleInput("\r");
-		await Promise.resolve();
-		await Promise.resolve();
-
-		expect(selected).toHaveBeenCalledWith(session);
-		expect(overlayCountAtSelection).toEqual([0]);
-		expect(resume).not.toHaveBeenCalled();
-		expect(ctx.session.switchSession).not.toHaveBeenCalled();
 	});
 });

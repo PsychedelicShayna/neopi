@@ -143,7 +143,7 @@ Granted models appear under the NeoProxy provider. For a server model named
 `neoproxy/office-cheap`, the complete NeoPi selector is `neoproxy/office-cheap`:
 the provider supplies the one `neoproxy/` prefix, and requests still send the
 server-issued ID unchanged. Select it with `/model`, or use
-`/models` to assign it to an existing model role. A missing grant is an empty
+`/roles` to assign it to an existing model role. A missing grant is an empty
 catalogue, not a fallback to a direct provider account.
 
 Before durable credential persistence begins, refusing trust, cancelling
@@ -224,7 +224,52 @@ failing regression test.
 
 ## Updating
 
-Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
+`npi update` shows the installed release, selected channel and any rollback hold.
+`npi update --check` checks **PsychedelicShayna/neopi** GitHub releases without
+replacing the binary. NeoPi never downloads upstream omp binaries or runs their
+installers.
+
+- `npi update stable` / `npi update nightly` synchronizes immediately to the
+  latest published release / prerelease, persists that channel and releases a
+  rollback hold. An explicit sync may downgrade the installed build.
+- `npi update rollback [N]` steps back N releases (default 1) in the installed
+  build's channel. The cursor is cumulative: `rollback 2` twice steps back four
+  releases. Rollback pauses automatic replacement for this executable across
+  all profiles until an explicit sync or channel change.
+- Settings → Startup & Updates exposes the existing `update.channel` and
+  `update.auto` keys. Automatic updates default to **Notify**; **Auto** installs
+  on a later interactive launch, at most once per 24 hours unless the channel changes.
+  Running sessions keep their loaded version. Project/session overrides cannot
+  silently replace a machine-wide executable.
+- Every install selects the exact platform asset, verifies its release's
+  `SHA256SUMS.txt`, smoke-checks the staged executable and retains `npi.previous`.
+- POSIX replacement is atomic. Windows uses **recoverable replacement**:
+  checksum-verified `npi.exe.new`, running image renamed to `npi.exe.old`, then
+  the new image published, with immediate restoration if publication fails.
+  A separate `npi.exe.recover.ps1` reads the journal and can recover even when
+  `npi.exe` is missing. Run it with
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\npi.exe.recover.ps1`.
+  If necessary, with `npi.exe` absent, manually rename `npi.exe.old` back to
+  `npi.exe`. The next launch/update reports and reconciles interrupted swaps.
+  Real Windows loader/filesystem verification remains **unverified** pending
+  the prerelease Windows check; injected-failure checks are not that proof.
+- The recovery updater starts at **18.18.8**, first source commit
+  `d2774cb85c99459da0cf4d33a5fc9ccc40e9ea88`. Older releases, and same-version
+  builds that cannot be verified to include that commit, require an interactive
+  `INSTALL LEGACY` acknowledgement; automatic updates never install them.
+  Their recovery commands may be absent. Retain `npi.previous` or reinstall
+  manually to recover.
+- Recovery commands dispatch before the ordinary CLI, native startup, settings
+  migrations, extensions and TUI. If the raw settings YAML is unreadable, binary
+  recovery can still proceed without overwriting that file; it reports that
+  the channel could not be persisted.
+
+The preserved fork-aware source workflow is now **`npi update source`**.
+Maintainers integrating upstream source must use the origin-based worktree and
+PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md);
+the remote default branch is the source of truth. `npi update --plugins`
+continues to update plugins independently. Manual platform downloads remain at
+[our GitHub releases](https://github.com/PsychedelicShayna/neopi/releases).
 
 ## Capture an idea
 

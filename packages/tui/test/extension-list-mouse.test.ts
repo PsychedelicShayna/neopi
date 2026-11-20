@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { buildTabBarTabs } from "../src/overlays/extensions/extension-dashboard";
 import { ExtensionList } from "../src/overlays/extensions/extension-list";
 import type { Extension } from "../src/overlays/extensions/types";
@@ -97,6 +98,21 @@ describe("ExtensionList mouse routing", () => {
 		list.handleWheel(-1); // up -> alpha
 		expect(list.getSelectedExtension()?.id).toBe("skill:alpha");
 		expect(seen).toEqual(["skill:alpha", "skill:beta", "skill:alpha"]);
+	});
+
+	test("clicking a filtered row cancels the draft without selecting a different row", () => {
+		const toggles: string[] = [];
+		const list = buildList(
+			id => toggles.push(id),
+			() => {},
+		);
+		for (const char of "/beta") list.handleInput(char);
+		list.render(40);
+		list.handleClick(2);
+		expect(list.navigationSnapshot().search).toMatchObject({ value: "", query: "", focused: false });
+		expect(list.pickerView().items.map(item => item.label)).toEqual(["alpha", "beta", "gamma"]);
+		expect(list.getSelectedExtension()?.name).toBe("beta");
+		expect(toggles).toEqual(["skill:beta"]);
 	});
 });
 
@@ -215,4 +231,13 @@ describe("ExtensionList list hints", () => {
 		expect(lines.some(line => line.includes("\n"))).toBe(false);
 		expect(lines.join("\n").split("\n")).toHaveLength(lines.length);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

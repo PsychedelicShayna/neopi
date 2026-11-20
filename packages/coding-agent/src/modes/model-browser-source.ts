@@ -1,5 +1,6 @@
 import { type Model, resolveModelServiceTier, type ServiceTier, shouldSendServiceTier } from "@oh-my-pi/pi-ai";
 import type { ModelHubSource } from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { SETTINGS_FILE_SCOPES } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { findActiveModelPreset, getModelPresetNames } from "../config/model-presets";
 import { formatModelStringWithRouting, resolveModelRoleValue, rolePriorityDefaults } from "../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../config/model-roles";
@@ -41,16 +42,26 @@ import {
 export function createModelBrowserSource(
 	settings: Settings,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
-	editingScope?: SettingsScope,
+	initialEditingScope?: SettingsScope,
 ): ModelHubSource {
+	let editingScope = initialEditingScope;
 	return {
-		editingScope,
-		getRoleScopeNote: editingScope ? role => {
+		get editingScope() {
+			return editingScope;
+		},
+		cycleScope: initialEditingScope
+			? () => {
+					const scopes = SETTINGS_FILE_SCOPES;
+					editingScope = scopes[(scopes.indexOf(editingScope ?? initialEditingScope) + 1) % scopes.length];
+				}
+			: undefined,
+		getRoleScopeNote: role => {
+			if (editingScope === undefined) return undefined;
 			const details = settings.getModelRoleScopeDetails(role, editingScope);
 			return details.shadowed
 				? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
 				: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
-		} : undefined,
+		},
 		get revision() {
 			return settings.revision;
 		},
@@ -110,10 +121,14 @@ export function createModelBrowserSource(
 		},
 		getProjectRoleEffortSelection: role => settings.getProjectRoleEffortSelection(role),
 		getGlobalRoleEffortSelection: role => settings.getGlobalRoleEffortSelection(role),
-		getRoleEffortSelection: role => editingScope === "session"
-			? settings.getSessionRoleEffortSelection(role)
-			: editingScope === "project" ? settings.getProjectRoleEffortSelection(role)
-				: editingScope === "global" ? settings.getGlobalRoleEffortSelection(role) : settings.getRoleEffortSelection(role),
+		getRoleEffortSelection: role =>
+			editingScope === "session"
+				? settings.getSessionRoleEffortSelection(role)
+				: editingScope === "project"
+					? settings.getProjectRoleEffortSelection(role)
+					: editingScope === "global"
+						? settings.getGlobalRoleEffortSelection(role)
+						: settings.getRoleEffortSelection(role),
 		getRoleTokenBudget: role => {
 			if (!editingScope) return settings.getRoleSetting(role, cfgCompactionThresholdTokens);
 			const entries = settings.readScopeValue(cfgRoleSettings, editingScope) as RoleSettings | undefined;
@@ -121,10 +136,14 @@ export function createModelBrowserSource(
 			return typeof value === "number" ? value : undefined;
 		},
 		getFallbackEffortSelection: (role, selector) => cfgFallbackEffortSelections.get(settings)[role]?.[selector],
-		getModelRole: role => editingScope === "session"
-			? settings.getSessionModelRole(role)
-			: editingScope === "project" ? settings.getProjectModelRole(role)
-				: editingScope === "global" ? settings.getGlobalModelRole(role) : settings.getModelRole(role),
+		getModelRole: role =>
+			editingScope === "session"
+				? settings.getSessionModelRole(role)
+				: editingScope === "project"
+					? settings.getProjectModelRole(role)
+					: editingScope === "global"
+						? settings.getGlobalModelRole(role)
+						: settings.getModelRole(role),
 		getSessionModelRole: role => settings.getSessionModelRole(role),
 		getProjectModelRole: role => settings.getProjectModelRole(role),
 		getGlobalModelRole: role => settings.getGlobalModelRole(role),

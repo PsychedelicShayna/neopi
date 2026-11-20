@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { Sidebar } from "../src/apps/git/sidebar";
 import { buildDiffDocument, DiffPane } from "../src/apps/git/diff-pane";
 import { GitHelpSheet } from "../src/apps/git/help";
@@ -112,4 +113,35 @@ describe("Git menu navigation", () => {
 		help.handleInput("\x1b");
 		expect(back).toBe(2);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
+
+it("keeps help accessible by arrows without advertising disabled Vim shortcuts", () => {
+	setMenuSearchVimMode(false);
+	let back = 0;
+	const help = new GitHelpSheet(
+		() => back++,
+		() => back++,
+	);
+	const off = JSON.stringify(help.describe());
+	expect(off).not.toContain("Vim navigation");
+	expect(off).not.toContain("Half page up or down");
+	help.handleInput("h");
+	expect(back).toBe(0);
+	help.handleInput("\x1b[D");
+	expect(back).toBe(1);
+	setMenuSearchVimMode(true);
+	expect(JSON.stringify(help.describe())).toContain("Vim navigation");
+	help.handleInput("h");
+	expect(back).toBe(2);
+	setMenuSearchVimMode(false);
+	expect(JSON.stringify(help.describe())).not.toContain("Vim navigation");
 });

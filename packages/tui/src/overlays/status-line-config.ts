@@ -114,6 +114,7 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 	cache_read: "Recorded prompt-cache read tokens.",
 	cache_write: "Recorded prompt-cache write tokens.",
 	cache_hit: "Prompt-cache hit rate.",
+	cache: "Prompt-cache warmth and expected prefix reuse on the next request.",
 	session_name: "Current session title; the band composer places it on its working row.",
 	usage: "Quota summary for the active provider and account.",
 	collab: "Collaboration role and connected participants.",
@@ -315,7 +316,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	readonly #titleRow = new PanelRows();
 	readonly #divider = new PanelRows();
 	readonly #footer = new PanelRows();
-	readonly #help = new MenuHelp(undefined, "h/l move the selected widget within the layout.");
+	readonly #help = new MenuHelp(undefined, "Left/Right move the selected widget within the layout.");
 	readonly #bottom = new PanelRows();
 	readonly #split = new SplitPane({
 		left: (width, height) => this.#renderList(width, height ?? this.#bodyRows),
@@ -914,7 +915,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
 				return style(
-					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id)} · ${sanitizeStatusText(id)}${templated}`,
+					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id, true)} · ${sanitizeStatusText(id)}${templated}`,
 					!enabled,
 				);
 			}

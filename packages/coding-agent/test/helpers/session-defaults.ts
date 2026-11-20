@@ -8,12 +8,15 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 			return fn();
 		},
 		setActiveToolsByName: async (_toolNames: string[]) => {},
+		getMountedXdevToolNames: () => [],
 		waitForIdle: async () => {},
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,
 		getToolByName: () => undefined,
 		getLastAssistantMessage: () => undefined,
-		hasPendingAsyncWork: () => false,
+		isRunActive: false,
+		wakeSources: undefined,
+		waitForRunEnd: async () => {},
 		abort: async () => {},
 		dispose: async () => {},
 		setIrcWakeTurnObserver: () => {},
@@ -22,6 +25,7 @@ export function createSessionDefaults(emit?: (event: AgentSessionEvent) => void)
 		isAdvisorActive: () => false,
 		subscribeRunState: () => () => {},
 		addDisposer: () => {},
+		getWorkPoolYieldItems: () => [],
 	} satisfies Partial<AgentSession>;
 }
 

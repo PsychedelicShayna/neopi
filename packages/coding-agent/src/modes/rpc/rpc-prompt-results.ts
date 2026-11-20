@@ -4,8 +4,8 @@
  * Every accepted `prompt`/`abort_and_prompt` that is not answered synchronously
  * with `data.agentInvoked: false` gets exactly one `prompt_result` frame, emitted
  * once all work the prompt caused has settled: immediately for local-only slash
- * commands and failures, or after the terminal `agent_end` of the run that
- * carried the prompt's work. Hosts correlate on the command `id` instead of
+ * commands and failures, or once the run that carried the prompt's work
+ * yields (`agent_pause` with `yielded`, or `agent_end`). Hosts correlate on the command `id` instead of
  * inferring ownership of an `agent_end` that carries no prompt identity.
  *
  * Ownership is explicit (issue #171), never inferred from run counts:
@@ -22,6 +22,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { stripRawHttpRequestDiagnostics } from "@oh-my-pi/pi-ai/utils/http-inspector";
+import { toError } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { getMessageEntryId } from "../../session/message-entry-ids";
 import type { CostCapRefusal } from "../../session/cost-gate";
@@ -79,9 +80,10 @@ export interface RpcPromptBinding {
  * Correlates accepted prompts with the run that carries their work and emits
  * their `prompt_result`. Fed every session event through {@link observe}.
  *
- * A prompt reports when the agent **yields** its work (`agent_end` with
- * `yielded`), not when the session is done: background jobs may still wake the
- * session later (see {@link RpcSessionSettleWatcher}), which `sessionSettled`
+ * A prompt reports when the agent **yields** its work (`agent_pause` with
+ * `yielded`, or the run's `agent_end`), not when the session is done: a paused
+ * run may still be resumed by queued input, a peer message, a background job or
+ * a child agent (see {@link RpcSessionSettleWatcher}), which `sessionSettled`
  * on the frame reports.
  *
  * A prompt dispatched as a fresh turn owns the first run that starts after it
@@ -154,7 +156,7 @@ export class RpcPromptResults {
 
 	/**
 	 * The prompt's work reached the agent (dispatched or queued). Reports now if
-	 * its own run already settled, otherwise at the next terminal `agent_end`.
+	 * its own run already yielded, otherwise at the next yield.
 	 */
 	settle(ticket: RpcPromptTicket): void {
 		const open = this.#open.get(ticket);
@@ -190,7 +192,7 @@ export class RpcPromptResults {
 	/**
 	 * Mark every open prompt aborted after a session transition (host command or
 	 * extension). Transitions detach the agent before aborting it, so the
-	 * interrupted run never publishes a terminal `agent_end` for them.
+	 * interrupted run never publishes an `agent_end` for them.
 	 */
 	abortOpen(): void {
 		for (const [ticket, open] of this.#open) {
@@ -202,7 +204,7 @@ export class RpcPromptResults {
 		}
 	}
 
-	/** Track run boundaries; call after the event has been written so `prompt_result` follows its `agent_end`. */
+	/** Track run boundaries; call after the event has been written so `prompt_result` follows its yield. */
 	observe(event: AgentSessionEvent): void {
 		if (event.type === "agent_start") {
 			this.#refusalAtRunStart = this.#costCapRefusal?.();
@@ -242,9 +244,9 @@ export class RpcPromptResults {
 			}
 			return;
 		}
-		if (event.type !== "agent_end" || this.#open.size === 0) return;
-		// Older sessions omit `yielded`; only their terminal ends were yields.
-		if (!(event.yielded ?? event.isTerminal !== false)) return;
+		if (this.#open.size === 0) return;
+		// A yield is a yielded `agent_pause` (the run may continue) or the loop's `agent_end`.
+		if (event.type !== "agent_end" && (event.type !== "agent_pause" || !event.yielded)) return;
 		// An unbound ticket accepted while a run was live settles with that
 		// run, including runs that paused and continued (the continuation's
 		// terminal end is what reports).
@@ -261,7 +263,7 @@ export class RpcPromptResults {
 				open.run = this.#agentStarts;
 			if (!open.entryId && !open.owner) open.endsSinceBegin++;
 		}
-		if (event.isTerminal !== false) this.#runLive = false;
+		if (event.type === "agent_end") this.#runLive = false;
 		const outcome = this.#costCapOutcome(this.#refusalAtRunStart) ?? runOutcome(event.messages);
 		// A still-queued steer/follow-up has not been read by the agent yet.
 		const queueDrained = this.#session.queuedMessageCount === 0;
@@ -435,7 +437,7 @@ export function reportPromptResult(input: {
 		})
 		.catch(cause => {
 			input.releaseReservation?.();
-			const error = cause instanceof Error ? cause : new Error(String(cause));
+			const error = toError(cause);
 			input.onError(error);
 			input.results.fail(input.ticket, error.message);
 		});

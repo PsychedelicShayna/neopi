@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
-import { beforeAll, describe, expect, type Mock, test, vi } from "bun:test";
+import { beforeAll, describe, expect, type Mock, test, vi, beforeEach, afterEach } from "bun:test";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -251,7 +252,7 @@ describe("ModelPicker", () => {
 
 		picker.handleInput("/");
 		picker.handleInput("@");
-		picker.handleInput("\n"); // confirm the draft before switching to quick roles
+		picker.handleInput("\n"); // leave search editing without activating a quick role
 		expect(onPickRole).not.toHaveBeenCalled();
 		const rendered = picker.render(220);
 		const frame = rendered.join("\n");
@@ -266,14 +267,16 @@ describe("ModelPicker", () => {
 		expect(onPick).not.toHaveBeenCalled();
 	});
 
-	test("search field types hjkl literally and Escape clears before a second Escape cancels", () => {
+	test("Vim search types hjkl literally, leaves Insert before restoring, then cancels", () => {
 		const { picker, onCancel } = createPicker({ models: [makeModel("test", "test-model")], scoped: true });
 
 		picker.handleInput("/");
 		picker.handleInput("hjkl");
 		picker.handleInput(ESC);
+		expect(picker.navigationSnapshot().browser).toMatchObject({ value: "hjkl", filterFocused: true });
+		picker.handleInput(ESC); // Normal-mode Escape restores the unfiltered list
 		expect(onCancel).not.toHaveBeenCalled();
-		expect(normalize(picker.render(220))).not.toContain("hjkl");
+		expect(picker.navigationSnapshot().browser).toMatchObject({ value: "", filterFocused: false });
 		expect(normalize(picker.render(220))).toContain("test-model");
 
 		picker.handleInput(ESC);
@@ -294,8 +297,8 @@ describe("ModelPicker", () => {
 			const rendered = normalize(picker.render(220));
 			expect(rendered).toContain("test/live");
 			expect(rendered).toContain("test/voice");
-			expect(rendered).toContain("lively"); // draft search leaves the committed list intact
-			expect(rendered).toContain("voicemail");
+			expect(rendered).not.toContain("lively"); // valid drafts preview matching rows live
+			expect(rendered).not.toContain("voicemail");
 			for (const key of ["\x1b[B", "\x1b[A", "\x1b[5~", "\x1b[6~", "\t"]) picker.handleInput(key);
 			expect(onPick).not.toHaveBeenCalled();
 			picker.handleInput("\n");
@@ -313,9 +316,18 @@ describe("ModelPicker", () => {
 		for (const ch of query) picker.handleInput(ch);
 		const rendered = normalize(picker.render(220));
 		expect(rendered).toMatch(/invalid.*(?:regex|pattern)|(?:regex|pattern).*error/i);
-		expect(rendered).toContain("test/live"); // an invalid draft does not replace the committed list
+		expect(rendered).toContain("test/live"); // an invalid draft retains the last valid preview
 		picker.handleInput("\n");
 		picker.handleInput("\n");
 		expect(onPick).not.toHaveBeenCalled();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

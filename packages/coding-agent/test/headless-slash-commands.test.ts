@@ -24,6 +24,7 @@ describe("headless builtins", () => {
 	let authStorage: AuthStorage;
 	let settings: Settings;
 	let session: AgentSession;
+	let mock: ReturnType<typeof createMockModel>;
 	let output: string[];
 
 	beforeEach(() => {
@@ -31,7 +32,8 @@ describe("headless builtins", () => {
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model");
-		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
+		mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
+		output = [];
 		settings = Settings.isolated({ "compaction.enabled": false, "retry.enabled": false });
 		session = new AgentSession({
 			agent: new Agent({
@@ -44,7 +46,6 @@ describe("headless builtins", () => {
 			settings,
 			modelRegistry: new ModelRegistry(authStorage),
 		});
-		output = [];
 	});
 
 	afterEach(async () => {
@@ -82,12 +83,14 @@ describe("headless builtins", () => {
 	});
 
 	describe("/personality", () => {
-		test("without a name lists the current and available personalities and asks for a name", async () => {
+		test("lists current and available personalities without changing selection or invoking the model", async () => {
+			const current = currentPersonalityName(settings);
 			expect(await run("/personality")).toEqual({ consumed: true });
-			const text = output.join("\n");
-			expect(text).toContain(`Personality: ${currentPersonalityName(settings)}`);
-			for (const name of BUILTIN_PERSONALITIES) expect(text).toContain(name);
-			expect(text).toContain("Usage: /personality <name>");
+			const listed = output.join("\n");
+			expect(listed).toContain(current);
+			for (const name of BUILTIN_PERSONALITIES) expect(listed).toContain(name);
+			expect(currentPersonalityName(settings)).toBe(current);
+			expect(mock.calls).toHaveLength(0);
 		});
 
 		test("sets a built-in personality for the session, matching case-insensitively", async () => {
@@ -100,7 +103,6 @@ describe("headless builtins", () => {
 					await import("@oh-my-pi/pi-coding-agent/session/settings").then(m => m.cfgPersonality),
 				),
 			).toBe("session");
-			expect(output.join("\n")).toContain(`Personality: ${target} (session)`);
 		});
 
 		test("sets a custom personality and refuses unknown names without changing anything", async () => {
@@ -108,31 +110,30 @@ describe("headless builtins", () => {
 			expect(await run("/personality Zesty")).toEqual({ consumed: true });
 			expect(currentPersonalityName(settings)).toBe("Zesty");
 			expect(await run("/personality nobody-by-this-name")).toEqual({ consumed: true, failed: true });
-			expect(output.at(-1)).toBe("Unknown or ambiguous personality: nobody-by-this-name");
 			expect(currentPersonalityName(settings)).toBe("Zesty");
 		});
 	});
 
 	describe("/notice", () => {
-		test("sends the operator notice as a steering message and reports an agent turn", async () => {
-			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		test("delivers an operator notice through the actual session and completes its model turn", async () => {
 			expect(await run("/notice  check the logs")).toEqual({ consumed: true, agentInvoked: true });
-			expect(prompt).toHaveBeenCalledTimes(1);
-			const [message, options] = prompt.mock.calls[0];
-			expect(message).toContain("check the logs");
-			expect(options).toMatchObject({
-				synthetic: true,
+			await session.waitForIdle();
+			expect(mock.calls).toHaveLength(1);
+			const delivered = mock.calls[0].context.messages.find(message => message.role === "developer");
+			expect(delivered).toMatchObject({
+				role: "developer",
 				attribution: "user",
-				streamingBehavior: "steer",
-				rawText: "/notice  check the logs",
+				synthetic: true,
+				userInitiated: true,
 			});
+			expect(JSON.stringify(delivered?.content)).toContain("check the logs");
+			expect(session.isStreaming).toBe(false);
 		});
 
-		test("needs text", async () => {
-			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		test("needs text without invoking the model or changing the transcript", async () => {
 			expect(await run("/notice")).toEqual({ consumed: true, failed: true });
-			expect(output).toEqual(["Usage: /notice <text>"]);
-			expect(prompt).not.toHaveBeenCalled();
+			expect(mock.calls).toHaveLength(0);
+			expect(session.messages).toEqual([]);
 		});
 	});
 });

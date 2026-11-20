@@ -23,6 +23,7 @@ import { matchesKey } from "../../keys";
 import { col, compact, item, keyed, list, node, row, span, stableKey, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../../native/node";
+import { actionButton, iconButton, quietButton, segmentedTabs } from "../../native/overlay";
 import type { TspProps, TspSpan } from "@oh-my-pi/pi-wire";
 import { TERMINAL } from "../../terminal-capabilities";
 import { truncateToWidth, visibleWidth } from "../../utils";
@@ -237,11 +238,6 @@ class GitFileTree {
 		];
 		return children(root, "");
 	}
-}
-
-/** A quiet text button (`Stage all`): a clickable row the role sheet draws as `.btn.quiet`. */
-function quietButton(label: string, act: string, title: string): NativeNode {
-	return node("row", { role: "omp.app.qbtn", actions: { click: act }, title }, [text(label)], act);
 }
 
 /** A text field at rest: its value (or placeholder) as text; a click starts editing it. */
@@ -1096,11 +1092,19 @@ export class Sidebar {
 							),
 							this.#describeCommit(on, summaryInput, descriptionEditor),
 						];
-				children.unshift(keyed(col([
-					text([span("Search files", "muted")]),
-					search,
-					...(queryError ? [text([span(queryError, "error")])] : []),
-				], { gap: "xs" }), "search"));
+				children.unshift(
+					keyed(
+						col(
+							[
+								text([span("Search files", "muted")]),
+								search,
+								...(queryError ? [text([span(queryError, "error")])] : []),
+							],
+							{ gap: "xs" },
+						),
+						"search",
+					),
+				);
 				return col(children, { role: "omp.app.git.side" });
 			},
 		);
@@ -1205,8 +1209,7 @@ export class Sidebar {
 	}
 
 	#describeStyleToggle(): NativeNode {
-		return node(
-			"tabs",
+		return segmentedTabs(
 			{
 				items: [
 					{ id: "path", label: "Path" },
@@ -1215,7 +1218,6 @@ export class Sidebar {
 				active: this.viewStyle,
 				role: "omp.app.seg",
 			},
-			undefined,
 			"style",
 		);
 	}
@@ -1234,18 +1236,10 @@ export class Sidebar {
 			area === "unstaged"
 				? [
 						quietButton("Stage all", "stage-all", "Stage every change (space on the head)"),
-						node(
-							"icon",
-							{
-								name: "wand",
-								role: "omp.app.ibtn",
-								title: "Stage by description…",
-								aria: "Stage by description",
-								actions: { click: "stage-ai" },
-							},
-							undefined,
-							"ai",
-						),
+						iconButton("wand", "stage-ai", "Stage by description…", {
+							key: "ai",
+							aria: "Stage by description",
+						}),
 					]
 				: [quietButton("Unstage all", "unstage-all", "Unstage every change (space on the head)")];
 		const head = row(
@@ -1370,8 +1364,13 @@ export class Sidebar {
 					"omp.app.git.body",
 				);
 		const hasChanges = this.#model.staged.length > 0 || this.#model.unstaged.length > 0 || this.amend;
-		const canCommit =
-			hasChanges && !this.generating && (summary.trim().length > 0 || description.trim().length === 0);
+		const blocked = !hasChanges
+			? "Nothing to commit"
+			: this.generating
+				? "Generating the commit message…"
+				: summary.trim().length === 0 && description.trim().length > 0
+					? "Write a summary line first"
+					: undefined;
 		const label = this.generating
 			? "Generating message…"
 			: summary.trim().length === 0 && description.trim().length === 0
@@ -1379,8 +1378,13 @@ export class Sidebar {
 				: this.#model.staged.length > 0
 					? "Commit"
 					: "Stage all & commit";
-		// The panels' button (omp-panels.css `omp.btn`): accent while the keyboard is on it, muted when it can't run.
-		const commitTone = !canCommit ? "muted" : on({ kind: "commit-button" }) ? "accent" : undefined;
+		// The panels' button: the primary while the keyboard is on it, disabled (saying why) when it can't run.
+		const commit = actionButton(label, "commit", {
+			title: this.#model.staged.length > 0 ? "Commit the staged changes" : "Stage everything, then commit",
+			busy: this.generating,
+			disabled: blocked,
+			tone: on({ kind: "commit-button" }) ? "accent" : undefined,
+		});
 		return col(
 			[
 				keyed(summaryField, "summary"),
@@ -1395,17 +1399,7 @@ export class Sidebar {
 								actions: { click: "amend" },
 								title: "Amend the previous commit",
 							}),
-							row(compact([this.generating && node("spinner", { style: "dots" }), text(label)]), {
-								gap: "xs",
-								align: "center",
-								role: "omp.btn",
-								tone: commitTone,
-								actions: canCommit ? { click: "commit" } : undefined,
-								title:
-									this.#model.staged.length > 0
-										? "Commit the staged changes"
-										: "Stage everything, then commit",
-							}),
+							commit,
 						],
 						{ justify: "between", align: "center", role: "omp.app.git.foot" },
 					),

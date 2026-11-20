@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { RawSseViewerComponent } from "../src/apps/debug/raw-sse";
 import { RawSseDebugBuffer } from "../src/apps/debug/raw-sse-buffer";
 import { initTheme } from "../src/theme/theme";
@@ -54,4 +55,13 @@ describe("raw SSE menu navigation", () => {
 			viewer.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

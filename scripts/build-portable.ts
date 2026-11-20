@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 import { resolveBuildIdentity } from "../packages/coding-agent/scripts/build-identity";
 
@@ -32,11 +31,11 @@ export function resolvePortableNativeBuild(which: (name: string) => string | nul
 	return which("bazelisk") || which("bazel") ? "bazel" : "cargo";
 }
 
-export function assertBaselineEmbedding(source: string): void {
-	const variants = [...source.matchAll(/variant:\s*["'](modern|baseline|default)["']/g)].map(match => match[1]);
-	if (variants.length !== 1 || variants[0] !== "baseline") {
+export function assertBaselineNativeFiles(names: readonly string[]): void {
+	const candidates = names.filter(name => /^pi_natives\.linux-x64-(modern|baseline)\.node$/.test(name));
+	if (candidates.length !== 1 || candidates[0] !== baselineNativeName) {
 		throw new Error(
-			`Portable build requires exactly one embedded baseline native (found: ${variants.join(", ") || "none"})`,
+			`Portable build requires exactly one baseline native (found: ${candidates.join(", ") || "none"})`,
 		);
 	}
 }
@@ -97,16 +96,12 @@ export async function buildPortable(): Promise<PortableManifest> {
 	const nativesManifest = (await Bun.file(path.join(repoRoot, "packages/natives/package.json")).json()) as {
 		version: string;
 	};
-	const transformersManifest = createRequire(import.meta.url)("@huggingface/transformers/package.json") as {
-		version: string;
-	};
 	const distDir = path.join(packageDir, "dist");
 	await fs.mkdir(distDir, { recursive: true });
 	const stagingDir = await fs.mkdtemp(path.join(distDir, ".portable-"));
 	const portableDir = path.join(distDir, "portable");
 	const nativeBuildRoute = resolvePortableNativeBuild();
 	const nativeBackup = await moveExistingNativesAside();
-	let generatedNative = false;
 	let generatedStats = false;
 
 	try {
@@ -133,11 +128,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 		await run([process.execPath, "--cwd=packages/stats", "run", "gen:stats"]);
 		generatedStats = true;
 		await run([process.execPath, "--cwd=packages/collab-web", "run", "gen:export-viewer"]);
-		await run([process.execPath, "--cwd=packages/natives", "run", "gen:native"], {
-			env: { ...Bun.env, TARGET_PLATFORM: "linux", TARGET_ARCH: "x64" },
-		});
-		generatedNative = true;
-		assertBaselineEmbedding(await Bun.file(path.join(nativeDir, "embedded-addon.js")).text());
+		assertBaselineNativeFiles(await fs.readdir(nativeDir));
 		const { compileCodingAgent } = await import("../packages/coding-agent/scripts/compile-binary");
 
 		const binaryPath = path.join(stagingDir, "npi");
@@ -145,7 +136,7 @@ export async function buildPortable(): Promise<PortableManifest> {
 			repoRoot,
 			entrypoint: path.join(packageDir, "src/cli.ts"),
 			outfile: binaryPath,
-			transformersVersion: transformersManifest.version,
+			native: { platform: "linux", arch: "x64" },
 			target: compileTarget,
 			compileTarget,
 			buildInfo,
@@ -177,7 +168,6 @@ export async function buildPortable(): Promise<PortableManifest> {
 		await fs.rm(stagingDir, { recursive: true, force: true });
 		throw error;
 	} finally {
-		if (generatedNative) await run([process.execPath, "--cwd=packages/natives", "run", "gen:native:reset"]);
 		if (generatedStats) await run([process.execPath, "--cwd=packages/stats", "run", "gen:stats:reset"]);
 		await restoreNatives(nativeBackup);
 	}

@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { stripVTControlCharacters } from "node:util";
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { IrcViewerComponent, type IrcViewerOptions } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { IrcLogEntry, IrcLogSource } from "@oh-my-pi/pi-tui/tools/irc";
@@ -117,7 +118,7 @@ describe("IrcViewerComponent", () => {
 			entry("0-Delta", "0-Alpha", "delta to alpha"),
 		]);
 		view.type("/alpha");
-		expect(view.screen().join("\n")).toContain("gamma to delta");
+		expect(view.screen().join("\n")).not.toContain("gamma to delta");
 		view.viewer.handleInput("\r");
 		const screen = view.screen().join("\n");
 		expect(screen).toContain("alpha to beta");
@@ -275,7 +276,11 @@ describe("IrcViewerComponent", () => {
 		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
 		view.viewer.handleInput("\x1b");
 		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
-		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, query: saved.draft.value, focused: false });
+		expect(view.viewer.navigationSnapshot().draft).toEqual({
+			...saved.draft,
+			query: saved.draft.value,
+			focused: false,
+		});
 		expect(visits).toEqual([]);
 		expect(view.closed()).toBe(0);
 		expect(sent).toEqual([]);
@@ -430,4 +435,13 @@ describe("IrcViewerComponent", () => {
 			expect(plain.screen().join("\n")).not.toContain("reply to");
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

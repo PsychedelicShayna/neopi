@@ -3,7 +3,7 @@
  *
  * Selecting an `ask` toolResult in the tree must not silently reposition the
  * leaf onto the old answer. `navigateTree()` instead hands back the original
- * questions (`reopenAsk`) so the caller can re-open the picker, then a
+ * questions (`reopenAsk`) so the caller can re-open the dialog, then a
  * follow-up call with `reanswerAskResult` branches a *new* sibling toolResult
  * off the same `ask` toolCall — leaving the original answer's branch intact.
  *
@@ -22,6 +22,7 @@ import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
+import type { AskToolInput } from "@oh-my-pi/pi-coding-agent/tools/ask";
 
 const TEST_MODEL = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 
@@ -77,11 +78,12 @@ function assistantMsg(text: string) {
 	};
 }
 
-const ORIGINAL_QUESTIONS = [
+const ORIGINAL_QUESTIONS: AskToolInput["questions"] = [
 	{
 		id: "deploy_target",
 		question: "Which deploy target?",
 		options: [{ label: "staging" }, { label: "production" }],
+		recommended: 0,
 	},
 ];
 
@@ -119,7 +121,7 @@ function staleAnswerResult(): AgentToolResult<AskToolDetails> {
 	return {
 		content: [{ type: "text", text: "User selected: staging" }],
 		details: {
-			question: ORIGINAL_QUESTIONS[0]!.question,
+			question: "Which deploy target?",
 			options: ["staging", "production"],
 			multi: false,
 			selectedOptions: ["staging"],
@@ -131,7 +133,7 @@ function newAnswerResult(): AgentToolResult<AskToolDetails> {
 	return {
 		content: [{ type: "text", text: "User selected: production" }],
 		details: {
-			question: ORIGINAL_QUESTIONS[0]!.question,
+			question: "Which deploy target?",
 			options: ["staging", "production"],
 			multi: false,
 			selectedOptions: ["production"],
@@ -162,43 +164,6 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			expect(result.reopenAsk?.toolCallId).toBe(askCallId);
 			expect(result.reopenAsk?.questions).toEqual(ORIGINAL_QUESTIONS);
 			// Nothing was mutated: the leaf is exactly where it was before probing.
-			expect(sessionManager.getLeafId()).toBe(leafBeforeProbe);
-		} finally {
-			await ctx.cleanup();
-		}
-	});
-
-	it("reopens a persisted Ask result with null optional previews instead of moving the leaf", async () => {
-		const ctx = await createTestSession({ inMemory: true });
-		try {
-			const { session, sessionManager } = ctx;
-			const savedQuestions = [
-				{
-					id: "deploy_target",
-					question: "Which deploy target?",
-					options: [
-						{ label: "staging", preview: null },
-						{ label: "production", preview: "Production rollout" },
-					],
-				},
-			];
-			sessionManager.appendMessage(userMsg("please deploy"));
-			sessionManager.appendMessage(toolCallMsg("ask-null-preview", "ask", { questions: savedQuestions }));
-			const resultId = sessionManager.appendMessage(
-				toolResultMsg("ask-null-preview", "ask", "User selected: staging"),
-			);
-			sessionManager.appendMessage(assistantMsg("deploying to staging"));
-			const leafBeforeProbe = sessionManager.getLeafId();
-
-			const result = await session.navigateTree(resultId, { allowAskReopen: true });
-
-			expect(result.reopenAsk?.questions).toEqual([
-				{
-					id: "deploy_target",
-					question: "Which deploy target?",
-					options: [{ label: "staging" }, { label: "production", preview: "Production rollout" }],
-				},
-			]);
 			expect(sessionManager.getLeafId()).toBe(leafBeforeProbe);
 		} finally {
 			await ctx.cleanup();
@@ -291,8 +256,12 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			const { session, sessionManager } = ctx;
 
 			sessionManager.appendMessage(userMsg("please deploy"));
-			// Legacy/corrupted persisted args: `questions` fails schema validation.
-			sessionManager.appendMessage(toolCallMsg("ask-call-bad", "ask", { questions: "not-an-array" }));
+			// HTML-only persisted arguments cannot be reopened as the fork's questions dialog.
+			sessionManager.appendMessage(
+				toolCallMsg("ask-call-bad", "ask", {
+					html: "<form><p>Which deploy target?</p></form>",
+				}),
+			);
 			const trBadId = sessionManager.appendMessage(toolResultMsg("ask-call-bad", "ask", "User selected: staging"));
 			sessionManager.appendMessage(assistantMsg("deploying to staging"));
 
@@ -455,7 +424,7 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 		// The recovery path must mirror the live tool path's
 		// `transformToolCallArguments`: persisted `ask` toolCall arguments may
 		// hold `$$HASH$$` placeholders in place of real secrets, and must be
-		// deobfuscated before validation — otherwise the reopened picker shows
+		// deobfuscated before validation — otherwise the reopened dialog shows
 		// the raw placeholder instead of the original question text
 		// (chatgpt-codex review on #5895).
 		const SECRET = "SUPER_SECRET_TOKEN_12345";
@@ -473,13 +442,7 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			const askCallId = "ask-call-1";
 			sessionManager.appendMessage(
 				toolCallMsg(askCallId, "ask", {
-					questions: [
-						{
-							id: "deploy_target",
-							question: obfuscatedQuestion,
-							options: [{ label: "staging" }, { label: "production" }],
-						},
-					],
+					questions: ORIGINAL_QUESTIONS.map(question => ({ ...question, question: obfuscatedQuestion })),
 				}),
 			);
 			const tr1Id = sessionManager.appendMessage(
@@ -493,7 +456,9 @@ describe("AgentSession tree navigation onto an ask toolResult", () => {
 			expect(result.reopenAsk).toBeDefined();
 			// The recovered question must be the deobfuscated plaintext, not the
 			// raw persisted placeholder.
-			expect(result.reopenAsk?.questions[0]?.question).toBe(plainQuestion);
+			expect(result.reopenAsk?.questions).toEqual(
+				ORIGINAL_QUESTIONS.map(question => ({ ...question, question: plainQuestion })),
+			);
 		} finally {
 			await ctx.cleanup();
 		}

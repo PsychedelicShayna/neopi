@@ -96,7 +96,7 @@ describe("/tool: catalog", () => {
 		const resource = await new InternalUrlRouter().resolve(`tool://${encodeURIComponent(h.device.name)}`, {
 			session: h.source,
 		});
-		expect(h.reports[1]).toBe(resource.content);
+		expect(h.reports[1]).toBe(String(resource.content));
 		expect(h.reports[1]).toContain("## Schema");
 		expect(h.reports[1]).toContain("## Examples");
 		expect(h.reports[1]).toContain("## Restrictions");

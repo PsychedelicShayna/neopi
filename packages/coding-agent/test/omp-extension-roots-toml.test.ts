@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as utils from "@oh-my-pi/pi-utils";
 import { listOmpExtensionRoots, withOmpExtensionRootScope } from "../src/discovery/omp-extension-roots";
@@ -9,9 +10,7 @@ let root: string;
 let agentDir: string;
 let cwd: string;
 beforeEach(async () => {
-	const scratch = "/mnt/alias/m2/agents/scratch/TomlReaders";
-	await fs.mkdir(scratch, { recursive: true });
-	root = await fs.mkdtemp(path.join(scratch, "roots-"));
+	root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-extension-roots-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(path.join(cwd, "extension"), { recursive: true });

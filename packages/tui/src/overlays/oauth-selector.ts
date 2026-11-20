@@ -671,7 +671,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 				this.#search.setValue("");
 				this.#syncSearchQuery();
 			} else if (ev.act === "close" || ev.act === "cancel" || ev.act === this.#sheet?.leave.id) {
-				this.handleInput("\x1b");
+				this.handleInput(this.#search.focused ? "\x03" : "\x1b");
 			}
 			return;
 		}

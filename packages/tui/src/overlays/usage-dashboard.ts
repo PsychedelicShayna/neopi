@@ -37,7 +37,7 @@ import { editorKey } from "../chrome/keybinding-hints";
 import type { TspSpan, TspTableColumn, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { col, elapsed, node, span, text } from "../native/describe";
 import { type DescribeContext, leafKey, type NativeChild, type NativeNode, type NativeUiEvent } from "../native/node";
-import { actionBar, actionButton } from "../native/overlay";
+import { actionBar, actionButton, segmentedTabs } from "../native/overlay";
 
 /** Local calendar-day activity consumed by the usage heatmap. */
 export interface DailyActivityPoint {
@@ -643,8 +643,8 @@ export interface UsageDashboardOptions {
 export function formatActivityErrorDetail(error: string, homeDir = os.homedir()): string {
 	let text = replaceTabs(sanitizeText(error)).replace(/\s+/g, " ").trim();
 	if (homeDir) {
-		const escaped = homeDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const forward = homeDir.replaceAll("\\", "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const escaped = RegExp.escape(homeDir);
+		const forward = RegExp.escape(homeDir.replaceAll("\\", "/"));
 		text = text.replace(new RegExp(`${escaped}|${forward}`, "gi"), "~");
 	}
 	return text.replace(/\.+$/, "");
@@ -1141,8 +1141,7 @@ export class UsageDashboardComponent implements Component {
 			);
 		}
 		const children: NativeChild[] = [
-			node(
-				"tabs",
+			segmentedTabs(
 				{
 					items: [
 						{ id: "overview", label: "Overview" },
@@ -1150,7 +1149,6 @@ export class UsageDashboardComponent implements Component {
 					],
 					active: this.#view,
 				},
-				undefined,
 				"tabs",
 			),
 			node("spacer", { grow: 1 }),

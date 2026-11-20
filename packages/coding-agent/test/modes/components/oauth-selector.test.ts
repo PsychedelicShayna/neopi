@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, describe, expect, it, beforeEach } from "bun:test";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { OAuthSelectorComponent } from "@oh-my-pi/pi-tui/overlays/oauth-selector";
@@ -56,7 +57,7 @@ describe("OAuthSelectorComponent", () => {
 		expect(selected).toEqual([target.id]);
 	});
 
-	it("clears an active filter on the first Esc and closes on the second", () => {
+	it("leaves Vim Insert before discarding the filter, then closes from the list", () => {
 		let cancelled = 0;
 		const component = new OAuthSelectorComponent(
 			"login",
@@ -69,7 +70,10 @@ describe("OAuthSelectorComponent", () => {
 		component.handleInput("j");
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("Search: hj");
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "hj", focused: true } });
+		component.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(component.navigationSnapshot()).toMatchObject({ search: { value: "", focused: false } });
 		component.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});
@@ -230,4 +234,13 @@ describe("OAuthSelectorComponent", () => {
 			expect(rendered).toContain("OpenCode Go");
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

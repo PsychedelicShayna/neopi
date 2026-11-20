@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Input, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -149,4 +150,13 @@ describe("MCP wizard prompt navigation", () => {
 		expect(oauth).not.toHaveBeenCalled();
 		expect("navigationSnapshot" in wizard).toBe(false);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

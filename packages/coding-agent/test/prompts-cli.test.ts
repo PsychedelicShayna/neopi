@@ -325,9 +325,7 @@ describe("prompts check", () => {
 		await Bun.write(partial, "{{#if x}}");
 		const broken = await run("check", { dir }, [envelope], { assets: promptAssets });
 		expect(broken.code).toBe(1);
-		expect((broken.json() as CheckResult).diagnostics).toEqual([
-			expect.objectContaining({ code: "render-error" }),
-		]);
+		expect((broken.json() as CheckResult).diagnostics).toEqual([expect.objectContaining({ code: "render-error" })]);
 		await Bun.write(partial, "{{x.output}}");
 		expect((await run("check", { dir }, [envelope], { assets: promptAssets })).code).toBe(0);
 		const system = "system/system-prompt.md";

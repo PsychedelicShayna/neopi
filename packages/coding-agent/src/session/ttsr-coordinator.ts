@@ -26,6 +26,7 @@ import {
 	type TtsrOutput,
 } from "../export/ttsr";
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
+import ttsrProseNoticeTemplate from "../prompts/system/ttsr-prose-notice.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import ttsrWarningTemplate from "../prompts/system/ttsr-warning.md" with { type: "text" };
 import type { AgentSessionEvent } from "./agent-session-events";
@@ -134,7 +135,7 @@ export class TtsrCoordinator {
 		this.#manager?.resetBuffer();
 	}
 
-	/** Advances repeat-after-gap tracking at turn end. */
+	/** Advances repeat-gap tracking at turn end. */
 	onTurnEnd(): void {
 		this.#manager?.incrementMessageCount();
 		this.#emittedTriggerRules.clear();
@@ -238,7 +239,10 @@ export class TtsrCoordinator {
 					{
 						name: rule.name,
 						path: this.#displayRulePath(rule.path),
-						matched: matched[rule.name] === undefined ? undefined : escapeHarnessTags(JSON.stringify(matched[rule.name])),
+						matched:
+							matched[rule.name] === undefined
+								? undefined
+								: escapeHarnessTags(JSON.stringify(matched[rule.name])),
 						content: rule.content,
 					},
 					{ cwd: this.#host.sessionManager.getCwd() },
@@ -366,19 +370,30 @@ export class TtsrCoordinator {
 		return `TTSR matched ${label}: ${rules.map(rule => rule.name).join(", ")}`;
 	}
 
-	#getInjectionContent(): { content: string; rules: Rule[]; matched: Record<string, string> } | undefined {
+	/**
+	 * Renders the pending rules with `template`. The template must describe the
+	 * real lifecycle: the abort path interrupts the output, the deferred path
+	 * only reports a rule matched on output the rule did not interrupt.
+	 */
+	#getInjectionContent(
+		assetKey: string,
+		template: string,
+	): { content: string; rules: Rule[]; matched: Record<string, string> } | undefined {
 		if (this.#pendingInjections.length === 0) return undefined;
 		const rules = this.#pendingInjections;
 		const matched = this.#pendingExcerpts;
 		const content = rules
 			.map(rule =>
 				renderPromptAsset(
-					"system/ttsr-interrupt.md",
-					ttsrInterruptTemplate,
+					assetKey,
+					template,
 					{
 						name: rule.name,
 						path: this.#displayRulePath(rule.path),
-						matched: matched[rule.name] === undefined ? undefined : escapeHarnessTags(JSON.stringify(matched[rule.name])),
+						matched:
+							matched[rule.name] === undefined
+								? undefined
+								: escapeHarnessTags(JSON.stringify(matched[rule.name])),
 						content: rule.content,
 					},
 					{ cwd: this.#host.sessionManager.getCwd() },
@@ -468,12 +483,12 @@ export class TtsrCoordinator {
 		if (markInjected && newlyAdded.length > 0) this.#manager?.markInjectedByNames(newlyAdded);
 	}
 
-	#markInjected(ruleNames: string[]): void {
+	#markInjected(ruleNames: string[], deliveryTurn?: number): void {
 		const uniqueRuleNames = Array.from(
 			new Set(ruleNames.map(ruleName => ruleName.trim()).filter(ruleName => ruleName.length > 0)),
 		);
 		if (uniqueRuleNames.length === 0) return;
-		this.#manager?.markInjectedByNames(uniqueRuleNames);
+		this.#manager?.markInjectedByNames(uniqueRuleNames, deliveryTurn);
 		this.#host.sessionManager.appendTtsrInjection(uniqueRuleNames);
 	}
 
@@ -530,7 +545,11 @@ export class TtsrCoordinator {
 			this.#pendingExcerpts = {};
 			return;
 		}
-		const injection = this.#getInjectionContent();
+		// The message ended without an abort or error: the pending rules matched
+		// output the rule did not interrupt. The notice must claim neither that
+		// the output was interrupted nor that it completed — a `length` stop
+		// truncates it and a `toolUse` stop continues into tool calls.
+		const injection = this.#getInjectionContent("system/ttsr-prose-notice.md", ttsrProseNoticeTemplate);
 		if (!injection) return;
 		const ruleNames = injection.rules.map(rule => rule.name);
 		const deliveryId = this.#reserveDeferredInjection(injection.rules);
@@ -723,6 +742,9 @@ export class TtsrCoordinator {
 		this.#emitTriggerOnce(matchContext, matches);
 		const retryToken = ++this.#retryToken;
 		const generation = this.#host.promptGeneration();
+		// The aborted turn has not ended yet; its reminder lands in the retry, one turn later. Recording that
+		// turn now keeps the retry exempt even when this task runs before the aborted turn's turn_end.
+		const retryTurn = (this.#manager?.getMessageCount() ?? 0) + 1;
 		this.#host.schedulePostPromptTask(
 			async () => {
 				if (this.#retryToken !== retryToken) {
@@ -743,7 +765,7 @@ export class TtsrCoordinator {
 				if (this.#manager?.getSettings().contextMode === "discard") {
 					this.#host.agent.replaceMessages(this.#host.agent.state.messages.slice(0, targetAssistantIndex));
 				}
-				const injection = this.#getInjectionContent();
+				const injection = this.#getInjectionContent("system/ttsr-interrupt.md", ttsrInterruptTemplate);
 				if (injection) {
 					const details = { rules: injection.rules.map(rule => rule.name), matched: injection.matched };
 					const injectionMessage: CustomMessage = {
@@ -766,7 +788,7 @@ export class TtsrCoordinator {
 							"agent",
 						),
 					);
-					this.#markInjected(details.rules);
+					this.#markInjected(details.rules, retryTurn);
 				}
 				this.#host.scheduleAgentContinue({
 					source: "ttsr-interrupt",

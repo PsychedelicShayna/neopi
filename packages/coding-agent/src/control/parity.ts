@@ -82,6 +82,7 @@ export const RPC_COMMAND_TYPES = [
 	"abort_bash",
 	"get_session_stats",
 	"get_usage",
+	"get_session_lease",
 	"export_html",
 	"switch_session",
 	"branch",

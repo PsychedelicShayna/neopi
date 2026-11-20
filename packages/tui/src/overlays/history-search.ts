@@ -4,6 +4,8 @@ import { theme } from "../theme/theme";
 import { MenuHelp, MenuHints } from "../components/menu-hints";
 /** Prompt history fields displayed in search results. */
 export interface HistorySearchEntry {
+	/** Stable identifier of the stored prompt. */
+	id: number;
 	prompt: string;
 	created_at: number;
 	/** Project folder the prompt was typed in. */
@@ -14,6 +16,8 @@ export interface HistorySearchEntry {
 export interface HistorySource {
 	search(query: string, limit: number): HistorySearchEntry[];
 	getRecent(limit: number): HistorySearchEntry[];
+	/** Remove a prompt from history. */
+	delete(id: number): void;
 }
 import { boundKeys, rawKeyHint } from "../chrome/keybinding-hints";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -233,9 +237,11 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#resultsList = new HistoryResultsList(this.#menu, this.#viewport);
 
 		const dot = theme.fg("dim", theme.sep.dot);
-		const hint = [rawKeyHint("enter", "select"), "/ search · Tab field/list · Esc field/list/close · ? help"].join(
-			dot,
-		);
+		const hint = [
+			rawKeyHint("enter", "select"),
+			rawKeyHint("delete", "delete entry"),
+			"/ search · Tab field/list · Esc field/list/close · ? help",
+		].join(dot);
 
 		this.addChild(new Spacer(1));
 		this.addChild({ render: width => [this.#search.render(width, { muted: text => theme.fg("dim", text) })] });
@@ -322,6 +328,16 @@ export class HistorySearchComponent extends OverlayPanel {
 		}
 		if (matchesKey(keyData, "ctrl+c")) {
 			this.#onCancel();
+			return;
+		}
+		// In list navigation Delete removes the selected entry; in the field it stays a text edit.
+		if (matchesKey(keyData, "delete")) {
+			this.#flushPendingSearch();
+			const selected = this.#menu.selectedItem;
+			if (selected) {
+				this.#historyStorage.delete(selected.id);
+				this.#updateResults();
+			}
 			return;
 		}
 		const action = this.#keys.read(keyData);
@@ -421,8 +437,9 @@ export class HistorySearchComponent extends OverlayPanel {
 			scroll: this.#nativeScroll,
 		};
 		this.#nativeHints = hintsRow([
-			{ keys: ["j", "k", "up", "down"], label: "navigate" },
+			{ keys: ["up", "down"], label: "navigate" },
 			{ keys: ENTER_KEYS, label: "select" },
+			{ keys: ["delete"], label: "delete entry" },
 			{ keys: ["/"], label: "search" },
 			{ keys: ["escape"], label: this.#search.focused ? "back to list" : "close" },
 		]);

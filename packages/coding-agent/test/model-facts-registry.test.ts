@@ -124,10 +124,13 @@ describe("registry model fact projection", () => {
 		cfgModelFactsOverrides.set(scope, { "fact-target/fresh-model": { contextWindow: 123_000 } });
 		await registry.refreshProvider("fact-target", "online");
 		expect(registry.find("fact-target", neutral.id)?.contextWindow).toBe(128_000);
-		expect(registry.find("fact-target", neutral.id)?.reasoning).toBe(false);
 		const model = registry.find("fact-target", neutral.id);
 		if (!model) throw new Error("target model missing");
-		expect(reasoningRequest(model).reasoning_effort).toBeUndefined();
+		// Upstream's learned thinking capabilities (3f8862bf9e) leave unknown discovered rows on a
+		// provisional ladder that request-time probes verify; the source's reviewed ladder never applies.
+		expect(model.thinking?.unverified).toBe(true);
+		expect(model.thinking?.efforts).not.toEqual([Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
+		expect(model.input).toEqual(["text"]);
 	});
 
 	for (const reasoning of [false, true]) {
@@ -147,14 +150,15 @@ describe("registry model fact projection", () => {
 					},
 				}),
 			);
-			// c7f0c532e4's generic discovery supplies these sparse compat defaults.
+			// Generic discovery supplies these sparse compat defaults; since upstream's learned thinking
+			// capabilities (3f8862bf9e) an unknown row carries no reasoning evidence and no effort-support flag.
 			const baseline = buildModel({
 				...neutral,
 				id,
 				provider: "hunt-neutral",
 				baseUrl: "https://neutral.invalid/v1",
-				reasoning,
-				compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false },
+				reasoning: reasoning ? true : undefined,
+				compat: { supportsStore: false, supportsDeveloperRole: false },
 			});
 			const snapshot = (model: Model<Api>): string =>
 				JSON.stringify({ compatConfig: model.compatConfig, compat: model.compat });
@@ -170,7 +174,7 @@ describe("registry model fact projection", () => {
 				const discovered = registry.find("hunt-neutral", id);
 				if (!discovered) throw new Error("discovered hunt model missing");
 				expect(snapshot(discovered)).toBe(snapshot(baseline));
-				expect(reasoningRequest(discovered)).toEqual({ model: id, messages: [], stream: true });
+				expect(reasoningRequest(discovered)).toEqual(reasoningRequest(baseline));
 				if (!enabled) {
 					expect(discovered).not.toHaveProperty("discoveryMissingInput");
 					expect(discovered).not.toHaveProperty("discoveryMissingContextWindow");

@@ -1,4 +1,5 @@
-import { beforeAll, expect, test } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, test, beforeEach, afterEach } from "bun:test";
 import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { ThemeSelectorComponent } from "../src/overlays/theme-selector";
 import { initTheme } from "../src/theme";
@@ -40,7 +41,13 @@ test("localizes theme picker copy while applying the original theme id", () => {
 	try {
 		setLocale("es");
 		const applied: string[] = [];
-		const selector = new ThemeSelectorComponent("dark", ["dark", "light"], name => applied.push(name), () => {}, () => {});
+		const selector = new ThemeSelectorComponent(
+			"dark",
+			["dark", "light"],
+			name => applied.push(name),
+			() => {},
+			() => {},
+		);
 		const output = Bun.stripANSI(selector.render(80).join("\n"));
 		expect(output).toContain("Tema");
 		expect(output).toContain("(actual)");
@@ -49,4 +56,13 @@ test("localizes theme picker copy while applying the original theme id", () => {
 	} finally {
 		setLocale(previous);
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

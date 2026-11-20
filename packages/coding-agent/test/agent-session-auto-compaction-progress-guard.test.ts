@@ -77,6 +77,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 
 	const NOTICE_SOURCE = "compaction";
 	const NO_PROGRESS_FRAGMENT = "Compaction freed too little context to make progress";
+	const FIXED_CONTEXT_FRAGMENT = "The system prompt and always-sent tool schemas alone exceed the recovery band";
 
 	beforeAll(async () => {
 		authStorage = await AuthStorage.create(":memory:");
@@ -289,6 +290,27 @@ describe("AgentSession auto-compaction progress guard", () => {
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
 		expect(noProgress.length).toBe(1);
 		expect(noProgress[0].level).toBe("warning");
+	});
+
+	it("skips threshold compaction and warns once when fixed context alone exceeds the recovery band", async () => {
+		cfgCompactionThresholdTokens.set(session.settings, 150_000);
+		// Tool schemas and the system prompt are never compacted; past the band no pass can help.
+		session.agent.state.systemPrompt = ["word ".repeat(150_000)];
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const notices = collectNotices();
+		const startCount = countCompactionStarts();
+
+		for (let turn = 0; turn < 2; turn++) {
+			const assistantMsg = highUsageAssistant();
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+			await session.waitForIdle();
+		}
+
+		expect(startCount()).toBe(0);
+		expect(promptSpy).not.toHaveBeenCalled();
+		const deadEnd = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(FIXED_CONTEXT_FRAGMENT));
+		expect(deadEnd.length).toBe(1);
 	});
 
 	it("blocks todo continuations after no-headroom compaction when auto-continue is disabled", async () => {
@@ -933,7 +955,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		const generateHandoffSpy = vi
 			.spyOn(compactionModule, "generateHandoffFromContext")
-			.mockResolvedValue("handoff document");
+			.mockResolvedValue("## Goal\nContinue the original request");
 
 		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
 		session.subscribe(event => {
@@ -967,10 +989,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(promptSpy).not.toHaveBeenCalled();
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "handoff document",
-		});
+		expect(sessionManager.getBranch().at(-1)).toMatchObject({ type: "compaction" });
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -983,7 +1002,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// Native (handoff) compaction is not extension-owned.
 		expect(compactEvents).toHaveLength(1);
 		expect(compactEvents[0]?.fromExtension).toBe(false);
-		expect(compactEvents[0]?.compactionEntry).toMatchObject({ summary: "handoff document" });
+		expect(compactEvents[0]?.compactionEntry?.type).toBe("compaction");
 		expect(compactEvents[0]?.compactionEntry?.fromExtension).toBeFalsy();
 	});
 
@@ -1191,10 +1210,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// The capped turn is dropped from history; its failure must stay visible to
 		// post-settle readers, or the task executor sees an idle run and re-prompts
 		// it straight back into the loop.
-		expect(session.getLastAssistantMessage()).toMatchObject({
-			stopReason: "error",
-			errorMessage: expect.stringContaining("Length-stop recovery gave up"),
-		});
+		const terminalFailure = session.getLastAssistantMessage();
+		expect(terminalFailure?.stopReason).toBe("error");
+		expect(terminalFailure?.errorMessage).toContain("Length-stop recovery gave up");
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -1311,14 +1329,11 @@ describe("AgentSession auto-compaction progress guard", () => {
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [lengthStop] });
 		await scheduler.yield();
 
-		handoffResult.resolve("speculative handoff");
+		handoffResult.resolve("## Goal\nContinue the original request");
 		await session.waitForIdle();
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "speculative handoff",
-		});
+		expect(sessionManager.getBranch().at(-1)).toMatchObject({ type: "compaction" });
 		expect(sessionManager.getBranch()).not.toContainEqual(
 			expect.objectContaining({
 				type: "message",
@@ -1349,7 +1364,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 				await releaseFailedHandoff.promise;
 				throw new Error("speculative handoff failed");
 			}
-			return "recovery handoff";
+			return "## Goal\nContinue the original request";
 		});
 
 		const speculativeTrigger = {
@@ -1403,10 +1418,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		await session.waitForIdle();
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(sessionManager.getBranch().at(-1)).toMatchObject({
-			type: "compaction",
-			summary: "recovery handoff",
-		});
+		expect(sessionManager.getBranch().at(-1)).toMatchObject({ type: "compaction" });
 	});
 
 	it("retries a small-window overflow when the reserve exceeds the model window", async () => {

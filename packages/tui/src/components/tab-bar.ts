@@ -9,7 +9,7 @@
  * - Shift+Tab / Arrow Left: Previous tab (wraps around)
  */
 import { formatKeyHint } from "../app-keybindings";
-import { MenuKeyReader } from "./menu-navigation";
+import { getMenuSearchVimMode, MenuKeyReader } from "./menu-navigation";
 import { compactText, styledSpans, styleSpans } from "../native/spans";
 import { node, row } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
@@ -184,7 +184,7 @@ export class TabBar implements Component {
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		// Tabs are a caller-owned mutable array (render keeps no cache either), so key on content.
-		let signature = `${this.#activeIndex}\0${this.#label}\0${this.showHint}`;
+		let signature = `${this.#activeIndex}\0${this.#label}\0${this.showHint}\0${getMenuSearchVimMode()}`;
 		for (const tab of this.#tabs) signature += `\0${tab.id}\x01${tab.label}\x01${tab.muted === true}`;
 		if (this.#native?.signature === signature) return this.#native.node;
 		const tabs = node("tabs", {
@@ -204,7 +204,12 @@ export class TabBar implements Component {
 		parts.push(tabs);
 		if (this.showHint) {
 			parts.push(
-				node("text", { spans: styleSpans(`(h/l tabs · ${formatKeyHint("tab")} cycle)`, this.#theme.hint) }),
+				node("text", {
+					spans: styleSpans(
+						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+						this.#theme.hint,
+					),
+				}),
 			);
 		}
 		const described = parts.length === 1 ? tabs : row(parts, { gap: "md", align: "center" });
@@ -273,7 +278,11 @@ export class TabBar implements Component {
 			// Navigation hint
 			if (this.showHint) {
 				chunks.push({ text: "  " });
-				chunks.push({ text: this.#theme.hint(`(h/l tabs · ${formatKeyHint("tab")} cycle)`) });
+				chunks.push({
+					text: this.#theme.hint(
+						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+					),
+				});
 			}
 			return chunks;
 		};

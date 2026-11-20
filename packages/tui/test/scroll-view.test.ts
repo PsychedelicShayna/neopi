@@ -1,6 +1,16 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { ScrollView } from "@oh-my-pi/pi-tui/components/scroll-view";
 import { Ellipsis, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
 
 const theme = {
 	track: () => "T",

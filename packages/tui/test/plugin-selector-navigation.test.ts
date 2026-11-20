@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { PluginSelectorComponent } from "../src/overlays/plugin-selector";
 import { initTheme } from "../src/theme/theme";
 
@@ -34,9 +35,12 @@ describe("plugin picker activation policy", () => {
 		const { list, selected } = make("uninstall");
 		list.handleInput("/");
 		for (const char of "alpha ") list.handleInput(char);
-		expect(list.navigationState().filter).toBe("alpha ");
+		expect(list.navigationState()).toMatchObject({ filterDraft: "alpha ", filterFocused: true });
 		expect(selected).toEqual([]);
 		list.handleInput("\x1b");
+		expect(list.navigationState()).toMatchObject({ filterDraft: "alpha ", filterFocused: true });
+		list.handleInput("\x1b");
+		expect(list.filterFocused).toBe(false);
 		list.handleInput(" ");
 		expect(selected).toEqual([]);
 	});
@@ -72,4 +76,13 @@ describe("plugin picker activation policy", () => {
 		selector.handleNativeEvent({ type: "action", key: "^picker", act: "confirm", mods: [] });
 		expect(selected).toEqual(["alpha"]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

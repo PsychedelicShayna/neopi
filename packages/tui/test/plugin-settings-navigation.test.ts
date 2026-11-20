@@ -1,4 +1,5 @@
-import { beforeAll, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, expect, it, beforeEach, afterEach } from "bun:test";
 import { initTheme } from "../src/theme/theme";
 import {
 	PluginListComponent,
@@ -53,7 +54,9 @@ it("routes literal plugin search before configure shortcuts and restores it", ()
 	list.handleInput("/");
 	list.handleInput("hjkl");
 	expect(opened).toEqual([]);
-	list.handleInput("\x1b");
+	list.handleInput("\r");
+	expect(opened).toEqual([]);
+	expect(list.navigationSnapshot()).toMatchObject({ filter: "hjkl", filterFocused: false });
 	const snapshot = list.navigationSnapshot();
 	const restored = make();
 	restored.restoreNavigation(snapshot);
@@ -255,3 +258,12 @@ for (const kind of ["npm", "marketplace"] as const) {
 		expect(visits).toEqual([""]);
 	});
 }
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});

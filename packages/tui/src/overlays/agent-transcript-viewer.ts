@@ -191,7 +191,7 @@ export class AgentTranscriptViewer implements Component {
 	#notice: string | undefined;
 	#expanded = false;
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp("jk gg/G C-u d e y", "h returns to the agent hub.");
+	readonly #help = new MenuHelp("jk gg/G C-u d e y", "Left arrow returns to the agent hub.");
 	#focus: "view" | "editor" = "view";
 	#pendingSends = 0;
 	#scroll: NativeScroll | undefined;

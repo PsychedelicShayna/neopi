@@ -34,6 +34,7 @@ import type {
 import {
 	numberSteps,
 	numericOption,
+	SETTINGS_FILE_SCOPES,
 	SETTING_TABS,
 	type SubmenuOption,
 	TAB_METADATA,
@@ -57,8 +58,8 @@ import type { SelectPickerOptions } from "../native/picker";
 import { getPreset } from "../status-line/presets";
 import { FormField, SelectFormField, TextFormField } from "../components/form";
 import { formTheme } from "../chrome/form-theme";
-import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { formatKeyHint } from "../app-keybindings";
+import { editorKey } from "../chrome/keybinding-hints";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { col, node, span, text } from "../native/describe";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
@@ -97,7 +98,7 @@ const PREVIEWED_SETTINGS = new Set([
 const ESCAPE = "\x1b";
 
 /** Footer hint set of the settings overlay, by what currently owns the keys. */
-type SettingsHintMode = "search" | "plugins" | "sections" | "rows" | "rows-sections";
+type SettingsHintMode = "search" | "search-results" | "plugins" | "sections" | "rows" | "rows-sections";
 
 /** The settings tab strip; muted tabs (no search matches) keep their place, dimmed. */
 function settingsTabsNode(tabs: readonly Tab[], active: string | undefined): NativeNode {
@@ -113,15 +114,20 @@ function settingsTabsNode(tabs: readonly Tab[], active: string | undefined): Nat
 }
 
 /** Footer hints for `mode`, mirroring the ANSI footer line. */
-function settingsHintsNode(mode: SettingsHintMode): NativeNode {
+function settingsHintsNode(mode: SettingsHintMode, scoped: boolean): NativeNode {
 	const confirmKeys: readonly KeyName[] = actionHint("tui.select.confirm", "")?.keys ?? [];
 	const close = actionHint("tui.select.cancel", t("settings.selector.close"));
 	const switchTabs: NativeHint = { keys: ["left", "right"], label: t("settings.selector.switch_tabs") };
+	const unset: NativeHint | undefined = scoped
+		? { keys: ["backspace"], label: t("settings.selector.unset") }
+		: undefined;
 	let hints: (NativeHint | undefined)[];
 	switch (mode) {
 		case "search":
+		case "search-results":
 			hints = [
 				actionHint("tui.select.confirm", t("settings.selector.change")),
+				mode === "search-results" ? unset : undefined,
 				{ keys: ["tab"], label: t("settings.selector.jump_tabs") },
 				actionHint("tui.select.cancel", t("settings.selector.exit_search")),
 			];
@@ -141,6 +147,7 @@ function settingsHintsNode(mode: SettingsHintMode): NativeNode {
 		case "rows-sections":
 			hints = [
 				{ keys: [...confirmKeys, "space"], label: t("settings.selector.change") },
+				unset,
 				...(mode === "rows-sections"
 					? [{ keys: ["tab"], label: t("settings.selector.jump_sections") } satisfies NativeHint, switchTabs]
 					: [{ keys: ["tab"], label: t("settings.selector.switch_tabs") } satisfies NativeHint]),
@@ -225,7 +232,8 @@ class NumericSettingsField extends Container {
 					Number(currentValue) > 0 ? currentValue : "",
 					false,
 					input => {
-						if (input.trim() && !Number.isFinite(Number(input))) throw new Error(t("settings.selector.finite_number_error"));
+						if (input.trim() && !Number.isFinite(Number(input)))
+							throw new Error(t("settings.selector.finite_number_error"));
 						onSubmit(input.trim());
 					},
 					onCancel,
@@ -258,6 +266,10 @@ class NumericSettingsField extends Container {
 	}
 }
 
+/** An enum setting's values as choices, each labelled by its value. */
+function enumOptions(def: SettingDef & { type: "enum" }): SelectItem[] {
+	return def.values.map(value => ({ value, label: value }));
+}
 /**
  * Single-choice setting field backed by the shared select form field.
  * Preserves the current selection, live async previews, footer previews,
@@ -392,7 +404,7 @@ class MultiSelectSubmenu extends Container {
 		this.#selectList.onCancel = this.#onClose;
 		const back = `${editorKey("tui.select.cancel")} to go back`;
 		const hint = this.#ordered
-			? `  Click to toggle · drag selected items to reorder · h/l move · 1-9 place · / search · ${back}`
+			? `  Click to toggle · drag selected items to reorder · ←/→ move · 1-9 place · / search · ${back}`
 			: `  Click/${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to toggle · ${back}`;
 		this.#field = new FormField(this.#selectList, {
 			theme: formTheme,
@@ -592,13 +604,20 @@ class ProviderLimitsSubmenu extends Container {
 			return {
 				value: provider,
 				label: provider,
-				description: limit === undefined ? t("settings.selector.unlimited") : t("settings.selector.limit", { limit }),
+				description:
+					limit === undefined ? t("settings.selector.unlimited") : t("settings.selector.limit", { limit }),
 			};
 		});
 		const clearItem: SelectItem[] =
 			Object.keys(limits).length === 0
 				? []
-				: [{ value: "__clear_all", label: t("settings.selector.clear_limits.label"), description: "Make every provider unlimited" }];
+				: [
+						{
+							value: "__clear_all",
+							label: t("settings.selector.clear_limits.label"),
+							description: "Make every provider unlimited",
+						},
+					];
 		const items = [...providerItems, ...clearItem];
 		this.#listField = new SelectFormField({
 			theme: formTheme,
@@ -631,15 +650,18 @@ class ProviderLimitsSubmenu extends Container {
 		this.#keys.reset();
 		if (!this.#restoringNavigation && this.#listField) this.#listNavigation = this.#listField.navigationSnapshot();
 		this.#editingProvider = provider;
-		const limits = this.#settings.normalizeProviderLimits(this.#settings.get("providers.maxInFlightRequests"));
+		const path = "providers.maxInFlightRequests";
+		const settings = this.#settings;
+		const limits = settings.normalizeProviderLimits(settings.own ? settings.own(path) : settings.get(path));
 		this.clear();
 		this.#listField = undefined;
 		this.addChild(
 			new TextFormField({
 				theme: formTheme,
 				label: `Max In-Flight Requests: ${provider}`,
-				description:
-					"Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
+				description: this.#settings.own
+					? "Enter a positive number. Decimals round down. Clear the field to inherit this provider’s limit."
+					: "Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
 				initialValue: limits[provider]?.toString() ?? undefined,
 				empty: "submit",
 				hint: t("settings.selector.text_hint", {
@@ -653,18 +675,19 @@ class ProviderLimitsSubmenu extends Container {
 					return undefined;
 				},
 				onSubmit: value => {
-					const next = { ...limits };
+					const next = { ...(settings.own ? settings.normalizeProviderLimits(settings.own(path)) : limits) };
 					const trimmed = value.trim();
 					if (trimmed === "") {
 						delete next[provider];
 					} else {
 						const limit = Number(trimmed);
-						if (!Number.isFinite(limit) || limit <= 0) throw new Error(t("settings.selector.provider_limit.error"));
+						if (!Number.isFinite(limit) || limit <= 0)
+							throw new Error(t("settings.selector.provider_limit.error"));
 						next[provider] = Math.max(1, Math.floor(limit));
 					}
 					const normalized = this.#settings.validateProviderLimits(next);
-					this.#settings.set("providers.maxInFlightRequests", normalized);
-					this.#onChange(normalized);
+					settings.set(path, normalized);
+					this.#onChange(settings.own ? settings.normalizeProviderLimits(settings.get(path)) : normalized);
 					this.#requestRender?.();
 				},
 				onCancel: () => {
@@ -807,8 +830,6 @@ export interface StatusLinePreviewSettings {
 export interface SettingsCallbacks {
 	/** Allow the host to provide a richer personality picker. */
 	createPersonalityManager?: (currentValue: string, done: (value?: string) => void) => Component;
-	/** Effective selection may be a user-defined name outside the built-in enum. */
-	currentPersonality?: () => string;
 	personalityOptions?: () => readonly SubmenuOption[];
 	/** Called when any setting value changes */
 	onChange: (path: string, newValue: unknown) => void;
@@ -915,13 +936,15 @@ export class SettingsSelectorComponent implements Component {
 	/** Refresh existing lists: setItems preserves their cursor, filter, viewport and open editor. */
 	#refreshReloadedSettings(): void {
 		const edit = this.#editingSetting;
-		if (edit && JSON.stringify(this.#context.settings.get(edit.path)) !== edit.baseline) edit.changedElsewhere = true;
-		this.#changedCounts.clear();
-		// An empty global search still displays the underlying tab.
-		if (this.#searchList && this.#currentTabId !== "plugins")
-			this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, this.#currentTabId));
+		if (edit && JSON.stringify(this.#getSettingEditValue(edit.path)) !== edit.baseline) edit.changedElsewhere = true;
 		this.#refreshItems();
 		this.#context.requestRender?.();
+	}
+
+	#getSettingEditValue(path: string): unknown {
+		const settings = this.#context.settings;
+		if (settings.own && getSettingDef(settings.entries, path)?.schemaType === "record") return settings.own(path);
+		return settings.get(path);
 	}
 
 	#editSetting(
@@ -931,7 +954,7 @@ export class SettingsSelectorComponent implements Component {
 	): Component {
 		this.#editingSetting = {
 			path,
-			baseline: JSON.stringify(this.#context.settings.get(path)),
+			baseline: JSON.stringify(this.#getSettingEditValue(path)),
 			changedElsewhere: false,
 		};
 		return build(value => {
@@ -993,14 +1016,19 @@ export class SettingsSelectorComponent implements Component {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
 		const tab = formatKeyHint("tab");
+		const unset = this.#context.settings.resolve
+			? ` · ${formatKeyHint("backspace")} ${t("settings.selector.unset")}`
+			: "";
 		if (this.#searchList) {
 			return this.#search.focused
 				? t("settings.selector.search_focused_hint", { confirm, cancel })
-				: t("settings.selector.search_hint", { tab, cancel });
+				: t("settings.selector.search_hint", { tab, cancel, unset });
 		}
 		if (this.#currentTabId === "plugins") {
 			return t(
-				this.#pluginComponent?.atRoot ? "settings.selector.plugins_root_hint" : "settings.selector.plugins_nested_hint",
+				this.#pluginComponent?.atRoot
+					? "settings.selector.plugins_root_hint"
+					: "settings.selector.plugins_nested_hint",
 				{ tab, cancel },
 			);
 		}
@@ -1010,6 +1038,7 @@ export class SettingsSelectorComponent implements Component {
 		const nav = t(this.#hasSectionJump ? "settings.selector.nav_sections" : "settings.selector.nav_tabs", { tab });
 		return t("settings.selector.rows_hint", {
 			confirm,
+			unset,
 			space_key: formatKeyHint("space"),
 			nav,
 			apply_hint: this.#callbacks.onApply ? t("settings.selector.apply_hint") : "",
@@ -1021,7 +1050,7 @@ export class SettingsSelectorComponent implements Component {
 
 	#scopeTitle(styled = false): string {
 		const active = this.#context.settings.scope ?? "global";
-		const scopes = ["global", "project", "session"].map(scope =>
+		const scopes = SETTINGS_FILE_SCOPES.map(scope =>
 			scope === active
 				? styled
 					? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`))
@@ -1034,9 +1063,10 @@ export class SettingsSelectorComponent implements Component {
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
 	#renderSearchBanner(width: number): string {
 		const icon = theme.symbol("icon.search");
-		const countText = this.#searchMatchCount === 1
-			? t("settings.selector.match_one")
-			: t("settings.selector.match_many", { count: this.#searchMatchCount });
+		const countText =
+			this.#searchMatchCount === 1
+				? t("settings.selector.match_one")
+				: t("settings.selector.match_many", { count: this.#searchMatchCount });
 		const rightWidth = visibleWidth(countText) + 1; // trailing margin
 		const prefix = ` ${theme.fg("accent", icon)} `;
 		// The input pads itself to exactly this width and keeps the cursor in view.
@@ -1072,7 +1102,9 @@ export class SettingsSelectorComponent implements Component {
 		const searching = this.#hasSearchResults;
 		const showSearch = searching || this.#search.focused;
 		const showPreview = !searching && this.#currentTabId === "appearance";
-		const previewLines = showPreview ? ["", theme.fg("muted", t("settings.selector.preview")), this.#getStatusPreviewString()] : [];
+		const previewLines = showPreview
+			? ["", theme.fg("muted", t("settings.selector.preview")), this.#getStatusPreviewString()]
+			: [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
 		const fixedRows = 1 + tabLines.length + 1 + (showSearch ? 1 : 0) + 1 + hints.length + 1;
@@ -1182,7 +1214,9 @@ export class SettingsSelectorComponent implements Component {
 			const at = list.prefsFocus();
 			const focusedDef = at.section ? getSettingDef(entries, list.getSelectedItem()?.id ?? "") : undefined;
 			const focusedGroup = prefsSectionId(focusedDef?.group ?? "General");
-			focus = at.row ?? (at.section ? (searching && focusedDef ? `${focusedDef.tab}/${focusedGroup}` : focusedGroup) : null);
+			focus =
+				at.row ??
+				(at.section ? (searching && focusedDef ? `${focusedDef.tab}/${focusedGroup}` : focusedGroup) : null);
 			editing = list.prefsEditing(id => this.#inlineMenu(id));
 			const open = list.openSubmenu;
 			if (open && !editing) {
@@ -1246,14 +1280,17 @@ export class SettingsSelectorComponent implements Component {
 		return root;
 	}
 
-	/** Settings changed from their default on `tab` (visible ones only); cached until the items rebuild. */
+	/** Configured settings on `tab` (visible ones only); cached until the items rebuild. */
 	#changedCount(tab: SettingTab): number {
 		const cached = this.#changedCounts.get(tab);
 		if (cached !== undefined) return cached;
+		const settings = this.#context.settings;
 		let count = 0;
 		for (const def of getSettingsForTab(this.#context.settings.entries, tab)) {
 			if (def.condition && !def.condition()) continue;
-			if (this.#isChanged(def, this.#getCurrentValue(def))) count++;
+			const resolution = settings.resolve?.(def.path);
+			if (resolution ? resolution.source !== undefined : this.#differsFromDefault(def, settings.get(def.path)))
+				count++;
 		}
 		this.#changedCounts.set(tab, count);
 		return count;
@@ -1270,12 +1307,12 @@ export class SettingsSelectorComponent implements Component {
 	#prefsControl(id: string, shown: string): TspPrefsControl | undefined {
 		const def = getSettingDef(this.#context.settings.entries, id);
 		if (!def) return undefined;
-		const value = this.#getCurrentValue(def);
+		const value = this.#context.settings.get(def.path);
 		switch (def.type) {
 			case "boolean":
 				return { k: "switch", on: value === true };
 			case "enum":
-				return { k: "choice", value: shown, options: def.values.map(v => ({ value: v, label: v })) };
+				return { k: "choice", value: shown, options: enumOptions(def) };
 			case "submenu": {
 				const labels = numberSteps(def);
 				if (labels) {
@@ -1422,25 +1459,26 @@ export class SettingsSelectorComponent implements Component {
 	): void {
 		const def = getSettingDef(this.#context.settings.entries, id);
 		if (!def) return;
-		if (id === "personality" && this.#callbacks.createPersonalityManager) {
-			list.openSubmenuFor(id);
+		if (value === null) {
+			this.#unsetSetting(def, list);
 			return;
 		}
-		if (value === null) {
-			if (list.openSubmenu) list.handleInput(ESCAPE);
-			this.#context.settings.unset(def.path);
-			this.#callbacks.onChange(def.path, this.#context.settings.get(def.path));
-			if (def.tab === "appearance") this.#triggerStatusLinePreview();
-			this.#refreshItems();
+		if (id === "personality" && this.#callbacks.createPersonalityManager) {
+			list.openSubmenuFor(id);
 			return;
 		}
 		switch (def.type) {
 			case "boolean":
 				if (typeof value === "boolean") list.applyValue(id, String(value));
 				return;
-			case "enum":
-				if (typeof value === "string") list.applyValue(id, value);
+			case "enum": {
+				if (typeof value !== "string") return;
+				// A committed native pick closes the menu, even while its filter owns Escape.
+				const open = list.openSubmenu;
+				if (open?.id === id && open.component instanceof SelectFormField) open.component.selectList.onCancel?.();
+				list.applyValue(id, value);
 				return;
+			}
 			case "submenu": {
 				const choice =
 					typeof value === "number"
@@ -1488,13 +1526,29 @@ export class SettingsSelectorComponent implements Component {
 		}
 	}
 
+	#unsetSetting(def: SettingDef, list: SettingsList): void {
+		const settings = this.#context.settings;
+		// Ownership follows presence, the same rule as the yellow colour: a key set to null in the
+		// selected file is present and removable even though its own value reads as undefined.
+		if (settings.resolve && (settings.scope === undefined || settings.resolve(def.path).source !== settings.scope))
+			return;
+		if (list.openSubmenu) list.handleInput(ESCAPE);
+		settings.unset(def.path);
+		this.#callbacks.onChange(def.path, settings.get(def.path));
+		if (def.tab === "appearance") this.#triggerStatusLinePreview();
+		this.#refreshItems();
+		this.#context.requestRender?.();
+	}
+
 	/** Rebuilds the visible items after a change made outside a list's own `onChange` (changed flags, conditions). */
 	#refreshItems(): void {
+		// An empty global search still displays the underlying tab.
+		if (this.#currentTabId !== "plugins")
+			this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, this.#currentTabId));
 		if (this.#searchList) {
 			this.#searchCorpora = null;
 			this.#setSearchQuery(this.#searchQuery);
-		} else if (this.#currentTabId !== "plugins")
-			this.#refreshCurrentTabItems(getSettingsForTab(this.#context.settings.entries, this.#currentTabId));
+		}
 	}
 
 	/**
@@ -1521,8 +1575,13 @@ export class SettingsSelectorComponent implements Component {
 		if (searching || this.#search.focused) {
 			const count = this.#searchMatchCount;
 			const locale = getLocale();
-			if (memo.search?.input !== this.#search.input || memo.search.count !== count || memo.search.locale !== locale) {
-				const countText = count === 1 ? t("settings.selector.match_one") : t("settings.selector.match_many", { count });
+			if (
+				memo.search?.input !== this.#search.input ||
+				memo.search.count !== count ||
+				memo.search.locale !== locale
+			) {
+				const countText =
+					count === 1 ? t("settings.selector.match_one") : t("settings.selector.match_many", { count });
 				memo.search = {
 					input: this.#search.input,
 					count,
@@ -1566,7 +1625,9 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const mode: SettingsHintMode = searching
-			? "search"
+			? this.#search.focused
+				? "search"
+				: "search-results"
 			: this.#currentTabId === "plugins"
 				? "plugins"
 				: this.#currentList?.sectionFocused
@@ -1574,7 +1635,7 @@ export class SettingsSelectorComponent implements Component {
 					: this.#hasSectionJump
 						? "rows-sections"
 						: "rows";
-		memo.hints[mode] ??= settingsHintsNode(mode);
+		memo.hints[mode] ??= settingsHintsNode(mode, this.#context.settings.resolve !== undefined);
 		children.push(memo.hints[mode]);
 
 		if (memo.root && sameItems(memo.root.children, children)) return memo.root.node;
@@ -1862,19 +1923,23 @@ export class SettingsSelectorComponent implements Component {
 			return null;
 		}
 
-		const currentValue = this.#getCurrentValue(def);
-		const changed = this.#isChanged(def, currentValue);
+		const settings = this.#context.settings;
+		const currentValue = settings.get(def.path);
+		const resolution = settings.resolve?.(def.path);
+		const source = resolution?.source;
+		const changed = resolution ? source !== undefined : this.#differsFromDefault(def, currentValue);
+		const valueSymbol = source !== undefined && source !== settings.scope ? (`scope.${source}` as const) : undefined;
 		const item = {
 			id: def.path,
-			label: `${this.#context.settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
-			description: [def.description, this.#context.settings.details?.(def.path).description]
-				.filter(Boolean)
-				.join("\n"),
+			label: `${settings.details?.(def.path).shadowed ? "󰈉 " : ""}${def.label}${provenanceSuffix(def.provenance)}`,
+			description: [def.description, settings.details?.(def.path).description].filter(Boolean).join("\n"),
 			warning:
 				[def.warning, this.#editingSetting?.path === def.path ? this.#getReloadConflict() : undefined]
 					.filter(Boolean)
 					.join("\n") || undefined,
 			changed,
+			scopedValue: resolution !== undefined,
+			valueSymbol,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
 		};
 
@@ -1883,7 +1948,13 @@ export class SettingsSelectorComponent implements Component {
 				return { ...item, currentValue: currentValue ? "true" : "false", values: ["true", "false"] };
 
 			case "enum":
-				return { ...item, currentValue: String(currentValue ?? ""), values: [...def.values] };
+				return {
+					...item,
+					currentValue: String(currentValue ?? ""),
+					values: [...def.values],
+					menu: (cv, done) =>
+						createSettingsSelectField(def.label, def.description, enumOptions(def), cv, done, () => done()),
+				};
 
 			case "submenu":
 				return {
@@ -1896,8 +1967,7 @@ export class SettingsSelectorComponent implements Component {
 				return {
 					...item,
 					currentValue: this.#formatTextInputValue(def, currentValue),
-					submenu: (cv, done) =>
-						this.#editSetting(def.path, done, finish => this.#createTextInput(def, cv, finish)),
+					submenu: (_cv, done) => this.#editSetting(def.path, done, finish => this.#createTextInput(def, finish)),
 				};
 
 			case "providerLimits":
@@ -1918,15 +1988,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 	}
 
-	/**
-	 * Get the current value for a setting.
-	 */
-	#getCurrentValue(def: SettingDef): unknown {
-		if (def.path === "personality" && this.#callbacks.currentPersonality) return this.#callbacks.currentPersonality();
-		return this.#context.settings.get(def.path);
-	}
-
-	#isChanged(def: SettingDef, currentValue: unknown): boolean {
+	#differsFromDefault(def: SettingDef, currentValue: unknown): boolean {
 		const defaultValue: unknown = def.defaultValue;
 		if (Array.isArray(currentValue) && Array.isArray(defaultValue)) {
 			return (
@@ -1964,7 +2026,11 @@ export class SettingsSelectorComponent implements Component {
 		if (def.path === "composer.shape") return getComposerShapeOptions();
 		if (def.customInput)
 			return [
-				{ value: CUSTOM_NUMBER_OPTION, label: t("settings.selector.custom.label"), description: t("settings.selector.custom.description") },
+				{
+					value: CUSTOM_NUMBER_OPTION,
+					label: t("settings.selector.custom.label"),
+					description: t("settings.selector.custom.description"),
+				},
 				...def.options,
 			];
 		return def.options;
@@ -2095,11 +2161,7 @@ export class SettingsSelectorComponent implements Component {
 	/**
 	 * Create a text input submenu for a string or structured setting.
 	 */
-	#createTextInput(
-		def: SettingDef & { type: "text" },
-		_currentValue: string,
-		done: (value?: string) => void,
-	): Component {
+	#createTextInput(def: SettingDef & { type: "text" }, done: (value?: string) => void): Component {
 		this.#textInputActive = true;
 		const wrappedDone = (value?: string) => {
 			this.#textInputActive = false;
@@ -2108,11 +2170,10 @@ export class SettingsSelectorComponent implements Component {
 		return createSettingsTextField(
 			def.label,
 			def.description,
-			this.#formatTextInputEditValue(def.path, this.#context.settings.get(def.path)),
+			this.#formatTextInputEditValue(def.path, this.#getSettingEditValue(def.path)),
 			def.secret,
 			value => {
-				// An empty field removes the persisted value, so the default (or an
-				// environment fallback) applies again instead of a pinned "".
+				// An empty field removes the persisted value so the setting inherits again.
 				if (value === "") this.#context.settings.unset(def.path);
 				else this.#setSettingValue(def.path, value);
 				this.#callbacks.onChange(def.path, this.#context.settings.get(def.path));
@@ -2288,7 +2349,12 @@ export class SettingsSelectorComponent implements Component {
 			const item = this.#defToItem(def);
 			if (!item) continue;
 			if (def.group && def.group !== lastGroup) {
-				items.push({ id: `__heading:${def.group}`, label: settingsGroupLabel(def.group), currentValue: "", heading: true });
+				items.push({
+					id: `__heading:${def.group}`,
+					label: settingsGroupLabel(def.group),
+					currentValue: "",
+					heading: true,
+				});
 				lastGroup = def.group;
 			}
 			items.push(item);
@@ -2435,8 +2501,18 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
+		const vimPrefix = this.#menuKeys.pending;
 		const action = this.#menuKeys.read(data);
 		if (action === "pending") return;
+		if (!action && !vimPrefix && matchesKey(data, "backspace") && this.#context.settings.resolve) {
+			const list = this.#displayList;
+			if (list && !list.sectionFocused) {
+				const item = list.getHoveredItem() ?? list.getSelectedItem();
+				const def = item && getSettingDef(this.#context.settings.entries, item.id);
+				if (def) this.#unsetSetting(def, list);
+			}
+			return;
+		}
 		if (action?.kind === "context") {
 			if (this.#currentList?.hasSectionFocusTargets()) this.#currentList.toggleSectionFocus();
 			else if (action.delta > 0) this.#tabBar.nextTab();

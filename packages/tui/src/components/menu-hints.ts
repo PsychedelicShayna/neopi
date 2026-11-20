@@ -5,12 +5,14 @@ import type { NativeNode } from "../native/node";
 import { compositeLineAt } from "../render/composite";
 import type { Component } from "../tui";
 import { replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+import { getMenuSearchVimMode } from "./menu-navigation";
 
 export const MENU_VIM_HINT = "hjkl gg/G C-u d e y";
 
 /** Harness actions always win the space budget; motions are optional decoration. */
 export function menuHintLines(harness: string, width: number, vim = MENU_VIM_HINT): string[] {
 	if (width <= 0) return [];
+	if (vim && !getMenuSearchVimMode()) vim = "↑↓ ←→ Home/End PgUp/PgDn";
 	const actions = replaceTabs(harness);
 	const actionWidth = visibleWidth(actions);
 	const motionWidth = visibleWidth(vim);
@@ -80,20 +82,37 @@ export class MenuHelp {
 	}
 
 	describe(): NativeNode {
-		return node("card", { head: t("tui.components.vim_help.title"), role: "omp.menu.vim-help" }, [
-			col(this.#explanations().map(line => node("text", { spans: [span(line)] }))),
-		]);
+		return node(
+			"card",
+			{
+				head: getMenuSearchVimMode() ? t("tui.components.vim_help.title") : "Menu navigation",
+				role: "omp.menu.vim-help",
+			},
+			[col(this.#explanations().map(line => node("text", { spans: [span(line)] })))],
+		);
 	}
 
 	#explanations(): string[] {
+		if (!getMenuSearchVimMode()) {
+			return [
+				"Menu navigation",
+				"",
+				"↑ / ↓: previous / next row",
+				"← / →: switch pane, collapse / expand, or adjust",
+				"Home / End: first / last item",
+				"PageUp / PageDown: full page up / down",
+				"Tab / Shift-Tab: next / previous context",
+				"/: search · Enter: select · Esc: return",
+				...(this.extra ? [this.extra] : []),
+				"",
+				t("tui.components.vim_help.return"),
+			];
+		}
 		const explanations = [t("tui.components.vim_help.title"), ""];
-		if (this.vim.includes("j") || this.vim.includes("k"))
-			explanations.push(t("tui.components.vim_help.rows"));
-		if (this.vim.includes("h") || this.vim.includes("l"))
-			explanations.push(t("tui.components.vim_help.horizontal"));
+		if (this.vim.includes("j") || this.vim.includes("k")) explanations.push(t("tui.components.vim_help.rows"));
+		if (this.vim.includes("h") || this.vim.includes("l")) explanations.push(t("tui.components.vim_help.horizontal"));
 		if (this.vim.includes("gg")) explanations.push(t("tui.components.vim_help.boundaries"));
-		if (this.vim.includes("u") || this.vim.includes("d"))
-			explanations.push(t("tui.components.vim_help.half_page"));
+		if (this.vim.includes("u") || this.vim.includes("d")) explanations.push(t("tui.components.vim_help.half_page"));
 		if (this.vim.includes("e") || this.vim.includes("y")) explanations.push(t("tui.components.vim_help.scroll"));
 		if (this.vim.includes("Pg") || this.vim.includes("gg")) explanations.push(t("tui.components.vim_help.page"));
 		if (this.extra) explanations.push(this.extra);

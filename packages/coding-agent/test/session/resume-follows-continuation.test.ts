@@ -7,9 +7,10 @@ import { EVAL_STATE_CONTEXT_TYPE } from "@oh-my-pi/pi-coding-agent/eval/state";
 import { createSessionManager } from "@oh-my-pi/pi-coding-agent/main";
 import { openRpcSession, type RpcOpenSessionSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { SESSION_EXIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
-import type { SessionContinuation } from "@oh-my-pi/pi-coding-agent/session/session-listing";
-import { readSessionHeaderId } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { SessionManager, type SessionPersistenceNotice } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { findSessionContinuation, type SessionContinuation } from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { loadSessionFile, readSessionHeaderId } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { SessionInUseError } from "@oh-my-pi/pi-coding-agent/session/session-lease";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { writeTerminalBreadcrumb } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { __resetDirsFromEnvForTests, getTerminalSessionsDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -178,8 +179,8 @@ function open(sessionFile: string, sessionDir: string): Promise<SessionManager> 
 	return SessionManager.open(sessionFile, sessionDir, new FileSessionStorage(), { suppressBreadcrumb: true });
 }
 
-async function userTurnsIn(sessionFile: string, sessionDir: string): Promise<unknown[]> {
-	const reader = await open(sessionFile, sessionDir);
+async function userTurnsIn(sessionFile: string): Promise<unknown[]> {
+	const reader = await SessionManager.openReadOnly(sessionFile);
 	return reader
 		.getEntries()
 		.flatMap(entry => (entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : []));
@@ -196,23 +197,45 @@ async function createSession(tempDir: TempDir): Promise<string> {
 }
 
 /**
- * Resume `sessionFile` while another process owns it and write once (a user
- * turn with text `write`, or the given write): the session moves to a sibling.
+ * Materialize a legacy continuation journal without reopening the live holder's
+ * file. Lifetime leases now reject that second writer; resume must still
+ * understand continuations saved before that ownership contract.
  */
 async function continueElsewhere(
 	sessionFile: string,
 	sessionDir: string,
 	write: string | ((manager: SessionManager) => void),
 ): Promise<string> {
-	const manager = await open(sessionFile, sessionDir);
-	const notices: SessionPersistenceNotice[] = [];
-	manager.onPersistenceNotice(notice => notices.push(notice));
+	const loaded = await loadSessionFile(sessionFile);
+	const header = loaded.entries.find(entry => entry.type === "session");
+	if (!header) throw new Error("Expected a session header");
+	const timestamp = new Date().toISOString();
+	const id = crypto.randomUUID();
+	const sibling = path.join(sessionDir, `${timestamp.replaceAll(":", "-").replaceAll(".", "-")}_${id}.jsonl`);
+	const {
+		type: _type,
+		id: _id,
+		timestamp: _timestamp,
+		parentSession: _parent,
+		continuationOf: _of,
+		...carried
+	} = header;
+	const continuationHeader = {
+		type: "session",
+		id,
+		timestamp,
+		parentSession: header.id,
+		continuationOf: header.id,
+		...carried,
+	};
+	await Bun.write(
+		sibling,
+		`${loaded.entries.map(entry => JSON.stringify(entry === header ? continuationHeader : entry)).join("\n")}\n`,
+	);
+	const manager = await open(sibling, sessionDir);
 	if (typeof write === "string") manager.appendMessage(userTurn(write));
 	else write(manager);
 	await manager.close();
-	const sibling = manager.getSessionFile();
-	if (!sibling) throw new Error("Expected the session to save somewhere");
-	expect(notices).toEqual([{ reason: "open-elsewhere", from: sessionFile, to: sibling }]);
 	return sibling;
 }
 
@@ -341,7 +364,7 @@ describe("--resume of a session that continued in a sibling file", () => {
 			} finally {
 				await manager.close();
 			}
-			expect(await userTurnsIn(continuation, tempDir.path())).toEqual(["before", "holder turn", "continued turn"]);
+			expect(await userTurnsIn(continuation)).toEqual(["before", "holder turn", "continued turn"]);
 		}, 30_000);
 	}
 
@@ -434,40 +457,20 @@ describe("--resume of a session that continued in a sibling file", () => {
 		}
 	}, 30_000);
 
-	it("moves off again when the continuation is itself open in another live process", async () => {
+	it("refuses to reopen a continuation held by another live process", async () => {
 		using tempDir = TempDir.createSync("@omp-resume-continuation-");
 		const { original, continuation } = await movedOffSession(tempDir);
-		const continuationId = await readSessionHeaderId(continuation);
 		const holder = await Holder.resume(tempDir, continuation);
 		try {
 			await holder.append("holder on the continuation");
-			const manager = await createSessionManager(
-				resumeArgs(original),
-				tempDir.path(),
-				stubSettings,
-				async () => "unavailable",
-			);
-			if (!manager) throw new Error("Expected a resumed session");
-			const notices: SessionPersistenceNotice[] = [];
-			manager.onPersistenceNotice(notice => notices.push(notice));
-			manager.appendMessage(userTurn("after resume"));
-			await manager.flush();
-			const savedTo = manager.getSessionFile();
-			if (!savedTo) throw new Error("Expected the resumed session to save somewhere");
-			expect(notices).toEqual([{ reason: "open-elsewhere", from: continuation, to: savedTo }]);
-			expect(manager.getHeader()?.continuationOf).toBe(continuationId);
-			await manager.close();
-			expect(await userTurnsIn(savedTo, tempDir.path())).toEqual([
-				"before",
-				"holder turn",
-				"continued turn",
-				"holder on the continuation",
-				"after resume",
-			]);
+			const before = await Bun.file(continuation).text();
+			await expect(
+				createSessionManager(resumeArgs(original), tempDir.path(), stubSettings, async () => "unavailable"),
+			).rejects.toBeInstanceOf(SessionInUseError);
+			expect(await Bun.file(continuation).text()).toBe(before);
 		} finally {
 			await holder.exit();
 		}
-		expect(await userTurnsIn(continuation, tempDir.path())).not.toContain("after resume");
 	}, 30_000);
 
 	it("keeps the asked-for file when its own conversation moved on after the continuation", async () => {
@@ -618,6 +621,33 @@ describe("--resume of a session that continued in a sibling file", () => {
 			await manager?.close();
 		}
 	}, 30_000);
+
+	it("reads only the header of a later sibling that continues nothing", async () => {
+		using tempDir = TempDir.createSync("@omp-resume-continuation-");
+		const original = await createSession(tempDir);
+		const created = new Date(Date.now() + 60_000).toISOString();
+		const sibling = tempDir.join(`${created.replace(/[:.]/g, "-")}_unrelated.jsonl`);
+		const header = { type: "session", version: 3, id: "unrelated", timestamp: created, cwd: tempDir.path() };
+		const filler = {
+			type: "custom",
+			customType: "filler",
+			data: "x".repeat(16_384),
+			id: "f1",
+			parentId: null,
+			timestamp: created,
+		};
+		await Bun.write(sibling, `${[header, filler].map(entry => JSON.stringify(entry)).join("\n")}\n`);
+		const scanned: string[] = [];
+		class CountingStorage extends FileSessionStorage {
+			override async scanLines(file: string, visit: (line: string) => boolean): Promise<void> {
+				scanned.push(file);
+				return super.scanLines(file, visit);
+			}
+		}
+
+		expect(await findSessionContinuation(original, new CountingStorage())).toBeUndefined();
+		expect(scanned).not.toContain(sibling);
+	});
 
 	it("does not follow a deliberate fork", async () => {
 		using tempDir = TempDir.createSync("@omp-resume-continuation-");

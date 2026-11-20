@@ -267,6 +267,15 @@ async function tryAcquireCooperativeLock(filePath: string): Promise<FileLockHand
 	}
 }
 
+/**
+ * Whether any holder, including this process, owns the lease, observed without
+ * taking it, so a concurrent `tryAcquireFileLock` never meets the probe.
+ * Throws when the lock cannot be probed.
+ */
+export function isFileLockHeld(filePath: string): boolean {
+	return NativeFileLock.isHeld(getLockPath(filePath));
+}
+
 /** Acquire an exclusive lease; callers must release it when their operation ends. */
 export async function acquireFileLock(filePath: string, options: FileLockOptions = {}): Promise<FileLockHandle> {
 	const opts = { ...DEFAULT_OPTIONS, ...options };

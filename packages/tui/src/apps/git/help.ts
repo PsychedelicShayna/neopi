@@ -11,6 +11,7 @@ import { formatKeyHint } from "../../app-keybindings";
 import type { KeyName } from "../../key-hint-format";
 import { matchesKey } from "../../keys";
 import { ScrollView } from "../../components/scroll-view";
+import { getMenuSearchVimMode } from "../../components/menu-navigation";
 import { col, node, span } from "../../native/describe";
 import type { NativeNode, NativeUiEvent } from "../../native/node";
 import { actionBar, actionButton } from "../../native/overlay";
@@ -25,18 +26,16 @@ interface Shortcut {
 
 const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcut[] }[] = [
 	{
-		title: "Move (Vim navigation)",
+		title: "Move",
 		rows: [
-			{ keys: ["j", "k", "up", "down"], label: "Next or previous row" },
-			{ keys: ["h", "l", "left", "right"], label: "Choose the left diff or right changes pane" },
+			{ keys: ["up", "down"], label: "Next or previous row" },
+			{ keys: ["left", "right"], label: "Choose the left diff or right changes pane" },
 			{ keys: ["enter"], label: "Open the file in the diff" },
 			{ keys: ["tab"], label: "Switch between the diff and the changes" },
 			{ keys: ["]", "["], label: "Next or previous file" },
 			{ keys: ["alt+down", "alt+up"], label: "Next or previous change" },
-			{ keys: ["g", "shift+g", "home", "end"], label: "gg / G: first / last row" },
-			{ keys: ["ctrl+u", "ctrl+d"], label: "Half page up or down" },
+			{ keys: ["home", "end"], label: "First / last row" },
 			{ keys: ["pageUp", "pageDown"], label: "Full page up or down" },
-			{ keys: ["ctrl+y", "ctrl+e"], label: "Scroll view without moving selection" },
 			{ keys: ["alt+left", "alt+right"], label: "Fold/unfold tree or pan diff" },
 			{ keys: ["/"], label: "Search changed file paths" },
 		],
@@ -72,11 +71,30 @@ const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcu
 	},
 ];
 
+const VIM_GROUPS: typeof GROUPS = [
+	...GROUPS,
+	{
+		title: "Vim navigation",
+		rows: [
+			{ keys: ["j", "k"], label: "Next or previous row" },
+			{ keys: ["h", "l"], label: "Choose the left diff or right changes pane" },
+			{ keys: ["g", "shift+g"], label: "gg / G: first / last row" },
+			{ keys: ["ctrl+u", "ctrl+d"], label: "Half page up or down" },
+			{ keys: ["ctrl+y", "ctrl+e"], label: "Scroll view without moving selection" },
+		],
+	},
+];
+
+function shortcutGroups(): typeof GROUPS {
+	return getMenuSearchVimMode() ? VIM_GROUPS : GROUPS;
+}
+
 /** The shortcuts overlay; any of `?`, escape or `q` closes it. */
 export class GitHelpSheet implements Component {
 	readonly nativeOverlay = { role: "omp.overlay.hotkeys", head: "Keyboard shortcuts", size: "lg" } as const;
 	readonly #close: () => void;
 	#native: NativeNode | undefined;
+	#nativeVimMode = getMenuSearchVimMode();
 	readonly #viewport = new ScrollView([], { height: 1 });
 
 	constructor(
@@ -87,7 +105,7 @@ export class GitHelpSheet implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (data === "?" || data === "h") this.back();
+		if (data === "?" || matchesKey(data, "left") || (getMenuSearchVimMode() && data === "h")) this.back();
 		else if (data === "q" || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) this.#close();
 		else this.#viewport.handleScrollKey(data);
 	}
@@ -106,9 +124,14 @@ export class GitHelpSheet implements Component {
 	}
 
 	describe(): NativeNode {
+		const vim = getMenuSearchVimMode();
+		if (vim !== this.#nativeVimMode) {
+			this.#nativeVimMode = vim;
+			this.#native = undefined;
+		}
 		this.#native ??= col(
 			[
-				...GROUPS.map(group =>
+				...shortcutGroups().map(group =>
 					node(
 						"section",
 						{ head: group.title, role: "omp.hotkeys.group" },
@@ -137,10 +160,12 @@ export class GitHelpSheet implements Component {
 
 	render(width: number): readonly string[] {
 		const keyWidth = Math.max(
-			...GROUPS.flatMap(group => group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" ")))),
+			...shortcutGroups().flatMap(group =>
+				group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" "))),
+			),
 		);
 		const lines = [truncateToWidth(` ${theme.bold("Keyboard shortcuts")}`, width), ""];
-		for (const group of GROUPS) {
+		for (const group of shortcutGroups()) {
 			lines.push(truncateToWidth(` ${theme.fg("muted", group.title)}`, width));
 			for (const row of group.rows) {
 				const keys = row.keys.map(formatKeyHint).join(" ");

@@ -18,6 +18,69 @@ afterEach(() => {
 });
 
 describe("menu keybinding ownership", () => {
+	it("leaves Vim aliases unhandled when disabled while preserving conventional navigation", () => {
+		setMenuSearchVimMode(false);
+		const reader = new MenuKeyReader();
+		for (const key of ["h", "j", "k", "l", "H", "J", "K", "L", "g", "G", "\x15", "\x04", "\x05", "\x19"]) {
+			expect(reader.read(key)).toBeUndefined();
+			expect(reader.pending).toBe(false);
+		}
+		for (const [key, action] of [
+			["\x1b[A", { kind: "move", delta: -1 }],
+			["\x1b[B", { kind: "move", delta: 1 }],
+			["\x1b[D", { kind: "horizontal", delta: -1 }],
+			["\x1b[C", { kind: "horizontal", delta: 1 }],
+			["\x1b[H", { kind: "boundary", edge: "first" }],
+			["\x1b[F", { kind: "boundary", edge: "last" }],
+			["\x1b[5~", { kind: "page", delta: -1 }],
+			["\x1b[6~", { kind: "page", delta: 1 }],
+			["\t", { kind: "context", delta: 1 }],
+			["\x1b[Z", { kind: "context", delta: -1 }],
+			["/", { kind: "search" }],
+			[" ", { kind: "toggle" }],
+			["\r", { kind: "confirm" }],
+			["\x1b", { kind: "cancel" }],
+		] as const) {
+			expect(reader.read(key)).toEqual(action);
+		}
+	});
+
+	it("enables all Vim motions live and drops pending prefixes when disabled", () => {
+		const reader = new MenuKeyReader();
+		for (const [key, action] of [
+			["j", { kind: "move", delta: 1 }],
+			["k", { kind: "move", delta: -1 }],
+			["h", { kind: "horizontal", delta: -1 }],
+			["l", { kind: "horizontal", delta: 1 }],
+			["G", { kind: "boundary", edge: "last" }],
+			["\x15", { kind: "halfPage", delta: -1 }],
+			["\x04", { kind: "halfPage", delta: 1 }],
+			["\x19", { kind: "scroll", delta: -1 }],
+			["\x05", { kind: "scroll", delta: 1 }],
+		] as const) {
+			expect(reader.read(key)).toEqual(action);
+		}
+		expect(reader.read("g")).toBe("pending");
+		expect(reader.read("g")).toEqual({ kind: "boundary", edge: "first" });
+		expect(reader.read("g")).toBe("pending");
+		setMenuSearchVimMode(false);
+		expect(reader.read("g")).toBeUndefined();
+		setMenuSearchVimMode(true);
+		expect(reader.read("g")).toBe("pending");
+	});
+
+	it("keeps explicit non-Vim half-page and scroll bindings usable when Vim is disabled", () => {
+		setMenuSearchVimMode(false);
+		const reader = new MenuKeyReader(
+			new KeybindingsManager(TUI_KEYBINDINGS, {
+				"tui.select.halfPageDown": "alt+d",
+				"tui.select.scrollUp": "alt+y",
+			}),
+		);
+		expect(reader.read("\x1bd")).toEqual({ kind: "halfPage", delta: 1 });
+		expect(reader.read("\x1by")).toEqual({ kind: "scroll", delta: -1 });
+	});
+
 	it("honors an injected registry while default readers follow global changes", () => {
 		const previous = getKeybindings();
 		try {

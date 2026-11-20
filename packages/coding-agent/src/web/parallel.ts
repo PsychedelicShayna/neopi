@@ -1,6 +1,6 @@
 import { type FetchImpl, getEnvApiKey } from "@oh-my-pi/pi-ai";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
-import type { AgentStorage } from "../session/agent-storage";
+import type { AgentStorageApi } from "../session/agent-storage";
 import { findCredential, withHardTimeout } from "./search/providers/utils";
 
 const PARALLEL_API_URL = "https://api.parallel.ai";
@@ -239,7 +239,7 @@ export function parseParallelSearchPayload(
 	};
 }
 
-export function findParallelApiKey(storage: AgentStorage | null | undefined): string | null {
+export function findParallelApiKey(storage: AgentStorageApi | null | undefined): string | null {
 	return findCredential(storage, getEnvApiKey("parallel"), "parallel");
 }
 
@@ -299,7 +299,7 @@ export async function searchWithParallel(
 	objective: string,
 	queries: string[],
 	options: ParallelSearchOptions,
-	storage: AgentStorage | null | undefined,
+	storage: AgentStorageApi | null | undefined,
 ): Promise<ParallelSearchResult> {
 	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {
@@ -333,7 +333,7 @@ export async function searchWithParallel(
 export async function extractWithParallel(
 	urls: string[],
 	options: ParallelExtractOptions,
-	storage: AgentStorage | null | undefined,
+	storage: AgentStorageApi | null | undefined,
 ): Promise<ParallelExtractResult> {
 	const apiKey = findParallelApiKey(storage);
 	if (!apiKey) {

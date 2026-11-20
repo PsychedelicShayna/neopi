@@ -104,9 +104,10 @@ interface DefinitionBase {
 	/**
 	 * Array entries may be objects scoping values to working-directory prefixes
 	 * (`{ path(s)/pathPrefix(es), values | items | <valuesKey> }`, see `config/settings.ts`);
-	 * `valuesKey` names the domain-specific alias for the values list (e.g. `models`).
+	 * `valuesKey` names the domain-specific alias for the values list (e.g. `models`, `patterns`),
+	 * and `itemType` selects whether unscoped/nested entries are strings (default) or rule objects.
 	 */
-	pathScoped?: { valuesKey: string };
+	pathScoped?: { valuesKey: string; itemType?: "string" | "object" };
 	/**
 	 * Protocol hosts (RPC/ACP embedders) that start from this setting's default rather than the local
 	 * user's interactive preference: at startup the default is pinned as a runtime override unless
@@ -129,8 +130,10 @@ interface DefinitionBase {
 
 export interface BooleanDefinition extends DefinitionBase {
 	type: "boolean";
-	default: boolean | undefined;
-	env?: SettingEnv<boolean>;
+	/** Offer session consent alongside persisted on/off values. */
+	allowAsk?: true;
+	default: boolean | "ask" | undefined;
+	env?: SettingEnv<boolean | "ask">;
 	ui?: UiBoolean;
 }
 
@@ -156,10 +159,22 @@ export interface EnumDefinition<T extends readonly string[] = readonly string[]>
 	ui?: UiEnum<T>;
 }
 
+export type ArrayMergeStrategy = "replace" | "prepend" | "append";
+
 export interface ArrayDefinition<T = unknown> extends DefinitionBase {
 	type: "array";
 	default: readonly T[] | null;
 	env?: SettingEnv<readonly T[]>;
+	/**
+	 * How higher-precedence config layers (`project`, `--config` overlay) combine with lower
+	 * layers (`global`):
+	 *  - `"replace"` (default): a configured array replaces lower layers wholesale.
+	 *  - `"prepend"`: higher-layer entries are placed before lower-layer entries.
+	 *  - `"append"`: higher-layer entries are placed after lower-layer entries.
+	 *
+	 * Runtime overrides (`Setting.override`) still replace the effective list wholesale.
+	 */
+	merge?: ArrayMergeStrategy;
 	/**
 	 * Closed vocabulary for the entries (`label` names one entry in messages, e.g. "status line
 	 * segment"). Writes naming an unknown entry are rejected; configured values that already contain
@@ -186,25 +201,27 @@ export type SettingDefinition =
 	| RecordDefinition;
 
 /** Value type a definition resolves to. */
-export type DefinitionValue<D> = D extends { type: "boolean"; default: undefined }
-	? boolean | undefined
-	: D extends { type: "boolean" }
-		? boolean
-		: D extends { type: "string"; default: infer V }
-			? undefined extends V
-				? string | undefined
-				: string
-			: D extends { type: "number"; default: undefined }
-				? number | undefined
-				: D extends { type: "number" }
-					? number
-					: D extends { type: "enum"; values: infer V }
-						? V extends readonly string[]
-							? V[number]
-							: never
-						: D extends { type: "array" | "record"; default: infer V }
-							? V
-							: never;
+export type DefinitionValue<D> = D extends { type: "boolean"; allowAsk: true }
+	? boolean | "ask"
+	: D extends { type: "boolean"; default: undefined }
+		? boolean | undefined
+		: D extends { type: "boolean" }
+			? boolean
+			: D extends { type: "string"; default: infer V }
+				? undefined extends V
+					? string | undefined
+					: string
+				: D extends { type: "number"; default: undefined }
+					? number | undefined
+					: D extends { type: "number" }
+						? number
+						: D extends { type: "enum"; values: infer V }
+							? V extends readonly string[]
+								? V[number]
+								: never
+							: D extends { type: "array" | "record"; default: infer V }
+								? V
+								: never;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Scopes
@@ -337,8 +354,9 @@ export abstract class Derived<T> {
 
 /**
  * Deep equality of setting values that, unlike `Bun.deepEquals`, also compares the key order of
- * plain objects: record order carries precedence (`edit.modelVariants` takes the first match), so a
- * reorder is a change. Values other than plain objects and arrays compare with `Bun.deepEquals`.
+ * plain objects: record order breaks ties between equal-length model patterns (`edit.modelVariants`,
+ * `systemPromptTemplates`), so a reorder is a change. Values other than plain objects and arrays
+ * compare with `Bun.deepEquals`.
  */
 export function settingValuesEqual(a: unknown, b: unknown): boolean {
 	if (Object.is(a, b)) return true;
@@ -403,6 +421,37 @@ class MappedValue<S, T> extends Derived<T> {
 	}
 }
 
+class OperatorValue<T> extends Derived<T> {
+	readonly #source: Derived<T>;
+
+	constructor(source: Derived<T>) {
+		super();
+		this.#source = source;
+	}
+
+	get sources(): readonly AnySetting[] {
+		return this.#source.sources;
+	}
+
+	inputs(settings: Settings): readonly unknown[] {
+		return [this.#source.get(settings.grantAuthority())];
+	}
+
+	compute(inputs: readonly unknown[]): T {
+		return inputs[0] as T;
+	}
+}
+
+/**
+ * `source` as the operator configured it ({@link Settings.grantAuthority}: global, `--config` and
+ * runtime layers, never a project layer), for settings a repository must not control because the
+ * agent can write its settings files. Listeners and effects fire when the merged value changes, so
+ * pair it with a settings-panel condition that hides the row while a project layer supplies it.
+ */
+export function operatorValue<T>(source: Derived<T>): Derived<T> {
+	return new OperatorValue(source);
+}
+
 /** Value types of a record of derivations. */
 export type DerivedValues<R extends Record<string, Derived<unknown>>> = {
 	[K in keyof R]: R[K] extends Derived<infer V> ? V : never;
@@ -459,8 +508,9 @@ export function combine<R extends Record<string, Derived<unknown>>, T>(
 }
 
 /**
- * Handle for one registered setting. Reads resolve, in precedence order: the definition's
- * environment variable, runtime override, `--config` overlay, project, global, then the default.
+ * Handle for one registered setting. Reads resolve, in precedence order: runtime override (CLI
+ * flags, session-only writes, SDK overrides), the definition's environment variable, `--config`
+ * overlay, project, global, then the default.
  */
 export class Setting<T, Id extends string = string> extends Derived<T> {
 	readonly id: Id;
@@ -505,6 +555,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		return this.definition.type;
 	}
 
+	/** Whether this boolean also accepts a session-consent preference. */
+	get allowsAsk(): boolean {
+		return this.definition.type === "boolean" && this.definition.allowAsk === true;
+	}
+
 	/** Whether persistent model-role overrides are supported for this setting. */
 	get roleScoped(): boolean {
 		return this.definition.roleScoped === true;
@@ -537,11 +592,15 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		return this.#envParsed;
 	}
 
-	/** Env value that currently takes effect in `scope`: a fallback env yields to a configured layer. */
+	/**
+	 * Env value that currently takes effect in `scope`: a runtime override (a CLI flag, a session-only
+	 * write) outranks it, and a fallback env also yields to every configured layer.
+	 */
 	#effectiveEnv(scope: ScopeLike): T | undefined {
 		const value = this.envValue();
-		if (value === undefined || !this.envFallback) return value;
+		if (value === undefined) return undefined;
 		const settings = settingsOf(scope);
+		if (!this.envFallback) return settings.hasRuntimeOverride(this) ? undefined : value;
 		if (this.envFallback === true) return settings.isConfigured(this) ? undefined : value;
 		const configured = settings.rawValue(this);
 		return configured === undefined || (typeof configured === "string" && configured.trim() === "")
@@ -578,9 +637,12 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		switch (this.definition.type) {
 			case "boolean": {
 				const lower = trimmed.toLowerCase();
+				if (this.allowsAsk && (lower === "ask" || lower === '"ask"')) return "ask" as T;
 				if (["true", "1", "yes", "on"].includes(lower)) return true as T;
 				if (["false", "0", "no", "off"].includes(lower)) return false as T;
-				throw new Error(`Invalid boolean value: ${text}. Use true/false, yes/no, on/off, or 1/0`);
+				throw new Error(
+					`Invalid boolean value: ${text}. Use true/false, yes/no, on/off, or 1/0${this.allowsAsk ? ", or ask" : ""}`,
+				);
 			}
 			case "number": {
 				const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
@@ -623,7 +685,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	accepts(value: unknown): boolean {
 		switch (this.definition.type) {
 			case "boolean":
-				return typeof value === "boolean";
+				return typeof value === "boolean" || (this.allowsAsk && value === "ask");
 			case "number":
 				return typeof value === "number" && Number.isFinite(value);
 			case "string":
@@ -638,7 +700,10 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 	}
 
 	#parseEnvText(raw: string): unknown {
-		if (this.definition.type === "boolean") return raw === "" ? undefined : parseFlag(raw);
+		if (this.definition.type === "boolean") {
+			if (this.allowsAsk && raw.trim() === "ask") return "ask";
+			return raw === "" ? undefined : parseFlag(raw);
+		}
 		if (raw.trim() === "") return undefined;
 		try {
 			return this.parse(raw);

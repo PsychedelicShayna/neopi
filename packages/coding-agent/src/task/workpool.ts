@@ -10,7 +10,7 @@ import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { isCompletionProbeEnabled } from "./completion-probe";
-import { runSubagentFollowUpTurn } from "./executor";
+import { runSubagentFollowUpTurn, softRequestBudgetFor } from "./executor";
 import {
 	type EffectiveSubagentPolicy,
 	reserveStructuredSubagentId,
@@ -90,6 +90,10 @@ export interface WorkPoolPeekResult {
 /** Resolved policy and optional shared context used to create a pool. */
 export interface WorkPoolCreateOptions {
 	name: string;
+	/** Raw fork agent/role/routing selector, kept separate from the per-call model field. */
+	agent?: string;
+	/** Raw selector applied to each worker at creation, never to follow-up turns. */
+	model?: string;
 	policy: EffectiveSubagentPolicy;
 	context?: string;
 	customTools?: CustomTool[];
@@ -112,6 +116,8 @@ export class WorkPool {
 	readonly ownerId: string;
 	readonly session: ToolSession;
 	readonly policy: EffectiveSubagentPolicy;
+	readonly #agentSelector: string;
+	readonly #model?: string;
 	readonly context?: string;
 	readonly customTools: CustomTool[];
 	readonly freshAgents: boolean;
@@ -134,6 +140,8 @@ export class WorkPool {
 		this.ownerId = session.getAgentId?.() ?? MAIN_AGENT_ID;
 		this.session = session;
 		this.policy = options.policy;
+		this.#agentSelector = options.agent ?? options.policy.agentName;
+		this.#model = options.model;
 		this.context = options.context;
 		this.customTools = options.customTools ?? [];
 		this.freshAgents = cfgEvalWorkpoolFreshAgents.get(session.settings);
@@ -394,7 +402,8 @@ export class WorkPool {
 							invocationKind: "eval",
 							assignment: message,
 							...(this.context ? { context: this.context } : {}),
-							agent: this.policy.agentName,
+							agent: this.#agentSelector,
+							...(this.#model !== undefined ? { perCallModel: this.#model } : {}),
 							identity: { id: agent.id },
 							customTools: this.customTools,
 							outputSchema,
@@ -423,6 +432,7 @@ export class WorkPool {
 							artifactsDir: this.session.getSessionFile()?.slice(0, -6),
 							maxRuntimeMs: cfgTaskMaxRuntimeMs.get(this.session.settings),
 							completionProbe: isCompletionProbeEnabled(this.session.settings, this.session.taskDepth ?? 0),
+							...softRequestBudgetFor(this.policy.agent.name, this.session.settings),
 						});
 					}
 				} catch (error) {

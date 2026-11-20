@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 import { LoginDialogComponent } from "@oh-my-pi/pi-tui/overlays/login-dialog";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -201,4 +202,13 @@ describe("LoginDialogComponent manual code input", () => {
 			setKeybindings(previous);
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

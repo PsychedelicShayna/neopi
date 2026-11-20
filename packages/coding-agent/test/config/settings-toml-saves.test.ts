@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../../src/config/settings";
@@ -14,9 +15,7 @@ let cwd: string;
 let state: SettingsTestState | undefined;
 beforeEach(async () => {
 	state = beginSettingsTest();
-	const scratch = "/mnt/alias/m2/agents/scratch/TomlSaves";
-	await fs.mkdir(scratch, { recursive: true });
-	root = await fs.mkdtemp(path.join(scratch, "save-"));
+	root = await fs.mkdtemp(path.join(os.tmpdir(), "npi-toml-saves-"));
 	agentDir = path.join(root, "agent");
 	cwd = path.join(root, "project");
 	await fs.mkdir(agentDir);

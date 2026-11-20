@@ -1,19 +1,17 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 /**
  * Contracts of the fullscreen /agents hub: frame geometry, scope sidebar
  * filtering, explicit search, the Space enable/disable toggle, and the
  * strip-driven configuration flows (property strips, pattern input, and the
  * model-browser pick) persisting one agent's entry at a time.
  */
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
-import {
-	AgentsHubComponent,
-	type AgentsHubDeps,
-	type HubAgent,
-} from "../src/overlays/agents-hub";
+import { AgentsHubComponent, type AgentsHubDeps, type HubAgent } from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
+import { uiProvenanceSuffix } from "../src/theme/provenance";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 
@@ -126,9 +124,13 @@ async function createHub(
 				listAdvisors: async () => [],
 				parse: raw => JSON.parse(raw),
 				serialize: definition => JSON.stringify(definition),
-				generate: async () => { throw new Error("Not used by navigation tests"); },
+				generate: async () => {
+					throw new Error("Not used by navigation tests");
+				},
 			},
-			saveDefinition: async () => { throw new Error("Not used by navigation tests"); },
+			saveDefinition: async () => {
+				throw new Error("Not used by navigation tests");
+			},
 			...overrides,
 		},
 		{ onCancel: () => (cancelled = true) },
@@ -173,7 +175,7 @@ describe("AgentsHub layout", () => {
 		expect(rendered).not.toContain("scout");
 	});
 
-	test("/ searches with literal hjkl; Esc clears the filter before closing", async () => {
+	test("/ previews a literal filter live, restores its confirmed query on Escape, and clears before closing", async () => {
 		const { hub, strip, type, cancelled } = await createHub(new TestSettings());
 		hub.handleInput("h"); // sidebar
 		hub.handleInput("j"); // project scope
@@ -181,18 +183,24 @@ describe("AgentsHub layout", () => {
 		hub.handleInput("l"); // rows
 		hub.handleInput("/");
 		type("sco");
-		let rendered = strip();
+		const rendered = strip();
 		expect(rendered).toContain("scout");
-		expect(rendered).toContain("dev");
+		expect(rendered).not.toContain("dev");
 		hub.handleInput("\r");
 		expect(strip()).not.toContain("dev");
 		hub.handleInput("/");
 		for (const key of "hjkl") hub.handleInput(key);
-		rendered = strip();
-		expect(rendered).toContain("Search: scohjkl");
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "scohjkl", query: "sco", focused: true });
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(false);
-		expect(strip()).not.toContain("Search: scohjkl");
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "scohjkl", focused: true });
+		hub.handleInput("\x1b");
+		expect(cancelled()).toBe(false);
+		expect(hub.navigationSnapshot().search).toMatchObject({ value: "sco", query: "sco", focused: false });
+		expect(strip()).toContain("scout");
+		expect(strip()).not.toContain("dev");
+		hub.handleInput("\x1b");
+		expect(cancelled()).toBe(false);
 		expect(strip()).toContain("dev");
 		hub.handleInput("\x1b");
 		expect(cancelled()).toBe(true);
@@ -320,7 +328,7 @@ describe("AgentsHub definition editing", () => {
 	test("Ctrl-G opens the same rich editor for existing definitions and Esc returns to selection", async () => {
 		const { hub } = await createHub(new TestSettings());
 		hub.handleInput("\x07");
-		expect(pickerProps(hub).title).toBe("Edit dev");
+		expect(pickerProps(hub).title).toBe(`Edit dev${uiProvenanceSuffix("features", "agent-definition-editor")}`);
 		expect(pickerProps(hub).items?.map(item => item.id)).toContain("tools");
 		hub.handleInput("\x1b");
 		expect(pickerProps(hub).selected).toBe("agent:project:dev");
@@ -460,7 +468,6 @@ describe("AgentsHub native events", () => {
 	});
 });
 
-
 describe("AgentsHub navigation history", () => {
 	test("body viewport moves one line independently and row motions reveal its selection", async () => {
 		const { hub } = await createHub(new TestSettings(), {
@@ -576,6 +583,8 @@ describe("AgentsHub navigation history", () => {
 			expect(restoredVisits).toEqual([]);
 			restored.hub.handleInput("\x1b");
 			expect(restored.hub.navigationSnapshot().assigning).toBeDefined();
+			restored.hub.handleInput("\x1b");
+			expect(restored.hub.navigationSnapshot().assigning).toBeDefined();
 			restored.hub.handleInput("h");
 			expect(restored.hub.navigationSnapshot()).toMatchObject({
 				assigning: undefined,
@@ -628,7 +637,6 @@ describe("AgentsHub navigation history", () => {
 		try {
 			hub.handleInput("/");
 			type("dev");
-			expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(false);
@@ -639,4 +647,13 @@ describe("AgentsHub navigation history", () => {
 			hub.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

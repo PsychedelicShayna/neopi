@@ -45,6 +45,14 @@ import { Container } from "@oh-my-pi/pi-tui/tui";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { makeAssistantMessage } from "../session-manager/helpers";
+import { RemoteAgentSession } from "../../src/thread/remote-agent-session";
+import type { ThreadService } from "../../src/thread/services";
+import { agentsThreadService } from "../../src/thread/services/agents";
+import { asyncJobsThreadService } from "../../src/thread/services/async-jobs";
+import { authService } from "../../src/thread/services/auth";
+import { identityThreadService } from "../../src/thread/services/identity";
+import { SubagentWorker } from "../../src/thread/subagent-worker";
+import type { FocusProbe, FocusProbeGlobals } from "../fixtures/focus-view-worker";
 
 describe("control host", () => {
 	let tempDir: TempDir;
@@ -554,6 +562,56 @@ describe("control host", () => {
 		expect(root.root).toBeUndefined();
 	});
 
+	test("a focused worker returns an unavailable frame before its first watch, then its own native state", async () => {
+		const { host, client } = await start({ "stt.enabled": false });
+		const root = session!;
+		const available = Promise.withResolvers<FocusProbe>();
+		const probeService: ThreadService = {
+			name: "focus-probe",
+			globals: (): FocusProbeGlobals => ({ ready: probe => available.resolve(probe) }),
+		};
+		const worker = new SubagentWorker({
+			entry: new URL("../fixtures/focus-view-worker.ts", import.meta.url),
+			services: [identityThreadService, agentsThreadService, authService, asyncJobsThreadService, probeService],
+			initTimeoutMs: 60_000,
+		});
+		try {
+			await worker.ready;
+			const probe = await available.promise;
+			await probe.open("ControlViewedWorker", root.modelRegistry, { "stt.enabled": true });
+			const remote = AgentRegistry.global().get("ControlViewedWorker")?.session;
+			if (!(remote instanceof RemoteAgentSession)) throw new Error("worker session was not registered remotely");
+			host.presenter = {
+				...stubPresenter({ approvalOpen: false }).presenter,
+				viewTarget: () => ({ agentId: "ControlViewedWorker", session: remote }),
+			};
+			expect(remote.controlState).toBeUndefined();
+			const unavailable = await client.request({ type: "state", target: "view" });
+			expect(unavailable.success).toBe(false);
+			expect(unavailable.data).toBeUndefined();
+			const rootState = await client.request({ type: "get_status" });
+			expect(rootState.success).toBe(true);
+			expect(rootState.data).toMatchObject({
+				session: { sessionId: root.sessionId, dictationEnabled: false },
+			});
+			const unsubscribe = remote.subscribe(() => {});
+			try {
+				await remote.sessionManager.flush();
+				const watched = await client.request({ type: "state", target: "view" });
+				expect(watched.success).toBe(true);
+				expect(watched.data).toMatchObject({
+					session: { sessionId: remote.sessionId, dictationEnabled: true },
+					root: { sessionId: root.sessionId },
+					view: { focusedAgent: "ControlViewedWorker" },
+				});
+			} finally {
+				unsubscribe();
+			}
+		} finally {
+			await worker.terminate("control view test complete");
+		}
+	});
+
 	test("target view falls back to the root session while nothing is focused", async () => {
 		const { host, client } = await start();
 		host.presenter = { ...stubPresenter({ approvalOpen: false }).presenter, viewTarget: () => undefined };
@@ -626,8 +684,8 @@ describe("control host", () => {
 				updateEditorBorderColor() {},
 				showStatus() {},
 			} as unknown as InteractiveModeContext;
-			new InputController(focused).cycleThinkingLevel();
-			runSubagentFastCommand(child, "off");
+			await new InputController(focused).cycleThinkingLevel();
+			await runSubagentFastCommand(child, "off");
 			expect(child.thinkingLevel).not.toBe(ThinkingLevel.High);
 			expect(await list()).toMatchObject({
 				resolvedThinkingLevel: child.thinkingLevel,

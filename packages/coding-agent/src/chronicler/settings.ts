@@ -1,5 +1,6 @@
 /** Chronicler settings, in settings-panel order. */
 import { register } from "../config/registry";
+import { DEFAULT_RECALL_BRANCH_FLOORS } from "./recall-policy";
 
 export * from "./capture-settings";
 export * from "./backfill-settings";
@@ -16,7 +17,7 @@ function numberSetting(id: string, value: number, label: string, description: st
 			}
 		},
 		ui: {
-			tab: "memory",
+			tab: "chronicler",
 			group: "Chronicler",
 			label,
 			description,
@@ -29,13 +30,26 @@ function numberSetting(id: string, value: number, label: string, description: st
 export const cfgChroniclerEnabled = register({
 	id: "chronicler.enabled",
 	type: "boolean",
+	allowAsk: true,
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Chronicler capture",
 		description:
-			"Continuously capture semantic beats using the @chronicler role. Independent of Memory Backend; both may be on.",
+			"Continuously capture semantic beats using the @chronicler role. Ask requests consent for each session. Independent of Memory Backend; both may be on.",
+	},
+});
+export const cfgChroniclerNotices = register({
+	id: "chronicler.notices",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "chronicler",
+		group: "Chronicler",
+		label: "Tell the primary agent",
+		description:
+			"Send the primary agent a system notice when Luna is enabled, disabled, paused, resumed, blinded or unblinded.",
 	},
 });
 export const cfgChroniclerRecallEnabled = register({
@@ -43,7 +57,7 @@ export const cfgChroniclerRecallEnabled = register({
 	type: "boolean",
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Chronicler recall tool",
 		description:
@@ -55,7 +69,7 @@ export const cfgChroniclerIndexDir = register({
 	type: "string",
 	default: undefined,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Index directory",
 		description: "Derived temporal view directory. Empty uses the agent directory's chronicle folder.",
@@ -66,7 +80,7 @@ export const cfgChroniclerIndexTimezone = register({
 	type: "string",
 	default: undefined,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Index timezone",
 		description: "IANA timezone for calendar buckets. Empty uses the system timezone.",
@@ -104,7 +118,7 @@ export const cfgChroniclerIndexShortNames = register({
 	type: "boolean",
 	default: false,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Short index filenames",
 		description: "Omit title slugs from derived atom filenames for restrictive filesystems.",
@@ -178,14 +192,47 @@ export const cfgChroniclerRecallResults = numberSetting(
 export const cfgChroniclerRecallRanker = register({
 	id: "chronicler.recall.ranker",
 	type: "enum",
-	values: ["model", "lexical"] as const,
+	values: ["model", "lexical", "judge"] as const,
 	default: "model",
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Recall ranker",
 		description:
-			"Rank branches with the chronicler-recall model or deterministic lexical coverage. Model ranking falls back to lexical when unavailable.",
+			"Rank with the chronicler-recall model, judge-role probabilities (including Jev), or lexical coverage. Unavailable ranking falls back to lexical.",
+	},
+});
+export const cfgChroniclerRecallBranchFloor = register({
+	id: "chronicler.recall.branchFloor",
+	type: "record",
+	default: DEFAULT_RECALL_BRANCH_FLOORS,
+	validate(raw) {
+		if (raw === undefined) return;
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+			throw new Error("chronicler.recall.branchFloor must map temporal levels to probabilities");
+		}
+		for (const [level, value] of Object.entries(raw)) {
+			if (
+				!Object.hasOwn(DEFAULT_RECALL_BRANCH_FLOORS, level) ||
+				typeof value !== "number" ||
+				!Number.isFinite(value) ||
+				value < 0 ||
+				value > 1
+			) {
+				throw new Error(
+					"chronicler.recall.branchFloor values must be probabilities from 0 to 1 for known temporal levels",
+				);
+			}
+		}
+	},
+	ui: {
+		tab: "chronicler",
+		group: "Chronicler",
+		label: "Recall branch floors",
+		description:
+			'Minimum judge score by temporal level. Enter a JSON object such as {"day": 0.3}, with probabilities from 0 to 1. Unspecified levels inherit.',
+		warning:
+			"Higher floors can prune relevant branches before their atoms are checked. The defaults are uncalibrated.",
 	},
 });
 export const cfgChroniclerRecallNeighborhoodMinutes = numberSetting(

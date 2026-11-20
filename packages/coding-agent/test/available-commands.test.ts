@@ -154,9 +154,9 @@ describe("buildAvailableSlashCommands", () => {
 
 	test("does not advertise custom or file commands shadowed by a builtin alias", async () => {
 		// ACP resolves builtin aliases before `session.prompt()` runs custom/file
-		// commands, so advertising `/plugin` or `/models` here would show the user a
+		// commands, so advertising `/plugin` or `/switch` here would show the user a
 		// command that silently executes the builtin instead of their handler.
-		const fileCommands = [{ name: "models", description: "My models note", content: "body", source: "test" }];
+		const fileCommands = [{ name: "switch", description: "My switch note", content: "body", source: "test" }];
 		const commands = await buildAvailableSlashCommands(
 			{
 				customCommands: [{ command: { name: "plugin", description: "My plugin helper" } }],
@@ -169,7 +169,7 @@ describe("buildAvailableSlashCommands", () => {
 
 		const byName = Object.fromEntries(commands.map(command => [command.name, command]));
 		expect(byName.plugin).toBeUndefined();
-		expect(byName.models).toBeUndefined();
+		expect(byName.switch).toBeUndefined();
 		expect(byName.plugins.source).toBe("builtin");
 		expect(byName.plugins.aliases).toEqual(["plugin"]);
 	});

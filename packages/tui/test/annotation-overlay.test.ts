@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { beforeAll, beforeEach, describe, expect, afterEach, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -984,7 +985,6 @@ describe("AnnotationOverlay", () => {
 						{ kind: "added", raw: rawLine, content: rawLine.slice(1), newLine: 27, hunkHeader: ONE_LINE_HUNK },
 					]),
 				],
-				// One row per action; the paging below assumes the same body height as before the discard action.
 				{ rows: 15 },
 			);
 			render(overlay, 72);
@@ -992,15 +992,22 @@ describe("AnnotationOverlay", () => {
 			expect(render(overlay, 72)).toContain("START_MARKER");
 			expect(render(overlay, 72)).not.toContain("TAIL_MARKER");
 
-			for (let page = 0; page < 8; page++) overlay.handleInput(PAGE_DOWN);
-			expect(render(overlay, 72)).toContain("TAIL_MARKER");
+			const pageUntilVisible = (key: string, marker: string) => {
+				// Even a one-column viewport has at most one visual row per source character.
+				for (let page = 0; page < rawLine.length; page++) {
+					overlay.handleInput(key);
+					const output = render(overlay, 72);
+					// Repeated source text can paint identical pages at different offsets.
+					if (output.includes(marker)) break;
+				}
+				expect(render(overlay, 72)).toContain(marker);
+			};
+			pageUntilVisible(PAGE_DOWN, "TAIL_MARKER");
 			overlay.handleInput("g");
 			overlay.handleInput("g");
 			expect(render(overlay, 72)).toContain("START_MARKER");
-			for (let page = 0; page < 8; page++) overlay.handleInput(PAGE_DOWN);
-			expect(render(overlay, 72)).toContain("TAIL_MARKER");
-			for (let page = 0; page < 8; page++) overlay.handleInput(PAGE_UP);
-			expect(render(overlay, 72)).toContain("START_MARKER");
+			pageUntilVisible(PAGE_DOWN, "TAIL_MARKER");
+			pageUntilVisible(PAGE_UP, "START_MARKER");
 			overlay.handleInput("G");
 			expect(render(overlay, 72)).toContain("TAIL_MARKER");
 
@@ -1108,4 +1115,13 @@ describe("AnnotationOverlay", () => {
 			]);
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -9,8 +9,9 @@ import { gitHelp as commandHelp } from "../cli/command-help";
 import { runGitTui } from "../cli/git-tui";
 import { Settings, settings } from "../config/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 
-import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight } from "../modes/settings";
+import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight, cfgTuiVimMode } from "../modes/settings";
 
 export default class Git extends Command {
 	static description = commandHelp.description;
@@ -37,6 +38,7 @@ export default class Git extends Command {
 		// Load settings first so the user's configured theme/symbol preset apply
 		// exactly like interactive mode (bare initTheme falls back to built-ins).
 		await Settings.init({ cwd: getProjectDir() });
+		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 		await initTheme(
 			false,
 			cfgSymbolPreset.get(settings),

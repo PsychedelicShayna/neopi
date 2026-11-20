@@ -43,7 +43,7 @@ const SPLIT_OPTIONS = [
 /** Models stacked individually in the daily chart; the rest fold into "Other". */
 const MODEL_LIMIT = 6;
 
-/** The cost series is bucketed by UTC day on the server. */
+/** The cost series is bucketed by local calendar day on the server. */
 const DAY_MS = 86_400_000;
 
 const COMPONENTS = [
@@ -53,13 +53,12 @@ const COMPONENTS = [
 	{ key: "costCacheWrite", label: "Cache write", color: "#f5b54a" },
 ] as const satisfies readonly { key: keyof CostComponents; label: string; color: string }[];
 
-const UTC_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-const UTC_DAY_LONG = new Intl.DateTimeFormat(undefined, {
+const LOCAL_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+const LOCAL_DAY_LONG = new Intl.DateTimeFormat(undefined, {
 	weekday: "short",
 	month: "short",
 	day: "numeric",
 	year: "numeric",
-	timeZone: "UTC",
 });
 
 export function CostsRoute({ active, range }: CostsRouteProps) {
@@ -102,9 +101,7 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 				<Card
 					index={1}
 					title={tr("costs.daily", "Daily estimate")}
-					description={
-						split === "model" ? "Per UTC day, stacked by model" : "Per UTC day, stacked by billing component"
-					}
+					description={split === "model" ? "Per day, stacked by model" : "Per day, stacked by billing component"}
 					actions={
 						<Segmented
 							size="sm"
@@ -124,8 +121,8 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 								<div className="stack" style={{ gap: 12 }}>
 									<Chart
 										slots={view.buckets.length}
-										tickLabel={i => UTC_DAY.format(view.buckets[i])}
-										tooltipTitle={i => UTC_DAY_LONG.format(view.buckets[i])}
+										tickLabel={i => LOCAL_DAY.format(view.buckets[i])}
+										tooltipTitle={i => LOCAL_DAY_LONG.format(view.buckets[i])}
 										series={series}
 										hidden={hidden}
 										height={280}
@@ -135,7 +132,9 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 										tooltipExtra={i =>
 											view.unpricedPerDay[i] > 0 ? (
 												<div className="chart-tooltip-row chart-tooltip-total">
-													<span className="chart-tooltip-label">{tr("costs.unpriced_requests", "Unpriced requests")}</span>
+													<span className="chart-tooltip-label">
+														{tr("costs.unpriced_requests", "Unpriced requests")}
+													</span>
 													<span className="chart-tooltip-value">
 														{formatInteger(view.unpricedPerDay[i])}
 													</span>
@@ -291,7 +290,10 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 				/>
 				<Stat
 					label={tr("costs.unpriced_requests", "Unpriced requests")}
-					title={tr("costs.unpriced_title", "Subscription usage with no public-equivalent price; excluded from the estimate")}
+					title={tr(
+						"costs.unpriced_title",
+						"Subscription usage with no public-equivalent price; excluded from the estimate",
+					)}
 					value={formatInteger(summary.unpricedRequests)}
 					hint={
 						summary.unpricedRequests > 0

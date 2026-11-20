@@ -2,7 +2,7 @@ import { register, type UiNumber } from "../config/registry";
 
 function numberUi(label: string, description: string, value: number): UiNumber {
 	return {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label,
 		description,
@@ -98,7 +98,7 @@ export const cfgChroniclerCaptureRetryBackoffMs = register({
 		for (const delay of value) integer(1, 2_147_483_647)(delay);
 	},
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Capture retry backoff (ms)",
 		description:
@@ -236,7 +236,7 @@ export const cfgChroniclerCaptureIncludeThinking = register({
 	type: "boolean",
 	default: true,
 	ui: {
-		tab: "memory",
+		tab: "chronicler",
 		group: "Chronicler",
 		label: "Capture thinking blocks",
 		description: "Include available assistant thinking blocks in the transcript evidence sent to the Chronicler.",

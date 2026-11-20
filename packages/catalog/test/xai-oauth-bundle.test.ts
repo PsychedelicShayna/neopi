@@ -60,6 +60,8 @@ describe("xai-oauth catalog seed", () => {
 		expect(image.compat).toBeUndefined();
 	});
 
+	// Exercise the alias bridge against a synthetic public tariff, including
+	// its inclusive long-context boundary, rather than pinning a live rate card.
 	it("prices the multi-agent SuperGrok alias from its public xAI equivalent", () => {
 		const subscription = seedModel("grok-4.20-multi-agent-0309");
 		const publicPeer: ModelSpec<Api> = {

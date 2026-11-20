@@ -5,9 +5,9 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { type AssistantUsageSource, addAssistantUsage, emptyAgentUsage } from "@oh-my-pi/pi-tui/tools/agent-usage";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
-import { assistantTurnProducedOutput } from "../session/messages";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "../session/session-entries";
-import { visitEntriesFromFileStream } from "../session/session-loader";
+import { assistantTurnProducedOutput, usageContextTokens } from "../session/messages";
+import { modelRoleOf } from "../session/session-entries";
+import { readSessionHeaderId, visitEntriesFromFileStream } from "../session/session-loader";
 import { loadBundledAgents } from "../task/agents";
 import { isReadOnlyAgent } from "../task/read-only-policy";
 import { persistedVibeChildIds } from "../vibe/lifecycle";
@@ -15,7 +15,7 @@ import {
 	type AgentHistorySummary,
 	type AgentMetricsSummary,
 	type AgentRef,
-	type AgentRegistry,
+	type AgentRegistryApi,
 	MAIN_AGENT_ID,
 } from "./agent-registry";
 import { getAgentTombstonePath } from "./agent-tombstone";
@@ -138,7 +138,7 @@ function assistantMetrics(message: Record<string, unknown>): AssistantMetrics {
 		tokens: usageTokens(usage),
 		tools: content.filter(part => recordOf(part)?.type === "toolCall").length,
 		cost: finiteNumber(cost?.total),
-		contextTokens: finiteNumber(usage.totalTokens) || undefined,
+		contextTokens: usageContextTokens(usage) || undefined,
 		resolvedModel: provider && model ? `${provider}/${model}` : undefined,
 		usageSource: {
 			usage: usage as AssistantUsageSource["usage"],
@@ -277,13 +277,7 @@ async function readPersistedAgentHistory(
 		const modelChange = modelChangeById.get(id);
 		if (modelChange) {
 			latestModelChange ??= modelChange;
-			if (
-				modelChange.role &&
-				modelChange.role !== EPHEMERAL_MODEL_CHANGE_ROLE &&
-				modelChange.role !== PREWALK_MODEL_CHANGE_ROLE
-			) {
-				modelRole ??= modelChange.role;
-			}
+			modelRole ??= modelRoleOf(modelChange.role);
 			// The transition that installed the serving model: it carries the
 			// fallback flag the raw message lacks. Every writer records the selector
 			// through `formatModelStringWithRouting`, which appends an `@upstream`
@@ -387,13 +381,8 @@ async function readPersistedAgentMetadata(
 				}
 				if (record.type === "model_change") {
 					if (typeof record.model === "string") history.resolvedModel = record.model;
-					if (
-						typeof record.role === "string" &&
-						record.role !== EPHEMERAL_MODEL_CHANGE_ROLE &&
-						record.role !== PREWALK_MODEL_CHANGE_ROLE
-					) {
-						history.modelRole = record.role;
-					}
+					const role = modelRoleOf(typeof record.role === "string" ? record.role : undefined);
+					if (role) history.modelRole = role;
 					if (typeof record.resolvedModelIsFallback === "boolean") {
 						history.resolvedModelIsFallback = record.resolvedModelIsFallback;
 					}
@@ -508,7 +497,7 @@ interface PersistedRosterLatch {
 	owned: Map<string, string>;
 }
 
-interface RegistryWithPersistedRosterLatches extends AgentRegistry {
+interface RegistryWithPersistedRosterLatches extends AgentRegistryApi {
 	[kPersistedRosterLatches]?: Map<string, PersistedRosterLatch>;
 	[kPersistedRosterScanTail]?: Promise<void>;
 }
@@ -520,7 +509,7 @@ interface RegistryWithPersistedRosterLatches extends AgentRegistry {
  * invalidates the latch, forcing a re-scan that restores this root's own
  * transcripts. Refs the scan did not restore are not this root's to police.
  */
-function latchOwnershipValid(registry: AgentRegistry, owned: Map<string, string>): boolean {
+function latchOwnershipValid(registry: AgentRegistryApi, owned: Map<string, string>): boolean {
 	for (const [id, sessionFile] of owned) {
 		const ref = registry.get(id);
 		if (!ref || ref.sessionFile !== sessionFile) return false;
@@ -528,7 +517,7 @@ function latchOwnershipValid(registry: AgentRegistry, owned: Map<string, string>
 	return true;
 }
 
-async function resolveRootSessionFile(registry: AgentRegistry, hint?: string | null): Promise<string | undefined> {
+async function resolveRootSessionFile(registry: AgentRegistryApi, hint?: string | null): Promise<string | undefined> {
 	const mainFile = registry.get(MAIN_AGENT_ID)?.sessionFile;
 	const candidate =
 		typeof hint === "string" && hint.endsWith(".jsonl")
@@ -586,7 +575,7 @@ export function isCurrentSessionRosterRef(
  * roster counts, never task startup, and remains retryable.
  */
 export async function ensurePersistedRoster(
-	registry: AgentRegistry,
+	registry: AgentRegistryApi,
 	sessionFileHint?: string | null,
 ): Promise<string | undefined> {
 	let root: string | undefined;
@@ -681,7 +670,7 @@ export async function ensurePersistedRoster(
 
 /** Register persisted subagent and advisor transcripts as parked registry refs. */
 export async function registerPersistedSubagents(
-	registry: AgentRegistry,
+	registry: AgentRegistryApi,
 	sessionFile: string | null | undefined,
 	options: {
 		shouldContinue?: () => boolean;
@@ -700,6 +689,8 @@ export async function registerPersistedSubagents(
 		 * "Main" root (the single-root behavior).
 		 */
 		rootAgentId?: string;
+		/** Observe refs already registered from a different root whose transcript is also present in this root. */
+		onCopiedRef?: (ref: AgentRef) => void;
 	} = {},
 ): Promise<void> {
 	if (!sessionFile?.endsWith(".jsonl")) return;
@@ -724,6 +715,7 @@ export async function registerPersistedSubagents(
 		shouldContinue,
 		sessionFile,
 		options.owned,
+		options.onCopiedRef,
 	);
 	if (!hydrateHistory || !shouldContinue()) return;
 	let nextTranscript = 0;
@@ -748,7 +740,7 @@ export async function registerPersistedSubagents(
 }
 
 async function registerPersistedSubagentsFromDir(
-	registry: AgentRegistry,
+	registry: AgentRegistryApi,
 	dir: string,
 	parentId: string | undefined,
 	vibeOwned: () => Promise<ReadonlySet<string>>,
@@ -756,6 +748,7 @@ async function registerPersistedSubagentsFromDir(
 	shouldContinue: () => boolean,
 	rootSessionFile: string,
 	owned?: Map<string, string>,
+	onCopiedRef?: (ref: AgentRef) => void,
 ): Promise<void> {
 	if (!shouldContinue()) return;
 	let entries: fs.Dirent[];
@@ -854,6 +847,25 @@ async function registerPersistedSubagentsFromDir(
 			typeof existing.sessionFile === "string" &&
 			!sessionFileBelongsToRoot(existing.sessionFile, rootSessionFile);
 		if (existing && !replaceable) {
+			// A fork can copy a live idle or killed transcript without detaching its
+			// source ref. The copy keeps the source transcript's header id; a
+			// separately created same-id agent does not. Report only proven copies,
+			// and never replace the live owner.
+			if (
+				existing.kind === "sub" &&
+				existing.sessionFile !== null &&
+				existing.sessionFile !== sessionFile &&
+				(existing.status === "idle" || existing.status === "aborted")
+			) {
+				const [sourceHeaderId, copiedHeaderId] = await Promise.all([
+					readSessionHeaderId(existing.sessionFile),
+					readSessionHeaderId(sessionFile),
+				]);
+				if (!shouldContinue()) return;
+				if (sourceHeaderId !== undefined && sourceHeaderId === copiedHeaderId && registry.get(id) === existing) {
+					onCopiedRef?.(existing);
+				}
+			}
 			if (existing.sessionFile === sessionFile) {
 				owned?.set(id, sessionFile);
 				transcripts.push({
@@ -916,6 +928,7 @@ async function registerPersistedSubagentsFromDir(
 				shouldContinue,
 				rootSessionFile,
 				owned,
+				onCopiedRef,
 			);
 		}
 	}

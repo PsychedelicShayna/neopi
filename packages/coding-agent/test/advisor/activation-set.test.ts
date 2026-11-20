@@ -19,6 +19,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { fixedAdvisorTools } from "../helpers/agent-session-setup";
 
 const roster: AdvisorConfig[] = [
 	{ id: "shared-id", name: "Shared", sourceScope: "user" },
@@ -67,7 +68,7 @@ describe("role-bound advisor activation", () => {
 			sessionManager: manager,
 			modelRegistry: new ModelRegistry(auth, path.join(directory, "models.yml")),
 			advisorConfigs: configs,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		return session;
 	}
@@ -180,6 +181,15 @@ describe("role-bound advisor activation", () => {
 		cfgAdvisorEnabled.override(settings, false);
 		await Promise.resolve();
 		expect(active.isAdvisorActive()).toBe(false);
+	});
+
+	it("session role sets can select project advisors instead of being treated as user sets", async () => {
+		const settings = Settings.isolated({ "advisor.enabled": true });
+		settings.writeScopeValue(cfgRoleSettings, { session: { "advisor.activationSet": ["project-id"] } }, "session");
+		settings.setActiveRole("session");
+		const active = start(settings);
+		expect(active.liveAdvisors().map(advisor => advisor.name)).toEqual(["Project"]);
+		expect(cfgAdvisorActivation.get(settings).scope).toBe("session");
 	});
 
 	it("loads existing settings without the feature and persists nullable activation sets in their source layers", async () => {

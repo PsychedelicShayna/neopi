@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { AuthStorage, type UsageReport } from "@oh-my-pi/pi-ai";
@@ -502,4 +503,13 @@ describe("interactive /usage account visibility", () => {
 			expect(mounted).toBeUndefined();
 		},
 	);
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

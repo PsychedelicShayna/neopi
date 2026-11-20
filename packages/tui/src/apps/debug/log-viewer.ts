@@ -714,7 +714,7 @@ export class DebugLogViewerComponent implements Component {
 	readonly #keys = new MenuKeyReader();
 	readonly #help = new MenuHelp(
 		"hjkl gg/G C-u d e y PgUp/PgDn",
-		"h / l: collapse / expand the selected log; Space toggles it.",
+		"Left / Right: collapse / expand the selected log; Space toggles it.",
 	);
 
 	constructor(options: DebugLogViewerComponentOptions) {

@@ -56,6 +56,7 @@ function createHarness(opts: RecoveryHarnessOptions = {}): RecoveryHarness {
 		} as unknown as Agent,
 		settings: state.settings,
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			appendCustomMessageEntry(...args: unknown[]) {
 				persisted.push(args);
 			},

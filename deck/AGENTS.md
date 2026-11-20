@@ -2,52 +2,36 @@
 
 NeoDeck is [NeoPi](https://github.com/PsychedelicShayna/neopi)'s orchestration and integration frontend; [NeoCode](https://github.com/PsychedelicShayna/neocode) is its graphical frontend.
 
-Repository and issue tracker: `PsychedelicShayna/neodeck`. Active upstream:
-`Shreyans13/omp-deck` (`upstream` remote). Original `bjb2/omp-deck` credits
-in README/CHANGELOG record historical provenance, not the active upstream.
+NeoDeck lives in NeoPi as the `deck/` subtree. The repository and issue tracker
+are `PsychedelicShayna/neopi`; the former `PsychedelicShayna/neodeck` repository
+is archived. Active upstream: `Shreyans13/omp-deck`. Original `bjb2/omp-deck`
+credits in README/CHANGELOG record historical provenance, not the active upstream.
 
 ## Read before acting
 
 - Read `README.md` for project context and runtime layout; it is not agent policy.
-- Read `CONTEXT.md` for repository/tracker vocabulary before interpreting work.
-- Read `docs/agents/policy.md` before branches, commits, GitHub posts, PRs, or merges; `docs/agents/` is the home for agent policy and mechanics.
-- Before requesting optional review or answering findings, read `docs/agents/pr-review-bots.md` for reviewer mechanics; `docs/agents/policy.md` owns nightly delivery.
+- NeoPi's root [AGENTS.md](../AGENTS.md) and [`docs/agents/`](../docs/agents/) own
+  agent policy for the deck: branches, commits, signing, GitHub posts, PRs,
+  merges, nightly delivery, promotion, review mechanics, and triage. Read
+  [policy.md](../docs/agents/policy.md) before any of those.
+- Read the root [CONTEXT.md](../CONTEXT.md) for tracker vocabulary and
+  [deck/CONTEXT.md](CONTEXT.md) for deck terms.
 
 ## Fork maintenance
 
 Before adding fork behavior or integrating upstream, read
 `docs/agents/fork-maintenance.md` for placement and compatibility rules.
-Before synchronizing a release, follow `docs/agents/upstream-sync.md`.
+Before synchronizing an omp-deck release, follow `docs/agents/upstream-sync.md`.
 Repository slug changes do not rename package scopes, environment variables,
 installed paths, launchers, or services. The default/live snapshot remains
-`~/.local/share/npi-deck`, served by `npi-deck.service`. Nightly installation
-is authorized under `docs/agents/policy.md`; default/live promotion is separate.
+`~/.local/share/npi-deck`, served by `npi-deck.service`; switching it is the
+owner's decision.
 
-## Agent skills
+## Issues
 
-### Issue tracker
-
-GitHub Issues on `PsychedelicShayna/neodeck`; always target it explicitly because
-fork discovery can resolve to the upstream parent. Read
-`docs/agents/issue-tracker.md` for commands, sizing, NeoPi contracts, and wayfinding.
-
-### Triage
-
-Read `docs/agents/triage.md` before classifying, claiming, reconciling, or closing
-issues and PRs; `docs/agents/triage-labels.md` defines the composable vocabulary.
-
-### Issue Funnel
-
-Before publishing or amending Captain specifications, read
-`docs/agents/issue-funnel.md` for publication ownership and deduplication.
-
-### Domain docs
-
-Single-context: root `CONTEXT.md` and decisions under `docs/agents/adr/` when present. Read
-`docs/agents/domain.md` before domain exploration.
-
-## Sizing work
-
-Read `docs/agents/issue-tracker.md#sizing` for independent difficulty/frame
-estimates, provenance, and one-time agent-frame normalization. Preserve
-human-authored estimates and existing evidenced title prefixes.
+Deck issues live in `PsychedelicShayna/neopi` GitHub Issues with the `npi-deck`
+label. Follow the root [issue tracker](../docs/agents/issue-tracker.md),
+[triage](../docs/agents/triage.md), and [Issue Funnel](../docs/agents/issue-funnel.md)
+guides. Former NeoDeck issues that were still relevant were migrated to NeoPi;
+a bare `#N` in deck code written before the fold may mean
+`PsychedelicShayna/neodeck#N`, so qualify new references.

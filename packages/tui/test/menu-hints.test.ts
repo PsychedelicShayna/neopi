@@ -1,6 +1,16 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { SettingsList, type SettingsListTheme } from "../src/components/settings-list";
 import { visibleWidth } from "../src/utils";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
+});
 
 const theme: SettingsListTheme = {
 	label: text => text,
@@ -14,6 +24,19 @@ function settings(onCancel = () => {}) {
 }
 
 describe("menu hint priority", () => {
+	it("shows conventional navigation and help while Vim is disabled", () => {
+		setMenuSearchVimMode(false);
+		const list = settings();
+		const text = list.render(160).join("\n");
+		expect(text).toContain("Home/End PgUp/PgDn");
+		expect(text).not.toContain("hjkl");
+		list.handleInput("?");
+		const help = list.render(100).join("\n");
+		expect(help).toContain("Menu navigation");
+		expect(help).toContain("PageUp / PageDown");
+		expect(help).not.toContain("Vim navigation");
+		expect(help).not.toContain("Ctrl-u / Ctrl-d");
+	});
 	it("keeps every Settings action at narrow widths and drops motions first", () => {
 		const lines = settings().render(34);
 		const text = lines.join("\n");

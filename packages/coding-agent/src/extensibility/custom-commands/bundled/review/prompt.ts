@@ -127,6 +127,7 @@ export function buildReviewPrompt(target: ResolvedReviewTarget, additionalInstru
 	const agentCount = getRecommendedReviewAgentCount(target.snapshot);
 	return renderPromptAsset("review-request.md", reviewRequestTemplate, {
 		mode: target.mode,
+		repository: target.repository,
 		files,
 		excluded: target.snapshot.excluded,
 		totalAdded: target.snapshot.totalAdded,

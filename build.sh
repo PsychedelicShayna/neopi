@@ -10,6 +10,7 @@
 # Environment:
 #   OMP_NATIVE_X64_VARIANT   modern | baseline (default: modern iff the CPU has AVX2)
 #   NPI_FORCE_NATIVE=1       rebuild the native addon unconditionally
+#   NPI_CARGO_JOBS=N         Cargo parallelism (default 6); only a dedicated build host should raise it
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -26,8 +27,11 @@ source scripts/npi-build-lib.sh
 command -v bun >/dev/null || die "bun is not on PATH"
 [[ -d node_modules ]] || die "node_modules is missing; run 'bun install --frozen-lockfile' first"
 
-# Fixed, not a default: an inherited larger value would starve the machine (AGENTS.md).
-export CARGO_BUILD_JOBS=6
+# Fixed, not inherited: an ambient larger CARGO_BUILD_JOBS would starve the machine (AGENTS.md).
+# A dedicated build host opts in explicitly through NPI_CARGO_JOBS.
+cargo_jobs=${NPI_CARGO_JOBS:-6}
+[[ $cargo_jobs =~ ^[1-9][0-9]*$ ]] || die "NPI_CARGO_JOBS must be a positive integer"
+export CARGO_BUILD_JOBS=$cargo_jobs
 
 native_dir=packages/natives/native
 version=$(bun -p 'require("./packages/natives/package.json").version')
@@ -82,8 +86,10 @@ native_inputs() {
 		"${OMP_NATIVE_FEATURES:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" "${PCRE2_SYS_STATIC:-}"
 	# Cargo overrides can change the compiler, wrapper or generated code.
 	# Target linkers also reach the embedded relay through crates/pi-natives/build.rs.
+	# CARGO_BUILD_JOBS only changes parallelism, not the addon's bytes; keying on it would
+	# miss the cache whenever the job count differs.
 	env | grep -E '^(RUSTC(_WRAPPER|_WORKSPACE_WRAPPER)?|CARGO_PROFILE_[A-Z0-9_]+|CARGO_BUILD_[A-Z0-9_]+|CARGO_TARGET_[A-Z0-9_]+_LINKER)=' |
-		LC_ALL=C sort || true
+		grep -v '^CARGO_BUILD_JOBS=' | LC_ALL=C sort || true
 	# A Bazel rc (scripts/bazel-natives.ts) can change flags and toolchains.
 	printf 'bazelrc %s\n' "${OMP_BAZEL_RC:-}"
 	if [[ -n ${OMP_BAZEL_RC:-} && -f $OMP_BAZEL_RC ]]; then

@@ -62,7 +62,12 @@ import {
 	type MenuSearchState,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
-import { AgentDefinitionEditor, type AgentDefinitionDraft, type AgentEditorDeps } from "./agent-definition-editor";
+import {
+	AgentDefinitionEditor,
+	type AgentDefinitionDraft,
+	type AgentDefinitionInspection,
+	type AgentEditorDeps,
+} from "./agent-definition-editor";
 
 /** One agent with its per-agent settings overrides resolved for display. */
 export interface HubAgent extends AgentDefinitionDraft {
@@ -114,7 +119,6 @@ type StripState =
 	| (HubStripState<StripChip> & { kind: "chips"; agent: HubAgent; property?: PropertyKind })
 	| { kind: "pattern"; agent: HubAgent; property: PropertyKind; input: Input };
 
-
 /** Runtime-owned discovery, settings, generation and persistence. */
 export interface AgentsHubDeps {
 	browserSource: ModelBrowserSource;
@@ -128,8 +132,16 @@ export interface AgentsHubDeps {
 	setAgentDisabled: (name: string, options: { disabled: boolean }) => void;
 	/** Persist one agent's override for `property`; `undefined` clears it. Other agents are untouched. */
 	setAgentOverride: (property: PropertyKind, name: string, value: string | undefined) => void;
-	editor: Omit<AgentEditorDeps, "existing" | "save">;
-	saveDefinition: (scope: "project" | "user", definition: AgentDefinitionDraft, original?: HubAgent) => Promise<string>;
+	editor: Omit<AgentEditorDeps, "existing" | "save" | "remove" | "createMissing" | "inspect" | "browserSource">;
+	saveDefinition: (
+		scope: "project" | "user",
+		definition: AgentDefinitionDraft,
+		original?: HubAgent,
+	) => Promise<string>;
+	/** Delete the file backing a user or project definition. */
+	deleteDefinition?: (agent: HubAgent) => Promise<void>;
+	/** Effective facts and findings for a draft; `original` is the definition being edited, if any. */
+	inspectDefinition?: (definition: AgentDefinitionDraft, original?: HubAgent) => AgentDefinitionInspection;
 	dispose?: () => void;
 }
 
@@ -159,7 +171,6 @@ interface AgentsHubNavigationSnapshot {
 	};
 	create?: { definition: AgentDefinitionDraft; original?: HubAgent };
 }
-
 
 /** Stable native list-item id of an agent-list row. */
 function listRowId(rowDef: ListRow): string {
@@ -276,7 +287,7 @@ export class AgentsHubComponent implements Component {
 		this.#deps = deps;
 		this.#callbacks = callbacks;
 		this.#browser = new ModelBrowser(deps.browserSource, {
-			emptyText: () => "  No models available — configure a provider in /models first.",
+			emptyText: () => "  No models available — configure a provider in /roles first.",
 		});
 		this.#browser.setShowProvider(true);
 		this.#browser.onActivate = item => this.#commitPickedModel(item);
@@ -671,19 +682,39 @@ export class AgentsHubComponent implements Component {
 		this.#keys.reset();
 		this.#editingOriginal = agent;
 		this.#definitionEditor?.dispose();
-		this.#definitionEditor = new AgentDefinitionEditor(this.#tui, {
-			...this.#deps.editor,
-			existing: this.#allAgents,
-			saveScopeEditable: !agent?.filePath || agent.source === "bundled",
-			save: async (definition, scope) => {
-				const filePath = await this.#deps.saveDefinition(scope, definition, agent);
-				this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
-				await this.#reload();
+		this.#definitionEditor = new AgentDefinitionEditor(
+			this.#tui,
+			{
+				...this.#deps.editor,
+				browserSource: this.#deps.browserSource,
+				getAvailableModels: this.#deps.editor.getAvailableModels ?? this.#deps.getAvailableModels,
+				existing: this.#allAgents,
+				saveScopeEditable: !agent?.filePath || agent.source === "bundled",
+				save: async (definition, scope, options) => {
+					const filePath = await this.#deps.saveDefinition(scope, definition, options?.asCopy ? undefined : agent);
+					this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
+					await this.#reload();
+				},
+				remove:
+					agent?.filePath && agent.source !== "bundled" && this.#deps.deleteDefinition
+						? async () => {
+								await this.#deps.deleteDefinition!(agent);
+								this.#notice = `Deleted agent ${agent.name} (${shortenPath(agent.filePath!)})`;
+								await this.#reload();
+							}
+						: undefined,
+				createMissing: name => this.#beginCreateFlow(undefined, { name, description: "", systemPrompt: "" }),
+				inspect: this.#deps.inspectDefinition
+					? definition => this.#deps.inspectDefinition!(definition, agent)
+					: undefined,
 			},
-		}, draft ?? agent ?? { name: "", description: "", systemPrompt: "" }, () => {
-			this.#clearCreateFlow();
-			this.#requestRender();
-		}, agent?.source === "user" ? "user" : "project");
+			draft ?? agent ?? { name: "", description: "", systemPrompt: "" },
+			() => {
+				this.#clearCreateFlow();
+				this.#requestRender();
+			},
+			agent?.source === "user" ? "user" : "project",
+		);
 		if (!this.#restoringNavigation) this.onNavigationVisit?.("definition", previous);
 		this.#requestRender();
 	}
@@ -1151,7 +1182,7 @@ export class AgentsHubComponent implements Component {
 			}
 			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
-		if (this.#search.focused) return "Search · hjkl type literally · Esc back to list";
+		if (this.#search.focused) return "Search · type to filter · Esc back to list";
 		if (this.#assigning) {
 			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
@@ -1221,7 +1252,9 @@ export class AgentsHubComponent implements Component {
 	 * chooses its sheet mode according to the currently focused form or text dialog.
 	 */
 	nativeSheet(cx: DescribeContext): boolean {
-		return this.#definitionEditor ? this.#definitionEditor.nativeSheet(cx) : cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
+		return this.#definitionEditor
+			? this.#definitionEditor.nativeSheet(cx)
+			: cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
 	}
 
 	describe(cx: DescribeContext): NativeNode {
@@ -1251,7 +1284,10 @@ export class AgentsHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#definitionEditor) { this.#definitionEditor.handleNativeEvent(event); return; }
+		if (this.#definitionEditor) {
+			this.#definitionEditor.handleNativeEvent(event);
+			return;
+		}
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
 		const pick = pickerEvent(event);
 		if (pick) {
@@ -1309,7 +1345,10 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			this.handleInput("\x1b");
+			const searching = this.#assigning
+				? this.#browser.filterFocused
+				: !this.#strip && !this.#createActive && this.#search.focused;
+			this.handleInput(searching ? "\x03" : "\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1718,9 +1757,9 @@ export class AgentsHubComponent implements Component {
 				];
 			}
 			return [
-				{ keys: ["j", "k"], label: "choose" },
+				{ keys: ["up", "down"], label: "choose" },
 				{ keys: ["enter", "space"], label: "set" },
-				{ keys: ["h", "l"], label: "pane" },
+				{ keys: ["left", "right"], label: "pane" },
 				cancel("back"),
 			];
 		}
@@ -1732,7 +1771,12 @@ export class AgentsHubComponent implements Component {
 				cancel("cancel"),
 			];
 		}
-		if (this.#createActive) return [{ keys: ["r"], label: "generate field" }, { keys: ["shift+r"], label: "generate with comment" }, cancel("back")];
+		if (this.#createActive)
+			return [
+				{ keys: ["r"], label: "generate field" },
+				{ keys: ["shift+r"], label: "generate with comment" },
+				cancel("back"),
+			];
 		if (this.#search.focused) return [cancel("back to list")];
 		if (this.#focus === "scope") {
 			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
@@ -1818,7 +1862,9 @@ export class AgentsHubComponent implements Component {
 						parent: this.#assignParent,
 					}
 				: undefined,
-			create: this.#definitionEditor ? { definition: this.#definitionEditor.definition, original: this.#editingOriginal } : undefined,
+			create: this.#definitionEditor
+				? { definition: this.#definitionEditor.definition, original: this.#editingOriginal }
+				: undefined,
 		};
 	}
 

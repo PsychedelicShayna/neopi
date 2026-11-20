@@ -33,6 +33,7 @@ function createContext(approvalOwnsComposer: boolean) {
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],

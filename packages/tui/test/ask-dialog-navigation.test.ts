@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -273,7 +274,20 @@ describe("ask callback prompt navigation", () => {
 		expect(routed.join("")).toBe("hjklggG / ");
 		expect(passthrough).toEqual([]);
 		expect(onCancel).not.toHaveBeenCalled();
+		// The composer owns the keys, so Esc is the composer's and never cancels the question (#818).
 		dialog.handleInput("\x1b");
+		expect(routed.at(-1)).toBe("\x1b");
+		expect(onCancel).not.toHaveBeenCalled();
+		dialog.handleInput("\x1bx"); // Alt+X, the ask's own cancel key
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

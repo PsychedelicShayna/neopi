@@ -106,7 +106,7 @@ or `--fork`.
 | `--smol <id>`                | Smol/fast model for lightweight tasks (or `PI_SMOL_MODEL`).                                                                |
 | `--slow <id>`                | Slow/reasoning model for thorough analysis (or `PI_SLOW_MODEL`).                                                           |
 | `--plan <id>`                | Plan model for architectural planning (or `PI_PLAN_MODEL`).                                                                |
-| `--model <id-or-role>` | Model or configured role to use (role: `slow` or `@slow`; fuzzy model match: `opus`, `gpt-5.2`; with a provider the id must be exact: `openai/gpt-5.2`). |
+| `--models <a,b,c>`           | Comma-separated model patterns for `Ctrl+P` cycling.                                                                       |
 | `--provider <name>`          | Provider to use (legacy; prefer `--model`).                                                                                |
 | `--api-key <key>`            | API key (defaults to env vars).                                                                                            |
 | `--provider-session-id <id>` | Reuse a specific provider-side session id for continuity and cache scoping.                                                |
@@ -151,6 +151,9 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--max-time <duration>` | Stop the session after this duration (e.g. `600`, `10m`, `1h`). |
 | `--no-exit-with-parent` | Print/json modes: keep running after the parent process dies. See [parent lifetime](#parent-lifetime). |
 | `--wait-async` | Print mode: wait for background jobs and react to each result in the same session (`async.printWake`). |
+| `--motion <mode>` | Animation preset: `full` (default), `reduced` (250 ms spinners, no shimmer or blink/fade), or `none` (static spinners and title). Streaming text is unaffected; see `--max-fps`. Overrides `tui.motion` and `PI_MOTION` for this run. |
+| `--spinner-interval <ms>` | Milliseconds between spinner frames, terminal title included (default `80`; `0` = static). Overrides `tui.spinnerInterval` and `PI_SPINNER_INTERVAL` for this run. |
+| `--max-fps <n>` | Repaint ceiling in frames per second (default `30`; `1`–`120`), streaming text included; keystroke echo keeps 30 fps. Overrides `tui.maxFps` and `PI_MAX_FPS` for this run. |
 | `--warn-cost <usd>` | Warn when session and subagent spend reaches this many USD (`session.warnCost`). |
 | `--max-cost <usd>` | Stop sending requests at this spend; an in-flight request can exceed it (`session.maxCost`). |
 
@@ -233,9 +236,10 @@ the session, which cancels background jobs the run started (`bash` or `task`
 calls the model ran asynchronously). With `--wait-async` (or
 `async.printWake: true`) it instead waits for them; each job's result is
 delivered to the same session as it is in the TUI, starting another turn, and a
-turn may start further jobs. The run exits once no owned job or undelivered
-result remains, and text mode prints the answer of the last turn. Bound
-unattended runs with `--max-time`.
+turn may start further jobs (or child agents that message back). The process
+exits once the run ends — nothing streaming and nothing left that could resume
+it — and text mode prints the answer of the last turn. Bound unattended runs
+with `--max-time`.
 
 ```sh
 # Start a long build in the background, then react to its result in the same session

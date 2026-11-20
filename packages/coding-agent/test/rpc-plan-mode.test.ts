@@ -29,6 +29,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
+import { fixedAdvisorTools } from "./helpers/agent-session-setup";
 
 type Frame = Record<string, unknown>;
 
@@ -125,7 +126,7 @@ describe("RPC plan mode", () => {
 			modelRegistry,
 			toolRegistry: registry,
 			builtInToolNames: ["read", "write"],
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 			xdev,
 		});
 		const frames: Frame[] = [];
@@ -436,13 +437,13 @@ describe("RPC plan mode", () => {
 		const { session, planMode } = setup();
 		cfgModelRoles.override(session.settings, { plan: "anthropic/claude-sonnet-4-6" });
 		await planMode.setMode("plan", undefined);
-		const chosen = modelRegistry.find("anthropic", "claude-opus-4-1");
-		if (!chosen) throw new Error("Expected claude-opus-4-1 in the registry");
+		const chosen = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!chosen) throw new Error("Expected claude-opus-4-5 in the registry");
 		await session.setModel(chosen);
 
 		await planMode.setMode("default", undefined);
 
-		expect(session.model?.id).toBe("claude-opus-4-1");
+		expect(session.model?.id).toBe(chosen.id);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 	});
 
@@ -731,18 +732,23 @@ describe("RPC plan mode", () => {
 		expect(respond("unknown", "approve")).toEqual([]);
 	});
 
-	it("without set_mode, reports plan transitions from other paths but installs no proposal handler", async () => {
-		const { session, planMode, frames, propose } = setup();
+	it("without set_mode, reports plan transitions and uses the session fallback without an RPC proposal handler", async () => {
+		const { session, planMode, frames, propose, writePlan } = setup();
+		await writePlan("demo", "# Demo plan\n\nImplement the change.");
 
-		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md", workflow: "iterative" });
+		session.setPlanModeState({ enabled: true, planFilePath: "local://demo-plan.md", workflow: "iterative" });
 
-		expect(frames).toEqual([{ type: "mode_changed", mode: "plan", planFilePath: "local://PLAN.md" }]);
+		expect(frames).toEqual([{ type: "mode_changed", mode: "plan", planFilePath: "local://demo-plan.md" }]);
 		expect(planMode.state).toEqual({
 			mode: "plan",
-			planMode: { planFilePath: "local://PLAN.md", workflow: "iterative" },
+			planMode: { planFilePath: "local://demo-plan.md", workflow: "iterative" },
 		});
-		expect(session.peekPlanProposalHandler()).toBeUndefined();
-		await expect(propose("demo")).rejects.toThrow("No plan is awaiting approval");
+		// Upstream 3b80c09933 makes xd://propose work without a host handler.
+		expect(session.peekPlanProposalHandler()).toBeDefined();
+		expect(await propose("demo")).toEqual({
+			content: [{ type: "text", text: "Plan ready for review." }],
+			details: { planFilePath: "local://demo-plan.md", title: "demo", planExists: true },
+		});
 		expect(frames.some(frame => frame.type === "plan_proposal_request")).toBe(false);
 	});
 });

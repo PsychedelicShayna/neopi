@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TUI } from "../src/index";
@@ -338,10 +339,13 @@ describe("advisor sync backlog picker", () => {
 	});
 
 	it("keeps file warnings visible without the obsolete bottom scope button", () => {
-		const overlay = buildOverlay({
-			advisors: [{ name: "Reviewer" }],
-			warnings: [`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "Bad\tName" dropped`],
-		}, () => {});
+		const overlay = buildOverlay(
+			{
+				advisors: [{ name: "Reviewer" }],
+				warnings: [`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "Bad\tName" dropped`],
+			},
+			() => {},
+		);
 		const frame = overlay.render(100).join("\n");
 		expect(frame).toContain('advisor "Bad   Name" dropped');
 		expect(frame).not.toContain("Scope: project");
@@ -454,6 +458,13 @@ describe("advisor menu navigation and history", () => {
 				filterFocused: true,
 			});
 			expect(doc.advisors[0]?.enabled).toBeUndefined();
+			h.overlay.handleInput("\x1b");
+			expect(h.closed()).toBe(0);
+			expect(h.overlay.navigationSnapshot().content).toMatchObject({
+				filter: "",
+				filterDraft: "hjkl/ g",
+				filterFocused: true,
+			});
 			h.overlay.handleInput("\x1b");
 			expect(h.closed()).toBe(0);
 			expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
@@ -735,9 +746,6 @@ describe("advisor menu navigation and history", () => {
 				h.overlay.handleInput("Reviewer");
 				expect(sheet().props.query).toBe("Reviewer");
 				if (mode !== "focused picker") h.overlay.handleInput("\r");
-				expect(sheet().props.actions?.find(action => action.id === "close")?.label).toBe(
-					mode === "focused picker" ? "Back to list" : "Clear search",
-				);
 				if (mode === "confirmed prefs")
 					h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 				else sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
@@ -772,9 +780,6 @@ describe("advisor menu navigation and history", () => {
 				handleNativeEvent(event: NativeUiEvent): void;
 			};
 			expect(component.describe().k).toBe("picker");
-			expect((component.describe().p as TspPickerProps).actions?.find(action => action.id === "apply")?.label).toBe(
-				"Clear search",
-			);
 			component.handleNativeEvent({ type: "action", key: "", act: "apply", mods: [] });
 			expect(h.overlay.navigationSnapshot()).toMatchObject({
 				context: { screen: "tools" },
@@ -853,6 +858,7 @@ describe("advisor menu navigation and history", () => {
 			expect(doc.advisors).toHaveLength(2);
 			h.overlay.handleInput("\x15"); // Clear the focused filter.
 			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\x1b"); // Normal -> list navigation.
 			h.overlay.handleInput("g");
 			h.overlay.handleInput("g");
 			h.overlay.handleInput("c");
@@ -1130,4 +1136,13 @@ describe("advisor config file shortcut", () => {
 			setKeybindings(previous);
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

@@ -2,6 +2,11 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
+import {
+	AGENT_PLUGIN_MANIFEST_SCHEMA,
+	classifyAgentPluginRoot,
+} from "@oh-my-pi/pi-coding-agent/discovery/agent-plugin-format";
 import { clearClaudePluginRootsCache } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import {
 	__resetLegacyPiResolutionCache,
@@ -24,6 +29,31 @@ afterEach(async () => {
 async function writeJson(filePath: string, value: unknown): Promise<void> {
 	await Bun.write(filePath, `${JSON.stringify(value)}\n`);
 }
+
+test("standard plugin manifest upgrades become visible after shared plugin cache invalidation", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-standard-plugin-cache-"));
+	tempRoots.push(root);
+	const manifestPath = path.join(root, "plugin.json");
+	const manifest = { $schema: AGENT_PLUGIN_MANIFEST_SCHEMA, name: "cache-upgrade", version: "1.0.0" };
+	await writeJson(manifestPath, manifest);
+	expect(await classifyAgentPluginRoot(root)).toMatchObject({
+		kind: "standard",
+		manifest: { version: "1.0.0" },
+	});
+
+	await writeJson(manifestPath, { ...manifest, version: "2.0.0" });
+	clearFsCache();
+	expect(await classifyAgentPluginRoot(root)).toMatchObject({
+		kind: "standard",
+		manifest: { version: "1.0.0" },
+	});
+
+	clearClaudePluginRootsCache();
+	expect(await classifyAgentPluginRoot(root)).toMatchObject({
+		kind: "standard",
+		manifest: { version: "2.0.0" },
+	});
+});
 
 test("getEnabledPlugins caches repeated discovery for the same cwd and home until plugin caches clear", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-plugin-cache-"));

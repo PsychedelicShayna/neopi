@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { EffortSelection } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { cfgModelsDefaultScope, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type RawSettings, Settings, type SettingsScope } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
@@ -17,7 +19,11 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { Component } from "@oh-my-pi/pi-tui";
 import * as modelHubModule from "@oh-my-pi/pi-tui/overlays/model-hub";
+import * as modelPickerModule from "@oh-my-pi/pi-tui/overlays/model-picker";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
@@ -25,8 +31,8 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 
 const model = (id: string) => getBundledModel("anthropic", id) as Model;
 
-// Settings writes made through the model hub, driven through the controller's real hub callbacks.
-describe("SelectorController model hub writes", () => {
+// Writes made through the model hub and the session-only picker, driven through the controller's real callbacks.
+describe("SelectorController model selector writes", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession | undefined;
@@ -40,6 +46,7 @@ describe("SelectorController model hub writes", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		restoreSettingsTestState(state);
 		state = undefined;
 		await session?.dispose();
@@ -51,7 +58,8 @@ describe("SelectorController model hub writes", () => {
 		tempDir.removeSync();
 	});
 
-	function start(settings: Settings, initial: Model): { controller: SelectorController; showError: () => unknown } {
+	function start(settings: Settings, initial: Model) {
+		let overlay: Component | undefined;
 		const live = new AgentSession({
 			agent: new Agent({ initialState: { model: initial, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(),
@@ -65,12 +73,17 @@ describe("SelectorController model hub writes", () => {
 			createInteractiveModeContext({
 				session: live,
 				settings,
-				ui: { showOverlay: () => ({ hide: () => {}, setHidden: () => {}, isHidden: () => false }) },
+				ui: {
+					showOverlay: component => {
+						overlay = component;
+						return { hide: () => {}, setHidden: () => {}, isHidden: () => false };
+					},
+				},
 				keybindings: { getKeys: () => [], getDisplayString: () => "" },
 				showError,
 			}),
 		);
-		return { controller, showError };
+		return { controller, showError, getOverlay: () => overlay };
 	}
 
 	function openModelHub(controller: SelectorController, scope?: SettingsScope): modelHubModule.ModelHubCallbacks {
@@ -126,7 +139,62 @@ describe("SelectorController model hub writes", () => {
 		expect(showError).not.toHaveBeenCalled();
 	});
 
-	it("rich session-only selection changes the live model without changing saved defaults or roles", async () => {
+	it("cycles /roles through all scopes and writes to the selected layer", async () => {
+		await initTheme(false);
+		const settings = await Settings.init({ inMemory: true });
+		for (const [scope, budget] of [
+			["global", 96000],
+			["project", 120000],
+			["session", 144000],
+		] as const) {
+			settings.writeScopeValue(cfgRoleSettings, { default: { "compaction.thresholdTokens": budget } }, scope);
+		}
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-opus-4-5", undefined, "global");
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-sonnet-4-5", undefined, "project");
+		settings.setRoleModelAndEffort("smol", "anthropic/claude-opus-4-5", undefined, "session");
+		const { controller, showError, getOverlay } = start(settings, model("claude-opus-4-5"));
+		controller.showModelSelector({ scope: "global" });
+		const hub = getOverlay();
+		if (!(hub instanceof modelHubModule.ModelHubComponent)) throw new Error("model hub was not opened");
+		try {
+			const render = () => Bun.stripANSI(hub.render(220).join("\n"));
+			for (const key of ["\x1b[A", "\r"]) hub.handleInput(key);
+			expect(render()).toContain("Ctrl+S cycle scope");
+			expect(render()).toContain("budget 96,000");
+
+			hub.handleInput("\x13");
+			expect(render()).toContain("budget 120,000");
+			expect(render()).toMatch(/Smol[^\n]*anthropic\/claude-sonnet-4-5/i);
+			hub.handleInput("b");
+			hub.handleInput("\x13");
+			expect(render()).toContain("Models · project");
+			for (const key of ["\x01", "\x0b", ..."64000", "\r"]) hub.handleInput(key);
+			expect(render()).toContain("budget 64,000");
+			for (const key of ["\x1b[B", "x"]) hub.handleInput(key);
+			expect(settings.getGlobalModelRole("smol")).toBe("anthropic/claude-opus-4-5");
+			expect(settings.getProjectModelRole("smol")).toBeUndefined();
+			expect(settings.getSessionModelRole("smol")).toBe("anthropic/claude-opus-4-5");
+
+			hub.handleInput("\x13");
+			expect(render()).toContain("budget 144,000");
+			hub.handleNativeEvent({ type: "action", key: "", act: "cycleScope", mods: [] });
+			expect(render()).toContain("budget 96,000");
+			expect(settings.readScopeValue(cfgRoleSettings, "global")).toEqual({
+				default: { "compaction.thresholdTokens": 96000 },
+			});
+			expect(settings.readScopeValue(cfgRoleSettings, "project")).toEqual({
+				default: { "compaction.thresholdTokens": 64000 },
+			});
+			expect(settings.readScopeValue(cfgRoleSettings, "session")).toEqual({
+				default: { "compaction.thresholdTokens": 144000 },
+			});
+			expect(showError).not.toHaveBeenCalled();
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	it("default session picker changes the live model without changing saved defaults or roles", async () => {
 		const agentDir = tempDir.join("agent");
 		const configPath = path.join(agentDir, "config.yml");
 		const original = YAML.stringify({
@@ -142,7 +210,7 @@ describe("SelectorController model hub writes", () => {
 			options = args[5] as modelHubModule.ModelHubOptions;
 			return { refreshAfterExternalMutation: () => {}, dispose: () => {} };
 		} as never);
-		controller.showModelSelector({ sessionOnly: true });
+		controller.showModelSelector({ temporaryOnly: true });
 		expect(options?.sessionOnly).toBe(true);
 		expect(options?.pinnedProviders).toEqual([]);
 		expect(callbacks?.onEditFacts).toBeUndefined();
@@ -189,6 +257,100 @@ describe("SelectorController model hub writes", () => {
 		});
 		options.onClose();
 	});
+
+	/** Opens the alt+p picker: the fork's session `/model` opens it only with `models.sessionPicker: small` (default: the hub). */
+	function openModelPicker(controller: SelectorController): {
+		callbacks: modelPickerModule.ModelPickerCallbacks;
+		options: modelPickerModule.ModelPickerOptions;
+	} {
+		let opened:
+			| { callbacks: modelPickerModule.ModelPickerCallbacks; options: modelPickerModule.ModelPickerOptions }
+			| undefined;
+		vi.spyOn(modelPickerModule, "ModelPickerComponent").mockImplementation(function (...args: unknown[]) {
+			opened = {
+				callbacks: args[4] as modelPickerModule.ModelPickerCallbacks,
+				options: args[5] as modelPickerModule.ModelPickerOptions,
+			};
+			return {};
+		} as never);
+		controller.showModelSelector({ temporaryOnly: true });
+		if (!opened) throw new Error("model picker was not opened");
+		return opened;
+	}
+
+	it("shows and keeps the session's own level on its current model, not its role's", async () => {
+		const sonnet = model("claude-sonnet-4-5");
+		const settings = Settings.isolated({
+			modelRoles: { default: "anthropic/claude-sonnet-4-5:high" },
+			"models.sessionPicker": "small",
+		});
+		const { controller, showError } = start(settings, sonnet);
+		session!.setThinkingLevel(Effort.Low);
+		const first = openModelPicker(controller);
+
+		// The slider opens on the level the session runs at.
+		expect(first.options.thinkingLevelFor?.(sonnet)).toBe(Effort.Low);
+		// Esc after moving the slider on the current model keeps the moved level.
+		first.callbacks.onKeepThinking?.(Effort.Medium);
+		first.callbacks.onCancel();
+		expect(session!.configuredThinkingLevel()).toBe(Effort.Medium);
+
+		// Picking the current model again with the slider untouched keeps it.
+		const second = openModelPicker(controller);
+		await second.callbacks.onPick(sonnet, "anthropic/claude-sonnet-4-5", { overContext: false });
+		expect(session!.configuredThinkingLevel()).toBe(Effort.Medium);
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("shows auto's resolved level once a turn settles it, and an untouched pick keeps auto", async () => {
+		const sonnet = model("claude-sonnet-4-5");
+		const { controller, showError } = start(Settings.isolated({ "models.sessionPicker": "small" }), sonnet);
+		vi.spyOn(session!.agent, "prompt").mockResolvedValue(undefined);
+		vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
+		session!.setThinkingLevel(AUTO_THINKING);
+
+		// Unresolved auto shows as auto.
+		const pending = openModelPicker(controller);
+		expect(pending.options.thinkingLevelFor?.(sonnet)).toBe(AUTO_THINKING);
+		pending.callbacks.onCancel();
+
+		await session!.prompt("Implement a focused parser fix");
+		const { callbacks, options } = openModelPicker(controller);
+		expect(options.thinkingLevelFor?.(sonnet)).toBe(Effort.High);
+
+		await callbacks.onPick(sonnet, "anthropic/claude-sonnet-4-5", { overContext: false });
+		expect(session!.configuredThinkingLevel()).toBe(AUTO_THINKING);
+		expect(showError).not.toHaveBeenCalled();
+	});
+
+	it("carries the session's manual level to a picked model over a role's level for it, refusing one its ladder lacks", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { smol: "anthropic/claude-opus-4-5:low" },
+			"models.sessionPicker": "small",
+		});
+		const { controller, showError } = start(settings, model("claude-opus-4-7"));
+		session!.setThinkingLevel(Effort.Max);
+
+		// The fork validates a manual level against the target (effort replacement mode): Opus 4.5 tops
+		// out at xhigh, so a max session is refused rather than silently clamped.
+		const refused = openModelPicker(controller);
+		await refused.callbacks.onPick(model("claude-opus-4-5"), "anthropic/claude-opus-4-5", { overContext: false });
+		expect(session!.model?.id).toBe("claude-opus-4-7");
+		expect(session!.configuredThinkingLevel()).toBe(Effort.Max);
+		expect(showError).toHaveBeenCalledWith(
+			"Thinking effort max is not supported by anthropic/claude-opus-4-5. Supported efforts: minimal, low, medium, high, xhigh",
+		);
+		refused.callbacks.onCancel();
+
+		// A level on its ladder carries over, not the smol role's low.
+		session!.setThinkingLevel(Effort.XHigh);
+		const { callbacks } = openModelPicker(controller);
+		await callbacks.onPick(model("claude-opus-4-5"), "anthropic/claude-opus-4-5", { overContext: false });
+		expect(session!.model?.id).toBe("claude-opus-4-5");
+		expect(session!.configuredThinkingLevel()).toBe(Effort.XHigh);
+		expect(showError).toHaveBeenCalledTimes(1);
+	});
+
 	it("saves only the edited fallback chain, never the chains a --config overlay supplies", async () => {
 		const agentDir = tempDir.join("agent");
 		const overlayPath = tempDir.join("overlay.yml");
@@ -218,7 +380,7 @@ describe("SelectorController model hub writes", () => {
 
 	it("preserves other persisted chains and drops emptied effort selections when editing a chain", async () => {
 		const agentDir = tempDir.join("agent");
-		await mkdir(agentDir, { recursive: true });
+		await fs.mkdir(agentDir, { recursive: true });
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
 			YAML.stringify({
@@ -311,15 +473,26 @@ describe("SelectorController model hub writes", () => {
 		expect(await Bun.file(path.join(agentDir, "config.yml")).exists()).toBe(false);
 	});
 
-	it.each(["default", "smol"])(
-		"saves an unscoped %s assignment globally without touching project roles",
-		async role => {
+	it.each([
+		["default", "built-in"],
+		["smol", "built-in"],
+		["default", "configured global"],
+		["smol", "configured global"],
+	] as const)(
+		"saves an unscoped %s assignment using the %s default scope without touching project roles",
+		async (role, scenario) => {
 			const agentDir = tempDir.join("agent");
+			const globalPath = path.join(agentDir, "config.yml");
 			const projectPath = tempDir.join(".omp", "config.yml");
 			const project = { modelRoles: { [role]: "anthropic/claude-opus-4-5" } };
 			await Bun.write(projectPath, YAML.stringify(project));
-			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ modelRoleStorage: "project" }));
+			const global: RawSettings = {
+				modelRoleStorage: "project",
+				...(scenario === "configured global" && { models: { defaultScope: "global" } }),
+			};
+			await Bun.write(globalPath, YAML.stringify(global));
 			const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+			const scope = cfgModelsDefaultScope.get(settings);
 			const { controller, showError } = start(settings, model("claude-opus-4-5"));
 
 			await openModelHub(controller).onAssign(
@@ -331,13 +504,14 @@ describe("SelectorController model hub writes", () => {
 			await settings.flush();
 
 			expect(showError).not.toHaveBeenCalled();
-			const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
-			expect(saved).toEqual({
-				modelRoleStorage: "project",
-				modelRoles: { [role]: "anthropic/claude-sonnet-4-5" },
-			});
+			const assignedRoles = { [role]: "anthropic/claude-sonnet-4-5" };
+			expect(settings.readScopeValue(cfgModelRoles, scope)).toEqual(assignedRoles);
+			const saved = YAML.parse(await Bun.file(globalPath).text()) as RawSettings;
+			expect(saved).toEqual(scope === "global" ? { ...global, modelRoles: assignedRoles } : global);
 			expect(YAML.parse(await Bun.file(projectPath).text())).toEqual(project);
-			expect(session?.model?.id).toBe("claude-opus-4-5");
+			expect(session?.model?.id).toBe(
+				role === "default" && scope === "session" ? "claude-sonnet-4-5" : "claude-opus-4-5",
+			);
 		},
 	);
 

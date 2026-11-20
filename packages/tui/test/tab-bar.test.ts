@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { TabBar, type TabBarTheme } from "@oh-my-pi/pi-tui/components/tab-bar";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
@@ -140,4 +141,13 @@ describe("TabBar", () => {
 		expect(tabBar.tabAt(0, 10)?.id).toBe("second");
 		expect(tabBar.tabAt(1, 1)).toBeUndefined();
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

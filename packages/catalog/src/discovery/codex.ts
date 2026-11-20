@@ -3,8 +3,9 @@ import { compareRevision, parseRevision } from "../compat/revision";
 import { classifyModel } from "../compat/taxonomy";
 import { getBundledModels } from "../models";
 import type { FetchImpl, ModelSpec } from "../types";
-import { discoveryFetch } from "../utils";
-import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
+import { discoveryFetch, parseServiceTierIds } from "../utils";
+import { CODEX_BASE_URL, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
+import { getCodexClientVersion } from "../wire/codex-version";
 
 const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
 const DEFAULT_CONTEXT_WINDOW = 272_000;
@@ -130,7 +131,7 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 	const fetchFn = discoveryFetch(options.fetchFn);
 	const baseUrl = normalizeBaseUrl(options.baseUrl);
 	const paths = normalizePaths(options.paths);
-	const clientVersion = normalizeClientVersion(options.clientVersion) ?? CODEX_CLIENT_VERSION;
+	const clientVersion = normalizeClientVersion(options.clientVersion) ?? getCodexClientVersion();
 	const headers = buildCodexHeaders(options, clientVersion);
 
 	let sawSuccessfulResponse = false;
@@ -205,7 +206,6 @@ function buildCodexHeaders(options: CodexModelDiscoveryOptions, clientVersion: s
 	if (options.accountId && options.accountId.trim().length > 0) {
 		headers.set(OPENAI_HEADERS.ACCOUNT_ID, options.accountId);
 	}
-	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
 	headers.set(OPENAI_HEADERS.VERSION, clientVersion);
 	headers.set("accept", "application/json");
@@ -334,14 +334,7 @@ function parseCodexModelEntry(entry: unknown): ParsedCodexModelEntry | null {
 
 	// codex-rs `ModelServiceTier { id, name, description }`; only the id reaches the wire.
 	// An explicit empty array is kept: it means the model offers no optional tier.
-	let serviceTiers: string[] | undefined;
-	if (Array.isArray(payload.service_tiers)) {
-		serviceTiers = [];
-		for (const tier of payload.service_tiers) {
-			const id = tier !== null && typeof tier === "object" && "id" in tier ? toNonEmptyString(tier.id) : null;
-			if (id && !serviceTiers.includes(id)) serviceTiers.push(id);
-		}
-	}
+	const serviceTiers = parseServiceTierIds(payload.service_tiers);
 
 	return {
 		slug,
@@ -403,7 +396,10 @@ function buildNormalizedCodexModel(
 			...(accountId && accountId.trim().length > 0
 				? {
 						accountAccess: {
-							[accountId]: parsed.cyberPrograms === undefined ? {} : { cyberPrograms: parsed.cyberPrograms },
+							[accountId]: {
+								...(parsed.cyberPrograms === undefined ? {} : { cyberPrograms: parsed.cyberPrograms }),
+								...(parsed.serviceTiers === undefined ? {} : { serviceTiers: parsed.serviceTiers }),
+							},
 						},
 					}
 				: {}),

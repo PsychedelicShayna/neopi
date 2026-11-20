@@ -38,6 +38,11 @@ Install after every merge batch; proof sessions hold a time-bounded [install loc
 - Never install this fork through a remote installer, a global package
   manager, `bun setup`, or `scripts/link-omp.sh`.
 - Stage a throwaway install with `NPI_DEST=<temp>/bin/npi PI_CODING_AGENT_DIR=<temp>/agent ./install.sh`.
+- A binary built on another machine installs here only when that machine built the
+  identical tree: same `HEAD`, same `git diff HEAD`, same untracked files. `install.sh`
+  checks the `dist/npi.source` record `build.sh` writes. A build-offload host must
+  reproduce all three, not just the commit. Shayna's workstation skill names her offload
+  command.
 
 ## Fork maintenance
 
@@ -50,11 +55,11 @@ Before designing agents, sub-agents, advisors, roles, lifecycle or interfaces,
 read `docs/agents/philosophy.md`: one kind of agent, roles as templates,
 restrictions as named properties.
 
-Exact argv `npi update` launches the fork-specific interactive update session
+Exact argv `npi update source` launches the fork-specific interactive update session
 from `packages/coding-agent/src/prompts/npi-update.md`; the executable basename
-and exact argument list gate that rewrite. `npi update --check`,
-`npi update --help`, and any additional arguments keep the ordinary
-update-command behavior.
+and exact argument list gate that rewrite. Binary status, checks, channel sync
+and rollback use the early updater CLI; plugin updates remain
+`npi update --plugins`.
 
 
 ### Package Structure
@@ -70,7 +75,7 @@ update-command behavior.
 | `packages/stats`        | Local observability dashboard (`npi stats`)                                             |
 | `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
 | `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
-| `crates/pi-natives`     | Rust crate for performance-critical text/grep ops                                       |
+| `crates/natives`        | Rust crate for performance-critical text/grep ops                                       |
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
@@ -91,6 +96,7 @@ nothing here requires confirmation beyond it. Repository specifics:
 
 ## Code Quality
 
+- New commands, settings, or interactive TUI features: MUST follow [Feature provenance](docs/agents/development.md#feature-provenance).
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
@@ -279,7 +285,9 @@ Logs go to `~/.omp/logs/npi.YYYY-MM-DD.log` with automatic rotation. Standalone 
 
 ## Menu Navigation
 
-Every menu, picker, overlay, and list surface opens in normal navigation. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport` (`packages/tui/src/components/menu-navigation.ts`); `SelectList` is the reference consumer. Arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+Vim navigation is opt-in through the single `tui.vimMode` setting (default `false`), which also enables modal prompt and search editing. With it disabled, menus retain ordinary navigation and literal text editing; do not consume Vim-only motions or advertise them in hints. Read the live preference through `getMenuSearchVimMode()` in `packages/tui/src/components/menu-navigation.ts`, including in direct handlers and native adapters. Arrows, PageUp/PageDown, Home/End, Enter, Esc, search focus, context switching, and menu history remain available independently of Vim mode.
+
+Every menu, picker, overlay, and list surface opens in navigation rather than a text field unless explicitly search-first. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport`; `SelectList` is the reference consumer. The Vim motion entries below apply only when `tui.vimMode` is enabled; ordinary surface actions remain independent.
 
 | Keys | Meaning in normal navigation |
 | --- | --- |
@@ -329,10 +337,13 @@ For the bash tool specifically:
 ## Commands
 
 - Never use `tsc`/`npx tsc` — always `bun check`.
-- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
+- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (omp-natives is a `cdylib`, which rustdoc skips; omp-builtins' examples are `ignore`d vendored uutils docs).
 - **Cargo parallelism**: always pass `-j 6` to cargo builds (e.g. `cargo build -j 6`,
   `bun run build:native` should use `CARGO_BUILD_JOBS=6`). The machine has 20 cores;
-  unbounded cargo eats all of them and starves the session.
+  unbounded cargo eats all of them and starves the session. `build.sh` pins 6 and
+  ignores an ambient `CARGO_BUILD_JOBS`. Only a dedicated build host raises it, explicitly,
+  with `NPI_CARGO_JOBS=<n>`. The job count is not part of the native cache key.
+- `bun check`'s Rust half runs only when the branch changed a Rust-affecting file (`*.rs`, `crates/`, Cargo/toolchain files) since its merge base with `upstream/main` or `origin/main`, committed or not; it always runs in GitHub Actions, when that cannot be determined (e.g. shallow clone), or with `OMP_FORCE_RUST_TASKS=1`.
 
 ## Rust Build Profiles
 

@@ -1,5 +1,6 @@
 import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 import { Database } from "bun:sqlite";
+import { assertNotHeldOpen } from "@oh-my-pi/pi-utils/held-file";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -42,6 +43,7 @@ import {
 	sessionResolveContext,
 	sessionWriteContext,
 } from "../internal-urls";
+import { readSnapshot } from "../commit/selective/journal";
 import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../lsp";
 
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
@@ -60,16 +62,13 @@ import { approvalTargetKey } from "./approval-targets";
 import { assertEditableFile } from "./auto-generated-guard";
 
 import { isReadTruncationNotice } from "@oh-my-pi/pi-tui/tools/hashline-format";
+import { hasColumnTruncationClause, isColumnTruncationNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { recoverConflictUriPrefix } from "./conflict-detect";
+import { unwrapHashlineHeaderPath } from "./hashline-header-path";
 import { outputMeta } from "./output-meta";
-import { formatPathRelativeToCwd, probeLiteralPathExists, specialFileKind } from "./path-utils";
+import { formatPathRelativeToCwd, probeLiteralPathExists, resolveToCwd, specialFileKind } from "./path-utils";
 import { splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
-import {
-	enforcePlanModeWrite,
-	resolvePlanPath,
-	targetsLocalSandbox,
-	unwrapHashlineHeaderPath,
-} from "./plan-mode-guard";
+import { enforcePlanModeWrite, resolvePlanPath, targetsLocalSandbox } from "./plan-mode-guard";
 import { decodeUtf8Text } from "./read-format";
 import { routeReadThroughBridge } from "./read-summary";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -87,10 +86,12 @@ import {
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 import { maybeWriteSnapshotHeader, stripWriteContent } from "./write-content";
+import { docTopicsReadable } from "./xdev";
 
 import {
 	cfgLspDiagnosticsDeduplicate,
 	cfgLspDiagnosticsOnWrite,
+	cfgLspEnabled,
 	cfgLspFormatOnWrite,
 	cfgLspRequestTimeout,
 } from "../lsp/settings";
@@ -217,11 +218,22 @@ async function assertNotReadSelectorMisfire(target: string, content: string, cwd
 
 const writeSchema = type({
 	path: "string",
-	"content?": "string",
+	content: "string",
 });
 
-/** Write arguments; `content` may be omitted only where the target scheme's write policy allows it. */
+/**
+ * Write arguments. `content` is required even where it is ignored (`proc://<id>/kill`): strict-mode
+ * providers turn an optional property into a nullable one, and models then send `content: null`.
+ */
 export type WriteToolInput = typeof writeSchema.infer;
+
+/**
+ * A `read` notice that its projection is incomplete: a truncation notice, or the column-cap
+ * notice of a page whose long lines are shown cut (`[Some lines truncated to 768 chars. …]`).
+ */
+function isReadProjectionNotice(line: string): boolean {
+	return isReadTruncationNotice(line) || isColumnTruncationNotice(line);
+}
 
 /**
  * Offset of the last non-blank line of LF-only `text` when that line is a `read`
@@ -232,7 +244,7 @@ function readTruncationNoticeStart(text: string): number {
 	while (end > 0) {
 		const start = text.lastIndexOf("\n", end - 1) + 1;
 		const line = text.slice(start, end);
-		if (line.trim().length > 0) return isReadTruncationNotice(line) ? start : -1;
+		if (line.trim().length > 0) return isReadProjectionNotice(line) ? start : -1;
 		end = start - 1;
 	}
 	return -1;
@@ -246,13 +258,12 @@ function lfNormalizedLength(text: string): number {
 }
 
 /**
- * `readTruncationNoticeStart(normalizeToLF(content)) !== -1` without normalizing the
- * payload: only the last non-blank line is inspected, bounded in the raw text by CR or LF
- * (exactly the line normalization would produce).
+ * The last non-blank line of `content` without normalizing the payload, bounded in the raw
+ * text by CR or LF (exactly the line normalization would produce); `undefined` when blank.
  */
-function endsWithReadTruncationNotice(content: string): boolean {
+function lastContentLine(content: string): string | undefined {
 	const contentEnd = content.trimEnd().length;
-	if (contentEnd === 0) return false;
+	if (contentEnd === 0) return undefined;
 	let start = contentEnd;
 	while (start > 0) {
 		const ch = content.charCodeAt(start - 1);
@@ -265,7 +276,13 @@ function endsWithReadTruncationNotice(content: string): boolean {
 		if (ch === 0x0a || ch === 0x0d) break;
 		end++;
 	}
-	return isReadTruncationNotice(content.slice(start, end));
+	return content.slice(start, end);
+}
+
+/** `readTruncationNoticeStart(normalizeToLF(content)) !== -1` without normalizing the payload. */
+function endsWithReadTruncationNotice(content: string): boolean {
+	const line = lastContentLine(content);
+	return line !== undefined && isReadProjectionNotice(line);
 }
 
 async function readCurrentWriteSource(
@@ -326,10 +343,18 @@ function assertNotShorterReadProjection(
 ): void {
 	const rawPayloadLength = readProjectionPayloadLength(rawContent);
 	if (rawPayloadLength === undefined || currentContent === undefined) return;
-	const payloadLength = writeContent === rawContent ? rawPayloadLength : lfNormalizedLength(writeContent);
-	if (payloadLength >= lfNormalizedLength(currentContent)) return;
+	// A column-cap notice proves the page lossy at any length: a cut line ends in `…` in place of
+	// its tail, and a line one column past the cap renders exactly as long as its source. So does
+	// a truncation notice carrying the column clause, whose line-number prefixes pad the payload.
+	const columnCut = hasColumnTruncationClause(lastContentLine(rawContent) ?? "");
+	if (!columnCut) {
+		const payloadLength = writeContent === rawContent ? rawPayloadLength : lfNormalizedLength(writeContent);
+		if (payloadLength >= lfNormalizedLength(currentContent)) return;
+	}
 	throw new ToolError(
-		`Refusing to overwrite '${displayPath}' with an incomplete read projection: the content ends with an ${APP_NAME} read truncation notice and covers less than the current source, so it would discard unseen content. Re-read the omitted ranges and write the complete file, or use edit for a partial change.`,
+		columnCut
+			? `Refusing to overwrite '${displayPath}' with an incomplete read projection: the content ends with an ${APP_NAME} read column-cap notice, so its cut lines would replace the full ones. Re-read the cut lines in raw mode and write the complete file, or use edit for a partial change.`
+			: `Refusing to overwrite '${displayPath}' with an incomplete read projection: the content ends with an ${APP_NAME} read truncation notice and covers less than the current source, so it would discard unseen content. Re-read the omitted ranges and write the complete file, or use edit for a partial change.`,
 	);
 }
 
@@ -607,11 +632,13 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly label = "Write";
 	get description(): string {
 		const deviceOnly = this.session.deviceOnlyWrite === true && this.session.pendingFullWriteDescription !== true;
+		// The archive/SQLite target grammar lives in `xd://read/sources`; inline it when that doc is unreachable.
 		return prompt.render(
 			deviceOnly
 				? resolvePromptAsset("tools/write-device-only.md", writeDeviceOnlyDescription, { cwd: this.session.cwd })
 						.text
 				: resolvePromptAsset("tools/write.md", writeDescription, { cwd: this.session.cwd }).text,
+			{ readActive: docTopicsReadable(this.session) },
 		);
 	}
 	readonly parameters = writeSchema;
@@ -633,7 +660,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	/** Resolves the LSP writethrough from the current `lsp.*` settings so changes apply to the next write. */
 	#lspWritethrough(): { writethrough: WritethroughCallback; deferred: DeferredDiagnostics | undefined } {
-		if (!(this.session.enableLsp ?? true)) return { writethrough: writethroughNoop, deferred: undefined };
+		if (!(this.session.enableLsp ?? true) || !cfgLspEnabled.get(this.session.settings)) {
+			return { writethrough: writethroughNoop, deferred: undefined };
+		}
 		const { settings } = this.session;
 		const enableDiagnostics = cfgLspDiagnosticsOnWrite.get(settings);
 		const dedup = enableDiagnostics && cfgLspDiagnosticsDeduplicate.get(settings);
@@ -918,7 +947,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	async execute(
 		_toolCallId: string,
-		{ path: rawPath, content: rawContent }: WriteParams,
+		{ path: rawPath, content }: WriteParams,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
 		context?: AgentToolContext,
@@ -939,10 +968,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const path = recovered.path;
 		const target = router.writeTarget(path);
 		const policy = target?.spec.write;
-		if (rawContent === undefined && !(target && policy?.contentOptional?.(target.url))) {
-			throw new ToolError(`content is required for ${path}.`);
-		}
-		const content = rawContent ?? "";
 		// Coordination writes (peer messages, background-work cancellation) and replies to the
 		// user touch no files, so neither gate below applies to them.
 		const touchesNoFiles =
@@ -981,7 +1006,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const verbatim = policy?.payload === "verbatim";
 			const { text: cleanContent, stripped } = verbatim
 				? { text: content, stripped: false }
-				: stripWriteContent(this.session, content);
+				: stripWriteContent(this.session, content, {
+						targetPath: target ? undefined : resolveToCwd(path, this.session.cwd),
+					});
 			// One UTF-8 scan per call, shared by the progress and result lines.
 			const cleanBytes = Buffer.byteLength(cleanContent, "utf8");
 			assertWriteTargetAddressable(path, router);
@@ -990,8 +1017,17 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					// Device payloads are dispatch arguments, not resource text, so only
 					// non-device text writes are checked against a truncated read projection.
 					if (!verbatim && target.spec.backing !== "device" && endsWithReadTruncationNotice(content)) {
-						const currentResource = await router.resolve(path, sessionResolveContext(this.session, { signal }));
-						assertNotShorterReadProjection(path, content, currentResource.content, cleanContent);
+						let currentContent: string | undefined;
+						try {
+							const current = (await router.resolve(path, sessionResolveContext(this.session, { signal })))
+								.content;
+							// Bytes were never read as text, so no read projection of them can be truncated.
+							if (typeof current === "string") currentContent = current;
+						} catch (error) {
+							// A missing target has no source to discard, as for a new disk file (readCurrentWriteSource).
+							if (!isEnoent(error)) throw error;
+						}
+						assertNotShorterReadProjection(path, content, currentContent, cleanContent);
 					}
 					// Handler-owned writes mutate state outside the sandbox unless they touch no
 					// files (peer messages, replies, background-work cancellation) or dispatch a
@@ -1010,10 +1046,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 							toolCall: { id: _toolCallId, onUpdate, context },
 						}),
 					);
+					// The flag tells the prewalk gate this write was not implementation work.
+					const fileFreeDetails: WriteToolDetails = touchesNoFiles ? { touchesNoFiles: true } : {};
 					if (handlerResult) {
 						const result: AgentToolResult<WriteToolDetails> = {
 							content: handlerResult.content,
-							details: handlerResult.details ?? {},
+							details: { ...handlerResult.details, ...fileFreeDetails },
 							isError: handlerResult.isError,
 							useless: handlerResult.useless,
 						};
@@ -1024,7 +1062,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					if (stripped) {
 						resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
 					}
-					return { content: [{ type: "text", text: resultText }], details: {} };
+					return { content: [{ type: "text", text: resultText }], details: fileFreeDetails };
 				}
 				// Read-only scheme: the router rejects the write with its uniform error.
 				if (!policy) await router.write(path, cleanContent);
@@ -1099,6 +1137,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (kind) {
 				throw new ToolError(`Cannot write '${path}': it is a ${kind}, not a regular file or directory.`);
 			}
+			// Overwriting a live SQLite database or `-shm` destroys it (issue #15586).
+			if (existing) {
+				try {
+					assertNotHeldOpen(absolutePath);
+				} catch (error) {
+					throw new ToolError(`Cannot write '${path}': ${(error as Error).message}`);
+				}
+			}
 			// Check if file exists and is auto-generated before overwriting.
 			if (existing) {
 				await assertEditableFile(absolutePath, path, this.session.settings);
@@ -1130,10 +1176,23 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			emitWriteProgress(onUpdate, writeBytes, displayPath, absolutePath);
 
+			const before = this.session.recordFileChange ? await readSnapshot(absolutePath) : undefined;
+			const journal = (after: string) => {
+				if (!before) return;
+				this.session.recordFileChange?.({
+					path: absolutePath,
+					tool: "write",
+					before: before.text,
+					after,
+					beforeMtimeMs: before.mtimeMs,
+				});
+			};
+
 			// Try ACP bridge first for editor-visible filesystem paths. Internal
 			// artifacts such as local:// plans are owned by NeoPi, not the editor.
 			const bridgeWrite = await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent, signal);
 			if (bridgeWrite) {
+				journal(bridgeWrite.text);
 				// `write` always replaces the whole file, so (unlike hashline's
 				// hunk-scoped diff) there's no size cost to keying the header/
 				// executable-bit check on the verified post-write content —
@@ -1156,14 +1215,25 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			}
 
 			const { writethrough, deferred } = this.#lspWritethrough();
-			const diagnostics = await writethrough(absolutePath, writeContent, signal, undefined, batchRequest, dst =>
-				deferred?.begin(dst),
+			// Linters read a shebang's execute bits (Ruff's EXE001), so they are set once the final
+			// bytes land, before the writethrough collects diagnostics for them.
+			let madeExecutable = false;
+			const diagnostics = await writethrough(
+				absolutePath,
+				writeContent,
+				signal,
+				undefined,
+				batchRequest,
+				dst => deferred?.begin(dst),
+				async committed => {
+					madeExecutable = await maybeMarkExecutableForShebang(absolutePath, committed);
+				},
 			);
 			if (!deferred || batchRequest?.flush === false) {
 				this.session.bumpFileMutationVersion?.(absolutePath);
 			}
 			const finalContent = diagnostics.finalContent;
-			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
+			journal(finalContent);
 
 			const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
 			const finalBytes = finalContent === writeContent ? writeBytes : Buffer.byteLength(finalContent, "utf8");

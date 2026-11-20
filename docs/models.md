@@ -4,11 +4,11 @@ This document describes how the coding-agent currently loads models, applies ove
 
 ## Editing models in the TUI
 
-Use `/models session`, `/models project`, or `/models global` to edit role
+Use `/roles session`, `/roles project`, or `/roles global` to edit role
 assignments in that scope. Session values override project values, which override
 global defaults. Role rows show the scope being edited and identify a higher
-scope when it shadows the saved assignment. Plain `/models` uses
-`models.defaultScope` (Global by default); that preference itself follows the
+scope when it shadows the saved assignment. Plain `/roles` uses
+`models.defaultScope` (session by default); that preference itself follows the
 same scope precedence.
 
 In **Roles**, select a role and press `b` or choose **Token budget** to edit its
@@ -17,7 +17,7 @@ inherit the ordinary context limit. These controls replace the per-role budget
 rows in Settings and keep the existing
 `roleSettings.<role>["compaction.thresholdTokens"]` keys and stored values.
 
-Open `/models` and choose **Model overrides**, beside Effort rules and Context
+Open `/roles` and choose **Model overrides**, beside Effort rules and Context
 rules. This lists every explicit override and custom model in the active models
 config, including entries that are not in the current catalog.
 
@@ -41,6 +41,43 @@ discovery and catalog values. Custom definitions replace matching catalog or
 discovered entries. Saving uses the shared config writer and a local catalog
 refresh, without online discovery. Unrelated edits made on disk are retained;
 overlapping stale edits are rejected rather than overwritten.
+
+## Selectable Codex variants
+
+Codex models expose supported serving profiles as ordinary model slugs:
+`-fast` (Priority), `-ultra` (Ultrafast), `-900k` (extended context), and
+`-fast-900k` / `-ultra-900k`. For example,
+`--model openai-codex/gpt-6-astra-fast-900k:high` selects Priority with the extended
+window and independently chooses high reasoning effort.
+
+Use these same selectors in roles, advisors, tasks, chains, and web-search roles;
+no separate assignment settings are required. Catalog refresh derives combinations
+from the model's capabilities, not a list of model names. Ultrafast requires an
+advertised tier; an explicit nonempty tier list can also exclude Priority.
+Discovered account eligibility guides the existing credential resolver's preferred
+pool. Its partial-discovery fallback may still try another account if that pool
+cannot serve the request; an unsupported premium tier can then fail at the backend.
+The requested tier is not silently downgraded. This feature does not change the
+generic credential fallback policy.
+These are Codex-only profiles; they do not add Codex support to speech APIs.
+
+`900k` is the friendly name of the extended (~1M) profile, not a literal token
+limit or an invented upstream model ID. The selected row retains the exact
+provider-supported input budget (for example, Astra's 922,000 input tokens).
+Models without a larger supported window do not get extended siblings.
+
+An explicit variant pins both its tier and its context profile, taking precedence
+over ambient `/fast`, extended-context, and role context-tier defaults. A Fast or
+Ultra slug without `-900k` uses the standard window. A `-900k` slug without Fast or
+Ultra suppresses inherited premium tiers. The unsuffixed model keeps the existing
+`/fast` and `/extended-context` behavior. To change a pinned profile, select its
+matching sibling; these commands do not rewrite an explicit slug.
+
+Persistence stores the ordinary selected slug; resolution reconstructs its policy
+from the catalog, including offline startup. Fully qualified missing selectors
+are rejected instead of silently choosing a sibling. Each fallback resolves its
+own model policy. As with other catalog selections, capability changes can make
+a previously selected profile unavailable.
 
 
 ## What controls model behavior
@@ -75,7 +112,7 @@ Legacy behavior still present:
 
 ## Optional model-fact sources and field overrides
 
-Open `/models` and press F6 to edit model facts. The session-only `/model`
+Open `/roles` and press F6 to edit model facts. The session-only `/model`
 picker does not expose settings edits. Choose a provider and model, or type an
 unlisted model ID under a configured provider. Each field accepts a literal,
 a reference to that field on another `provider/model`, or Automatic. The preview
@@ -238,8 +275,107 @@ An unscoped OpenRouter `baseUrl` names the `/api/v1` chat root, so OpenRouter De
 models use its `/api/alpha` sibling on the same host, e.g. a `.../api/v1` relay serves judges at
 `.../api/alpha/decisions`.
 
-`preferWebsockets` (on a model or `modelOverrides` entry) controls whether Codex requests prefer
-the WebSocket transport. `omitMaxOutputTokens` omits the model-derived output cap.
+`omitMaxOutputTokens` omits the model-derived output cap.
+
+`compat.base64SkipThoughtSignature` (Google APIs, default `false`): sends the unsigned-tool-call bypass sentinel base64-encoded. Set it on a `google-generative-ai` model behind a gateway that decodes `thoughtSignature` as base64 and answers the raw `skip_thought_signature_validator` literal with a 400, for example when Gemini replays another model's tool-call history:
+
+```yaml
+providers:
+   my-gemini-gateway:
+      baseUrl: https://gateway.example.com/gemini/v1beta
+      api: google-generative-ai
+      models:
+         - id: gemini-3.8-flash
+           compat:
+              base64SkipThoughtSignature: true
+```
+
+### Standard Responses WebSockets
+
+Standard Responses uses HTTP/SSE by default, including at the official OpenAI
+endpoint. To opt in from OMP, set this in `config.yml`:
+
+```yaml
+providers:
+  openaiResponsesWebsockets: true
+```
+
+The catalog's `supports-websockets` KDL rule marks capability, not enablement.
+It covers OpenAI `openai-responses`, including custom providers that inherit that
+provider type. Copilot, OpenRouter and other unmarked provider/API combinations
+remain on HTTP/SSE. The independent `providers.openaiWebsockets: auto|off|on` setting
+and `PI_CODEX_WEBSOCKET` continue to govern Codex only.
+
+Model and request `preferWebsockets` can only narrow OMP's setting: **either explicit
+`false` disables WS**, even if the other is `true`. Turning the setting off cannot
+be overridden. Standalone pi-ai SDK callers have no OMP settings dependency: they
+must explicitly opt in with a request or model `true`; either `false` still vetoes it.
+
+For a gateway with uneven support, keep the existing provider entry in `models.yml`
+and disable WS for the affected model:
+
+```yaml
+providers:
+  openai:
+    api: openai-responses
+    baseUrl: https://gateway.example.com/v1
+    modelOverrides:
+      gpt-5:
+        preferWebsockets: false
+```
+
+Custom `models` entries accept the same boolean. WS uses the existing `/responses`
+endpoint and authentication; the gateway must implement `response.create`.
+SDK `fetch` overrides affect HTTP/SSE, not sockets. Explicit WS opt-in bypasses that
+HTTP override for the socket; an HTTP fallback still uses it.
+
+Payload construction and `onPayload` precede connecting, including for cancelled
+requests. A pre-send handshake network failure, connect timeout, or upgrade
+404/405/426/501 rebuilds the full HTTP candidate with its normal storage/chaining
+rules and calls `onPayload` again. The hook may replace each candidate; it does not
+see the final socket-local delta. Other upgrade statuses retain normal error
+classification. Diagnostics preserve status and available headers, not a buffered
+rejected-upgrade body.
+
+When handshake headers are available, `onResponse` reports the physical WS
+handshake once, marked with `metadata.transport="websocket"` and
+`metadata.phase="handshake"`. Reusing the socket does not emit another handshake.
+These are not per-generation headers; no generation request ID is invented.
+`omp bench --json` includes the transport when response metadata makes it
+observable. Standard WS cache benchmarks still measure generation usage, but
+cannot claim per-generation request IDs or HTTP response-cache headers.
+
+A healthy retained socket can send incremental `previous_response_id` turns,
+including with `store: false`. Changed history/options, credentials, concurrent
+temporary sockets, or a replacement after the **30-second idle limit** require
+full input without an old socket's anchor. Continuation follows the same opt-outs
+as HTTP chaining: `statefulResponses: false`, `PI_OPENAI_STATEFUL=0`, or a model's
+`compat.statefulResponses: false` sends full history on every WS turn, so set the
+compat flag for gateways that ignore `previous_response_id`. Three consecutive
+stale-anchor rejections stop sending anchors for the logical session. Official HTTP
+can already use stored stateful chaining independently of that socket lifetime; WS
+is not guaranteed to save traffic or latency there.
+
+Injected `previous_response_id` and `background: true` are rejected. A definite
+first-frame stale-anchor rejection permits one full-history resend on the same
+healthy socket before generation evidence. WS does not inherit HTTP transient,
+resume, or empty-completion retries; a successful empty WS response submits once.
+
+After an uncertain send, a transport failure or stream timeout fails the call
+without hidden HTTP replay. Partial output remains available; existing Agent
+recovery may start an SSE continuation under its own rules, retaining completed
+tool results and never executing incomplete arguments. Caller abort and protocol/
+queue errors do not mark transport incompatibility.
+
+An upgrade rejection (404/405/426/501) or a post-send transport failure makes the
+SSE downgrade sticky for the logical session, endpoint and model until
+`releaseSession`/provider-state `close` or a new scope. A pre-send network failure or
+connect timeout falls back for that request only; a second consecutive one becomes
+sticky, and a completed WS exchange resets the count. Embedders retaining provider
+state must release finished sessions. Calls without a logical session ID do not
+share sticky state; without `providerSessionState`, it lasts only for that call.
+Normal idle retirement is not a downgrade. Codex's protocol and recovery remain
+independent.
 
 ### Bedrock request options
 
@@ -268,12 +404,25 @@ override matching model tags. These fields do not configure the Anthropic Messag
 - `typesafe`
 - `openrouter-decisions`
 - `openai-decisions`
+- `google-decisions`
 - `workers-ai-systemone`
 
-`typesafe`, `openrouter-decisions`, `openai-decisions`, and `workers-ai-systemone` are judgment APIs, not chat transports: a model declared with one answers judgment requests and is selected by the `judge` model role. `typesafe` posts TypeSafe's System One body to `{baseUrl}/v1/systemone` (any System One server: TypeSafe, OpenJEV, Kev, self-hosted Clef); `openrouter-decisions` posts the same body to `{baseUrl}/decisions`; `openai-decisions` translates questions and answers to OpenAI's Decisions API at `{baseUrl}/decisions` (the bundled `openai/gpt-6-luna-decisions` row sends the wire model `gpt-6-luna`); `workers-ai-systemone` posts the System One body to Cloudflare Workers AI at `{baseUrl}/{model id}`, where `<account>` in the base URL is filled from the stored credential's account id or `CLOUDFLARE_ACCOUNT_ID`. Its `headers` carry gateway routing or custom authentication headers for that traffic.
-Judgment requests can share image attachments with vision-chat requests. Native OpenAI Decisions, TypeSafe Jev, OpenRouter Jev, and Workers AI judges, plus prompted vision-chat models, support images; text-only candidates are skipped for image requests. `Judge.supportsImages` identifies compatible candidates, and a judge chain with no image-capable model fails explicitly rather than dropping images. Prompted judgments normalize images for the selected candidate, including upscaling undersized rasters and converting WebP for models with STB-backed decoders; native judges continue to receive the original image bytes. When constructing a `NativeJudge` directly for System One, set `supportsImages: true`; `createNativeJudge` derives this flag from the catalog.
+`typesafe`, `openrouter-decisions`, `openai-decisions`, `google-decisions`, and `workers-ai-systemone` are judgment APIs, not chat transports: a model declared with one answers judgment requests and is selected by the `judge` model role. `typesafe` posts TypeSafe's System One body to `{baseUrl}/v1/systemone` (any System One server: TypeSafe, OpenJEV, Kev, self-hosted Clef); `openrouter-decisions` posts the same body to `{baseUrl}/decisions`; `openai-decisions` translates questions and answers to OpenAI's Decisions API at `{baseUrl}/decisions` (the bundled `openai/gpt-6-luna-decisions` row sends the wire model `gpt-6-luna`); `google-decisions` translates them to Google's Gemini Decisions API at `{baseUrl}/decisions` with the key in `x-goog-api-key` (the bundled `google/gemini-decision-1` row); `workers-ai-systemone` posts the System One body to Cloudflare Workers AI at `{baseUrl}/{model id}`, where `<account>` in the base URL is filled from the stored credential's account id or `CLOUDFLARE_ACCOUNT_ID`. Its `headers` carry gateway routing or custom authentication headers for that traffic.
+Judgment requests can share image attachments with vision-chat requests. Native OpenAI Decisions, Gemini Decisions, TypeSafe Jev, OpenRouter Jev, and Workers AI judges, plus prompted vision-chat models, support images; text-only candidates are skipped for image requests. `Judge.supportsImages` identifies compatible candidates, and a judge chain with no image-capable model fails explicitly rather than dropping images. Prompted judgments normalize images for the selected candidate, including upscaling undersized rasters and converting WebP for models with STB-backed decoders; native judges continue to receive the original image bytes. When constructing a `NativeJudge` directly for System One, set `supportsImages: true`; `createNativeJudge` derives this flag from the catalog.
 
 Catalog-backed native judges apply the selected model's image bounds. Direct `NativeJudge` constructors can supply `imageInput` bounds explicitly; opting into images does not inherit Jev's size limits for unrelated System One models.
+
+`openrouter-decisions` judges honor the model's `compat.openRouterRouting` and `compat.extraBody` as OpenRouter chat models do, under any base URL: routing (including an `@provider` selector pin) becomes the request's `provider` field, then `extraBody` is merged over the body. `openRouterRouting` accepts only `only` and `order`; for other [provider preferences](https://openrouter.ai/docs/provider-routing) such as `allow_fallbacks` or `data_collection`, set the whole `provider` object in `extraBody`, which replaces the routing block. Other judgment APIs ignore both keys.
+
+```yaml
+providers:
+   openrouter:
+      modelOverrides:
+         typesafe/jev-1.14:
+            compat:
+               extraBody:
+                  provider: { only: [typesafe], allow_fallbacks: false, data_collection: deny }
+```
 
 OpenAI Decisions forwards embedded `ImageContent.detail`, and different explicit fidelity settings retain separate native image-judgment cache entries. TypeSafe Jev has no image-detail equivalent: detail is ignored on the wire and in cache identity, so requests that differ only by detail can reuse an answer. Omitted detail and explicit `auto` share the default setting.
 
@@ -283,7 +432,7 @@ After image filtering, the same native-only tail policy used for text judgments 
 
 #### Jev images (experimental)
 
-Native image judgments for Jev are experimental. Direct TypeSafe Jev supports `jev-latest`, `jev-preview`, `jev-1.13.0`, and `jev-1.14.0` (the default `judge` role uses `typesafe/jev-1.14.0`; `jev-latest` is TypeSafe's stable alias, currently `jev-1.13.0`). OpenRouter supports `typesafe/jev-1.13`, `typesafe/jev-1.14`, and `~typesafe/jev-latest`.
+Native image judgments for Jev are experimental. Direct TypeSafe Jev supports `jev-latest`, `jev-preview`, `jev-1.13.0`, and `jev-1.14.0` (the default `judge` role uses `typesafe/jev-1.14.0`; `jev-latest` is TypeSafe's stable alias and has served `jev-1.14.0` since 2026-10-22). OpenRouter supports `typesafe/jev-1.13`, `typesafe/jev-1.14`, and `~typesafe/jev-latest`.
 
 Images join `state` without replacing it: an object root keeps its fields and gains them under a collision-safe `__omp_judgment_images` key (with a numeric suffix if the key is taken), an array root gains them at the end, and a string root becomes `[original, ...images]`. Direct TypeSafe requests add each image as a referenced `assets` entry and put its reference in `state`, setting `TypeSafe-Danger-Zone-Images: true` only when images are attached; caller-supplied assets (auth gateway) must each be referenced in `state`, `instructions`, or `criteria`, and each split request carries only the assets it references. OpenRouter encodes each image as an `image_url` data URL part and uses neither the TypeSafe header nor a top-level `images` field.
 
@@ -340,7 +489,7 @@ Loading models.yml checks a `modelOverrides` `kind` only against an api the file
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 - `imageInputDecoder`: `stb` only. Set this on a custom model or `modelOverrides` entry when the serving backend uses an STB-compatible image decoder that cannot accept WebP; OMP converts attached and historical WebP images before provider dispatch.
 - `imageCountBudget`: positive integer. Set this on a custom model or `modelOverrides` entry to state how many images one request to its host may carry. It replaces the catalog budget, which is 5 for a provider no catalog rule names. A gateway in front of a vendor with a higher limit needs it: once a session holds more images than the budget, OMP drops the oldest ones, which changes the cached prompt prefix.
-- `tokenizer`: opt into a specific embedded local tokenizer when a proxy's model id is ambiguous or noncanonical. Allowed values: `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, `glm5`, and `o200k` (OpenAI GPT-5 and later). Omit it to use catalog identity policy; unknown models retain the fast local estimate.
+- `tokenizer`: opt into a specific embedded local tokenizer when a proxy's model id is ambiguous or noncanonical. Allowed values: `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, `glm5`, `cl100k` (OpenAI GPT-3.5 and GPT-4) and `o200k` (OpenAI GPT-5 and later). Omit it to use catalog identity policy; models without one count in o200k.
 
 ## Validation rules (current)
 
@@ -619,6 +768,10 @@ Runtime discovery probes LiteLLM management metadata in order: `GET /model_group
 
 If every metadata route is unavailable, discovery falls back to the OpenAI-compatible `GET /models` list. A forbidden or failed metadata request is logged once with its endpoint and status; `404` is treated as an absent route. Both paths exclude models explicitly marked with known task-specific LiteLLM modes: `audio_speech`, `audio_transcription`, `batch`, `embedding`, `guardrail`, `image_edit`, `image_generation`, `moderation`, `ocr`, `rerank`, `search`, `vector_store`, and `video_generation`. Missing, null, and unrecognized modes remain selectable so router aliases continue to work. Rich metadata maps per-model context, capability, and upstream-provider fields. OpenAI-backed models use LiteLLM's Responses route so reasoning summaries remain available; mixed-provider groups stay on Chat Completions. Bare fallback ids use the known OpenAI model families for routing and bundled reference metadata when available. Fallback pricing remains unknown (represented by zero); configured generic discovery uses a 128,000-token context default when neither the endpoint nor a bundled reference supplies a limit. Rich management metadata can supply provider-specific prices. Later probes fill or override reported metadata for models in the first usable roster rather than unioning every endpoint's roster.
 
+### Bifrost provider discovery
+
+When `bifrost` has a credential (`BIFROST_API_KEY` or stored `/login bifrost` auth), runtime discovery reads the gateway's `GET /models` roster from the provider `baseUrl` / `models.yml` config, otherwise `BIFROST_BASE_URL`, otherwise `http://localhost:8080/v1`. Model ids keep Bifrost's `<bifrost-provider>/<model>` form. Chat models use `openai-completions`; decision models become `openai-decisions` judges on `POST {baseUrl}/decisions`. The roster is authoritative and cached per key and base URL. Row mapping, decision-model detection, and judge retry guidance are in [Bifrost](provider-quirks.md#bifrost-bifrost).
+
 ### Generic OpenAI-compatible discovery
 
 `openai-models-list` reads `{baseUrl}/v1/models` by default (without adding a second `/v1`).
@@ -635,6 +788,20 @@ existing native/reference/default fallback.
 Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
 use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
 Anthropic-routed models use an 8,192-token fallback output cap.
+
+When neither configuration, discovery nor the catalog establishes reasoning support, thinking is
+**unverified**, not disabled. The first request with a thinking level (including the session default)
+runs small, separate capability probes before sending your turn. The requested level is tried first;
+all six levels are tested in parallel. If that format fails, alternate effort, toggle or token-budget
+formats are tried for the API. Probes contain only a fixed arithmetic question, never your conversation
+or tools. They add requests and latency on the first use of an unknown model.
+
+Accepted levels, request format and observed reasoning are saved in `models.db`, scoped to provider,
+API, endpoint and wire model ID. Later turns reuse the result and clamp unsupported levels. Positive
+results expire after 30 days; results with no reasoning controls expire after one day. Auth failures,
+rate limits, outages and timeouts are inconclusive and are not saved as lack of support. Parameter
+acceptance counts even if the provider returns no visible reasoning. Explicit capability settings,
+including `reasoning: false`, take precedence over probing.
 
 A row advertising only image output becomes an image-generation runner; embedding-only output
 becomes an embedding runner. Mixed outputs remain chat models. These runners are visible with
@@ -834,8 +1001,8 @@ write one. `D` edits the selected role's description in
 `modelTags.<role>.description`. The top row shows it on one truncated line.
 An empty description hides the text without restoring the default.
 
-The `agent-author` role creates agent definitions in the agents hub. Until assigned,
-agent creation keeps using the foreground model. The `compaction` role overrides
+The `agent-author` role authors agent definition prose wherever agents can be generated (today the
+`/agents` definition editor). Until assigned, agent creation keeps using the foreground model. The `compaction` role overrides
 the summarizer used by soft compaction without switching the foreground model.
 Until assigned, compaction keeps its existing model-specific and active-model
 fallback order.
@@ -850,19 +1017,23 @@ changing summary quality. Both roles appear in **Roles** and RPC listings.
 
 The `deck-*` namespace belongs to NeoDeck: every role id beginning with `deck-` is a member, including custom roles. The built-in chat role `deck-inbox` classifies inbox items and chooses where they go. Its default is GPT-6 Luna on the ChatGPT subscription provider (`openai-codex/gpt-6-luna`). If that model is unavailable, normal role resolution reports it as unresolved; it does not borrow the active conversation model.
 
-Assign `modelRoles.deck-inbox` globally or per project, or use `/models` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
+Assign `modelRoles.deck-inbox` globally or per project, or use `/roles` → **Roles** → **Deck inbox**. Presentation overrides, provenance, thinking selections, and `retry.fallbackChains.deck-inbox` work like other chat roles. RPC `get_roles` (or in-process `RpcRoles.list()`) includes it even before configuration, with its default in `patterns` and optional available model in `resolved`; all `deck-*` entries carry `namespace: "deck"`.
 
 Consumers add another role by registering a `deck-<name>` key through the existing `modelRoles`, `modelTags`, or `cycleOrder` settings. For example, `modelRoles: { deck-triage: "openai-codex/gpt-6-luna" }` makes `@deck-triage` available in the picker and RPC catalog without a NeoPi code change. The namespace alone does not register an unconfigured role or supply it with a default model. To ship a new built-in role visible on fresh installs, add its id to the shared role lists in `packages/tui/src/overlays/model-browser.ts`, metadata to `config/model-roles.ts`, and any default selectors to `src/priority.json`; no namespace-specific resolver or UI changes are needed.
 
 #### Assigning roles
 
-Assigning a non-default role in `/models` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
+Assigning a non-default role in `/roles` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
-`/model` opens the rich provider-sidebar picker in current-session-only mode, starting on **Recently used**. Selecting a model uses it for the active conversation without changing the saved default or role mappings. This view has no role chooser or policy editors. Use **All models** or a provider to browse beyond recent selections. `/models` keeps the full role-management hub. `/switch` and Alt+P keep the compact session-only picker.
+`/model [selector]` opens the fullscreen **Big Pickle** session-only picker by default, the same as Alt+P, or switches directly when given a selector. Choose **Small picker** in Settings → Model → **Session model picker** (`models.sessionPicker: small`) for the compact view. Both sizes support pressing Alt+P again to target the temporary Task-role override. Focused subagent selection continues to use its compact session-only picker. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. Selecting a model changes only the active conversation, not the saved default or role mappings. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` is a hidden alias for `/roles`; `/switch` is a hidden alias for `/model`. A hidden alias appears with its command's description when the typed command text is a literal prefix of that alias and no visible command name or ordinary alias shares that prefix. Fuzzy name and description matches do not suppress it.
 
-In `/model`, `/models`, the compact session picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
+Vim navigation and editing are opt-in through `tui.vimMode: true` (default `false`; **Vim Navigation and Editing** in `/settings`). The Vim motions and yank/paste aliases described below require that setting. Ordinary arrows, paging, Home/End, Enter/Space, search focus, context switching and menu history remain available when it is off; text fields use literal editing.
+
+In `/roles`, the compact `/model` picker, and agent hubs, lists open in normal navigation. `j`/`k` select, `gg`/`G` jump, `Ctrl-d`/`Ctrl-u` move half a page, and `Ctrl-e`/`Ctrl-y` scroll the view without changing the selected row. `/` focuses the section's search field; Roles search stays in Roles. Text fields keep literal typing and editing keys. Esc leaves the field retaining its query, then returns from a nested page to its parent; Esc at the root closes. `h`/`l` and Left/Right switch model-hub panes except in a focused field or effort chooser, where they edit text or adjust effort. Non-effort chip strips use `j`/`k` to choose and Enter/Space to commit; `h`/`l` leaves without committing and switches panes. Tab/Shift-Tab and Ctrl-N/Ctrl-P switch contexts, not chip values. Roles retains `f` for adding a fallback and `y`/`Y`/`p` for yank/paste. Composer editing and Ctrl-P model cycling are unchanged. See [menu navigation](./keybindings.md#menu-navigation) for history and native viewport limits.
 
 In the Roles view, `y` on a root with configured fallbacks snapshots the primary model followed by its complete fallback chain, preserving fixed and Auto effort metadata. A root without fallbacks and an individual fallback row still yank a single entry; `Y` keeps its existing whole-chain behavior on fallback rows. `p` appends the snapshot to the target chain in order, skips duplicates, and preserves existing target-entry policies. Later source or target edits do not mutate the saved snapshot.
+
+Without Vim mode, use `Alt+Y` to copy the highlighted role/model, `Alt+Shift+Y` to copy its complete fallback chain, and `Alt+P` to append the copied entries. These alternatives remain available with Vim mode enabled too.
 
 Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default`. Quote `@` aliases in YAML values (`plan: "@slow"`). Chat-role values can append `:auto` or a concrete thinking selector (`:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, `:max`); model-kind roles do not use chat thinking suffixes. An explicit `provider/model:high` or `@role:high` in a caller's selector bypasses implicit global effort rules, but `:auto` classifies within the matching rule and saved Auto set.
 
@@ -877,7 +1048,7 @@ chain rather than inheriting the active conversation model.
 
 If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
 
-### Effort controls in `/models`
+### Effort controls in `/roles`
 
 The **Effort rules** sidebar edits global `effort.rules`: pick an exact catalog model or enter a `provider/model` glob or `re:` regular expression, then toggle its allowed concrete levels. Exact rules win over regexes, then globs. The first matching row within a kind wins; pattern rows can be reordered. These rules apply to implicit effort choices in sessions and subagents, including saved fixed defaults, not only Auto. Explicit supported caller/manual efforts bypass the rules, and legacy mode ignores them. The judge path currently skips the implicit rule resolver when its selection is absent or Inherit.
 
@@ -885,7 +1056,7 @@ Assign a role in **Roles** or from a model row and select **Inherit**, **Off**, 
 
 In the default `effort.mode: replacement`, implicit role/fallback choices are intersected with the target model's capabilities and winning global rule. A constrained fixed level adjusts to the nearest permitted level below it or, if necessary, the lowest permitted level, with a warning. An empty permitted intersection yields an actionable error instead of silent promotion. `effort.mode: legacy` restores the old `lo|med|hi` task hints and `task.maxEffort` ceiling; the replacement wire accepts only concrete levels when enabled. See [Thinking and effort policy](./settings.md#thinking-and-effort-policy).
 
-### Context rules in `/models`
+### Context rules in `/roles`
 
 The **Context rules** sidebar uses the same exact-model picker, glob/regex editor, search, and pattern ordering as Effort rules. Both editors save global rule arrays; project and `--config` layers can replace those arrays through the usual Settings precedence. Context rules apply to every session model use, including subagents and explicit effort selections. They do not rewrite the provider's catalog capabilities.
 
@@ -918,7 +1089,7 @@ A model preset is a named snapshot of every role assignment plus `defaultThinkin
 /modelpreset list | delete <name>
 ```
 
-In `/models`, press `s` in the Roles view to save the current setup under a name. Presets live under `modelPresets` in `config.yml`:
+In `/roles`, press `s` in the Roles view to save the current setup under a name. Presets live under `modelPresets` in `config.yml`:
 
 ```yaml
 modelPresets:
@@ -941,11 +1112,12 @@ Related settings:
 - `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
 - `providers.kimiApiFormat` (`auto|openai|anthropic`; `auto` follows server-declared model metadata)
 - `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
+- `providers.openaiResponsesWebsockets` (opt-in standard Responses transport; see [Standard Responses WebSockets](#standard-responses-websockets))
 - `providers.openaiLiveSteering` (deliver mid-response user messages into GPT-6 responses over the Codex WebSocket)
 
 `modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`
 accept exact selectors, globs, and fuzzy matches. The resulting scope restricts chat models only
-(Ctrl+P cycling, the startup model, chat roles in `/models`); judge, search, image, and speech
+(Ctrl+P cycling, the startup model, chat roles in `/roles`); judge, search, image, and speech
 models stay available for their roles, so entries naming them are accepted but have no effect.
 
 `enabledModels`, `enabledProviders`, and `disabledProviders` entries may also be scoped to a path prefix:
@@ -969,7 +1141,7 @@ String entries apply everywhere. Scoped entries apply when the current working d
 
 Both surfaces keep provider-prefixed concrete models visible and selectable.
 
-- `/model` opens the rich session-only picker on recently used models, with provider catalogs and no role chooser. `/models` opens the full role-management hub. `/switch` and Alt+P open the compact session-only picker.
+- `/model [selector]` and Alt+P use the fullscreen Big Pickle by default (`models.sessionPicker: small` selects the compact picker); a selector switches directly without editing saved roles. `/roles [session|project|global]` and Alt+M open the role-management hub. The old `/models` and `/switch` names remain hidden aliases, revealed by a literal prefix once no visible command name or ordinary alias shares it.
 - `omp models` (default `ls` action) prints provider-grouped tables of available **chat** models; `--kind <kind>` selects another catalog kind and `--kind all` includes every kind.
 - `omp models find <substring>` filters by provider, id, or name; `omp models refresh` forces an online catalog re-fetch ignoring the model cache TTL; a provider name doubles as an `ls` filter (e.g. `omp models openai-codex`).
 - Other flags: `--json`, `-e <path>` / `--extension <path>` (repeatable), `--no-extensions` (skip ambient discovery; explicit `-e` still loads), and `--config <overlay>` (repeatable).
@@ -1176,7 +1348,8 @@ An explicit per-request region or a model ARN's region wins. Otherwise an ambien
 `AWS_REGION`/`AWS_DEFAULT_REGION`/the AWS profile is used when compatible with the inference
 profile's geo prefix; a compatible guardrail ARN region or the geo's default region is the
 fallback. Models without a recognized geo prefix use the ambient region, then the guardrail ARN
-region, then `us-east-1`. Set `baseUrl` on `providers.amazon-bedrock` (or on a custom provider using
+region, then a regional `baseUrl` region, then `us-east-1`. Set `baseUrl` on `providers.amazon-bedrock`
+(or on a custom provider using
 `api: bedrock-converse-stream`) to send requests somewhere else instead — a VPC/PrivateLink
 endpoint, a FIPS host, or a gateway. Any path or query string on the `baseUrl` is kept — the path
 as a prefix, the query appended to the final URL (and included in SigV4's canonical request when
@@ -1195,9 +1368,10 @@ with the resolved region — signing has to match the region it sends to, and ev
 model already carries such a `baseUrl`. Use a distinct host (VPC endpoint, `-fips`, gateway) to
 pin an origin exactly.
 
-Region resolution itself is unaffected by `baseUrl`, because SigV4 still signs with a real AWS
-region — set `AWS_REGION` or use a region-scoped model id/ARN if the endpoint expects a specific
-one. A gateway that accepts a bearer token instead of SigV4 needs no AWS signing credentials: set the
+For models without a recognized geo prefix, a regional `baseUrl` sets the region when the ambient
+and guardrail ARN regions are unset. SigV4 signs with that region instead of the `us-east-1` default.
+An ambient region or region-scoped model id/ARN overrides it. A gateway that accepts a bearer token
+instead of SigV4 needs no AWS signing credentials: set the
 provider's `apiKey` (or `AWS_BEARER_TOKEN_BEDROCK`) and signing is skipped. Region resolution still
 controls AWS's default host.
 

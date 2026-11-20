@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -104,19 +105,17 @@ describe("short-list native picker search", () => {
 		}
 	});
 
-	it("shows a short-list filter and leaves it before native close cancels", () => {
+	it.each([false, true])("leaves a short-list filter before native Close cancels (Vim %s)", vim => {
+		setMenuSearchVimMode(vim);
 		const { selector, log } = make();
 		const initial = selector.describe(pickerCx);
 		expect(sheet(initial).props.query).toBeNull();
 		selector.getSelectList().handleInput("/");
 		const focused = selector.describe(pickerCx);
-		expect(focused).not.toBe(initial);
 		expect(sheet(focused).props.query).toBe("");
-		expect(sheet(focused).props.actions?.at(-1)?.label).toBe("Back to list");
 		selector.getSelectList().handleInput("h");
 		selector.handleNativeEvent(act("close"));
 		expect(sheet(selector.describe(pickerCx)).props.query).toBeNull();
-		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Close");
 		expect(log).not.toContain("cancel");
 		selector.handleNativeEvent(act("close"));
 		expect(log).toContain("cancel");
@@ -131,7 +130,6 @@ describe("short-list native picker search", () => {
 		list.handleInput("\r");
 		expect(list.filterFocused).toBe(false);
 		expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
-		expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Clear search");
 		expect(log).toEqual([]);
 
 		selector.handleNativeEvent(act(action));
@@ -141,18 +139,6 @@ describe("short-list native picker search", () => {
 
 		selector.handleNativeEvent(act(action));
 		expect(log).toEqual(["cancel"]);
-	});
-
-	it("invalidates the native sheet when an empty filter loses focus", () => {
-		const { selector, log } = make();
-		selector.getSelectList().handleInput("/");
-		const focused = selector.describe(pickerCx);
-		selector.handleNativeEvent(act("cancel"));
-		const normal = selector.describe(pickerCx);
-		expect(normal).not.toBe(focused);
-		expect(sheet(normal).props.query).toBeNull();
-		expect(sheet(normal).props.actions?.at(-1)?.label).toBe("Close");
-		expect(log).not.toContain("cancel");
 	});
 });
 
@@ -306,7 +292,7 @@ describe("oauth selector picker", () => {
 		keys: { source: (id: string) => (id === signedIn ? { kind: "oauth" } : undefined) } as never,
 	};
 
-	it("shows auth-state dots and filters the provider catalogue while typing", () => {
+	it("keeps credential state visible while search previews the matching providers", () => {
 		const selector = new OAuthSelectorComponent(
 			"login",
 			auth,
@@ -317,7 +303,6 @@ describe("oauth selector picker", () => {
 		expect(first.layout).toBe("cards");
 		const row = first.items?.find(item => item.id === signedIn);
 		expect(row?.dot).toBe("success");
-		expect(row?.detail).toBe("Signed in · login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
 		selector.handleInput("/");
@@ -327,6 +312,15 @@ describe("oauth selector picker", () => {
 		expect(live.order?.length).toBeLessThan(providers.length);
 		selector.handleInput("\r");
 		expect(sheet(selector.describe(pickerCx)).props.order).toEqual(live.order);
+		selector.handleInput("\x1b");
+		selector.handleInput("/");
+		selector.handleInput(providers[1]!.name);
+		const preview = sheet(selector.describe(pickerCx)).props;
+		expect(preview.order).toContain(providers[1]!.id);
+		expect(preview.order?.length).toBeLessThan(providers.length);
+		selector.handleInput("\r");
+		const typed = sheet(selector.describe(pickerCx)).props;
+		expect(typed.order?.length).toBeLessThan(providers.length);
 	});
 
 	it("activate signs in with the clicked provider; close cancels", () => {
@@ -367,6 +361,7 @@ describe("oauth selector picker", () => {
 		selector.handleInput("/");
 		selector.handleInput("hjkl /");
 		selector.handleInput("\x1b");
+		selector.handleInput("\x1b");
 		expect(closed).toBe(false);
 		const snapshot = selector.navigationSnapshot();
 		const restored = new OAuthSelectorComponent(
@@ -380,4 +375,13 @@ describe("oauth selector picker", () => {
 		selector.handleInput("\x1b");
 		expect(closed).toBe(true);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

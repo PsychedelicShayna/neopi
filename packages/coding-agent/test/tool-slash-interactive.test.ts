@@ -59,7 +59,7 @@ describe("live /tool: command reports and completion", () => {
 		});
 		terminal = new VirtualTerminal(120, 32);
 		const composer = new Composer({ terminal });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 		mode.addAutocompleteProvider(base => {
 			provider = base;
 			return base;

@@ -38,6 +38,7 @@ function runExtensionWorker(
 		},
 		tabGroups: { query: () => Promise.resolve([]) },
 		debugger: { getTargets: () => Promise.resolve([]), onEvent: event, onDetach: event },
+		downloads: { search: () => Promise.resolve([]), onCreated: event, onChanged: event },
 		alarms: { create() {}, onAlarm: event },
 		action: {
 			setBadgeText: () => Promise.resolve(),

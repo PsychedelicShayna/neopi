@@ -1,8 +1,9 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
-import { PlanReviewOverlay } from "@oh-my-pi/pi-tui/overlays/plan-review-overlay";
+import { PlanReviewOverlay, type PlanReviewOverlayChoice } from "@oh-my-pi/pi-tui/overlays/plan-review-overlay";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 
@@ -12,8 +13,6 @@ const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const ENTER = "\r";
 const TAB = "\t";
-const SHIFT_LEFT = "\x1b[1;2D";
-const SHIFT_RIGHT = "\x1b[1;2C";
 const SHIFT_DOWN = "\x1b[1;2B";
 const CANCEL = "\x07"; // ctrl+g, remapped to tui.select.cancel below
 
@@ -23,12 +22,18 @@ function render(component: PlanReviewOverlay): string {
 	return stripVTControlCharacters(component.render(80).join("\n"));
 }
 
-const APPROVAL_OPTIONS = [
+const APPROVAL_LABELS = [
 	"Approve and execute",
 	"Approve and compact context",
 	"Approve and keep context",
 	"Refine plan",
 ];
+/** Choices whose ids are their labels, so picks read as the option text. */
+const APPROVAL_OPTIONS: PlanReviewOverlayChoice[] = APPROVAL_LABELS.map(label => ({ id: label, label }));
+/** {@link APPROVAL_OPTIONS} with "Approve and keep context" disabled. */
+const KEEP_DISABLED: PlanReviewOverlayChoice[] = APPROVAL_OPTIONS.map((choice, i) =>
+	i === 2 ? { ...choice, disabled: "Context is too full" } : choice,
+);
 
 describe("PlanReviewOverlay", () => {
 	beforeAll(async () => {
@@ -75,129 +80,6 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(ENTER);
 		expect(onPick).toHaveBeenCalledTimes(1);
 		expect(onPick).toHaveBeenCalledWith("Approve and compact context");
-	});
-
-	it("uses viewer motions, gg prefixes and explicit pane/context keys without submitting", () => {
-		const rows = Array.from({ length: 400 }, (_, index) => `L${String(index).padStart(3, "0")}`).join("\n");
-		const onPick = vi.fn();
-		const overlay = new PlanReviewOverlay(
-			`# Plan\n\n\`\`\`\n${rows}\n\`\`\`\n`,
-			{ options: APPROVAL_OPTIONS },
-			{ onPick, onCancel: vi.fn() },
-		);
-		const visible = () =>
-			render(overlay)
-				.split("\n")
-				.flatMap(line => line.match(/L\d{3}/)?.[0] ?? []);
-		render(overlay);
-		overlay.handleInput(LEFT);
-		for (let index = 0; index < 12; index++) overlay.handleInput("j");
-		const before = visible();
-		overlay.handleInput("\x05");
-		expect(visible()[0]).toBe(before[1]);
-		overlay.handleInput("\x19");
-		expect(visible()[0]).toBe(before[0]);
-		overlay.handleInput("\x04");
-		expect(visible()[0]).not.toBe(before[0]);
-		overlay.handleInput("\x15");
-		expect(visible()[0]).toBe(before[0]);
-		overlay.handleInput("\x1b[6~");
-		overlay.handleInput("\x1b[5~");
-		expect(visible()[0]).toBe(before[0]);
-		overlay.handleInput("G");
-		expect(render(overlay)).toContain("L399");
-		overlay.handleInput("g");
-		expect(render(overlay)).toContain("L399");
-		overlay.handleInput("g");
-		expect(render(overlay)).toContain("L000");
-		overlay.handleInput(RIGHT);
-		overlay.handleInput(" ");
-		expect(onPick).not.toHaveBeenCalled();
-		overlay.handleInput("\x0e");
-		expect(render(overlay)).toContain("↑/↓ scroll");
-		overlay.handleInput("\x10");
-		expect(render(overlay)).not.toContain("↑/↓ scroll");
-	});
-
-	it("scrolls Contents without relocating the selected section and clamps its last row", () => {
-		const plan =
-			"# Plan\n\n" + Array.from({ length: 40 }, (_, index) => `## Section ${index}\n\nbody-${index}\n\n`).join("");
-		let titles: string[] = [];
-		const overlay = new PlanReviewOverlay(
-			plan,
-			{ options: APPROVAL_OPTIONS },
-			{
-				onPick: vi.fn(),
-				onCancel: vi.fn(),
-				onAnnotationStateChange: state => {
-					titles = state.annotations.map(annotation => annotation.section.title);
-				},
-			},
-		);
-		render(overlay);
-		overlay.handleInput(TAB);
-		overlay.handleInput("\x05");
-		render(overlay);
-		overlay.handleInput("a");
-		overlay.handleInput("first");
-		overlay.handleInput(ENTER);
-		expect(titles).toEqual(["Section 0"]);
-		overlay.handleInput("G");
-		overlay.handleInput("j");
-		overlay.handleInput("a");
-		overlay.handleInput("last");
-		overlay.handleInput(ENTER);
-		expect(titles).toEqual(["Section 0", "Section 39"]);
-		overlay.handleInput("l"); // body scroll resumes passive Contents following
-		overlay.handleInput("g");
-		overlay.handleInput("g");
-		const sidebar = render(overlay)
-			.split("\n")
-			.map(line => line.split("│")[1] ?? "")
-			.join("\n");
-		expect(sidebar).toContain("Section 0");
-	});
-
-	it("keeps annotation text literal, shares chooser bounds and cancels native drafts before the review", () => {
-		const onPick = vi.fn();
-		const onCancel = vi.fn();
-		let notes: string[] = [];
-		const overlay = new PlanReviewOverlay(
-			"# Plan\n\n## First\n\nbody\n\n## Last\n\nend\n",
-			{ options: APPROVAL_OPTIONS },
-			{
-				onPick,
-				onCancel,
-				onAnnotationStateChange: state => {
-					notes = state.annotations.map(annotation => annotation.note);
-				},
-			},
-		);
-		render(overlay);
-		overlay.handleInput(TAB);
-		overlay.handleInput("a");
-		const literal = "j/k h l gg G / note";
-		for (const char of literal) overlay.handleInput(char);
-		expect(render(overlay)).toContain(literal);
-		overlay.handleNativeEvent({ type: "action", key: "tools/cancel", act: "cancel", mods: [] });
-		expect(onCancel).not.toHaveBeenCalled();
-		expect(notes).toEqual([]);
-		for (const note of [literal, "second"]) {
-			overlay.handleInput("a");
-			for (const char of note) overlay.handleInput(char);
-			overlay.handleInput(ENTER);
-		}
-		overlay.handleInput("e");
-		overlay.handleInput("G");
-		overlay.handleInput("j");
-		overlay.handleInput(" ");
-		overlay.handleInput("\x15");
-		overlay.handleInput("changed");
-		overlay.handleInput(ENTER);
-		expect(notes).toEqual([literal, "changed"]);
-		expect(onPick).not.toHaveBeenCalled();
-		overlay.handleNativeEvent({ type: "action", key: "tools/cancel", act: "cancel", mods: [] });
-		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
 	it("types printable submit, delete, cancel and external-editor bindings literally", () => {
@@ -305,7 +187,7 @@ describe("PlanReviewOverlay", () => {
 		expect(out).toContain("My Plan");
 		expect(out).toContain("step one then step two");
 		expect(out).toContain("Plan mode - next step");
-		for (const option of APPROVAL_OPTIONS) expect(out).toContain(option);
+		for (const option of APPROVAL_LABELS) expect(out).toContain(option);
 		expect(out).toContain("esc cancel");
 		// Outlined like the /copy overlay.
 		expect(out).toContain(theme.boxRound.topLeft);
@@ -378,7 +260,7 @@ describe("PlanReviewOverlay", () => {
 		// Disable index 2 ("Approve and keep context").
 		const overlay = new PlanReviewOverlay(
 			"plan",
-			{ promptTitle: "next", options: APPROVAL_OPTIONS, disabledIndices: [2] },
+			{ promptTitle: "next", options: KEEP_DISABLED },
 			{ onPick, onCancel: vi.fn() },
 		);
 		// 0 -> 1 -> (skip 2) -> 3.
@@ -400,7 +282,7 @@ describe("PlanReviewOverlay", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
-	it("drives the model-tier slider with Shift-Left/Right without changing the option cursor", () => {
+	it("drives the model-tier slider with left/right without changing the option cursor", () => {
 		const changes: number[] = [];
 		const slider: HookSelectorSlider = {
 			caption: "continue with",
@@ -414,12 +296,12 @@ describe("PlanReviewOverlay", () => {
 			{ promptTitle: "next", options: APPROVAL_OPTIONS, slider },
 			{ onPick, onCancel: vi.fn() },
 		);
-		overlay.handleInput(SHIFT_RIGHT);
+		overlay.handleInput(RIGHT);
 		expect(changes).toEqual([1]);
 		// Clamped at the right edge.
-		overlay.handleInput(SHIFT_RIGHT);
+		overlay.handleInput(RIGHT);
 		expect(changes).toEqual([1]);
-		overlay.handleInput(SHIFT_LEFT);
+		overlay.handleInput(LEFT);
 		expect(changes).toEqual([1, 0]);
 
 		// The slider must not have moved the option cursor.
@@ -637,7 +519,7 @@ describe("PlanReviewOverlay", () => {
 		expect(sidebar).not.toContain("build the thing");
 	});
 
-	it("clamps region navigation until an explicit pane change", () => {
+	it("flows past the end of a region into the actions on Down", () => {
 		const overlay = new PlanReviewOverlay(
 			SECTION_PLAN,
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
@@ -645,13 +527,11 @@ describe("PlanReviewOverlay", () => {
 		);
 		render(overlay);
 		overlay.handleInput(TAB); // -> toc, first section
-		// Walking beyond the last ToC entry must not change focus.
+		// Walk to the last ToC entry, then one more Down drops into the actions.
 		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
 		const out = render(overlay);
-		expect(out).toContain("a annotate");
-		overlay.handleInput("l"); // ToC -> body
-		overlay.handleInput("l"); // body -> actions
-		expect(render(overlay)).not.toContain("a annotate");
+		// Actions focus restores the option cursor highlight + actions help.
+		expect(out).not.toContain("a annotate");
 	});
 
 	it("scrolls the body exactly one line per keystroke in body focus", () => {
@@ -1262,7 +1142,76 @@ describe("PlanReviewOverlay", () => {
 		expect(feedback).toContain("Goal");
 	});
 
-	it("drives the slider with Shift-arrows even when a sidebar is present", () => {
+	it("offers Refine first and preselected only while the plan has feedback", () => {
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			SECTION_PLAN,
+			{ promptTitle: "next", options: APPROVAL_OPTIONS, refine: { id: "refine", label: "Refine with notes" } },
+			{ onPick, onCancel: vi.fn(), onPlanEdited: vi.fn() },
+		);
+		expect(render(overlay)).not.toContain("Refine with notes");
+		overlay.handleInput(TAB); // -> toc (Overview)
+		overlay.handleInput(DOWN); // -> Goal
+		overlay.handleInput("d"); // delete Goal: feedback now exists
+		expect(render(overlay)).toContain("Refine with notes");
+		overlay.handleInput("u"); // undo: no feedback, no Refine
+		expect(render(overlay)).not.toContain("Refine with notes");
+		overlay.handleInput("d");
+		overlay.handleInput(TAB); // -> body
+		overlay.handleInput(TAB); // -> actions, cursor on Refine
+		overlay.handleInput(ENTER);
+		expect(onPick).toHaveBeenCalledWith("refine");
+	});
+
+	it("saves through Save without closing the review", () => {
+		const onSave = vi.fn();
+		const onPick = vi.fn();
+		const overlay = new PlanReviewOverlay(
+			"# Plan\n\nbody\n",
+			{ promptTitle: "next", options: APPROVAL_OPTIONS.slice(0, 1) },
+			{ onPick, onCancel: vi.fn(), onSave },
+		);
+		overlay.handleInput(DOWN); // -> Save
+		overlay.handleInput(ENTER);
+		expect(onSave).toHaveBeenCalledWith("# Plan\n\nbody\n");
+		expect(onPick).not.toHaveBeenCalled();
+		expect(render(overlay)).not.toContain("submitting");
+		overlay.handleInput(UP);
+		overlay.handleInput(ENTER);
+		expect(onPick).toHaveBeenCalledWith("Approve and execute");
+	});
+
+	it("restores a quote annotation under the line holding the quote and lists it in the feedback", () => {
+		const onFeedbackChange = vi.fn();
+		const plan = "# Plan\n\n## Goal\n\nShip the credits ledger.\n\n## Steps\n\nWrite the migration.\n";
+		const at = "## Steps\n\n".length;
+		const overlay = new PlanReviewOverlay(
+			plan,
+			{
+				promptTitle: "next",
+				options: APPROVAL_OPTIONS,
+				annotationState: {
+					annotations: [
+						{
+							section: { index: 2, title: "Steps" },
+							target: { kind: "quote", quote: "the migration", at: at + "Write ".length },
+							note: "which table?",
+						},
+					],
+				},
+			},
+			{ onPick: vi.fn(), onCancel: vi.fn(), onFeedbackChange },
+		);
+		expect(onFeedbackChange).toHaveBeenLastCalledWith(
+			'Refinement feedback on the plan:\n\n## Steps\n> "the migration"\n- which table?\n',
+		);
+		const lines = render(overlay).split("\n");
+		const row = lines.findIndex(line => line.includes("Write the migration."));
+		expect(lines[row + 1]).toContain("“the migration”");
+		expect(lines[row + 2]).toContain("which table?");
+	});
+
+	it("drives the slider with both arrows even when a sidebar is present", () => {
 		const changes: number[] = [];
 		const slider: HookSelectorSlider = {
 			caption: "continue with",
@@ -1276,11 +1225,12 @@ describe("PlanReviewOverlay", () => {
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		render(overlay); // establish the sidebar
-		// Shift-arrows retain the slider while unmodified h/l and arrows own panes.
-		overlay.handleInput(SHIFT_RIGHT); // 0 -> 1
-		overlay.handleInput(SHIFT_LEFT); // 1 -> 0
+		// The sidebar sits beside the body, not the slider, so left must still step
+		// the tier back instead of being stolen to focus the ToC.
+		overlay.handleInput(RIGHT); // 0 -> 1
+		overlay.handleInput(LEFT); // 1 -> 0
 		expect(changes).toEqual([1, 0]);
-		// Slider adjustment keeps action focus.
+		// Focus stayed on the actions region (left did not jump to the ToC).
 		expect(render(overlay)).not.toContain("a annotate");
 	});
 
@@ -1351,7 +1301,7 @@ describe("PlanReviewOverlay", () => {
 	it("never hovers a disabled option", () => {
 		const overlay = new PlanReviewOverlay(
 			"plan body text",
-			{ promptTitle: "next", options: APPROVAL_OPTIONS, disabledIndices: [2] },
+			{ promptTitle: "next", options: KEEP_DISABLED },
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		const selectedBg = theme.getBgAnsi("selectedBg");
@@ -1359,4 +1309,13 @@ describe("PlanReviewOverlay", () => {
 		expect(hoverRow(overlay, "Approve and keep context")).toBe(true);
 		expect(optionLineRaw(overlay, "Approve and keep context")).not.toContain(selectedBg);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

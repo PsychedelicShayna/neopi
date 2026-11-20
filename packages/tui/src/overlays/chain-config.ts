@@ -540,7 +540,7 @@ export class ChainConfigOverlayComponent implements Component {
 		this.#screen = screen;
 		this.#active = active;
 		const navigationHint =
-			screen === "thinking" ? "h/l effort" : screen === "list" ? "h/l, Tab panes" : "h parent / l open";
+			screen === "thinking" ? "←/→ effort" : screen === "list" ? "←/→, Tab panes" : "← parent / → open";
 		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
 		this.#previewScroll = savedList?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && savedList?.previewFocused === true;

@@ -1,8 +1,20 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
-import { pickWeightedTip, WelcomeComponent } from "@oh-my-pi/pi-tui/prompt/welcome";
+import { pickWeightedTip, type VersionUpdate, WelcomeComponent } from "@oh-my-pi/pi-tui/prompt/welcome";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui";
+import type { NativeNode } from "../src/native/node";
+
+function nativeVersionText(welcome: WelcomeComponent): string {
+	const nodes: NativeNode[] = [welcome.describe({} as never)];
+	for (const node of nodes) {
+		if (node.k === "text" && node.p?.role === "omp.welcome.version") {
+			return (node.p.spans ?? []).map(part => part.t).join("");
+		}
+		for (const child of node.c ?? []) if ("k" in child) nodes.push(child);
+	}
+	throw new Error("Welcome version text missing");
+}
 
 describe("WelcomeComponent", () => {
 	beforeAll(async () => {
@@ -74,11 +86,77 @@ describe("WelcomeComponent", () => {
 		}
 	});
 
-	it("keeps classic branding inside narrow terminal widths", () => {
+	it("keeps classic branding and every updater phase inside narrow terminal widths", () => {
 		const welcome = new WelcomeComponent("1.0.0", "classic");
-		for (const width of [4, 6, 12, 20, 36, 50, 80, 140]) {
-			for (const line of welcome.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		const updates: (VersionUpdate | null)[] = [
+			null,
+			{ phase: "updating", version: "1.1.0", fraction: 0.5 },
+			{ phase: "ready", version: "1.1.0" },
+			{ phase: "failed", version: "1.1.0" },
+		];
+		for (const update of updates) {
+			welcome.setVersionUpdate(update);
+			for (const width of [4, 6, 12, 20, 36, 50, 80, 140]) {
+				for (const line of welcome.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
 		}
+	});
+
+	it.each(["new", "classic"] as const)(
+		"refreshes native and terminal updater progress, completion, failure and clearing (%s)",
+		branding => {
+			const welcome = new WelcomeComponent("1.0.0", branding);
+			const baselineNative = nativeVersionText(welcome);
+			const baseline = welcome.render(80).map(line => Bun.stripANSI(line));
+			const states: { update: VersionUpdate; status: string }[] = [
+				{ update: { phase: "updating", version: "1.1.0" }, status: "updating…" },
+				{ update: { phase: "updating", version: "1.1.0", fraction: 0.426 }, status: "42%" },
+				{ update: { phase: "updating", version: "1.1.0", fraction: 0.789 }, status: "78%" },
+				{ update: { phase: "ready", version: "1.1.0" }, status: "next launch" },
+				{ update: { phase: "failed", version: "1.1.0" }, status: "update failed" },
+			];
+			for (const { update, status } of states) {
+				welcome.setVersionUpdate(update);
+				const native = nativeVersionText(welcome);
+				const rendered = welcome.render(80).map(line => Bun.stripANSI(line));
+				const terminal = rendered.find(line => line.includes("v1.0.0")) ?? "";
+				for (const version of [native, terminal]) {
+					expect(version).toContain("v1.0.0");
+					expect(version).toContain("v1.1.0");
+					expect(version).toContain(status);
+				}
+				if (branding === "classic") expect(rendered.slice(1)).toEqual(baseline.slice(1));
+			}
+			welcome.setVersionUpdate(null);
+			expect(nativeVersionText(welcome)).toBe(baselineNative);
+			expect(welcome.render(80).map(line => Bun.stripANSI(line))).toEqual(baseline);
+		},
+	);
+
+	it("narrows the classic updater before dropping it without shifting the boxed content", () => {
+		const welcome = new WelcomeComponent("1.0.0", "classic");
+		const baselines = new Map<number, string[]>(
+			[80, 38, 30].map(width => [width, welcome.render(width).map(line => Bun.stripANSI(line))]),
+		);
+		welcome.setVersionUpdate({ phase: "updating", version: "1.1.0", fraction: 0.5 });
+		const headers = new Map<number, string>();
+		for (const width of [80, 38, 30]) {
+			const rows = welcome.render(width).map(line => Bun.stripANSI(line));
+			headers.set(width, rows[0] ?? "");
+			const baseline = baselines.get(width);
+			if (!baseline) throw new Error(`missing classic welcome baseline at width ${width}`);
+			expect(rows.slice(1)).toEqual(baseline.slice(1));
+			for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+		}
+		const full = headers.get(80)!;
+		const compact = headers.get(38)!;
+		expect(full).toContain("→ v1.1.0");
+		expect(full).toContain("50%");
+		expect(compact).toContain("→ v1.1.0 50%");
+		const suffixWidth = (row: string) => visibleWidth(row.slice(row.indexOf("→"), row.indexOf("50%") + 3));
+		expect(suffixWidth(full)).toBeGreaterThan(suffixWidth(compact));
+		expect(headers.get(30)).toContain("v1.0.0");
+		expect(headers.get(30)).not.toContain("→");
 	});
 
 	it("selects standard tip when preset is not unicode", () => {
@@ -168,5 +246,22 @@ describe("WelcomeComponent", () => {
 		expect(narrow).toContain("████████████");
 		expect(narrow).not.toContain("█▀▀▄");
 		expect(narrow).not.toContain("v1.0.0");
+	});
+
+	it("trails the version with update progress, narrowing it before dropping it, without moving the lockup", () => {
+		const rows = (columns: number, update: boolean) => {
+			const welcome = new WelcomeComponent("1.0.0");
+			if (update) welcome.setVersionUpdate({ phase: "updating", version: "1.1.0", fraction: 0.5 });
+			return welcome.render(columns).map(row => Bun.stripANSI(row));
+		};
+		const versionRow = (columns: number) => rows(columns, true).find(row => row.includes("v1.0.0")) ?? "";
+
+		// The lockup centers as if no indicator were there.
+		expect(rows(80, true).slice(0, 4)).toEqual(rows(80, false).slice(0, 4));
+		expect(versionRow(80)).toMatch(/v1\.0\.0 → v1\.1\.0 \S+ 50%$/);
+		// Too narrow for the bar: the percent alone; narrower still: the bare version.
+		expect(versionRow(56)).toMatch(/v1\.0\.0 → v1\.1\.0 50%$/);
+		expect(versionRow(38)).not.toContain("→");
+		for (const columns of [80, 56, 38]) expect(visibleWidth(versionRow(columns))).toBeLessThan(columns);
 	});
 });

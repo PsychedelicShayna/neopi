@@ -50,7 +50,7 @@ export function taskEvents(task: Task): TaskEvent[] {
 	return events.sort((a, b) => a.at.localeCompare(b.at));
 }
 
-/** Existing cards may contain prose beginning with an unfinished YAML delimiter. */
+/** Malformed metadata remains visible for repair without inventing evidence properties. */
 export function evidenceProperties(body: string): Record<string, unknown> {
 	try { return cardFrontmatter(body).properties; } catch { return {}; }
 }

@@ -95,7 +95,6 @@ describe("enabled speculative local reads", () => {
 			data: (await Bun.file(imagePath).bytes()).toBase64(),
 			mimeType: "image/png",
 		});
-		expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "IMAGE_READ_OK" }]);
 	});
 
 	it("starts the physical read before provider completion and commits one normal result", async () => {

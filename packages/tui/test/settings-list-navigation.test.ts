@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { SettingsFormField, SettingsList, type SettingsListTheme } from "../src/components/settings-list";
 import { TextFormField } from "../src/components/form";
 
@@ -64,9 +65,11 @@ describe("SettingsList host-decoded navigation", () => {
 		expect(field.filterFocused).toBe(true);
 		field.handleInput("jkgG/ ");
 		expect(field.settingsList.getSearchQuery()).toBe("jkgG/ ");
+		expect(field.settingsList.navigationSnapshot().filterDraft).toBe("jkgG/ ");
+		field.handleInput("\x1b");
+		expect(field.filterFocused).toBe(true);
 		field.handleInput("\x1b");
 		expect(field.filterFocused).toBe(false);
-		expect(field.settingsList.getSearchQuery()).toBe("");
 		field.settingsList.clearSearch();
 		field.settingsList.handleNavigation({ kind: "confirm" });
 		expect(field.settingsList.hasOpenSubmenu()).toBe(true);
@@ -103,6 +106,53 @@ describe("SettingsList host-decoded navigation", () => {
 		expect(previews).toEqual(["second", "second"]);
 	});
 
+	it("restores a native cycling-row popup draft without applying it or replaying visits", () => {
+		const changed: string[] = [];
+		const visits: string[] = [];
+		const list = new SettingsList(
+			[
+				{
+					id: "mode",
+					label: "Mode",
+					currentValue: "off",
+					values: ["off", "on"],
+					menu: (value, done) =>
+						new TextFormField({
+							theme: fieldTheme,
+							initialValue: value,
+							onSubmit: text => done(text),
+							onCancel: () => done(),
+						}),
+				},
+			],
+			4,
+			settingsTheme,
+			(_id, value) => changed.push(value),
+			() => {},
+		);
+		list.onNavigationVisit = page => visits.push(page);
+		const root = list.navigationSnapshot();
+		list.openSubmenuFor("mode");
+		list.handleInput(" draft");
+		const popup = list.navigationSnapshot();
+		expect(popup).toMatchObject({ submenuId: "mode", submenu: { value: "off draft" } });
+		expect(visits).toEqual(["mode"]);
+
+		list.restoreNavigation(root);
+		expect(list.hasOpenSubmenu()).toBe(false);
+		list.restoreNavigation(popup);
+		expect(list.hasOpenSubmenu()).toBe(true);
+		expect(list.navigationSnapshot()).toMatchObject({ submenu: { value: "off draft" } });
+		expect(list.getSelectedItem()?.currentValue).toBe("off");
+		expect(changed).toEqual([]);
+		expect(visits).toEqual(["mode"]);
+
+		list.handleInput("\x1b");
+		list.handleNavigation({ kind: "toggle" });
+		expect(list.getSelectedItem()?.currentValue).toBe("on");
+		expect(changed).toEqual(["on"]);
+	});
+
 	it("history never cycles a setting whose old submenu no longer exists", () => {
 		const changed: string[] = [];
 		const list = new SettingsList(
@@ -136,4 +186,13 @@ describe("SettingsList host-decoded navigation", () => {
 		expect(list.getSelectedItem()?.currentValue).toBe("off");
 		expect(changed).toEqual([]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

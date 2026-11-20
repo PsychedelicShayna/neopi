@@ -12,6 +12,8 @@ import { sameItems, sameProps } from "../native/memo";
 import { plainLine, plainText } from "../native/spans";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { Component } from "../tui";
+import { activeThemeSymbol } from "../theme/active-symbols";
+import type { SymbolKey } from "../theme/symbols";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 import { MenuHelp, menuHintLines } from "./menu-hints";
@@ -46,6 +48,9 @@ function hasMouseRouter(component: Component): component is Component & MouseRou
 	return "routeMouse" in component && typeof component.routeMouse === "function";
 }
 
+/** Builds a row's editor from its current value; `done` closes it, with the value picked if one was. */
+export type SettingEditor = (currentValue: string, done: (selectedValue?: string) => void) => Component;
+
 export interface SettingItem {
 	/** Unique identifier for this setting */
 	id: string;
@@ -57,11 +62,20 @@ export interface SettingItem {
 	warning?: string;
 	/** Current value to display (right side) */
 	currentValue: string;
+	/** Inherited source marker, kept separate from the editable value. */
+	valueSymbol?: SymbolKey;
+	/** Use file presence for the value color, even while selected or outside the active section. */
+	scopedValue?: boolean;
 	/** If provided, Enter/Space cycles through these values */
 	values?: string[];
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
-	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
-	/** True when the displayed setting differs from its default value. */
+	submenu?: SettingEditor;
+	/**
+	 * A `values` row's choices as a menu: a native settings page's popup button
+	 * opens it ({@link SettingsList.openSubmenuFor}); Enter/Space still cycle.
+	 */
+	menu?: SettingEditor;
+	/** Whether to highlight the row's value as configured. */
 	changed?: boolean;
 	/** The default, as a native settings page names it in the changed dot's title. */
 	defaultLabel?: string;
@@ -97,9 +111,10 @@ export function prefsSectionId(title: string): string {
 /** A setting as a native settings row, given its typed control; `undefined` for headings. */
 export function settingPrefsRow(item: SettingItem, control: TspPrefsControl): TspPrefsRow | undefined {
 	if (item.heading) return undefined;
+	const symbol = item.valueSymbol ? activeThemeSymbol(item.valueSymbol) : "";
 	const row: TspPrefsRow = {
 		id: item.id,
-		label: plainLine(item.label),
+		label: plainLine(symbol ? `${item.label} ${symbol}` : item.label),
 		hint: item.description ? plainLine(item.description) : undefined,
 		warning: item.warning ? plainLine(item.warning) : undefined,
 		changed: item.changed === true ? true : undefined,
@@ -277,7 +292,7 @@ export class SettingsList implements Component {
 	navigationSnapshot(): SettingsListNavigationState {
 		return {
 			selectedId: this.#selection.selectedKey,
-			filter: this.#filterQuery,
+			filter: this.#search.confirmedQuery,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
 			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
@@ -292,7 +307,7 @@ export class SettingsList implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
-		this.#setFilter(this.#search.query);
+		if (this.#filterQuery !== this.#search.query) this.#setFilter(this.#search.query);
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 
@@ -325,14 +340,8 @@ export class SettingsList implements Component {
 				focused: state.filterFocused === true && this.#options.typeToSearch !== false,
 				cursor: state.filterCursor,
 			});
-			if (
-				typeof state.submenuId === "string" &&
-				this.selectItem(state.submenuId) &&
-				this.getSelectedItem()?.submenu
-			) {
-				this.#activateItem();
-				// #activateItem reassigns the submenu that the reset above narrowed to null.
-				const submenu = this.#submenuComponent as Component | null;
+			if (typeof state.submenuId === "string") {
+				const submenu = this.openSubmenuFor(state.submenuId);
 				if (isMenuHistoryParticipant(submenu)) submenu.restoreNavigation(state.submenu);
 			}
 			this.#viewport.setTop(state.viewportTop);
@@ -488,14 +497,18 @@ export class SettingsList implements Component {
 		this.#onChange(item.id, value);
 	}
 
-	/** Opens row `id`'s submenu the way Enter does (leaving one already open for it); returns it. */
+	/**
+	 * Opens row `id`'s submenu (a cycling row's `menu`) the way Enter opens a
+	 * submenu, leaving one already open for it; returns it.
+	 */
 	openSubmenuFor(id: string): Component | undefined {
 		const open = this.openSubmenu;
 		if (open?.id === id) return open.component;
 		if (open || !this.selectItem(id)) return undefined;
 		const item = this.getSelectedItem();
-		if (!item?.submenu) return undefined;
-		this.#activateItem();
+		const editor = item?.submenu ?? item?.menu;
+		if (!item || !editor) return undefined;
+		this.#openSubmenu(item, editor);
 		return this.#submenuComponent ?? undefined;
 	}
 
@@ -535,6 +548,13 @@ export class SettingsList implements Component {
 	/** Highlight the item under the pointer (null clears). */
 	setHoverItem(id: string | null): void {
 		this.#hoveredItemId = id;
+	}
+
+	/** The visible row highlighted by the pointer, independent of keyboard selection. */
+	getHoveredItem(): SettingItem | undefined {
+		const id = this.#hoveredItemId;
+		if (id === null || !this.#hitRows.includes(id)) return undefined;
+		return this.#filteredItems.find(item => item.id === id);
 	}
 
 	/**
@@ -823,7 +843,9 @@ export class SettingsList implements Component {
 	}
 
 	#describeItem(item: NativeDescribedSetting): NativeNode {
-		const value = plainLine(String(item.currentValue ?? ""));
+		const symbol = item.valueSymbol ? activeThemeSymbol(item.valueSymbol) : "";
+		const current = String(item.currentValue ?? "");
+		const value = plainLine(symbol && current ? `${current} ${symbol}` : symbol || current);
 		const changed = item.changed === true;
 		const signature = `${item.heading === true}\0${item.label}\0${value}\0${changed}\0${item.warning ?? ""}\0${item.description ?? ""}`;
 		const cached = item[kNativeItem];
@@ -900,20 +922,32 @@ export class SettingsList implements Component {
 		const labelPad = padding(Math.max(0, maxLabelWidth - visibleWidth(labelPlain)));
 		const separator = "  ";
 		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
-		const valuePlain = truncateToWidth(String(item.currentValue ?? ""), valueMaxWidth, Ellipsis.Omit);
+		const current = String(item.currentValue ?? "");
+		let valuePlain: string;
+		if (item.valueSymbol) {
+			const symbol = activeThemeSymbol(item.valueSymbol);
+			const suffix = symbol && current ? ` ${symbol}` : symbol;
+			const suffixWidth = visibleWidth(suffix);
+			valuePlain =
+				suffixWidth <= valueMaxWidth
+					? truncateToWidth(current, valueMaxWidth - suffixWidth, Ellipsis.Omit) + suffix
+					: truncateToWidth(current, valueMaxWidth, Ellipsis.Omit);
+		} else {
+			valuePlain = truncateToWidth(current, valueMaxWidth, Ellipsis.Omit);
+		}
 		const hovered = !isSelected && this.#theme.hovered !== undefined && item.id === this.#hoveredItemId;
-		// De-emphasized rows (outside the active section) render as plain text
-		// under one dim wash so inner label/value colors don't fight it.
+		const valueText = this.#theme.value(valuePlain, isSelected && !item.scopedValue, item.changed === true);
 		if (dimmed && !isSelected) {
-			const text = this.#theme.hint(
-				truncateToWidth(`  ${labelPlain}${labelPad}${separator}${valuePlain}`, Math.max(0, rowWidth)),
-			);
+			// Scoped values retain their presence color outside the active section.
+			const left = `  ${labelPlain}${labelPad}${separator}`;
+			const text = item.scopedValue
+				? truncateToWidth(this.#theme.hint(left) + valueText, Math.max(0, rowWidth))
+				: this.#theme.hint(truncateToWidth(left + valuePlain, Math.max(0, rowWidth)));
 			return hovered && this.#theme.hovered ? this.#theme.hovered(text) : text;
 		}
 		const warningStyle = this.#theme.warning ?? this.#theme.description;
 		const labelText =
 			this.#theme.label(item.label, isSelected, item.changed === true) + (mark ? warningStyle(mark) : "") + labelPad;
-		const valueText = this.#theme.value(valuePlain, isSelected, item.changed === true);
 		const text = truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
 		// Pointer hover paints a band behind the whole row, distinct from the
 		// keyboard selection (cursor glyph + accent) which stays where it is.
@@ -939,7 +973,12 @@ export class SettingsList implements Component {
 			lines.push("");
 			const editKey = editorKey("tui.editor.deleteCharBackward");
 			const cancelKey = editorKey("tui.select.cancel");
-			lines.push(truncateToWidth(this.#theme.hint(t("tui.settings_list.edit_search", { edit: editKey, cancel: cancelKey })), width));
+			lines.push(
+				truncateToWidth(
+					this.#theme.hint(t("tui.settings_list.edit_search", { edit: editKey, cancel: cancelKey })),
+					width,
+				),
+			);
 			return lines;
 		}
 
@@ -1186,24 +1225,7 @@ export class SettingsList implements Component {
 		if (!item || item.heading) return;
 
 		if (item.submenu && openSubmenu) {
-			const previousSnapshot = this.navigationSnapshot();
-			// Open submenu, passing current value so it can pre-select correctly
-			this.#submenuItemId = item.id;
-			this.#submenuComponent = item.submenu(item.currentValue, (selectedValue?: string) => {
-				if (selectedValue !== undefined) {
-					item.currentValue = selectedValue;
-					this.#onChange(item.id, selectedValue);
-				}
-				this.#closeSubmenu();
-			});
-			if (isMenuHistoryParticipant(this.#submenuComponent)) {
-				this.#submenuComponent.onNavigationVisit = (page, previousSubmenu) => {
-					if (this.#restoring) return;
-					const previous = { ...this.navigationSnapshot(), submenu: previousSubmenu };
-					this.onNavigationVisit?.(page ? `${item.id}:${page}` : item.id, previous);
-				};
-			}
-			if (!this.#restoring) this.onNavigationVisit?.(item.id, previousSnapshot);
+			this.#openSubmenu(item, item.submenu);
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -1212,6 +1234,27 @@ export class SettingsList implements Component {
 			item.currentValue = newValue;
 			this.#onChange(item.id, newValue);
 		}
+	}
+
+	/** Opens `editor` for `item` with its current value (so it pre-selects); a pick updates the row and runs `onChange`. */
+	#openSubmenu(item: SettingItem, editor: SettingEditor): void {
+		const previousSnapshot = this.navigationSnapshot();
+		this.#submenuItemId = item.id;
+		this.#submenuComponent = editor(item.currentValue, (selectedValue?: string) => {
+			if (selectedValue !== undefined) {
+				item.currentValue = selectedValue;
+				this.#onChange(item.id, selectedValue);
+			}
+			this.#closeSubmenu();
+		});
+		if (isMenuHistoryParticipant(this.#submenuComponent)) {
+			this.#submenuComponent.onNavigationVisit = (page, previousSubmenu) => {
+				if (this.#restoring) return;
+				const previous = { ...this.navigationSnapshot(), submenu: previousSubmenu };
+				this.onNavigationVisit?.(page ? `${item.id}:${page}` : item.id, previous);
+			};
+		}
+		if (!this.#restoring) this.onNavigationVisit?.(item.id, previousSnapshot);
 	}
 
 	#closeSubmenu(): void {

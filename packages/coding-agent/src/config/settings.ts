@@ -13,12 +13,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { type GeneratedProvider, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { type Api, type Model, modelKind } from "@oh-my-pi/pi-catalog/types";
 import {
+	expandTilde,
 	getAgentDbPath,
 	getAgentDir,
 	getLastChangelogVersionPath,
@@ -31,15 +31,19 @@ import {
 	procmgr,
 } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import {
+	SETTINGS_FILE_SCOPES,
+	type SettingsFileScope,
+	type SettingsResolution,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
-import { AgentStorage } from "../session/agent-storage";
+import { AgentStorage, type AgentStorageApi } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { writeFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
@@ -58,7 +62,7 @@ import {
 } from "./registry";
 // Registers every setting before any instance is read (definitions live next to their domains).
 import "./all-settings";
-import { cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
+import { cfgDisabledProviders, cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
 import { cfgRoleSettings } from "./role-settings";
 import {
 	cfgRoleEffortSelections,
@@ -126,7 +130,7 @@ function validateRuntimeModelOverrides(overrides: RuntimeModelOverrides): Runtim
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
 export type SettingProvenance = "env" | "runtime" | "session" | "role" | "overlay" | "project" | "global" | "default";
 
-export type SettingsScope = "global" | "project" | "session";
+export type SettingsScope = SettingsFileScope;
 export interface SettingsScopeDetails {
 	global: unknown;
 	project: unknown;
@@ -139,6 +143,42 @@ export interface SettingsScopeDetails {
 /** Raw settings object as stored in YAML */
 export interface RawSettings {
 	[key: string]: unknown;
+}
+
+/** `null` means absent; present files are compared by content hash. */
+type SettingsFileStamp = bigint | null;
+type SettingsFileCheck = { stamp: SettingsFileStamp; content?: Buffer };
+type SettingsFileStamps = Map<string, SettingsFileStamp>;
+
+async function checkSettingsFile(filePath: string): Promise<SettingsFileCheck> {
+	try {
+		const content = await fs.promises.readFile(filePath);
+		return { stamp: Bun.hash.xxHash64(content), content };
+	} catch (error) {
+		if (isEnoent(error)) return { stamp: null };
+		throw error;
+	}
+}
+
+async function checkSettingsFiles(paths: Iterable<string>, previous: SettingsFileStamps): Promise<SettingsFileStamps> {
+	const entries = await Promise.all(
+		Array.from(paths, async filePath => {
+			try {
+				return [filePath, (await checkSettingsFile(filePath)).stamp] as const;
+			} catch {
+				// The actual config loaders own diagnostics for unreadable files.
+				return [filePath, previous.get(filePath) ?? null] as const;
+			}
+		}),
+	);
+	return new Map(entries);
+}
+
+function settingsFilesChanged(previous: SettingsFileStamps, current: SettingsFileStamps): boolean {
+	for (const [filePath, stamp] of current) {
+		if (stamp !== (previous.get(filePath) ?? null)) return true;
+	}
+	return false;
 }
 
 type YamlContentGeneration = {
@@ -232,6 +272,7 @@ type MainYamlReadResult = {
 	configPath: string | null;
 	toml?: RawSettings;
 	tomlPath?: string;
+	files: SettingsFileStamps;
 };
 
 type ProjectSettingsReadResult = {
@@ -240,17 +281,32 @@ type ProjectSettingsReadResult = {
 	toml: RawSettings;
 	tomlPath?: string;
 	shellPathSource: string | undefined;
-	/** Files that supplied merged project-level settings items. */
+	/** Discovered project files to invalidate and watch, including filtered or temporarily missing sources. */
 	sourcePaths: string[];
 	/** Project warnings surfaced for this read; commit with the layer as `#projectSettingsWarningsSeen`. */
 	warningsSeen: Set<string>;
+	files: SettingsFileStamps;
+};
+
+/** A project-layer read before `disabledProviders` filtering; `#resolveProjectRead` merges it. */
+type ProjectSettingsDiscovery = {
+	cwd: string;
+	quarantineInvalid: boolean;
+	/** Project-level settings items in discovery order, disabled providers' items included. */
+	items: SettingsCapabilityItem[];
+	nativeModelRoles: unknown;
+	fileSettings: RawSettings;
+	toml: RawSettings;
+	tomlPath?: string;
+	warningsSeen: Set<string>;
+	files: SettingsFileStamps;
 };
 
 /** `strict` rejects on any unreadable layer; `keep-last-good` keeps each failed layer's previous value. */
 type PersistedReloadMode = "strict" | "keep-last-good";
 
 /** Layer refreshes serialized by `Settings.#exclusive`: disk reloads and cwd re-scopes. */
-type LayerRefreshKind = PersistedReloadMode | "rescope";
+type LayerRefreshKind = PersistedReloadMode | "rescope" | "recheck" | "session-save";
 
 /** Quiet period after the last config-file event before the watcher reloads from disk. */
 const CONFIG_WATCH_DEBOUNCE_MS = 200;
@@ -422,8 +478,110 @@ interface OwnLayers {
 	session: RawSettings;
 }
 
+interface FileScopeView {
+	readonly parent: FileScopeView | undefined;
+	readonly layers: OwnLayers;
+	readonly merged: RawSettings;
+}
+
 /** The layers an {@link Settings.overlay} child writes locally; see {@link Settings.overlayLayers}. */
-export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides" | "session">>;
+export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides" | "session"> & { derived: boolean }>;
+
+/**
+ * Copy of one instance's own layers and scope, from which a worker-thread {@link Settings.mirror}
+ * is built and kept current ({@link Settings.mirrorState}, {@link Settings.applyMirrorState}).
+ */
+export interface SettingsMirrorState {
+	/** Bumped on every own-layer change of the source; a mirror ignores states not newer than its last. */
+	readonly generation: number;
+	readonly cwd: string;
+	readonly agentDir: string;
+	readonly configFiles: readonly string[];
+	readonly global: RawSettings;
+	readonly project: RawSettings;
+	readonly globalToml: RawSettings;
+	readonly projectToml: RawSettings;
+	readonly globalTomlPath: string | undefined;
+	readonly projectTomlPath: string | undefined;
+	readonly configPath: string | null;
+	readonly session: RawSettings;
+	readonly sessionSettingsPath: string | undefined;
+	readonly sessionDirty: boolean;
+	readonly activeRole: string | null | undefined;
+	readonly runtimeModelOverrides: RuntimeModelOverrides | undefined;
+	readonly savedRuntimeModelRoleOverrides: readonly (readonly [string, string | undefined])[];
+	readonly configOverlay: RawSettings;
+	readonly overrides: RawSettings;
+	readonly softPins: readonly string[];
+	readonly derived: boolean;
+	readonly projectShellPathSource: string | undefined;
+	readonly overlayShellPathSource: string | undefined;
+}
+
+/** A write made on a worker mirror, replayed on its main-thread instance; settings travel by id. */
+export type SettingsMirrorWrite =
+	| { readonly op: "writeValue"; readonly id: string; readonly value: unknown; readonly layer: "global" | "override" }
+	| { readonly op: "unsetGlobalValue"; readonly id: string }
+	| { readonly op: "writeEntry"; readonly id: string; readonly key: string; readonly value: unknown }
+	| { readonly op: "writeMember"; readonly id: string; readonly item: string; readonly member: boolean }
+	| { readonly op: "pinDefaultValue"; readonly id: string }
+	| { readonly op: "clearOverrideValue"; readonly id: string }
+	| { readonly op: "setModelRole"; readonly role: string; readonly modelId: string | undefined }
+	| { readonly op: "setProjectModelRole"; readonly role: string; readonly modelId: string }
+	| { readonly op: "clearProjectModelRole"; readonly role: string }
+	| { readonly op: "overrideModelRoles"; readonly roles: ReadOnlyDict<string> }
+	| { readonly op: "writeScopeValue"; readonly id: string; readonly value: unknown; readonly scope: SettingsScope }
+	| { readonly op: "writeProjectValue"; readonly id: string; readonly value: unknown }
+	| { readonly op: "applyRuntimeOverridesAtomically"; readonly overrides: RuntimeModelOverrides | undefined }
+	| { readonly op: "setActiveRole"; readonly role: string | undefined }
+	| { readonly op: "setRoleSetting"; readonly role: string; readonly id: string; readonly value: unknown }
+	| {
+			readonly op: "setRoleModelAndEffort";
+			readonly role: string;
+			readonly selector: string | undefined;
+			readonly selection: EffortSelection | undefined;
+			readonly scope: SettingsScope;
+	  }
+	| {
+			readonly op: "setFallbackChainAndEfforts";
+			readonly role: string;
+			readonly chain: string[];
+			readonly selections: Record<string, EffortSelection>;
+			readonly previousRole: string | undefined;
+	  }
+	| { readonly op: "setRoleEffortSelection"; readonly role: string; readonly selection: EffortSelection | undefined }
+	| {
+			readonly op: "setProjectRoleEffortSelection";
+			readonly role: string;
+			readonly selection: EffortSelection | undefined;
+	  };
+
+/** A disk or scope operation a worker mirror runs on its main-thread instance. */
+export type SettingsMirrorRefresh =
+	| { readonly op: "flush" }
+	| { readonly op: "reloadFromDisk"; readonly includeParents: boolean }
+	| { readonly op: "reloadForCwd"; readonly cwd: string }
+	| { readonly op: "applySettingsReload" }
+	| { readonly op: "clearScope"; readonly scope: "session" | "project" }
+	| { readonly op: "attachSessionFile"; readonly sessionFile: string | undefined }
+	| { readonly op: "saveSessionSettings" }
+	| { readonly op: "settleSessionSettings"; readonly choice: "session" | "project" | "discard" };
+
+/**
+ * The main-thread instance behind a worker {@link Settings.mirror}. Mirrors never write locally:
+ * every write and disk operation goes through here (the main instance is the single writer) and
+ * the mirror adopts the state it returns.
+ */
+export interface SettingsMirrorSource {
+	/** Applies `write` on the main instance (the worker blocks until it is done); returns its state afterwards. */
+	write(write: SettingsMirrorWrite): SettingsMirrorState;
+	/** Runs `refresh` on the main instance; resolves with its state afterwards. */
+	refresh(refresh: SettingsMirrorRefresh): Promise<SettingsMirrorState>;
+	/** The main instance's {@link Settings.cloneForCwd}, received as a mirror. */
+	cloneForCwd(cwd: string): Promise<Settings>;
+	/** The main instance's {@link Settings.getStorage}, as a remote handle; absent keeps the parent's (or none). */
+	readonly storage?: AgentStorageApi | null;
+}
 
 /** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
 interface LayerRefresh {
@@ -483,10 +641,6 @@ export function dropSettingsGroupShadows(data: RawSettings, sourcePath: string, 
 	return result;
 }
 
-function expandTilde(p: string): string {
-	return p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
-}
-
 function normalizePathPrefix(prefix: string): string {
 	return path.resolve(expandTilde(prefix));
 }
@@ -494,6 +648,45 @@ function normalizePathPrefix(prefix: string): string {
 function pathMatchesPrefix(cwd: string, prefix: string): boolean {
 	const relative = path.relative(normalizePathPrefix(prefix), path.resolve(cwd));
 	return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Phonon voice replacing each retired Kokoro voice family, keyed by Kokoro's
+ * accent/gender prefix (`af_heart` → American female → `harper`).
+ */
+const PHONON_VOICE_FOR_KOKORO_PREFIX: Record<string, string> = {
+	af_: "harper",
+	am_: "easton",
+	bf_: "maeve",
+	bm_: "edwin",
+};
+
+/**
+ * Local TTS moved from Kokoro-82M to Phonon 31M: rewrite configured Kokoro
+ * voice ids (`tts.localVoice`, `speech.voice`) to the Phonon voice of the same
+ * accent and gender, and a `local/kokoro` speech role to `local/phonon-31m`.
+ * Handles nested and quoted-dotted sources.
+ */
+function migrateKokoroSpeechSettings(raw: RawSettings): void {
+	const phononVoice = (value: unknown): string | undefined =>
+		typeof value === "string" ? PHONON_VOICE_FOR_KOKORO_PREFIX[value.slice(0, 3)] : undefined;
+	const phononRole = (value: unknown): unknown =>
+		value === "local/kokoro"
+			? "local/phonon-31m"
+			: Array.isArray(value)
+				? value.map(entry => (entry === "local/kokoro" ? "local/phonon-31m" : entry))
+				: value;
+	const leaves: Array<[root: string, leaf: string, migrate: (value: unknown) => unknown]> = [
+		["tts", "localVoice", value => phononVoice(value) ?? value],
+		["speech", "voice", value => phononVoice(value) ?? value],
+		["modelRoles", "speech", phononRole],
+	];
+	for (const [root, leaf, migrate] of leaves) {
+		const rootObj = raw[root];
+		if (isRecord(rootObj) && leaf in rootObj) rootObj[leaf] = migrate(rootObj[leaf]);
+		const dotted = `${root}.${leaf}`;
+		if (dotted in raw) raw[dotted] = migrate(raw[dotted]);
+	}
 }
 
 function stringArrayFromUnknown(value: unknown): string[] {
@@ -602,41 +795,104 @@ function runChangeListeners(listeners: ReadonlySet<SettingChangeListener>, setti
 	}
 }
 
+/** Path prefixes a path-scoped array entry names under `path`, `paths`, `pathPrefix`, `pathPrefixes`. */
+function pathScopePrefixes(entry: Record<string, unknown>): string[] {
+	return [
+		...stringArrayFromUnknown(entry.path),
+		...stringArrayFromUnknown(entry.paths),
+		...stringArrayFromUnknown(entry.pathPrefix),
+		...stringArrayFromUnknown(entry.pathPrefixes),
+	];
+}
+
+/**
+ * Default entries an object-item path-scoped `list` keeps: a non-empty list of only scoped entries
+ * adds to the setting's default (the built-in interceptor rules) rather than replacing it, so this
+ * returns that default; any unscoped entry makes the list replace it, so this returns `[]`.
+ * Read by {@link resolvePathScopedArray} and by layered merges, which must keep that meaning once a
+ * higher layer prepends unscoped entries onto a scoped-only lower list.
+ */
+function scopedListDefault(setting: AnySetting, list: readonly unknown[]): readonly unknown[] {
+	const { definition } = setting;
+	if (definition.type !== "array" || definition.pathScoped?.itemType !== "object" || list.length === 0) return [];
+	return list.some(entry => isRecord(entry) && pathScopePrefixes(entry).length === 0)
+		? []
+		: (definition.default ?? []);
+}
+
+/**
+ * Appends the object `entries` that apply at `cwd` to `resolved`.
+ * An entry naming no path prefix (none of the scope keys, or only unusable values such as YAML's
+ * `path: ~` = null) is unscoped and passes through unchanged. A scoped entry whose prefix covers `cwd`
+ * contributes its remaining fields as an inline rule, then its nested `values`/`items`/`valuesKey`
+ * entries resolved the same way, so no rule it carries is dropped inside its scope.
+ */
+function resolvePathScopedObjects(
+	entries: readonly unknown[],
+	valuesKey: string,
+	cwd: string,
+	resolved: unknown[],
+): void {
+	for (const entry of entries) {
+		if (!isRecord(entry)) continue;
+		const prefixes = pathScopePrefixes(entry);
+		if (prefixes.length === 0) {
+			resolved.push(entry);
+			continue;
+		}
+		if (!prefixes.some(prefix => pathMatchesPrefix(cwd, prefix))) continue;
+
+		const {
+			path: _path,
+			paths: _paths,
+			pathPrefix: _prefix,
+			pathPrefixes: _prefixes,
+			values,
+			items,
+			[valuesKey]: nested,
+			...inlineRule
+		} = entry;
+		if (Object.keys(inlineRule).length > 0) resolved.push(inlineRule);
+		for (const list of [values, items, nested]) {
+			if (Array.isArray(list)) resolvePathScopedObjects(list, valuesKey, cwd, resolved);
+		}
+	}
+}
+
 /** Value `setting` has in the `merged` layers, path-scoped entries resolved for `cwd`; `null` counts as unset. */
 function configuredValue(merged: RawSettings, setting: AnySetting, cwd: string): unknown {
 	const value = getByPath(merged, setting.segments);
 	if (value === undefined || value === null) return undefined;
-	return resolvePathScopedStringArray(setting, value, cwd) ?? value;
+	return resolvePathScopedArray(setting, value, cwd) ?? value;
 }
 
-function resolvePathScopedStringArray(setting: AnySetting, value: unknown, cwd: string): string[] | undefined {
+function resolvePathScopedArray(setting: AnySetting, value: unknown, cwd: string): unknown[] | undefined {
 	const scope = setting.definition.pathScoped;
 	if (!scope || !Array.isArray(value)) return undefined;
 
-	const resolved: string[] = [];
+	const resolved: unknown[] = [];
+	if (scope.itemType === "object") {
+		resolvePathScopedObjects(value, scope.valuesKey, cwd, resolved);
+		resolved.push(...scopedListDefault(setting, value));
+		return resolved;
+	}
+
 	for (const entry of value) {
 		if (typeof entry === "string") {
 			resolved.push(entry);
 			continue;
 		}
-		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		if (!isRecord(entry)) continue;
 
-		const scoped: Record<string, unknown> = entry;
-		const prefixes = [
-			...stringArrayFromUnknown(scoped.path),
-			...stringArrayFromUnknown(scoped.paths),
-			...stringArrayFromUnknown(scoped.pathPrefix),
-			...stringArrayFromUnknown(scoped.pathPrefixes),
-		];
+		const prefixes = pathScopePrefixes(entry);
 		if (prefixes.length === 0 || !prefixes.some(prefix => pathMatchesPrefix(cwd, prefix))) continue;
 
 		resolved.push(
-			...stringArrayFromUnknown(scoped.values),
-			...stringArrayFromUnknown(scoped.items),
-			...stringArrayFromUnknown(scoped[scope.valuesKey]),
+			...stringArrayFromUnknown(entry.values),
+			...stringArrayFromUnknown(entry.items),
+			...stringArrayFromUnknown(entry[scope.valuesKey]),
 		);
 	}
-
 	return resolved;
 }
 
@@ -698,7 +954,7 @@ export class Settings {
 	#configPath: string | null;
 	#cwd: string;
 	#agentDir: string;
-	#storage: AgentStorage | null = null;
+	#storage: AgentStorageApi | null = null;
 
 	#configFiles: string[] = [];
 	/** Global settings from config.yml/config.yaml */
@@ -707,6 +963,8 @@ export class Settings {
 	#project: RawSettings = {};
 	#globalToml: RawSettings = {};
 	#projectToml: RawSettings = {};
+	#globalSettingsFiles: SettingsFileStamps = new Map();
+	#projectSettingsFiles: SettingsFileStamps = new Map();
 	/** Last successfully loaded native .omp/config.yml contents. */
 	#projectFileSettings: RawSettings = {};
 	/** Logical config paths whose malformed targets were moved aside. */
@@ -715,7 +973,7 @@ export class Settings {
 	#configOverlay: RawSettings = {};
 	/** Project settings file that most recently supplied shellPath. */
 	#projectShellPathSource: string | undefined;
-	/** Discovered files that supplied the current project layer (watch targets). */
+	/** Project files to invalidate and watch, including filtered or temporarily missing sources. */
 	#projectSourcePaths: string[] = [];
 	/** Capability warnings already surfaced for the current project scope; reloads stay quiet. */
 	#projectSettingsWarningsSeen = new Set<string>();
@@ -726,6 +984,10 @@ export class Settings {
 	/** User session overrides travel with the transcript's artifact directory, not cwd. */
 	#session: RawSettings = {};
 	#sessionSettingsPath: string | undefined;
+	#sessionFileStamp: SettingsFileStamp = null;
+	#sessionFileBase: RawSettings = {};
+	/** Unresolved same-key edits remain conflicts even after the file baseline advances. */
+	#sessionFileConflicts: ReadonlySet<string> | undefined;
 	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
@@ -759,8 +1021,14 @@ export class Settings {
 	#childForwarders = new Set<SettingChangeListener>();
 	/** Instance this overlay reads through to ({@link overlay}); overlays never persist or write back. */
 	#parent: Settings | undefined;
+	/** A subagent-derived view inherits its parent's grant authority; host-created overlays do not. */
+	#derived = false;
 	/** Parent {@link revision} `#merged` was last built from; any other parent revision re-merges. */
 	#syncedParentRevision = -1;
+	/** Project-free view returned by {@link grantAuthority}, valid while {@link revision} is unchanged. */
+	#grantView: { revision: number; view: Settings } | undefined;
+	/** File-only views are built lazily for scopes the settings editor visits. */
+	#fileScopeViews?: Map<SettingsFileScope, FileScopeView>;
 
 	/**
 	 * Global-layer paths written during this session (for partial save), keyed by
@@ -828,8 +1096,21 @@ export class Settings {
 
 	/** Whether to persist changes */
 	#persist: boolean;
+	/** Main-thread instance this worker mirror replicates; set only by {@link Settings.mirror}. */
+	#mirror: SettingsMirrorSource | undefined;
+	/** {@link SettingsMirrorState.generation} this mirror last adopted; `-1` before the first. */
+	#mirrorGeneration = -1;
+	/** Bumped by every own-layer or scope rebuild; reported as {@link SettingsMirrorState.generation}. */
+	#layerGeneration = 0;
+	/** Observers of own-layer and scope changes ({@link onLayersChange}). */
+	#layerListeners = new Set<() => void>();
 
-	private constructor(options: SettingsOptions = {}) {
+	/**
+	 * `projection`: a derived read-only view of another instance ({@link grantAuthority}), not a
+	 * session's settings; it stays out of the registry so legacy {@link findScopedSettings}
+	 * lookups never resolve to it.
+	 */
+	private constructor(options: SettingsOptions = {}, { projection = false }: { projection?: boolean } = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
@@ -837,7 +1118,7 @@ export class Settings {
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
-		liveSettingsInstances.add(new WeakRef(this));
+		if (!projection) liveSettingsInstances.add(new WeakRef(this));
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
 	}
 
@@ -919,7 +1200,7 @@ export class Settings {
 	 */
 	static isolated(
 		overrides: Readonly<Record<string, unknown>> = {},
-		options: { storage?: AgentStorage | null } = {},
+		options: { storage?: AgentStorageApi | null } = {},
 	): Settings {
 		const instance = new Settings({ inMemory: true, overrides });
 		instance.#storage = options.storage ?? null;
@@ -928,16 +1209,43 @@ export class Settings {
 	}
 
 	/**
-	 * Child view for a subagent or other derived session: reads fall through to this instance
-	 * live (a later edit here reaches the child and its listeners), while `overrides` and every
-	 * later write on the child stay in the child — never persisted, never written back here.
+	 * The operator or SDK host's authority for model grants: a read-only view of the global,
+	 * `--config` and runtime layers (an overlay's own over its parent's) without any project layer,
+	 * because repository settings files are writable by the agent. Only subagent-derived overlays
+	 * delegate to their parent's authority, so a host's own overlay remains authoritative.
+	 */
+	grantAuthority(): Settings {
+		if (this.#derived && this.#parent) return this.#parent.grantAuthority();
+		const revision = this.revision;
+		if (this.#grantView?.revision === revision) return this.#grantView.view;
+		const view = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir }, { projection: true });
+		view.#storage = this.#storage;
+		view.#global = this.#operatorLayers();
+		inheritWarnings(view, this);
+		view.#rebuildMerged();
+		this.#grantView = { revision, view };
+		return view;
+	}
+
+	/** Global, `--config` and runtime layers merged over an overlay parent's, skipping every project layer. */
+	#operatorLayers(): RawSettings {
+		const own = this.#mergeOwnLayers({ ...this.#ownLayers(), project: {} });
+		return this.#parent ? this.#deepMerge(this.#parent.#operatorLayers(), own) : own;
+	}
+
+	/**
+	 * Child view: reads fall through to this instance live (a later edit here reaches the
+	 * child and its listeners), while overrides and later writes stay local and non-persistent.
+	 * Use `derived: true` for subagent-injected settings, which must not grant models.
+	 * Plain overlays are host-created authority boundaries.
 	 *
 	 * @throws Error when `overrides` names an unknown setting or a value its definition rejects.
 	 */
-	overlay(overrides: Readonly<Record<string, unknown>> = {}): Settings {
+	overlay(overrides: Readonly<Record<string, unknown>> = {}, options: { derived?: boolean } = {}): Settings {
 		const child = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir, overrides });
 		child.#storage = this.#storage;
 		child.#parent = this;
+		child.#derived = options.derived ?? false;
 		inheritWarnings(child, this);
 		child.#rebuildMerged();
 		// The parent holds only a weak reference, so a discarded child is collected without an
@@ -961,12 +1269,17 @@ export class Settings {
 	 * this plain data instead of the live child with its merged view, memoized values and listeners.
 	 */
 	overlayLayers(): OverlayLayers {
-		return structuredClone({ global: this.#global, overrides: this.#overrides, session: this.#session });
+		return structuredClone({
+			global: this.#global,
+			overrides: this.#overrides,
+			session: this.#session,
+			derived: this.#derived,
+		});
 	}
 
 	/** {@link overlay} of this instance whose own layers are `layers` (from {@link overlayLayers}). */
 	restoreOverlay(layers: OverlayLayers): Settings {
-		const child = this.overlay();
+		const child = this.overlay({}, { derived: layers.derived });
 		child.#global = structuredClone(layers.global);
 		child.#overrides = structuredClone(layers.overrides);
 		child.#session = structuredClone(layers.session);
@@ -984,7 +1297,7 @@ export class Settings {
 
 	/** Re-merges an overlay whose parent changed since the last merge (every parent write bumps its revision). */
 	#syncParent(): void {
-		if (this.#parent && this.#parent.revision !== this.#syncedParentRevision) this.#rebuildMerged();
+		if (this.#parent && this.#parent.revision !== this.#syncedParentRevision) this.#remerge();
 	}
 
 	/** Merged layers, re-merged first when the parent moved on. */
@@ -1009,6 +1322,146 @@ export class Settings {
 		return globalInstancePromise;
 	}
 
+	/**
+	 * Worker thread: in-memory replica of a main-thread instance, seeded from its {@link mirrorState}
+	 * and kept current by {@link applyMirrorState}. It never opens agent.db, config files or locks.
+	 * Reads, `onEffectiveChange` listeners, {@link revision} and child {@link overlay}s behave as on
+	 * the source; every write and disk operation on the mirror itself goes to `source` (the main
+	 * instance stays the single writer), while overlays created from the mirror keep their writes
+	 * local like any overlay. A mirror of an overlay is an overlay of `parent`, its parent's mirror.
+	 */
+	static mirror(source: SettingsMirrorSource, state: SettingsMirrorState, parent?: Settings): Settings {
+		const instance = parent
+			? parent.overlay({}, { derived: state.derived })
+			: new Settings({ inMemory: true, cwd: state.cwd, agentDir: state.agentDir });
+		instance.#mirror = source;
+		if (source.storage !== undefined) instance.#storage = source.storage;
+		instance.applyMirrorState(state);
+		return instance;
+	}
+
+	/**
+	 * Worker bootstrap only: makes `instance`, the {@link mirror} of the main thread's global
+	 * settings, this thread's global singleton (`settings`, {@link instance}, {@link current},
+	 * unscoped {@link findScopedSettings}) and the driver of process-wide effects, without
+	 * {@link init} loading anything.
+	 *
+	 * @throws Error when `instance` is not a mirror.
+	 */
+	static installGlobalMirror(instance: Settings): void {
+		if (!instance.#mirror) throw new Error("Settings.installGlobalMirror expects a worker mirror");
+		if (globalInstance === instance) return;
+		releaseGlobalMirrorEffects?.();
+		globalInstance = instance;
+		globalInstancePromise = Promise.resolve(instance);
+		clearBoundSettingsMethods();
+		releaseGlobalMirrorEffects = bindEffects(instance);
+	}
+
+	/** Whether this instance is a worker {@link mirror} of a main-thread instance. */
+	get isMirror(): boolean {
+		return this.#mirror !== undefined;
+	}
+
+	/** Instance this {@link overlay} reads through to; `undefined` for a root instance. */
+	overlayParent(): Settings | undefined {
+		return this.#parent;
+	}
+
+	/** Main thread: copy of this instance's own layers and scope, for building or refreshing a worker {@link mirror}. */
+	mirrorState(): SettingsMirrorState {
+		return {
+			generation: this.#layerGeneration,
+			cwd: this.#cwd,
+			agentDir: this.#agentDir,
+			configFiles: [...this.#configFiles],
+			global: structuredClone(this.#global),
+			project: structuredClone(this.#project),
+			globalToml: structuredClone(this.#globalToml),
+			projectToml: structuredClone(this.#projectToml),
+			globalTomlPath: this.#globalTomlPath,
+			projectTomlPath: this.#projectTomlPath,
+			configPath: this.#configPath,
+			session: structuredClone(this.#session),
+			sessionSettingsPath: this.#sessionSettingsPath,
+			sessionDirty: this.#sessionDirty,
+			activeRole: this.#activeRole,
+			runtimeModelOverrides: this.getRuntimeModelOverrides(),
+			savedRuntimeModelRoleOverrides: [...this.#savedRuntimeModelRoleOverrides],
+			configOverlay: structuredClone(this.#configOverlay),
+			overrides: structuredClone(this.#overrides),
+			softPins: [...this.#softPins].map(setting => setting.id),
+			derived: this.#derived,
+			projectShellPathSource: this.#projectShellPathSource,
+			overlayShellPathSource: this.#overlayShellPathSource,
+		};
+	}
+
+	/**
+	 * Worker mirror: adopts a newer {@link mirrorState} of the main instance, then notifies change
+	 * listeners (and overlay children) of every setting whose effective value changed, like a disk
+	 * reload. A state not newer than the last adopted one is ignored.
+	 *
+	 * @throws Error when this instance is not a {@link mirror}.
+	 */
+	applyMirrorState(state: SettingsMirrorState): void {
+		if (!this.#mirror) throw new Error("Settings.applyMirrorState expects a worker mirror");
+		if (state.generation <= this.#mirrorGeneration) return;
+		const previous = this.#mirrorGeneration < 0 ? undefined : this.#snapshot();
+		this.#mirrorGeneration = state.generation;
+		this.#cwd = state.cwd;
+		this.#agentDir = state.agentDir;
+		this.#configFiles = [...state.configFiles];
+		this.#global = structuredClone(state.global);
+		this.#project = structuredClone(state.project);
+		this.#globalToml = structuredClone(state.globalToml);
+		this.#projectToml = structuredClone(state.projectToml);
+		this.#globalTomlPath = state.globalTomlPath;
+		this.#projectTomlPath = state.projectTomlPath;
+		this.#configPath = state.configPath;
+		this.#session = structuredClone(state.session);
+		this.#sessionSettingsPath = state.sessionSettingsPath;
+		this.#sessionDirty = state.sessionDirty;
+		this.#activeRole = state.activeRole;
+		this.#runtimeModelOverrides = structuredClone(state.runtimeModelOverrides);
+		this.#savedRuntimeModelRoleOverrides = new Map(state.savedRuntimeModelRoleOverrides);
+		this.#configOverlay = structuredClone(state.configOverlay);
+		this.#overrides = structuredClone(state.overrides);
+		this.#softPins = new Set(
+			state.softPins.map(id => {
+				const setting = lookupSetting(id);
+				if (!setting) throw new Error(`Unknown mirrored setting ${id}`);
+				return setting;
+			}),
+		);
+		this.#derived = state.derived;
+		this.#projectShellPathSource = state.projectShellPathSource;
+		this.#overlayShellPathSource = state.overlayShellPathSource;
+		this.#rebuildMerged();
+		if (previous) this.#fireChangesSince(previous);
+	}
+
+	/**
+	 * Calls `listener` synchronously after every rebuild of this instance's own layers or scope
+	 * (writes, reloads, re-scopes; not a parent's changes). Returns the unsubscribe.
+	 */
+	onLayersChange(listener: () => void): () => void {
+		this.#layerListeners.add(listener);
+		return () => {
+			this.#layerListeners.delete(listener);
+		};
+	}
+
+	/** Replays `write` on the main instance behind this mirror and adopts the resulting state. */
+	#forward(mirror: SettingsMirrorSource, write: SettingsMirrorWrite): void {
+		this.applyMirrorState(mirror.write(write));
+	}
+
+	/** Runs `refresh` on the main instance behind this mirror and adopts the resulting state. */
+	async #forwardRefresh(mirror: SettingsMirrorSource, refresh: SettingsMirrorRefresh): Promise<void> {
+		this.applyMirrorState(await mirror.refresh(refresh));
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Core API
 	// ─────────────────────────────────────────────────────────────────────────
@@ -1024,8 +1477,11 @@ export class Settings {
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
-		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
-			configuredValue(this.#session, setting, this.#cwd) === undefined) {
+		if (
+			setting.roleScoped &&
+			configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
+			configuredValue(this.#session, setting, this.#cwd) === undefined
+		) {
 			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
 			if (roleValue !== undefined) return roleValue;
 		}
@@ -1065,8 +1521,55 @@ export class Settings {
 
 	/** Raw value owned by one scope, without copying a higher scope into the editor. */
 	readScopeValue(setting: AnySetting, scope: SettingsScope): unknown {
-		const layer = scope === "session" ? this.#session : scope === "project" ? this.#project : this.#global;
-		return structuredClone(getByPath(layer, setting.segments) ?? this.#parent?.readScopeValue(setting, scope));
+		return structuredClone(
+			getByPath(this.#fileScopeLayer(scope), setting.segments) ?? this.#parent?.readScopeValue(setting, scope),
+		);
+	}
+
+	/** Raw value owned by this instance's runtime override layer. */
+	readRuntimeOverrideValue(setting: AnySetting): unknown {
+		return structuredClone(getByPath(this.#overrides, setting.segments));
+	}
+
+	/** Resolve a setting at a file scope without using the non-file layers. */
+	resolveFileScopeValue(setting: AnySetting, scope: SettingsFileScope): SettingsResolution {
+		const { layers, merged } = this.#fileScopeView(scope);
+
+		let source: SettingsFileScope | undefined;
+		for (const fileScope of SETTINGS_FILE_SCOPES) {
+			if (getByPath(layers[fileScope], setting.segments) !== undefined) source = fileScope;
+			if (fileScope === scope) break;
+		}
+		const value = configuredValue(merged, setting, this.#cwd);
+		return { value: value === undefined ? setting.default : structuredClone(value), source };
+	}
+
+	#fileScopeLayer(scope: SettingsFileScope): RawSettings {
+		switch (scope) {
+			case "global":
+				return this.#global;
+			case "project":
+				return this.#project;
+			case "session":
+				return this.#session;
+		}
+	}
+
+	#fileScopeView(scope: SettingsFileScope): FileScopeView {
+		const parent = this.#parent ? this.#parent.#fileScopeView(scope) : undefined;
+		const views = (this.#fileScopeViews ??= new Map());
+		const cached = views.get(scope);
+		if (cached && cached.parent === parent) return cached;
+
+		const layers: OwnLayers = { global: {}, project: {}, session: {}, configOverlay: {}, overrides: {} };
+		for (const fileScope of SETTINGS_FILE_SCOPES) {
+			const own = this.#fileScopeLayer(fileScope);
+			layers[fileScope] = parent ? this.#deepMerge(parent.layers[fileScope], own) : own;
+			if (fileScope === scope) break;
+		}
+		const view = { parent, layers, merged: this.#mergeOwnLayers(layers) };
+		views.set(scope, view);
+		return view;
 	}
 
 	getScopeDetails(setting: AnySetting, scope: SettingsScope): SettingsScopeDetails {
@@ -1083,6 +1586,7 @@ export class Settings {
 	}
 
 	writeScopeValue(setting: AnySetting, value: unknown, scope: SettingsScope): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "writeScopeValue", id: setting.id, value, scope });
 		if (scope === "global") {
 			if (value === undefined) setting.unset(this);
 			else setting.set(this, value);
@@ -1103,6 +1607,7 @@ export class Settings {
 	}
 
 	async clearScope(scope: "session" | "project"): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "clearScope", scope });
 		if (scope === "project") {
 			for (const setting of allSettings()) {
 				if (this.readScopeValue(setting, scope) !== undefined) this.writeProjectValue(setting, undefined);
@@ -1124,41 +1629,172 @@ export class Settings {
 
 	/** Bind only at a session identity change; changing cwd must not rebind this path. */
 	async attachSessionFile(sessionFile: string | undefined): Promise<void> {
-		const nextPath = sessionFile?.endsWith(".jsonl") ? path.join(sessionFile.slice(0, -6), "settings.yml") : undefined;
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "attachSessionFile", sessionFile });
+		const nextPath = sessionFile?.endsWith(".jsonl")
+			? path.join(sessionFile.slice(0, -6), "settings.yml")
+			: undefined;
 		if (nextPath === this.#sessionSettingsPath) return;
 		await this.saveSessionSettings();
-		let loaded: RawSettings = {};
-		if (nextPath) {
-			try {
-				const parsed: unknown = YAML.parse(await Bun.file(nextPath).text());
-				if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${nextPath}`);
-				assertKnownSettingPaths(parsed);
-				for (const setting of allSettings()) {
-					const value = getByPath(parsed, setting.segments);
-					if (value !== undefined) setting.assertWritable(value);
-				}
-				loaded = parsed;
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
+		const file = nextPath ? await checkSettingsFile(nextPath) : { stamp: null };
+		this.#replaceSessionLayer(nextPath, this.#readSessionSettings(nextPath, file.content), file.stamp);
+	}
+
+	/** Reload the bound sidecar after editing it. Save pending session settings before opening the editor. */
+	async reloadSessionSettings(): Promise<void> {
+		if (this.#mirror) throw new Error("Session settings must be reloaded on the owning instance.");
+		const filePath = this.#sessionSettingsPath;
+		if (!filePath) return;
+		const file = await checkSettingsFile(filePath);
+		const loaded = this.#readSessionSettings(filePath, file.content);
+		if (filePath !== this.#sessionSettingsPath) return;
+		if (this.#sessionDirty) throw new Error("Cannot reload session settings with unsaved changes.");
+		this.#replaceSessionLayer(filePath, loaded, file.stamp);
+	}
+
+	/** Reconcile external file changes, optionally limited to the bound session sidecar. */
+	async recheckSettingsFiles(scope?: "session"): Promise<void> {
+		// Worker mirrors never read from disk. The interactive editor runs on the owner.
+		if (this.#mirror) return;
+		if (scope !== "session") await this.#parent?.recheckSettingsFiles();
+		await this.#exclusive("recheck", async () => {
+			await this.#recheckSessionSettings();
+			if (scope === "session") return;
+			const [global, project] = await Promise.all([
+				checkSettingsFiles(this.#globalSettingsFiles.keys(), this.#globalSettingsFiles),
+				checkSettingsFiles(this.#projectSettingsFiles.keys(), this.#projectSettingsFiles),
+			]);
+			const globalChanged = settingsFilesChanged(this.#globalSettingsFiles, global);
+			const projectChanged = settingsFilesChanged(this.#projectSettingsFiles, project);
+			// Leave synchronous directory re-arming to the existing periodic watcher recovery.
+			if (globalChanged || projectChanged) {
+				await this.#reloadPersistedLayers("keep-last-good", {
+					global: globalChanged ? global : undefined,
+					project: projectChanged ? project : undefined,
+				});
 			}
+		});
+	}
+
+	async #recheckSessionSettings(): Promise<void> {
+		const filePath = this.#sessionSettingsPath;
+		if (!filePath) return;
+		try {
+			const baseline = this.#sessionFileStamp;
+			const file = await checkSettingsFile(filePath);
+			if (filePath !== this.#sessionSettingsPath || baseline !== this.#sessionFileStamp || file.stamp === baseline) {
+				return;
+			}
+			const external = this.#readSessionSettings(filePath, file.content);
+			if (this.#sessionDirty) this.#reconcileSessionSettings(filePath, external, file.stamp, "recheck");
+			else this.#replaceSessionLayer(filePath, external, file.stamp);
+		} catch (error) {
+			logger.warn("Settings: keeping last good session config; on-disk change failed to load", {
+				path: filePath,
+				error: String(error),
+			});
 		}
+	}
+
+	#readSessionSettings(filePath: string | undefined, content: Buffer | undefined): RawSettings {
+		if (content === undefined) return {};
+		const parsed: unknown = YAML.parse(content.toString("utf8"));
+		if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${filePath}`);
+		assertKnownSettingPaths(parsed);
+		for (const setting of allSettings()) {
+			const value = getByPath(parsed, setting.segments);
+			if (value !== undefined) setting.assertWritable(value);
+		}
+		return parsed;
+	}
+
+	#replaceSessionLayer(
+		filePath: string | undefined,
+		loaded: RawSettings,
+		stamp: SettingsFileStamp,
+		merged = loaded,
+		conflicts?: ReadonlySet<string>,
+	): void {
 		const previous = this.#snapshot();
-		this.#sessionSettingsPath = nextPath;
-		this.#session = loaded;
-		this.#sessionDirty = false;
+		this.#sessionSettingsPath = filePath;
+		this.#session = merged;
+		this.#sessionFileStamp = stamp;
+		this.#sessionFileBase = loaded;
+		this.#sessionFileConflicts = conflicts;
+		this.#sessionDirty = merged !== loaded;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
 	}
 
+	#reconcileSessionSettings(
+		filePath: string,
+		external: RawSettings,
+		stamp: SettingsFileStamp,
+		mode: "recheck" | "save",
+	): void {
+		let merged = external;
+		let conflicts: Set<string> | undefined;
+		for (const { id, segments } of allSettings()) {
+			const old = getByPath(this.#sessionFileBase, segments);
+			const local = getByPath(this.#session, segments);
+			if (settingValuesEqual(old, local)) continue;
+			const remote = getByPath(external, segments);
+			if (settingValuesEqual(local, remote)) continue;
+			if (this.#sessionFileConflicts?.has(id) || !settingValuesEqual(old, remote)) {
+				if (mode === "save") {
+					throw new Error(`Cannot save session settings: ${id} changed both on disk and in memory (${filePath}).`);
+				}
+				(conflicts ??= new Set()).add(id);
+			}
+			if (merged === external) merged = structuredClone(external);
+			if (local === undefined) deleteByPath(merged, segments);
+			else setByPath(merged, segments, local);
+		}
+		if (conflicts && !this.#sessionFileConflicts) {
+			logger.warn(
+				"Settings: session file changed with conflicting unsaved edits; keeping the local values for those settings",
+				{
+					path: filePath,
+					settings: [...conflicts],
+				},
+			);
+		}
+		this.#replaceSessionLayer(filePath, external, stamp, merged, conflicts);
+	}
+
 	async saveSessionSettings(): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "saveSessionSettings" });
 		if (!this.#sessionDirty || !this.#sessionSettingsPath) return;
+		await this.#exclusive("session-save", () => this.#saveSessionSettings());
+	}
+
+	async #saveSessionSettings(): Promise<void> {
+		const filePath = this.#sessionSettingsPath;
+		if (!this.#sessionDirty || !filePath) return;
+		const baseline = this.#sessionFileStamp;
+		const file = await checkSettingsFile(filePath);
+		if (filePath !== this.#sessionSettingsPath || !this.#sessionDirty) return;
+		if (file.stamp !== baseline || this.#sessionFileConflicts) {
+			const external =
+				file.stamp === baseline ? this.#sessionFileBase : this.#readSessionSettings(filePath, file.content);
+			this.#reconcileSessionSettings(filePath, external, file.stamp, "save");
+			if (!this.#sessionDirty) return;
+		}
 		const snapshot = this.#session;
-		await writeFileAtomically(this.#sessionSettingsPath, stringifyYamlConfig(snapshot));
-		if (snapshot === this.#session) this.#sessionDirty = false;
+		const content = stringifyYamlConfig(snapshot);
+		await writeFileAtomically(filePath, content);
+		if (filePath !== this.#sessionSettingsPath) return;
+		this.#sessionFileBase = snapshot;
+		this.#sessionFileStamp = Bun.hash.xxHash64(content);
+		this.#sessionFileConflicts = undefined;
+		if (snapshot === this.#session) {
+			this.#sessionDirty = false;
+			this.#rebuildMerged();
+		}
 	}
 
 	/** Quit decisions share the same scope writers as the menus. */
 	async settleSessionSettings(choice: "session" | "project" | "discard"): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "settleSessionSettings", choice });
 		if (choice === "project") {
 			for (const setting of allSettings()) {
 				const value = this.readScopeValue(setting, "session");
@@ -1171,6 +1807,19 @@ export class Settings {
 	}
 
 	/**
+	 * Whether a runtime override — a CLI flag, a session-only write, an SDK override — sets `setting`
+	 * here or on an overlay parent. Such an override outranks the setting's environment variable; a
+	 * soft-pinned protocol default does not.
+	 */
+	hasRuntimeOverride(setting: AnySetting): boolean {
+		const own = getByPath(this.#overrides, setting.segments);
+		if (own !== undefined && own !== null && !this.#softPins.has(setting)) return true;
+		const session = getByPath(this.#session, setting.segments);
+		if (session !== undefined && session !== null) return true;
+		return this.#parent?.hasRuntimeOverride(setting) ?? false;
+	}
+
+	/**
 	 * Registry plumbing behind `Setting.set` / `Setting.override`: writes `value` for `setting` to the
 	 * global layer (persisted in the background; releases a soft pin, see {@link pinDefaultValue}) or
 	 * the runtime-override layer, then notifies change listeners (process-wide effects apply
@@ -1179,6 +1828,7 @@ export class Settings {
 	 * @throws Error when the value does not fit the definition's type or fails its `items`/`validate` check.
 	 */
 	writeValue(setting: AnySetting, value: unknown, layer: "global" | "override"): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "writeValue", id: setting.id, value, layer });
 		setting.assertWritable(value);
 		if (layer === "override" && setting === cfgModelRoles) {
 			this.#savedRuntimeModelRoleOverrides.clear();
@@ -1206,6 +1856,7 @@ export class Settings {
 	 * the default — supply the value.
 	 */
 	unsetGlobalValue(setting: AnySetting): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "unsetGlobalValue", id: setting.id });
 		const current = getByPath(this.#global, setting.segments);
 		if (current === undefined && !this.#softPins.has(setting) && !this.#activeReceipt) return;
 		const prev = setting.get(this);
@@ -1226,6 +1877,7 @@ export class Settings {
 	 */
 	writeEntry(setting: AnySetting, key: string, value: unknown): void {
 		if (setting.type !== "record") throw new Error(`Setting ${setting.id} is not a record`);
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "writeEntry", id: setting.id, key, value });
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
 		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
@@ -1256,6 +1908,7 @@ export class Settings {
 	 */
 	writeMember(setting: AnySetting, item: string, { member }: { member: boolean }): void {
 		if (setting.type !== "array") throw new Error(`Setting ${setting.id} is not a list`);
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "writeMember", id: setting.id, item, member });
 		const list = getByPath(this.#global, setting.segments);
 		const defaultList = setting.default;
 		const base: readonly unknown[] = Array.isArray(list) ? list : Array.isArray(defaultList) ? defaultList : [];
@@ -1293,6 +1946,7 @@ export class Settings {
 	 * override/clear ends it.
 	 */
 	pinDefaultValue(setting: AnySetting): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "pinDefaultValue", id: setting.id });
 		const value = setting.default;
 		if (value === undefined || this.isConfigured(setting)) return;
 		this.writeValue(setting, value, "override");
@@ -1327,6 +1981,7 @@ export class Settings {
 	 * layer is mutated; listeners fire once, after all three maps are in place.
 	 */
 	applyRuntimeOverridesAtomically(overrides: RuntimeModelOverrides | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "applyRuntimeOverridesAtomically", overrides });
 		if (
 			overrides === undefined &&
 			this.#runtimeModelOverrides === undefined &&
@@ -1364,6 +2019,7 @@ export class Settings {
 
 	/** Persist a registry setting to this project's config without changing user settings. */
 	writeProjectValue(setting: AnySetting, value: unknown): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "writeProjectValue", id: setting.id, value });
 		if (value !== undefined) setting.assertWritable(value);
 		this.#captureProjectMutation(setting.segments);
 		const previous = setting.get(this);
@@ -1378,6 +2034,7 @@ export class Settings {
 
 	/** Registry plumbing behind `Setting.clearOverride`: drops the runtime override of `setting`. */
 	clearOverrideValue(setting: AnySetting): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "clearOverrideValue", id: setting.id });
 		if (setting === cfgModelRoles) {
 			this.#savedRuntimeModelRoleOverrides.clear();
 		}
@@ -1493,7 +2150,8 @@ export class Settings {
 	 * Apply on-disk edits live: watch the directories holding config.yml, the
 	 * project settings files, and `--config` overlays, and run a debounced
 	 * keep-last-good reload (a file that fails to parse or validate keeps its
-	 * layer's last good values). Arming a watch also schedules one reload, so
+	 * layer's last good values; a single value this build cannot read keeps its
+	 * last good value). Arming a watch also schedules one reload, so
 	 * edits that landed before it went live are not lost. Only the persisting
 	 * process-global instance watches; other instances ignore the call. Stopped
 	 * by {@link stopWatching} / {@link cancelPendingSaves}.
@@ -1679,6 +2337,7 @@ export class Settings {
 
 	/** Shared watcher/explicit-Apply path: adopt each valid durable layer and notify live consumers. */
 	async applySettingsReload(): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "applySettingsReload" });
 		if (!this.#persist) return;
 		await this.#exclusive("keep-last-good", () => this.#reloadPersistedLayers("keep-last-good"));
 		this.#syncFileWatchers();
@@ -1736,6 +2395,7 @@ export class Settings {
 	 * Call before exit to ensure all changes are persisted.
 	 */
 	async flush(): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "flush" });
 		if (this.#saveTimer) {
 			clearTimeout(this.#saveTimer);
 			this.#saveTimer = undefined;
@@ -1774,11 +2434,13 @@ export class Settings {
 	 * @throws Error when a configured value fails its definition's `validate` check.
 	 */
 	async cloneForCwd(cwd: string): Promise<Settings> {
+		if (this.#mirror) return this.#mirror.cloneForCwd(cwd);
 		let cloned: Settings;
 		if (this.#parent) {
-			cloned = (await this.#parent.cloneForCwd(cwd)).overlay();
+			cloned = (await this.#parent.cloneForCwd(cwd)).overlay({}, { derived: this.#derived });
 			cloned.#project = structuredClone(this.#project);
 			cloned.#projectToml = structuredClone(this.#projectToml);
+			cloned.#projectTomlPath = this.#projectTomlPath;
 		} else {
 			cloned = new Settings({
 				cwd,
@@ -1787,18 +2449,33 @@ export class Settings {
 			});
 			cloned.#storage = this.#storage;
 			cloned.#configPath = this.#configPath;
-			cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
-			if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
+			cloned.#project = this.#persist
+				? cloned.#adoptProjectRead(await cloned.#readProjectSettings(true), {
+						global: this.#global,
+						globalToml: this.#globalToml,
+						session: this.#session,
+						configOverlay: this.#configOverlay,
+						overrides: this.#overrides,
+					})
+				: structuredClone(this.#project);
+			if (!this.#persist) {
+				cloned.#projectToml = structuredClone(this.#projectToml);
+				cloned.#projectTomlPath = this.#projectTomlPath;
+				cloned.#projectShellPathSource = this.#projectShellPathSource;
+			}
 			cloned.#configFiles = [...this.#configFiles];
 			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
+		cloned.#globalSettingsFiles = this.#globalSettingsFiles;
 		cloned.#globalToml = structuredClone(this.#globalToml);
 		cloned.#globalTomlPath = this.#globalTomlPath;
-		cloned.#projectTomlPath = this.#projectTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		cloned.#session = structuredClone(this.#session);
 		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
+		cloned.#sessionFileStamp = this.#sessionFileStamp;
+		cloned.#sessionFileBase = this.#sessionFileBase;
+		cloned.#sessionFileConflicts = this.#sessionFileConflicts;
 		cloned.#sessionDirty = this.#sessionDirty;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
@@ -1814,7 +2491,9 @@ export class Settings {
 
 	/**
 	 * Re-read the current global, project, and explicit overlay layers from disk
-	 * without replacing this instance or discarding runtime overrides.
+	 * without replacing this instance or discarding runtime overrides. An in-memory
+	 * overlay has no layers of its own on disk; `includeParents` reloads the persisted
+	 * settings behind it, keeping the overlay's own overrides.
 	 *
 	 * All sources are loaded and validated before any live layer is replaced, so
 	 * readers never observe a partially refreshed or invalid configuration.
@@ -1823,7 +2502,14 @@ export class Settings {
 	 * @throws Error when a source fails to load or a value fails its definition's
 	 * `validate` check; the previous layers stay in effect.
 	 */
-	async reloadFromDisk(): Promise<void> {
+	async reloadFromDisk(options?: { includeParents?: boolean }): Promise<void> {
+		if (this.#mirror) {
+			return this.#forwardRefresh(this.#mirror, {
+				op: "reloadFromDisk",
+				includeParents: options?.includeParents === true,
+			});
+		}
+		if (options?.includeParents && this.#parent) await this.#parent.reloadFromDisk(options);
 		if (!this.#persist) return;
 		await this.#exclusive("strict", () => this.#reloadPersistedLayers("strict"));
 	}
@@ -1850,7 +2536,10 @@ export class Settings {
 		}
 	}
 
-	async #reloadPersistedLayers(mode: PersistedReloadMode): Promise<void> {
+	async #reloadPersistedLayers(
+		mode: PersistedReloadMode,
+		changed?: { global?: SettingsFileStamps; project?: SettingsFileStamps },
+	): Promise<void> {
 		const keepLastGood = mode === "keep-last-good";
 		for (;;) {
 			try {
@@ -1862,11 +2551,15 @@ export class Settings {
 			}
 			const mutationGeneration = this.#persistedMutationGeneration;
 
-			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
-				this.#readExistingMainYaml(false),
-				this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood }),
-				this.#readConfigOverlays(false),
+			const reads = await Promise.allSettled([
+				!changed || changed.global ? this.#readExistingMainYaml(false, changed?.global) : undefined,
+				!changed || changed.project
+					? this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood, files: changed?.project })
+					: undefined,
+				changed ? undefined : this.#readConfigOverlays(false),
 			]);
+			const [globalResult, , overlayResult] = reads;
+			let [, projectResult] = reads;
 			if (mutationGeneration !== this.#persistedMutationGeneration) continue;
 			for (const result of [globalResult, projectResult, overlayResult]) {
 				if (result.status === "fulfilled") continue;
@@ -1877,8 +2570,8 @@ export class Settings {
 			}
 
 			const refreshed: LayerRefresh[] = [];
-			if (globalResult.status === "fulfilled") {
-				const { configPath } = globalResult.value;
+			if (globalResult.status === "fulfilled" && globalResult.value) {
+				const { configPath, files, tomlPath } = globalResult.value;
 				// A config this instance moved aside as malformed reads as missing until a save
 				// recreates it; keep the last good layer instead of rebuilding it from pending writes.
 				const quarantined = this.#configPath !== null && this.#quarantinedYamlTargets.has(this.#configPath);
@@ -1891,22 +2584,12 @@ export class Settings {
 					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 					commit: () => {
 						this.#configPath = configPath;
-						this.#globalTomlPath = globalResult.value.tomlPath;
+						this.#globalTomlPath = tomlPath;
+						this.#globalSettingsFiles = files;
 					},
 				});
 			}
-			if (projectResult.status === "fulfilled") {
-				const project = projectResult.value;
-				this.#applyPendingProjectWrites(project.settings);
-				refreshed.push({
-					layer: "project",
-					settings: project.settings,
-					toml: project.toml,
-					source: project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd),
-					commit: () => this.#commitProjectRead(project),
-				});
-			}
-			if (overlayResult.status === "fulfilled") {
+			if (overlayResult.status === "fulfilled" && overlayResult.value) {
 				const { settings, shellPathSource } = overlayResult.value;
 				refreshed.push({
 					layer: "configOverlay",
@@ -1918,19 +2601,52 @@ export class Settings {
 				});
 			}
 
-			// Keep-last-good adopts each refreshed layer only when it validates over the layers
-			// accepted so far: an invalid file keeps its own layer's last good values while the
-			// other layers still refresh. Strict validates the whole refresh and throws.
+			// Accept global and overlay edits before resolving the project read: a rejected layer
+			// cannot disable a provider in the project layer. Strict mode validates the final set.
 			let layers = this.#ownLayers();
 			const adopted: LayerRefresh[] = [];
 			for (const refresh of refreshed) {
+				if (keepLastGood) this.#keepReadableValues(refresh.settings, layers[refresh.layer], refresh.source);
 				const trial: OwnLayers = { ...layers, [refresh.layer]: refresh.settings };
 				if (refresh.layer === "global") trial.globalToml = refresh.toml;
-				if (refresh.layer === "project") trial.projectToml = refresh.toml;
 				if (keepLastGood && !this.#acceptsLayers(trial, refresh.source)) continue;
 				layers = trial;
 				adopted.push(refresh);
 			}
+			if (
+				changed?.global &&
+				!changed.project &&
+				!Bun.deepEquals(
+					this.#disabledProviderIds(this.#ownLayers(), this.#cwd),
+					this.#disabledProviderIds(layers, this.#cwd),
+				)
+			) {
+				// Filter project providers again if the newly adopted global config could change their eligibility.
+				[projectResult] = await Promise.allSettled([this.#readProjectSettings(false, { rejectNewWarnings: true })]);
+				if (mutationGeneration !== this.#persistedMutationGeneration) continue;
+				if (projectResult.status === "rejected") {
+					logger.warn("Settings: keeping last good config; on-disk change failed to load", {
+						error: String(projectResult.reason),
+					});
+				}
+			}
+			if (projectResult.status === "fulfilled" && projectResult.value) {
+				const project = this.#resolveProjectRead(projectResult.value, layers);
+				this.#applyPendingProjectWrites(project.settings);
+				const source = project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd);
+				const trial: OwnLayers = { ...layers, project: project.settings, projectToml: project.toml };
+				if (!keepLastGood || this.#acceptsLayers(trial, source)) {
+					layers = trial;
+					adopted.push({
+						layer: "project",
+						settings: project.settings,
+						toml: project.toml,
+						source,
+						commit: () => this.#commitProjectRead(project),
+					});
+				}
+			}
+			if (changed && adopted.length === 0) return;
 			const settled = this.#settlePins(layers);
 			if (!keepLastGood) this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(layers)), this.#cwd);
 
@@ -1946,6 +2662,30 @@ export class Settings {
 			this.#rebuildMerged();
 			this.#fireChangesSince(previous);
 			return;
+		}
+	}
+
+	/**
+	 * Keeps, in a re-read layer `fresh`, the value the `live` layer holds for each setting whose new
+	 * on-disk value this build cannot read (an enum value a newer omp added, a wrong type) while its
+	 * old value was readable. Reading an unreadable value falls back to the default, so a config
+	 * written for another version would otherwise move a running session to a value neither config
+	 * chose — and rebuild every tool description and prompt derived from it, losing the session's
+	 * prompt cache. The file keeps the edit; instances loading it fresh read it as before.
+	 */
+	#keepReadableValues(fresh: RawSettings, live: RawSettings, source: string): void {
+		for (const setting of allSettings()) {
+			const next = getByPath(fresh, setting.segments);
+			if (next === undefined || next === null || setting.accepts(next)) continue;
+			const kept = getByPath(live, setting.segments);
+			if (kept === undefined || kept === null || !setting.accepts(kept)) continue;
+			setByPath(fresh, setting.segments, structuredClone(kept));
+			logger.warn("Settings: keeping last good value; on-disk value is invalid", {
+				path: source,
+				setting: setting.id,
+				value: next,
+				kept,
+			});
 		}
 	}
 
@@ -1985,6 +2725,7 @@ export class Settings {
 	 * `validate` check; the instance then stays on its previous scope.
 	 */
 	async reloadForCwd(cwd: string): Promise<void> {
+		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "reloadForCwd", cwd });
 		const normalized = path.normalize(cwd);
 		for (let active = this.#activeReload; active; active = this.#activeReload) {
 			await active.promise.catch(() => {});
@@ -1998,16 +2739,20 @@ export class Settings {
 		try {
 			if (normalized === this.#cwd) return;
 			await this.flush();
-			const project = this.#persist ? await this.#readProjectSettings(true, { cwd: normalized }) : undefined;
-			const candidate: OwnLayers = {
+			const read = this.#persist ? await this.#readProjectSettings(true, { cwd: normalized }) : undefined;
+			const layers = {
 				global: this.#global,
-				project: project?.settings ?? this.#project,
 				globalToml: this.#globalToml,
-				projectToml: project?.toml ?? this.#projectToml,
 				configOverlay: this.#configOverlay,
 				session: this.#session,
 				overrides:
 					this.#savedRuntimeModelRoleOverrides.size === 0 ? this.#overrides : this.#buildOriginalOverrides(),
+			};
+			const project = read ? this.#resolveProjectRead(read, layers) : undefined;
+			const candidate: OwnLayers = {
+				...layers,
+				project: project?.settings ?? this.#project,
+				projectToml: project?.toml ?? this.#projectToml,
 			};
 			const settledPins = this.#settlePins(candidate);
 			this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(candidate)), normalized);
@@ -2037,7 +2782,7 @@ export class Settings {
 	// Accessors
 	// ─────────────────────────────────────────────────────────────────────────
 
-	getStorage(): AgentStorage | null {
+	getStorage(): AgentStorageApi | null {
 		return this.#storage;
 	}
 
@@ -2154,11 +2899,12 @@ export class Settings {
 
 	/** Apply persistent role defaults without changing any persisted or runtime setting. */
 	setActiveRole(role: string | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setActiveRole", role });
 		const next = role ?? null;
 		if (this.#activeRole === next) return;
 		const previous = this.#snapshot();
 		this.#activeRole = next;
-		this.#revision++;
+		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
 	}
 
@@ -2170,11 +2916,12 @@ export class Settings {
 	}
 
 	/** Persisted scope supplying a role value. Null restores inheritance and has no source. */
-	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | undefined {
+	getRoleSettingSourceScope<T>(role: string, setting: Setting<T>): "user" | "project" | "session" | undefined {
 		if (!setting.roleScoped || this.getRoleSetting(role, setting) === undefined) return undefined;
 		const segments = ["roleSettings", role, setting.id];
 		for (const [layer, scope] of [
 			[this.#overrides, "user"],
+			[this.#session, "session"],
 			[this.#configOverlay, "user"],
 			[overlaySettingsToml(this.#project, this.#projectToml), "project"],
 			[overlaySettingsToml(this.#global, this.#globalToml), "user"],
@@ -2186,6 +2933,7 @@ export class Settings {
 
 	/** Persist one role setting. Undefined restores inheritance, including over a lower layer. */
 	setRoleSetting<T>(role: string, setting: Setting<T>, value: T | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setRoleSetting", role, id: setting.id, value });
 		if (!role.trim()) throw new Error("Model role must have a name");
 		if (!setting.roleScoped) throw new Error(`Setting "${setting.id}" does not support role overrides`);
 		if (value !== undefined) setting.assertRoleWritable(value);
@@ -2321,6 +3069,25 @@ export class Settings {
 	 * stale skip in place.
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setModelRole", role, modelId });
+		this.#stageGlobalModelRole(role, modelId);
+		this.#syncRuntimeModelRole(role, modelId);
+	}
+
+	/**
+	 * Persists one global model role under a receipt like {@link setModelRole}, but moves the role's
+	 * runtime override only when the write was applied, so a refused write leaves the running model alone.
+	 */
+	async persistModelRoleWithReceipt(
+		role: ModelRole | string,
+		modelId: string | undefined,
+	): Promise<SettingsMutationReceipt> {
+		const receipt = await this.persistWithReceipt(() => this.#stageGlobalModelRole(role, modelId));
+		if (receipt.status === "applied") this.#syncRuntimeModelRole(role, modelId);
+		return receipt;
+	}
+
+	#stageGlobalModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const prev = cfgModelRoles.get(this);
 		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
 		// the runtime-override sync below still applies.
@@ -2344,6 +3111,9 @@ export class Settings {
 			this.#queueSave();
 		}
 		this.#fireIfChanged(cfgModelRoles, prev);
+	}
+
+	#syncRuntimeModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
 			return;
 		}
@@ -2367,6 +3137,7 @@ export class Settings {
 	 * Set a model role in the current project's settings layer.
 	 */
 	setProjectModelRole(role: ModelRole | string, modelId: string): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setProjectModelRole", role, modelId });
 		this.#setProjectModelRoleValue(role, modelId);
 		this.#captureRuntimeModelRoleOverride(role);
 		this.#updateRuntimeModelRoleOverride(role, modelId);
@@ -2375,6 +3146,7 @@ export class Settings {
 	 * Clear a model role from the current project's settings layer.
 	 */
 	clearProjectModelRole(role: ModelRole | string): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "clearProjectModelRole", role });
 		this.#setProjectModelRoleValue(role, null);
 		this.#captureRuntimeModelRoleOverride(role);
 		this.#updateRuntimeModelRoleOverride(role, undefined);
@@ -2440,6 +3212,8 @@ export class Settings {
 		selection: EffortSelection | undefined,
 		scope: SettingsScope,
 	): void {
+		if (this.#mirror)
+			return this.#forward(this.#mirror, { op: "setRoleModelAndEffort", role, selector, selection, scope });
 		const staged = this.#stageRoleModelAndEffort(role, selector, selection, scope);
 		const previousRoles = cfgModelRoles.get(this);
 		const previousEfforts = cfgRoleEffortSelections.get(this);
@@ -2510,6 +3284,15 @@ export class Settings {
 		selections: Record<string, EffortSelection>,
 		previousRole?: string,
 	): void {
+		if (this.#mirror) {
+			return this.#forward(this.#mirror, {
+				op: "setFallbackChainAndEfforts",
+				role,
+				chain,
+				selections,
+				previousRole,
+			});
+		}
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
 		assertValidSelectorPattern(role);
 		for (const selector of chain) {
@@ -2584,6 +3367,7 @@ export class Settings {
 
 	/** Persist the role's effort metadata in the global layer. */
 	setRoleEffortSelection(role: string, selection: EffortSelection | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setRoleEffortSelection", role, selection });
 		if (selection) validateEffortSelection(selection);
 		const global = getByPath(this.#global, ["roleEffortSelections"]);
 		const current: Record<string, EffortSelection> = {};
@@ -2612,6 +3396,7 @@ export class Settings {
 
 	/** Persist the role's effort metadata in the selected project, without changing global defaults. */
 	setProjectRoleEffortSelection(role: string, selection: EffortSelection | undefined): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "setProjectRoleEffortSelection", role, selection });
 		if (selection) validateEffortSelection(selection);
 		const previous = cfgRoleEffortSelections.get(this);
 		const current = getByPath(this.#project, ["roleEffortSelections"]);
@@ -2691,8 +3476,14 @@ export class Settings {
 		};
 		const winner = this.getModelRoleProvenance(role);
 		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
-		return { global: value("global"), project: value("project"), session: value("session"),
-			effective: this.getModelRole(role), winner, shadowed: rank[winner] > rank[scope] };
+		return {
+			global: value("global"),
+			project: value("project"),
+			session: value("session"),
+			effective: this.getModelRole(role),
+			winner,
+			shadowed: rank[winner] > rank[scope],
+		};
 	}
 
 	/**
@@ -2780,6 +3571,7 @@ export class Settings {
 	 * Override model roles (helper for modelRoles record).
 	 */
 	overrideModelRoles(roles: ReadOnlyDict<string>): void {
+		if (this.#mirror) return this.#forward(this.#mirror, { op: "overrideModelRoles", roles: { ...roles } });
 		const next = this.#modelRolesFromLayer(this.#overrides);
 		for (const [role, modelId] of Object.entries(roles)) {
 			if (modelId) {
@@ -2801,13 +3593,14 @@ export class Settings {
 		// abandoning the other rejection.
 		const [globalResult, projectResult] = await Promise.allSettled([
 			this.#persist ? this.#loadGlobalSettings() : Promise.resolve(),
-			this.#loadProjectSettings(),
+			this.#readProjectSettings(true),
 		]);
 		if (globalResult.status === "rejected") throw globalResult.reason;
 		if (projectResult.status === "rejected") throw projectResult.reason;
 
-		this.#project = projectResult.value;
 		this.#configOverlay = await this.#loadConfigOverlays();
+		// Global and overlay `disabledProviders` decide which providers feed the project layer.
+		this.#project = this.#adoptProjectRead(projectResult.value);
 
 		// Build merged view (global → project → overrides; project wins over global)
 		this.#rebuildMerged();
@@ -2821,7 +3614,7 @@ export class Settings {
 			this.#global = existingConfig;
 		} else {
 			await this.#migrateFromLegacy();
-			this.#global = await this.#loadYaml(this.#configPath!);
+			this.#global = (await this.#loadExistingMainYaml()) ?? {};
 		}
 		await this.#seedLastChangelogVersionMarker();
 	}
@@ -2829,7 +3622,7 @@ export class Settings {
 	async #loadReadOnly(): Promise<Settings> {
 		const [globalResult, projectResult] = await Promise.allSettled([
 			this.#loadExistingMainYaml(),
-			this.#loadProjectSettings(),
+			this.#readProjectSettings(true),
 		]);
 		if (globalResult.status === "rejected") throw globalResult.reason;
 		if (projectResult.status === "rejected") throw projectResult.reason;
@@ -2837,8 +3630,8 @@ export class Settings {
 			this.#global = globalResult.value;
 		}
 
-		this.#project = projectResult.value;
 		this.#configOverlay = await this.#loadConfigOverlays();
+		this.#project = this.#adoptProjectRead(projectResult.value);
 		this.#rebuildMerged();
 		this.#validateAll();
 		return this;
@@ -3245,8 +4038,15 @@ export class Settings {
 		}
 	}
 
-	async #readExistingMainYaml(quarantineInvalid: boolean): Promise<MainYamlReadResult> {
-		if (!this.#configPath) return { settings: null, configPath: null };
+	async #readExistingMainYaml(
+		quarantineInvalid: boolean,
+		previous = this.#globalSettingsFiles,
+	): Promise<MainYamlReadResult> {
+		if (!this.#configPath) return { settings: null, configPath: null, files: new Map() };
+		const files = await checkSettingsFiles(
+			[...MAIN_CONFIG_FILENAMES, SETTINGS_TOML, CONFIG_TOML].map(name => path.join(this.#agentDir, name)),
+			previous,
+		);
 		const source = await settingsTomlSource(this.#agentDir);
 		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		for (const filename of MAIN_CONFIG_FILENAMES) {
@@ -3255,13 +4055,14 @@ export class Settings {
 				? await this.#loadYamlIfPresentForStartup(configPath)
 				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
 			if (loaded)
-				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath };
+				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath, files };
 		}
 		return {
 			settings: source ? toml : null,
 			toml,
 			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 			tomlPath: source?.filePath,
+			files,
 		};
 	}
 
@@ -3270,6 +4071,7 @@ export class Settings {
 		this.#configPath = result.configPath;
 		this.#globalToml = result.toml ?? {};
 		this.#globalTomlPath = result.tomlPath;
+		this.#globalSettingsFiles = result.files;
 		return result.settings;
 	}
 
@@ -3283,8 +4085,8 @@ export class Settings {
 	 */
 	async #readProjectSettings(
 		quarantineInvalid: boolean,
-		options: { rejectNewWarnings?: boolean; cwd?: string } = {},
-	): Promise<ProjectSettingsReadResult> {
+		options: { rejectNewWarnings?: boolean; cwd?: string; files?: SettingsFileStamps } = {},
+	): Promise<ProjectSettingsDiscovery> {
 		const cwd = options.cwd ?? this.#cwd;
 		// Resolve once: capability discovery, fs-cache invalidation, and the
 		// warning prefix below must all derive from the same absolute scope so
@@ -3292,17 +4094,27 @@ export class Settings {
 		const discoveryCwd = path.resolve(cwd);
 		const projectConfigDir = getProjectAgentDir(cwd);
 		const projectConfigPath = path.join(projectConfigDir, "config.yml");
+		const knownSources = [
+			projectConfigPath,
+			path.join(projectConfigDir, SETTINGS_TOML),
+			path.join(projectConfigDir, CONFIG_TOML),
+			path.join(projectConfigDir, "settings.json"),
+			path.join(discoveryCwd, ".claude", "settings.json"),
+			...(cwd === this.#cwd ? this.#projectSourcePaths : []),
+		];
+		const files = await checkSettingsFiles(new Set(knownSources), options.files ?? this.#projectSettingsFiles);
 		invalidateCapabilityFsCache(projectConfigPath);
 		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
 		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
 		for (const sourcePath of this.#projectSourcePaths) invalidateCapabilityFsCache(sourcePath);
-		let shellPathSource: string | undefined;
-		let merged: RawSettings = {};
-		const sourcePaths: string[] = [];
+		let projectItems: SettingsCapabilityItem[] = [];
 		let rejectedWarnings: string[] | undefined;
 		let warningsSeen = this.#projectSettingsWarningsSeen;
 		try {
-			const result = await loadCapability(settingsCapability.id, { cwd: discoveryCwd });
+			const result = await loadCapability(settingsCapability.id, {
+				cwd: discoveryCwd,
+				includeDisabledProviders: true,
+			});
 			// `loadCapability` aggregates warnings across every level, but this
 			// method only merges project items — user-level parse failures belong
 			// to the global layer and would misattribute here. Warnings embed
@@ -3321,16 +4133,10 @@ export class Settings {
 			} else {
 				for (const warning of newWarnings) logger.warn(`Settings: ${warning}`);
 				warningsSeen = new Set(projectWarnings);
-				for (const item of result.items as SettingsCapabilityItem[]) {
-					if (item.level === "project") {
-						merged = this.#deepMerge(merged, dropSettingsGroupShadows(item.data as RawSettings, item.path));
-						sourcePaths.push(item.path);
-						if (Object.hasOwn(item.data, "shellPath")) shellPathSource = item.path;
-					}
-				}
+				projectItems = (result.items as SettingsCapabilityItem[]).filter(item => item.level === "project");
 			}
 		} catch {
-			shellPathSource = undefined;
+			projectItems = [];
 			// Capability discovery is best-effort; the native project config below
 			// remains authoritative for its model-role layer and must not be hidden.
 		}
@@ -3343,25 +4149,107 @@ export class Settings {
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
 				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
-		const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
-		if (nativeModelRoles !== undefined) {
-			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
-		}
 		const source = await settingsTomlSource(projectConfigDir);
 		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
+		const newSources = new Set(projectItems.map(item => item.path).filter(filePath => !files.has(filePath)));
+		for (const [filePath, stamp] of await checkSettingsFiles(newSources, this.#projectSettingsFiles)) {
+			files.set(filePath, stamp);
+		}
 		return {
-			settings: overlaySettingsToml(this.#migrateRawSettings(merged, quarantineInvalid), toml),
+			cwd,
+			quarantineInvalid,
+			items: projectItems,
+			nativeModelRoles: getByPath(nativeProject, ["modelRoles"]),
 			fileSettings: structuredClone(overlaySettingsToml(nativeProject, toml)),
 			toml,
 			tomlPath: source?.filePath,
-			shellPathSource,
-			sourcePaths,
 			warningsSeen,
+			files,
 		};
 	}
 
-	async #loadProjectSettings(): Promise<RawSettings> {
-		const result = await this.#readProjectSettings(true);
+	/**
+	 * Merges a project read, leaving out items from providers `disabledProviders` disables. That
+	 * setting may come from any layer, the project's own native config included, so it resolves
+	 * over `layers` with the merged project; the read itself runs without waiting for them.
+	 */
+	#resolveProjectRead(read: ProjectSettingsDiscovery, layers: Omit<OwnLayers, "project">): ProjectSettingsReadResult {
+		let project = this.#mergeProjectItems(read.items, read.nativeModelRoles);
+		project.settings = overlaySettingsToml(project.settings, read.toml);
+		const disabled = this.#disabledProviderIds({ ...layers, project: project.settings }, read.cwd);
+		if (read.items.some(item => disabled.has(item._source.provider))) {
+			const filtered = this.#mergeProjectItems(
+				read.items.filter(item => !disabled.has(item._source.provider)),
+				read.nativeModelRoles,
+			);
+			filtered.settings = overlaySettingsToml(filtered.settings, read.toml);
+			const projectSwitch = getByPath(project.settings, cfgDisabledProviders.segments);
+			if (projectSwitch !== undefined) {
+				const remaining = this.#disabledProviderIds({ ...layers, project: filtered.settings }, read.cwd);
+				// A project provider may disable itself; preserve only its switch when removing
+				// its other settings would undo that decision. Do not pin a global/overlay switch.
+				let changed = disabled.size !== remaining.size;
+				if (!changed) {
+					for (const id of disabled) {
+						if (!remaining.has(id)) {
+							changed = true;
+							break;
+						}
+					}
+				}
+				if (changed) setByPath(filtered.settings, cfgDisabledProviders.segments, projectSwitch);
+			}
+			project = filtered;
+		}
+		return {
+			settings: this.#migrateRawSettings(project.settings, read.quarantineInvalid),
+			fileSettings: read.fileSettings,
+			toml: read.toml,
+			tomlPath: read.tomlPath,
+			shellPathSource: Object.hasOwn(read.toml, "shellPath") ? read.tomlPath : project.shellPathSource,
+			sourcePaths: [
+				...new Set([
+					...(read.cwd === this.#cwd ? this.#projectSourcePaths : []),
+					...read.items.map(item => item.path),
+					...(read.tomlPath ? [read.tomlPath] : []),
+				]),
+			],
+			warningsSeen: read.warningsSeen,
+			files: read.files,
+		};
+	}
+
+	/** Project-level settings `items` merged in discovery order, then the native project config's model roles. */
+	#mergeProjectItems(
+		items: readonly SettingsCapabilityItem[],
+		nativeModelRoles: unknown,
+	): { settings: RawSettings; sourcePaths: string[]; shellPathSource: string | undefined } {
+		let settings: RawSettings = {};
+		const sourcePaths: string[] = [];
+		let shellPathSource: string | undefined;
+		for (const item of items) {
+			settings = this.#deepMerge(settings, dropSettingsGroupShadows(item.data as RawSettings, item.path), {
+				arrays: "combine",
+			});
+			sourcePaths.push(item.path);
+			if (Object.hasOwn(item.data, "shellPath")) shellPathSource = item.path;
+		}
+		if (nativeModelRoles !== undefined) settings = this.#deepMerge(settings, { modelRoles: nativeModelRoles });
+		return { settings, sourcePaths, shellPathSource };
+	}
+
+	/** Provider ids `disabledProviders` resolves to for `cwd` when `layers` are merged (over the overlay parent). */
+	#disabledProviderIds(layers: OwnLayers, cwd: string): ReadonlySet<string> {
+		const value = configuredValue(this.#mergeOverParent(this.#mergeOwnLayers(layers)), cfgDisabledProviders, cwd);
+		return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : []);
+	}
+
+	/** Resolves `read` over `layers` (default: this instance's own) and commits it; returns the project layer. */
+	#adoptProjectRead(
+		read: ProjectSettingsDiscovery,
+		layers: Omit<OwnLayers, "project"> = this.#ownLayers(),
+	): RawSettings {
+		const result = this.#resolveProjectRead(read, layers);
 		this.#commitProjectRead(result);
 		return result.settings;
 	}
@@ -3374,6 +4262,7 @@ export class Settings {
 		this.#projectShellPathSource = result.shellPathSource;
 		this.#projectSourcePaths = result.sourcePaths;
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
+		this.#projectSettingsFiles = result.files;
 	}
 
 	async #readConfigOverlays(captureLegacyChangelogVersion = true): Promise<ConfigOverlayReadResult> {
@@ -3381,7 +4270,7 @@ export class Settings {
 		let settings: RawSettings = {};
 		for (const filePath of this.#configFiles) {
 			const overlay = await this.#loadOverlayYaml(filePath, captureLegacyChangelogVersion);
-			settings = this.#deepMerge(settings, overlay);
+			settings = this.#deepMerge(settings, overlay, { arrays: "combine" });
 			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath;
 		}
 		return { settings, shellPathSource };
@@ -3449,7 +4338,7 @@ export class Settings {
 		}
 
 		try {
-			const dbSettings = this.#storage?.getSettings();
+			const dbSettings = this.#storage instanceof AgentStorage ? this.#storage.getSettings() : null;
 			if (dbSettings) {
 				settings = this.#deepMerge(settings, this.#migrateRawSettings(dbSettings as RawSettings));
 				migrated = true;
@@ -3482,7 +4371,7 @@ export class Settings {
 			}
 
 			try {
-				this.#storage?.clearMigratedSettings();
+				if (this.#storage instanceof AgentStorage) this.#storage.clearMigratedSettings();
 			} catch (error) {
 				logger.warn("Settings: failed to clear migrated agent.db settings", { error: String(error) });
 			}
@@ -3491,6 +4380,13 @@ export class Settings {
 
 	/** Apply schema migrations to raw settings */
 	#migrateRawSettings(raw: RawSettings, captureLegacyChangelogVersion = true): RawSettings {
+		// Preserve the existing updater preferences across the channel/mode cutover.
+		const update = isRecord(raw.update) ? raw.update : undefined;
+		if (update?.channel === "canary") update.channel = "nightly";
+		if (typeof update?.auto === "boolean") update.auto = update.auto ? "auto" : "off";
+		if (raw["update.channel"] === "canary") raw["update.channel"] = "nightly";
+		if (typeof raw["update.auto"] === "boolean") raw["update.auto"] = raw["update.auto"] ? "auto" : "off";
+
 		// queueMode -> steeringMode
 		if ("queueMode" in raw && !("steeringMode" in raw)) {
 			raw.steeringMode = raw.queueMode;
@@ -3827,15 +4723,21 @@ export class Settings {
 			if (migrated !== undefined) providersObj.tinyModel = migrated;
 		}
 
-		// Saved-reset autoRedeem booleans -> tri-state enums. Existing explicit
-		// false keeps "do not run"; missing config falls through to "unset",
-		// which asks before the first eligible provider-specific spend.
-		const codexResetsObj = raw.codexResets as Record<string, unknown> | undefined;
-		if (codexResetsObj && typeof codexResetsObj.autoRedeem === "boolean") {
-			codexResetsObj.autoRedeem = codexResetsObj.autoRedeem ? "yes" : "no";
-		}
-		if (typeof raw["codexResets.autoRedeem"] === "boolean") {
-			raw["codexResets.autoRedeem"] = raw["codexResets.autoRedeem"] ? "yes" : "no";
+		// Legacy single saved-reset `autoRedeem` (boolean or tri-state) -> the 5h and
+		// weekly window keys not set yet. The Fable window is new and stays `unset`.
+		for (const group of ["codexResets", "claudeResets"] as const) {
+			const nested = isRecord(raw[group]) ? raw[group] : undefined;
+			const dotted = `${group}.autoRedeem`;
+			const legacy = nested?.autoRedeem ?? raw[dotted];
+			if (nested) delete nested.autoRedeem;
+			delete raw[dotted];
+			if (legacy === undefined) continue;
+			const mode = typeof legacy === "boolean" ? (legacy ? "yes" : "no") : legacy;
+			for (const key of ["autoRedeem5h", "autoRedeemWeekly"]) {
+				if (nested?.[key] !== undefined || raw[`${group}.${key}`] !== undefined) continue;
+				if (nested) nested[key] = mode;
+				else raw[`${group}.${key}`] = mode;
+			}
 		}
 
 		// Map legacy `memories.enabled` boolean to the explicit `memory.backend`
@@ -4087,13 +4989,13 @@ export class Settings {
 			delete raw["task.completionProbeMs"];
 		}
 
-		// Early per-agent toggles were persisted as booleans even though the
-		// runtime record contract is "on"/"off"/model pattern. Normalize each
-		// layer before merging so project-level false still overrides global true.
+		// Per-agent records accept booleans from early persisted toggles and
+		// hand-written YAML, though the runtime contract is "on"/"off"/model pattern.
+		// Normalize each layer before merging so project-level false still overrides global true.
 		{
 			const taskObj = isRecord(raw.task) ? raw.task : undefined;
 			if (taskObj) {
-				for (const key of ["agentPrewalk", "agentAdvisor"]) {
+				for (const key of ["agentPrewalk", "agentAdvisor", "agentPrewalkAuto"]) {
 					const overrides = isRecord(taskObj[key]) ? taskObj[key] : undefined;
 					if (!overrides) continue;
 					for (const agentName in overrides) {
@@ -4123,6 +5025,8 @@ export class Settings {
 			"remindersMax",
 			value => typeof value === "number" && Number.isFinite(value),
 		);
+
+		migrateKokoroSpeechSettings(raw);
 
 		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
 		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
@@ -4963,6 +5867,7 @@ export class Settings {
 	 */
 	#adoptSavedGlobal(saved: RawSettings, source: string): void {
 		this.#applyPendingGlobalWrites(saved);
+		this.#keepReadableValues(saved, this.#global, source);
 		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return;
 		const previous = this.#snapshot();
 		this.#global = saved;
@@ -5153,7 +6058,15 @@ export class Settings {
 				for (const [key, receipt] of receipts) {
 					if (this.#projectInFlightReceipts.get(key) === receipt) this.#projectInFlightReceipts.delete(key);
 				}
-				await this.#writeSettingsTarget(target, projectSettings, canPatchDocument ? source : undefined, mutations);
+				// A batch whose every change was refused leaves the file exactly as the outside writer left it.
+				if (mutations.length > 0) {
+					await this.#writeSettingsTarget(
+						target,
+						projectSettings,
+						canPatchDocument ? source : undefined,
+						mutations,
+					);
+				}
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#projectToml = target.toml ?? {};
 				for (const [key, pending] of this.#modifiedProjectMutations) {
@@ -5184,7 +6097,7 @@ export class Settings {
 		}
 
 		const previous = this.#snapshot();
-		const project = await this.#readProjectSettings(false);
+		const project = this.#resolveProjectRead(await this.#readProjectSettings(false), this.#ownLayers());
 		this.#applyPendingProjectWrites(project.settings);
 		this.#commitProjectRead(project);
 		this.#project = project.settings;
@@ -5208,8 +6121,24 @@ export class Settings {
 	// Utilities
 	// ─────────────────────────────────────────────────────────────────────────
 
+	/** Re-merges after a change to this instance's own layers or scope, then tells {@link onLayersChange} observers. */
 	#rebuildMerged(): void {
+		this.#remerge();
+		this.#layerGeneration++;
+		if (this.#layerListeners.size === 0) return;
+		for (const listener of Array.from(this.#layerListeners)) {
+			try {
+				listener();
+			} catch (error) {
+				logger.warn("Settings: layer-change listener failed", { error: String(error) });
+			}
+		}
+	}
+
+	/** Rebuilds the merged view from the own layers over the parent's current view. */
+	#remerge(): void {
 		this.#revision++;
+		this.#fileScopeViews?.clear();
 		if (this.#parent) this.#syncedParentRevision = this.#parent.revision;
 		this.#merged = this.#mergeOverParent(this.#mergeOwnLayers(this.#ownLayers()));
 	}
@@ -5229,8 +6158,10 @@ export class Settings {
 	/** `layers` (global, project, `--config` overlay, runtime) merged in precedence order. */
 	#mergeOwnLayers(layers: OwnLayers): RawSettings {
 		// TOML is folded into each mutable scope at read time, before setters run.
-		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project));
-		merged = this.#deepMerge(merged, layers.configOverlay);
+		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project), {
+			arrays: "layer",
+		});
+		merged = this.#deepMerge(merged, layers.configOverlay, { arrays: "layer" });
 		return this.#deepMerge(this.#deepMerge(merged, layers.session), layers.overrides);
 	}
 
@@ -5250,22 +6181,32 @@ export class Settings {
 	/**
 	 * `overrides` deep-merged over `base`. Keys follow the higher layer's order, then base-only keys:
 	 * record order is meaningful to some consumers (`retry.fallbackChains` is searched in order).
+	 * `arrays` decides how an array setting declaring `merge` combines with the lower value:
+	 *  - `"replace"` (default): the higher array replaces it, like every other value.
+	 *  - `"combine"`: the setting's `merge` strategy applies over the lower array as found.
+	 *  - `"layer"`: as `"combine"`, and a lower layer leaving the setting unset (or `null`) contributes its default.
+	 * `prefix` is the dotted path of `base`/`overrides` within the settings tree.
 	 */
-	#deepMerge(base: RawSettings, overrides: RawSettings): RawSettings {
+	#deepMerge(
+		base: RawSettings,
+		overrides: RawSettings,
+		options: { readonly arrays?: "replace" | "combine" | "layer"; readonly prefix?: string } = {},
+	): RawSettings {
+		const { arrays = "replace", prefix = "" } = options;
 		const result: RawSettings = {};
 		for (const key of Object.keys(overrides)) {
 			const override = overrides[key];
 			const baseVal = Object.hasOwn(base, key) ? base[key] : undefined;
 
 			if (override === undefined) continue;
+			const settingPath = prefix ? `${prefix}.${key}` : key;
 
+			const isOverrideRecord = typeof override === "object" && override !== null && !Array.isArray(override);
+			const isBaseRecord = typeof baseVal === "object" && baseVal !== null && !Array.isArray(baseVal);
 			if (
-				typeof override === "object" &&
-				override !== null &&
-				!Array.isArray(override) &&
-				typeof baseVal === "object" &&
-				baseVal !== null &&
-				!Array.isArray(baseVal)
+				isOverrideRecord &&
+				(isBaseRecord ||
+					(arrays === "layer" && baseVal === undefined && Object.hasOwn(settingsGroupOnlyPrefixes(), settingPath)))
 			) {
 				// Effort selections are discriminated values: a project "fixed"
 				// must replace global "auto", not inherit its allowed/selector fields.
@@ -5274,10 +6215,37 @@ export class Settings {
 					key,
 					"mode" in override &&
 						(override.mode === "auto" || override.mode === "fixed" || override.mode === "inherit") &&
+						isBaseRecord &&
 						"mode" in baseVal
 						? override
-						: this.#deepMerge(baseVal as RawSettings, override as RawSettings),
+						: this.#deepMerge((isBaseRecord ? baseVal : {}) as RawSettings, override as RawSettings, {
+								arrays,
+								prefix: settingPath,
+							}),
 				);
+			} else if (arrays !== "replace" && Array.isArray(override)) {
+				const setting = lookupSetting(settingPath);
+				const strategy = setting?.definition.type === "array" ? setting.definition.merge : undefined;
+				const fallbackBase =
+					arrays === "layer" &&
+					(baseVal === undefined || baseVal === null) &&
+					override.length > 0 &&
+					setting?.definition.type === "array"
+						? setting.default
+						: undefined;
+				// A scoped-only lower list stands for its entries plus the default; keep that once higher entries join it.
+				const effectiveBase = Array.isArray(baseVal)
+					? setting
+						? [...baseVal, ...scopedListDefault(setting, baseVal)]
+						: baseVal
+					: fallbackBase;
+				if (override.length > 0 && strategy === "prepend" && Array.isArray(effectiveBase)) {
+					setOwn(result, key, [...override, ...effectiveBase]);
+				} else if (override.length > 0 && strategy === "append" && Array.isArray(effectiveBase)) {
+					setOwn(result, key, [...effectiveBase, ...override]);
+				} else {
+					setOwn(result, key, override);
+				}
 			} else {
 				setOwn(result, key, override);
 			}
@@ -5292,9 +6260,10 @@ export class Settings {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Weak registry of every constructed instance so `resetSettingsForTest` can
- * disarm stray background saves on isolated instances too. WeakRefs never
- * retain instances; the set is cleared on every test reset.
+ * Weak registry of every constructed instance except in-memory projections, so
+ * `resetSettingsForTest` can disarm stray background saves on isolated
+ * instances too and {@link findScopedSettings} can resolve a session by scope.
+ * WeakRefs never retain instances; the set is cleared on every test reset.
  */
 const liveSettingsInstances = new Set<WeakRef<Settings>>();
 
@@ -5316,6 +6285,8 @@ let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
 let boundSettingsInstance: Settings | null = null;
 let boundSettingsMethods = new Map<PropertyKey, unknown>();
+/** Releases the effects hold {@link Settings.installGlobalMirror} took for the current global mirror. */
+let releaseGlobalMirrorEffects: (() => void) | undefined;
 
 function clearBoundSettingsMethods(): void {
 	boundSettingsInstance = null;
@@ -5371,6 +6342,7 @@ export function resetSettingsForTest(): void {
 	liveSettingsInstances.clear();
 	globalInstance = null;
 	globalInstancePromise = null;
+	releaseGlobalMirrorEffects = undefined;
 	clearBoundSettingsMethods();
 	// Effect-owned process state (theme, redaction, request limits, …) returns to its defaults.
 	resetRegistryForTest(Settings.isolated());

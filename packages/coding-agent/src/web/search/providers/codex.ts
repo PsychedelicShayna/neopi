@@ -4,16 +4,25 @@
  * Uses the configured Codex Responses transport for proxy/API-key setups and
  * the official ChatGPT backend for OAuth logins.
  */
-import { type Api, type AuthStorage, type FetchImpl, type Model, withAuth, withOAuthAccess } from "@oh-my-pi/pi-ai";
+import {
+	type Api,
+	type AuthStorage,
+	type FetchImpl,
+	type Model,
+	type ServiceTier,
+	withAuth,
+	withOAuthAccess,
+} from "@oh-my-pi/pi-ai";
 import { resolveCodexResponsesUrl } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { applyOpenAIServiceTier } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import {
 	applyCodexResidencyHeader,
 	CODEX_BASE_URL,
-	CODEX_CLIENT_VERSION,
 	getCodexAccountId,
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
+import { getCodexClientVersion } from "@oh-my-pi/pi-catalog/wire/codex-version";
 import { readSseJson, USER_AGENT } from "@oh-my-pi/pi-utils";
 import type { SearchResponse, SearchSource } from "@oh-my-pi/pi-tui/tools/web-search-types";
 import { SearchProviderError } from "../../../web/search/types";
@@ -302,9 +311,8 @@ function buildCodexHeaders(
 		headers.delete(OPENAI_HEADERS.ACCOUNT_ID);
 	}
 	applyCodexResidencyHeader(headers, accessToken);
-	headers.set(OPENAI_HEADERS.BETA, OPENAI_HEADER_VALUES.BETA_RESPONSES);
 	headers.set(OPENAI_HEADERS.ORIGINATOR, OPENAI_HEADER_VALUES.ORIGINATOR_CODEX);
-	headers.set(OPENAI_HEADERS.VERSION, CODEX_CLIENT_VERSION);
+	headers.set(OPENAI_HEADERS.VERSION, getCodexClientVersion());
 	headers.set("User-Agent", USER_AGENT);
 	headers.set("Accept", "text/event-stream");
 	headers.set("Content-Type", "application/json");
@@ -355,16 +363,16 @@ async function callCodexSearch(
 		timeoutMs?: number;
 		systemPrompt?: string;
 		searchContextSize?: "low" | "medium" | "high";
-		modelId: string;
+		model: Model<Api>;
 		fetch?: FetchImpl;
 		transport: CodexSearchTransport;
 	},
 ): Promise<CodexSearchResult> {
 	const headers = buildCodexHeaders(auth.accessToken, auth.accountId, options.transport.headers);
 
-	const requestedModel = options.modelId;
+	const requestedModel = options.model.requestModelId ?? options.model.id;
 
-	const body: Record<string, unknown> = {
+	const body: Record<string, unknown> & { service_tier?: ServiceTier } = {
 		model: requestedModel,
 		stream: true,
 		store: false,
@@ -386,6 +394,7 @@ async function callCodexSearch(
 		tool_choice: { type: "web_search" },
 		instructions: options.systemPrompt ?? DEFAULT_INSTRUCTIONS,
 	};
+	applyOpenAIServiceTier(body, undefined, options.model);
 
 	const fetchImpl = options.fetch ?? fetch;
 	const response = await fetchImpl(options.transport.url, {
@@ -574,20 +583,25 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 			timeoutMs: params.timeoutMs,
 			systemPrompt: params.systemPrompt,
 			searchContextSize: "high",
-			modelId: params.model.id,
+			model: params.model,
 			fetch: params.fetch,
 			transport: requestTransport,
 		});
 	};
 
 	let result: CodexSearchResult;
-	if (transport.customEndpoint) {
+	if (transport.customEndpoint || (params.model.codexVariant && params.model.accountAccess)) {
 		// The registry resolver and provenance guard must consult the same storage;
+		// Derived slugs reuse the registry's tier-filtered account eligibility.
 		// params.authStorage may be a divergent caller handle. Command-backed keys
 		// still outrank lower-priority OAuth credentials in the registry storage.
 		const credentialOrigin = params.modelRegistry.authStorage.keys.source(params.model.provider);
 		const hasCommandBackedKey = params.modelRegistry.hasCommandBackedApiKey(params.model.provider);
-		if (!hasCommandBackedKey && (credentialOrigin?.kind === "oauth" || credentialOrigin?.kind === "env")) {
+		if (
+			transport.customEndpoint &&
+			!hasCommandBackedKey &&
+			(credentialOrigin?.kind === "oauth" || credentialOrigin?.kind === "env")
+		) {
 			throw new SearchProviderError(
 				"codex",
 				`Refusing to send official Codex OAuth credentials to custom endpoint ${transport.baseUrl}. Configure an API key for provider "${params.model.provider}".`,
@@ -595,10 +609,18 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 		}
 
 		const keyOrResolver = params.modelRegistry.resolver(params.model, params.sessionId);
-		result = await withAuth(keyOrResolver, async accessToken => runSearch({ accessToken }), {
-			signal: params.signal,
-			missingKeyMessage: `Codex credentials not found for selected provider "${params.model.provider}".`,
-		});
+		result = await withAuth(
+			keyOrResolver,
+			async accessToken =>
+				runSearch({
+					accessToken,
+					...(transport.customEndpoint ? {} : { accountId: getCodexAccountId(accessToken) }),
+				}),
+			{
+				signal: params.signal,
+				missingKeyMessage: `Codex credentials not found for selected provider "${params.model.provider}".`,
+			},
+		);
 	} else {
 		// `hasCodexSearch` admits this provider from `keys.source()`, which knows
 		// about env bearers; `oauth.access` below does not — it only reads stored

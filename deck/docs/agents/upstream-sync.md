@@ -1,12 +1,13 @@
 # Synchronizing an upstream release
 
-Active upstream is `Shreyans13/omp-deck` (`upstream` remote). Original
-`bjb2/omp-deck` credits are historical provenance, not a release source.
+The deck's active upstream is `Shreyans13/omp-deck`. Original `bjb2/omp-deck`
+credits are historical provenance, not a release source. The deck is NeoPi's
+`deck/` subtree, so an omp-deck release merges under the `deck/` prefix only.
 
-Syncs land on `sync/<date>` through a PR into `nightly`, never directly on
-`main` or `nightly`. Promotion into `main` is separate
-(`docs/agents/policy.md` › Promotion). The fetched remote branch is the source
-of truth, not a local checkout or another feature worktree.
+Syncs land on `sync/deck-<date>` through a PR into NeoPi's `nightly`, under NeoPi's
+[repository policy](../../../docs/agents/policy.md); promotion into `neopi` is
+separate. The fetched remote branch is the source of truth, not a local
+checkout or another feature worktree.
 
 ## 1. Preserve and establish the baseline
 
@@ -15,7 +16,7 @@ WIP/topic branches with signed commits; leave unrelated checkouts untouched.
 Do not use a stash as durable storage or reset a local default branch.
 Merge prerequisite topic PRs before syncing, then fetch again.
 
-Read `docs/agents/fork-maintenance.md`. Pin `origin/nightly`, the selected
+Read [fork-maintenance.md](fork-maintenance.md). Pin `origin/nightly`, the selected
 upstream release tag and peeled commit, and relevant open PR heads. Select
 the newest intended upstream release tag, not an arbitrary branch tip:
 
@@ -34,16 +35,18 @@ record its exact commit, and create the worktree from freshly fetched
 `origin/nightly`:
 
 ```sh
-git worktree add ../neodeck-wt-sync-<date> -b sync/<date> origin/nightly
+git worktree add ../neopi-wt-deck-sync-<date> -b sync/deck-<date> origin/nightly
 ```
 
-In that new worktree, create `backup/neodeck-pre-upstream-<date>` at the pinned
-fork baseline. Record the source commit, tag commit, recovery ref, and open PR
-heads in `docs/updates/<date>-upstream-<tag>.md`.
+In that new worktree, create `backup/deck-pre-upstream-<date>` at the pinned
+baseline. Record the source commit, tag commit, recovery ref, and open PR
+heads in `deck/docs/updates/<date>-upstream-<tag>.md`.
 
 ## 3. Merge and maintain the conflict ledger
 
-Merge the selected tag with `git merge --no-ff --no-commit <tag>`. Resolve
+Merge the selected tag into the subtree with
+`git merge -X subtree=deck --no-ff --no-commit <tag>`; never merge an omp-deck
+tag at the repository root. Confirm that the merge touches only `deck/`. Resolve
 conflicts personally, sequentially, one file at a time; research may be
 read-only delegated, but resolution ownership stays with the integrating agent.
 
@@ -55,32 +58,26 @@ its ledger row before staging:
 | Path | Resolution | Fork behavior kept | Upstream change taken | Why |
 | --- | --- | --- | --- | --- |
 
-Inspect automatically merged fork integration points too. Preserve the NeoPi
-pin/SDK contract, streaming sessions, canvas/card properties, approvals,
-bridges, and installed-runtime identity. Treat a NeoPi pin update as an
-explicit compatibility change, not an incidental conflict resolution.
-For lockfiles, start from upstream and regenerate only after auditing new
-dependencies; never execute unaudited installers.
+Inspect automatically merged fork integration points too. Preserve the in-tree
+NeoPi SDK contract, streaming sessions, canvas/card properties, approvals,
+bridges, and installed-runtime identity. The deck has no NeoPi pin, setup
+script, or lockfile of its own: drop any upstream `bun.lock`, `neopi.pin`,
+`neopi-setup` or standalone workflow it reintroduces. Regenerate the root
+`bun.lock` only after auditing new dependencies; never execute unaudited installers.
 
 ## 4. Commit and verify in isolation
 
-Complete the merge with a signed commit and verify it:
+Complete the merge with a signed, verified commit under NeoPi's
+[commit policy](../../../docs/agents/policy.md#commits-and-identity).
+Post-merge fixes are separate signed logical commits.
 
-```sh
-git commit -S/home/shayna/.ssh/id_ed25519_github_signing_agents.pub -F <message-file>
-git verify-commit HEAD
-```
-
-Use a Conventional Commit headline of at most 72 characters, prose describing
-what/why/verification, and actual executing identity in `Model:` and
-`Co-authored-by:` trailers. Post-merge fixes are separate signed logical commits.
-
-Useful CI-equivalent checks (informational for nightly):
+Useful CI-equivalent checks (informational for nightly), from the repository root:
 
 ```sh
 bun install --frozen-lockfile
-bun run typecheck && bun test
-bun run --cwd apps/web build
+bun deck/.github/scripts/typecheck.ts
+(cd deck && bun test . ./.github/scripts)
+(cd deck/apps/web && bun run build)
 ```
 
 When useful, exercise conflicted boundaries and changed runtime behavior using
@@ -97,7 +94,7 @@ The wrapper already invokes `timeout` + `xvfb-run -a` with mandatory
 `--password-store=basic`; it does not inherit `DBUS_SESSION_BUS_ADDRESS`,
 `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`, or live display,
 Wayland and credential variables. HOME and XDG paths are private. Follow the
-invocation and actual-child argv/environment checks in `CONTRIBUTING.md`.
+invocation and actual-child argv/environment checks in `deck/CONTRIBUTING.md`.
 Never use display `:0` or Xephyr. Terminate the entire process tree, including
 detached crash handlers and Xvfb, and verify termination with `pgrep` matching
 the private profile, debugging port and Xvfb display. If Xvfb cannot perform a
@@ -109,11 +106,11 @@ nightly gate. Source inspection alone does not prove runtime behavior.
 
 ## 5. Publish and realign safely
 
-Push `sync/<date>` and open a PR into `nightly` using the PR template and identity
-block. Summarize commits/tag, recovery ref, ledger/conflicts, retained or
+Push the sync branch and open a PR into `nightly` under NeoPi's policy.
+Summarize commits/tag, recovery ref, ledger/conflicts, retained or
 replaced contracts, audited dependencies, checks/build/smoke proof, and any
-baseline defects. Merge with a merge commit under
-[nightly delivery](policy.md#nightly-delivery), without CI or review waits.
+baseline defects. Merge with a merge commit under NeoPi's
+[nightly delivery](../../../docs/agents/policy.md#nightly-delivery) rules.
 
 After merging, fetch and confirm the intended tree is in `origin/nightly`.
 Only fast-forward a clean local integration checkout when its tip is an

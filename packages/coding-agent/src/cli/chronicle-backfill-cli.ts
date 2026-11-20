@@ -232,8 +232,10 @@ export async function runChronicleBackfill(
 
 	const baseSettings = await deps.loadSettings(deps.cwd, overrides);
 	const concurrency = flags.concurrency ?? cfgChroniclerBackfillConcurrency.get(baseSettings);
-	if (!flags.dryRun && !cfgChroniclerEnabled.get(baseSettings)) {
-		deps.stderr("chronicler.enabled is false in the effective settings; refusing. Pass --force to backfill anyway.");
+	if (!flags.dryRun && cfgChroniclerEnabled.get(baseSettings) !== true) {
+		deps.stderr(
+			"chronicler.enabled is not true in the effective settings; refusing. Pass --force to backfill anyway.",
+		);
 		return 2;
 	}
 

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
@@ -200,5 +200,44 @@ describe("/fast targets the current model's service-tier family", () => {
 		session.setFastMode(false);
 		expect(session.serviceTierByFamily).toEqual({});
 		expect(session.isFastModeActive()).toBe(false);
+	});
+
+	it("recognizes newly discovered Ultrafast without a context-window change", async () => {
+		const stale = codexModel(["priority"]);
+		const fresh = codexModel(["priority", "ultrafast"]);
+		const ready = Promise.withResolvers<void>();
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "tier-models.yml"));
+		const wait = vi.spyOn(registry, "awaitInitialBackgroundRefresh").mockImplementation(() => ready.promise);
+		const find = vi
+			.spyOn(registry, "find")
+			.mockImplementation((provider, id) => (provider === fresh.provider && id === fresh.id ? fresh : undefined));
+		authStorage.keys.setRuntime(stale.provider, "token");
+		session = new AgentSession({
+			agent: new Agent({ initialState: { model: stale, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry: registry,
+			rebindModelAfterDiscovery: true,
+		});
+		try {
+			expect(session.setUltrafastMode(true)).toBe(false);
+			const changed = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "model_changed") changed.resolve();
+			});
+			ready.resolve();
+			await Promise.race([
+				changed.promise,
+				Bun.sleep(1_000).then(() => {
+					throw new Error("Service-tier discovery did not rebind the active model");
+				}),
+			]);
+			expect(session.model?.contextWindow).toBe(stale.contextWindow);
+			expect(session.setUltrafastMode(true)).toBe(true);
+			expect(session.isFastModeActive()).toBe(true);
+		} finally {
+			wait.mockRestore();
+			find.mockRestore();
+		}
 	});
 });

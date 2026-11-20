@@ -1,3 +1,4 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { SettingsList, type SettingsListTheme } from "@oh-my-pi/pi-tui/components/settings-list";
@@ -214,6 +215,7 @@ describe("SettingsList", () => {
 		list.handleInput("/");
 		list.handleInput("b");
 		expect(list.getSearchQuery()).toBe("b");
+		expect(list.getSelectedItem()?.id).toBe("browser.path");
 		expect(list.render(80).join("\n")).not.toContain("Theme");
 		list.handleInput("\r");
 
@@ -778,6 +780,49 @@ describe("SettingsList", () => {
 		expect(changes).toBe(1);
 		expect(visits.map(visit => visit.page)).toEqual(["name", ""]);
 	});
+	it("previews search while editing, consumes navigation, and cancels back to the confirmed pattern", () => {
+		let changes = 0;
+		let cancelled = 0;
+		const list = new SettingsList(
+			[
+				{ id: "claude", label: "Claude model", currentValue: "off", values: ["off", "on"] },
+				{ id: "count", label: "Count 1000", currentValue: "0" },
+				{ id: "gpt", label: "GPT model", currentValue: "" },
+			],
+			5,
+			testTheme,
+			() => changes++,
+			() => cancelled++,
+		);
+		const output = () => list.render(120).join("\n");
+		list.handleInput("/");
+		list.handleInput("claude");
+		expect(list.navigationSnapshot()).toMatchObject({ filter: "", filterDraft: "claude", filterFocused: true });
+		expect(list.getSearchQuery()).toBe("claude");
+		expect(list.getSelectedItem()?.id).toBe("claude");
+		expect(output()).not.toContain("GPT model");
+		for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x0e"]) list.handleInput(key);
+		expect(list.getSelectedItem()?.id).toBe("claude");
+		expect(list.sectionFocused).toBe(false);
+		expect(list.navigationSnapshot()).toMatchObject({ filterCursor: 6, filterFocused: true });
+		list.handleInput("\r");
+		expect(list.navigationSnapshot()).toMatchObject({ filter: "claude", filterFocused: false });
+		expect(changes).toBe(0);
+		list.handleInput("/");
+		list.handleInput("unconfirmed");
+		expect(list.getSelectedItem()).toBeUndefined();
+		list.handleInput("\x1b");
+		expect(list.filterFocused).toBe(true);
+		list.handleInput("\x1b");
+		expect(list.getSearchQuery()).toBe("claude");
+		expect(list.getSelectedItem()?.id).toBe("claude");
+		expect(list.filterFocused).toBe(false);
+		list.handleInput("\x1b");
+		expect(list.getSearchQuery()).toBe("");
+		expect(output()).toContain("GPT model");
+		expect(cancelled).toBe(0);
+	});
+
 	it("previews raw patterns while consuming search-mode navigation keys", () => {
 		let changes = 0;
 		let cancelled = 0;
@@ -787,12 +832,14 @@ describe("SettingsList", () => {
 				{ id: "count", label: "Count 1000", currentValue: "0" },
 				{ id: "gpt", label: "GPT model", currentValue: "" },
 			],
-			5, testTheme, () => changes++, () => cancelled++,
+			5,
+			testTheme,
+			() => changes++,
+			() => cancelled++,
 		);
 		const output = () => list.render(120).join("\n");
 		list.handleInput("/");
 		for (const key of ".{1000}") list.handleInput(key);
-		expect(list.navigationSnapshot()).toMatchObject({ filter: ".{1000}", filterDraft: ".{1000}", filterFocused: true });
 		expect(output()).toContain("No matching settings");
 		for (const key of ["\x1b[A", "\x1b[B", "\t", "\x04", "\x0e"]) list.handleInput(key);
 		expect(list.getSelectedItem()).toBeUndefined();
@@ -815,6 +862,7 @@ describe("SettingsList", () => {
 		list.handleInput("/");
 		list.handleInput("unconfirmed");
 		list.handleInput("\x1b");
+		list.handleInput("\x1b");
 		expect(list.getSearchQuery()).toBe("/^claude/");
 		expect(output()).not.toContain("GPT model");
 		expect(list.debugState().filterFocused).toBe(false);
@@ -824,10 +872,14 @@ describe("SettingsList", () => {
 		expect(cancelled).toBe(0);
 	});
 
-	it("discards a draft on departure rather than applying it", () => {
+	it.each([false, true])("discards an unconfirmed preview on departure (Vim %s)", vim => {
+		setMenuSearchVimMode(vim);
 		const list = new SettingsList(
 			[{ id: "alpha", label: "Alpha", currentValue: "" }],
-			5, testTheme, () => {}, () => {},
+			5,
+			testTheme,
+			() => {},
+			() => {},
 		);
 		list.handleInput("/");
 		list.handleInput("nothing matches");
@@ -835,4 +887,13 @@ describe("SettingsList", () => {
 		expect(list.navigationSnapshot()).toMatchObject({ filter: "", filterFocused: false });
 		expect(list.render(80).join("\n")).toContain("Alpha");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

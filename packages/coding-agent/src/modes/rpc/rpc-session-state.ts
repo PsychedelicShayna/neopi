@@ -6,13 +6,14 @@ import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { shortHostname } from "@oh-my-pi/pi-tui/status-line/short-hostname";
 import { cfgSttEnabled } from "../../stt/settings";
 import type { AgentSession } from "../../session/agent-session";
+import { type AgentViewSession, isLocalAgentSession } from "../../session/agent-session-handle";
 import { isSessionSettled } from "../../session/session-settle";
 import { calculateTokensPerSecond } from "../../utils/token-rate";
 import { MAX_RPC_FRAME_BYTES } from "./rpc-frame";
 import { serializeRpcModel } from "./rpc-model";
 import { rpcPlanModeState } from "./rpc-plan-mode";
 import type { RpcScheduledTurnProbe } from "./rpc-session-settle";
-import type { RpcSessionState } from "./rpc-types";
+import type { RpcSessionControlState, RpcSessionState } from "./rpc-types";
 import { rpcSessionTelemetry } from "./rpc-session-telemetry";
 
 export interface RpcSessionStateOptions {
@@ -63,24 +64,65 @@ export function copyQueue(entries: readonly string[], limit: QueueLimit | undefi
 	return copy;
 }
 
-export function buildRpcSessionState(session: AgentSession, options: RpcSessionStateOptions): RpcSessionState {
-	const queuedMessages = session.getQueuedMessages();
-	const model = session.model;
+/** Capture bounded native facts only: no transcript scan, queue copy or volatile generation meter. */
+export function captureRpcSessionControlState(
+	session: AgentSession,
+	scheduledTurn?: RpcScheduledTurnProbe,
+): RpcSessionControlState {
 	return {
-		model: model ? serializeRpcModel(model) : undefined,
-		thinkingLevel: session.thinkingLevel,
-		isStreaming: session.isStreaming,
-		isCompacting: session.isCompacting,
 		steeringMode: session.steeringMode,
 		followUpMode: session.followUpMode,
 		interruptMode: session.interruptMode,
-		sessionFile: session.sessionFile,
-		sessionId: session.sessionId,
-		sessionName: session.sessionName,
 		...rpcSessionTelemetry(session),
 		chronicler: session.chroniclerHealth,
 		autoCompactionEnabled: session.autoCompactionEnabled,
 		queuedMessageCount: session.queuedMessageCount,
+		runningJobCount: session.getRunningBackgroundJobCount(),
+		hasPendingAsyncWork: session.hasPendingAsyncWork(),
+		isSettled: isSessionSettled(session, scheduledTurn),
+		slowModeSupported: session.isSlowModeSupported(),
+		slowModeEnabled: session.isSlowModeEnabled(),
+		slowModeScope: session.getSlowModeScope(),
+		usageLimit: session.getUsageLimitState(),
+		dictationEnabled: cfgSttEnabled.get(session.settings),
+		chatMode: session.chatMode?.mode ?? "off",
+		...rpcPlanModeState(session),
+	};
+}
+
+export function buildRpcSessionState(session: AgentSession, options: RpcSessionStateOptions): RpcSessionState;
+export function buildRpcSessionState(
+	session: AgentViewSession,
+	options: RpcSessionStateOptions & { includeDump: false },
+): RpcSessionState;
+export function buildRpcSessionState(session: AgentViewSession, options: RpcSessionStateOptions): RpcSessionState {
+	const local = isLocalAgentSession(session) ? session : undefined;
+	const control = local ? captureRpcSessionControlState(local, options.scheduledTurn) : session.controlState;
+	if (!control) throw new Error("Focused worker control state has not arrived");
+	let dump: Pick<RpcSessionState, "systemPrompt" | "dumpTools"> | undefined;
+	if (options.includeDump) {
+		if (!local) throw new Error("Session dumps require a local session");
+		dump = {
+			systemPrompt: local.systemPrompt,
+			dumpTools: local.agent.state.tools.map(tool => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: toolWireSchema(tool),
+				examples: tool.examples,
+			})),
+		};
+	}
+	const queuedMessages = session.getQueuedMessages();
+	const model = session.model;
+	return {
+		...control,
+		model: model ? serializeRpcModel(model) : undefined,
+		thinkingLevel: session.thinkingLevel,
+		isStreaming: session.isStreaming,
+		isCompacting: session.isCompacting,
+		sessionFile: session.sessionFile,
+		sessionId: session.sessionId,
+		sessionName: session.sessionManager.getSessionName(),
 		queuedMessages: {
 			steering: copyQueue(queuedMessages.steering, options.queueLimit),
 			followUp: copyQueue(queuedMessages.followUp, options.queueLimit),
@@ -88,34 +130,14 @@ export function buildRpcSessionState(session: AgentSession, options: RpcSessionS
 		},
 		hostname: shortHostname(),
 		activeTimeMs: session.getActiveTimeMs(),
-		runningJobCount: session.getRunningBackgroundJobCount(),
-		hasPendingAsyncWork: session.hasPendingAsyncWork(),
-		isSettled: isSessionSettled(session, options.scheduledTurn),
 		todoPhases: session.getTodoPhases(),
 		fastModeEnabled: session.isFastModeEnabled(),
 		tokensPerSecond: calculateTokensPerSecond(session.messages, session.isStreaming),
 		fastModeActive: session.isFastModeActive(),
-		slowModeSupported: session.isSlowModeSupported(),
-		slowModeEnabled: session.isSlowModeEnabled(),
-		slowModeScope: session.getSlowModeScope(),
-		usageLimit: session.getUsageLimitState(),
 		messageCount: session.messages.length,
-		...(options.includeDump
-			? {
-					systemPrompt: session.systemPrompt,
-					dumpTools: session.agent.state.tools.map(tool => ({
-						name: tool.name,
-						description: tool.description,
-						parameters: toolWireSchema(tool),
-						examples: tool.examples,
-					})),
-				}
-			: {}),
+		...dump,
 		contextUsage: session.getContextUsage(),
 		activeRole: options.activeRole,
-		dictationEnabled: cfgSttEnabled.get(session.settings),
-		chatMode: session.chatMode?.mode ?? "off",
-		...rpcPlanModeState(session),
 		goal: session.getGoalModeState() ?? null,
 	};
 }

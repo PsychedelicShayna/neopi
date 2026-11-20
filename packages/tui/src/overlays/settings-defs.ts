@@ -9,6 +9,7 @@ export type SettingTab =
 	| "interaction"
 	| "context"
 	| "memory"
+	| "chronicler"
 	| "files"
 	| "shell"
 	| "tools"
@@ -25,6 +26,7 @@ export const SETTING_TABS: SettingTab[] = [
 	"interaction",
 	"context",
 	"memory",
+	"chronicler",
 	"files",
 	"shell",
 	"tools",
@@ -39,6 +41,7 @@ export const TAB_METADATA: Record<SettingTab, TabMetadata> = {
 	interaction: { label: "Interaction", icon: "tab.interaction" },
 	context: { label: "Context", icon: "tab.context" },
 	memory: { label: "Memory", icon: "tab.memory" },
+	chronicler: { label: "Chronicler", icon: "tab.chronicler" },
 	files: { label: "Files", icon: "tab.files" },
 	shell: { label: "Shell", icon: "tab.shell" },
 	tools: { label: "Tools", icon: "tab.tools" },
@@ -53,6 +56,7 @@ export const TAB_LEADS: Record<SettingTab, string> = {
 	interaction: "Input, approvals, notifications, speech and what happens at startup.",
 	context: "What the model sees, and when and how the conversation compacts.",
 	memory: "What omp remembers across sessions and where it keeps it.",
+	chronicler: "Capture session history, build the Chronicle index, and recall past events.",
 	files: "How files are read, summarized and edited, and the language servers.",
 	shell: "The bash tool and the eval runtimes.",
 	tools: "Which tools the model has, their limits and the external integrations.",
@@ -84,17 +88,22 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Chaining",
 		"Control",
 		"Agent monitor",
+		"Settings",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
-	memory: ["General", "Chronicler", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
+	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight", "Sharpshooter"],
+	chronicler: ["Chronicler"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Runtimes"],
 	tools: [
 		"Available Tools",
 		"Todos",
 		"Grep & Browser",
+		"Find",
 		"Computer",
+		"Disassembler",
 		"IDA Pro",
+		"Ghidra",
 		"GitHub",
 		"Output Limits",
 		"Execution",
@@ -102,7 +111,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Extensions",
 		"Developer",
 	],
-	tasks: ["Modes", "Subagents", "Messaging", "Isolation", "Commands & Skills"],
+	tasks: ["Modes", "Subagents", "Agent Definitions", "Messaging", "Isolation", "Commands & Skills"],
 	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Timeouts", "Privacy"],
 };
 
@@ -150,19 +159,38 @@ export interface SettingsDisplayEntry {
 	condition?: () => boolean;
 }
 
+/** Settings file layers the panel can edit, broadest first. A future scope is inserted here. */
+export const SETTINGS_FILE_SCOPES = ["global", "project", "session"] as const;
+/** A settings file layer the panel can edit. */
+export type SettingsFileScope = (typeof SETTINGS_FILE_SCOPES)[number];
+
+/** What a row shows at the selected scope, resolved over setting files only. */
+export interface SettingsResolution {
+	/**
+	 * The value that applies at the selected scope from the selected file and every broader one
+	 * (session ← project ← global), merged the way settings layers merge; the schema default when
+	 * none sets it. Never an environment variable, CLI overlay or runtime override.
+	 */
+	value: unknown;
+	/** The narrowest file at or above the selected scope that sets the key; undefined when none does. */
+	source?: SettingsFileScope;
+}
+
 export interface SettingsHost {
 	entries: readonly SettingsDisplayEntry[];
-	readonly scope?: "global" | "project" | "session";
+	readonly scope?: SettingsFileScope;
 	cycleScope?(): void;
 	details?(path: string): { shadowed: boolean; description: string };
 	/** Adopted durable layers changed, including values hidden by a higher scope. */
 	onReload?(listener: () => void): () => void;
+	/** The resolved value at the selected scope: `resolve(path).value` for scoped hosts. */
 	get(path: string): unknown;
+	/** Value and source at the selected scope. Hosts without scopes omit it. */
+	resolve?(path: string): SettingsResolution;
+	/** The value stored in the selected scope's own file; undefined when absent. Seed partial writes from this. */
+	own?(path: string): unknown;
 	set(path: string, value: unknown): void;
-	/**
-	 * Removes the value from the global config: a project or other layer, or an environment
-	 * variable, that configures the setting still applies; otherwise the default does.
-	 */
+	/** Removes the key from the selected scope's file so the setting inherits again. */
 	unset(path: string): void;
 	normalizeProviderLimits(value: unknown): Record<string, number>;
 	validateProviderLimits(value: unknown): Record<string, number>;

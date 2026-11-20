@@ -75,7 +75,7 @@ for (const format of ["legacy", "stamp"] as const) {
 	});
 }
 
-// quarantined: flaky on Windows, tracked by #198
+// quarantined: flaky on Windows, tracked by NeoPi #751 (was neodeck#198)
 test.skipIf(process.platform === "win32")("refuses a Bun older than the tree's engines.bun", async () => {
 	const tree = recordedTree({ bunEngine: ">=99.0.0" });
 	expect(await refusal(tree)).toContain(`Bun ${Bun.version} does not satisfy NeoPi's engines.bun ">=99.0.0"`);

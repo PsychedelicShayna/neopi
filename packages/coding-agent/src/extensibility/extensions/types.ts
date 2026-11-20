@@ -8,6 +8,7 @@
  * - Interact with the user via UI primitives
  */
 
+import type { EntryProvenance } from "@oh-my-pi/pi-tui/theme/provenance";
 import {
 	type ExtensionUiComponent,
 	type ExtensionUiComponentFactory,
@@ -15,6 +16,7 @@ import {
 	type MessageRenderer,
 	type AssistantThinkingRenderer,
 	type AssistantTextRenderer,
+	type TranscriptPresenter,
 } from "@oh-my-pi/pi-tui/chat/extension-types";
 export {
 	type ExtensionUiComponent,
@@ -26,6 +28,9 @@ export {
 	type AssistantThinkingRenderer,
 	type AssistantTextRenderContext,
 	type AssistantTextRenderer,
+	type TranscriptBlock,
+	type TranscriptPresentation,
+	type TranscriptPresenter,
 } from "@oh-my-pi/pi-tui/chat/extension-types";
 import type { type as ArkType } from "@oh-my-pi/omptype";
 import type * as TypeBox from "@oh-my-pi/omptype/typebox";
@@ -68,6 +73,7 @@ import type {
 	AutocompleteProvider,
 	Component,
 	EditorTheme,
+	Keybinding,
 	KeyId,
 	OverlayHandle,
 	OverlayOptions,
@@ -121,11 +127,14 @@ import type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactEvent,
 	SessionBeforeCompactResult,
+	SessionBeforeShutdownEvent,
+	SessionBeforeShutdownResult,
 	SessionBeforeSwitchEvent,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeEvent,
 	SessionBeforeTreeResult,
 	SessionBranchEvent,
+	SessionClearEvent,
 	SessionCompactEvent,
 	SessionCompactingEvent,
 	SessionCompactingResult,
@@ -146,7 +155,7 @@ import type {
 import type { SlashCommandInfo } from "../slash-commands";
 import type { TerminalLaunchRequest, TerminalLaunchResult } from "../../subprocess/terminal-launch";
 
-export type { OverlayHandle, OverlayOptions } from "@oh-my-pi/pi-tui";
+export type { Keybinding, OverlayHandle, OverlayOptions } from "@oh-my-pi/pi-tui";
 export type { AppKeybinding, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 export type { ExecOptions, ExecResult } from "../../exec/exec";
 export type { AgentToolResult, AgentToolUpdateCallback };
@@ -199,6 +208,20 @@ export type {
 	ExtensionAskDialogResult,
 } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 
+import type { HtmlFormData, OptionNote } from "@oh-my-pi/pi-tui/html-form/data";
+export type { HtmlFormData, HtmlFormValue, OptionNote } from "@oh-my-pi/pi-tui/html-form/data";
+
+/** A submitted {@link ExtensionUIContext.formDialog}: form values and optional notes on selected options. */
+export interface ExtensionFormDialogResult {
+	data: HtmlFormData;
+	/**
+	 * Notes on selected options, separate from `data`. Only the interactive form
+	 * dialog collects them; ACP elicitation and field-by-field hosts never do.
+	 */
+	notes?: OptionNote[];
+	timedOut?: boolean;
+}
+
 export function getExtensionUISelectOptionLabel(option: ExtensionUISelectItem): string {
 	return typeof option === "string" ? option : option.label;
 }
@@ -237,6 +260,18 @@ export interface ExtensionUIDialogOptions {
 	/** Invoked when user input resets a UI-managed timeout countdown */
 	onTimeoutReset?: () => void;
 	/**
+	 * Form dialogs: invoked when `signal` closes the form before a submit (a message the user sent
+	 * instead), with the answers the user changed from the form's defaults and their option notes.
+	 */
+	onAbandon?: (given: ExtensionFormDialogResult) => void;
+	/**
+	 * Ask dialogs: set by a caller whose dialog outlives a message the user sends (the `ask` tool), so the
+	 * composer says sending keeps the questions open rather than skipping them. Aborts once the caller
+	 * stops waiting on the answer: the dialog stays open and still settles its promise when answered or
+	 * cancelled, but no longer holds the run, its blocked status, or the dialogs queued behind it.
+	 */
+	detach?: AbortSignal;
+	/**
 	 * Host hint to mask entered characters in `input` dialogs.
 	 * Enforced by the interactive TUI (masked as bullets), forwarded on RPC `input`
 	 * requests for hosts that honor it, and rejected (`undefined`) in ACP mode where
@@ -266,7 +301,7 @@ export interface ExtensionUIDialogOptions {
 	 *  trailing options (e.g. "Other"/"Done" actions) keep the plain cursor.
 	 *  Defaults to all options when `selectionMarker` is set. */
 	markableCount?: number;
-	/** Allow image pastes in rich ask-dialog custom-answer and note prompts. */
+	/** Allow image pastes in rich ask-dialog custom-answer and note prompts, and in `formDialog` option notes. */
 	acceptImages?: boolean;
 }
 
@@ -363,6 +398,14 @@ export interface ExtensionUIContext {
 	): Promise<ExtensionAskDialogResult | undefined>;
 
 	/**
+	 * Show an HTML `<form>` (see `@oh-my-pi/pi-tui/html-form/parse`) as an interactive form and
+	 * resolve its data on submit, `undefined` on cancel. With `timeout`, the form's current values
+	 * submit when it elapses (`timedOut: true`); input resets the countdown. Absent on hosts that
+	 * cannot draw a form; callers then fall back to field-by-field `select`/`input`/`editor`.
+	 */
+	formDialog?(html: string, dialogOptions?: ExtensionUIDialogOptions): Promise<ExtensionFormDialogResult | undefined>;
+
+	/**
 	 * Show a tool-approval prompt; anything but an explicit approval is `deny`, `session` only when
 	 * the prompt offers it, and a grant only one the prompt lists. Each prompt is a title line then
 	 * details: `compact` summarizes the tool's own details (command, path, content) to one row for a
@@ -385,6 +428,15 @@ export interface ExtensionUIContext {
 	 * and only while `extensionRenderers.assistantText` is on; a no-op elsewhere.
 	 */
 	rerenderMessage(timestamp: number): void;
+
+	/**
+	 * Ask the transcript presenters again for the blocks with these ids (`TranscriptBlock.id`)
+	 * and redraw those whose display changed. omp re-asks on its own only when a block's data
+	 * changes; call this when the presenter's own state changes (an `agent_end` handler marking a
+	 * run's calls done, say). A changed block with rows already in terminal scrollback replays the
+	 * transcript once. Interactive mode only; a no-op elsewhere.
+	 */
+	refreshTranscript(ids: readonly string[]): void;
 
 	/**
 	 * True while a link whose scheme an extension registered can be picked to raise `link_activate`:
@@ -494,15 +546,17 @@ export interface ExtensionUIContext {
 
 export type { ContextUsage };
 
+/** One invocation's history-rewrite options and lifecycle callbacks. */
 export interface CompactOptions {
 	onComplete?: (result: CompactionResult) => void;
 	onError?: (error: Error) => void;
 	/**
 	 * Force a one-off compaction mode for this invocation, replacing the
-	 * configured `compaction.methodOrder` (`/compact soft`, `remote`, or
-	 * `snapcompact`). Omitted = configured preference order.
+	 * configured `compaction.methodOrder`. Omitted = configured preference order.
 	 */
 	mode?: CompactMode;
+	/** Cancel the compaction without interrupting any live turn. */
+	signal?: AbortSignal;
 	/**
 	 * Internal summarizer guidance — piped only to native summarization, never
 	 * exposed as `customInstructions` on the `session_before_compact` extension
@@ -516,7 +570,7 @@ export interface CompactOptions {
 	 */
 	internalGuidance?: string;
 	/**
-	 * A manual compaction aborts any turn in flight and, once the summary is
+	 * A foreground compaction aborts any turn in flight and, once the summary is
 	 * committed (or at once when there was nothing to compact), resumes it with
 	 * the auto-continue nudge. Set this when the caller dispatches its own
 	 * follow-up turn after compaction — plan-mode "Approve and compact context" —
@@ -526,6 +580,13 @@ export interface CompactOptions {
 	 * and independent of this option.
 	 */
 	suppressContinuation?: boolean;
+	/**
+	 * The model that will read the compacted context when the caller switches to
+	 * it right after (a switch onto a smaller window compacts first). A
+	 * provider-native method whose replay payload that model cannot read is
+	 * skipped, so the switch does not land on a placeholder summary.
+	 */
+	readerModel?: Model;
 }
 
 /**
@@ -802,7 +863,8 @@ export interface ExtensionContext {
 	/**
 	 * Answer the open interactive plan review as if the operator picked `choice` in it.
 	 * `refine` needs non-empty `input.feedback`, which is sent as the next planning prompt.
-	 * `save` writes the plan under its default file name without the path prompt.
+	 * `save` writes the plan under its default file name without the path prompt; the review
+	 * stays open and still takes an answer (no `plan_review_resolved`).
 	 * Approvals execute the plan as it is when picked (in-overlay edits, else the plan
 	 * file), which may differ from the `planContent` that `plan_review_requested` reported.
 	 * `input.role` selects an approval's execution tier, matched against `plan_review_requested`'s
@@ -1142,10 +1204,12 @@ export interface ResourcesDiscoverResult {
 export type {
 	SessionBeforeBranchEvent,
 	SessionBeforeCompactEvent,
+	SessionBeforeShutdownEvent,
 	SessionBeforeSwitchEvent,
 	SessionBeforeTreeEvent,
 	SessionBranchEvent,
 	SessionBranchReason,
+	SessionClearEvent,
 	SessionCompactEvent,
 	SessionCompactingEvent,
 	SessionEvent,
@@ -1171,7 +1235,9 @@ export type {
 	CacheWarmingAction,
 	CacheWarmingDecision,
 	CacheWarmingMode,
+	CacheWarmingRentMethod,
 	CacheWarmingStatus,
+	CacheWarmingStrategy,
 } from "../../session/cache-warmer";
 
 /** Fired before a provider request is sent. Can replace the payload. */
@@ -1436,7 +1502,10 @@ export interface ToolApprovalResolvedEvent {
 
 /** Stable ids for the interactive plan review's choices; labels may change (keep's label carries a token count). */
 export type PlanReviewChoice = "execute" | "compact" | "keep" | "refine" | "save";
-/** A choice as displayed in the interactive plan review, delivered in display order by `plan_review_requested`. */
+/**
+ * A choice of the interactive plan review, delivered in order by `plan_review_requested`. The overlay
+ * shows `refine` only while the plan has comments; it is always answerable with feedback.
+ */
 export interface PlanReviewOption {
 	id: PlanReviewChoice;
 	label: string;
@@ -1783,6 +1852,7 @@ export interface BeforeSubagentSpawnEventResult {
 export type {
 	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
+	SessionBeforeShutdownResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
 	SessionCompactingResult,
@@ -1802,6 +1872,8 @@ export type {
 export interface RegisteredCommand {
 	name: string;
 	description?: string;
+	/** Display-only origin marker; bundled commands use the shared provenance registry. */
+	provenance?: EntryProvenance;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -1819,6 +1891,20 @@ export type ExtensionServiceTier<Family extends ServiceTierFamily> = Family exte
 	: Family extends "google"
 		? "flex" | "priority"
 		: ServiceTier;
+
+/**
+ * What holds a keyboard chord, as reported by {@link ExtensionAPI.getShortcutConflict}.
+ *
+ * - `reserved`: omp keeps the chord; a shortcut on it is never bound.
+ * - `keybinding`: these keymap actions are bound to it in the main editor: `app.*` actions, which
+ *   usually take the key first where they apply, and `tui.editor.*` / `tui.input.*` editing keys,
+ *   which a shortcut on the chord would take over.
+ * - `extension`: another extension's shortcut is on it; only one of them runs.
+ */
+export type ShortcutConflict =
+	| { kind: "reserved" }
+	| { kind: "keybinding"; keybindings: Keybinding[] }
+	| { kind: "extension"; extensionPath: string };
 
 /**
  * ExtensionAPI passed to extension factory functions.
@@ -1856,6 +1942,7 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
 	): void;
 	on(event: "session_switch", handler: ExtensionHandler<SessionSwitchEvent>): void;
+	on(event: "session_clear", handler: ExtensionHandler<SessionClearEvent>): void;
 	on(
 		event: "session_before_branch",
 		handler: ExtensionHandler<SessionBeforeBranchEvent, SessionBeforeBranchResult>,
@@ -1871,6 +1958,10 @@ export interface ExtensionAPI {
 		handler: ExtensionHandler<CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult>,
 	): void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
+	on(
+		event: "session_before_shutdown",
+		handler: ExtensionHandler<SessionBeforeShutdownEvent, SessionBeforeShutdownResult>,
+	): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
@@ -1998,6 +2089,7 @@ export interface ExtensionAPI {
 		name: string,
 		options: {
 			description?: string;
+			provenance?: RegisteredCommand["provenance"];
 			getArgumentCompletions?: RegisteredCommand["getArgumentCompletions"];
 			handler: RegisteredCommand["handler"];
 		},
@@ -2011,6 +2103,19 @@ export interface ExtensionAPI {
 			handler: (ctx: ExtensionContext) => Promise<void> | void;
 		},
 	): void;
+
+	/**
+	 * What already holds `shortcut`, or `undefined` when it is free. Chords compare as the TUI matches
+	 * them (`alt+ctrl+x` is `ctrl+alt+x`; `?` also covers `shift+?`); this extension's own
+	 * registrations don't count. The first of `reserved`, `keybinding`, `extension` is reported.
+	 * Keybindings come from this session's TUI keymap (user remaps included), or omp's defaults
+	 * without a TUI.
+	 *
+	 * Throws while extensions are loading, so call it from a handler, not the factory. Shortcuts are
+	 * bound before `session_start`, so a chord validated there applies once the factory registers it
+	 * on the next start.
+	 */
+	getShortcutConflict(shortcut: KeyId): ShortcutConflict | undefined;
 
 	/** Register a CLI flag. */
 	registerFlag(
@@ -2054,6 +2159,24 @@ export interface ExtensionAPI {
 	 * only while the `extensionRenderers.assistantText` setting is on.
 	 */
 	registerAssistantTextRenderer(renderer: AssistantTextRenderer): void;
+
+	/**
+	 * Choose how the main session's transcript blocks are drawn (see {@link TranscriptBlock}).
+	 * Presenters are asked in extension load order, the first answer other than `undefined` wins;
+	 * a suspended extension's presenter is skipped. One that throws or answers anything but a
+	 * {@link TranscriptPresentation} (a Promise included) is reported once and draws the block in
+	 * full. Never mutate the block's `args` or `result`: they are omp's live objects. omp may ask
+	 * again at any time (a transcript rebuild, a data change) and keeps no earlier answer: answer
+	 * from the block and the extension's own state only, keyed by block id rather than by run. A
+	 * block the user expanded is always drawn in full, and `display.hideToolActivity` still hides
+	 * tool activity. A focused subagent, a collab guest and the transcript overlays draw stock
+	 * cards. Display only: the session, exports and model context are unchanged. Returns a
+	 * disposer that removes the presenter. Presenters run synchronously while the transcript draws,
+	 * so keep them cheap. Interactive mode only, and only while the
+	 * `extensionRenderers.transcriptPresenters` setting is on; elsewhere the presenter is registered
+	 * but never asked.
+	 */
+	registerTranscriptPresenter(presenter: TranscriptPresenter): () => void;
 
 	/**
 	 * Claim a link scheme (e.g. `"cc-stretch"` for `cc-stretch:…` links). In a plain terminal,
@@ -2101,8 +2224,9 @@ export interface ExtensionAPI {
 
 	/** Send a user prompt: idle starts a turn; streaming queues as steer unless deliverAs is set.
 	 *  `deliverAs: "aside"` injects at the next step boundary without interrupting the in-flight tool
-	 *  batch while streaming, except that it ends a running interruptible `wait`; idle still starts a turn. */
-	sendUserMessage(content: string | (TextContent | ImageContent)[], options?: SendUserMessageOptions): void;
+	 *  batch while streaming, except that it ends a running interruptible `wait`; idle still starts a turn.
+	 *  Rejects with `PromptDroppedError` if the message was not admitted (e.g. abort or cost cap). */
+	sendUserMessage(content: string | (TextContent | ImageContent)[], options?: SendUserMessageOptions): Promise<void>;
 
 	/** Append a custom entry to the session for state persistence (not sent to LLM). */
 	appendEntry<T = unknown>(customType: string, data?: T): void;
@@ -2264,8 +2388,8 @@ export interface ProviderModelConfig {
 	 * Must be a kind the api serves, as in `models.yml`.
 	 */
 	kind?: Model["kind"];
-	/** Whether the model supports extended thinking at all. */
-	reasoning: boolean;
+	/** Reviewed thinking capability; omitted when request-time discovery should determine support. */
+	reasoning?: boolean;
 	/** Optional canonical thinking capability metadata for per-model effort support. */
 	thinking?: Model["thinking"];
 	/** Supported input types. */
@@ -2278,7 +2402,7 @@ export interface ProviderModelConfig {
 	contextWindow: number;
 	/** Maximum output tokens. */
 	maxTokens: number;
-	/** Whether Codex requests should prefer WebSocket transport. */
+	/** WebSocket preference within catalog policy; explicit false disables transport selection. */
 	preferWebsockets?: boolean;
 	/** Custom headers for this model. */
 	headers?: Record<string, string>;
@@ -2342,7 +2466,7 @@ export type SendMessageHandler = <T = unknown>(
 export type SendUserMessageHandler = (
 	content: string | (TextContent | ImageContent)[],
 	options?: SendUserMessageOptions,
-) => void;
+) => Promise<void>;
 
 export type AppendEntryHandler = <T = unknown>(customType: string, data?: T) => void;
 
@@ -2375,6 +2499,8 @@ export interface ExtensionRuntimeState {
 	unregisterProvider(name: string, sourceId: string): void;
 	/** Eval backends registered before the session runner is constructed. */
 	pendingEvalBackendRegistrations: ExtensionEvalBackend[];
+	/** What holds `shortcut` for the extension at `extensionPath`; answered by the runner once it exists. */
+	getShortcutConflict(shortcut: KeyId, extensionPath: string): ShortcutConflict | undefined;
 }
 
 /** Action implementations for ExtensionAPI methods. */
@@ -2411,6 +2537,8 @@ export interface ExtensionContextActions {
 	getPendingPlanReview?: () => PlanReviewRequestedEvent | undefined;
 	openPlanReview?: () => Promise<boolean>;
 	sessionModes?: ExtensionSessionModes;
+	/** The host's effective keymap, user remaps included; omitted outside the TUI, where omp's default keymap applies. */
+	keybindings?: KeybindingsManager;
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string[];
@@ -2453,6 +2581,8 @@ export interface Extension {
 	toolRegistrationListeners?: Set<ToolRegistrationListener>;
 	assistantThinkingRenderers: AssistantThinkingRenderer[];
 	assistantTextRenderers: AssistantTextRenderer[];
+	/** Presenters registered with `registerTranscriptPresenter`, in registration order. */
+	transcriptPresenters: TranscriptPresenter[];
 	/** Link schemes claimed with `registerLinkScheme`, lowercase. */
 	linkSchemes: string[];
 	fileWriteFallbackHandlers: FileWriteFallbackHandler[];

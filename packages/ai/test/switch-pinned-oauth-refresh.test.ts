@@ -55,7 +55,8 @@ async function fixture(expired: boolean) {
 	if (!row || !sibling) throw new Error("missing fixture credentials");
 	const fingerprint = await storage.keys.fingerprintPinned(row.id, PROVIDER);
 	if (!fingerprint) throw new Error("missing fixture fingerprint");
-	const requests: Array<{ method: string; path: string; contentType: string | null; form: Record<string, string> }> = [];
+	const requests: Array<{ method: string; path: string; contentType: string | null; form: Record<string, string> }> =
+		[];
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -91,7 +92,7 @@ async function fixture(expired: boolean) {
 		row,
 		fingerprint,
 		requests,
-		async assertRotated() {
+		async assertRotated(refreshReason: "proactive_expiry" | "unauthorized_recovery") {
 			expect(requests).toEqual([
 				{
 					method: "POST",
@@ -101,6 +102,7 @@ async function fixture(expired: boolean) {
 						grant_type: "refresh_token",
 						client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
 						refresh_token: FAKE_REFRESH,
+						refresh_reason: refreshReason,
 					},
 				},
 			]);
@@ -131,13 +133,19 @@ test("expired pinned OAuth returns the rotated token without changing its siblin
 		forceRefresh: true,
 	});
 	expect(key).toBe(NEXT_ACCESS);
-	await f.assertRotated();
+	await f.assertRotated("proactive_expiry");
 });
 
 test("switch-bound 401 recovery rotates the same credential without using its sibling", async () => {
 	const f = await fixture(false);
 	const binding = { provider: PROVIDER, credentialId: f.row.id, fingerprint: f.fingerprint };
-	const credential = await pinnedCredential(f.storage, binding, "gpt-5.5", "recover-pin", new AbortController().signal);
+	const credential = await pinnedCredential(
+		f.storage,
+		binding,
+		"gpt-5.5",
+		"recover-pin",
+		new AbortController().signal,
+	);
 	if (!credential) throw new Error("missing pinned credential");
 	expect(credential.initial).toBe("fake-rejected-access");
 	expect(f.requests).toHaveLength(0);
@@ -146,5 +154,5 @@ test("switch-bound 401 recovery rotates the same credential without using its si
 		lastChance: false,
 	});
 	expect(recovered).toEqual({ apiKey: NEXT_ACCESS, credentialId: f.row.id });
-	await f.assertRotated();
+	await f.assertRotated("unauthorized_recovery");
 });

@@ -523,7 +523,6 @@ export class RpcPlanModeController {
 		}
 		const { autosaveFailed } = await approvePlanProposal(session, proposal);
 		await this.#restoreAfterApproval();
-		session.sessionManager.appendModeChange("none");
 		return approvedPlanProposalResult(proposal, autosaveFailed);
 	}
 
