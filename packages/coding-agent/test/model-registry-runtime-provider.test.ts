@@ -66,26 +66,30 @@ describe("ModelRegistry runtime provider registration", () => {
 		maxTokens: 8192,
 	};
 
-	function holdDiscoverySlices(count: number) {
+	function holdDiscoverySlices() {
 		const ready = Promise.withResolvers<void>();
 		const released = Promise.withResolvers<void>();
-		const originalSleep = Bun.sleep;
-		let remaining = count;
+		const originalSetImmediate = globalThis.setImmediate;
+		let held = false;
 		let clock = 0;
-		const sleepSpy = vi.spyOn(Bun, "sleep").mockImplementation(ms => {
-			if (ms === 0 && remaining > 0) {
-				if (--remaining === 0) ready.resolve();
-				return released.promise;
-			}
-			return originalSleep(ms);
-		});
-		const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => (clock += 5));
+		// Spend the slice budget at every checkpoint, even with only two rows.
+		const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => (clock += 10));
+		const holdImmediate = <Args extends unknown[]>(callback: (...args: Args) => void, ...args: Args) => {
+			if (held) return originalSetImmediate(callback, ...args);
+			held = true;
+			return originalSetImmediate(() => {
+				ready.resolve();
+				void released.promise.then(() => callback(...args));
+			});
+		};
+		const timers: { setImmediate: typeof holdImmediate } = globalThis;
+		const immediateSpy = vi.spyOn(timers, "setImmediate").mockImplementation(holdImmediate);
 		return {
 			ready: ready.promise,
 			release: released.resolve,
 			restore() {
 				released.resolve();
-				sleepSpy.mockRestore();
+				immediateSpy.mockRestore();
 				clockSpy.mockRestore();
 			},
 		};
@@ -225,6 +229,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("overlapping discovery builds publish complete snapshots without losing another provider", async () => {
+		const secondFetch = Promise.withResolvers<void>();
 		for (const provider of ["slice-a", "slice-b"]) {
 			registry.registerProvider(
 				provider,
@@ -232,22 +237,28 @@ describe("ModelRegistry runtime provider registration", () => {
 					baseUrl: `https://${provider}.example.com/v1`,
 					api: "openai-completions",
 					apiKey: "literal-key",
-					fetchDynamicModels: async () => [
-						{ ...baseModel, id: "first" },
-						{ ...baseModel, id: "last" },
-					],
+					fetchDynamicModels: async () => {
+						if (provider === "slice-b") secondFetch.resolve();
+						return [
+							{ ...baseModel, id: "first" },
+							{ ...baseModel, id: "last" },
+						];
+					},
 				},
 				"ext://runtime",
 			);
 		}
 		registry.getAll();
-		const slices = holdDiscoverySlices(2);
-		const refreshes = [
-			registry.refreshDiscoverableProviders(["slice-a"], "online"),
-			registry.refreshDiscoverableProviders(["slice-b"], "online"),
-		];
+		const slices = holdDiscoverySlices();
+		const refreshes = [registry.refreshDiscoverableProviders(["slice-a"], "online")];
 		try {
 			await slices.ready;
+			refreshes.push(registry.refreshDiscoverableProviders(["slice-b"], "online"));
+			await secondFetch.promise;
+			// Let the second pass queue its landing while the first is still held.
+			const turn = Promise.withResolvers<void>();
+			setImmediate(turn.resolve);
+			await turn.promise;
 			expect(getProviderModels(registry, "slice-a")).toEqual([]);
 			expect(getProviderModels(registry, "slice-b")).toEqual([]);
 			slices.release();
@@ -320,8 +331,9 @@ describe("ModelRegistry runtime provider registration", () => {
 				"ext://runtime",
 			);
 			registry.getAll();
-			const slices = holdDiscoverySlices(1);
+			const slices = holdDiscoverySlices();
 			const refreshing = registry.refreshDiscoverableProviders(["yielded-provider"], "online");
+			let reloading: Promise<void> | undefined;
 			try {
 				await slices.ready;
 				expect(getProviderModels(registry, "yielded-provider")).toEqual([]);
@@ -339,12 +351,12 @@ describe("ModelRegistry runtime provider registration", () => {
 							},
 						}),
 					);
-					await registry.refresh("offline");
+					reloading = registry.refresh("offline");
 				} else {
 					registry.unregisterProvider("yielded-provider");
 				}
 				slices.release();
-				await refreshing;
+				await Promise.all([refreshing, reloading]);
 				expect(getProviderModels(registry, "yielded-provider").map(model => model.id)).toEqual(
 					change === "reload" ? ["first", "last"] : [],
 				);
@@ -352,7 +364,7 @@ describe("ModelRegistry runtime provider registration", () => {
 					expect(registry.find("new-static", "new-static-model")?.baseUrl).toBe("https://new.example.com/v1");
 			} finally {
 				slices.restore();
-				await refreshing;
+				await Promise.all([refreshing, reloading]);
 			}
 		},
 	);
