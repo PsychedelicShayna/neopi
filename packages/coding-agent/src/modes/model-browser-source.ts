@@ -1,5 +1,6 @@
 import { type Model, resolveModelServiceTier, type ServiceTier, shouldSendServiceTier } from "@oh-my-pi/pi-ai";
 import type { ModelHubSource } from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { SETTINGS_FILE_SCOPES } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { findActiveModelPreset, getModelPresetNames } from "../config/model-presets";
 import { formatModelStringWithRouting, resolveModelRoleValue, rolePriorityDefaults } from "../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../config/model-roles";
@@ -41,18 +42,26 @@ import {
 export function createModelBrowserSource(
 	settings: Settings,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
-	editingScope?: SettingsScope,
+	initialEditingScope?: SettingsScope,
 ): ModelHubSource {
+	let editingScope = initialEditingScope;
 	return {
-		editingScope,
-		getRoleScopeNote: editingScope
-			? role => {
-					const details = settings.getModelRoleScopeDetails(role, editingScope);
-					return details.shadowed
-						? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
-						: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
+		get editingScope() {
+			return editingScope;
+		},
+		cycleScope: initialEditingScope
+			? () => {
+					const scopes = SETTINGS_FILE_SCOPES;
+					editingScope = scopes[(scopes.indexOf(editingScope ?? initialEditingScope) + 1) % scopes.length];
 				}
 			: undefined,
+		getRoleScopeNote: role => {
+			if (editingScope === undefined) return undefined;
+			const details = settings.getModelRoleScopeDetails(role, editingScope);
+			return details.shadowed
+				? `${editingScope} · shadowed by ${details.winner}: ${String(details.effective ?? "inherit")}`
+				: `${editingScope} · effective ${details.winner}: ${String(details.effective ?? "inherit")}`;
+		},
 		get revision() {
 			return settings.revision;
 		},

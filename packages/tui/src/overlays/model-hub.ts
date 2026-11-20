@@ -199,10 +199,11 @@ export interface ModelHubSource extends ModelBrowserSource {
 	readonly disabledProviders: readonly string[];
 	readonly fallbackChains: Record<string, string[]>;
 	readonly modelRoleStorage: "global" | "project";
-	/** Fixed authoring scope selected by /models; absent retains the embedding host's scope picker. */
+	/** Current role-authoring scope; absent retains the embedding host's scope picker. */
 	readonly editingScope?: ModelRoleSelectionScope;
+	cycleScope?(): void;
 	getSessionModelRole?(role: string): string | undefined;
-	getRoleScopeNote?(role: string): string;
+	getRoleScopeNote?(role: string): string | undefined;
 	readonly cycleOrder: readonly string[];
 	getProjectModelRole(role: string): string | undefined;
 	getGlobalModelRole(role: string): string | undefined;
@@ -3179,6 +3180,24 @@ export class ModelHubComponent implements Component {
 		this.#requestRender();
 	}
 
+	get #canCycleScope(): boolean {
+		return (
+			!this.#sessionOnly &&
+			this.#settings.cycleScope !== undefined &&
+			!this.#strip &&
+			!this.#filterEditing &&
+			!this.#assignmentPending &&
+			!this.#externalEditPending &&
+			this.#assigning === null &&
+			!(this.#activeEntry().kind === "overrides" && this.#overrides().editing)
+		);
+	}
+
+	#cycleScope(): void {
+		this.#settings.cycleScope?.();
+		this.#refreshAfterMutation();
+	}
+
 	handleInput(rawData: string): void {
 		if (rawData.startsWith("\x1b[<")) {
 			this.#nativeVersion++;
@@ -3217,8 +3236,13 @@ export class ModelHubComponent implements Component {
 				return;
 			}
 		}
+		if (matchesKey(rawData, "ctrl+s") && this.#canCycleScope && !this.#keys.read(rawData)) {
+			this.#cycleScope();
+			return;
+		}
 		if (
 			!this.#sessionOnly &&
+			this.#settings.editingScope !== "session" &&
 			matchesKey(rawData, "ctrl+g") &&
 			!this.#keys.read(rawData) &&
 			this.#callbacks.onOpenConfigFile
@@ -3243,7 +3267,9 @@ export class ModelHubComponent implements Component {
 					row?.kind === "role"
 						? this.#settings.getModelRoleSource(row.role)
 						: "global";
-				const scope = source === "project" ? "project" : "global";
+				const scope =
+					(section === "roles" ? this.#settings.editingScope : undefined) ??
+					(source === "project" ? "project" : "global");
 				this.#externalEditPending = true;
 				void this.#callbacks.onOpenConfigFile(section, scope).finally(() => {
 					this.#externalEditPending = false;
@@ -4439,10 +4465,21 @@ export class ModelHubComponent implements Component {
 		return lines.slice(0, rows);
 	}
 
+	get #title(): string {
+		if (this.#sessionOnly) return this.#taskMode ? "Task model" : "Session model";
+		const scope = this.#settings.editingScope;
+		return scope ? `Models · ${scope}` : "Models";
+	}
+
 	#footerHint(): string {
 		const entry = this.#activeEntry();
-		const configFile = !this.#sessionOnly && this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : "";
-		if (entry.kind === "overrides" && this.#assigning === null) return `${this.#overrides().hint}${configFile}`;
+		const configFile =
+			!this.#sessionOnly && this.#settings.editingScope !== "session" && this.#callbacks.onOpenConfigFile
+				? " · Ctrl+G config file"
+				: "";
+		const scopeHint = this.#canCycleScope ? " · Ctrl+S cycle scope" : "";
+		if (entry.kind === "overrides" && this.#assigning === null)
+			return `${this.#overrides().hint}${scopeHint}${configFile}`;
 		const refreshHint =
 			this.#scopedModels.length === 0 && !this.#strip && !this.#filterEditing
 				? `${entry.kind === "provider" && !entry.locked ? " · F5 refresh" : ""} · Ctrl+F5 refresh all`
@@ -4459,10 +4496,10 @@ export class ModelHubComponent implements Component {
 			this.#isBrowserView(entry) &&
 			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
 		)
-			return `${MODEL_SCOPE_HINT}${refreshHint}${facts}${configFile}`;
+			return `${MODEL_SCOPE_HINT}${scopeHint}${refreshHint}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `/ search · ${detail}${refreshHint}${facts}${configFile}`;
+		return `/ search · ${detail}${scopeHint}${refreshHint}${facts}${configFile}`;
 	}
 
 	#surfaceFooterHint(): string {
@@ -4734,7 +4771,7 @@ export class ModelHubComponent implements Component {
 		else this.#frame.chipRanges = [];
 		return this.#help.render(
 			this.#frame.render(width, height, this.#entries, footer, {
-				title: this.#taskMode ? "Task model" : this.#sessionOnly ? "Session model" : "Models",
+				title: this.#title,
 				borderColor: this.#taskMode ? "error" : undefined,
 			}),
 			width,
@@ -4766,7 +4803,7 @@ export class ModelHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.overlay.model-hub",
-			this.#taskMode ? "Task model · session-only override" : this.#sessionOnly ? "Session model" : "Models",
+			this.#taskMode ? "Task model · session-only override" : this.#title,
 			describeHubSidebar(this.#entries, this.#activeEntryId, this.#nativeSidebarStyle, "scopes"),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
@@ -5217,6 +5254,9 @@ export class ModelHubComponent implements Component {
 				: this.#focus === "scope"
 					? this.#footerHint()
 					: "/ search · ? help";
+		const cycleScope = this.#canCycleScope ? pickerAction("cycleScope", "Cycle scope", "ctrl+s") : undefined;
+		const actions = this.#pickerActions(entry, rolesView, lockedView);
+		if (cycleScope) actions.splice(actions.length - 1, 0, cycleScope);
 		const queryError = compileMenuRegex(
 			entry.kind === "effort" && this.#assigning === null
 				? this.#effortSearch.value
@@ -5226,13 +5266,7 @@ export class ModelHubComponent implements Component {
 		)?.error;
 		const props: TspProps<"picker"> = {
 			tone: this.#taskMode ? "error" : undefined,
-			title: this.#sessionOnly
-				? this.#taskMode
-					? "Task model"
-					: "Session model"
-				: this.#settings.editingScope
-					? `Models · ${this.#settings.editingScope}`
-					: "Models",
+			title: this.#title,
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5252,7 +5286,7 @@ export class ModelHubComponent implements Component {
 			placeholder: rolesView ? "Search roles and fallback chains…" : "/ search models…",
 			scopes: this.#pickerScopes(),
 			scope: entry.id,
-			actions: this.#pickerActions(entry, rolesView, lockedView),
+			actions,
 			strip: strip ? this.#pickerStrip(strip) : null,
 			focus: strip ? "strip" : this.#focus === "scope" ? "scopes" : "list",
 		};
@@ -5291,6 +5325,7 @@ export class ModelHubComponent implements Component {
 										? pickerAction("effort:remove", "Remove", "x")
 										: undefined,
 									this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+									cycleScope,
 									this.#pickerCancelAction(),
 								]),
 				},
@@ -6097,6 +6132,9 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		switch (act) {
+			case "cycleScope":
+				if (this.#canCycleScope) this.#cycleScope();
+				return;
 			case "refreshAll":
 				this.#refreshAllProviders();
 				return;

@@ -397,7 +397,11 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "model",
 		description: "Configure model roles",
 		allowArgs: true,
-		inlineHint: "[session|project|global]",
+		subcommands: [
+			{ name: "session", description: "Edit session model roles" },
+			{ name: "project", description: "Edit project model roles" },
+			{ name: "global", description: "Edit global model roles" },
+		],
 		handleTui: (command, runtime) => {
 			const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
 			if (scope !== "session" && scope !== "project" && scope !== "global") {

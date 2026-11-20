@@ -12,6 +12,7 @@
 
 ### Added
 
+- Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).
 - Choose session-start Chronicler consent with `chronicler.enabled: ask`, set recording limits by addressing Luna as `@chronicler`, see her blue-bordered notes, and read her optional editorial notes in atom front matter.
 - Control socket: `reload_settings` accepts the `session` scope, re-reading only the addressed session's settings file, and `settings_set`/`settings_unset` can write the `global`, `project` or `session` file of the addressed session (`persist` remains the global alias); member edits change only that scope's own map.
 - `/settings` shows the value that applies at the selected scope with an icon for the scope it comes from, colours a row yellow when a file at or above that scope sets it, removes the key with Backspace so it inherits again, and opens the selected scope's file, including the session file, with Ctrl+G ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
