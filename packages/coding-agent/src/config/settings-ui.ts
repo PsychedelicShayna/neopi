@@ -74,9 +74,22 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			const condition = ui.condition ? CONDITIONS[ui.condition] : undefined;
 			entries.push({
 				path: setting.id,
-				type: setting.type,
-				defaultValue: setting.default,
-				ui: { ...ui, provenance: entryProvenance("settings", setting.id), description: `${ui.description}${note}` },
+				type: setting.allowsAsk ? "enum" : setting.type,
+				defaultValue: setting.allowsAsk ? String(setting.default) : setting.default,
+				ui: {
+					...ui,
+					...(setting.allowsAsk
+						? {
+								options: [
+									{ value: "true", label: "On" },
+									{ value: "false", label: "Off" },
+									{ value: "ask", label: "Ask" },
+								],
+							}
+						: {}),
+					provenance: entryProvenance("settings", setting.id),
+					description: `${ui.description}${note}`,
+				},
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: condition ? () => condition(scope) : undefined,
@@ -99,7 +112,10 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			const scopes = SETTINGS_FILE_SCOPES;
 			editingScope = scopes[(scopes.indexOf(editingScope) + 1) % scopes.length];
 		},
-		get: path => resolve(path).value,
+		get: path => {
+			const value = resolve(path).value;
+			return requireSetting(path).allowsAsk ? String(value) : value;
+		},
 		resolve,
 		own: path => scope.readScopeValue(requireSetting(path), editingScope),
 		details: path => {
@@ -116,7 +132,11 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 				description: `${details.shadowed ? `󰈉 Shadowed by ${details.winner}: ${format(details.effective)}. ` : ""}Global: ${format(details.global)} · Project: ${format(details.project)} · Session: ${format(details.session)} · Effective: ${format(details.effective)} (${details.winner})`,
 			};
 		},
-		set: (path, value) => scope.writeScopeValue(requireSetting(path), value, editingScope),
+		set: (path, value) => {
+			const setting = requireSetting(path);
+			const configured = setting.allowsAsk && value !== "ask" ? setting.parse(String(value)) : value;
+			scope.writeScopeValue(setting, configured, editingScope);
+		},
 		unset: path => scope.writeScopeValue(requireSetting(path), undefined, editingScope),
 		normalizeProviderLimits: normalizeProviderMaxInFlightRequests,
 		validateProviderLimits: validateProviderMaxInFlightRequests,

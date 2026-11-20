@@ -6,24 +6,36 @@ Atoms stay the only source of truth. The view is a cache: deleting it loses noth
 
 Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
 
+## Luna's recording limits and notes (canary)
+
+Luna is the Chronicler. `chronicler.enabled` accepts `true` (On), `false` (Off), or `"ask"`. Interactive Ask mode asks **Enable the Chronicler for this session? Yes/No** before capture starts; the choice applies only to that session. Noninteractive Ask mode stays off until the host explicitly enables capture. When enabled, the primary agent receives a session-start explanation of the record and how to set limits, unless `chronicler.notices` is off.
+
+Either participant can address Luna as `@chronicler` to pause or resume recording, exclude details or a subject now and later, or include nothing at all. A directive has to be coherently **to** her: ordinary mentions of "chronicler", explanations quoting `@chronicler`, and tool output remain transcript evidence. Luna acknowledges every accepted directive with her single `note` tool. Notes carry Chronicler-specific framing in the main transcript and a blue border in the terminal; they are not advisor messages. Her default is silence, but she can also raise a recording-consent reminder, refuse, or object.
+
+Active semantic limits are committed as `recordingLimits` in `chronicler/beats/<batch>/COMMIT.json`, alongside capture publication. They are separate from pending-beat carry, so `chronicler.capture.carryChars: 0` does not discard consent. `finish_chronicle.recording_limits` can replace the active limits, omit the field to retain them, or use null after they are lifted. They survive context rebuilding and resuming the session. For a semantic pause, Luna retains paused source IDs there and can reread them through `read_chronicle.source` to catch up after resume; replay uses only the same frozen, blind-filtered transcript visible to that capture pass. A subject exclusion remains in force after resume. This is not retroactive deletion of already published atoms.
+
+The private limit state retains enough detail to identify an exclusion after a fresh start, including exact identifiers or subject descriptions when needed; it is not part of a published atom or acknowledgement. If an older summary is too vague, Luna rereads its cited directive source before capturing. If that source is unavailable and she cannot safely apply the limit, she records no beats and explains the limitation through her note tool.
+
+An atom can optionally carry `chronicler_note` in its YAML front matter: Luna's reservations, feelings, or editorial decisions, separate from the beat body. She can also qualify attribution within a beat. An ordinary atom omits the field entirely, and old atoms remain readable without conversion. Note-tool messages are staged with their pass and delivered only after publication succeeds; a failed or revoked pass does not send a successful acknowledgement.
+
 ## Session controls: `/chron`
 
 `/chron` (or `/chron status`) shows Luna's effective state for the current session.
 
-| Command | Effect |
-| --- | --- |
-| `/chron pause` | Stop ingest while retaining her context window. `/chron resume` catches up on the paused exchange. |
-| `/chron resume` | Resume paused ingest. Does not lift a blind span; use `/chron unblind` for that. |
-| `/chron blind` | Stop ingest and exclude the exchange until `/chron unblind`, including future catch-up and backfill. |
-| `/chron unblind` | Continue after the blind marker. The blinded exchange remains excluded. |
-| `/chron off` | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
-| `/chron on` | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded. |
-| `/chron index` | Dispatch a background refresh of this session's captured atoms and their shared ancestors. |
-| `/chron recall "question"` | Dispatch the existing recall tool across sessions and deliver its result automatically. |
+| Command                    | Effect                                                                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `/chron pause`             | Stop ingest while retaining her context window. `/chron resume` catches up on the paused exchange.                      |
+| `/chron resume`            | Resume paused ingest. Does not lift a blind span; use `/chron unblind` for that.                                        |
+| `/chron blind`             | Stop ingest and exclude the exchange until `/chron unblind`, including future catch-up and backfill.                    |
+| `/chron unblind`           | Continue after the blind marker. The blinded exchange remains excluded.                                                 |
+| `/chron off`               | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
+| `/chron on`                | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded.              |
+| `/chron index`             | Dispatch a background refresh of this session's captured atoms and their shared ancestors.                              |
+| `/chron recall "question"` | Dispatch the existing recall tool across sessions and deliver its result automatically.                                 |
 
 These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
 
-Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
+Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. The startup consent notice tells the primary agent it may also refuse or set limits by addressing `@chronicler` directly.
 
 Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
 
@@ -106,22 +118,23 @@ Chronicler controls are editable in **Settings > Memory > Chronicler**, with des
 
 Backfill command flags override their matching settings. Its `pollMs` setting only controls progress checks during an explicitly requested run; it does not start a backfill or refresh the index. Selection flags such as `--all`, `--force`, and `--dry-run` stay explicit per invocation.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `chronicler.notices` | `true` | Tell the primary agent when Luna's capture state changes. |
-| `chronicler.recall.enabled` | `false` | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
-| `chronicler.index.dir` | `<agentDir>/chronicle` | View root. |
-| `chronicler.index.timezone` | system zone | IANA zone for calendar buckets. |
-| `chronicler.index.summaryTokens` | `500` | Target size of a generated node. |
-| `chronicler.index.hopTokens` | `1000` | Ceiling for one hop: a node's routing text or a terminal enumeration. |
-| `chronicler.index.terminalAtoms` | `8` | Atoms per terminal bucket before subdivision. |
-| `chronicler.index.leadTokens` | `120` | Leading-paragraph length per atom in enumerations. |
-| `chronicler.index.shortNames` | `false` | Stub names `<time>-<id>.md` for restrictive filesystems. |
-| `chronicler.recall.beam` | `2` | Branches kept per expansion. |
-| `chronicler.recall.results` | `5` | Atoms per recall. |
-| `chronicler.recall.ranker` | `model` | `model`, `lexical` or `judge`. |
-| `chronicler.recall.branchFloor` | `0.2` per level | Judge routing probability floors; partial level overrides merge with defaults. |
-| `chronicler.recall.neighborhoodMinutes` | `90` | Window for adjacency and neighbors. |
+| Setting                                 | Default                | Meaning                                                                                                              |
+| --------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `chronicler.enabled`                    | `false`                | On (`true`), Off (`false`), or interactive session consent (`"ask"`).                                                |
+| `chronicler.notices`                    | `true`                 | Tell the primary agent when Luna's capture state changes.                                                            |
+| `chronicler.recall.enabled`             | `false`                | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
+| `chronicler.index.dir`                  | `<agentDir>/chronicle` | View root.                                                                                                           |
+| `chronicler.index.timezone`             | system zone            | IANA zone for calendar buckets.                                                                                      |
+| `chronicler.index.summaryTokens`        | `500`                  | Target size of a generated node.                                                                                     |
+| `chronicler.index.hopTokens`            | `1000`                 | Ceiling for one hop: a node's routing text or a terminal enumeration.                                                |
+| `chronicler.index.terminalAtoms`        | `8`                    | Atoms per terminal bucket before subdivision.                                                                        |
+| `chronicler.index.leadTokens`           | `120`                  | Leading-paragraph length per atom in enumerations.                                                                   |
+| `chronicler.index.shortNames`           | `false`                | Stub names `<time>-<id>.md` for restrictive filesystems.                                                             |
+| `chronicler.recall.beam`                | `2`                    | Branches kept per expansion.                                                                                         |
+| `chronicler.recall.results`             | `5`                    | Atoms per recall.                                                                                                    |
+| `chronicler.recall.ranker`              | `model`                | `model`, `lexical` or `judge`.                                                                                       |
+| `chronicler.recall.branchFloor`         | `0.2` per level        | Judge routing probability floors; partial level overrides merge with defaults.                                       |
+| `chronicler.recall.neighborhoodMinutes` | `90`                   | Window for adjacency and neighbors.                                                                                  |
 
 For example, configure judge routing without changing the existing search budgets:
 
@@ -141,14 +154,14 @@ hour = 0.3
 
 ```yaml
 chronicler:
-  enabled: true
-  recall:
-    enabled: true
-  index:
-    timezone: America/Sao_Paulo
+   enabled: true
+   recall:
+      enabled: true
+   index:
+      timezone: America/Sao_Paulo
 modelRoles:
-  chronicler: openai-codex/gpt-6-luna:max
-  chronicler-summary: openai-codex/gpt-6-luna:low
+   chronicler: openai-codex/gpt-6-luna:max
+   chronicler-summary: openai-codex/gpt-6-luna:low
 ```
 
 The `chronicler-summary` role writes summaries; `chronicler-recall` supplies model-based recall ranking, while `judge` supplies judge-protocol ranking. Summaries and verification send atom text to their configured providers, the same disclosure boundary as capture. Session judge calls reuse the session's usage ledger, telemetry and shared cost gate.

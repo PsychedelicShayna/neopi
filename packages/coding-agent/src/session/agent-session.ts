@@ -247,6 +247,7 @@ import { type PlanApprovalDetails, resolveApprovedPlan } from "../plan-mode/appr
 import { listPlanFiles, readPlanFile, resolvePlanFilePath } from "../plan-mode/plan-files";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import type { PlanModeState } from "../plan-mode/state";
+import chroniclerStartupConsent from "../prompts/chronicler/startup-consent.md" with { type: "text" };
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import bundledAnthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
@@ -1463,6 +1464,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Registry recording this agent blocked on the user while a {@link waitForUser} dialog is open. */
 	readonly #agentRegistry: AgentRegistryApi | undefined;
 	#agentKind: "main" | "sub" = "main";
+	readonly #chroniclerStartupNotices = new Set<string>();
 	#scoutAllowedBySpawnPolicy = true;
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
@@ -3392,6 +3394,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			isCaptureEligible: () =>
 				this.#agentKind === "main" && (!this.#chatMode || chatModeIncludes(this.#chatMode, "memory")),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			emitNote: async message => {
+				const generation = this.#sessionGeneration;
+				let accepted = false;
+				await this.#sendCustomMessageWithAcceptance(
+					message,
+					{ triggerTurn: false, steeringInterruptMode: "wait" },
+					() => {
+						accepted = true;
+					},
+					() => this.#isDisposed || this.#sessionGeneration !== generation,
+				);
+				return accepted;
+			},
 			onEnabledChange: enabled => {
 				void this.sendChroniclerNotice(enabled ? "enabled" : "disabled").catch(error => {
 					logger.warn("Chronicler transition notice failed", { error: String(error) });
@@ -9508,7 +9523,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async sendChroniclerNotice(transition: ChroniclerTransition, options?: ChroniclerNoticeOptions): Promise<void> {
-		await injectChroniclerNotice(this, transition, options);
+		await injectChroniclerNotice(
+			this,
+			transition,
+			transition === "enabled" ? { enabledExtra: chroniclerStartupConsent.trim(), ...options } : options,
+		);
 	}
 
 	/** Explicit operator controls; blind entry IDs remain private to Luna's store. */
@@ -10315,6 +10334,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 	}
 
+	/** Present the enabled explanation once per actual session, including headless callers. */
+	async ensureChroniclerStartupNotice(): Promise<void> {
+		if (
+			this.#agentKind !== "main" ||
+			(this.#chatMode && !chatModeIncludes(this.#chatMode, "memory")) ||
+			!this.chroniclerEnabled
+		)
+			return;
+		const sessionId = this.sessionId;
+		if (this.#chroniclerStartupNotices.has(sessionId)) return;
+		this.#chroniclerStartupNotices.add(sessionId);
+		await this.sendChroniclerNotice("enabled", { enabledExtra: chroniclerStartupConsent.trim() });
+	}
+
 	async #prompt(text: string, options?: PromptOptions): Promise<boolean> {
 		if (!isDeferredSubmissionActive()) return false;
 		// Stamp the operator's submission instant before ANY async preprocessing —
@@ -10342,11 +10375,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Locally handled commands and failed dispatches release that claim.
 			const release = await this.#maintenance.waitForMaintenanceCleanup();
 			const outcome: PromptDispatchOutcome = { sessionClaimed: false };
-			if (!release) return await this.#dispatchPrompt(text, options, submittedAt, outcome, followUps);
 			try {
+				await this.ensureChroniclerStartupNotice();
 				return await this.#dispatchPrompt(text, options, submittedAt, outcome, followUps);
 			} finally {
-				release(outcome.sessionClaimed);
+				release?.(outcome.sessionClaimed);
 			}
 		} catch (error) {
 			// Setup threw before the prompt went live: its follow-ups go back with it.
@@ -10700,11 +10733,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// prompts and the CLI initial message must not start during a blocking compaction.
 			const release = await this.#maintenance.waitForMaintenanceCleanup();
 			const outcome: PromptDispatchOutcome = { sessionClaimed: false };
-			if (!release) return await this.#dispatchCustomPrompt(message, options, outcome, followUps);
 			try {
+				await this.ensureChroniclerStartupNotice();
 				return await this.#dispatchCustomPrompt(message, options, outcome, followUps);
 			} finally {
-				release(outcome.sessionClaimed);
+				release?.(outcome.sessionClaimed);
 			}
 		} catch (error) {
 			// Setup threw before the prompt went live: its follow-ups go back with it.

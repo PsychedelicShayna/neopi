@@ -162,7 +162,7 @@ function getTypeDisplay(def: CliSettingDef): string {
 	}
 	switch (def.type) {
 		case "boolean":
-			return "(boolean)";
+			return def.setting.allowsAsk ? '(boolean|"ask")' : "(boolean)";
 		case "number":
 			return "(number)";
 		case "array":

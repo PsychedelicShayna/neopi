@@ -15,6 +15,8 @@ import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../coll
 import { settings } from "../../config/settings";
 import { continuesConversation } from "./conversation-position";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
+import { ChroniclerMessageCard } from "@oh-my-pi/pi-tui/chat/chronicler-message";
+import type { ChroniclerMessageDetails } from "@oh-my-pi/pi-tui/chat/messages";
 import { createMixtureTraceCard } from "@oh-my-pi/pi-tui/chat/mixture-trace";
 import { MIXTURE_TRACE_MESSAGE_TYPE, type MixtureTraceDetails } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { cfgMoaShowTraceCards } from "../../moa/settings";
@@ -394,6 +396,12 @@ export class UiHelpers {
 						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
+					}
+					if (message.customType === "chronicler") {
+						this.ctx.chatContainer.addChild(
+							new ChroniclerMessageCard(message as CustomMessage<ChroniclerMessageDetails>, theme),
+						);
+						break;
 					}
 					if (message.customType === "advisor") {
 						const details = (message as CustomMessage<AdvisorMessageDetails>).details;

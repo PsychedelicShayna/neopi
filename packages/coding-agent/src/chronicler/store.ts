@@ -65,6 +65,7 @@ export interface BeatInput {
 	related: string[];
 	supersedes?: string;
 	uncertainty?: string;
+	chroniclerNote?: string;
 }
 
 export interface BeatRecord extends BeatInput {
@@ -81,6 +82,12 @@ export interface CaptureSource {
 	timestamp: string;
 }
 
+/** Active participant recording limits, independent of pending-beat carry. */
+export interface RecordingLimits {
+	sources: string[];
+	text: string;
+}
+
 export interface CaptureCheckpoint {
 	version: 1;
 	batchId: string;
@@ -89,6 +96,7 @@ export interface CaptureCheckpoint {
 	entries: CaptureSource[];
 	beats: { id: string; file: string }[];
 	carry: { sources: string[]; text: string } | null;
+	recordingLimits?: RecordingLimits | null;
 }
 
 export interface CaptureBatch {
@@ -96,6 +104,7 @@ export interface CaptureBatch {
 	entries: readonly CaptureSource[];
 	beats: BeatRecord[];
 	carry: { sources: string[]; text: string } | null;
+	recordingLimits?: RecordingLimits | null;
 	finalized: boolean;
 	revoked: boolean;
 }
@@ -215,10 +224,11 @@ interface LoadedBatch {
 
 /** One coherent, read-only view of a batch published before the directory scan. */
 export interface CommittedChroniclerBatch {
-	readonly checkpoint: Readonly<Omit<CaptureCheckpoint, "entries" | "beats" | "carry">> & {
+	readonly checkpoint: Readonly<Omit<CaptureCheckpoint, "entries" | "beats" | "carry" | "recordingLimits">> & {
 		readonly entries: readonly Readonly<CaptureSource>[];
 		readonly beats: readonly Readonly<{ id: string; file: string }>[];
 		readonly carry: { readonly sources: readonly string[]; readonly text: string } | null;
+		readonly recordingLimits?: { readonly sources: readonly string[]; readonly text: string } | null;
 	};
 	readonly beats: readonly BeatRecord[];
 }
@@ -265,6 +275,9 @@ export async function readCommittedChroniclerBatches(rootDir: string): Promise<r
 		if (checkpoint.carry?.sources.some(id => !sources.has(id))) {
 			throw new ChroniclerCorruptionError(`batch ${checkpoint.batchId} carry cites an uncommitted source`);
 		}
+		if (checkpoint.recordingLimits?.sources.some(id => !sources.has(id))) {
+			throw new ChroniclerCorruptionError(`batch ${checkpoint.batchId} recording limits cite an uncommitted source`);
+		}
 	}
 	return Object.freeze(
 		batches.map(({ checkpoint, records }) =>
@@ -277,6 +290,12 @@ export async function readCommittedChroniclerBatches(rootDir: string): Promise<r
 						? Object.freeze({
 								sources: Object.freeze([...checkpoint.carry.sources]),
 								text: checkpoint.carry.text,
+							})
+						: null,
+					recordingLimits: checkpoint.recordingLimits
+						? Object.freeze({
+								sources: Object.freeze([...checkpoint.recordingLimits.sources]),
+								text: checkpoint.recordingLimits.text,
 							})
 						: null,
 				}),
@@ -304,6 +323,9 @@ export class ChroniclerStore {
 	#processed = new Set<string>();
 	#sources = new Map<string, CaptureSource>();
 	#carry: { sources: string[]; text: string } | null = null;
+	#recordingLimits: RecordingLimits | null = null;
+	#ownRecordingLimits: RecordingLimits | null | undefined;
+	#inheritedRecordingLimits: RecordingLimits | null = null;
 	#committedBatchIds = new Set<string>();
 	#beatIds = new Set<string>();
 	#lastEntryId: string | null = null;
@@ -363,6 +385,10 @@ export class ChroniclerStore {
 		return this.#carry;
 	}
 
+	get recordingLimits(): RecordingLimits | null {
+		return this.#recordingLimits;
+	}
+
 	/**
 	 * Load every committed batch, rebuild the processed-entry union and the
 	 * derived caches. Staging directories and unreferenced files are preserved
@@ -399,6 +425,9 @@ export class ChroniclerStore {
 		this.#ownCarry = null;
 		this.#ownCarrySeen = false;
 		this.#inheritedCarry = null;
+		this.#recordingLimits = null;
+		this.#ownRecordingLimits = undefined;
+		this.#inheritedRecordingLimits = null;
 
 		for (const batch of loaded) this.#absorb(batch);
 		this.#invalidateViews();
@@ -430,6 +459,11 @@ export class ChroniclerStore {
 			}
 		}
 		for (const { checkpoint } of loaded) {
+			for (const id of checkpoint.recordingLimits?.sources ?? []) {
+				if (!this.#sources.has(id)) {
+					throw this.#halt(`batch ${checkpoint.batchId} recording limits cite missing source ${id}`);
+				}
+			}
 			if (!checkpoint.carry) continue;
 			const dangling = checkpoint.carry.sources.filter(id => !this.#sources.has(id));
 			if (dangling.length > 0) {
@@ -479,6 +513,7 @@ export class ChroniclerStore {
 			entries: Object.freeze(copied),
 			beats: [],
 			carry: null,
+			recordingLimits: this.#recordingLimits,
 			finalized: false,
 			revoked: false,
 		};
@@ -540,6 +575,8 @@ export class ChroniclerStore {
 			uncertainty = input.uncertainty.trim();
 		}
 
+		const chroniclerNote = input.chroniclerNote?.trim();
+
 		const file = `${compactTimestamp(eventTime)}-${slugifyTitle(title)}-${id}.md`;
 		const record = freezeRecord({
 			id,
@@ -556,6 +593,7 @@ export class ChroniclerStore {
 			related,
 			...(supersedes ? { supersedes } : {}),
 			...(uncertainty ? { uncertainty } : {}),
+			...(chroniclerNote ? { chroniclerNote } : {}),
 		});
 		batch.beats.push(record);
 		return record;
@@ -715,6 +753,18 @@ export class ChroniclerStore {
 			if (text.length > 0) carry = { sources, text };
 		}
 
+		const recordingLimits = freezeCarry(batch.recordingLimits ?? null);
+		if (recordingLimits) {
+			if (!isNonEmptyString(recordingLimits.text) || !recordingLimits.sources.length) {
+				throw new Error(`Chronicler batch ${batch.id}: recording limits need text and source entry IDs`);
+			}
+			for (const source of recordingLimits.sources) {
+				if (!known.has(source)) {
+					throw new Error(`Chronicler batch ${batch.id}: recording limits cite unknown source ${source}`);
+				}
+			}
+		}
+
 		return {
 			version: CHECKPOINT_VERSION,
 			batchId: batch.id,
@@ -723,6 +773,7 @@ export class ChroniclerStore {
 			entries: batch.entries.map(entry => ({ ...entry })),
 			beats,
 			carry,
+			recordingLimits,
 		};
 	}
 
@@ -744,6 +795,7 @@ export class ChroniclerStore {
 		];
 		if (record.supersedes) fields.push(["supersedes", record.supersedes]);
 		if (record.uncertainty) fields.push(["uncertainty", record.uncertainty]);
+		if (record.chroniclerNote) fields.push(["chronicler_note", record.chroniclerNote]);
 		const frontmatter = fields.map(([key, value]) => `${key}: ${YAML.stringify(value)}`).join("\n");
 		return `---\n${frontmatter}\n---\n\n# ${record.title}\n\n${record.body}\n`;
 	}
@@ -842,6 +894,18 @@ export class ChroniclerStore {
 			if (!isNonEmptyString(value.text)) throw this.#halt("checkpoint carry text is empty", file);
 			carry = { sources, text: value.text };
 		}
+		let recordingLimits: RecordingLimits | null = null;
+		if (record.recordingLimits !== null && record.recordingLimits !== undefined) {
+			if (typeof record.recordingLimits !== "object" || Array.isArray(record.recordingLimits)) {
+				throw this.#halt("checkpoint recording limits are neither null nor an object", file);
+			}
+			const value = record.recordingLimits as Record<string, unknown>;
+			const sources = stringArray(value.sources);
+			if (!sources?.length || !isNonEmptyString(value.text)) {
+				throw this.#halt("checkpoint recording limits need text and source entry IDs", file);
+			}
+			recordingLimits = { sources, text: value.text };
+		}
 
 		return {
 			version: CHECKPOINT_VERSION,
@@ -851,6 +915,7 @@ export class ChroniclerStore {
 			entries,
 			beats,
 			carry,
+			recordingLimits,
 		};
 	}
 
@@ -919,6 +984,13 @@ export class ChroniclerStore {
 			}
 			uncertainty = frontmatter.uncertainty.trim();
 		}
+		let chroniclerNote: string | undefined;
+		if (frontmatter.chronicler_note !== undefined) {
+			if (!isNonEmptyString(frontmatter.chronicler_note)) {
+				throw this.#halt(`beat ${listed.id} has invalid Chronicler note text`, file);
+			}
+			chroniclerNote = frontmatter.chronicler_note.trim();
+		}
 
 		const title = frontmatter.title.trim();
 		const text = this.#stripTitleHeading(body, title);
@@ -939,6 +1011,7 @@ export class ChroniclerStore {
 			related,
 			...(supersedes ? { supersedes } : {}),
 			...(uncertainty ? { uncertainty } : {}),
+			...(chroniclerNote ? { chroniclerNote } : {}),
 		});
 	}
 
@@ -989,6 +1062,11 @@ export class ChroniclerStore {
 		// A fork with no batch of its own still surfaces the ancestor's carry; a
 		// session that has committed keeps its own latest value, including null.
 		this.#carry = this.#ownCarrySeen ? this.#ownCarry : this.#inheritedCarry;
+		const limits = freezeCarry(checkpoint.recordingLimits ?? null);
+		if (checkpoint.sessionId === this.#meta.sessionId) this.#ownRecordingLimits = limits;
+		else this.#inheritedRecordingLimits = limits;
+		this.#recordingLimits =
+			this.#ownRecordingLimits === undefined ? this.#inheritedRecordingLimits : this.#ownRecordingLimits;
 	}
 
 	#invalidateViews(): void {
@@ -1032,6 +1110,8 @@ export class ChroniclerStore {
 				if (readback.carry.sources[i] !== expected.carry.sources[i]) return false;
 			}
 		}
+		if (JSON.stringify(readback.recordingLimits ?? null) !== JSON.stringify(expected.recordingLimits ?? null))
+			return false;
 		return true;
 	}
 
@@ -1087,6 +1167,14 @@ export class ChroniclerStore {
 			if (!sources || !isNonEmptyString(value.text)) return null;
 			carry = { sources, text: value.text };
 		}
+		let recordingLimits: RecordingLimits | null = null;
+		if (record.recordingLimits !== null && record.recordingLimits !== undefined) {
+			if (typeof record.recordingLimits !== "object" || Array.isArray(record.recordingLimits)) return null;
+			const value = record.recordingLimits as Record<string, unknown>;
+			const sources = stringArray(value.sources);
+			if (!sources?.length || !isNonEmptyString(value.text)) return null;
+			recordingLimits = { sources, text: value.text };
+		}
 		return {
 			version: CHECKPOINT_VERSION,
 			batchId: (record.batchId as string).trim(),
@@ -1095,6 +1183,7 @@ export class ChroniclerStore {
 			entries,
 			beats,
 			carry,
+			recordingLimits,
 		};
 	}
 

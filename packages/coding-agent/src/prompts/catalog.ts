@@ -399,9 +399,42 @@ import asset387 from "./system/chillax-notice.md" with { type: "text" };
 import asset388 from "./system/skill-notice.md" with { type: "text" };
 import asset389 from "./tools/wait-idle.md" with { type: "text" };
 import chroniclerStatusNotice from "./chronicler/status-notice.md" with { type: "text" };
+import chroniclerNoteTool from "./chronicler/note-tool.md" with { type: "text" };
+import chroniclerNoteMessage from "./chronicler/note-message.md" with { type: "text" };
+import chroniclerStartupConsent from "./chronicler/startup-consent.md" with { type: "text" };
 
 /** Static embeds are the release source; agents remain inspectable without changing discovery. */
 export const promptAssets: readonly PromptAsset[] = [
+	{
+		id: "chronicler/note-tool.md",
+		relPath: "chronicler/note-tool.md",
+		bundled: chroniclerNoteTool,
+		scope: "feature:chronicler/note-tool",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: ["packages/coding-agent/src/chronicler/note-tool.ts"],
+	},
+	{
+		id: "chronicler/note-message.md",
+		relPath: "chronicler/note-message.md",
+		bundled: chroniclerNoteMessage,
+		scope: "feature:chronicler/note-message",
+		group: "core",
+		keys: [{ path: "note", type: "string", required: true, resolution: "session-dependent" }],
+		fixture: { note: "I will honor that recording limit." },
+		consumerHints: ["packages/coding-agent/src/chronicler/note-tool.ts"],
+	},
+	{
+		id: "chronicler/startup-consent.md",
+		relPath: "chronicler/startup-consent.md",
+		bundled: chroniclerStartupConsent,
+		scope: "feature:chronicler/startup-consent",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: ["packages/coding-agent/src/session/agent-session.ts"],
+	},
 	{
 		id: "chronicler/status-notice.md",
 		relPath: "chronicler/status-notice.md",
@@ -1238,6 +1271,15 @@ export const promptAssets: readonly PromptAsset[] = [
 					{ path: "text", type: "string" },
 				],
 			},
+			{
+				path: "recordingLimits",
+				type: "object",
+				resolution: "session-dependent",
+				children: [
+					{ path: "sources", type: "string[]" },
+					{ path: "text", type: "string" },
+				],
+			},
 			{ path: "delta", type: "string", required: true, resolution: "session-dependent" },
 		],
 		fixture: {
@@ -1247,6 +1289,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			beats: [{ id: "example-1", title: "Example title", kind: "Example kind", eventTime: "Example eventTime" }],
 			omitted: "Example omitted",
 			carry: [{ sources: "Example sources", text: "Example text" }],
+			recordingLimits: { sources: ["directive-1"], text: "Exclude the participant's private topic." },
 			delta: "Example delta",
 		},
 		consumerHints: [
