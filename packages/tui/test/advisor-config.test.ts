@@ -339,10 +339,13 @@ describe("advisor sync backlog picker", () => {
 	});
 
 	it("keeps file warnings visible without the obsolete bottom scope button", () => {
-		const overlay = buildOverlay({
-			advisors: [{ name: "Reviewer" }],
-			warnings: [`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "Bad\tName" dropped`],
-		}, () => {});
+		const overlay = buildOverlay(
+			{
+				advisors: [{ name: "Reviewer" }],
+				warnings: [`${path.join(os.homedir(), ".omp", "WATCHDOG.yml")}: advisor "Bad\tName" dropped`],
+			},
+			() => {},
+		);
 		const frame = overlay.render(100).join("\n");
 		expect(frame).toContain('advisor "Bad   Name" dropped');
 		expect(frame).not.toContain("Scope: project");

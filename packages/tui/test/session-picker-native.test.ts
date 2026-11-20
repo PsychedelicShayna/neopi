@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../src/chrome/overlay-box";
 import { TextFormField } from "../src/components/form";
@@ -16,9 +18,15 @@ const withPicker: DescribeContext = {
 };
 const withoutPicker: DescribeContext = { ...withPicker, supports: kind => kind !== "picker" };
 
+const previousKeybindings = getKeybindings();
+
 beforeAll(async () => {
 	await initTheme(false);
+	// The app installs its keymap before any picker opens; `getKeybindings()` alone knows only `tui.*` actions.
+	setKeybindings(KeybindingsManager.inMemory());
 });
+
+afterAll(() => setKeybindings(previousKeybindings));
 
 const HOUR = 3_600_000;
 
@@ -301,12 +309,16 @@ describe("session selector rename", () => {
 describe("history search picker", () => {
 	const now = Math.floor(Date.now() / 1000);
 	const entries: HistorySearchEntry[] = [
-		{ prompt: "deploy the release\nwith notes", created_at: now - 60, cwd: "/work/app" },
-		{ prompt: "routine status", created_at: now - 7200 },
+		{ id: 1, prompt: "deploy the release\nwith notes", created_at: now - 60, cwd: "/work/app" },
+		{ id: 2, prompt: "routine status", created_at: now - 7200 },
 	];
 	const source = {
 		getRecent: (limit: number) => entries.slice(0, limit),
 		search: (query: string) => entries.filter(e => e.prompt.includes(query)),
+		delete: (id: number) => {
+			const index = entries.findIndex(entry => entry.id === id);
+			if (index >= 0) entries.splice(index, 1);
+		},
 	};
 
 	it("hoists a keyed md picker from the dock and inserts on activate", () => {

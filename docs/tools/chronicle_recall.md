@@ -6,7 +6,7 @@
 - Entry: `packages/coding-agent/src/tools/chronicle-recall.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/chronicle-recall.md`
 - Search: `packages/coding-agent/src/chronicler/temporal/recall.ts` (`recallChronicle`)
-- Ranking: `packages/coding-agent/src/chronicler/temporal/rank.ts` (model and lexical rankers)
+- Ranking: `packages/coding-agent/src/chronicler/temporal/{rank,judge-rank}.ts` (model, lexical and judge-protocol rankers)
 - View: `packages/coding-agent/src/chronicler/temporal/{tree,view,indexer}.ts`; built by `npi chronicle index`
 - Settings: `packages/coding-agent/src/chronicler/settings.ts`
 - User docs: `docs/chronicle.md`
@@ -42,17 +42,17 @@ Single-shot result. `content[0].text` renders the results; `details` is the full
 - `results[]`: `id`, `title`, `kind`, `eventTime`, `project`, `sessionId`, `score`, `confident`, `via` (`descent` or `adjacent`), `anchor` (hint anchor id for adjacency), `beat` (canonical beat file), `stub` (view stub), `transcript: { path, entryIds }`, `body` (canonical text, capped at 12,000 characters with `bodyTruncated`), `stale`, `neighbors[]`.
 - `candidates[]`: ranked periods (`key`, `level`, `label`, local period, `atomCount`, `projects`, `description`, `score`) for a non-atom `resolution`, or when recall is ambiguous.
 - `ambiguous` and `ask` (`time-range` or `adjacent-event`): set when no atom is confident; `ask` names the follow-up that would discriminate best.
-- `trace[]`: the branches considered — `rank`, `terminal`, `collapse`, `backtrack`, `evict`, `candidate`, `anchor`, `adjacent`, and evidence notes (`atom-missing`, `stale-atom`, `moved-out-of-scope`, `view-drift`, `ranker-fallback`) with candidate scores.
+- `trace[]`: the branches considered — `rank`, `terminal`, `collapse`, `backtrack`, `evict`, `prune` (judge floor), `candidate`, `anchor`, `adjacent`, and evidence notes (`atom-missing`, `stale-atom`, `moved-out-of-scope`, `view-drift`, `ranker-fallback`) with candidate scores.
 - `evidenceErrors[]`, `view: { root, indexedAt, complete, viewStale }`, `ranker`, `rankerFallback`.
 - A result with neither atoms nor candidates is marked `useless`.
 
 ## Flow
-1. Settings resolve the view root (`chronicler.index.dir`, default `<agentDir>/chronicle`), beam, result budget, neighborhood window, and ranker. The `model` ranker uses the `chronicler-summary` role and falls back to lexical scoring when no model resolves or a reply cannot be parsed.
+1. Settings resolve the view root (`chronicler.index.dir`, default `<agentDir>/chronicle`), beam, result budget, neighborhood window, and ranker. The `model` ranker uses `chronicler-recall`; the `judge` ranker uses the configured judge-role state/questions protocol, existing answer cache, session usage journal and cost gate. Unavailable or failed ranking falls back explicitly to lexical scoring; aborts propagate.
    Default scope is the owning transcript's session (including advisor calls). Explicit session selectors or keywords widen it. Native grep evaluates keywords over raw transcripts before ranking; matched session ids intersect any selected sessions, while dates/project retain their existing event-level filtering. No keyword matches select no atoms. The JSON result's optional `prefilter` reports keywords, selected `matchingSessions`, and the number of raw `matchingTranscripts`.
-2. Best-first descent from the root (or `node`): each expansion ranks the in-scope children's parent-authored descriptions and keeps the best `beam` plus near-ties in a frontier bounded to `beam × 4`. A branch whose best child or atom scores below half its own score (and below 0.6) is recorded as collapsed; the next pop from another branch is recorded as a backtrack.
-3. Terminal buckets rank their enumerated atoms. Atoms scoring at least 0.25 become candidates; 0.6 is confident.
-4. With `hint`, a second descent finds an anchor atom; in-scope atoms within `chronicler.recall.neighborhoodMinutes` of it are ranked against the query and fill up to half the budget as `adjacent` results.
-5. Each selected atom, the hint anchor, and every listed neighbor is re-read from its committed batch; rank requests are paged so each stays within the view's `hopTokens` (a query or hint longer than a quarter of a hop is clipped for ranking and the clip is recorded as `query-clipped` in the trace), and ties with an atom in another period are reported as ambiguous. A changed atom is returned with its current fields and `stale: true`; a deleted or unlisted atom goes to `evidenceErrors`; an atom whose current metadata left the scope is dropped. Confident results list in-scope neighbors within the window.
+2. Best-first descent from the root (or `node`): model/lexical expansion retains `beam` plus near-ties. Judge expansion first filters children by their level's `chronicler.recall.branchFloor` and keeps at most `beam`; the existing bounded frontier, hop and concurrency budgets still apply. A dead-end branch is recorded as collapsed and the strongest retained alternate is explored.
+3. Terminal buckets rank their enumerated atoms. Judge ranking verifies complete canonical bodies under the shared concurrency limit before scores can consume result slots or become confident; it does not verify clipped routing text. `atomMin` and `confidence` remain the result and confident-match thresholds.
+4. With `hint`, a second descent finds an anchor atom; in-scope atoms within `chronicler.recall.neighborhoodMinutes` of it are ranked against the query and may fill the configured adjacent share. Judge anchors and adjacent atoms also require full-body verification.
+5. Each selected atom, hint anchor and listed neighbor is re-read from its committed batch. Routing pages respect `hopTokens`; full judge verification instead splits complete bodies under the shared judgment token ceiling, never clipping a body. Missing/failed/oversized judgments disclose full-text lexical fallback. A changed body invalidates its previous verification score, so it is omitted with an evidence diagnostic rather than returned with stale confidence. Model/lexical results retain existing stale-atom behavior. Scope is rechecked before evidence is returned; ties across periods remain ambiguous.
 
 ## Errors
 - No view: `No chronicle view at <root>. Run \`npi chronicle index\` first.`

@@ -18,7 +18,7 @@ export type HangulCompatibilityJamoWidth = "platform" | "unicode" | 1 | 2;
 
 let hangulCompatibilityJamoWidth: HangulCompatibilityJamoWidth = "platform";
 
-// Wire encoding for the native override (see crates/pi-natives text.rs):
+// Wire encoding for the native override (see crates/natives text.rs):
 // 0 = platform default, 1 = narrow, 2 = wide, 3 = unicode (no correction).
 function nativeHangulCompatibilityJamoOverride(width: HangulCompatibilityJamoWidth): number {
 	if (width === "unicode") return 3;
@@ -268,7 +268,7 @@ const OSC66_PREFIX = "\x1b]66;";
 // virtual-placement prefix on Unicode-placeholder image lines, or the TUI's
 // BEL-terminated cursor marker. `Bun.stringWidth` strips CSI/OSC but counts APC
 // payloads as printable text, so they are removed before measuring (they occupy
-// zero cells — matching the native width engine in pi-natives/text.rs).
+// zero cells — matching the native width engine in omp-natives/text.rs).
 // Remove the outer tmux envelope first: doubled ESC bytes belong to its
 // payload, and stripping only the inner APC leaves printable wrapper bytes.
 const APC_SPAN_REGEX = /\x1bPtmux;(?:[^\x1b]|\x1b\x1b)*\x1b\\|\x1b_[\s\S]*?(?:\x07|\x1b\\)/g;
@@ -299,7 +299,7 @@ const HANGUL_COMPAT_JAMO_BUN_WIDTH = 2;
 
 // Effective target cell width for Compatibility Jamo, or `null` to follow the
 // Unicode width (no correction). Mirrors `hangul_compat_jamo_target_width` in
-// crates/pi-natives/src/text.rs.
+// crates/natives/src/text.rs.
 function hangulCompatibilityJamoTargetWidth(): 1 | 2 | null {
 	switch (hangulCompatibilityJamoWidth) {
 		case 1:
@@ -318,7 +318,7 @@ function hangulCompatibilityJamoTargetWidth(): 1 | 2 | null {
 // width engine: subtract Bun's per-jamo cell count and add back the effective
 // width — the runtime target when one is active, otherwise the `unicode-width`
 // value. Mirrors `char_width_corrected` / `apply_hangul_compat_jamo_delta` in
-// crates/pi-natives/src/text.rs, including the rule that the zero-width filler
+// crates/natives/src/text.rs, including the rule that the zero-width filler
 // (U+3164) is never widened past the narrow correction (a wide terminal still
 // renders it at its Unicode width of 0).
 function correctHangulCompatibilityJamoWidth(

@@ -19,6 +19,7 @@ import { cfgComposerPredictions, cfgTuiVimMode } from "../modes/settings";
 import { cfgAdvisorEnabled } from "../advisor/settings";
 import { cfgEffortPolicyMode } from "./effort-policy";
 import { cfgTaskPerCallModelAllow } from "../task/settings";
+import { cfgAuthUnpausedProviders } from "./model-settings";
 
 /** A condition follows its panel's settings owner; an uninitialized default proxy stays hidden. */
 function whenSettings(test: (settings: Settings) => boolean): (scope: Settings) => boolean {
@@ -41,6 +42,7 @@ const CONDITIONS: Record<string, (scope: Settings) => boolean> = {
 	planModeEnabled: whenSettings(s => cfgPlanEnabled.get(s)),
 	planAutosaveEnabled: whenSettings(s => cfgPlanEnabled.get(s) && cfgPlanAutosave.get(s)),
 	perCallModelAllowNotProject: whenSettings(s => cfgTaskPerCallModelAllow.provenance(s) !== "project"),
+	unpausedProvidersNotProject: whenSettings(s => cfgAuthUnpausedProviders.provenance(s) !== "project"),
 };
 
 /** Description suffix telling the panel user that an environment variable is in play. */

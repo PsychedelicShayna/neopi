@@ -92,7 +92,7 @@ describe("OAuth device-code polling", () => {
 						verification_uri: "https://example.com/verify",
 						interval: 0,
 						expires_in: 60,
-					})) as typeof fetch,
+					})) as unknown as typeof fetch,
 				onAuth: info => {
 					auth.push(info);
 					controller.abort();

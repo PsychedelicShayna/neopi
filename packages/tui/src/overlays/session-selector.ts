@@ -203,6 +203,20 @@ function sessionPreview(session: SessionSelectorEntry, forkedFrom: string | unde
 	]);
 }
 
+/** BCP 47 tag from the POSIX locale variables (`LC_ALL`, then `LC_TIME`, then `LANG`), or `undefined` to use the runtime default. */
+export function systemDateLocale(env: Readonly<Record<string, string | undefined>>): string | undefined {
+	const raw = env.LC_ALL || env.LC_TIME || env.LANG;
+	const tag = raw?.replace(/[.@].*$/, "").replace(/_/g, "-");
+	if (!tag || tag === "C" || tag === "POSIX") return undefined;
+	try {
+		return Intl.DateTimeFormat.supportedLocalesOf(tag)[0];
+	} catch {
+		return undefined;
+	}
+}
+
+const dateLocale = systemDateLocale(process.env);
+
 /** Absolute dates of week-old sessions; `toLocaleDateString` goes through Intl on every call. */
 const localeDateCache = new WeakMap<Date, { time: number; text: string }>();
 
@@ -222,7 +236,7 @@ function formatSessionDate(date: Date): string {
 
 	const cached = localeDateCache.get(date);
 	if (cached?.time === time) return cached.text;
-	const text = date.toLocaleDateString();
+	const text = date.toLocaleDateString(dateLocale);
 	localeDateCache.set(date, { time, text });
 	return text;
 }
@@ -1034,7 +1048,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (selected) this.onSelect?.(selected);
 	}
 
-	/** Delete / Backspace on an empty query: ask the parent to confirm deleting the selected session. */
+	/** Delete in the list (or the picker's Delete action): ask the parent to confirm deleting the selected session. */
 	requestDelete(): void {
 		const selected = this.#menu.selectedItem;
 		if (selected) this.onDeleteRequest?.(selected);
@@ -1599,8 +1613,6 @@ export interface SessionSelectorOptions<T extends SessionSelectorEntry = Session
 	allSessions?: SessionListing<T>;
 	/** Picker heading; defaults to "Resume Session". */
 	title?: string;
-	/** Primary action label; defaults to "Resume" (ANSI footer defaults to "select"). */
-	actionLabel?: string;
 	/** Fixed scope label, or false to omit the scope suffix. */
 	scopeLabel?: string | false;
 	/**
@@ -1687,7 +1699,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#extraFooterRows = 0;
 	readonly #fillHeight: boolean;
 	readonly #title: string;
-	readonly #actionLabel: string;
 	readonly #scopeLabel: string | false | undefined;
 	/** What `#messageContainer` shows, for the native description. */
 	#message: SessionPickerMessage | undefined;
@@ -1747,7 +1758,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
 		this.#title = options.title ?? "Resume Session";
-		this.#actionLabel = options.actionLabel ?? "Resume";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
 		this.#scopeLabel = options.scopeLabel;
@@ -2330,7 +2340,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	/**
 	 * `lg` cards sheet (`screen` for the standalone app): sessions grouped by
 	 * day (ranked flat while searching), the selected session's preview, the
-	 * delete confirm strip, and the actions of the keys Enter, Delete/Backspace,
+	 * delete confirm strip, and the actions of the keys Enter, Delete,
 	 * F2 (rename), the pin keys (Pin / Unpin, whichever applies to the selected
 	 * session), Tab (the scope toggle, labelled with the scope it switches
 	 * to) and Esc. Untitled unless the caller named it; the placeholder says the scope.
@@ -2358,7 +2368,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", this.#actionLabel, "enter", { primary: true })];
+		const actions = [pickerAction("resume", "Resume", "enter", { primary: true })];
 		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "delete"));
 		if (this.#onRename) actions.push(pickerAction("rename", "Rename", "f2"));
 		const pin = this.#pinAction();

@@ -31,7 +31,6 @@ import {
 	type ResolvedModelRoleValue,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
-import { getKnownRoleIds } from "../config/model-roles";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
 import { containsMagicKeyword } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
@@ -50,7 +49,7 @@ import type { EditModeSetting } from "../edit/settings";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE, TEMPORARY_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
 import {
@@ -62,31 +61,19 @@ import {
 } from "./settings";
 import { cfgDisabledProviders, cfgEnabledModels } from "../config/model-settings";
 
-/** Whether `model` takes effort per message, so changing it mid-conversation keeps the cached prefix. */
+/**
+ * Whether `model` takes effort per message, so changing it mid-conversation keeps the cached prefix:
+ * Anthropic per-message `output_config`, or OpenAI `configuration_update` items (standard reasoning mode only).
+ */
 function takesPerMessageEffort(model: Model): boolean {
 	const { compat } = model;
-	return compat !== undefined && "supportsPerMessageEffort" in compat && compat.supportsPerMessageEffort === true;
-}
-
-/**
- * Explicit thinking suffix of the first configured role that resolves to `model`
- * among `availableModels`; what a temporary picker applies when it selects that model.
- */
-export function roleThinkingLevelForModel(
-	settings: Settings,
-	availableModels: Model[],
-	model: Model,
-): ConfiguredThinkingLevel | undefined {
-	if (availableModels.length === 0) return undefined;
-	const matchPreferences = getModelMatchPreferences(settings);
-	for (const role of getKnownRoleIds(settings)) {
-		const roleValue = settings.getModelRole(role);
-		if (!roleValue) continue;
-		const resolved = resolveModelRoleValue(roleValue, availableModels, { settings, matchPreferences });
-		if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
-		if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
-	}
-	return undefined;
+	if (compat === undefined) return false;
+	if ("supportsPerMessageEffort" in compat && compat.supportsPerMessageEffort === true) return true;
+	return (
+		"supportsConfigurationUpdate" in compat &&
+		compat.supportsConfigurationUpdate === true &&
+		model.reasoningMode !== "pro"
+	);
 }
 
 /**
@@ -391,10 +378,6 @@ export class ModelControls {
 		return resolveRoleModelFull(this.#host.settings, role, this.#host.modelRegistry.getAvailable(), this.#model);
 	}
 
-	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
-		return roleThinkingLevelForModel(this.#host.settings, this.#host.modelRegistry.getAvailable(), model);
-	}
-
 	async setModel(
 		model: Model,
 		role: string = "default",
@@ -461,7 +444,8 @@ export class ModelControls {
 		thinkingLevel?: ConfiguredThinkingLevel,
 		options?: { ephemeral?: boolean; prewalk?: boolean },
 		selection: "explicit" | "automatic" = "explicit",
-	): Promise<void> {
+		isCurrent?: () => boolean,
+	): Promise<boolean> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -473,25 +457,37 @@ export class ModelControls {
 			thinkingLevel ?? this.#reappliedThinkingLevel(targetModel.thinking?.defaultLevel),
 			thinkingLevel === undefined ? this.#effortOrigin : "manual",
 		);
+		if (isCurrent?.() === false) return false;
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		if (selection === "explicit") this.#host.settings.setActiveRole(undefined);
-		this.#host.sessionManager.appendModelChange(
-			`${targetModel.provider}/${targetModel.id}`,
-			options?.prewalk ? PREWALK_MODEL_CHANGE_ROLE : options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
-		);
-		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		// Identity, not object equality: the agent's resolver and metadata rebinds swap in refitted rows of the
+		// same model. Only a different model means another selection replaced this one during reconciliation.
+		const landed = modelsAreEqual(this.#model, targetModel);
+		if (landed) {
+			this.#host.sessionManager.appendModelChange(
+				`${targetModel.provider}/${targetModel.id}`,
+				options?.prewalk
+					? PREWALK_MODEL_CHANGE_ROLE
+					: options?.ephemeral
+						? EPHEMERAL_MODEL_CHANGE_ROLE
+						: TEMPORARY_MODEL_CHANGE_ROLE,
+			);
+			this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		}
 
-		// Apply explicit thinking level if given; otherwise prefer the model's
-		// configured defaultLevel; otherwise re-clamp the current level (or auto).
-		if (thinkingLevel !== undefined) {
+		// A user selection during the switch owns effort, even on the same model.
+		if (isCurrent?.() === false || !landed) {
+			this.#reapplyThinkingLevel();
+		} else if (thinkingLevel !== undefined) {
 			this.setThinkingLevel(thinkingLevel);
 		} else {
 			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
+		return isCurrent?.() !== false && landed;
 	}
 
 	/**
@@ -779,8 +775,9 @@ export class ModelControls {
 
 	/**
 	 * Re-apply the active thinking selection after a model change. Preserves `auto`
-	 * (re-clamping the provisional level to the new model); otherwise re-applies the
-	 * preferred default or the current effective level.
+	 * (re-clamping the provisional level to the new model); otherwise carries the
+	 * current level, clamped to the nearest effort the new model supports.
+	 * `fallback` (the new model's own default) applies only when no level is set.
 	 */
 	#reappliedThinkingLevel(preferredDefault?: ThinkingLevel): ConfiguredThinkingLevel | undefined {
 		const explicit = this.#effortOrigin === "manual" || this.#effortOrigin === "caller";
@@ -817,8 +814,6 @@ export class ModelControls {
 			ceiling === undefined
 				? efforts
 				: efforts.filter(level => THINKING_EFFORTS.indexOf(level) <= THINKING_EFFORTS.indexOf(ceiling));
-		// Auto never opts an unverified model into thinking; only a concrete pick does.
-		if (this.#model.thinking?.unverified) return [ThinkingLevel.Off, ...selectable];
 		return [ThinkingLevel.Off, AUTO_THINKING, ...selectable];
 	}
 
@@ -856,7 +851,7 @@ export class ModelControls {
 		signal?: AbortSignal,
 	): Promise<void> {
 		const model = this.#model;
-		if (!model?.reasoning || model.thinking?.unverified) return;
+		if (!model?.reasoning) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
 		// Cascade routes effort via sibling model ids, not a wire param) have
 		// nothing to pick — skip classification rather than discard its result.
@@ -960,7 +955,7 @@ export class ModelControls {
 	applyChillax(promptText: string): boolean {
 		if (!this.#host.magicKeywordEnabled("chillax") || !containsMagicKeyword(promptText, "chillax")) return false;
 		const model = this.#model;
-		if (!model?.reasoning || model.thinking?.unverified || !takesPerMessageEffort(model)) return false;
+		if (!model?.reasoning || !takesPerMessageEffort(model)) return false;
 		const floor = getSupportedEfforts(model)[0];
 		if (floor === undefined) return false;
 		if (this.#autoThinking) {
@@ -987,6 +982,23 @@ export class ModelControls {
 			this.setThinkingLevel(floor);
 		}
 		return true;
+	}
+
+	/**
+	 * Settle auto on the level a starting run thinks at when no classification
+	 * resolved it (IRC wakes, resumed runs, agent-originated and synthetic turns),
+	 * so readers stop showing auto as pending while the agent runs at a concrete
+	 * level. The replacement policy starts auto on a concrete level, `off`
+	 * included, and settles there; the legacy policy keeps upstream's rule and
+	 * settles only a reasoning effort. The next user turn still reclassifies.
+	 */
+	settleAutoThinkingLevel(): void {
+		if (!this.#autoThinking || this.#autoResolvedLevel !== undefined) return;
+		const effort =
+			this.#thinkingLevel === ThinkingLevel.Off && cfgEffortPolicyMode.get(this.#host.settings) === "replacement"
+				? ThinkingLevel.Off
+				: toReasoningEffort(this.#thinkingLevel);
+		if (effort !== undefined) this.#resolveAutoThinkingLevel(effort);
 	}
 
 	/** Publish the first concrete auto resolution, then only changed levels, preserving its selection provenance. */

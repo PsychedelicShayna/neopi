@@ -24,7 +24,7 @@ function target(url: InternalUrl): { name: string; unset: boolean } {
 		!["", "/", "/unset"].includes(pathname) ||
 		(!name && pathname === "/unset")
 	) {
-		throw new ToolError("Use env://, env://NAME, or write env://NAME/unset without content.");
+		throw new ToolError('Use env://, env://NAME, or write env://NAME/unset with empty content ("").');
 	}
 	return { name, unset: pathname === "/unset" };
 }
@@ -41,7 +41,6 @@ export class EnvProtocolHandler implements ProtocolHandler {
 			payload: "verbatim",
 			scope: "workspace",
 			tier: () => "exec",
-			contentOptional: url => target(url).unset,
 		},
 	};
 
@@ -80,11 +79,12 @@ export class EnvProtocolHandler implements ProtocolHandler {
 	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<InternalWriteResult> {
 		if (!context?.session) throw new ToolError("env:// requires an owning session.");
 		const { name, unset } = target(url);
-		if (!name) throw new ToolError("Write env://NAME with the exact value, or env://NAME/unset without content.");
-		// The write transport normalizes omitted optional content to an empty string.
+		if (!name)
+			throw new ToolError('Write env://NAME with the exact value, or env://NAME/unset with empty content ("").');
+		// The write schema requires content, so /unset takes an empty payload.
 		// The explicit /unset action, not the payload, distinguishes deletion from an empty value.
 		if (unset && content !== "")
-			throw new ToolError("Omit content when unsetting a variable; set values at env://NAME instead.");
+			throw new ToolError('Unset takes empty content (""); set values at env://NAME instead.');
 		sessionEnvironment(context.session).set(name, unset ? undefined : content);
 		return {
 			content: [

@@ -368,7 +368,6 @@ for (const level of [ThinkingLevel.High, ThinkingLevel.Off]) {
 				settings,
 				modelOverride: "openai/mock-model:low",
 				callerModelSelector: "openai/mock-model:low",
-				structured: false,
 				restrictToolNames: true,
 				enableLsp: false,
 				enableMCP: false,

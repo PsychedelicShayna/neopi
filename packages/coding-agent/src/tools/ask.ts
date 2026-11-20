@@ -54,6 +54,11 @@ import { describeAttachedImagesForTextModel, shouldDescribeImagesForTextModel } 
 
 /** Returned to a headless fork's model instead of aborting its run. */
 const HEADLESS_FORK_ASK_ERROR = prompt.render(askHeadlessForkMessage);
+/** The call's result when the user sent a message instead of answering yet; the message follows it. */
+const ASK_KEPT_OPEN_RESULT =
+	"The user sent a message before answering; it follows. These questions stay open on their screen, and their answers will arrive later as a user message. Reply to their message now; do not ask these questions again.";
+/** Leads the user's message carrying answers given after the call returned. */
+const ASK_LATE_ANSWERS_HEADER = "Answers to the questions you asked earlier, which stayed open while we talked:";
 
 export const OTHER_OPTION = "Other (type your own)";
 const CHAT_ABOUT_THIS_OPTION = "Chat about this";
@@ -684,7 +689,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			context?.abort();
 			throw new ToolAbortError("Ask tool requires interactive mode");
 		}
-		// Only a queued user message closes ask; peer IRC and background results
+		// Only a queued user message reaches past ask; peer IRC and background results
 		// are not answers. Keep the turn alive so the message reaches its boundary.
 		const steeringSignal = context.toolCall?.steeringSignal;
 		const userSteering = new AbortController();
@@ -693,15 +698,19 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		};
 		if (steeringSignal?.aborted) onSteer();
 		else steeringSignal?.addEventListener("abort", onSteer, { once: true });
-		const dialogSignal = signal ? AbortSignal.any([signal, userSteering.signal]) : userSteering.signal;
 		const abortError = (): ToolAbortError =>
 			new ToolAbortError(userSteering.signal.aborted ? "Ask interrupted by message" : "Ask input was cancelled");
 		const cancelAsk = (): never => {
+			// Past a user's message the run no longer waits here: closing the questions ends nothing else.
 			if (userSteering.signal.aborted) throw abortError();
 			context.abort();
 			throw new ToolAbortError("Ask tool was cancelled by the user");
 		};
 		try {
+			if (context.ui.askDialog)
+				return await this.#askKeepingOpen(params, signal, userSteering.signal, context.ui, cancelAsk);
+			// Prompt-by-prompt hosts close the questions on a message.
+			const dialogSignal = signal ? AbortSignal.any([signal, userSteering.signal]) : userSteering.signal;
 			return await this.#askQuestions(params, dialogSignal, context.ui, cancelAsk);
 		} catch (error) {
 			if (userSteering.signal.aborted && error instanceof ToolAbortError) throw abortError();
@@ -711,11 +720,67 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		}
 	}
 
+	/**
+	 * The rich dialog stays open past a message the user sends (`steered`). The provider protocol needs this
+	 * call's result before the model can read that message, so the call returns then, saying the questions
+	 * stay open, and the dialog lives on: its answers reach the agent later as the user's own message
+	 * (`ToolSession.sendUserMessage`). Until then the turn's abort closes the dialog; after, answering,
+	 * cancelling, a newer ask, or the session going away does.
+	 */
+	async #askKeepingOpen(
+		params: AskParams,
+		turnSignal: AbortSignal | undefined,
+		steered: AbortSignal,
+		extensionUi: NonNullable<AgentToolContext["ui"]>,
+		cancelAsk: () => never,
+	): Promise<AgentToolResult<AskToolDetails>> {
+		const dialogAbort = new AbortController();
+		const onTurnAbort = (): void => {
+			if (!steered.aborted) dialogAbort.abort();
+		};
+		if (turnSignal?.aborted) onTurnAbort();
+		else turnSignal?.addEventListener("abort", onTurnAbort, { once: true });
+		const answering = this.#askQuestions(params, dialogAbort.signal, extensionUi, cancelAsk, steered);
+		const detached = Promise.withResolvers<undefined>();
+		const onDetach = (): void => detached.resolve(undefined);
+		if (steered.aborted) onDetach();
+		else steered.addEventListener("abort", onDetach, { once: true });
+		try {
+			const answered = await Promise.race([answering, detached.promise]);
+			if (answered) return answered;
+		} finally {
+			steered.removeEventListener("abort", onDetach);
+			turnSignal?.removeEventListener("abort", onTurnAbort);
+		}
+		const unregister = [
+			this.session.registerSessionChangeCallback?.(() => dialogAbort.abort()),
+			this.session.registerDisposeCallback?.(() => dialogAbort.abort()),
+		];
+		void answering
+			.then(
+				result =>
+					this.session.sendUserMessage?.([{ type: "text", text: ASK_LATE_ANSWERS_HEADER }, ...result.content]),
+				// Cancelled, replaced by a newer ask, or closed with the session: nothing to send.
+				() => undefined,
+			)
+			.catch(error => {
+				logger.warn("ask answers given after a message could not be delivered", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			})
+			.finally(() => {
+				for (const release of unregister) if (typeof release === "function") release();
+			});
+		return { content: [{ type: "text", text: ASK_KEPT_OPEN_RESULT }], details: {} };
+	}
+
 	async #askQuestions(
 		params: AskParams,
 		signal: AbortSignal,
 		extensionUi: NonNullable<AgentToolContext["ui"]>,
 		cancelAsk: () => never,
+		/** Rich dialogs: aborts when the user steers past the questions, which then stay open (`#askKeepingOpen`). */
+		detach?: AbortSignal,
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Models occasionally inject `\r` runs into string values (observed with
 		// GLM via OpenRouter); sanitize before the dialog renders or the answer
@@ -842,7 +907,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							...(q.multi !== undefined ? { multi: q.multi } : {}),
 							...(q.recommended !== undefined ? { recommended: q.recommended } : {}),
 						})),
-						{ timeout: timeout ?? undefined, signal, acceptImages: true },
+						{ timeout: timeout ?? undefined, signal, acceptImages: true, ...(detach ? { detach } : {}) },
 					);
 				const richResult = await untilAborted(signal, showRichDialog);
 				if (!richResult) {

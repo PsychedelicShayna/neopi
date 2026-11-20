@@ -54,7 +54,7 @@ export async function setSubagentModel(
 	thinkingLevel?: ConfiguredThinkingLevel,
 ): Promise<void> {
 	if (!isLocalAgentSession(session)) return session.setSubagentModel(model, thinkingLevel);
-	await session.setModelTemporary(model, thinkingLevel ?? session.resolveTemporaryModelThinkingLevel(model));
+	await session.setModelTemporary(model, thinkingLevel);
 }
 
 /** Session-only tier mutation; enabled and actually active remain separate session facts. */

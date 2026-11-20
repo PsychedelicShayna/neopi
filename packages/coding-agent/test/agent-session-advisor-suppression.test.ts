@@ -34,6 +34,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
+import { fixedAdvisorTools } from "./helpers/agent-session-setup";
 import { cfgAdvisorSyncBacklog } from "@oh-my-pi/pi-coding-agent/advisor/settings";
 
 interface MockYieldDetails {
@@ -70,6 +71,7 @@ interface AdvisorTestExtensionRunner {
 	hasHandlers(eventType: string): boolean;
 	emitBeforeAgentStart(): Promise<undefined>;
 	emit(event: { type: string; message?: AgentMessage }): Promise<void>;
+	emitSessionStop?(): Promise<undefined>;
 }
 
 describe("AgentSession advisor auto-resume suppression", () => {
@@ -242,7 +244,6 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			sessionManager,
 			settings,
 			modelRegistry,
-			advisorTools: [],
 			advisorStreamFn: advisorMock.stream,
 			advisorConfigs: reviewMode === "agent-end" ? [{ name: "Final reviewer", reviewMode }] : undefined,
 			extensionRunner: extensionRunner as never,
@@ -409,7 +410,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				sessionManager: SessionManager.inMemory(),
 				settings,
 				modelRegistry: new ModelRegistry(authStorage, tempDir.join("models.yml")),
-				advisorTools: [],
+				advisorTools: fixedAdvisorTools(),
 				advisorStreamFn: advisorMock.stream,
 				extensionRunner: extensionRunner as never,
 			});
@@ -446,7 +447,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			const advisor = session.getAdvisorAgent();
 			if (!advisor) throw new Error("Expected advisor");
 			const unsubscribeAdvice = advisor.subscribe(event => {
-				if (event.type === "message_end" && event.message.role === "toolResult" && event.message.toolName === "advise") {
+				if (
+					event.type === "message_end" &&
+					event.message.role === "toolResult" &&
+					event.message.toolName === "advise"
+				) {
 					advised.resolve();
 				}
 			});
@@ -472,7 +477,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				if (event.type === "message_end" && isAdvisorCard(event.message) && event.message.content.includes(note)) {
 					visibleEvents.push("advice-card");
 				}
-				if (event.type === "agent_end" && event.isTerminal !== false) {
+				if (event.type === "agent_end") {
 					visibleEvents.push("terminal-end");
 					persistedAtEnd.push(
 						session.sessionManager
@@ -513,11 +518,13 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				await session.waitForIdle();
 				expect(mock.calls).toHaveLength(continuation ? 4 : 3);
 				const nextContext = JSON.stringify(mock.calls[2].context.messages);
-				expect(mock.calls[2].context.messages).toContainEqual(expect.objectContaining({
-					role: "toolResult",
-					toolName: "held",
-					content: [{ type: "text", text: "held complete" }],
-				}));
+				expect(mock.calls[2].context.messages).toContainEqual(
+					expect.objectContaining({
+						role: "toolResult",
+						toolName: "held",
+						content: [{ type: "text", text: "held complete" }],
+					}),
+				);
 				if (severity !== "nit") expect(nextContext).toContain(note);
 				else expect(nextContext).not.toContain(note);
 				const advisorCards = agent.state.messages.filter(isAdvisorCard);
@@ -530,9 +537,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 					expect(continuedContext).toContain("The terminal result needs its missing correction.");
 					expect(continuedContext).toContain(note);
 					expect(agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
-					expect(advisorMock.calls.some(call =>
-						JSON.stringify(call.context.messages).includes("corrected terminal result"),
-					)).toBe(false);
+					expect(
+						advisorMock.calls.some(call =>
+							JSON.stringify(call.context.messages).includes("corrected terminal result"),
+						),
+					).toBe(false);
 				}
 				expect(spokenAdvice.some(text => text.includes(note))).toBe(true);
 			} finally {
@@ -588,7 +597,6 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			sessionManager,
 			settings,
 			modelRegistry,
-			advisorTools: [],
 			advisorStreamFn: advisorMock.stream,
 		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
@@ -642,14 +650,16 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			if (!advisor) throw new Error("Expected advisor agent to be live");
 			const notes = ["First late regression needs a test.", "Second late regression needs a test."];
 			const advisorMock = createMockModel({
-				responses: [{
-					content: notes.map((note, index) => ({
-						type: "toolCall" as const,
-						id: `late-advice-${index}`,
-						name: "advise",
-						arguments: { note, severity: "concern" },
-					})),
-				}],
+				responses: [
+					{
+						content: notes.map((note, index) => ({
+							type: "toolCall" as const,
+							id: `late-advice-${index}`,
+							name: "advise",
+							arguments: { note, severity: "concern" },
+						})),
+					},
+				],
 				handler: () => ({ content: [], stopReason: "stop" }),
 			});
 			advisor.streamFn = advisorMock.stream;
@@ -794,25 +804,22 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			{ severity: "blocker" as const, continueSeverity: "blocker" as const, reviewMode },
 			{ severity: "nit" as const, continueSeverity: "nit" as const, reviewMode },
 		]),
-	)(
-		"steers late advice at advisor.continueSeverity after a terminal answer %j",
-		async opts => {
-			const { session, mock } = await createCompletedAdvisorSession(opts);
+	)("steers late advice at advisor.continueSeverity after a terminal answer %j", async opts => {
+		const { session, mock } = await createCompletedAdvisorSession(opts);
 
-			await session.prompt("read five fixture files and answer with exactly one line");
-			await session.waitForIdle();
-			expect(mock.calls.length).toBe(1);
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
 
-			expect(session.setAdvisorEnabled(true)).toBe(true);
-			const advisor = session.getAdvisorAgent();
-			if (!advisor) throw new Error("Expected advisor agent to be live");
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
 
-			await advisor.prompt("inspect the completed turn");
-			await session.waitForIdle();
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
 
-			expect(mock.calls.length).toBe(2);
-		},
-	);
+		expect(mock.calls.length).toBe(2);
+	});
 
 	it("preserves another late advisor note after an existing advisor card", async () => {
 		const { session, mock } = await createCompletedAdvisorSession();
@@ -1098,7 +1105,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			sessionManager,
 			settings,
 			modelRegistry,
-			advisorTools: [parkTool],
+			advisorTools: fixedAdvisorTools(parkTool),
 			advisorStreamFn: advisorMock.stream,
 		});
 		expect(session.setAdvisorEnabled(true)).toBe(true);
@@ -1343,7 +1350,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	});
 
 	it("keeps background wakes after an interrupt that lands while the finished turn still settles", async () => {
-		// The session reports streaming for the whole post-turn unwind — extension hooks,
+		// The session reports streaming for the whole post-turn unwind — stop hooks,
 		// compaction, the advisor drain — long after the turn reached its own end. An Esc
 		// there stops nothing a background completion could restart, and no later turn end
 		// would lift the suppression again, so the wake must survive it.
@@ -1352,10 +1359,11 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		const extensionRunner: AdvisorTestExtensionRunner = {
 			hasHandlers: () => true,
 			emitBeforeAgentStart: async () => undefined,
-			emit: async event => {
-				if (event.type !== "agent_end") return;
+			emit: async () => {},
+			emitSessionStop: async () => {
 				settling.resolve();
 				await releaseSettle.promise;
+				return undefined;
 			},
 		};
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
