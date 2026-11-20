@@ -99,4 +99,3 @@ describe("loadNpmRegistryResolver", () => {
 		await expect(loadNpmRegistryResolver({ env: {}, homeDir })).rejects.toThrow("${MISSING}");
 	});
 });
-

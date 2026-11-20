@@ -1,10 +1,6 @@
 import * as fs from "node:fs";
 import type { AgentHubDeps, AgentHubRemote } from "@oh-my-pi/pi-tui/overlays/agent-hub";
-import type {
-	AgentHubRegistry,
-	AgentLifecycleLike,
-	AgentRecordLike,
-} from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import type { AgentHubRegistry, AgentLifecycleLike, AgentRecordLike } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { type AgentCostSnapshot, aggregateCost } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
 import type { AgentTranscriptSource } from "@oh-my-pi/pi-tui/overlays/agent-transcript-viewer";
 import type { ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -124,9 +120,14 @@ export function sumSubagentTreeCost(args: {
 	const { observers, rootSessionFile, sessionCosts } = args;
 	const rows: AgentRef[] = [];
 	const observedById = new Map<string, ObservableSession>();
+	// Multi-session hosts (ACP, SDK) register each root as `kind: "main"` under
+	// its own id, not `MAIN_AGENT_ID`. A root and its advisors are billed apart
+	// from the tree, and a root's transcript always belongs to itself.
+	const mainIds = new Set([MAIN_AGENT_ID]);
+	for (const ref of args.refs) if (ref.kind === "main") mainIds.add(ref.id);
 	for (const ref of args.refs) {
-		if (ref.id === MAIN_AGENT_ID) continue;
-		if (ref.kind === "advisor" && (ref.parentId ?? MAIN_AGENT_ID) === MAIN_AGENT_ID) continue;
+		if (mainIds.has(ref.id)) continue;
+		if (ref.kind === "advisor" && mainIds.has(ref.parentId ?? MAIN_AGENT_ID)) continue;
 		const observed = observers.getSession(ref.id);
 		const inTree = ref.sessionFile
 			? rootSessionFile !== undefined && sessionFileBelongsToRoot(ref.sessionFile, rootSessionFile)

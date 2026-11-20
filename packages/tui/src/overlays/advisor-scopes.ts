@@ -30,10 +30,16 @@ import {
 	cloneAdvisorConfig,
 	type AdvisorConfigCallbacks,
 	type AdvisorConfigDeps,
+	type AdvisorConfig,
 	type AdvisorConfigScope,
 	type WatchdogConfigDoc,
 } from "./advisor-config";
 import { describeHubChips, renderHubChips, type ChipRange, type StripChip, type StripState } from "./hub-frame";
+import {
+	AdvisorActivationSetOverlayComponent,
+	type AdvisorActivationSetScope,
+	type AdvisorActivationSetSource,
+} from "./advisor-activation-sets";
 
 const SCOPE_LABELS: Record<AdvisorConfigScope, string> = {
 	user: "User",
@@ -50,9 +56,10 @@ export interface AdvisorConfigFile {
 
 export interface AdvisorScopeCallbacks extends Omit<AdvisorConfigCallbacks, "loadDoc" | "save" | "openConfigFile"> {
 	loadFile: (path: string) => Promise<WatchdogConfigDoc>;
-	saveFile: (path: string, doc: WatchdogConfigDoc) => Promise<void>;
+	saveFile: (path: string, doc: WatchdogConfigDoc, options?: { advisorField: "enabled" | "id" }) => Promise<void>;
 	/** Edit the exact discovered file, not a scope's default path. */
 	openFile?: (path: string) => Promise<void>;
+	activationSets?: AdvisorActivationSetSource;
 }
 
 interface ScopeNavigationSnapshot {
@@ -63,6 +70,9 @@ interface ScopeNavigationSnapshot {
 	scopeFocused: boolean;
 	editor?: AdvisorConfigOverlayComponent;
 	content?: unknown;
+	activationEditor?: AdvisorActivationSetOverlayComponent;
+	activationContent?: unknown;
+	editorEntries?: { path: string; entries: readonly { ref: AdvisorConfig; base: AdvisorConfig }[] };
 }
 
 /** Select an exact discovered file before opening the existing per-advisor editor. */
@@ -78,13 +88,18 @@ export class AdvisorScopeOverlayComponent implements Component {
 	#scopeFocused = true;
 	readonly #scopeStrip: StripState<StripChip<AdvisorConfigScope>> = {
 		chips: (["user", "project", "project-omp", "session"] as const).map(scope => ({
-			label: SCOPE_LABELS[scope], styled: SCOPE_LABELS[scope], action: scope,
+			label: SCOPE_LABELS[scope],
+			styled: SCOPE_LABELS[scope],
+			action: scope,
 		})),
 		index: 0,
 	};
 	readonly #scopeRanges: ChipRange[] = [];
 	#list: SelectList;
 	#editor: AdvisorConfigOverlayComponent | undefined;
+	#activationEditor: AdvisorActivationSetOverlayComponent | undefined;
+	#editorEntries: ScopeNavigationSnapshot["editorEntries"];
+	#activationLoad = 0;
 	#busy = false;
 	#pendingApply = false;
 	#rows = 30;
@@ -117,7 +132,6 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#list = this.#buildList();
 	}
 
-
 	#scope(): AdvisorConfigScope {
 		return this.#scopeStrip.chips[this.#scopeStrip.index].action;
 	}
@@ -134,11 +148,13 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	#buildList(state?: SelectListNavigationState): SelectList {
-		const items: SelectItem[] = this.#files.filter(file => file.scope === this.#scope()).map(file => ({
-			value: file.path,
-			label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
-			description: sanitizeDisplayLine(shortenPath(file.path)),
-		}));
+		const items: SelectItem[] = this.#files
+			.filter(file => file.scope === this.#scope())
+			.map(file => ({
+				value: file.path,
+				label: `${file.doc.enabled === false ? "○" : "●"} ${SCOPE_LABELS[file.scope]}`,
+				description: sanitizeDisplayLine(shortenPath(file.path)),
+			}));
 		items.push(
 			{ value: "divider", label: "────────────────", disabled: true },
 			{ value: "disable", label: "Disable all active advisors" },
@@ -147,6 +163,19 @@ export class AdvisorScopeOverlayComponent implements Component {
 			{ value: "apply", label: "Apply saved configuration" },
 			{ value: "close", label: "Close" },
 		);
+		if (this.#cb.activationSets && this.#scope() !== "project") {
+			items.push({
+				value: "roles-heading",
+				label: `Role activation sets · ${this.#scope() === "session" ? "settings.yml" : "config.yml"}`,
+				disabled: true,
+			});
+			for (const role of this.#cb.activationSets.getRoles()) {
+				items.push({
+					value: `role:${role.id}`,
+					label: `Role: ${sanitizeDisplayLine(role.id)} (${sanitizeDisplayLine(role.label)})`,
+				});
+			}
+		}
 		const list = new SelectList(items, this.#rows, getSelectListTheme(), {
 			search: "always",
 			activateOnSpace: false,
@@ -164,9 +193,22 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	#preview(): string[] {
+		const value = this.#list.getSelectedItem()?.value;
+		if (value?.startsWith("role:"))
+			return [
+				`Role ${sanitizeDisplayLine(value.slice(5))} · ${SCOPE_LABELS[this.#scope()]}`,
+				"Enter edits this role's advisor activation set by stable ID.",
+				"A set replaces individual enabled flags. Clear restores per-advisor flags.",
+				"Role sets persist in User / Project .omp config.yml or Session settings.yml, not root WATCHDOG.",
+			];
 		const file = this.#selectedFile();
 		if (!file)
-			return ["Select a file to preview its advisors.", "Space toggles a whole file. Enter edits that file."];
+			return [
+				`Bulk actions affect only ${SCOPE_LABELS[this.#scope()]} advisor entries.`,
+				"Whole-file switches stay unchanged.",
+				"Select a file to preview its advisors.",
+				"Space toggles a whole file. Enter edits that file.",
+			];
 		return [
 			sanitizeDisplayLine(shortenPath(file.path)),
 			file.doc.enabled === false ? "File disabled. Entries remain editable." : "File enabled",
@@ -193,8 +235,8 @@ export class AdvisorScopeOverlayComponent implements Component {
 			});
 	}
 
-	async #write(file: AdvisorConfigFile, doc: WatchdogConfigDoc): Promise<void> {
-		await this.#cb.saveFile(file.path, doc);
+	async #write(file: AdvisorConfigFile, doc: WatchdogConfigDoc, advisorEnabledOnly = false): Promise<void> {
+		await this.#cb.saveFile(file.path, doc, advisorEnabledOnly ? { advisorField: "enabled" } : undefined);
 		file.doc = await this.#cb.loadFile(file.path);
 		this.#pendingApply = true;
 	}
@@ -227,44 +269,73 @@ export class AdvisorScopeOverlayComponent implements Component {
 			this.#pendingApply = false;
 			return;
 		}
+		if (value.startsWith("role:") && this.#scope() !== "project") {
+			await this.#openActivationSet(value.slice(5), this.#scope() as AdvisorActivationSetScope);
+			return;
+		}
 		if (["enable", "disable", "invert"].includes(value)) {
+			const scope = this.#scope();
+			let changed = 0;
 			for (const file of this.#files) {
+				if (file.scope !== scope) continue;
 				const doc = await this.#cb.loadFile(file.path);
-				const fileEnabled = doc.enabled !== false;
-				doc.enabled =
-					value === "disable" || (value === "invert" && doc.advisors.length === 0 && fileEnabled)
-						? false
-						: undefined;
+				let fileChanges = 0;
 				for (const advisor of doc.advisors) {
-					advisor.enabled =
-						value === "disable"
-							? false
-							: value === "enable" || !fileEnabled || advisor.enabled === false
-								? undefined
-								: false;
+					const enabled = value === "disable" ? false : value === "enable" || advisor.enabled === false;
+					if ((advisor.enabled !== false) === enabled) continue;
+					advisor.enabled = enabled ? undefined : false;
+					fileChanges++;
 				}
-				await this.#write(file, doc);
+				if (fileChanges === 0) continue;
+				await this.#write(file, doc, true);
+				changed += fileChanges;
 			}
 			this.#list = this.#buildList(this.#list.navigationState());
-			this.#cb.notify("Saved advisor states. Press a to apply them to live advisors.");
+			this.#cb.notify(
+				changed > 0
+					? `Saved ${changed} ${SCOPE_LABELS[scope]} advisor entry states; file switches unchanged. Press a to apply.`
+					: `No ${SCOPE_LABELS[scope]} advisor entry states changed; file switches and implicit defaults unchanged.`,
+			);
 			return;
 		}
 		const file = this.#files.find(candidate => candidate.path === value);
 		if (!file) return;
 		const previous = this.navigationSnapshot();
 		const doc = await this.#cb.loadFile(file.path);
+		this.#editorEntries = {
+			path: file.path,
+			entries: doc.advisors.map(ref => ({ ref, base: structuredClone(ref) })),
+		};
 		if (doc.warnings?.length)
 			(this.#cb.warn ?? this.#cb.notify)(`WATCHDOG.yml: ${sanitizeDisplayWarnings(doc.warnings).join("; ")}`);
 		const editor = new AdvisorConfigOverlayComponent(
 			this.#tui,
-			{ ...this.#deps, effectiveRoster: [], filePath: file.path },
+			{
+				...this.#deps,
+				effectiveRoster: [],
+				filePath: file.path,
+				getActivationNote: advisor => {
+					const note = this.#cb.activationSets?.getOverrideNote({ ...advisor, sourceScope: file.scope });
+					return note === undefined ? undefined : sanitizeDisplayLine(note);
+				},
+			},
 			file.scope,
 			doc,
 			{
 				...this.#cb,
-				getSources: async () => Promise.all(this.#files.map(async source => ({
-					...source, doc: await this.#cb.loadFile(source.path),
-				}))),
+				editActivationSet: this.#cb.activationSets
+					? async () => {
+							const source = this.#cb.activationSets!;
+							await this.#openActivationSet(source.getActiveRole() ?? "default", source.getActiveScope());
+						}
+					: undefined,
+				getSources: async () =>
+					Promise.all(
+						this.#files.map(async source => ({
+							...source,
+							doc: await this.#cb.loadFile(source.path),
+						})),
+					),
 				copyAdvisor: async (advisor, targetPath) => {
 					const target = this.#files.find(source => source.path === targetPath);
 					if (!target) throw new Error("Advisor copy destination no longer exists");
@@ -309,7 +380,45 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.onNavigationVisit?.(`advisor-file:${file.path}`, previous);
 	}
 
+	async #openActivationSet(role: string, scope: AdvisorActivationSetScope): Promise<void> {
+		const source = this.#cb.activationSets;
+		if (!source) return;
+		const revision = ++this.#activationLoad;
+		const parentEditor = this.#editor;
+		const previous = this.navigationSnapshot();
+		const state = await source.load(role, scope);
+		if (revision !== this.#activationLoad || parentEditor !== this.#editor) return;
+		this.#activationEditor = new AdvisorActivationSetOverlayComponent(role, scope, state, source, {
+			notify: this.#cb.notify,
+			requestRender: this.#cb.requestRender,
+			saved: async assigned => {
+				for (const identity of assigned) {
+					if (identity.path !== this.#editorEntries?.path) continue;
+					const original = this.#editorEntries.entries[identity.index];
+					if (original && Bun.deepEquals(original.base, identity.before)) {
+						original.ref.id = identity.id;
+						original.base.id = identity.id;
+					}
+				}
+				for (const file of this.#files) file.doc = await this.#cb.loadFile(file.path);
+				if (assigned.length > 0) this.#pendingApply = true;
+				this.#editor?.refreshActivationNotes(assigned.length > 0);
+			},
+			close: () => {
+				const snapshot = this.navigationSnapshot();
+				this.#activationEditor = undefined;
+				this.#editor?.refreshActivationNotes();
+				this.#list = this.#buildList(this.#list.navigationState());
+				this.onNavigationVisit?.(this.#editor ? "advisor-file" : "advisor-scopes", snapshot);
+				this.#cb.requestRender();
+			},
+		});
+		this.onNavigationVisit?.(`advisor-role:${scope}:${role}`, previous);
+		this.#cb.requestRender();
+	}
+
 	render(width: number): readonly string[] {
+		if (this.#activationEditor) return this.#activationEditor.render(width);
 		if (this.#editor) return this.#editor.render(width);
 		const hints = menuHintLines(
 			`↑ scope · ←/→ cycle scope · Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close · ? help`,
@@ -322,7 +431,15 @@ export class AdvisorScopeOverlayComponent implements Component {
 		return this.#help.render(
 			[
 				topBorder(width, title),
-				row(renderHubChips(width - 4, `${this.#scopeFocused ? "›" : " "} Scope: `, this.#scopeStrip, this.#scopeRanges), width),
+				row(
+					renderHubChips(
+						width - 4,
+						`${this.#scopeFocused ? "›" : " "} Scope: `,
+						this.#scopeStrip,
+						this.#scopeRanges,
+					),
+					width,
+				),
 				divider(width),
 				...this.#split.render(width),
 				divider(width),
@@ -334,10 +451,12 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	nativeSheet(cx: DescribeContext): boolean {
+		if (this.#activationEditor) return this.#activationEditor.nativeSheet(cx);
 		return this.#editor ? this.#editor.nativeSheet(cx) : cx.supports("picker");
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#activationEditor) return this.#activationEditor.describe(cx);
 		if (this.#editor) return this.#editor.describe(cx);
 		if (this.#help.open) return this.#help.describe();
 		const preview = this.#preview().map(line => text(line, { wrap: "word" }));
@@ -368,6 +487,10 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#activationEditor) {
+			this.#activationEditor.handleInput(data);
+			return;
+		}
 		if (this.#editor) {
 			this.#editor.handleInput(data);
 			return;
@@ -426,7 +549,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 		}
 		if (this.#scopeFocused) {
 			if (action?.kind === "horizontal") this.#setScope(this.#scopeStrip.index + action.delta);
-			else if ((action?.kind === "move" && action.delta > 0) || action?.kind === "confirm" || action?.kind === "context") {
+			else if (
+				(action?.kind === "move" && action.delta > 0) ||
+				action?.kind === "confirm" ||
+				action?.kind === "context"
+			) {
 				this.#scopeFocused = false;
 				this.#cb.requestRender();
 			} else if (action?.kind === "search") {
@@ -435,8 +562,11 @@ export class AdvisorScopeOverlayComponent implements Component {
 			}
 			return;
 		}
-		if (action?.kind === "move" && action.delta < 0 &&
-			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value) {
+		if (
+			action?.kind === "move" &&
+			action.delta < 0 &&
+			this.#list.getSelectedItem()?.value === this.#list.pickerView().items.find(item => !item.disabled)?.value
+		) {
 			this.#scopeFocused = true;
 			this.#cb.requestRender();
 			return;
@@ -481,6 +611,10 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#activationEditor) {
+			this.#activationEditor.handleNativeEvent(event);
+			return;
+		}
 		if (this.#editor) {
 			this.#editor.handleNativeEvent(event);
 			return;
@@ -504,11 +638,15 @@ export class AdvisorScopeOverlayComponent implements Component {
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#busy || this.#editor?.blocksMenuHistory === true;
+		return (
+			this.#busy || this.#activationEditor?.blocksMenuHistory === true || this.#editor?.blocksMenuHistory === true
+		);
 	}
 	leaveMenu(): void {
 		this.#keys.reset();
+		this.#activationLoad++;
 		this.#editor?.leaveMenu();
+		this.#activationEditor?.leaveMenu();
 	}
 	navigationSnapshot(): ScopeNavigationSnapshot {
 		return {
@@ -519,6 +657,9 @@ export class AdvisorScopeOverlayComponent implements Component {
 			previewFocused: this.#previewFocused,
 			editor: this.#editor,
 			content: this.#editor?.navigationSnapshot(),
+			activationEditor: this.#activationEditor,
+			activationContent: this.#activationEditor?.navigationSnapshot(),
+			editorEntries: this.#editorEntries,
 		};
 	}
 	restoreNavigation(snapshot: unknown): void {
@@ -532,10 +673,14 @@ export class AdvisorScopeOverlayComponent implements Component {
 		this.#previewFocused = state.previewFocused;
 		this.#editor = state.editor;
 		if (this.#editor) this.#editor.restoreNavigation(state.content);
+		this.#activationEditor = state.activationEditor;
+		if (this.#activationEditor) this.#activationEditor.restoreNavigation(state.activationContent);
+		this.#editorEntries = state.editorEntries;
 		this.#keys.reset();
 	}
 
 	dispose(): void {
+		this.#activationLoad++;
 		this.#editor?.dispose();
 	}
 }

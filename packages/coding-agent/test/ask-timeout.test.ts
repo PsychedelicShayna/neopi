@@ -185,7 +185,11 @@ describe("AskTool timeout", () => {
 
 		expect(outcome.rejection).toBeUndefined();
 		expect(
-			outcome.result?.details?.results?.map(({ id, selectedOptions, timedOut }) => ({ id, selectedOptions, timedOut })),
+			outcome.result?.details?.results?.map(({ id, selectedOptions, timedOut }) => ({
+				id,
+				selectedOptions,
+				timedOut,
+			})),
 		).toEqual([
 			{ id: "db", selectedOptions: ["SQLite"], timedOut: undefined },
 			{ id: "auth", selectedOptions: ["JWT"], timedOut: true },

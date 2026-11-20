@@ -18,11 +18,13 @@ export type KnownApi =
 	| "google-generative-ai"
 	| "google-gemini-cli"
 	| "google-vertex"
+	| "kiro-api"
 	| "ollama-chat"
 	| "cursor-agent"
 	| "factory-droid-agent"
 	| "gitlab-duo-agent"
 	| "devin-agent"
+	| "antigravity-acp"
 	| "apple-foundation-models";
 export type Api = KnownApi | (string & {});
 
@@ -53,7 +55,10 @@ export const RUNNER_APIS = [
 	"typesafe",
 	"openrouter-decisions",
 	"openai-decisions",
+	"google-decisions",
 	"workers-ai-systemone",
+	"liquid-systemone",
+	"nace-systemone",
 	"openai-images",
 	"openrouter-images",
 	"xai-tts",
@@ -70,7 +75,10 @@ export const RUNNER_API_KINDS: Record<Exclude<(typeof RUNNER_APIS)[number], "loc
 	typesafe: "judge",
 	"openrouter-decisions": "judge",
 	"openai-decisions": "judge",
+	"google-decisions": "judge",
 	"workers-ai-systemone": "judge",
+	"liquid-systemone": "judge",
+	"nace-systemone": "judge",
 	"openai-images": "image",
 	"openrouter-images": "image",
 	"xai-tts": "tts",
@@ -195,9 +203,9 @@ export interface ThinkingConfig {
 	requiresEffort?: boolean;
 	/**
 	 * The catalog has no evidence this model reasons (unclassified id, no
-	 * capability metadata). The ladder is offered for the user to opt into:
-	 * sessions leave thinking unset until the user picks an effort, and a
-	 * request without an effort goes out as non-reasoning (see
+	 * capability metadata). The provisional ladder follows the session/default
+	 * effort until live discovery verifies its controls. A request without an
+	 * effort goes out as non-reasoning (see
 	 * `withoutUnverifiedThinking`).
 	 */
 	unverified?: boolean;
@@ -1312,11 +1320,19 @@ export interface DevinCompat {
 	supportsParallelToolCalls?: boolean;
 	/** See {@link BedrockCompat.supportsSamplingParams}. */
 	supportsSamplingParams?: boolean;
+	/**
+	 * Smallest explicit `temperature` this wire accepts. Cascade rejects
+	 * `temperature: 0` with an opaque `invalid_argument` while any positive
+	 * value works, so callers that pin 0 for deterministic decoding (session
+	 * titles, memory extraction) would fail and silently fall back to another
+	 * model. Unset sends the caller's value through unchanged.
+	 */
+	temperatureFloor?: number;
 }
 
 /** Fully-resolved devin-agent compat view. */
-export type ResolvedDevinCompat = Required<Omit<DevinCompat, "supportsSamplingParams">> &
-	Pick<DevinCompat, "supportsSamplingParams">;
+export type ResolvedDevinCompat = Required<Omit<DevinCompat, "supportsSamplingParams" | "temperatureFloor">> &
+	Pick<DevinCompat, "supportsSamplingParams" | "temperatureFloor">;
 /**
  * Compatibility settings for the Google API family (google-generative-ai,
  * google-vertex, google-gemini-cli). Class-driven defaults come from the
@@ -1541,6 +1557,8 @@ export interface ModelAccountAccess {
 	 * Absent when the backend reported no program metadata.
 	 */
 	cyberPrograms?: readonly string[];
+	/** Codex service tiers advertised by this account; absent when not reported. */
+	serviceTiers?: readonly string[];
 	/**
 	 * Antigravity request constants this account's `fetchAvailableModels`
 	 * roster advertised, keyed by upstream SKU id. Takes precedence over
@@ -1573,7 +1591,7 @@ export interface AntigravityModelWireProfile {
 	/** Fixed `generationConfig.maxOutputTokens` the client always sends. */
 	maxOutputTokens?: number;
 	/** SKU thinking level; the native client sends it in preference to a budget. */
-	thinkingLevel?: "LOW" | "MEDIUM" | "HIGH";
+	thinkingLevel?: "LOW" | "MEDIUM" | "HIGH" | "xhigh";
 	/** SKU thinking budget (`-1` is dynamic), sent when no level is advertised. */
 	thinkingBudget?: number;
 }
@@ -1638,6 +1656,15 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * Fixed policy of a derived Codex catalog slug. Explicit slug policy wins
+	 * over ambient tier/context settings; the unsuffixed row retains legacy controls.
+	 */
+	codexVariant?: {
+		baseModelId: string;
+		serviceTier: "default" | "priority" | "ultrafast";
+		contextWindow: number;
+	};
 	/**
 	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
 	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
@@ -1907,6 +1934,7 @@ export interface Model<TApi extends Api = Api> {
 export interface ModelSpec<TApi extends Api = Api> extends Omit<
 	Model<TApi>,
 	| "compat"
+	| "reasoning"
 	| "identity"
 	| "compatConfig"
 	| "requiresGlyphTokenization"
@@ -1916,6 +1944,8 @@ export interface ModelSpec<TApi extends Api = Api> extends Omit<
 	| "supportsAssistantPrefill"
 	| "supportsComputerUseConfig"
 > {
+	/** Authored capability: undefined means no evidence; false explicitly rules out reasoning. */
+	reasoning?: boolean;
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
 	compat?: CompatConfigOf<TApi>;
 }

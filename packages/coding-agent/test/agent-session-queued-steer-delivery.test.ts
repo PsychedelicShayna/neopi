@@ -31,7 +31,6 @@ import { convertToLlm, type CustomMessage, USER_INTERRUPT_LABEL } from "@oh-my-p
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
-import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { type LiveDelegationDelivery, LiveSessionController } from "../src/live/controller";
 import type { LiveClientMessage, LiveServerEvent } from "../src/live/protocol";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../src/session/messages";
@@ -335,7 +334,7 @@ describe("AgentSession queued steer delivery", () => {
 		});
 		expect(session.agent.peekFollowUpQueue()[0]).toMatchObject({ attribution: "agent" });
 		expect(session.getQueuedMessages().followUp).toEqual(["spoken request"]);
-		expect(session.popLastQueuedMessage()).toEqual({ text: "spoken request", images: undefined });
+		expect(session.popLastQueuedMessage()).toMatchObject({ text: "spoken request", queue: "followUp" });
 		expect(session.popLastQueuedMessage()).toBeUndefined();
 		expect(session.clearQueue({ forInterrupt: true })).toEqual({ steering: [], followUp: [] });
 	});
@@ -437,7 +436,8 @@ describe("AgentSession queued steer delivery", () => {
 			expect(JSON.stringify(mock.calls[0]?.context.messages)).not.toContain("new spoken request");
 		} finally {
 			releaseOld.resolve();
-			await withTimeout(session.waitForIdle(), 2_000, "Queued request did not finish");
+			// The final answer relays on the run's terminal agent_end, which follows idle.
+			await withTimeout(session.waitForRunEnd(), 2_000, "Queued request did not finish");
 			await controller.stop();
 			unsubscribe();
 		}
@@ -788,9 +788,7 @@ describe("AgentSession queued steer delivery", () => {
 		await withTimeout(session.waitForIdle(), 2_000, "continuation did not finish");
 
 		expect(mock.calls.length).toBe(2);
-		expect(JSON.stringify(mock.calls[1].context.messages)).toContain(
-			JSON.stringify(manualContinuePrompt).slice(1, -1),
-		);
+		expect(mock.calls[1].context.messages.filter(message => message.role === "developer")).toHaveLength(1);
 		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "resumed" }]);
 		await resumed;
 	});
@@ -939,21 +937,23 @@ describe("AgentSession queued steer delivery", () => {
 	});
 
 	// Interrupt-and-send (empty Enter with a queued steer): the abort's own drain
-	// resumes the run, so its settle must not read as a stop — otherwise the UI
+	// resumes the run, so the interrupted loop only pauses it — otherwise the UI
 	// flips to idle (title, OSC 7501, loader) for one frame before the steer runs.
-	it("settles an interrupt non-terminally when a queued steer resumes the run", async () => {
+	it("pauses the run on an interrupt when a queued steer resumes it", async () => {
 		const { session } = await createSession([
 			{ content: ["slow response"], delayMs: 1_000 },
 			{ content: ["steered response"] },
 		]);
-		const settles: Array<boolean | undefined> = [];
+		const settles: string[] = [];
+		const runStates: string[] = [];
+		session.subscribeRunState(state => runStates.push(state));
 		const streaming = Promise.withResolvers<void>();
 		const steered = Promise.withResolvers<void>();
 		session.subscribe(event => {
 			if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
-			if (event.type !== "agent_end") return;
-			settles.push(event.isTerminal);
-			if (settles.length === 2) steered.resolve();
+			if (event.type !== "agent_end" && event.type !== "agent_pause") return;
+			settles.push(event.type);
+			if (event.type === "agent_end") steered.resolve();
 		});
 
 		const run = session.prompt("hello").catch(() => {});
@@ -963,7 +963,8 @@ describe("AgentSession queued steer delivery", () => {
 		await withTimeout(steered.promise, 2_000, "queued steer never resumed the run");
 		await run;
 
-		expect(settles).toEqual([false, true]);
+		expect(settles).toEqual(["agent_pause", "agent_end"]);
+		expect(runStates).toEqual(["running", "idle"]);
 	});
 
 	// A host driving the session to a result (the subagent executor) awaits the
@@ -1020,6 +1021,7 @@ describe("AgentSession queued steer delivery", () => {
 				pendingImages: [],
 				pendingImageLinks: [],
 				addToHistory: () => {},
+				clearSubmittedDraft: () => {},
 			},
 			withLocalSubmission: async (_text, submit) => submit(),
 			hasActiveBtw: () => false,
@@ -1135,13 +1137,13 @@ describe("AgentSession queued steer delivery", () => {
 		});
 	}
 
-	it("settles an interrupt terminally when nothing is queued to resume it", async () => {
+	it("ends the run on an interrupt when nothing is queued to resume it", async () => {
 		const { session } = await createSession([{ content: ["slow response"], delayMs: 1_000 }]);
-		const settles: Array<boolean | undefined> = [];
+		const settles: string[] = [];
 		const streaming = Promise.withResolvers<void>();
 		session.subscribe(event => {
 			if (event.type === "message_start" && event.message.role === "assistant") streaming.resolve();
-			if (event.type === "agent_end") settles.push(event.isTerminal);
+			if (event.type === "agent_end" || event.type === "agent_pause") settles.push(event.type);
 		});
 
 		const run = session.prompt("hello").catch(() => {});
@@ -1150,7 +1152,7 @@ describe("AgentSession queued steer delivery", () => {
 		await session.waitForIdle();
 		await run;
 
-		expect(settles).toEqual([true]);
+		expect(settles).toEqual(["agent_end"]);
 	});
 
 	it("dequeuing an ultrathink prompt mid-stream restores the text and drops its companion notice", async () => {
@@ -1549,6 +1551,41 @@ describe("AgentSession queued steer delivery", () => {
 			expect(session.removeQueuedMessage("/review raw", "followUp")).toBe(true);
 			expect(session.removeQueuedMessage("/review expanded", "followUp")).toBe(true);
 			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: ["keep"], liveSteered: 0 });
+		});
+
+		it.each(["prompt", "steer", "followUp"] as const)(
+			"expands original inline references once before %s queues a message",
+			async method => {
+				const { session } = await createSession(
+					[],
+					[
+						{ name: "first", description: "First", content: "/prompts:second", source: "(test)" },
+						{ name: "second", description: "Second", content: "SECOND", source: "(test)" },
+					],
+				);
+				const text = "Before /prompts:first then /prompts:second";
+				session.agent.state.isStreaming = true;
+				try {
+					if (method === "prompt") await session.prompt(text, { streamingBehavior: "steer" });
+					else if (method === "steer") await session.steer(text);
+					else await session.followUp(text);
+					const queued = session.getQueuedMessages();
+					expect(method === "followUp" ? queued.followUp : queued.steering).toEqual([
+						"Before /prompts:second then SECOND",
+					]);
+				} finally {
+					session.agent.state.isStreaming = false;
+				}
+			},
+		);
+
+		it("keeps inline references raw when follow-up expansion is disabled", async () => {
+			const { session } = await createSession(
+				[],
+				[{ name: "review", description: "Review", content: "REVIEW", source: "(test)" }],
+			);
+			await session.followUp("Keep /prompts:review", undefined, { expandPromptTemplates: false });
+			expect(session.getQueuedMessages().followUp).toEqual(["Keep /prompts:review"]);
 		});
 
 		it("removes a queued file-based slash command by its raw /cmd invocation", async () => {

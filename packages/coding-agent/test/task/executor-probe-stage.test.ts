@@ -30,12 +30,12 @@ function scriptedSession(script: (emit: (event: AgentSessionEvent) => void) => P
 	};
 	let aborted = false;
 	const session = {
-		...createSessionDefaults(),
+		...createSessionDefaults(emit),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
-		sessionManager: { appendSessionInit: () => {} },
+		sessionManager: { appendSessionInit: () => {}, getCwd: () => process.cwd() },
 		getActiveToolNames: () => ["bash", "yield"],
 		getEnabledToolNames: () => ["bash", "yield"],
 		getToolByName: () => undefined,
@@ -115,7 +115,7 @@ describe("executor completion-probe stage and tool results", () => {
 			index: 0,
 			id: `probe-stage-${Math.random().toString(36).slice(2)}`,
 			settings: Settings.isolated(),
-			modelRegistry: { refresh: async () => {} } as ModelRegistry,
+			modelRegistry: { refresh: async () => {}, getAvailable: () => [] } as unknown as ModelRegistry,
 			enableLsp: false,
 			eventBus: new EventBus(),
 			onProgress: progress => snapshots.push({ ...progress, recentTools: progress.recentTools.slice() }),

@@ -39,6 +39,7 @@ function harness(draft = "") {
 		session: { navigateTree },
 		editor: {
 			getText: () => editor.text,
+			getExpandedText: () => editor.text,
 			get pendingImages() {
 				return [];
 			},

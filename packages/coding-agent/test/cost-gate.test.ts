@@ -376,7 +376,7 @@ describe("cost gate in a running session", () => {
 		const api = "test-cost-gate-child";
 		const provider = scriptedProvider(api, [response(1.2)]);
 		const parent = await createSession(api, { "session.maxCost": 1 });
-		const child = await createSession(api, {}, { costGate: parent.costGate });
+		const child = await createSession(api, {}, { agentId: "CostChild", costGate: parent.costGate });
 
 		await child.prompt("child work");
 		await child.waitForIdle();

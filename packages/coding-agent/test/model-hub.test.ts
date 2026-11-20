@@ -2026,6 +2026,37 @@ describe("ModelHub", () => {
 			}
 		});
 
+		test("role fallback candidates honor the role's accepted model kinds", () => {
+			const chat = makeModel("test", "chat-model");
+			const image = makeModel("test", "image-model", 128_000, undefined, "image");
+			const { hub } = createHub({ models: [chat, image], scoped: true });
+
+			enterRolesView(hub);
+			hub.handleInput("f"); // add a fallback for the first role (default): model or pattern
+			hub.handleInput("\n"); // pick model
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("Adding fallback for");
+			expect(rendered).toContain("chat-model");
+			expect(rendered).not.toContain("image-model");
+		});
+
+		test("model-keyed fallback candidates are not filtered by a role", () => {
+			const chat = makeModel("test", "chat-model");
+			const image = makeModel("test", "image-model", 128_000, undefined, "image");
+			const { hub } = createHub({ models: [chat, image], scoped: true });
+
+			hub.handleInput("/");
+			for (const ch of "chat-model") hub.handleInput(ch);
+			hub.handleInput("\n"); // confirm the search
+			hub.handleInput("\n"); // open the strip for chat-model
+			hub.handleInput("G"); // retry-fallback
+			hub.handleInput(UP); // fallbacks:test/*
+			hub.handleInput("\n");
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("Adding fallback for test/*");
+			expect(rendered).toContain("image-model");
+		});
+
 		test("x removes a chain entry and Enter on an entry replaces it", () => {
 			const a = makeModel("test", "model-a");
 			const b = makeModel("test", "model-b");

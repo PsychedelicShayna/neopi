@@ -21,6 +21,8 @@ export interface SubcommandDef {
 export interface BuiltinSlashCommand {
 	name: string;
 	aliases?: string[];
+	/** Accepted aliases revealed by a literal prefix once no visible command name or alias shares it. */
+	hiddenAliases?: string[];
 	description: string;
 	/** Autocomplete type-indicator icon. Defaults to "action" (generic terminal glyph). */
 	icon?: SlashCommandIconName;
@@ -105,9 +107,9 @@ export interface SlashCommandRuntime {
 	refreshCommands: () => Promise<void> | void;
 	/**
 	 * Reload plugin state (caches, skills, slash command registry, project
-	 * registries) and re-emit available commands. Used by `/reload-plugins`,
-	 * `/move`, and `/marketplace`/`/plugins` mutations so the session sees a
-	 * consistent view after plugin or project-scope changes.
+	 * registries) and re-emit available commands. Used by `/reload-plugins`
+	 * and `/marketplace`/`/plugins` mutations so the session sees a consistent
+	 * view after plugin changes. `/move` re-scopes through `rescopeSessionToCwd`.
 	 */
 	reloadPlugins: () => Promise<void>;
 	/**

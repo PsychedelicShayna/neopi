@@ -25,7 +25,7 @@ export function SettingsForm({ spec, onChange, errors }: Props) {
 	}
 	function patchBudget(p: Partial<RoutineBudget>): void {
 		const next: RoutineBudget = { ...(spec.budget ?? {}), ...p };
-		// Drop empty keys so the YAML output stays clean.
+		// Drop empty keys so the TOML output stays clean.
 		const cleaned: RoutineBudget = {};
 		for (const [k, v] of Object.entries(next)) {
 			if (v !== undefined && v !== null) (cleaned as Record<string, unknown>)[k] = v;

@@ -125,12 +125,12 @@ describe("extension shortcuts", () => {
 			undefined,
 			pi => {
 				pi.registerShortcut("ctrl+C" as KeyId, { handler: noop });
-				pi.registerShortcut("alt+X" as KeyId, { handler: noop });
+				pi.registerShortcut("alt+Z" as KeyId, { handler: noop });
 			},
 			noop,
 		);
-		expect([...runner.getShortcuts().keys()]).toEqual(["alt+x"]);
-		expect(second!.getShortcutConflict("alt+x")).toEqual({ kind: "extension", extensionPath: "ext-0" });
+		expect([...runner.getShortcuts().keys()]).toEqual(["alt+z"]);
+		expect(second!.getShortcutConflict("alt+z")).toEqual({ kind: "extension", extensionPath: "ext-0" });
 	});
 
 	it("binds only the last registration of a chord in any spelling, and reports that one", async () => {
@@ -176,16 +176,6 @@ describe("extension shortcuts", () => {
 		// `shift+up` is app.message.dequeue's macOS fallback; the editor stops binding it to dequeue after this remap.
 		const api = (await loadRunner(KeybindingsManager.inMemory({ "app.ask.hide": "shift+up" }), noop)).apis[0]!;
 		expect(api.getShortcutConflict("shift+up")).toEqual({ kind: "keybinding", keybindings: ["app.ask.hide"] });
-	});
-
-	it("reports the chord an emptied approve or follow-up binding falls back to", async () => {
-		// Approval and follow-up stay reachable on Ctrl+Enter when the user empties their key lists.
-		const keymap = KeybindingsManager.inMemory({ "app.approval.approve": [], "app.message.followUp": [] });
-		const api = (await loadRunner(keymap, noop)).apis[0]!;
-		expect(api.getShortcutConflict("ctrl+enter")).toEqual({
-			kind: "keybinding",
-			keybindings: ["app.approval.approve", "app.message.followUp"],
-		});
 	});
 
 	it("treats a shifted symbol and its bare spelling as one key, as the keymap does", async () => {

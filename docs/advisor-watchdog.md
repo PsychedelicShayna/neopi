@@ -49,11 +49,19 @@ Without an effort suffix, advisors request `medium`, clamped to the model's supp
 
 ### Role activation sets
 
-Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Existing entries receive IDs on their first save in `/advisor configure`. Renaming preserves the ID. Copy the persisted ID from `WATCHDOG.yml` when declaring a role activation set.
+Each saved roster advisor has a hidden `id`. New advisors and clones get fresh IDs, even when their other fields match. Renaming preserves the ID. `/advisor configure` can select legacy entries for a role set: saving the set assigns IDs only to those selected entries, without repairing other rows or changing file gates.
 
 Duplicate IDs within one file emit a warning without hiding rows. Only the first row uses the shared ID during discovery. Saving in `/advisor configure` gives later duplicates fresh IDs and preserves each row's settings.
 
-Store the set alongside the role's other settings in the user settings file or the project's `.omp/config.yml`:
+Edit sets in `/advisor configure`: choose **User**, **Project .omp**, or **Session**, then a **Role:** row. The active role and roles that already have settings appear first, including roles with no remaining model assignment. Project-root `WATCHDOG.yml` is a roster source, not a role-settings store. Persisted session role settings live in the transcript artifact directory's `settings.yml`; sessions without a persistent transcript keep that layer in memory.
+
+Space/Enter check and uncheck advisors; `c` creates an empty set, Backspace clears the set back to ordinary settings/per-advisor flags, and `s` saves. A project or session clear masks an inherited role set with `null`. Editing an inherited set creates a local set in the selected scope. Ordinary `advisor.activationSet` values are diagnosed separately and never silently copied into a role draft.
+
+Rows show when a role set replaces an advisor's own enabled flag, when a whole-file gate still disables it, and when an ID is missing, out of scope, duplicated, or shadowed. Missing/out-of-scope references can be removed from those rows. The selected row shows its stable ID and exact source path. The per-advisor Enabled row also explains active-role overrides and links directly to the role-set editor without discarding unsaved file edits.
+
+Checkbox changes remain a draft until Save. Role settings use the normal settings persistence path and can update the active role immediately. Assigning legacy IDs also writes `WATCHDOG.yml`: normal main-session file watching automatically rediscovers saved roster changes after its debounce, so Save is **not** an apply barrier and may reconcile other already-saved roster edits. The editor does not invoke its explicit Apply callback while saving a role set; Apply (`a`) remains a manual reload, including for hosts without that watcher. The global advisor switch and whole-file gates are never changed by editing a role set.
+
+The equivalent configuration in the user settings file, project's `.omp/config.yml`, or session `settings.yml` is:
 
 ```yaml
 roleSettings:
@@ -62,7 +70,7 @@ roleSettings:
       - 0198ad12-6751-7455-b102-45e8fe384b9e
 ```
 
-User-scoped sets can reference user advisors only. Project-scoped sets can reference any advisor visible in that project. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
+User-scoped sets can reference user advisors only. Project- and session-scoped sets can reference any advisor visible in that project/session. A missing or out-of-scope reference produces a warning and is skipped without failing the role switch.
 
 Activation precedence is:
 
@@ -70,7 +78,7 @@ Activation precedence is:
 2. An explicit role activation set selects exactly its listed advisors, including entries whose own `enabled` flag is false. `[]` selects none.
 3. Without a set, each advisor's own `enabled` flag decides, including the legacy default when no roster exists. Omit the setting or use `null` to restore this behavior.
 
-Switching roles stops old-only advisors and starts new-only advisors. Advisors selected by both roles keep their running context and pending reviews. `/advisor status` explains the current activation policy. Activation-set editing belongs to the role editor, not the model picker.
+Switching roles stops old-only advisors and starts new-only advisors. Advisors selected by both roles keep their running context and pending reviews. `/advisor status` explains the current activation policy. Activation sets are edited inside `/advisor configure`, not the model picker.
 
 
 ### Backup reviewer
@@ -224,7 +232,7 @@ The threshold does not bypass stop/abort suppression, immunity, plan mode, or cl
 Session/client constraints can preserve a note whose normal delivery path is steering:
 
 - **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
-- **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
+- **ACP with deferred agent-initiated turns:** when the bridge reports `deferAgentInitiatedTurns` (no client prompt is open), an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
 
 The three delivery channels are **aside** (non-interrupting boundary delivery during immunity), **steer** (wait-mode steering or an allowed continuation), and **preserve** (a visible card without waking the primary). Advisor steering never cancels in-flight tools or generation.
 
@@ -452,13 +460,27 @@ A continuation an advisor delivery itself starts — a steer while the primary i
 
 ### Discovery locations
 
-`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user and project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root, or the home directory when no repo root is found. All discovered files load together. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
+`WATCHDOG.yml`/`WATCHDOG.yaml` have **four storage scopes**, exposed separately by `/advisor configure`:
 
-For compatibility, a `$HOME/WATCHDOG.yml` or `$HOME/.omp/WATCHDOG.yml` found by the ancestor walk remains **project scope**, not user scope. It applies to non-repository sessions beneath `$HOME`; inside a repository the walk stops at its root and does not reach `$HOME` unless that is the root itself. User scope specifically means the active agent directory. This display distinction does not change which rosters load.
+| Scope label | Source files | Stored source scope |
+| --- | --- | --- |
+| User | `<active agent dir>/WATCHDOG.yml` or `WATCHDOG.yaml` | `user` |
+| Project root | Standalone `WATCHDOG.yml`/`WATCHDOG.yaml` in the project/ancestor walk | `project` |
+| Project .omp | `.omp/WATCHDOG.yml`/`.omp/WATCHDOG.yaml` in the same ancestor walk | `project-omp` |
+| Session | `<current transcript artifact dir>/WATCHDOG.yml` or `WATCHDOG.yaml` | `session` |
+
+The user/project search reuses the `WATCHDOG.md` ancestor walk from `cwd` up to the repository root, or the home directory when no repository root exists. Session roster sources are appended afterward, so their matching IDs or legacy names override earlier files. All discovered roster files are listed, including disabled files and multiple ancestors in the same storage scope; editing targets the exact selected path. A more-specific file replaces an earlier entry with the same persisted ID, or the same name slug for legacy entries without IDs.
+
+Storage scope is separate from `advisors[].scope` (`main`, `subagent`, `all`), which controls which session kinds an advisor watches. It is also separate from [role-set persistence](#role-activation-sets): User, Project .omp, and Session have role settings, while project-root WATCHDOG is only a roster source. A shared discovery helper may call both project locations “project”; that coarse loader level is not the advisor editor's storage-scope vocabulary.
+
+Bulk enable/disable/invert changes only explicit advisor flags within the selected storage scope; it never flips a whole-file gate or touches another scope. Space remains the explicit per-file switch. An implicit default with no advisor row has no per-entry flag to change.
+
+For compatibility, a `$HOME/WATCHDOG.yml` found by the ancestor walk has `project` storage scope, while `$HOME/.omp/WATCHDOG.yml` has `project-omp`; neither becomes a User source merely because it is beneath `$HOME`. They apply to non-repository sessions beneath home. Inside a repository, the walk stops at its root and does not reach home unless home itself is that root. User scope specifically means the active agent directory. These labels do not change which rosters load.
 
 The main session watches these roster locations, including files created later in an existing or new `.omp` directory. Creating, editing, removing, or atomically replacing a file rediscovers the merged roster after a short debounce. Unchanged advisors keep their context; new or changed advisors start from the current transcript, and removed or disabled advisors stop. If the advisor subsystem is off, only its stored roster changes; the edit does not enable it. An unreadable file or malformed YAML leaves the previous live roster running, with a logged warning, until a subsequent valid edit.
 
 At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win identity collisions; top-level instructions still concatenate.
+
 ## Subagents
 
 Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:

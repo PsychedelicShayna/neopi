@@ -183,6 +183,11 @@ interface AskDialogOptions {
 	 * ignores the key.
 	 */
 	passthrough?(keyData: string): boolean;
+	/**
+	 * Hands the keyboard to the composer below the dialog: ↓ past the last answer, Tab past the last
+	 * tab, or hiding the question. The question stays pending.
+	 */
+	releaseKeys?(): void;
 }
 
 interface QuestionState {
@@ -644,8 +649,6 @@ export class AskDialogComponent implements Component {
 	#overflowLayouts = new WeakMap<ExtensionAskDialogQuestion, Set<string>>();
 	#expanded = false;
 	#contentWidth = 76;
-	#headerExpandable = false;
-	#descExpandable = false;
 	/** Collapsed to one line (`app.ask.hide` / the Hide button) while the question stays pending. */
 	#hidden = false;
 	/** Memoized native description; dropped whenever dialog state may have changed. */
@@ -767,11 +770,12 @@ export class AskDialogComponent implements Component {
 		this.#native = undefined;
 		if (keyData !== "n" && keyData !== "N") this.#justAnswered = undefined;
 		const inputGuard = this.options.inputGuard;
+		// The composer owns typing while a draft holds it or the question is hidden; the keys are then the
+		// composer's, Esc included, so it never cancels a question the user is not looking at.
+		const composerOwns = inputGuard !== undefined && (this.#guardBlocks() || this.#hidden);
 		// Proxied draft text wins over remapped menu actions.
-		if (inputGuard && (this.#guardBlocks() || this.#hidden) && extractPrintableText(keyData) !== undefined) {
-			this.#keys.reset();
-			inputGuard.handleInput(keyData);
-			this.#requestRender();
+		if (composerOwns && extractPrintableText(keyData) !== undefined) {
+			this.#toComposer(keyData);
 			return;
 		}
 		if (!this.#guardBlocks() && !this.#hidden && this.#help.handleInput(keyData)) {
@@ -783,12 +787,17 @@ export class AskDialogComponent implements Component {
 			this.#keys.reset();
 			return;
 		}
-		if (matchesSelectCancel(keyData)) {
+		if (getKeybindings().matches(keyData, "app.ask.cancel")) {
 			this.#finishCancel();
 			return;
 		}
+		if (matchesSelectCancel(keyData)) {
+			if (composerOwns) this.#toComposer(keyData);
+			else this.#finishCancel();
+			return;
+		}
 		if (getKeybindings().matches(keyData, "app.ask.hide")) {
-			this.#setHidden(!this.#hidden);
+			this.setHidden(!this.#hidden);
 			return;
 		}
 		// Expand before the draft-input guard so the expansion action can reveal a truncated
@@ -806,25 +815,26 @@ export class AskDialogComponent implements Component {
 				this.#releaseGuard();
 				return;
 			}
-			inputGuard?.handleInput(keyData);
-			this.#requestRender();
+			this.#toComposer(keyData);
 			return;
 		}
 		if (this.#hidden) {
 			this.#keys.reset();
-			// Hidden, the question waits and the composer takes the typing; Enter on
-			// an empty composer brings the question back.
+			// Hidden, the question waits and the composer takes the typing; Enter brings the question back.
 			if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-				this.#setHidden(false);
-			} else if (inputGuard) {
-				inputGuard.handleInput(keyData);
-				this.#requestRender();
-			}
+				this.setHidden(false);
+			} else this.#toComposer(keyData);
 			return;
 		}
 		const action = this.#keys.read(keyData);
 		if (action === "pending") return;
 		if (action && (action.kind === "context" || action.kind === "horizontal")) {
+			// Tab past the last tab (the Review tab, or the only question) goes down to the composer.
+			const onLastTab = !this.#hasSubmitTab() || this.#isSubmitTab();
+			if (action.kind === "context" && action.delta > 0 && onLastTab && this.options.releaseKeys) {
+				this.#releaseKeys();
+				return;
+			}
 			if (this.#hasSubmitTab()) {
 				this.#switchTab(action.delta);
 				this.#requestRender();
@@ -832,8 +842,53 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (this.#isSubmitTab()) {
-			if (action) this.#handleSubmitTabInput(action);
+			if (action && action.kind !== "search") this.#handleSubmitTabInput(action);
+			// Printable text the review has no use for starts (or continues) the composer's draft.
+			else if (extractPrintableText(keyData) !== undefined) this.#toComposer(keyData);
 		} else this.#handleQuestionInput(keyData, action);
+	}
+
+	/** Whether the question is collapsed to one line (`app.ask.hide`) while it stays pending. */
+	get hidden(): boolean {
+		return this.#hidden;
+	}
+
+	/**
+	 * Collapses the question to one line or shows it again. Hiding hands the keys to the composer
+	 * ({@link AskDialogOptions.releaseKeys}); the question stays pending either way.
+	 */
+	setHidden(hidden: boolean): void {
+		if (this.#hidden === hidden) return;
+		this.#keys.reset();
+		this.#nativeScroll = undefined;
+		this.#hidden = hidden;
+		this.#countdown?.reset();
+		this.#requestRender();
+		if (hidden) this.options.releaseKeys?.();
+	}
+
+	/**
+	 * The host brought the keys to the question because the user asked for it (↑ from the composer,
+	 * Shift+Tab, `app.ask.hide`): it shows again, and a composer draft no longer holds typing.
+	 */
+	engage(): void {
+		this.#guardReleased = true;
+		this.#native = undefined;
+		this.setHidden(false);
+		this.#requestRender();
+	}
+
+	/** A key that belongs to the composer: the input guard takes it there. */
+	#toComposer(keyData: string): void {
+		this.#keys.reset();
+		this.options.inputGuard?.handleInput(keyData);
+		this.#requestRender();
+	}
+
+	#releaseKeys(): void {
+		this.#keys.reset();
+		this.options.releaseKeys?.();
+		this.#requestRender();
 	}
 
 	render(width: number): readonly string[] {
@@ -851,27 +906,34 @@ export class AskDialogComponent implements Component {
 		// available within the existing height cap.
 		const totalRows = this.#dialogHeight(innerWidth, process.stdout.rows || 40);
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
-		const maxTitleRows = Math.max(1, totalRows - 5 - MIN_BODY_ROWS - tabBarRows);
-		const headerLines = this.#renderHeader(innerWidth, maxTitleRows);
-		// top border (1) + header(N) + two dividers + footer(1) + bottom
-		// border (1) = N + 5 fixed rows outside the body. Without the bottom
-		// border term the dialog overflowed the viewport by one row
-		// (PRRT_kwDOQxs0bc6OFbDY).
-		const hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
-		const fixedRows = 1 + headerLines.length + 1 + 1 + hintRows + 1;
-		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
-		this.#bodyRows = bodyRows;
-		const bodyLines = this.#isSubmitTab()
-			? this.#renderSubmitBody(innerWidth, bodyRows)
-			: this.#renderQuestionBody(innerWidth, bodyRows);
-		const footer = this.#footerHintText(bodyLines.indicator);
+		let hintRows = menuHintLines(this.#footerHintText(""), innerWidth, this.#guardBlocks() ? "" : undefined).length;
+		let headerLines: string[];
+		let bodyLines: RenderedList;
+		let footerLines: string[];
+		for (;;) {
+			// Borders and dividers cost four rows; the footer may wrap independently on each tab.
+			const maxTitleRows = Math.max(1, totalRows - 4 - hintRows - MIN_BODY_ROWS - tabBarRows);
+			headerLines = this.#renderHeader(innerWidth, maxTitleRows);
+			const fixedRows = 4 + headerLines.length + hintRows;
+			const bodyRows = Math.max(1, totalRows - fixedRows);
+			this.#bodyRows = bodyRows;
+			bodyLines = this.#isSubmitTab()
+				? this.#renderSubmitBody(innerWidth, bodyRows)
+				: this.#renderQuestionBody(innerWidth, bodyRows);
+			footerLines = menuHintLines(
+				this.#footerHintText(bodyLines.indicator),
+				innerWidth,
+				this.#guardBlocks() ? "" : undefined,
+			);
+			if (footerLines.length <= hintRows) break;
+			hintRows = footerLines.length;
+		}
 		this.#panel.title = this.#titleText();
 		this.#headerRegion.setLines(headerLines);
 		this.#bodyRegion.setLines(bodyLines.lines);
-		this.#bodyRegion.setHeight(bodyRows);
-		this.#footerRegion.setLines(
-			menuHintLines(footer, innerWidth, this.#guardBlocks() ? "" : undefined).map(line => theme.fg("dim", line)),
-		);
+		this.#bodyRegion.setHeight(this.#bodyRows);
+		this.#footerRegion.setLines(footerLines.map(line => theme.fg("dim", line)));
+		this.#footerRegion.setHeight(hintRows);
 		return this.#help.render(this.#panel.render(width), width);
 	}
 
@@ -989,7 +1051,8 @@ export class AskDialogComponent implements Component {
 			...(hideKey ? { keys: hideKey } : {}),
 			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		// Hidden, the composer holds the keys and Esc is its own: the ask's cancel key skips.
+		const cancelKey = getKeybindings().getKeys("app.ask.cancel")[0];
 		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
@@ -1104,7 +1167,8 @@ export class AskDialogComponent implements Component {
 	 * shows its hint in place of the answer actions.
 	 */
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		// While a draft owns typing, Esc is the composer's: the ask's cancel key skips.
+		const cancelKey = getKeybindings().getKeys(blocked ? "app.ask.cancel" : "tui.select.cancel")[0];
 		const skip = actionButton("Skip", "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
@@ -1167,7 +1231,7 @@ export class AskDialogComponent implements Component {
 				return;
 			}
 			if (event.act === "hide" || event.act === "show") {
-				this.#setHidden(event.act === "hide");
+				this.setHidden(event.act === "hide");
 				return;
 			}
 			if (this.#hidden) return;
@@ -1320,7 +1384,9 @@ export class AskDialogComponent implements Component {
 	 *  size is stable for the dialog's lifetime at a given terminal size. */
 	#measureHeight(width: number, termRows: number): number {
 		const maxHeight = Math.max(MIN_DIALOG_ROWS, Math.floor(termRows * DIALOG_HEIGHT_RATIO));
-		const chrome = 5; // topBorder + divider + divider + footer + bottomBorder
+		const chromeRows = (question: ExtensionAskDialogQuestion | undefined, submit: boolean): number =>
+			4 +
+			menuHintLines(this.#footerHintText("", question, submit), width, this.#guardBlocks() ? "" : undefined).length;
 		const tabBarRows = this.#hasSubmitTab() ? 1 : 0;
 		const mdTheme = getMarkdownTheme();
 		let needed = MIN_DIALOG_ROWS;
@@ -1348,13 +1414,13 @@ export class AskDialogComponent implements Component {
 				return total;
 			};
 			const body = listRows(width);
-			needed = Math.max(needed, chrome + headerRows + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(question, false) + headerRows + Math.max(MIN_BODY_ROWS, body));
 		}
 		if (this.#hasSubmitTab()) {
 			// Warning line + blank, one summary line per question, blank, and
 			// the Submit row; note lines added later scroll within the body.
 			const body = 2 + this.#questions.length + 2;
-			needed = Math.max(needed, chrome + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
+			needed = Math.max(needed, chromeRows(undefined, true) + tabBarRows + 1 + Math.max(MIN_BODY_ROWS, body));
 		}
 		return Math.min(needed, maxHeight);
 	}
@@ -1362,15 +1428,6 @@ export class AskDialogComponent implements Component {
 	#titleText(): string {
 		const title = this.#remainingSeconds === undefined ? "Ask" : `Ask (${this.#remainingSeconds}s)`;
 		return this.#isSubmitTab() ? title : `${title} · a add option note · A edit latest`;
-	}
-
-	#setHidden(hidden: boolean): void {
-		if (this.#hidden === hidden) return;
-		this.#keys.reset();
-		this.#nativeScroll = undefined;
-		this.#hidden = hidden;
-		this.#countdown?.reset();
-		this.#requestRender();
 	}
 
 	/** True while a draft that predates the dialog still owns typing. */
@@ -1396,19 +1453,14 @@ export class AskDialogComponent implements Component {
 		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
 	}
 
-	/** Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to bring it back. */
+	/**
+	 * Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to
+	 * bring it back. The composer holds the keys meanwhile, so the hints name the keys that work from there.
+	 */
 	#renderHidden(width: number): readonly string[] {
-		const hideKey = editorKey("app.ask.hide");
-		const enter = formatKeyHint("enter");
-		const inputGuard = this.options.inputGuard;
-		const blocked = this.#guardBlocks();
-		// While a draft owns input, Enter goes to the draft, so only the hide key restores.
-		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
-		const hints: string[] = [];
-		if (blocked && inputGuard) hints.push(this.#guardHint(inputGuard));
-		else if (inputGuard) hints.push("type to write a message");
-		if (show) hints.push(`${show} show`);
-		hints.push(`${editorKey("tui.select.cancel")} cancel`);
+		const showKey = editorKey("app.ask.hide");
+		const cancelKey = editorKey("app.ask.cancel");
+		const hints = [showKey && `${showKey} show`, cancelKey && `${cancelKey} cancel`].filter(Boolean);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
 		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
 		const question = this.#questions[this.#currentQuestionIndex()];
@@ -1457,51 +1509,52 @@ export class AskDialogComponent implements Component {
 			lines.push(...this.#tabBar.render(width));
 		}
 		if (this.#isSubmitTab()) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
 			lines.push(theme.bold(theme.fg("accent", "Review answers")));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
 		const question = this.#questions[questionIndex];
-		if (!question) {
-			this.#headerExpandable = false;
-			this.#descExpandable = false;
-			return lines;
-		}
-		const wrapped = wrapQuestionTitle(question, width);
-		this.#headerExpandable = wrapped.length > MAX_HEADER_ROWS;
-		this.#descExpandable = questionDescriptionsOverflow(question, width);
-		const maxRows = this.#expanded ? maxTitleRows : MAX_HEADER_ROWS;
+		if (!question) return lines;
+		const maxRows = this.#expanded ? maxTitleRows : Math.min(MAX_HEADER_ROWS, maxTitleRows);
 		lines.push(...renderQuestionTitle(question, width, maxRows));
 		return lines;
 	}
 
-	#expandHint(): string {
-		if (!this.#headerExpandable && !this.#descExpandable) return "";
+	#expandHint(question = this.#questions[this.#currentQuestionIndex()]): string {
+		if (
+			!question ||
+			(wrapQuestionTitle(question, this.#contentWidth).length <= MAX_HEADER_ROWS &&
+				!questionDescriptionsOverflow(question, this.#contentWidth))
+		)
+			return "";
 		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
 	}
 
-	#footerHintText(indicator: string): string {
+	#footerHintText(
+		indicator: string,
+		question = this.#questions[this.#currentQuestionIndex()],
+		submit = this.#isSubmitTab(),
+	): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
 		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
-		if (this.#isSubmitTab()) {
+		// While the draft owns typing, Esc is the composer's: the ask's own cancel key cancels.
+		if (inputGuard && this.#guardBlocks())
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${editorKey("app.ask.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
+		if (submit) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
 		}
-		const question = this.#questions[this.#currentQuestionIndex()];
 		// Enter advances in multi-question dialogs and submits single-question ones.
 		const enterAction = this.#questions.length > 1 ? "next" : "submit";
 		const action = question?.multi
 			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
 			: `${enter} select · ${formatKeyHint("n")} note`;
 		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
-		const expand = this.#expandHint();
+		const expand = this.#expandHint(question);
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
 			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
@@ -1595,6 +1648,16 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (action?.kind === "move" || action?.kind === "boundary") {
+			// ↓ past the last answer goes down to the composer.
+			if (
+				action.kind === "move" &&
+				action.delta > 0 &&
+				state.cursorIndex >= rows.length - 1 &&
+				this.options.releaseKeys
+			) {
+				this.#releaseKeys();
+				return;
+			}
 			state.cursorIndex =
 				action.kind === "move"
 					? clamp(state.cursorIndex + action.delta, 0, Math.max(0, rows.length - 1))
@@ -1617,8 +1680,11 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (action?.kind === "confirm") this.#commitRow(question, state, rowItem, true);
-		else if (action?.kind === "toggle" && question.multi && rowItem.kind === "option") {
-			this.#commitRow(question, state, rowItem, false);
+		else if (action?.kind === "toggle") {
+			if (question.multi && rowItem.kind === "option") this.#commitRow(question, state, rowItem, false);
+		} else if (extractPrintableText(keyData) !== undefined) {
+			// Printable text the question has no use for starts (or continues) the composer's draft.
+			this.#toComposer(keyData);
 		}
 	}
 
@@ -1667,7 +1733,11 @@ export class AskDialogComponent implements Component {
 			return;
 		}
 		if (this.#submitLayoutDirty) this.render(this.#contentWidth + 4);
-		if (!this.#submitView?.handleMenuAction(action)) return;
+		if (!this.#submitView?.handleMenuAction(action)) {
+			// ↓ past the end of the review goes down to the composer.
+			if (action.kind === "move" && action.delta > 0 && this.options.releaseKeys) this.#releaseKeys();
+			return;
+		}
 		this.#submitScrollOffset = this.#submitView.getScrollOffset();
 		this.#queueNativeScroll(action, "review");
 		this.#requestRender();

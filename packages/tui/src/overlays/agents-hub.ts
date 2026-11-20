@@ -114,7 +114,6 @@ type StripState =
 	| (HubStripState<StripChip> & { kind: "chips"; agent: HubAgent; property?: PropertyKind })
 	| { kind: "pattern"; agent: HubAgent; property: PropertyKind; input: Input };
 
-
 /** Runtime-owned discovery, settings, generation and persistence. */
 export interface AgentsHubDeps {
 	browserSource: ModelBrowserSource;
@@ -129,7 +128,11 @@ export interface AgentsHubDeps {
 	/** Persist one agent's override for `property`; `undefined` clears it. Other agents are untouched. */
 	setAgentOverride: (property: PropertyKind, name: string, value: string | undefined) => void;
 	editor: Omit<AgentEditorDeps, "existing" | "save">;
-	saveDefinition: (scope: "project" | "user", definition: AgentDefinitionDraft, original?: HubAgent) => Promise<string>;
+	saveDefinition: (
+		scope: "project" | "user",
+		definition: AgentDefinitionDraft,
+		original?: HubAgent,
+	) => Promise<string>;
 	dispose?: () => void;
 }
 
@@ -159,7 +162,6 @@ interface AgentsHubNavigationSnapshot {
 	};
 	create?: { definition: AgentDefinitionDraft; original?: HubAgent };
 }
-
 
 /** Stable native list-item id of an agent-list row. */
 function listRowId(rowDef: ListRow): string {
@@ -276,7 +278,7 @@ export class AgentsHubComponent implements Component {
 		this.#deps = deps;
 		this.#callbacks = callbacks;
 		this.#browser = new ModelBrowser(deps.browserSource, {
-			emptyText: () => "  No models available — configure a provider in /models first.",
+			emptyText: () => "  No models available — configure a provider in /roles first.",
 		});
 		this.#browser.setShowProvider(true);
 		this.#browser.onActivate = item => this.#commitPickedModel(item);
@@ -671,19 +673,25 @@ export class AgentsHubComponent implements Component {
 		this.#keys.reset();
 		this.#editingOriginal = agent;
 		this.#definitionEditor?.dispose();
-		this.#definitionEditor = new AgentDefinitionEditor(this.#tui, {
-			...this.#deps.editor,
-			existing: this.#allAgents,
-			saveScopeEditable: !agent?.filePath || agent.source === "bundled",
-			save: async (definition, scope) => {
-				const filePath = await this.#deps.saveDefinition(scope, definition, agent);
-				this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
-				await this.#reload();
+		this.#definitionEditor = new AgentDefinitionEditor(
+			this.#tui,
+			{
+				...this.#deps.editor,
+				existing: this.#allAgents,
+				saveScopeEditable: !agent?.filePath || agent.source === "bundled",
+				save: async (definition, scope) => {
+					const filePath = await this.#deps.saveDefinition(scope, definition, agent);
+					this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
+					await this.#reload();
+				},
 			},
-		}, draft ?? agent ?? { name: "", description: "", systemPrompt: "" }, () => {
-			this.#clearCreateFlow();
-			this.#requestRender();
-		}, agent?.source === "user" ? "user" : "project");
+			draft ?? agent ?? { name: "", description: "", systemPrompt: "" },
+			() => {
+				this.#clearCreateFlow();
+				this.#requestRender();
+			},
+			agent?.source === "user" ? "user" : "project",
+		);
 		if (!this.#restoringNavigation) this.onNavigationVisit?.("definition", previous);
 		this.#requestRender();
 	}
@@ -1221,7 +1229,9 @@ export class AgentsHubComponent implements Component {
 	 * chooses its sheet mode according to the currently focused form or text dialog.
 	 */
 	nativeSheet(cx: DescribeContext): boolean {
-		return this.#definitionEditor ? this.#definitionEditor.nativeSheet(cx) : cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
+		return this.#definitionEditor
+			? this.#definitionEditor.nativeSheet(cx)
+			: cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
 	}
 
 	describe(cx: DescribeContext): NativeNode {
@@ -1251,7 +1261,10 @@ export class AgentsHubComponent implements Component {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#definitionEditor) { this.#definitionEditor.handleNativeEvent(event); return; }
+		if (this.#definitionEditor) {
+			this.#definitionEditor.handleNativeEvent(event);
+			return;
+		}
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
 		const pick = pickerEvent(event);
 		if (pick) {
@@ -1735,7 +1748,12 @@ export class AgentsHubComponent implements Component {
 				cancel("cancel"),
 			];
 		}
-		if (this.#createActive) return [{ keys: ["r"], label: "generate field" }, { keys: ["shift+r"], label: "generate with comment" }, cancel("back")];
+		if (this.#createActive)
+			return [
+				{ keys: ["r"], label: "generate field" },
+				{ keys: ["shift+r"], label: "generate with comment" },
+				cancel("back"),
+			];
 		if (this.#search.focused) return [cancel("back to list")];
 		if (this.#focus === "scope") {
 			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
@@ -1821,7 +1839,9 @@ export class AgentsHubComponent implements Component {
 						parent: this.#assignParent,
 					}
 				: undefined,
-			create: this.#definitionEditor ? { definition: this.#definitionEditor.definition, original: this.#editingOriginal } : undefined,
+			create: this.#definitionEditor
+				? { definition: this.#definitionEditor.definition, original: this.#editingOriginal }
+				: undefined,
 		};
 	}
 

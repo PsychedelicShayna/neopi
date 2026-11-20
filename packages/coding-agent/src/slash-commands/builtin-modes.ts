@@ -392,62 +392,25 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "model",
-		aliases: ["models"],
+		name: "roles",
+		hiddenAliases: ["models"],
 		icon: "model",
-		description: "Switch model for this session",
-		acpDescription: "Show current model selection",
+		description: "Configure model roles",
 		allowArgs: true,
 		inlineHint: "[session|project|global]",
-		getTuiAutocompleteDescription: runtime => {
-			const model = runtime.ctx.viewSession.model;
-			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
-		},
-		handle: async (command, runtime) => {
-			if (command.args) {
-				const selector = command.args.trim();
-				const resolved = resolveSessionModelSelector(selector, runtime.session, runtime.settings);
-				const match = resolved.model;
-				if (!match) {
-					return usage(
-						`Unknown model: ${selector}. Use ACP \`session/setModel\` for picker-driven selection or list available models with /model.`,
-						runtime,
-					);
-				}
-				try {
-					await runtime.session.setModel(match);
-					if (resolved.thinkingLevel !== undefined) runtime.session.setThinkingLevel(resolved.thinkingLevel);
-					await runtime.output(`Model set to ${match.provider}/${match.id}.`);
-					await runtime.notifyTitleChanged?.();
-					await runtime.notifyConfigChanged?.();
-					return commandConsumed();
-				} catch (err) {
-					return usage(`Failed to set model: ${errorMessage(err)}`, runtime);
-				}
-			}
-
-			const model = runtime.session.model;
-			await runtime.output(
-				model ? `Current model: ${model.provider}/${model.id}` : "No model is currently selected.",
-			);
-			return commandConsumed();
-		},
 		handleTui: (command, runtime) => {
-			if (command.name === "model") {
-				runtime.ctx.showModelSelector({ sessionOnly: true });
-			} else {
-				const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
-				if (scope !== "session" && scope !== "project" && scope !== "global") {
-					runtime.ctx.showError("Usage: /models [session|project|global]");
-					return;
-				}
-				runtime.ctx.showModelSelector({ scope });
+			const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
+			if (scope !== "session" && scope !== "project" && scope !== "global") {
+				runtime.ctx.showError("Usage: /roles [session|project|global]");
+				return;
 			}
+			runtime.ctx.showModelSelector({ scope });
 			clearSubmittedText(runtime);
 		},
 	},
 	{
-		name: "switch",
+		name: "model",
+		hiddenAliases: ["switch"],
 		icon: "swap",
 		get description() {
 			return `Switch model for this session (same as ${formatKeyHint("alt+p")}); accepts fuzzy ids, provider/id, @role, :level`;

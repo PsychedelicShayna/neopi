@@ -145,6 +145,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 					action: "Pick an extension link on screen by its tag; press again to browse the whole transcript",
 				},
 				{ keys: [act("app.ask.hide")], action: "Hide/show a pending ask question" },
+				{ keys: [act("app.ask.cancel")], action: "Cancel a pending ask question (Esc does only inside it)" },
 				{ keys: [act("app.ask.note")], action: "Add or edit a note on an ask option" },
 				{ keys: [act("app.approval.approve")], action: "Approve a pending tool call" },
 				{ keys: [act("app.thinking.toggle")], action: "Toggle thinking block visibility" },
@@ -309,7 +310,14 @@ export class HotkeysSheetComponent implements Component {
 					actionBar([
 						close,
 						null,
-						text([span(getMenuSearchVimMode() ? "? help   jk gg/G C-u d e y PgUp/PgDn" : "? help   ↑/↓ Home/End PgUp/PgDn", "dim")]),
+						text([
+							span(
+								getMenuSearchVimMode()
+									? "? help   jk gg/G C-u d e y PgUp/PgDn"
+									: "? help   ↑/↓ Home/End PgUp/PgDn",
+								"dim",
+							),
+						]),
 					]),
 				],
 				{ gap: "lg" },

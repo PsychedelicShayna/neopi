@@ -575,9 +575,10 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			if (parked?.session && !park.detached && park.cancel()) {
 				await park.promise;
 				const keptRef = this.#registry.get(id);
-				const kept = keptRef && keptRef === initial && keptRef.status !== "aborted" && !isAgentTranscriptReadOnly(keptRef)
-					? keptRef.session
-					: null;
+				const kept =
+					keptRef && keptRef === initial && keptRef.status !== "aborted" && !isAgentTranscriptReadOnly(keptRef)
+						? keptRef.session
+						: null;
 				if (kept) {
 					// Park cleared the idle timer; re-arm so TTL park still works.
 					const adopted = this.#adopted.get(id);

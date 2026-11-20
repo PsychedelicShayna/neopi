@@ -52,10 +52,15 @@ const veryMagicFixtures: RegexFixture[] = [
 function expectNeovimAgreement(fixtures: readonly RegexFixture[], mode: string): void {
 	const cases = fixtures.map(({ pattern, texts }) => ({ pattern: `\\v${mode}${pattern}`, texts }));
 	const lua = `lua vim.o.ignorecase=true; local cases=vim.json.decode([==[${JSON.stringify(cases)}]==]); local out={}; for _,c in ipairs(cases) do local values={}; for _,s in ipairs(c.texts) do table.insert(values,vim.fn.match(s,c.pattern)>=0) end; table.insert(out,values) end; io.stdout:write(vim.json.encode(out))`;
-	const process = Bun.spawnSync(["nvim", "--headless", "-u", "NONE", "-i", "NONE", "-c", lua, "-c", "qa!"], { stdout: "pipe", stderr: "pipe" });
+	const process = Bun.spawnSync(["nvim", "--headless", "-u", "NONE", "-i", "NONE", "-c", lua, "-c", "qa!"], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
 	expect(process.exitCode).toBe(0);
 	const expected = JSON.parse(process.stdout.toString()) as boolean[][];
-	const actual = fixtures.map(({ pattern, texts }) => texts.map(text => compileMenuRegex(`/${mode}${pattern}`)?.regex?.test(text)));
+	const actual = fixtures.map(({ pattern, texts }) =>
+		texts.map(text => compileMenuRegex(`/${mode}${pattern}`)?.regex?.test(text)),
+	);
 	expect(actual).toEqual(expected);
 }
 
@@ -76,11 +81,17 @@ describe("Vim regex differential fixtures", () => {
 		expect(texts.map(text => compiled?.regex?.test(text))).toEqual(matches);
 	});
 
-	it.skipIf(Bun.which("nvim") === null)("agrees with very-magic-prefixed Neovim without a default-magic override", () => {
-		expectNeovimAgreement(veryMagicFixtures, "");
-	});
+	it.skipIf(Bun.which("nvim") === null)(
+		"agrees with very-magic-prefixed Neovim without a default-magic override",
+		() => {
+			expectNeovimAgreement(veryMagicFixtures, "");
+		},
+	);
 
-	it.each([String.raw`/\q`, "/%d65", "/@>", "/[[:unknown:]]", "/[[:__proto__:]]"])("rejects unsupported atoms rather than silently literalizing %s", pattern => {
-		expect(compileMenuRegex(pattern)?.error).toContain("Unsupported");
-	});
+	it.each([String.raw`/\q`, "/%d65", "/@>", "/[[:unknown:]]", "/[[:__proto__:]]"])(
+		"rejects unsupported atoms rather than silently literalizing %s",
+		pattern => {
+			expect(compileMenuRegex(pattern)?.error).toContain("Unsupported");
+		},
+	);
 });

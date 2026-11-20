@@ -294,7 +294,10 @@ export class LiveCommandController {
 		}
 	}
 
-	async #start(voice: string = cfgLiveVoice.get(this.#ctx.settings), remote?: ExtensionLiveStartOptions): Promise<LiveStartOutcome> {
+	async #start(
+		voice: string = cfgLiveVoice.get(this.#ctx.settings),
+		remote?: ExtensionLiveStartOptions,
+	): Promise<LiveStartOutcome> {
 		if (this.#session) throw new Error("A live session is already active");
 		this.#model = cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
@@ -330,9 +333,12 @@ export class LiveCommandController {
 				force: cfgLiveForceDelegateKeyword.get(this.#ctx.settings),
 				silenceMs: cfgLiveSubmitSilenceMs.get(this.#ctx.settings),
 			}),
-			composerText: expanded => this.#ctx.editor.chainLocked
-				? undefined
-				: expanded ? this.#ctx.editor.getExpandedText() : this.#ctx.editor.getText(),
+			composerText: expanded =>
+				this.#ctx.editor.chainLocked
+					? undefined
+					: expanded
+						? this.#ctx.editor.getExpandedText()
+						: this.#ctx.editor.getText(),
 			captureComposerExcludingTurns: turns => {
 				const ids = turns.flatMap(turn => {
 					const id = this.#committedSpeech.get(turn);
@@ -340,8 +346,10 @@ export class LiveCommandController {
 				});
 				const editor = this.#ctx.editor;
 				const mediaTokens = [...editor.getText().matchAll(COMPOSER_TOKEN_REGEX)]
-					.filter(match => match[1] === "Image" || match[1] === "Video" ||
-						(!match[1] && chipLabelKind(match[0]) !== "paste"))
+					.filter(
+						match =>
+							match[1] === "Image" || match[1] === "Video" || (!match[1] && chipLabelKind(match[0]) !== "paste"),
+					)
 					.map(match => match[0]);
 				const captured = editor.captureTextWithoutUtterances(ids, mediaTokens);
 				const voiceOnlyTurns = turns.filter(turn => {
@@ -349,8 +357,9 @@ export class LiveCommandController {
 					return id !== undefined && captured.excludedIds.includes(id);
 				});
 				const force = stripLiveKeyword(captured.text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
-				const routingText = force.matched ? force.text :
-					stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
+				const routingText = force.matched
+					? force.text
+					: stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
 				return {
 					receipt: {
 						id: captured.receipt,

@@ -30,7 +30,6 @@ import { agentsThreadService } from "../../src/thread/services/agents";
 import { asyncJobsThreadService } from "../../src/thread/services/async-jobs";
 import { authService } from "../../src/thread/services/auth";
 import { identityThreadService } from "../../src/thread/services/identity";
-import { getApprovalGrants } from "../../src/tools/approval-cache";
 
 /** What the worker-side session reports about itself. */
 export interface FocusSessionReport {
@@ -67,10 +66,6 @@ export interface FocusProbe {
 	/** Register a real root-owned job whose body waits in this worker for cancellation. */
 	startIdleJob(id: string): Promise<string>;
 	progressIdleJob(jobId: string, text: string): Promise<void>;
-	/** Approve approval scope `key` for the rest of the session, as its extension wrapper does. */
-	grantSessionApproval(id: string, key: string): Promise<void>;
-	/** Remember `always-ask-cached` grant `key` in the session's conversation tier. */
-	recordSessionGrant(id: string, key: string): Promise<void>;
 	/** Drop every queued follow-up for good, as queue editing does. */
 	dropFollowUps(id: string): Promise<void>;
 }
@@ -202,22 +197,27 @@ const probe: FocusProbe = {
 		const manager = local(id).asyncJobManager;
 		if (!manager) throw new Error("root async-job service missing");
 		const entered = Promise.withResolvers<void>();
-		const jobId = manager.register("bash", "idle worker job", async context => {
-			jobProgress.set(context.jobId, context.reportProgress);
-			entered.resolve();
-			try {
-				await new Promise<void>(resolve => {
-					if (context.signal.aborted) resolve();
-					else context.signal.addEventListener("abort", () => resolve(), { once: true });
-				});
-				const observed = jobAborts.get(id) ?? [];
-				observed.push({ jobId: context.jobId, reason: context.signal.reason });
-				jobAborts.set(id, observed);
-				return "idle job stopped";
-			} finally {
-				jobProgress.delete(context.jobId);
-			}
-		}, { ownerId: id });
+		const jobId = manager.register(
+			"bash",
+			"idle worker job",
+			async context => {
+				jobProgress.set(context.jobId, context.reportProgress);
+				entered.resolve();
+				try {
+					await new Promise<void>(resolve => {
+						if (context.signal.aborted) resolve();
+						else context.signal.addEventListener("abort", () => resolve(), { once: true });
+					});
+					const observed = jobAborts.get(id) ?? [];
+					observed.push({ jobId: context.jobId, reason: context.signal.reason });
+					jobAborts.set(id, observed);
+					return "idle job stopped";
+				} finally {
+					jobProgress.delete(context.jobId);
+				}
+			},
+			{ ownerId: id },
+		);
 		await entered.promise;
 		return jobId;
 	},
@@ -246,17 +246,6 @@ const probe: FocusProbe = {
 	dropFollowUps: async id => {
 		const session = local(id);
 		session.dropQueuedMessages(session.agent.peekFollowUpQueue());
-	},
-	grantSessionApproval: async (id, key) => {
-		local(id).extensionRunner?.grantSessionApproval(key);
-	},
-	recordSessionGrant: async (id, key) => {
-		const session = local(id);
-		getApprovalGrants(session.settings.getAgentDir(), session.sessionManager.getSessionId()).record(
-			key,
-			"read",
-			"session",
-		);
 	},
 };
 

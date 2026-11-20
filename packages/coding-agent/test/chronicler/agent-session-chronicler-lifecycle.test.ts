@@ -312,12 +312,12 @@ describe("AgentSession Chronicler identity boundaries", () => {
 		const finish = Promise.withResolvers<boolean>();
 		const switching = session!.switchSession(targetFile, {
 			onCwdChange: async () => {
+				await session!.moveSession(targetCwd, path.dirname(targetFile));
 				reached.resolve();
 				return finish.promise;
 			},
 		});
 		await reached.promise;
-		await session!.moveSession(targetCwd, path.dirname(targetFile));
 		// Give a premature resume ample opportunity to bind and capture the target.
 		await Bun.sleep(300);
 		expect(session!.isSessionTransitioning).toBe(true);

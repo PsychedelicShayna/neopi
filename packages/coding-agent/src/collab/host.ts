@@ -25,6 +25,7 @@ import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { canReviveAgent, isAgentTranscriptReadOnly } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import type { AgentSessionEvent } from "../session/agent-session";
+import { toWireEvent } from "../session/loop-end-wire";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
 import { readTranscriptSlice } from "../session/transcript-slice";
@@ -70,6 +71,7 @@ import {
 /** Events that change the footer state guests render. */
 const STATE_TRIGGER_EVENTS: Record<string, true> = {
 	agent_start: true,
+	agent_pause: true,
 	agent_end: true,
 	message_end: true,
 	tool_execution_end: true,
@@ -536,7 +538,9 @@ export class CollabHost {
 		// peer); a joining guest's welcome snapshot covers everything before that.
 		// The local registry work below is independent of this.
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			if (isWireAgentEvent(event)) this.#broadcastEvent(event);
+			// Guests speak the per-loop `agent_end` wire shape (see loop-end-wire.ts).
+			const wireEvent = toWireEvent(event);
+			if (isWireAgentEvent(wireEvent)) this.#broadcastEvent(wireEvent);
 			this.#onEventForState(event);
 		});
 		// Subagent frames publish on the session tree's observability bus at
@@ -1364,7 +1368,10 @@ export class CollabHost {
 		// Validate against the host registry, not the guest's potentially stale roster.
 		const ref = AgentRegistry.global().get(agentId);
 		if (ref && isAgentTranscriptReadOnly(ref)) {
-			this.#send({ t: "error", message: `agent ${agentId}: transcripts for this participant are read-only` }, fromPeer);
+			this.#send(
+				{ t: "error", message: `agent ${agentId}: transcripts for this participant are read-only` },
+				fromPeer,
+			);
 			return;
 		}
 		const fail = (err: unknown) => {
@@ -1374,7 +1381,13 @@ export class CollabHost {
 		switch (cmd) {
 			case "chat": {
 				if (ref?.status === "aborted") {
-					this.#send({ t: "error", message: `agent ${agentId}: killed transcript is read-only; explicitly revive it first` }, fromPeer);
+					this.#send(
+						{
+							t: "error",
+							message: `agent ${agentId}: killed transcript is read-only; explicitly revive it first`,
+						},
+						fromPeer,
+					);
 					return;
 				}
 				const trimmed = text?.trim();
@@ -1407,7 +1420,13 @@ export class CollabHost {
 			}
 			case "revive":
 				if (!ref || !canReviveAgent(ref)) {
-					this.#send({ t: "error", message: `agent ${agentId}: only parked agents or killed agents with transcripts can be revived` }, fromPeer);
+					this.#send(
+						{
+							t: "error",
+							message: `agent ${agentId}: only parked agents or killed agents with transcripts can be revived`,
+						},
+						fromPeer,
+					);
 					return;
 				}
 				AgentLifecycleManager.global().ensureLive(agentId).catch(fail);

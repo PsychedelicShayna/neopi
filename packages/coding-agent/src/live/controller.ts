@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
@@ -38,7 +39,7 @@ import {
 	type LiveServerEvent,
 } from "./protocol";
 import { OUTPUT_ACTIVE_LEVEL, OutputActivity } from "./output-activity";
-import { CodexLiveTransport } from "./transport";
+import { type LiveEndpoint, LiveTransport, resolveLiveEndpoint } from "./transport";
 import { DEFAULT_LIVE_VOICE } from "./voices";
 
 const MIN_BARGE_IN_LEVEL = 0.04;
@@ -133,7 +134,7 @@ export interface LiveSessionCallbacks {
 }
 
 /** Structural transport surface the controller needs (test seam). */
-export type LiveTransportLike = Pick<CodexLiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio"> & {
+export type LiveTransportLike = Pick<LiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio"> & {
 	readonly sdpAnswer?: string;
 	playbackQueueStats?(): { queuedMs: number; droppedMs: number };
 	setOutputSuppressed?(suppressed: boolean): void;
@@ -165,7 +166,7 @@ export interface LiveSessionControllerOptions {
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
-	/** Realtime model slug, defaulting to gpt-live-1-codex. */
+	/** Realtime model slug requested for the call, defaulting to {@link DEFAULT_LIVE_MODEL}. */
 	model?: string;
 	blockDelegateKeyword?: string;
 	delegationKeywords?: () => { suppress: string; force: string };
@@ -180,8 +181,8 @@ export interface LiveSessionControllerOptions {
 	speakableIdleMs?: number;
 	/** Test seam: minimum gap between reasoning narrations; defaults to 3000 ms. */
 	thinkingFlushMs?: number;
-	/** Test seam: builds the realtime transport; defaults to CodexLiveTransport. */
-	createTransport?(options: ConstructorParameters<typeof CodexLiveTransport>[0]): LiveTransportLike;
+	/** Test seam: builds the realtime transport; defaults to LiveTransport. */
+	createTransport?(options: ConstructorParameters<typeof LiveTransport>[0]): LiveTransportLike;
 	/** Test seam: builds the microphone recorder; defaults to the shared native capture. */
 	createRecorder?(
 		sampleRate: number,
@@ -287,12 +288,15 @@ export class LiveSessionController {
 	#suppressedResponse = false;
 	readonly #sdpOffer: string | undefined;
 
-	readonly #createTransport: (options: ConstructorParameters<typeof CodexLiveTransport>[0]) => LiveTransportLike;
+	readonly #createTransport: (options: ConstructorParameters<typeof LiveTransport>[0]) => LiveTransportLike;
 	readonly #createRecorder: (
 		sampleRate: number,
 		callback: (error: Error | null, samples: Float32Array) => void,
 	) => LiveRecorderLike;
 	#transport: LiveTransportLike | undefined;
+	/** The custom server set by `live.endpoint`, resolved at start; unset uses Codex. */
+	#endpoint: LiveEndpoint | undefined;
+	readonly #transportAbort = new AbortController();
 	#recorder: LiveRecorderLike | undefined;
 	#unsubscribeSession: (() => void) | undefined;
 	#sendChain: Promise<void> = Promise.resolve();
@@ -433,7 +437,7 @@ export class LiveSessionController {
 			typeof thinkingFlushMs === "number" && Number.isFinite(thinkingFlushMs) && thinkingFlushMs >= 0
 				? thinkingFlushMs
 				: DEFAULT_THINKING_FLUSH_MS;
-		this.#createTransport = options.createTransport ?? (transportOptions => new CodexLiveTransport(transportOptions));
+		this.#createTransport = options.createTransport ?? (transportOptions => new LiveTransport(transportOptions));
 		this.#createRecorder = options.createRecorder ?? sharedAudioCapture;
 		this.#sdpOffer = options.sdpOffer;
 	}
@@ -457,7 +461,6 @@ export class LiveSessionController {
 	heldContextCount(): number {
 		return this.#heldContext.length;
 	}
-
 
 	/**
 	 * SDP answer for the caller's peer in an `sdpOffer` session. It exists as soon as the offer is
@@ -483,6 +486,11 @@ export class LiveSessionController {
 		}
 
 		try {
+			this.#endpoint = await resolveLiveEndpoint(this.#session.settings);
+			if (this.#stopped) {
+				throw this.#failure ?? new Error("The live session stopped while starting.");
+			}
+			this.#assertProviderAllowed();
 			const user = currentUser();
 			const instructions = renderPromptAsset(
 				"live/session-instructions.md",
@@ -505,11 +513,13 @@ export class LiveSessionController {
 				: [];
 			const transport = this.#createTransport({
 				authStorage: this.#session.modelRegistry.authStorage,
+				endpoint: this.#endpoint,
 				sessionId: this.#session.sessionId,
 				instructions,
 				voice: this.#voice,
 				model: this.#model,
 				sdpOffer: this.#sdpOffer,
+				signal: this.#transportAbort.signal,
 				callbacks: {
 					onEvent: event => this.#guardEvent(() => this.#handleLiveEvent(event)),
 					onOutputLevel: level => this.#guardEvent(() => this.#handleOutputLevel(level)),
@@ -526,6 +536,7 @@ export class LiveSessionController {
 			if (this.#stopped) {
 				throw this.#failure ?? new Error("The live session stopped while connecting.");
 			}
+			this.#assertProviderAllowed();
 			// Seed before queued operator input or microphone capture can begin a live turn.
 			for (const chunk of history) {
 				if (!(await this.#queueSend(buildSessionContextAppend(chunk, "commentary")))) {
@@ -616,6 +627,12 @@ export class LiveSessionController {
 		this.#pendingDelegation = undefined;
 		this.#pendingDelivery = undefined;
 		this.#stopped = true;
+		if (
+			this.#phase === "connecting" ||
+			(cfgOffline.get(this.#session.settings) && this.#session.model?.provider !== "openai-codex")
+		) {
+			this.#transportAbort.abort();
+		}
 		clearTimeout(this.#voiceFloorTimer);
 		this.#voiceFloorTimer = undefined;
 		clearTimeout(this.#transcriptKeywordTimer);
@@ -662,11 +679,17 @@ export class LiveSessionController {
 		this.#transport = undefined;
 		if (transport) {
 			try {
-				await transport.send(buildSessionClose());
+				if (
+					!this.#transportAbort.signal.aborted &&
+					(!cfgOffline.get(this.#session.settings) || this.#session.model?.provider === "openai-codex")
+				) {
+					await transport.send(buildSessionClose());
+				}
 			} catch (cause) {
 				cleanupError ??= toError(cause);
 			}
 			try {
+				this.#transportAbort.abort();
 				await transport.close();
 			} catch (cause) {
 				cleanupError ??= toError(cause);
@@ -989,7 +1012,16 @@ export class LiveSessionController {
 		this.#scheduleTranscriptKeyword();
 	}
 
+	/** Offline mode reaches only the session's provider, unless `live.endpoint` names the voice server. */
+	#assertProviderAllowed(): void {
+		if (this.#endpoint || !cfgOffline.get(this.#session.settings)) return;
+		if (this.#session.model?.provider !== "openai-codex") {
+			throw new Error("Live audio requires the openai-codex session provider or live.endpoint in offline mode.");
+		}
+	}
+
 	#handleSessionEvent(event: AgentSessionEvent): void {
+		if (event.type === "model_changed") this.#assertProviderAllowed();
 		if (event.type === "message_start" && event.message.role === "assistant") {
 			// A provider continuation still belongs to the current handoff, not its prior stop.
 			this.#completedResponse = undefined;
@@ -1042,7 +1074,7 @@ export class LiveSessionController {
 			this.#completedResponse = event.message.stopReason === "stop" ? event.message : undefined;
 			return;
 		}
-		if (event.type !== "agent_end") return;
+		if (event.type !== "agent_end" && event.type !== "agent_pause") return;
 		// Expected obsolete settle from a live-handoff abort: agent-core emits a
 		// fresh empty assistant message with stopReason "aborted" for a deliberate
 		// abort. Consume the token and ignore the settle entirely — relaying would
@@ -1057,7 +1089,9 @@ export class LiveSessionController {
 				return;
 			}
 		}
-		const { relay, closeDelegation } = classifyRelaySettle(event);
+		const { relay, closeDelegation } = classifyRelaySettle(
+			event.type === "agent_pause" ? { isTerminal: false, hasFinalResponse: event.hasFinalResponse } : {},
+		);
 		if (!relay) return;
 		this.#appendFinalResponse(event.messages, { closeDelegation });
 		this.#completedResponse = undefined;
@@ -1092,7 +1126,8 @@ export class LiveSessionController {
 		const released = this.#releasedReplyTurns;
 		this.#releasedReplyTurns = undefined;
 		if (this.#answeredTurns || fromContext) return;
-		this.#answeredTurns = released ??
+		this.#answeredTurns =
+			released ??
 			this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined).map(turn => turn.turn);
 	}
 
@@ -1294,14 +1329,17 @@ export class LiveSessionController {
 		const block = stripLiveKeyword(routingText, this.#blockDelegateKeyword);
 		const voiceOnly = this.#turnsWhere(turn => turn.final && !this.#mayDelegateTurn(turn));
 		const lastTurn = this.#tailTurn();
-		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs()) return false;
+		if ((voiceOnly.length || block.matched) && Date.now() < this.#lastComposerWrite + this.#quietFloorMs())
+			return false;
 		const captured = this.#captureComposerExcludingTurns?.(voiceOnly.map(turn => turn.turn));
 		const preserved = captured?.voiceOnlyTurns ?? voiceOnly.map(turn => turn.turn);
 		const primary = voiceOnly.length
-			? captured?.text.trim() ??
+			? (captured?.text.trim() ??
 				this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined)
-					.map(turn => turn.text).join("\n\n").trim()
-			: captured?.text.trim() ?? (block.matched ? block.text : message);
+					.map(turn => turn.text)
+					.join("\n\n")
+					.trim())
+			: (captured?.text.trim() ?? (block.matched ? block.text : message));
 		if (!this.retireComposerSpeech(preserved)) return false;
 		this.#holdReleased = true;
 		// A pre-submit response/route belongs to the old draft, not this released request.
@@ -1322,7 +1360,12 @@ export class LiveSessionController {
 			if (primary) this.#offerPendingComposer(primary, forced, captured?.receipt, captured?.routingText);
 		} else if (block.matched) {
 			const turn: UserLedgerTurn = {
-				turn: ++this.#userLedgerTurn, text: primary, routingText, final: true, blocked: true, composerReceipt: captured?.receipt,
+				turn: ++this.#userLedgerTurn,
+				text: primary,
+				routingText,
+				final: true,
+				blocked: true,
+				composerReceipt: captured?.receipt,
 			};
 			this.#putTurn(turn);
 			this.#deliverBlockedTurn(turn);
@@ -1332,7 +1375,12 @@ export class LiveSessionController {
 		return true;
 	}
 
-	#offerPendingComposer(text: string, forced: boolean, composerReceipt?: LiveComposerReceipt, routingText?: string): void {
+	#offerPendingComposer(
+		text: string,
+		forced: boolean,
+		composerReceipt?: LiveComposerReceipt,
+		routingText?: string,
+	): void {
 		const turn: UserLedgerTurn = { turn: ++this.#userLedgerTurn, text, routingText, final: true, composerReceipt };
 		this.#putTurn(turn);
 		this.#latestUtterance = turn;
@@ -1360,14 +1408,16 @@ export class LiveSessionController {
 			"utf8",
 		);
 		for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-			void this.#queueSend(buildSessionContextAppend(
-				renderPromptAsset(
-					"live/operator-submitted-message.md",
-					operatorSubmittedMessageTemplate,
-					{ message: part },
-					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+			void this.#queueSend(
+				buildSessionContextAppend(
+					renderPromptAsset(
+						"live/operator-submitted-message.md",
+						operatorSubmittedMessageTemplate,
+						{ message: part },
+						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+					),
 				),
-			));
+			);
 		}
 	}
 
@@ -1494,7 +1544,9 @@ export class LiveSessionController {
 	#keywordText(expanded = false): string | undefined {
 		return this.#composerText
 			? this.#composerText(expanded)
-			: this.#turnsWhere(turn => turn.claim === undefined).map(turn => turn.text).join("\n\n");
+			: this.#turnsWhere(turn => turn.claim === undefined)
+					.map(turn => turn.text)
+					.join("\n\n");
 	}
 
 	#scheduleTranscriptKeyword(): void {
@@ -1505,25 +1557,31 @@ export class LiveSessionController {
 		const text = this.#keywordText();
 		if (text !== this.#lastKeywordSubmission) this.#lastKeywordSubmission = undefined;
 		if (!text || text === this.#lastKeywordSubmission || this.#tailTurn()?.final === false) return;
-		if (!stripLiveKeyword(text, keywords.force, true).matched &&
-			!stripLiveKeyword(text, keywords.submit, true).matched) return;
+		if (
+			!stripLiveKeyword(text, keywords.force, true).matched &&
+			!stripLiveKeyword(text, keywords.submit, true).matched
+		)
+			return;
 		const remaining = this.#lastComposerWrite + Math.max(keywords.silenceMs, this.#quietFloorMs()) - Date.now();
-		this.#transcriptKeywordTimer = setTimeout(() => {
-			this.#transcriptKeywordTimer = undefined;
-			const current = this.#transcriptKeywords?.();
-			if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
-			const expanded = this.#keywordText(true);
-			if (!expanded) return;
-			const force = stripLiveKeyword(text, current.force, true);
-			const submit = stripLiveKeyword(text, current.submit, true);
-			const keyword = force.matched ? current.force : current.submit;
-			if (!(force.matched || submit.matched)) return;
-			const message = stripLiveKeyword(expanded, keyword, true).text;
-			if (!message.trim()) return;
-			this.#lastKeywordSubmission = text;
-			const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
-			if (!accepted) this.#lastKeywordSubmission = undefined;
-		}, Math.max(0, remaining));
+		this.#transcriptKeywordTimer = setTimeout(
+			() => {
+				this.#transcriptKeywordTimer = undefined;
+				const current = this.#transcriptKeywords?.();
+				if (!current || this.#stopped || this.#keywordText() !== text || this.#tailTurn()?.final === false) return;
+				const expanded = this.#keywordText(true);
+				if (!expanded) return;
+				const force = stripLiveKeyword(text, current.force, true);
+				const submit = stripLiveKeyword(text, current.submit, true);
+				const keyword = force.matched ? current.force : current.submit;
+				if (!(force.matched || submit.matched)) return;
+				const message = stripLiveKeyword(expanded, keyword, true).text;
+				if (!message.trim()) return;
+				this.#lastKeywordSubmission = text;
+				const accepted = force.matched ? this.forceDelegateComposer(message) : this.submitComposer(message);
+				if (!accepted) this.#lastKeywordSubmission = undefined;
+			},
+			Math.max(0, remaining),
+		);
 	}
 
 	#voiceTurnBlocked(): boolean {
@@ -1536,8 +1594,13 @@ export class LiveSessionController {
 
 	/** Holding the next input must not close native playback in the middle of an admitted reply. */
 	#voiceOutputBlocked(): boolean {
-		return this.#voiceTurnBlocked() && !this.#responding &&
-			this.#releasedReplyTurns === undefined && !this.#contextSinceResponse && this.#outputLevel <= OUTPUT_ACTIVE_LEVEL;
+		return (
+			this.#voiceTurnBlocked() &&
+			!this.#responding &&
+			this.#releasedReplyTurns === undefined &&
+			!this.#contextSinceResponse &&
+			this.#outputLevel <= OUTPUT_ACTIVE_LEVEL
+		);
 	}
 
 	/** Apply settings immediately, including native RTP playback (which bypasses JS transcript events). */
@@ -1708,6 +1771,12 @@ export class LiveSessionController {
 
 	#handleMicrophoneAudio(samples: Float32Array): void {
 		if (this.#stopped || !this.#transport) return;
+		try {
+			this.#assertProviderAllowed();
+		} catch (cause) {
+			this.#reportFailure(toError(cause));
+			return;
+		}
 		if (this.#muted) return;
 		this.#inputLevel = microphoneLevel(samples);
 		this.#emitLevels();
@@ -2061,7 +2130,7 @@ export class LiveSessionController {
 	async #appendTranscriptLine(line: string): Promise<void> {
 		if (this.#transcriptLogPath === null) return;
 		if (this.#transcriptLogPath === undefined) {
-			const allocated = await this.#session.sessionManager.allocateArtifactPath("live-transcript");
+			const allocated = await this.#session.sessionManager.allocateArtifactPath();
 			if (allocated.path) {
 				this.#transcriptLogPath = allocated.path;
 				logger.info("Live transcript artifact allocated", { id: allocated.id, path: allocated.path });
@@ -2083,6 +2152,7 @@ export class LiveSessionController {
 		if (!transport || this.#stopped) return Promise.resolve(false);
 		const sent = this.#sendChain.then(async () => {
 			if (this.#stopped) return false;
+			this.#assertProviderAllowed();
 			await transport.send(message);
 			return true;
 		});

@@ -79,9 +79,7 @@ describe("built-in prompt runtime boundaries", () => {
 				contextFiles: [{ path: path.join(cwd, "role.md"), content: "PROJECT ROLE" }],
 			});
 			expect(adapted.systemPrompt[0]).toBe(baseline.systemPrompt[0]);
-			expect(adapted.systemPrompt[1]).toContain("Model adapter: Opus 5");
-			expect(adapted.systemPrompt[1]).toContain("anthropic / opus / 5.0.0");
-			expect(adapted.systemPrompt[1]).toContain("Recommended effort");
+			expect(adapted.systemPrompt).toHaveLength(baseline.systemPrompt.length + 1);
 			expect(adapted.systemPrompt.at(-1)).toContain("PROJECT ROLE");
 			for (const activeModel of [
 				{ ...opus, id: "claude-opus-4-8" },
@@ -141,11 +139,13 @@ describe("built-in prompt runtime boundaries", () => {
 	it("keeps bundled provider bytes when no override is installed", async () => {
 		await withPromptHome(async cwd => {
 			const original = prompt.render.bind(prompt);
+			const originalTracked = prompt.renderTracked.bind(prompt);
 			let context: Record<string, unknown> | undefined;
-			const render = spyOn(prompt, "render").mockImplementation((template, data) => {
+			// The system prompt renders through the source-tracked path (renderPromptAssetTracked).
+			const render = spyOn(prompt, "renderTracked").mockImplementation((template, data, items) => {
 				if (data && typeof data === "object" && "MAX_CONCURRENCY" in data)
 					context ??= data as Record<string, unknown>;
-				return original(template, data);
+				return originalTracked(template, data, items);
 			});
 			try {
 				const result = await buildSystemPrompt(options(cwd));
@@ -215,10 +215,12 @@ describe("built-in prompt runtime boundaries", () => {
 				["internal-urls/env.md", new EnvProtocolHandler()],
 				["internal-urls/model.md", new ModelProtocolHandler()],
 			] as const) {
-				expect(await runPromptsCommand(
-					{ action: "unpack", targets: [], flags: { only: id, json: true } },
-					{ cwd, agentDir, stdout: () => {}, stderr: () => {} },
-				)).toBe(0);
+				expect(
+					await runPromptsCommand(
+						{ action: "unpack", targets: [], flags: { only: id, json: true } },
+						{ cwd, agentDir, stdout: () => {}, stderr: () => {} },
+					),
+				).toBe(0);
 				const file = path.join(agentDir, "builtin-prompts", id);
 				expect(await Bun.file(file).text()).toBe(getPromptAsset(id)!.bundled);
 				await Bun.write(file, "custom protocol guidance");

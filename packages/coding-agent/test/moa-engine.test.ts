@@ -797,10 +797,11 @@ describe("side paths never run the mixture", () => {
 	const SIDE_ROLES = { default: "mixture/draft-then-edit", smol: "fake/other" };
 
 	it("auto-compacts a mixture session with a native model", async () => {
-		const session = await mixtureSession(
-			DRAFT_THEN_EDIT_TOML,
-			undefined,
-			Settings.isolated({
+		await ensureFixture();
+		const session = await createMoaSession(fixture, {
+			systemPrompt: ["Test session."],
+			toolNames: [],
+			settings: Settings.isolated({
 				...SETTINGS,
 				modelRoles: SIDE_ROLES,
 				"compaction.enabled": true,
@@ -810,7 +811,9 @@ describe("side paths never run the mixture", () => {
 				"compaction.keepRecentTokens": 1,
 				"compaction.methodOrder": ["soft"],
 			}),
-		);
+		});
+		sessions.push(session);
+		await session.setModel(mixtureModel());
 		const seen = events(session);
 		const long = "a long answer that fills the context window ".repeat(8);
 		members.script("editor", { text: long }, { text: long });
@@ -1336,7 +1339,10 @@ describe("provider context for members", () => {
 			const options = members.callsTo(modelId)[0]?.options;
 			return [options?.kimiApiFormat, options?.preferWebsockets, options?.thinkingBudgets?.medium];
 		};
-		expect(observed("other")).toEqual(["anthropic", false, 12_345]);
+		expect(members.callsTo("other")[0]?.options).toMatchObject({
+			kimiApiFormat: "anthropic",
+			thinkingBudgets: { medium: 12_345 },
+		});
 		expect(observed("writer")).toEqual(observed("other"));
 		expect(observed("editor")).toEqual(observed("other"));
 	});

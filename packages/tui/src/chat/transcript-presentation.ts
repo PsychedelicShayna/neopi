@@ -12,11 +12,13 @@ import { type DescribeContext, type NativeNode, type NativeUiEvent, rootToggleEx
 import { Memo } from "../native/memo";
 import { plainLine, plainText, spansLine } from "../native/spans";
 import type { AnimationFrame, CompactTranscriptBlock } from "../chrome/transcript-container";
-import type { DaemonSnapshot } from "../tools/daemon";
+import { type PersistedSnapshot, serviceView } from "../tools/daemon";
 import type { TranscriptBlock, TranscriptPresentation, TranscriptPresenter } from "./extension-types";
 import type { LateDiagnosticsFile } from "./late-diagnostics-message";
 import {
 	type AdvisorMessageDetails,
+	ASYNC_NOTIFY_MESSAGE_TYPE,
+	type AsyncNotifyDetails,
 	type BashExecutionMessage,
 	type CustomMessage,
 	type EvalExecutionMessage,
@@ -438,7 +440,13 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 		}
 		return bash
 			? { terminal, name: "bash", role: "omp.bash", title: "Bash", target: source }
-			: { terminal, name: "eval", role: "omp.eval", title: language !== undefined ? `Eval (${language})` : "Python", target: source };
+			: {
+					terminal,
+					name: "eval",
+					role: "omp.eval",
+					title: language !== undefined ? `Eval (${language})` : "Python",
+					target: source,
+				};
 	}
 	switch (message.customType) {
 		case "advisor": {
@@ -473,8 +481,19 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 			const title = jobs.length === 1 ? "Background job completed" : `${jobs.length} background jobs completed`;
 			return { ...plainHead("job", "omp.activity", title, ids), glyph: theme.fg("success", theme.status.success) };
 		}
+		case ASYNC_NOTIFY_MESSAGE_TYPE: {
+			const reports = (message.details as AsyncNotifyDetails | undefined)?.reports ?? [];
+			const lines = reports.reduce((sum, report) => sum + report.lines.length + report.omitted, 0);
+			const target = `${reports.map(report => report.id).join(", ")} · ${countOf(lines, "line")}`;
+			return {
+				...plainHead("job", "omp.activity", "Background output", target),
+				glyph: theme.fg("accent", theme.status.info),
+			};
+		}
 		case LAUNCH_COMPLETION_MESSAGE_TYPE: {
-			const daemons = (message.details as { daemons?: DaemonSnapshot[] } | undefined)?.daemons ?? [];
+			const daemons = ((message.details as { daemons?: PersistedSnapshot[] } | undefined)?.daemons ?? []).map(
+				serviceView,
+			);
 			const failed = daemons.some(
 				daemon => daemon.state === "failed" || (daemon.exitCode !== undefined && daemon.exitCode !== 0),
 			);

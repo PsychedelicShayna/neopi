@@ -7,7 +7,7 @@
  *   bun apps/server/src/backend/contract.ts [--json]
  *
  * The tree is chosen the way the server chooses it (NPI_DECK_BACKEND, else
- * activeBackend in config.yml). The checks run in a child process whose HOME,
+ * activeBackend in config.toml). The checks run in a child process whose HOME,
  * Windows profile selectors, XDG dirs, cwd and PI_CODING_AGENT_DIR point into
  * a fresh temp dir, with credential and PI_/OMP_/NPI_DECK_ env vars dropped and a dummy openrouter
  * key so model resolution works without a real account. No check makes a

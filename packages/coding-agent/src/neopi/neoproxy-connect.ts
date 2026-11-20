@@ -143,7 +143,7 @@ async function connect(
 	};
 	delete providers.neoproxy.apiKey;
 	callbacks.onProgress?.(
-		`${models.data.length} granted model(s). After connecting, use /model or /models to select a model or assign a role.`,
+		`${models.data.length} granted model(s). After connecting, use /model or /roles to select a model or assign a role.`,
 	);
 	if (models.data.length === 0)
 		callbacks.onProgress?.(

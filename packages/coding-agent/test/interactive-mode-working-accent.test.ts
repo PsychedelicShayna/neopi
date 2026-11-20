@@ -59,6 +59,7 @@ async function createHarness(sessionName: string): Promise<Harness> {
 			metadataForProvider: () => undefined,
 		},
 		customCommands: [],
+		getToolCatalogEntries: () => [],
 		skills: [],
 		autoCompactionEnabled: true,
 		messages: [],

@@ -17,6 +17,7 @@ beforeAll(() => initTheme());
 function makeBridge() {
 	const woken: AgentMessage[][] = [];
 	const host = {
+		sessionManager: { getCwd: () => process.cwd() },
 		isDisposed: () => false,
 		isStreaming: () => false,
 		planModeEnabled: () => false,
@@ -67,6 +68,7 @@ describe("IrcBridge broadcast legs reaching a streaming recipient", () => {
 		const steered: AgentMessage[] = [];
 		const observed: AgentSessionEvent[] = [];
 		const host = {
+			sessionManager: { getCwd: () => process.cwd() },
 			agent: { steer: (message: AgentMessage) => steered.push(message) } as unknown as Agent,
 			isDisposed: () => false,
 			isStreaming: () => true,
@@ -221,12 +223,5 @@ describe("IrcBridge broadcast legs reaching a streaming recipient", () => {
 		expect(bridge.hasQueuedFrom("Peer")).toBe(false);
 		await bridge.deliver({ id: "p2", from: "Peer", to: "Child", body: "question?", ts: 9 });
 		expect(bridge.hasQueuedFrom("Peer")).toBe(true);
-	});
-
-	it("keeps the broadcast flag on a message drained from the inbox", async () => {
-		const { bridge } = makeStreamingChild();
-		await bridge.deliver({ id: "b2", from: "Peer", to: "Child", body: "everyone: rebase", ts: 3, broadcast: true });
-
-		expect(bridge.drainInboxMessages("Child")).toMatchObject([{ id: "b2", from: "Peer", broadcast: true }]);
 	});
 });

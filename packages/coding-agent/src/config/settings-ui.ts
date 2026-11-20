@@ -19,6 +19,7 @@ import { cfgComposerPredictions, cfgTuiVimMode } from "../modes/settings";
 import { cfgAdvisorEnabled } from "../advisor/settings";
 import { cfgEffortPolicyMode } from "./effort-policy";
 import { cfgTaskPerCallModelAllow } from "../task/settings";
+import { cfgAuthUnpausedProviders } from "./model-settings";
 
 /** A condition follows its panel's settings owner; an uninitialized default proxy stays hidden. */
 function whenSettings(test: (settings: Settings) => boolean): (scope: Settings) => boolean {
@@ -41,7 +42,7 @@ const CONDITIONS: Record<string, (scope: Settings) => boolean> = {
 	planModeEnabled: whenSettings(s => cfgPlanEnabled.get(s)),
 	planAutosaveEnabled: whenSettings(s => cfgPlanEnabled.get(s) && cfgPlanAutosave.get(s)),
 	perCallModelAllowNotProject: whenSettings(s => cfgTaskPerCallModelAllow.provenance(s) !== "project"),
-
+	unpausedProvidersNotProject: whenSettings(s => cfgAuthUnpausedProviders.provenance(s) !== "project"),
 };
 
 /** Description suffix telling the panel user that an environment variable is in play. */
@@ -85,7 +86,9 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 	return {
 		entries,
 		onReload: listener => scope.onPersistedLayersChange(listener),
-		get scope() { return editingScope; },
+		get scope() {
+			return editingScope;
+		},
 		cycleScope: () => {
 			const scopes: SettingsScope[] = ["global", "project", "session"];
 			editingScope = scopes[(scopes.indexOf(editingScope) + 1) % scopes.length];
@@ -97,7 +100,12 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 		details: path => {
 			const setting = resolve(path);
 			const details = scope.getScopeDetails(setting, editingScope);
-			const format = (value: unknown) => setting.isCredential ? (value === undefined ? "inherit" : "[redacted]") : (JSON.stringify(value) ?? "inherit");
+			const format = (value: unknown) =>
+				setting.isCredential
+					? value === undefined
+						? "inherit"
+						: "[redacted]"
+					: (JSON.stringify(value) ?? "inherit");
 			return {
 				shadowed: details.shadowed,
 				description: `${details.shadowed ? `󰈉 Shadowed by ${details.winner}: ${format(details.effective)}. ` : ""}Global: ${format(details.global)} · Project: ${format(details.project)} · Session: ${format(details.session)} · Effective: ${format(details.effective)} (${details.winner})`,

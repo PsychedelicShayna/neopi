@@ -8,6 +8,7 @@ import { Effort } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { cfgEffortPolicyMode, cfgEffortRules } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -75,6 +76,7 @@ describe("AgentSession magic keyword settings", () => {
 		authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-magic-keywords-auth-"));
 		authStorage = await AuthStorage.create(path.join(authRoot, "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("openai-codex", "test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(authRoot, "models.yml"));
 	});
 
@@ -212,15 +214,16 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it.each([
-		["takes per-message effort", "claude-sonnet-5-5", Effort.Low],
-		["needs a stable effort", "claude-sonnet-4-5", Effort.High],
+		["takes per-message effort", "anthropic", "claude-sonnet-5-5", Effort.Low],
+		["takes configuration updates", "openai-codex", "gpt-6-astra", Effort.Low],
+		["needs a stable effort", "anthropic", "claude-sonnet-4-5", Effort.High],
 	] as const)(
 		"a chillax steer mid-turn on a model that %s sets the next request's effort",
-		async (_label, id, next) => {
+		async (_label, provider, id, next) => {
 			const mock = createMockModel({ responses: [{ content: ["working"] }, { content: ["relaxed"] }] });
 			const agent = new Agent({
 				getApiKey: () => "test-key",
-				initialState: { model: getBundledModel("anthropic", id), systemPrompt: ["Test"], tools: [] },
+				initialState: { model: getBundledModel(provider, id), systemPrompt: ["Test"], tools: [] },
 				convertToLlm,
 				streamFn: mock.stream,
 			});
@@ -246,9 +249,13 @@ describe("AgentSession magic keyword settings", () => {
 		},
 	);
 
-	it("resolves an auto chillax turn to the model floor without classifying", async () => {
+	it("resolves an auto chillax turn to its configured effort floor without classifying", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, [], "claude-sonnet-5-5");
 		session = created.session;
+		cfgEffortPolicyMode.override(created.settings, "replacement");
+		cfgEffortRules.override(created.settings, [
+			{ selector: "anthropic/claude-sonnet-5-5", allowed: [Effort.Low, Effort.High] },
+		]);
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.High);
 		session.setThinkingLevel(AUTO_THINKING);

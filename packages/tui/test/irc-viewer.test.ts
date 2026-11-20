@@ -276,7 +276,11 @@ describe("IrcViewerComponent", () => {
 		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
 		view.viewer.handleInput("\x1b");
 		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
-		expect(view.viewer.navigationSnapshot().draft).toEqual({ ...saved.draft, query: saved.draft.value, focused: false });
+		expect(view.viewer.navigationSnapshot().draft).toEqual({
+			...saved.draft,
+			query: saved.draft.value,
+			focused: false,
+		});
 		expect(visits).toEqual([]);
 		expect(view.closed()).toBe(0);
 		expect(sent).toEqual([]);

@@ -137,6 +137,7 @@ describe("SelectorController.showHistorySearch", () => {
 		new SelectorController(ctx).showHistorySearch();
 		const [history] = slot.children;
 		if (!(history instanceof HistorySearchComponent)) throw new Error("history search was not mounted");
+		history.handleInput("\r"); // Confirm the empty query; the next Enter inserts the selected entry.
 		history.handleInput("\n");
 
 		expect(editor.setText).not.toHaveBeenCalled();

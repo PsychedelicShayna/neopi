@@ -172,7 +172,13 @@ describe("ctl pipe", () => {
 
 	test("relays journal notifications and unknown event kinds without disrupting command responses", async () => {
 		const notifications = [
-			{ type: "journal_state", reason: "snapshot", sessionId: "native", sessionFile: "/sessions/native.jsonl", leafId: null },
+			{
+				type: "journal_state",
+				reason: "snapshot",
+				sessionId: "native",
+				sessionFile: "/sessions/native.jsonl",
+				leafId: null,
+			},
 			{ type: "future_session_event", payload: { retained: true } },
 		];
 		const f = await fixture((connection, frame) => {
@@ -181,7 +187,8 @@ describe("ctl pipe", () => {
 		const input = new PassThrough();
 		const frames: Record<string, unknown>[] = [];
 		const result = await ctlPipe(f.instanceId, {
-			registry: { dir: f.dir }, input,
+			registry: { dir: f.dir },
+			input,
 			io: {
 				stderr: () => {},
 				stdout: text => {

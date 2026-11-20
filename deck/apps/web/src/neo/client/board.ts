@@ -1,5 +1,5 @@
 import type { CardRun, ListTasksResponse, Task } from "@npi-deck/protocol";
-import { isMap, parseDocument } from "yaml";
+import { cardPropertyDocument } from "@/lib/card-frontmatter";
 import { tasksApi } from "@/lib/tasks-api";
 import { PREVIEW_ACCOUNTS, PREVIEW_WHEEL } from "./preview-data";
 import { SOURCES } from "./source";
@@ -35,10 +35,8 @@ export interface BoardClient {
 const claimedEvents = new Map<string, BoardEvent[]>();
 
 function propertiesFromBody(body: string): Record<string, unknown> {
-	const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(body);
-	if (!header) return {};
-	const doc = parseDocument(header[1]!);
-	return !doc.errors.length && isMap(doc.contents) ? doc.toJSON() as Record<string, unknown> : {};
+	try { return cardPropertyDocument(body).properties; }
+	catch { return {}; }
 }
 
 function originFromBody(body: string): BoardCard["origin"] {

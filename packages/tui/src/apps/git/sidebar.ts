@@ -1092,11 +1092,19 @@ export class Sidebar {
 							),
 							this.#describeCommit(on, summaryInput, descriptionEditor),
 						];
-				children.unshift(keyed(col([
-					text([span("Search files", "muted")]),
-					search,
-					...(queryError ? [text([span(queryError, "error")])] : []),
-				], { gap: "xs" }), "search"));
+				children.unshift(
+					keyed(
+						col(
+							[
+								text([span("Search files", "muted")]),
+								search,
+								...(queryError ? [text([span(queryError, "error")])] : []),
+							],
+							{ gap: "xs" },
+						),
+						"search",
+					),
+				);
 				return col(children, { role: "omp.app.git.side" });
 			},
 		);

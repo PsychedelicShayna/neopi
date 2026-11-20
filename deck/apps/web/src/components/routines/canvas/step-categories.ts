@@ -22,8 +22,8 @@
  * new step type lands, the test fails until the author classifies it here.
  */
 
-import type { StepTemplateDescriptor } from "../spec-yaml";
-import { STEP_TYPE_DESCRIPTIONS } from "../spec-yaml";
+import type { StepTemplateDescriptor } from "../spec-toml";
+import { STEP_TYPE_DESCRIPTIONS } from "../spec-toml";
 
 export interface StepCategory {
 	/** Stable lookup key (also used as React list key). */

@@ -128,8 +128,8 @@ describe("SessionSelectorComponent mouse", () => {
 		);
 
 		const lines = selector.render(80);
-		const footerRow = lines.findIndex(line => line.includes("[j/k"));
-		expect(footerRow).toBeGreaterThanOrEqual(0);
+		const footerRow = lines.length - 3;
+		expect(lines).toHaveLength(40);
 
 		// Click directly on the footer hint row: must not resume anything.
 		selector.handleInput(leftClick(footerRow + 1));
@@ -149,18 +149,16 @@ describe("SessionSelectorComponent fill-height footer", () => {
 		const selector = makeSelector(mixedSessions(20), () => {}, rows);
 
 		const top = selector.render(80);
-		const topHint = top.findIndex(line => line.includes("[j/k"));
+		const footer = top.slice(-3);
 		expect(top.length).toBe(rows);
-		expect(topHint).toBe(rows - 3);
 		expect(top[rows - 1]!.trim().length).toBeGreaterThan(0); // bottom border on the last row
 
 		// Scroll to the bottom of the list (now an untitled window of a different
 		// height); the footer must not move.
 		for (let i = 0; i < 25; i++) selector.handleInput(wheel("down"));
 		const bottom = selector.render(80);
-		const bottomHint = bottom.findIndex(line => line.includes("[j/k"));
 		expect(bottom.length).toBe(rows);
-		expect(bottomHint).toBe(topHint);
+		expect(bottom.slice(-3)).toEqual(footer);
 		expect(bottom[rows - 1]!.trim().length).toBeGreaterThan(0);
 	});
 });

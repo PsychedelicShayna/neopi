@@ -45,6 +45,7 @@ import { resolveUsedFraction } from "../usage";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { resolvePeer } from "../utils/resolve-peer";
+import { applyCallerTrust } from "./caller-options";
 import { type AuthGatewayClientScope, AuthGatewayClientTable } from "./clients";
 import {
 	type AuthGatewayBootOptions,
@@ -59,7 +60,6 @@ import {
 	resolveGatewayApiKey,
 } from "./dispatch";
 import {
-	captureRequestHeaders,
 	corsHeaders,
 	gatewayResponseHeaders,
 	hasMisplacedBearer,
@@ -372,14 +372,6 @@ async function handleFormatEndpoint(
 		const message = error instanceof Error ? error.message : String(error);
 		return route.module.formatError(400, "invalid_request_error", message);
 	}
-	// Merge gateway-captured passthrough headers under the parser's own
-	// captures. Parsers that set `options.headers` themselves win (they may
-	// have stripped or normalized values); the gateway's allow-list fills in
-	// anything they didn't touch.
-	{
-		const captured = captureRequestHeaders(req.headers);
-		parsed.options.headers = { ...captured, ...parsed.options.headers };
-	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
 	const supportsOpenAIImageFileReferences =
@@ -422,6 +414,9 @@ async function handleFormatEndpoint(
 	if ("status" in apiKey) return route.module.formatError(apiKey.status, apiKey.type, apiKey.message);
 
 	const streamOpts = buildStreamOptions(parsed, model, controller.signal);
+	// Only the upstream-bound options: `encodeStream` reads the caller's parsed
+	// request, and the Anthropic encoder answers its `anthropic-beta`.
+	applyCallerTrust(streamOpts, req, bootOpts.client !== undefined);
 	if (bootOpts.fetch) streamOpts.fetch = bootOpts.fetch;
 	// Per-session provider learning (sticky strict-tools / fast-mode / thinking
 	// fallbacks, Codex transport sessions). Owned by this gateway instance: the
@@ -667,12 +662,11 @@ async function handlePiNative(
 		delete streamOpts.frequencyPenalty;
 		delete streamOpts.repetitionPenalty;
 	}
-	// Merge gateway-captured passthrough headers under the client's own
-	// headers — the client's values win when they collide.
-	const captured = captureRequestHeaders(req.headers);
-	streamOpts.headers = { ...captured, ...streamOpts.headers };
-	for (const name of Object.keys(streamOpts.headers)) {
-		if (name.toLowerCase() === NEOPROXY_CREDENTIAL_HEADER) delete streamOpts.headers[name];
+	applyCallerTrust(streamOpts, req, bootOpts.client !== undefined);
+	if (streamOpts.headers) {
+		for (const name of Object.keys(streamOpts.headers)) {
+			if (name.toLowerCase() === NEOPROXY_CREDENTIAL_HEADER) delete streamOpts.headers[name];
+		}
 	}
 	streamOpts.sessionId = sessionId;
 
@@ -1009,15 +1003,19 @@ export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): Auth
 		const pathname = new URL(req.url).pathname;
 		const scopedOpts = client ? scopeRouteOptions(hostOpts, client) : hostOpts;
 		const credentialId = req.headers.get(NEOPROXY_CREDENTIAL_HEADER);
-		const opts: AuthGatewayRouteOptions = credentialId === null ? scopedOpts : {
-			...scopedOpts,
-			credentialId,
-			resolveModel: (id, options) => {
-				const accepts = (model: Model<Api>): boolean => !scopedOpts.excludeProviders?.has(model.provider) && (options?.accepts?.(model) ?? true);
-				const model = scopedOpts.resolveModel(id, { ...options, accepts });
-				return model && accepts(model) ? model : undefined;
-			},
-		};
+		const opts: AuthGatewayRouteOptions =
+			credentialId === null
+				? scopedOpts
+				: {
+						...scopedOpts,
+						credentialId,
+						resolveModel: (id, options) => {
+							const accepts = (model: Model<Api>): boolean =>
+								!scopedOpts.excludeProviders?.has(model.provider) && (options?.accepts?.(model) ?? true);
+							const model = scopedOpts.resolveModel(id, { ...options, accepts });
+							return model && accepts(model) ? model : undefined;
+						},
+					};
 		try {
 			if (client && (pathname === "/v1/neoproxy/accounts" || credentialId !== null)) {
 				return json(403, { error: "NeoProxy account sharing requires the gateway bearer" });

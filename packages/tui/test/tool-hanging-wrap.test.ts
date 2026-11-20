@@ -196,16 +196,12 @@ describe("prefixed tool rows", () => {
 		expect(rows.filter(row => row.includes("Team standard"))).toHaveLength(1);
 	});
 
-	it("hangs Ask option labels beneath their marker and wraps LSP hover code", async () => {
+	it("wraps LSP hover code", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const label = "This detailed option label is long enough to require a second row inside the narrow card.";
 		const ask = plain(
 			askToolRenderer
-				.renderCall(
-					{ question: "Pick?", options: [{ label }] },
-					{ expanded: false, isPartial: true },
-					theme,
-				)
+				.renderCall({ question: "Pick?", options: [{ label }] }, { expanded: false, isPartial: true }, theme)
 				.render(width),
 		);
 		const option = ask.findIndex(row => row.includes("This detailed"));

@@ -168,7 +168,13 @@ class FakeModelServer {
 		if (runTurn && last?.role === "tool") {
 			reply = { text: `tool said: ${messageText(last.content)}` };
 		} else if (runTurn && userText.includes(BG_JOB_TASK)) {
-			reply = { tool: "bash", args: { command: "echo bg-done", async: true } };
+			reply = {
+				tool: "bash",
+				args: {
+					command: `while [ ! -f ${JSON.stringify(path.join(cwd, "bg-release"))} ]; do sleep 0.01; done; echo bg-done`,
+					async: true,
+				},
+			};
 		} else if (runTurn && userText.includes(HANG_TASK)) {
 			const held = Promise.withResolvers<void>();
 			this.#hangs.push(held.resolve);
@@ -309,7 +315,6 @@ function runOptions(id: string, task: string, extra: Partial<ExecutorOptions> = 
 		id,
 		description: `routing ${id}`,
 		modelOverride: MODEL,
-		structured: false,
 		settings,
 		authStorage,
 		modelRegistry,
@@ -395,7 +400,18 @@ describe("subagent runs routed into pooled workers", () => {
 		"runs the child in a worker: main mirror, result, progress, lifecycle frames, cost, async jobs",
 		async () => {
 			const progress: AgentProgress[] = [];
-			const result = await runSubprocess(runOptions("Bg", BG_JOB_TASK, { onProgress: p => progress.push(p) }));
+			// Keep the job pending until the first plain-text answer finishes, so this
+			// exercises a follow-up turn rather than an inline tool-boundary delivery.
+			let release: Promise<number> | undefined;
+			const result = await runSubprocess(
+				runOptions("Bg", BG_JOB_TASK, {
+					onProgress: p => {
+						progress.push(p);
+						if (p.requests >= 2 && !release) release = Bun.write(path.join(cwd, "bg-release"), "");
+					},
+				}),
+			);
+			await release;
 
 			expect(result.error).toBeUndefined();
 			expect(result.exitCode).toBe(0);
@@ -437,6 +453,21 @@ describe("subagent runs routed into pooled workers", () => {
 	);
 
 	it(
+		"reads a worker-homed child's pending wake on main: set while its run streams, clear once it ends",
+		async () => {
+			const controller = new AbortController();
+			const running = runSubprocess(runOptions("Waker", HANG_TASK, { signal: controller.signal }));
+			await server.hung();
+			const session = AgentRegistry.global().get("Waker")?.session;
+			await waitFor(() => session?.hasPendingWake === true);
+			controller.abort(new Error("stop from main"));
+			await running;
+			await waitFor(() => session?.hasPendingWake === false);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
 		"aborts the worker run when main's signal aborts",
 		async () => {
 			const controller = new AbortController();
@@ -467,7 +498,6 @@ describe("subagent runs routed into pooled workers", () => {
 				id: "Parked",
 				agent: AGENT,
 				message: "again",
-				structured: false,
 			});
 			expect(followUp.error).toBeUndefined();
 			expect(followUp.output).toBe("pong");
@@ -519,7 +549,7 @@ describe("subagent runs routed into pooled workers", () => {
 			const worker = pool.forThread(home);
 			if (!worker) throw new Error("home worker missing");
 
-			const turn = runSubagentFollowUpTurn({ id: "Crash", agent: AGENT, message: HANG_TASK, structured: false });
+			const turn = runSubagentFollowUpTurn({ id: "Crash", agent: AGENT, message: HANG_TASK });
 			await server.hung();
 			worker.terminate("worker crashed: boom");
 			const failed = await turn;
@@ -551,7 +581,6 @@ describe("subagent runs routed into pooled workers", () => {
 				id: "Crash",
 				agent: AGENT,
 				message: "again",
-				structured: false,
 			});
 			expect(again.output).toBe("pong");
 		},

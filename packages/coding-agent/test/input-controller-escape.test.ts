@@ -65,7 +65,7 @@ function createContext(): {
 		abort: Spy;
 		abortBash: Spy;
 		abortEval: Spy;
-		abortHandoff: Spy;
+		abortCompaction: Spy;
 		addMessageToChat: Spy;
 		cancelPendingSubmission: Spy;
 		clearEditor: Spy;
@@ -96,7 +96,7 @@ function createContext(): {
 	const abort = vi.fn();
 	const abortBash = vi.fn();
 	const abortEval = vi.fn();
-	const abortHandoff = vi.fn();
+	const abortCompaction = vi.fn();
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
@@ -167,6 +167,7 @@ function createContext(): {
 				return () => {};
 			}),
 			addStartListener: vi.fn(),
+			getFocused: () => editor,
 		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
@@ -176,11 +177,12 @@ function createContext(): {
 		session: {
 			isStreaming: false,
 			isCompacting: false,
-			isGeneratingHandoff: false,
+			isBackgroundCompacting: false,
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,
 			messages: [],
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],
@@ -200,10 +202,8 @@ function createContext(): {
 		} as unknown as InteractiveModeContext["session"],
 		viewSession: {
 			isCompacting: false,
-			isGeneratingHandoff: false,
 			isRetrying: false,
-			abortCompaction: vi.fn(),
-			abortHandoff,
+			abortCompaction,
 			abortRetry: vi.fn(),
 		} as unknown as InteractiveModeContext["viewSession"],
 		eventController: {
@@ -274,7 +274,7 @@ function createContext(): {
 			abort,
 			abortBash,
 			abortEval,
-			abortHandoff,
+			abortCompaction,
 			addMessageToChat,
 			cancelPendingSubmission,
 			clearQueue,
@@ -305,10 +305,8 @@ function createContext(): {
 
 type AbortViewSession = {
 	isCompacting: boolean;
-	isGeneratingHandoff: boolean;
 	isRetrying: boolean;
 	abortCompaction: Spy;
-	abortHandoff: Spy;
 	abortRetry: Spy;
 };
 
@@ -320,6 +318,7 @@ function abortViewSession(ctx: InteractiveModeContext): AbortViewSession {
 
 type MutableSessionState = InteractiveModeContext["session"] & {
 	isStreaming: boolean;
+	isBackgroundCompacting: boolean;
 };
 
 function mutableSessionState(ctx: InteractiveModeContext): MutableSessionState {
@@ -414,6 +413,7 @@ describe("InputController escape behavior", () => {
 			const harness = ctx as unknown as SideCommandHarness;
 			harness.fileSlashCommands = new Set(commands.map(cmd => cmd.name));
 			harness.session.slashCommands = commands;
+			ctx.isKnownSlashCommand = text => ctx.fileSlashCommands.has(text.slice(1).split(/\s+/, 1)[0]!);
 			return harness;
 		}
 
@@ -514,6 +514,7 @@ describe("InputController escape behavior", () => {
 			withFileCommands(ctx, [sitrep]).session.extensionRunner = {
 				getCommand: (name: string) => (name === "sitrep" ? { name } : undefined),
 				hasHandlers: () => false,
+				getEvalBackendAliases: () => [],
 			};
 			Object.assign(editor, { clearDraft: vi.fn() });
 			const controller = new InputController(ctx);
@@ -705,15 +706,16 @@ describe("InputController escape behavior", () => {
 		expect(editor.getText()).toContain("held behind it");
 	});
 
-	it("aborts active handoff generation before default Esc handling", () => {
+	it("cancels background compaction on Esc without interrupting the live turn", () => {
 		const { ctx, editor, spies } = createContext();
-		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
+		mutableSessionState(ctx).isBackgroundCompacting = true;
+		mutableSessionState(ctx).isStreaming = true;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
 
-		expect(spies.abortHandoff).toHaveBeenCalledTimes(1);
+		expect(spies.abortCompaction).toHaveBeenCalledTimes(1);
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
@@ -830,7 +832,7 @@ describe("InputController escape behavior", () => {
 
 	it("dismisses an active /btw panel before aborting maintenance", () => {
 		const { ctx, editor, spies } = createContext();
-		abortViewSession(ctx).isGeneratingHandoff = true;
+		abortViewSession(ctx).isCompacting = true;
 		spies.hasActiveBtw.mockReturnValue(true);
 		const controller = new InputController(ctx);
 
@@ -838,7 +840,7 @@ describe("InputController escape behavior", () => {
 		editor.onEscape?.();
 
 		expect(spies.handleBtwEscape).toHaveBeenCalledTimes(1);
-		expect(spies.abortHandoff).not.toHaveBeenCalled();
+		expect(spies.abortCompaction).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
@@ -888,13 +890,11 @@ describe("InputController escape behavior", () => {
 	});
 
 	it("returns focused subagent view to main on Esc without aborting its active maintenance (#2819)", () => {
-		const { ctx, editor, spies } = createContext();
+		const { ctx, editor } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
-		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
 		(ctx.viewSession as { isRetrying: boolean }).isRetrying = true;
 		(ctx.viewSession as unknown as { abortCompaction: Spy }).abortCompaction = vi.fn();
-		(ctx.viewSession as unknown as { abortHandoff: Spy }).abortHandoff = spies.abortHandoff;
 		(ctx.viewSession as unknown as { abortRetry: Spy }).abortRetry = vi.fn();
 		const controller = new InputController(ctx);
 
@@ -903,19 +903,16 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(ctx.viewSession.abortCompaction as unknown as Spy).not.toHaveBeenCalled();
-		expect(spies.abortHandoff).not.toHaveBeenCalled();
 		expect(ctx.viewSession.abortRetry as unknown as Spy).not.toHaveBeenCalled();
 	});
 
 	it("aborts main-view maintenance on Esc normally", () => {
-		const { ctx, editor, spies } = createContext();
+		const { ctx, editor } = createContext();
 		// Not focused:
 		expect(ctx.focusedAgentId).toBeUndefined();
 		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
-		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
 		(ctx.viewSession as { isRetrying: boolean }).isRetrying = true;
 		(ctx.viewSession as unknown as { abortCompaction: Spy }).abortCompaction = vi.fn();
-		(ctx.viewSession as unknown as { abortHandoff: Spy }).abortHandoff = spies.abortHandoff;
 		(ctx.viewSession as unknown as { abortRetry: Spy }).abortRetry = vi.fn();
 		const controller = new InputController(ctx);
 
@@ -924,7 +921,6 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.unfocusSession).not.toHaveBeenCalled();
 		expect(ctx.viewSession.abortCompaction as unknown as Spy).toHaveBeenCalledTimes(1);
-		expect(spies.abortHandoff).toHaveBeenCalledTimes(1);
 		expect(ctx.viewSession.abortRetry as unknown as Spy).toHaveBeenCalledTimes(1);
 	});
 
@@ -933,13 +929,9 @@ describe("InputController escape behavior", () => {
 		const { ctx, editor, spies } = createContext();
 		const viewSession = abortViewSession(ctx);
 		viewSession.isCompacting = true;
-		viewSession.isGeneratingHandoff = true;
 		viewSession.isRetrying = true;
 		viewSession.abortCompaction = vi.fn(() => {
 			throw new Error("compaction boom");
-		});
-		viewSession.abortHandoff = vi.fn(() => {
-			throw new Error("handoff boom");
 		});
 		viewSession.abortRetry = vi.fn(() => {
 			throw new Error("retry boom");
@@ -950,10 +942,8 @@ describe("InputController escape behavior", () => {
 		editor.onEscape?.();
 
 		expect(viewSession.abortCompaction).toHaveBeenCalledTimes(1);
-		expect(viewSession.abortHandoff).toHaveBeenCalledTimes(1);
 		expect(viewSession.abortRetry).toHaveBeenCalledTimes(1);
 		expect(debugSpy).toHaveBeenCalledWith("Failed to abort compaction", { error: "compaction boom" });
-		expect(debugSpy).toHaveBeenCalledWith("Failed to abort handoff", { error: "handoff boom" });
 		expect(debugSpy).toHaveBeenCalledWith("Failed to abort retry", { error: "retry boom" });
 		expect(spies.abort).not.toHaveBeenCalled();
 	});

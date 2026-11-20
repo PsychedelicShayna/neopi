@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../src/chrome/overlay-box";
 import { TextFormField } from "../src/components/form";
@@ -16,9 +18,15 @@ const withPicker: DescribeContext = {
 };
 const withoutPicker: DescribeContext = { ...withPicker, supports: kind => kind !== "picker" };
 
+const previousKeybindings = getKeybindings();
+
 beforeAll(async () => {
 	await initTheme(false);
+	// The app installs its keymap before any picker opens; `getKeybindings()` alone knows only `tui.*` actions.
+	setKeybindings(KeybindingsManager.inMemory());
 });
+
+afterAll(() => setKeybindings(previousKeybindings));
 
 const HOUR = 3_600_000;
 
@@ -113,21 +121,22 @@ describe("session selector picker", () => {
 		expect(props(selector.describe(withPicker)).size).toBe("screen");
 	});
 
-	it("filters session picker results only after confirming search", () => {
-		const selector = make();
+	it("previews session search live and confirms without resuming a result", () => {
+		const resumed: string[] = [];
+		const selector = make({ resumed });
 		selector.handleInput("/");
 		type(selector, "gam");
 		const drafting = props(selector.describe(withPicker));
 		expect(drafting.query).toBe("gam");
-		expect(drafting.order).toContain(today.path);
-		expect(drafting.order).toContain(todayToo.path);
-		expect(drafting.hits).toBeUndefined();
+		expect(drafting.order).toEqual([old.path]);
+		expect(drafting.hits).toEqual({ [old.path]: [[0, 3]] });
 		selector.handleInput("\r");
 		const after = props(selector.describe(withPicker));
 		expect(after.query).toBe("gam");
 		expect(after.order).toEqual([old.path]);
 		expect(after.hits).toEqual({ [old.path]: [[0, 3]] });
 		expect(after.selected).toBe(old.path);
+		expect(resumed).toEqual([]);
 	});
 
 	it("runs pointer events down the keys' paths", async () => {
@@ -300,12 +309,16 @@ describe("session selector rename", () => {
 describe("history search picker", () => {
 	const now = Math.floor(Date.now() / 1000);
 	const entries: HistorySearchEntry[] = [
-		{ prompt: "deploy the release\nwith notes", created_at: now - 60, cwd: "/work/app" },
-		{ prompt: "routine status", created_at: now - 7200 },
+		{ id: 1, prompt: "deploy the release\nwith notes", created_at: now - 60, cwd: "/work/app" },
+		{ id: 2, prompt: "routine status", created_at: now - 7200 },
 	];
 	const source = {
 		getRecent: (limit: number) => entries.slice(0, limit),
 		search: (query: string) => entries.filter(e => e.prompt.includes(query)),
+		delete: (id: number) => {
+			const index = entries.findIndex(entry => entry.id === id);
+			if (index >= 0) entries.splice(index, 1);
+		},
 	};
 
 	it("hoists a keyed md picker from the dock and inserts on activate", () => {
@@ -316,7 +329,8 @@ describe("history search picker", () => {
 			() => {},
 		);
 		type(search, "deploy");
-		expect(props((search.describe(withPicker).c as NativeNode[])[0]!).items).toHaveLength(2);
+		expect(props((search.describe(withPicker).c as NativeNode[])[0]!).items).toHaveLength(1);
+		expect(inserted).toEqual([]);
 		search.handleInput("\r");
 		const root = search.describe(withPicker);
 		expect(root.k).toBe("col");

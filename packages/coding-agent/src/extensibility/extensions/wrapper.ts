@@ -508,15 +508,22 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			} else {
 				const uiContext = this.runner.getUIContext();
 				const safetyAppendix =
-					pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
+					pendingSafetyChecks.length > 0
+						? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)]
+						: [];
 				let approved: boolean;
 				try {
-					const answer = await requestApproval(uiContext, this.tool, resolvedArgs, {
-						reason: approvalCheck.reason,
-						appendix: safetyAppendix,
-						sessionSubject: sessionScope?.subject,
-						grants: cacheTargets,
-					});
+					// The call's signal closes the prompt: aborting the turn (Esc, a session switch) must not
+					// wait on an approval the user can no longer see or answer.
+					const answer = await untilAborted(signal, () =>
+						requestApproval(uiContext, this.tool, resolvedArgs, {
+							reason: approvalCheck.reason,
+							appendix: safetyAppendix,
+							sessionSubject: sessionScope?.subject,
+							grants: cacheTargets,
+							signal,
+						}),
+					);
 					approved = answer !== "deny";
 					if (answer === "session" && sessionScope) this.runner.grantSessionApproval(sessionScope.key);
 					if (typeof answer === "object" && approvalGrants) {

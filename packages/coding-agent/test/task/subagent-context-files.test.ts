@@ -113,9 +113,8 @@ async function fixture() {
 	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([MODEL]);
 	vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in policy-context tests"));
 	vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [WORKER], projectAgentsDir: null });
-	const mock = createMockModel({
-		handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { complete: true } } }] },
-	});
+	// No output schema → no `yield` tool (usesYield contract); the final message is the result.
+	const mock = createMockModel({ handler: { content: ["Policy context checked."] } });
 	vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation(() => mock.stream);
 	const realCreate = sdk.createAgentSession;
 	vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
@@ -298,25 +297,28 @@ describe("subagent policy context", () => {
 		expect(advisorPrompt).not.toContain(h.markers.source);
 	});
 
-	it.each([false, true])("filters explicit AGENTS.md while preserving other SDK context verbatim (empty=%s)", async empty => {
-		const h = await fixture();
-		const explicit = empty
-			? []
-			: [
-					{ path: h.directory.join("notes.txt"), content: "EXPLICIT_NON_POLICY_CONTEXT" },
-					{ path: h.directory.join("someone", "AGENTS.md"), content: "EXPLICIT_AGENT_POLICY_CONTEXT" },
-				];
-		const parent = await h.create({ contextFiles: explicit });
-		const child = await h.spawn(parent, empty ? "EmptyPolicyChild" : "ExplicitPolicyChild");
-		const rendered = systemPrompt(child);
-		if (!empty) {
-			expect(rendered).toContain("EXPLICIT_NON_POLICY_CONTEXT");
-			expect(rendered.split("EXPLICIT_NON_POLICY_CONTEXT")).toHaveLength(2);
-			expect(rendered).not.toContain("EXPLICIT_AGENT_POLICY_CONTEXT");
-		}
-		for (const marker of Object.values(h.markers)) expect(rendered).not.toContain(marker);
-		if (empty) expect(rendered).not.toContain("<repo-rules>");
-	});
+	it.each([false, true])(
+		"filters explicit AGENTS.md while preserving other SDK context verbatim (empty=%s)",
+		async empty => {
+			const h = await fixture();
+			const explicit = empty
+				? []
+				: [
+						{ path: h.directory.join("notes.txt"), content: "EXPLICIT_NON_POLICY_CONTEXT" },
+						{ path: h.directory.join("someone", "AGENTS.md"), content: "EXPLICIT_AGENT_POLICY_CONTEXT" },
+					];
+			const parent = await h.create({ contextFiles: explicit });
+			const child = await h.spawn(parent, empty ? "EmptyPolicyChild" : "ExplicitPolicyChild");
+			const rendered = systemPrompt(child);
+			if (!empty) {
+				expect(rendered).toContain("EXPLICIT_NON_POLICY_CONTEXT");
+				expect(rendered.split("EXPLICIT_NON_POLICY_CONTEXT")).toHaveLength(2);
+				expect(rendered).not.toContain("EXPLICIT_AGENT_POLICY_CONTEXT");
+			}
+			for (const marker of Object.values(h.markers)) expect(rendered).not.toContain(marker);
+			if (empty) expect(rendered).not.toContain("<repo-rules>");
+		},
+	);
 
 	it("rediscovers policy on warm revival after the normal capability-cache boundary", async () => {
 		const h = await fixture();

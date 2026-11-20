@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { AuthStorage, type FetchImpl, type Model, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { expandCodexVariants } from "@oh-my-pi/pi-catalog/model-variants";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
 import { hasCodexSearch, searchCodex } from "@oh-my-pi/pi-coding-agent/web/search/providers/codex";
@@ -326,6 +327,14 @@ describe("searchCodex model selection", () => {
 		expect(capturedRequest?.body?.model).toBe("gpt-5.6-luna");
 		expect(result.model).toBe("gpt-5.6-luna");
 		expect(result.sources).toEqual([{ title: "Example Article", url: "https://example.com/article" }]);
+	});
+
+	it("sends a selected fast/extended slug's real model and pinned service tier", async () => {
+		const base = { ...codexModel("gpt-6-astra"), serviceTiers: ["priority"], maxContextWindow: 922_000 };
+		const variant = expandCodexVariants([base]).find(model => model.id === "gpt-6-astra-fast-900k")!;
+		await searchCodex(makeSearchParams("variant web search", mockCodexFetch("gpt-6-astra"), variant));
+		expect(capturedRequest?.body?.model).toBe("gpt-6-astra");
+		expect(capturedRequest?.body?.service_tier).toBe("priority");
 	});
 
 	it("uses email-only OAuth credentials without an account header", async () => {

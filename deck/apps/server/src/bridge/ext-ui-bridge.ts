@@ -212,6 +212,14 @@ export class ExtensionUIBridge implements ExtensionUIContext {
 		return () => {};
 	}
 
+	rerenderMessage(_timestamp: number): void {}
+
+	refreshTranscript(_ids: readonly string[]): void {}
+
+	getLinkClicksAvailable(): boolean {
+		return false;
+	}
+
 	setStatus(_key: string, _text: string | undefined): void {}
 
 	setWorkingMessage(_message?: string): void {}
@@ -238,6 +246,10 @@ export class ExtensionUIBridge implements ExtensionUIContext {
 	}
 
 	setEditorComponent(_factory: unknown): void {}
+
+	getEditorComponent(): undefined {
+		return undefined;
+	}
 
 	addAutocompleteProvider(_factory: AutocompleteProviderFactory): void {}
 

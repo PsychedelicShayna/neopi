@@ -143,9 +143,7 @@ describe("compaction prompt asset reload boundaries", () => {
 		await override("compaction/file-operations.md", "Agent files: {{files}}");
 		await override("compaction/snapcompact/file-operations.md", "Image files: {{files}}");
 		const readMessage = response();
-		readMessage.content = [
-			{ type: "toolCall", id: "read", name: "read", arguments: { path: "src/a.ts" } },
-		];
+		readMessage.content = [{ type: "toolCall", id: "read", name: "read", arguments: { path: "src/a.ts" } }];
 		const entries: SessionEntry[] = [
 			{ type: "message", id: "user", parentId: null, timestamp: "2026-01-01T00:00:00Z", message: conversation[0] },
 			{ type: "message", id: "read", parentId: "user", timestamp: "2026-01-01T00:00:01Z", message: readMessage },

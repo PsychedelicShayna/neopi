@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { formatKernelRestartNotice } from "@oh-my-pi/pi-coding-agent/eval/executor-base";
 import {
 	disposeVmContextsByOwner,
 	executeInVmContext,
@@ -50,13 +51,17 @@ describe("owner-scoped retained kernel resets", () => {
 		};
 		try {
 			await run(parent, "globalThis.parentValue = 17;");
-			expect(await run(child, "globalThis.childOldValue = 19; display([parentValue]);")).toBe("[ 17 ]");
-			expect(await run(parent, "display([childOldValue]);")).toBe("[ 19 ]");
+			expect(await run(child, "globalThis.childOldValue = 19; print([parentValue]);")).toBe("[ 17 ]");
+			expect(await run(parent, "print([childOldValue]);")).toBe("[ 19 ]");
 			expect(
-				await run(child, "display([typeof parentValue, typeof childOldValue]); globalThis.childValue = 23;", true),
+				await run(
+					child,
+					"print([typeof parentValue, typeof childOldValue]); globalThis.childValue = 23; void 0;",
+					true,
+				),
 			).toBe("[ 'undefined', 'undefined' ]");
-			expect(await run(child, "display([typeof parentValue, childValue]);")).toBe("[ 'undefined', 23 ]");
-			expect(await run(parent, "display([parentValue, childOldValue, typeof childValue]);")).toBe(
+			expect(await run(child, "print([typeof parentValue, childValue]);")).toBe("[ 'undefined', 23 ]");
+			expect(await run(parent, "print([parentValue, childOldValue, typeof childValue]);")).toBe(
 				"[ 17, 19, 'undefined' ]",
 			);
 
@@ -64,16 +69,16 @@ describe("owner-scoped retained kernel resets", () => {
 				(await snapshotVmContext({ sessionKey: sessionId, sessionId, cwd: process.cwd(), ownerId: childId }))
 					?.values,
 			).toEqual({ childValue: 23 });
-			expect(await run(child, "display([typeof childValue]); globalThis.childValue = 29;", true)).toBe(
+			expect(await run(child, "print([typeof childValue]); globalThis.childValue = 29; void 0;", true)).toBe(
 				"[ 'undefined' ]",
 			);
-			expect(await run(child, "display([childValue]);")).toBe("[ 29 ]");
+			expect(await run(child, "print([childValue]);")).toBe("[ 29 ]");
 
 			await disposeVmContextsByOwner(childId);
-			expect(await run(parent, "display([parentValue, childOldValue]);")).toBe("[ 17, 19 ]");
+			expect(await run(parent, "print([parentValue, childOldValue]);")).toBe("[ 17, 19 ]");
 			await run(child, "globalThis.childValue = 31;", true);
 			await disposeVmContextsByOwner(parentId);
-			expect(await run(child, "display([typeof parentValue, childValue]);")).toBe("[ 'undefined', 31 ]");
+			expect(await run(child, "print([typeof parentValue, childValue]);")).toBe("[ 'undefined', 31 ]");
 		} finally {
 			await Promise.all([disposeVmContextsByOwner(childId), disposeVmContextsByOwner(parentId)]);
 		}
@@ -115,7 +120,7 @@ describe("owner-scoped retained kernel resets", () => {
 					cwd: process.cwd(),
 					session: child,
 					filename: "owner-reset-cancel.js",
-					code: "display({ ready: true }); await Promise.withResolvers().promise;",
+					code: "print({ ready: true }); await Promise.withResolvers().promise;",
 					runState: {
 						signal: controller.signal,
 						onText: text => {
@@ -124,10 +129,10 @@ describe("owner-scoped retained kernel resets", () => {
 					},
 				}),
 			).rejects.toThrow("cancel child fork");
-			expect(await run(child, "display([typeof parentValue, typeof childValue]);")).toBe(
-				"[ 'undefined', 'undefined' ]",
-			);
-			expect(await run(parent, "display([parentValue]);")).toBe("[ 41 ]");
+			const recreated = await run(child, "print([typeof parentValue, typeof childValue]);");
+			expect(recreated).toStartWith(formatKernelRestartNotice("JS worker"));
+			expect(recreated.split("\n").at(-1)).toBe("[ 'undefined', 'undefined' ]");
+			expect(await run(parent, "print([parentValue]);")).toBe("[ 41 ]");
 		} finally {
 			controller.abort(abortError);
 			await Promise.all([disposeVmContextsByOwner(childId), disposeVmContextsByOwner(parentId)]);

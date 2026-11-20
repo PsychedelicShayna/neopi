@@ -372,8 +372,8 @@ export class ExtensionDashboard implements Component {
 			return;
 		}
 		if (overList) {
-			this.#setPane("list");
 			this.#mainList.handleClick(paneLine);
+			this.#setPane("list");
 			this.#requestRender();
 		}
 	}
@@ -617,6 +617,7 @@ export class ExtensionDashboard implements Component {
 		this.#pane = pane;
 		this.#mainList.setFocused(pane === "list");
 		this.#mainList.focusFilter(false);
+		this.#syncSearch();
 		this.#keys.reset();
 		this.#requestRender();
 	}

@@ -1,7 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getOAuthApiKey, getOAuthProvider } from "../registry/oauth";
-import type { OAuthCredentials, OAuthProvider } from "../registry/oauth/types";
+import type { OAuthProvider } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { CredentialRankingContext, CredentialRankingStrategy, PlanGate, UsageReport } from "../usage";
 import { isWithinUsageReserve } from "../usage";
@@ -51,6 +51,14 @@ import {
 
 /** Temporary block after a transient OAuth refresh failure. */
 export const OAUTH_REFRESH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+
+/**
+ * A refresh abandoned by this process (caller cancel or shutdown) says nothing
+ * about the credential, so it must not record a failure or a shared block.
+ */
+function isAbandonedRefresh(error: unknown): boolean {
+	return error instanceof Error && error.name === "AbortError";
+}
 
 /** OAuth bearer and credential chosen for a request, with its durable row id when available. */
 export type OAuthResolutionResult = { apiKey: string; credential: OAuthCredential; credentialId?: number };
@@ -341,7 +349,7 @@ export class CredentialSelector {
 			modelId: options?.modelId,
 		};
 		const blockScope = strategy.blockScope?.(rankingContext);
-		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const blockScopes = credentialBlockScopesForRequest(strategy, rankingContext, blockScope);
 		const candidates = await this.#rankApiKeySelections({
 			providerKey,
 			provider,
@@ -425,7 +433,7 @@ export class CredentialSelector {
 		const planGate = strategy?.planGate?.(rankingContext);
 		if (!this.#oauthUsagePolicy(provider, credentials, strategy, planGate !== undefined).checkUsage) return;
 		const blockScope = strategy?.blockScope?.(rankingContext);
-		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const blockScopes = credentialBlockScopesForRequest(strategy, rankingContext, blockScope);
 		const providerKey = providerTypeKey(provider, "oauth");
 		await raceSignal(
 			Promise.all(
@@ -615,7 +623,7 @@ export class CredentialSelector {
 		};
 		const blockScope = strategy?.blockScope?.(rankingContext);
 		// Reads honour every scope that applies; the scalar above is for args that persist.
-		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const blockScopes = credentialBlockScopesForRequest(strategy, rankingContext, blockScope);
 		const planGate = strategy?.planGate?.(rankingContext);
 		const hasPlanRequirement = planGate !== undefined;
 		const accountIds = options?.accountIds?.length ? new Set(options.accountIds) : undefined;
@@ -875,7 +883,7 @@ export class CredentialSelector {
 					// A failed preflight already exercised the provider refresh path.
 					// Do not replay the same refresh token in the final candidate pass.
 					const errorMsg = String(error);
-					const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(errorMsg);
+					const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(error);
 					logger.debug("OAuth preflight refresh failed", {
 						provider,
 						index: candidate.selection.index,
@@ -911,7 +919,7 @@ export class CredentialSelector {
 							// to a sibling account with the wrong prefetched usage/plan.
 							return;
 						}
-					} else {
+					} else if (!isAbandonedRefresh(error)) {
 						recordTransientRefreshFailure(error);
 						if (credentialId !== undefined) {
 							const latestIndex = this.#deps.pool
@@ -1139,38 +1147,24 @@ export class CredentialSelector {
 		}
 
 		try {
-			let result: { newCredentials: OAuthCredentials; apiKey: string } | null;
+			// Refresh first through the broker-aware single-flighted machinery
+			// so transient failures surface as network errors (5-min temp block)
+			// instead of `getOAuthApiKey`'s "expired" precondition error, which
+			// the definitive-failure regex below would otherwise classify as
+			// auth failure and soft-disable a still-valid credential. A broker
+			// refresh returns only token/identity fields, so the key is built
+			// from the merged row, which keeps provider routing metadata.
+			const refreshed = mergeRefreshedCredential(
+				selection.credential,
+				await this.#deps.refresher.refresh(provider, selection.credential, credentialId, options?.signal, "expiry"),
+			);
 			const customProvider = getOAuthProvider(provider);
-			if (customProvider) {
-				const refreshedCredentials = await this.#deps.refresher.refresh(
-					provider,
-					selection.credential,
-					credentialId,
-					options?.signal,
-					"expiry",
-				);
-				const apiKey = customProvider.getApiKey
-					? customProvider.getApiKey(refreshedCredentials)
-					: refreshedCredentials.access;
-				result = { newCredentials: refreshedCredentials, apiKey };
-			} else {
-				// Refresh first through the broker-aware single-flighted machinery
-				// so transient failures surface as network errors (5-min temp block)
-				// instead of `getOAuthApiKey`'s "expired" precondition error, which
-				// the definitive-failure regex below would otherwise classify as
-				// auth failure and soft-disable a still-valid credential.
-				const refreshedCredentials = await this.#deps.refresher.refresh(
-					provider,
-					selection.credential,
-					credentialId,
-					options?.signal,
-					"expiry",
-				);
-				const oauthCreds: Record<string, OAuthCredentials> = {
-					[provider]: refreshedCredentials,
-				};
-				result = await getOAuthApiKey(provider as OAuthProvider, oauthCreds);
-			}
+			const result = customProvider
+				? {
+						newCredentials: refreshed,
+						apiKey: customProvider.getApiKey ? customProvider.getApiKey(refreshed) : refreshed.access,
+					}
+				: await getOAuthApiKey(provider as OAuthProvider, { [provider]: refreshed });
 			if (!result) return undefined;
 			const updated = mergeRefreshedCredential(selection.credential, result.newCredentials);
 			if (credentialId !== undefined) {
@@ -1217,7 +1211,7 @@ export class CredentialSelector {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
 			// Keep credentials for transient errors (network, 5xx) and block temporarily
-			const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(errorMsg);
+			const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(error);
 
 			logger.warn("OAuth token refresh failed", {
 				provider,
@@ -1242,7 +1236,7 @@ export class CredentialSelector {
 				if (this.#deps.pool.credentials(provider).some(credential => credential.type === "oauth")) {
 					if (allowFallback) return this.resolveOAuth(provider, sessionId, options);
 				}
-			} else {
+			} else if (!isAbandonedRefresh(error)) {
 				usageOptions.onTransientRefreshFailure?.(error);
 				// Block temporarily for transient failures (5 minutes)
 				this.#deps.blocks.mark(
@@ -1297,7 +1291,7 @@ export class CredentialSelector {
 		const strategy = this.#deps.strategies(provider);
 		const rankingContext: CredentialRankingContext = { modelId: options.modelId };
 		const blockScope = strategy?.blockScope?.(rankingContext);
-		const blockScopes = credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope);
+		const blockScopes = credentialBlockScopesForRequest(strategy, rankingContext, blockScope);
 		const planGate = strategy?.planGate?.(rankingContext);
 		return this.tryOAuth(provider, { credential, index }, providerTypeKey(provider, "oauth"), sessionId, options, {
 			checkUsage: strategy !== undefined || this.#deps.usage.canFetchOAuthUsage(provider),
@@ -1325,7 +1319,7 @@ export class CredentialSelector {
 			provider,
 			providerTypeKey(provider, "api_key"),
 			index,
-			credentialBlockScopesForRequest(provider, strategy, rankingContext, blockScope),
+			credentialBlockScopesForRequest(strategy, rankingContext, blockScope),
 		);
 	}
 }

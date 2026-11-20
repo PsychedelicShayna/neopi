@@ -8,8 +8,9 @@ import {
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	isDirectoryCompletionValue,
-	midPromptSkillTokenMatches,
+	midPromptInlineTokenMatches,
 	SKILL_NAMESPACE,
+	PROMPT_NAMESPACE,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { canonicalKeyId, getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -79,6 +80,8 @@ export interface NativeEditorLayout {
 	readonly role: string;
 	/** Tone of the root (`pending` while a turn runs). */
 	readonly tone?: TspTone;
+	/** Folds the root to its compact row while the keys are elsewhere in the document (an ask above it). */
+	readonly folded?: boolean;
 	readonly children: readonly NativeChild[];
 	/** Keypath of the `editor` node inside the root (the autocomplete's caret anchor). */
 	readonly caret: string;
@@ -104,7 +107,7 @@ function sameDecorations(a: readonly TspEditorDecoration[], b: readonly TspEdito
 	for (let i = 0; i < a.length; i++) {
 		const x = a[i]!;
 		const y = b[i]!;
-		if (x.from !== y.from || x.to !== y.to || x.s !== y.s || x.fx !== y.fx) return false;
+		if (x.from !== y.from || x.to !== y.to || x.s !== y.s || x.fx !== y.fx || x.blob !== y.blob) return false;
 	}
 	return true;
 }
@@ -870,7 +873,13 @@ export class Editor implements Component, Focusable {
 	#nativeDecor?: { text: string; generation: number; decor: readonly TspEditorDecoration[] | undefined };
 	#nativeEditor?: { props: TspEditorProps; node: NativeNode };
 	#nativeOverlay?: { list: SelectList; caret: string; node: NativeNode };
-	#nativeRoot?: { role: string; tone: TspTone | undefined; children: readonly NativeChild[]; node: NativeNode };
+	#nativeRoot?: {
+		role: string;
+		tone: TspTone | undefined;
+		folded: boolean | undefined;
+		children: readonly NativeChild[];
+		node: NativeNode;
+	};
 
 	// Store last layout width for cursor navigation
 	#lastLayoutWidth: number = 80;
@@ -885,8 +894,9 @@ export class Editor implements Component, Focusable {
 	// Line measurement + word-wrap cache shared by #layoutText,
 	// #buildVisualLineMap, and key handlers within a frame. Line text is a
 	// sound key (strings are immutable); cleared on layout-width or
-	// width-config (Hangul jamo setting) change and size-bounded so stale
-	// lines don't accumulate.
+	// width-config (Hangul jamo setting) change, and bounded relative to the
+	// buffer's line count so every current line stays cached across frames
+	// while stale edited-away lines can't accumulate unboundedly.
 	#wrapCache = new Map<string, WrapEntry>();
 	#wrapCacheWidth = -1;
 	#wrapCacheEpoch = -1;
@@ -953,6 +963,8 @@ export class Editor implements Component, Focusable {
 	#autocompleteRequestRunning = false;
 	#autocompleteAbortController: AbortController | undefined;
 	#autocompleteWaiters: Array<() => void> = [];
+	/** Discovery pass the shown `^` list rebuilds after (see {@link ModelMentionCompletion.pending}). */
+	#awaitedMentionDiscovery: Promise<void> | undefined;
 	#autocompleteMaxVisible: number = 10;
 	onAutocompleteUpdate?: () => void;
 	/** Called after an async text-assist result mutates the document outside an input event, so hosts can schedule a repaint. */
@@ -998,6 +1010,11 @@ export class Editor implements Component, Focusable {
 	 */
 	#pinnedUndo: UndoMark | null = null;
 
+	/**
+	 * ↑ on the first line, not browsing history: true when the host took the keys (to an ask waiting above
+	 * the composer); false lets ↑ recall history or move the cursor as usual.
+	 */
+	onUpFromTop?: () => boolean;
 	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
@@ -1334,15 +1351,41 @@ export class Editor implements Component, Focusable {
 	}
 
 	#isOnFirstVisualLine(): boolean {
-		const visualLines = this.#buildVisualLineMap(this.#caretRowWidth);
-		const currentVisualLine = this.#findCurrentVisualLine(visualLines);
-		return currentVisualLine === 0;
+		const segment = this.#cursorSegmentInLine(this.#caretRowWidth);
+		if (segment.index === -1) return this.#state.lines.length === 1 && segment.count === 1;
+		return this.#state.cursorLine === 0 && segment.index === 0;
 	}
 
 	#isOnLastVisualLine(): boolean {
-		const visualLines = this.#buildVisualLineMap(this.#caretRowWidth);
-		const currentVisualLine = this.#findCurrentVisualLine(visualLines);
-		return currentVisualLine === visualLines.length - 1;
+		const segment = this.#cursorSegmentInLine(this.#caretRowWidth);
+		if (segment.index === -1) return true;
+		return this.#state.cursorLine === this.#state.lines.length - 1 && segment.index === segment.count - 1;
+	}
+
+	/**
+	 * The cursor's wrapped row within its own logical line, using the same segment
+	 * ownership rules as {@link #findCurrentVisualLine}; `index` is -1 when no row owns
+	 * the cursor (that lookup then falls back to the last visual line).
+	 */
+	#cursorSegmentInLine(width: number): { index: number; count: number } {
+		const line = this.#state.lines[this.#state.cursorLine] || "";
+		const cursorCol = this.#state.cursorCol;
+		if (line.length === 0 || this.#lineEntry(line, width).width <= width) {
+			return { index: cursorCol <= line.length ? 0 : -1, count: 1 };
+		}
+		const chunks = this.#wrapLine(line, width);
+		for (let j = 0; j < chunks.length; j++) {
+			const chunk = chunks[j];
+			const colInSegment = cursorCol - chunk.startIndex;
+			const length = chunk.endIndex - chunk.startIndex;
+			if (
+				(colInSegment >= 0 || j === 0) &&
+				(colInSegment < length || (j === chunks.length - 1 && colInSegment <= length))
+			) {
+				return { index: j, count: chunks.length };
+			}
+		}
+		return { index: -1, count: chunks.length };
 	}
 
 	#navigateHistory(direction: 1 | -1): void {
@@ -2037,11 +2080,21 @@ export class Editor implements Component, Focusable {
 			this.#nativeOverlay = undefined;
 		}
 		const root = this.#nativeRoot;
-		if (root && root.role === layout.role && root.tone === layout.tone && sameItems(root.children, children)) {
+		if (
+			root &&
+			root.role === layout.role &&
+			root.tone === layout.tone &&
+			root.folded === layout.folded &&
+			sameItems(root.children, children)
+		) {
 			return root.node;
 		}
-		const described = col(children, layout.tone ? { role: layout.role, tone: layout.tone } : { role: layout.role });
-		this.#nativeRoot = { role: layout.role, tone: layout.tone, children, node: described };
+		const described = col(children, {
+			role: layout.role,
+			...(layout.tone ? { tone: layout.tone } : {}),
+			...(layout.folded ? { folded: true } : {}),
+		});
+		this.#nativeRoot = { role: layout.role, tone: layout.tone, folded: layout.folded, children, node: described };
 		return described;
 	}
 
@@ -2513,7 +2566,7 @@ export class Editor implements Component, Focusable {
 					// immediately after applying, so only a real command may be completed here, and
 					// only one whose name matches: a description-only hit would run an unrelated command.
 					const selected = syncResult?.items.find(item => item.value !== SKILL_NAMESPACE);
-					if (syncResult && selected && !selected.descriptionMatch) {
+					if (syncResult && selected && !selected.descriptionMatch && !selected.preserveInputOnSubmit) {
 						// Invalidate any pending async autocomplete so its stale results are discarded
 						this.#autocompleteRequestId += 1;
 						// Apply the best match and submit the completed command
@@ -2571,8 +2624,10 @@ export class Editor implements Component, Focusable {
 		}
 		// Arrow keys
 		else if (kb.matchesCanonical(canonical, "tui.editor.cursorUp")) {
-			// Up - history navigation or cursor movement
-			if (this.#isEditorEmpty()) {
+			// Up - out to what waits above (an ask), else history navigation or cursor movement
+			if (this.#historyIndex === -1 && this.#isOnFirstVisualLine() && this.onUpFromTop?.()) {
+				// The host took the keys.
+			} else if (this.#isEditorEmpty()) {
 				this.#navigateHistory(-1); // Start browsing history
 			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
 				this.#navigateHistory(-1); // Navigate to older history entry
@@ -3235,7 +3290,7 @@ export class Editor implements Component, Focusable {
 		}
 		let entry = this.#wrapCache.get(line);
 		if (entry === undefined) {
-			if (this.#wrapCache.size >= 256) {
+			if (this.#wrapCache.size >= Math.max(256, this.#state.lines.length * 2)) {
 				this.#wrapCache.clear();
 			}
 			entry = { width: visibleWidth(line), chunks: null };
@@ -3252,6 +3307,8 @@ export class Editor implements Component, Focusable {
 
 	#layoutText(contentWidth: number): LayoutLine[] {
 		const layoutLines: LayoutLine[] = [];
+		// A shrunk buffer (submit, clear, deletion) must not keep the old draft's lines cached.
+		if (this.#wrapCache.size > Math.max(256, this.#state.lines.length * 2)) this.#wrapCache.clear();
 
 		if (this.#state.lines.length === 0 || (this.#state.lines.length === 1 && this.#state.lines[0] === "")) {
 			// Empty editor
@@ -5453,7 +5510,10 @@ export class Editor implements Component, Focusable {
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
-		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
+		if (
+			(item?.value.startsWith(SKILL_NAMESPACE) || item?.value.startsWith(PROMPT_NAMESPACE)) &&
+			findTrailingSlashCommandStart(this.#autocompletePrefix) !== null
+		) {
 			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
 			if (currentTrailingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentTrailingStart);
@@ -5466,7 +5526,7 @@ export class Editor implements Component, Focusable {
 					// therefore falls through to file completion instead of rewriting
 					// the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
-					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
+					if (midPromptInlineTokenMatches(lowerToken, item.value, item.description)) return true;
 				}
 			}
 			return false;
@@ -5917,7 +5977,8 @@ export class Editor implements Component, Focusable {
 	): void {
 		this.#autocompletePrefix = suggestions.prefix;
 		this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
-		this.#enterAcceptsSelection = !suggestions.items[0]?.descriptionMatch;
+		this.#enterAcceptsSelection =
+			!suggestions.items[0]?.descriptionMatch && !suggestions.items[0]?.preserveInputOnSubmit;
 		this.#autocompleteState = state;
 		this.onAutocompleteUpdate?.();
 	}
@@ -5991,11 +6052,23 @@ export class Editor implements Component, Focusable {
 		this.#invalidateAutocompleteRequests();
 		if (completion.kind === "matched") {
 			this.#showAutocompleteSuggestions(completion.suggestions, "regular");
+			if (completion.pending) this.#refreshModelMentionsAfter(completion.pending);
 		} else {
 			this.#cancelAutocomplete();
 			this.onAutocompleteUpdate?.();
 		}
 		return true;
+	}
+
+	/** Rebuild the shown `^` list from the live token once `pending` discovery settles; one rebuild per pass. */
+	#refreshModelMentionsAfter(pending: Promise<void>): void {
+		if (this.#awaitedMentionDiscovery === pending) return;
+		this.#awaitedMentionDiscovery = pending;
+		void pending.then(() => {
+			if (this.#awaitedMentionDiscovery !== pending) return;
+			this.#awaitedMentionDiscovery = undefined;
+			this.#refreshModelMentionListSync();
+		});
 	}
 
 	/**

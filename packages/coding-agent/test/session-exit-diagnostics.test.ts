@@ -21,7 +21,10 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/exit-diagnostics";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SessionInUseError } from "@oh-my-pi/pi-coding-agent/session/session-lease";
 import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
+
+const SESSION_MANAGER_MODULE = path.join(import.meta.dir, "../src/session/session-manager.ts");
 
 const pendingAssistant: AssistantMessage = {
 	role: "assistant",
@@ -244,6 +247,61 @@ describe("session exit diagnostics", () => {
 				.some(entry => entry.type === "custom" && entry.customType === SESSION_EXIT_CUSTOM_TYPE),
 		).toBe(false);
 	});
+
+	it("rejects loading a session another live process owns without forking or modifying it", async () => {
+		tempDir = TempDir.createSync("@pi-unowned-session-exit-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected built-in anthropic model to exist");
+		const creator = SessionManager.create(tempDir.path(), tempDir.path());
+		creator.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });
+		creator.appendMessage({ ...pendingAssistant, content: [{ type: "text", text: "done" }], stopReason: "stop" });
+		await creator.flush();
+		const sessionFile = creator.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		await creator.close();
+
+		// Another live omp process writes the session, so it holds the ownership lease.
+		const ownerScript = tempDir.join("owner.ts");
+		await Bun.write(
+			ownerScript,
+			[
+				`import { SessionManager } from ${JSON.stringify(SESSION_MANAGER_MODULE)};`,
+				"const manager = await SessionManager.open(process.argv[2], undefined, undefined, { suppressBreadcrumb: true });",
+				'manager.appendMessage({ role: "user", content: "owner turn", timestamp: Date.now() });',
+				"await manager.flush();",
+				'process.stdout.write("ready\\n");',
+				"for await (const _ of console) {}",
+				"await manager.close();",
+			].join("\n"),
+		);
+		// The live `process.env`, so the owner meets this process's session-owner leases.
+		const owner = Bun.spawn([process.execPath, ownerScript, sessionFile], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			env: process.env,
+		});
+		try {
+			const { value } = await owner.stdout.getReader().read();
+			expect(new TextDecoder().decode(value)).toBe("ready\n");
+
+			// The fork claims its lifetime lease at open, not at the first write.
+			// A read-only upstream open is deliberately not part of this contract.
+			const before = await Bun.file(sessionFile).text();
+			await expect(
+				SessionManager.open(sessionFile, tempDir.path(), undefined, { suppressBreadcrumb: true }),
+			).rejects.toBeInstanceOf(SessionInUseError);
+			expect(await Bun.file(sessionFile).text()).toBe(before);
+			expect(fs.readdirSync(tempDir.path()).filter(name => name.endsWith(".jsonl"))).toEqual([
+				path.basename(sessionFile),
+			]);
+		} finally {
+			owner.stdin.end();
+			await owner.exited;
+		}
+	}, 30_000);
 
 	it("treats assistant tool calls as pending even when stopReason is not toolUse", () => {
 		const sessionManager = SessionManager.inMemory();

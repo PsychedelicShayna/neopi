@@ -29,7 +29,12 @@ const sessions: SessionSelectorEntry[] = Array.from({ length: 40 }, (_, i) => ({
 function snapshot(selector: SessionSelectorComponent) {
 	return selector.navigationSnapshot() as {
 		scope: string;
-		list: { search: { value: string; cursor: number; focused: boolean }; selected: string; order: string[]; top: unknown };
+		list: {
+			search: { value: string; cursor: number; focused: boolean };
+			selected: string;
+			order: string[];
+			top: unknown;
+		};
 	};
 }
 function make() {
@@ -240,7 +245,7 @@ describe("session selector Vim navigation and safe history", () => {
 
 	it("retains deep-history membership and selection when a restored full listing finishes fuzzy scanning", async () => {
 		vi.useFakeTimers();
-		const rows = Array.from({ length: 122 }, (_, i) => ({
+		const rows: SessionSelectorEntry[] = Array.from({ length: 122 }, (_, i) => ({
 			cwd: "/work",
 			modified: new Date(2024, 0, 1, 0, 0, i),
 			size: 100,

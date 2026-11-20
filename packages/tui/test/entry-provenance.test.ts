@@ -69,6 +69,22 @@ test("Settings selection styling preserves each marker's independent tier color"
 			thinkingLevel: undefined,
 			availableThemes: [],
 			providers: [],
+			plugins: {
+				manager: {
+					list: async () => [],
+					getPlugin: async () => undefined,
+					getPluginSettings: async () => ({}),
+					setEnabled: async () => {},
+					getEnabledFeatures: async () => null,
+					setEnabledFeatures: async () => {},
+					setPluginSetting: async () => {},
+				},
+				createMarketplaceManager: async () => ({
+					listInstalledPlugins: async () => [],
+					setPluginEnabled: async () => {},
+				}),
+				parsePluginId: id => ({ name: id }),
+			},
 			settings: {
 				entries: tiers.map(tier => ({
 					path: tier,

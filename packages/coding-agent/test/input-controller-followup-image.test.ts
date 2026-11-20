@@ -77,6 +77,7 @@ function createContext(opts: {
 			isCompacting: false,
 			isBashRunning: false,
 			isEvalRunning: false,
+			captureSubmissionGuard: () => () => true,
 			extensionRunner: undefined,
 			prompt,
 		},

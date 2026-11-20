@@ -1,5 +1,5 @@
 import { isGraphValue, type GraphEffect, type GraphObject, type GraphValue } from "@npi-deck/protocol";
-import { cardExecutionProperties, cardFrontmatter, withCardProperties } from "../card-properties.ts";
+import { cardExecutionProperties, cardFrontmatter, importLegacyCardBody, withCardProperties } from "../card-properties.ts";
 import { getDb } from "../db/index.ts";
 import { getGraphEffect, GraphActionConflictError, graphDigest, redactGraphActionField, reserveGraphEffect, storeGraphEffect } from "../db/graph-actions.ts";
 import { createTask, getDefaultState, getState, updateTask } from "../db/tasks.ts";
@@ -82,11 +82,11 @@ function cardRequest(value: GraphObject): CardRequest {
 	if (value.orderInState !== undefined && (typeof value.orderInState !== "number" || !Number.isSafeInteger(value.orderInState))) throw new Error("orderInState must be a safe integer");
 	if (value.archived !== undefined && typeof value.archived !== "boolean") throw new Error("archived must be boolean");
 	const properties = value.properties === undefined ? undefined : object(value.properties, "properties");
-	const body = withCardProperties(value.body as string | undefined ?? "", properties);
-	cardExecutionProperties(body); // #101 metadata validation; arbitrary stored front matter remains supported.
+	const body = value.body as string | undefined ?? "";
+	cardExecutionProperties(withCardProperties(importLegacyCardBody(body), properties));
 	const stateId = value.stateId === undefined ? getDefaultState().id : text(value.stateId, "stateId");
 	if (!getState(stateId)) throw new Error("Unknown card stateId");
-	return { title, body, stateId, ...(value.cwd !== undefined ? { cwd: value.cwd as string | null } : {}), ...(value.orderInState !== undefined ? { orderInState: value.orderInState as number } : {}), ...(value.archived !== undefined ? { archived: value.archived as boolean } : {}) };
+	return { title, body, stateId, ...(properties !== undefined ? { properties } : {}), ...(value.cwd !== undefined ? { cwd: value.cwd as string | null } : {}), ...(value.orderInState !== undefined ? { orderInState: value.orderInState as number } : {}), ...(value.archived !== undefined ? { archived: value.archived as boolean } : {}) };
 }
 function persistedCard(request: CardRequest): GraphObject {
 	const card = createTask(request);

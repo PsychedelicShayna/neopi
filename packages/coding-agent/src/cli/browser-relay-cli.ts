@@ -48,7 +48,8 @@ async function runInstall(dirOverride: string | undefined): Promise<void> {
 	console.log(`${APP_NAME} starts the relay automatically when the browser prelude needs it;`);
 	console.log(`run \`${APP_NAME} browser-relay\` yourself only for --token or --no-group.`);
 	console.log("The extension badge shows 'on' once it reaches a relay.");
-	if (!dirOverride) console.log(`Newer ${APP_NAME} versions update the extension in this folder and reload it on their own.`);
+	if (!dirOverride)
+		console.log(`Newer ${APP_NAME} versions update the extension in this folder and reload it on their own.`);
 	console.log(
 		"Old connection-refused entries in chrome://extensions > Errors may persist after reconnect; use Clear all.",
 	);

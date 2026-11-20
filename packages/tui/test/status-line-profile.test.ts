@@ -26,6 +26,7 @@ function createContext(overrides: Partial<SegmentContext> = {}): SegmentContext 
 		vim: null,
 		collab: null,
 		stream: null,
+		live: null,
 		recording: false,
 		usageStats: {
 			input: 0,
@@ -52,6 +53,7 @@ function createContext(overrides: Partial<SegmentContext> = {}): SegmentContext 
 		activeRepo: null,
 		worktree: null,
 		git: { branch: null, status: null, pr: null },
+		usageReports: null,
 		usage: null,
 		...overrides,
 	};
@@ -70,6 +72,15 @@ describe("status line pi segment profile tag", () => {
 		vi.spyOn(piUtils, "getActiveProfile").mockReturnValue("work");
 		const rendered = renderSegment("pi", createContext({ now: new Date(0), turnElapsedMs: 92_000 }));
 		expect(Bun.stripANSI(rendered.content)).toBe(`${theme.getSpinnerFrames("activity")[0]}-work 1m`);
+	});
+
+	it("shows a question mark instead of the spinner while the turn waits on an ask", () => {
+		vi.spyOn(piUtils, "getActiveProfile").mockReturnValue(undefined);
+		const waiting = renderSegment(
+			"pi",
+			createContext({ now: new Date(0), turnElapsedMs: 125_000, awaitingAnswer: true }),
+		);
+		expect(Bun.stripANSI(waiting.content)).toBe(`${theme.symbol("cmd.question") || "?"} 2m`);
 	});
 
 	it("names the profile in the native status bar", () => {

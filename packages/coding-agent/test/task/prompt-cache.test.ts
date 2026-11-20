@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
 import * as fs from "node:fs";
 import type { Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { buildRequest as buildGeminiRequest } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
@@ -186,6 +187,10 @@ describe("task sibling prompt-cache routing", () => {
 		async (_name, provider, modelId, parentCacheKey, parentTaskKey, expected) => {
 			using directory = TempDir.createSync("@omp-task-cache-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
+			// Antigravity is paused in its auth rules; its transport stays for when it is turned back on.
+			if (provider === "google-antigravity") {
+				vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined);
+			}
 			const authStorage = await AuthStorage.create(directory.join("auth.db"));
 			const parentOverride = unoptedParentLanes[_name];
 			const [parentProvider, parentModelId] = parentOverride ?? [provider, modelId];
@@ -289,6 +294,7 @@ describe("task sibling prompt-cache routing", () => {
 			);
 			try {
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -319,6 +325,7 @@ describe("task sibling prompt-cache routing", () => {
 					const result = await tool.execute(name, {
 						name,
 						task: `Review ${name}.`,
+						outputSchema: {},
 					});
 					expect(result.isError, JSON.stringify(result)).not.toBe(true);
 					expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
@@ -491,6 +498,7 @@ describe("task sibling prompt-cache routing", () => {
 				const lineage = `parent-lineage-${suffix}`;
 				const childName = `sibling-${suffix}`;
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -519,7 +527,11 @@ describe("task sibling prompt-cache routing", () => {
 				// boundary verbatim; only the derivation step may decline to use it.
 				expect(parent.getPromptCacheKeyForModel(parent.agent.state.model)).toBe("");
 				const tool = parent.getToolByName("task") as TaskTool;
-				const result = await tool.execute(childName, { name: childName, task: "Review the sibling." });
+				const result = await tool.execute(childName, {
+					name: childName,
+					task: "Review the sibling.",
+					outputSchema: {},
+				});
 				expect(result.isError, JSON.stringify(result)).not.toBe(true);
 				expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 			}
@@ -616,6 +628,7 @@ describe("task sibling prompt-cache routing", () => {
 		);
 		async function createParent(lineage: string, model: Model, explicitKey?: string) {
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -640,7 +653,7 @@ describe("task sibling prompt-cache routing", () => {
 		async function runTask(tool: TaskTool, name: string) {
 			inTaskExecute = true;
 			try {
-				const result = await tool.execute(name, { name, task: `Review ${name}.` });
+				const result = await tool.execute(name, { name, task: `Review ${name}.`, outputSchema: {} });
 				expect(result.isError, JSON.stringify(result)).not.toBe(true);
 				expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 			} finally {
@@ -777,11 +790,12 @@ describe("task sibling prompt-cache routing", () => {
 			authStorage.keys.setRuntime(provider, "test-key");
 			try {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
 					modelPattern: requested,
-					modelPatternAuthFallback: `${provider}/${modelId}`,
+					modelPatternParentFallback: `${provider}/${modelId}`,
 					taskPromptCacheKey: "parent:task",
 					sessionManager: SessionManager.inMemory(directory.path()),
 					settings: Settings.isolated({
@@ -857,6 +871,7 @@ describe("task sibling prompt-cache routing", () => {
 			if (!muse) throw new Error(`Model missing from offline catalog fixture: muse-code/${modelId}`);
 			const luna = getBundledModel("openai-codex", "gpt-6-luna");
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -1000,6 +1015,7 @@ describe("task sibling prompt-cache routing", () => {
 			const reopened = await SessionManager.open(forkFile, directory.path());
 			for (const sessionManager of [forked, reopened]) {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheCopy${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -1058,6 +1074,7 @@ describe("task sibling prompt-cache routing", () => {
 			const altCwd = directory.join("alt");
 			fs.mkdirSync(altCwd, { recursive: true });
 			const { session: alt } = await sdk.createAgentSession({
+				agentId: `CacheAlternate${Bun.randomUUIDv7()}`,
 				cwd: altCwd,
 				agentDir: directory.path(),
 				authStorage,
