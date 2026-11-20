@@ -1,4 +1,5 @@
 import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
+import type { OAuthRefreshReason } from "../../auth/types";
 import type { FetchImpl } from "../../types";
 import type { OAuthProviderUnion } from "../registry";
 
@@ -23,13 +24,24 @@ export type OAuthCredentials = {
 	 * Account residency region (e.g. `"eu"`), when the provider is
 	 * region-partitioned. Captured at login; refreshed identity may update it
 	 * when the account migrates, while failed lookups preserve the stored value.
-	 * Residency selects the API host, not inference eligibility.
+	 * Residency selects the API host, not inference eligibility. For Kiro, the
+	 * API region the login routes to.
 	 */
 	region?: string;
 	/** Factory organization inference scope, independent of account residency. */
 	inferenceRegion?: "global" | "eu" | "us";
 	/** WorkOS selected organization; never used as a Factory API organization header. */
 	activeOrganizationId?: string;
+	/**
+	 * Kiro AWS SSO-OIDC client binding (IAM Identity Center / Builder ID). Refresh
+	 * must reuse the registered client at `oidc.{kiroOidcRegion}`; a row without
+	 * `kiroClientId` is a Google/GitHub sign-in refreshed by the Kiro auth service.
+	 */
+	kiroClientId?: string;
+	kiroClientSecret?: string;
+	kiroOidcRegion?: string;
+	/** Kiro profile ARN the login routes by; absent for Builder ID. Embeds the AWS account id, so never displayed. */
+	kiroProfileArn?: string;
 	/**
 	 * Epoch ms of the interactive login that minted this grant. Set by
 	 * `AuthStorage.oauth.login`; token refreshes preserve it. Providers with an
@@ -63,6 +75,11 @@ export type OAuthPrompt = {
 	allowEmpty?: boolean;
 	/** Request masked entry from interactive hosts. Hosts that cannot hide input must reject the prompt. */
 	secret?: boolean;
+	/**
+	 * Marks the yes/no acceptance of a provider's `login-warning`, asked before any auth URL.
+	 * Hosts that refuse pre-auth input (RPC) must still surface it; only an answer of "yes" continues.
+	 */
+	riskAcknowledgement?: boolean;
 };
 
 export type OAuthAuthInfo = {
@@ -137,8 +154,15 @@ export interface OAuthProviderInterface {
 	readonly loginKind?: OAuthLoginKind;
 	readonly deviceCode?: boolean;
 	login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials | string | ApiKeyLoginResult>;
-	/** Refresh a stored grant; the signal bounds provider network work to refresh ownership. */
-	refreshToken?(credentials: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials>;
+	/**
+	 * Refresh a stored grant; the signal bounds provider network work to refresh ownership.
+	 * `reason` is why the refresh was requested; undefined means the grant is near expiry.
+	 */
+	refreshToken?(
+		credentials: OAuthCredentials,
+		signal?: AbortSignal,
+		reason?: OAuthRefreshReason,
+	): Promise<OAuthCredentials>;
 	getApiKey?(credentials: OAuthCredentials): string;
 	/** Store resulting OAuth credentials under a different provider id. */
 	readonly storeCredentialsAs?: string;

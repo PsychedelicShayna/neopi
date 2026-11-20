@@ -1123,7 +1123,15 @@ describe("AgentSession message pipeline", () => {
 		expect(deltas.join("")).toBe("Answer");
 		expect(JSON.stringify(capturedContext?.messages)).toContain("zephyr-42");
 		expect(session.agent.state.messages).toEqual(messagesBefore);
-		expect(sessionManager.getEntries()).toEqual(entriesBefore);
+		// The exchange stays off the transcript; only its spend is journaled as one `model_usage` row.
+		const entriesAfter = sessionManager.getEntries();
+		expect(entriesAfter).toHaveLength(entriesBefore.length + 1);
+		expect(entriesAfter.slice(0, entriesBefore.length)).toEqual(entriesBefore);
+		expect(entriesAfter.at(-1)).toMatchObject({
+			type: "model_usage",
+			purpose: "extension",
+			completion: { reply: "Answer" },
+		});
 
 		expect(result.replyText).toBe("Answer");
 		expect(capturedOptions?.promptCacheKey).toBe(promptCacheKey);

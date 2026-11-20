@@ -1,8 +1,9 @@
-import { Text } from "@oh-my-pi/pi-tui";
+import { SEGMENT_RESET } from "@oh-my-pi/pi-tui";
 import type { SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
+import { wrapTreeLine } from "@oh-my-pi/pi-tui/render/hanging-wrap";
 import { formatMoreItems, replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	formatPhaseDisplayName,
 	isClosedTodo,
@@ -11,7 +12,7 @@ import {
 	type TodoPhase,
 	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-tui/tools/todo";
-import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 
 const HUD_NOTE_SUP_DIGITS: Record<string, string> = {
@@ -47,16 +48,14 @@ export function formatTodoLine(todo: TodoItem, prefix: string, matched: boolean)
 			return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		case "abandoned":
 			return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
-		case "blocked":
-			return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
 		default:
 			if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 			return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 	}
 }
 
-/** Input to {@link renderTodoLines}; the same state drives the HUD and the panel section. */
-export interface TodoLinesInput {
+/** Input to {@link renderTodoTree}; the same state drives the HUD and the panel section. */
+export interface TodoTreeInput {
 	readonly phases: readonly TodoPhase[];
 	/** Expanded lists every stage and task; collapsed applies the budgets. */
 	readonly expanded: boolean;
@@ -81,15 +80,28 @@ export function activePhase(phases: readonly TodoPhase[]): TodoPhase | undefined
 	return active ?? nonEmpty[nonEmpty.length - 1];
 }
 
+/** One logical todo row: its content, and the spine drawn beside its first row and beside its continuations. */
+export interface TodoRow {
+	readonly content: string;
+	readonly spine: string;
+	readonly hang: string;
+}
+
+/** The todo tree as logical rows plus the closing tail; {@link wrapTodoTree} lays it out at a width. */
+export interface TodoTree {
+	readonly rows: readonly TodoRow[];
+	readonly tail: string;
+}
+
 /**
  * The todo tree as logical rows: one stage per spine branch, its tasks below,
  * and a closing tail whose fill tracks overall progress. No leading blank or
- * `TODO` header, and no width: callers wrap the rows (`Text`) at their own
- * width. Empty when no phase has tasks.
+ * `TODO` header, and no width: callers lay the rows out with
+ * {@link wrapTodoTree} at their own width. Undefined when no phase has tasks.
  */
-export function renderTodoLines(input: TodoLinesInput): string[] {
+export function renderTodoTree(input: TodoTreeInput): TodoTree | undefined {
 	const phases = input.phases.filter(phase => phase.tasks.length > 0);
-	if (phases.length === 0) return [];
+	if (phases.length === 0) return undefined;
 	const { expanded, activeDescs } = input;
 	const { subsequentStageCap, activeTaskCap } = input.budget;
 	const multiPhase = phases.length > 1;
@@ -190,12 +202,38 @@ export function renderTodoLines(input: TodoLinesInput): string[] {
 	if (closedTasks > 0) filled = Math.max(filled, 1);
 	if (closedTasks < totalTasks) filled = Math.min(filled, pathLen - 1);
 
-	const lines: string[] = [];
-	for (let i = 0; i < contentLines.length; i++) {
-		lines.push(` ${theme.fg(i < filled ? "accent" : "dim", spineGlyphs[i]!)}${contentLines[i]}`);
-	}
+	const rows: TodoRow[] = contentLines.map((content, i) => {
+		const color = i < filled ? "accent" : "dim";
+		return {
+			content,
+			spine: ` ${theme.fg(color, spineGlyphs[i]!)}`,
+			hang: ` ${theme.fg(color, `${theme.tree.vertical}  `)}`,
+		};
+	});
 	const tailFilled = Math.max(0, Math.min(filled - contentLines.length, tail.length));
-	lines.push(` ${theme.fg("accent", tail.slice(0, tailFilled))}${theme.fg("dim", tail.slice(tailFilled))}`);
+	return { rows, tail: ` ${theme.fg("accent", tail.slice(0, tailFilled))}${theme.fg("dim", tail.slice(tailFilled))}` };
+}
+
+/**
+ * Lay `tree` out at `width`. Rows are wrapped here rather than by `Text`, which wraps the joined string
+ * and restarts every continuation at the panel edge, cutting the spine and the task rail: a wide row
+ * hangs beneath its own content — a task under its checkbox, a stage under its name — with the spine
+ * running on beside it. `rowTheme` must be the theme `tree` was styled with: `wrapTreeLine` finds a
+ * connector by its styled bytes.
+ */
+export function wrapTodoTree(tree: TodoTree, width: number, rowTheme: Theme = theme): string[] {
+	const lines: string[] = [];
+	for (const { content, spine, hang } of tree.rows) {
+		const rowWidth = Math.max(1, width - visibleWidth(spine));
+		const rows = wrapTreeLine(content, rowWidth, rowTheme) ?? wrapTextWithAnsi(content, rowWidth);
+		// A renderer carries SGR state from one row into the next, and a wrapped row can end with a style
+		// still open (a bold stage name), so a row that continues ends in a reset to keep it off the spine.
+		const last = rows.length - 1;
+		for (let r = 0; r <= last; r++) {
+			lines.push(`${r === 0 ? spine : hang}${rows[r]}${r < last ? SEGMENT_RESET : ""}`);
+		}
+	}
+	lines.push(tree.tail);
 	return lines;
 }
 
@@ -225,15 +263,14 @@ export class TodoSection implements SidePanelSection {
 	readonly content = (width: number): readonly string[] => {
 		const state = this.#state;
 		if (state.hidden) return [];
-		const lines = renderTodoLines({
+		const tree = renderTodoTree({
 			phases: state.phases,
 			expanded: true,
 			activeDescs: state.activeDescs,
 			budget: TODO_LINE_BUDGET,
 		});
-		if (lines.length === 0) return [];
 		// The panel's fitLayoutLine pads the rows; wrap only, no padding of our own.
-		return new Text(lines.join("\n"), 0, 0).render(width);
+		return tree ? wrapTodoTree(tree, width) : [];
 	};
 
 	/** Store the state the next frame renders; the caller requests that frame. */

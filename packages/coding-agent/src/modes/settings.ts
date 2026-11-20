@@ -48,7 +48,7 @@ export const cfgSettingsDefaultScope = register({
 	id: "settings.defaultScope",
 	type: "enum",
 	values: ["global", "project", "session"] as const,
-	default: "global",
+	default: "session",
 	ui: {
 		tab: "interaction",
 		group: "Settings",
@@ -591,6 +591,19 @@ export const cfgTuiRenderSvg = register({
 		label: "Render SVG Figures",
 		description:
 			"Invite the agent to draw diagrams and charts as SVG, rendered inline as images on terminals that show graphics",
+	},
+});
+
+export const cfgTuiRenderEmbeds = register({
+	id: "tui.renderEmbeds",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Render Embedded Images and Pages",
+		description:
+			"Invite the agent to show pictures with <img> and web pages with <iframe>, loading them (remote addresses included) to draw inline on terminals that show graphics",
 	},
 });
 
@@ -1404,7 +1417,7 @@ export const cfgSpellingAutocomplete = register({
 export const cfgComposerPredictions = register({
 	id: "composer.predictions",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Input",
@@ -1657,7 +1670,7 @@ export const cfgAskTimeout = register({
 		group: "Notifications",
 		label: "Ask Timeout",
 		description:
-			"Auto-select the recommended ask option after this many seconds (0 disables). Also bounds cfg:// approval prompts; an unanswered approval denies the write instead of auto-selecting",
+			"Submit an ask form's current values (your preselected answers) after this many seconds (0 disables). Also bounds cfg:// approval prompts; an unanswered approval denies the write instead of auto-submitting",
 		options: [
 			{ value: "0", label: "Disabled" },
 			{ value: "15", label: "15 seconds" },

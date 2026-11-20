@@ -150,8 +150,8 @@
               }
               self.homeManagerModules.default
               {
-                programs.omomp.enable = true;
-                programs.omomp.settings.startup.quiet = true;
+                programs.omp.enable = true;
+                programs.omp.settings.startup.quiet = true;
               }
             ];
           };
@@ -165,7 +165,7 @@
                 };
               }
               self.nixosModules.default
-              { programs.omomp.enable = true; }
+              { programs.omp.enable = true; }
             ];
           };
           modulesEvaluate =

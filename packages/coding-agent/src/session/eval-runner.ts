@@ -4,6 +4,8 @@ import type { Settings } from "../config/settings";
 import { jsBackend, pythonBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { disposeVmContextsByOwner } from "../eval/js/context-manager";
+import { namespaceSessionId as namespaceJsSessionId } from "../eval/js";
+import { namespaceSessionId as namespacePythonSessionId } from "../eval/py";
 import { disposeKernelSessionsByOwner } from "../eval/py/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import type { ExtensionRunner } from "../extensibility/extensions";
@@ -41,6 +43,9 @@ export class EvalRunner {
 	#pendingMessages: EvalExecutionMessage[] = [];
 	#activeExecutions = new Set<Promise<unknown>>();
 	#disposing = false;
+	readonly #disposeStarted = Promise.withResolvers<void>();
+	#staleKernelReleaseQueued = false;
+	#pendingKernelRelease: Promise<void> | undefined;
 
 	constructor(host: EvalRunnerHost, options: { kernelOwnerId: string; parentSessionId?: string }) {
 		this.#host = host;
@@ -194,9 +199,50 @@ export class EvalRunner {
 	}
 	beginDispose(): void {
 		this.#disposing = true;
+		this.#disposeStarted.resolve();
+	}
+
+	/**
+	 * Shuts down retained kernels this owner holds under any eval session id but the current one.
+	 *
+	 * Kernels are keyed by {@link getSessionId}, so once a session transition changes it (or
+	 * rolls back after a hook started a kernel for the abandoned target) those kernels are
+	 * unreachable and would hold a live process until the session is disposed. The release
+	 * waits for in-flight eval work to settle and reads the current id only then, so a cell
+	 * still running in a departed kernel finishes, and a kernel started for the adopted
+	 * session, e.g. by a `session_switch` hook, is kept.
+	 */
+	releaseStaleKernels(): void {
+		if (this.#disposing || this.#staleKernelReleaseQueued) return;
+		this.#staleKernelReleaseQueued = true;
+		const previousRelease = this.#pendingKernelRelease;
+		const release = (async () => {
+			await previousRelease;
+			const idle = await this.#waitForIdleUnlessDisposing();
+			this.#staleKernelReleaseQueued = false;
+			if (!idle) return;
+			// Selection runs synchronously inside both calls, before any eval work can start.
+			const sessionId = this.getSessionId();
+			const results = await Promise.allSettled([
+				disposeKernelSessionsByOwner(this.#kernelOwnerId, {
+					keepSessionId: namespacePythonSessionId(sessionId),
+				}),
+				disposeVmContextsByOwner(this.#kernelOwnerId, { keepSessionId: namespaceJsSessionId(sessionId) }),
+			]);
+			for (const result of results) {
+				if (result.status === "rejected") {
+					logger.warn("Failed to release stale eval kernels", { error: String(result.reason) });
+				}
+			}
+		})();
+		this.#pendingKernelRelease = release;
+		void release.finally(() => {
+			if (this.#pendingKernelRelease === release) this.#pendingKernelRelease = undefined;
+		});
 	}
 
 	async disposeKernels(): Promise<void> {
+		await this.#pendingKernelRelease;
 		const settled = await this.#prepareExecutionsForDispose();
 		if (!settled) logger.warn("Detaching retained eval-kernel ownership while eval execution is still active");
 		const results = await Promise.allSettled([
@@ -206,6 +252,14 @@ export class EvalRunner {
 		]);
 		const errors = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
 		if (errors.length) throw new AggregateError(errors, "Failed to dispose one or more eval kernels");
+	}
+
+	/** Resolves true once no eval work is active, or false as soon as disposal begins. */
+	async #waitForIdleUnlessDisposing(): Promise<boolean> {
+		while (this.#activeExecutions.size > 0 && !this.#disposing) {
+			await Promise.race([Promise.allSettled(Array.from(this.#activeExecutions)), this.#disposeStarted.promise]);
+		}
+		return !this.#disposing;
 	}
 
 	async #waitForExecutionsToSettle(timeoutMs: number): Promise<boolean> {

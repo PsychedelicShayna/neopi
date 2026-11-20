@@ -49,7 +49,7 @@ describe("--exit-with-parent for RPC", () => {
 			// process teardown, not shell parsing or job bookkeeping.
 			void child
 				.request(
-					{ type: "bash", command: `sh -c 'sleep 300 & echo $! > "$1"; wait' sh ${JSON.stringify(pidFile)}` },
+					{ type: "bash", command: `/bin/sh -c 'sleep 300 & echo $! > "$1"; wait' sh ${JSON.stringify(pidFile)}` },
 					60_000,
 				)
 				.catch(() => {});

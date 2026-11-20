@@ -494,7 +494,7 @@ export function answerRpcProtocolNegotiation(
 
 /**
  * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
- * (`prompt` and `steer_subagent` are also backgrounded there, but start through
+ * (`prompt`, `steer_subagent`, and `handoff` also run in the background, but start through
  * the serial tail.) `btw_cancel` is synchronous and must overtake a `btw` still
  * starting or a long serial command; `abort_branch_summary` likewise overtakes
  * the `navigate_tree` whose summary it stops.
@@ -514,7 +514,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 /**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * `bash`, `predict_word`, `prompt` and `steer_subagent` are dispatched in the
+ * `bash`, `predict_word`, `prompt`, `steer_subagent`, and `handoff` are dispatched in the
  * background so the caller can keep reading subsequent frames while one is
  * still settling: a `bash` command can run for a long time, and a `prompt`
  * command's response is held until the message is admitted, which can span
@@ -562,7 +562,8 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 		command.type === "dictation_start" ||
 		command.type === "follow_up" ||
 		command.type === "navigate_tree" ||
-		command.type === "steer_subagent"
+		command.type === "steer_subagent" ||
+		command.type === "handoff"
 	) {
 		const task = (async () => {
 			try {
@@ -651,7 +652,7 @@ export class RpcUserInputGate {
 	}
 }
 
-/** Starts prompts, steers, follow-ups and `steer_subagent` after earlier ordinary commands, without
+/** Starts prompts, steers, follow-ups, `steer_subagent` and `handoff` after earlier ordinary commands, without
  * awaiting admission. Control frames, `bash` and `predict_word` dispatch immediately (see
  * dispatchRpcInputFrame). `acceptInput` runs synchronously in {@link dispatch}, before the
  * handler is queued, so an abort can invalidate a frame that has not started yet. */
@@ -1173,6 +1174,10 @@ export function requestRpcSelect(
 			title,
 			options: labels,
 			...(optionDetails ? { optionDetails } : {}),
+			initialIndex: dialogOptions?.initialIndex,
+			selectionMarker: dialogOptions?.selectionMarker,
+			checkedIndices: dialogOptions?.checkedIndices ? [...dialogOptions.checkedIndices] : undefined,
+			markableCount: dialogOptions?.markableCount,
 			timeout: dialogOptions?.timeout,
 		},
 		response => parseValueDialogResponse(response, dialogOptions),
@@ -1927,7 +1932,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					inputGate.commitSessionChange(command);
 					// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
 					if (command.type !== "branch" && command.type !== "fork") promptResults.abortOpen();
-					// The detached run publishes no terminal agent_end to settle on.
+					// The detached run publishes no agent_end to settle on.
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
 					// A session change ends set_mode's plan mode; answer once its restore landed.
@@ -2743,15 +2748,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "handoff": {
-				// Resetting the agent mid-stream lets the live turn keep emitting into a
-				// session that handoff has already torn down. Refuse while a prompt is in
-				// flight (mirrors the TUI /handoff guard).
-				if (session.isStreaming) {
-					return error(id, "handoff", "Cannot hand off while a response is in progress");
-				}
-				const result = await session.handoff(command.customInstructions);
+				// Handoff is a compaction mode: steering and `abort` stay free while it prepares.
+				await session.compact(command.customInstructions, { mode: "handoff" });
 				await planMode.settled();
-				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
+				return success(id, "handoff", {});
 			}
 
 			// =================================================================
@@ -3510,6 +3510,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// A backgrounded builtin (e.g. a /mcp reauth browser wait) must not park
 	// the drain: tear it down now that the client is gone.
 	abortBuiltinCommands("RPC client disconnected");
+	if (session.isBackgroundCompacting) session.abortCompaction("RPC client disconnected");
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();
 	// Dispose the main session before exiting so the browser reaper and other

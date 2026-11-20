@@ -10,6 +10,7 @@ import type { AuthStorage } from "../session/auth-storage";
 import { type MCPLoadResult, MCPManager } from "./manager";
 import type { McpConnectionStatusEvent } from "./startup-events";
 import { MCPToolCache } from "./tool-cache";
+import type { MCPTransformContext } from "./transforms";
 
 /** Result from loading MCP tools */
 export interface MCPToolsLoadResult {
@@ -39,6 +40,8 @@ export interface MCPToolsLoadOptions {
 	filterBrowser?: boolean;
 	/** Server name globs to admit; empty or absent admits every server. */
 	includeServers?: readonly string[];
+	/** What the session offers natively, for built-in transforms; omitted: none applies. */
+	builtinTransforms?: MCPTransformContext;
 	/** SQLite storage for MCP tool cache (null disables cache) */
 	cacheStorage?: AgentStorageApi | null;
 	/** Auth storage used to resolve OAuth credentials before initial MCP connect */
@@ -79,6 +82,7 @@ export async function discoverAndLoadMCPTools(cwd: string, options?: MCPToolsLoa
 			filterExa: options?.filterExa,
 			filterBrowser: options?.filterBrowser,
 			includeServers: options?.includeServers,
+			builtinTransforms: options?.builtinTransforms,
 		});
 	} catch (error) {
 		// If discovery fails entirely, return empty result

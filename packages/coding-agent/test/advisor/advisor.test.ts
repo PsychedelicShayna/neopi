@@ -380,7 +380,13 @@ describe("advisor", () => {
 					id: "ask-1",
 					name: "ask",
 					arguments: {
-						html: '<form><p>Authorize deployment?</p><label><input type="radio" name="deploy" value="yes"> Yes</label><label><input type="radio" name="deploy" value="no"> No</label></form>',
+						questions: [
+							{
+								id: "deploy",
+								question: "Authorize deployment?",
+								options: [{ label: "Yes" }, { label: "No" }],
+							},
+						],
 					},
 				},
 			],
@@ -390,8 +396,13 @@ describe("advisor", () => {
 			role: "toolResult",
 			toolCallId: "ask-1",
 			toolName: "ask",
-			content: [{ type: "text", text: 'User answers:\n{\n  "deploy": "yes"\n}' }],
-			details: { answers: [{ name: "deploy", question: "Authorize deployment?", answer: "Yes" }] },
+			content: [{ type: "text", text: "User selected: Yes" }],
+			details: {
+				question: "Authorize deployment?",
+				options: ["Yes", "No"],
+				multi: false,
+				selectedOptions: ["Yes"],
+			},
 			isError: false,
 			timestamp: 2,
 		} as unknown as AgentMessage;
@@ -403,13 +414,15 @@ describe("advisor", () => {
 				expandToolIO: true,
 			});
 
-			expect(compact).not.toContain('"deploy": "yes"');
-			expect(expanded).toContain("<p>Authorize deployment?</p>");
-			expect(expanded).toContain('value="no"> No</label>');
-			expect(expanded).toContain('"deploy": "yes"');
+			expect(compact).not.toContain("User selected: Yes");
+			expect(expanded).toContain('"id": "deploy"');
+			expect(expanded).toContain('"question": "Authorize deployment?"');
+			expect(expanded).toContain('"label": "Yes"');
+			expect(expanded).toContain('"label": "No"');
+			expect(expanded).toContain("User selected: Yes");
 		});
 
-		it("bounds long ask forms and answers with visible head and tail context", () => {
+		it("bounds long ask questions and answers with visible head and tail context", () => {
 			const questionEnd = "question-at-end";
 			const answerEnd = "answer-at-end";
 			const longQuestion = {
@@ -418,7 +431,13 @@ describe("advisor", () => {
 					{
 						...(askCall as unknown as { content: Record<string, unknown>[] }).content[0],
 						arguments: {
-							html: `<form><p>question-start ${"context\n".repeat(1200)}${questionEnd}</p><textarea name="answer"></textarea></form>`,
+							questions: [
+								{
+									id: "deploy",
+									question: `question-start ${"context\n".repeat(1200)}${questionEnd}`,
+									options: [{ label: "Yes" }, { label: "No" }],
+								},
+							],
 						},
 					},
 				],
@@ -443,8 +462,18 @@ describe("advisor", () => {
 				role: "toolResult",
 				toolCallId: "ask-orphan",
 				toolName: "ask",
-				content: [{ type: "text", text: 'User answers:\n{\n  "deploy": "yes"\n}' }],
-				details: { answers: [{ name: "deploy", question: "Authorize production deployment?", answer: "Yes" }] },
+				content: [{ type: "text", text: "User answers:\ndeploy: Yes" }],
+				details: {
+					results: [
+						{
+							id: "deploy",
+							question: "Authorize production deployment?",
+							options: ["Yes", "No"],
+							multi: false,
+							selectedOptions: ["Yes"],
+						},
+					],
+				},
 				isError: false,
 				timestamp: 2,
 			} as unknown as AgentMessage;
@@ -452,7 +481,7 @@ describe("advisor", () => {
 			const expanded = formatSessionHistoryMarkdown([orphan], { expandToolIO: true });
 
 			expect(expanded).toContain("Authorize production deployment?");
-			expect(expanded).toContain('"deploy": "yes"');
+			expect(expanded).toContain("deploy: Yes");
 		});
 
 		it("bounds expanded tool results with visible head and tail context", () => {
@@ -794,7 +823,10 @@ describe("advisor", () => {
 			);
 			for (let turn = 1; turn <= 6; turn++) {
 				tool.beginUpdate(turn);
-				const result = await tool.execute(`note-${turn}`, { note: `Missing regression ${turn}.`, severity: "concern" });
+				const result = await tool.execute(`note-${turn}`, {
+					note: `Missing regression ${turn}.`,
+					severity: "concern",
+				});
 				expect(JSON.stringify(result.content)).toContain("Queued for the configured delivery point");
 			}
 			// Even a new completed review and explicit flush cannot release held notes.
@@ -857,7 +889,10 @@ describe("advisor", () => {
 			const noise = await tool.execute("noise", { note: "Stop.", severity: "concern" });
 			expect(JSON.stringify(noise.content)).toContain("nothing actionable");
 			await tool.execute("good", { note: "The migration needs a backup.", severity: "concern" });
-			const rejected = await tool.execute("extra", { note: "The second migration needs a backup.", severity: "concern" });
+			const rejected = await tool.execute("extra", {
+				note: "The second migration needs a backup.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(rejected.content)).toContain("Dropped:");
 			expect(JSON.stringify(rejected.content)).not.toContain("Queued");
 			hold = false;
@@ -910,8 +945,11 @@ describe("advisor", () => {
 		it("moves an escalated reservation to its earlier configured delivery point without replaying it", async () => {
 			let active = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => active && severity !== "blocker");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => active && severity !== "blocker",
+			);
 			await tool.execute("pending", { note: "The migration drops users without a backup.", severity: "concern" });
 			await tool.execute("duplicate", { note: "The migration drops users without a backup.", severity: "concern" });
 			tool.beginUpdate();
@@ -924,8 +962,11 @@ describe("advisor", () => {
 
 		it("does not free a routed concern's budget when its earlier held nit escalates again", async () => {
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
-				severity => severity === "nit");
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 1 }),
+				severity => severity === "nit",
+			);
 			await tool.execute("held", { note: "The write path is unsafe.", severity: "nit" });
 			await tool.execute("live", { note: "The write path is unsafe.", severity: "concern" });
 			await tool.execute("blocker", { note: "The write path is unsafe.", severity: "blocker" });
@@ -938,8 +979,11 @@ describe("advisor", () => {
 		it("applies live timing edits selectively without resetting admission or charging the backlog twice", async () => {
 			let holdConcern = true;
 			const onAdvice = vi.fn();
-			const tool = new AdviseTool(onAdvice, new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
-				severity => severity === "nit" || severity === undefined || holdConcern);
+			const tool = new AdviseTool(
+				onAdvice,
+				new AdvisorEmissionGuard({ budgetPerUpdate: 2 }),
+				severity => severity === "nit" || severity === undefined || holdConcern,
+			);
 			await tool.execute("nit", { note: "Rename the helper." });
 			await tool.execute("concern", { note: "The write drops the lock.", severity: "concern" });
 			holdConcern = false;
@@ -949,7 +993,10 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenCalledWith("The write drops the lock.", "concern", undefined);
 			// The new concern may displace the still-held, lower-rank nit. The
 			// routed concern keeps its slot, so another concern cannot fit.
-			const replacement = await tool.execute("replacement", { note: "Another lock is missing.", severity: "concern" });
+			const replacement = await tool.execute("replacement", {
+				note: "Another lock is missing.",
+				severity: "concern",
+			});
 			expect(JSON.stringify(replacement.content)).toContain("Delivered.");
 			tool.flushDeferredNotes();
 			expect(onAdvice).toHaveBeenCalledTimes(2);
@@ -1239,7 +1286,6 @@ describe("advisor", () => {
 				}),
 			).toBe(false);
 		});
-
 
 		it("wraps each note in an advisory tag with severity as an attribute and escapes the body", () => {
 			const content = formatAdvisorBatchContent([
@@ -5771,6 +5817,38 @@ describe("advisor", () => {
 			expect(error.message).toBe("provider failed");
 			expect(events).toEqual(["prompt:1", "hook:provider failed", "prompt:2"]);
 			expect(runtime.backlog).toBe(0);
+		});
+
+		it("backs off between consecutive failures and honors a provider retry hint", async () => {
+			const promptTimes: number[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					promptTimes.push(performance.now());
+					// The 1st failure carries a 150 ms hint (above the 40 ms base); the 2nd has none.
+					state.error = promptTimes.length === 1 ? "429 rate limited retry-after-ms=150" : "provider failed";
+				},
+				abort: () => {},
+				reset: () => {
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const failures: unknown[] = [];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				notifyFailure: error => failures.push(error),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 40);
+
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => failures.length >= 1 && runtime.backlog === 0);
+
+			expect(promptTimes).toHaveLength(3);
+			// Hint wins over the 40 ms jittered base; the second wait is 80 ms doubled, minus at most 25% jitter.
+			expect(promptTimes[1] - promptTimes[0]).toBeGreaterThanOrEqual(145);
+			expect(promptTimes[2] - promptTimes[1]).toBeGreaterThanOrEqual(58);
 		});
 
 		it("calls onTurnError for each consecutive failure including the dropped third turn", async () => {

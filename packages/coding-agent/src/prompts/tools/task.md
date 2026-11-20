@@ -20,11 +20,8 @@ Read `model://<selector>` before choosing unfamiliar reasoning levels: resolved 
 {{#if routingPolicies}}`agent: "policy:<name>/<slot>"`: apply a declared routing slot's model, effort, specialist and role boundary; explicit per-spawn effort wins. NEVER invent undeclared policies.
 {{#list routingPolicies join=""}}- `{{selector}}`: model={{model}}, effort={{effort}}; boundary: {{boundary}}
 {{/list}}{{/if}}
-{{#if file}}`taskFile`: absolute path or `local://` file; contents become the task, read once at dispatch. Exactly one of `task`/`taskFile`.
-{{/if}}
 `name`: CamelCase ≤32, auto-generated if omitted; address agent by name.{{#if structured}} `outputSchema` overrides agent/session schemas.{{/if}}
 `solutionSpace`: describe how open-ended the child's problem is: whether the fix or design is given, or which causes or designs remain open. Volume of work does not widen it; NEVER mention sibling agents or coordination. (`one fix: rename, names given`; `one fix: slice end in paginate`; `single-flight cache load; races easy to miss`; `several retry API shapes; error classes to choose`; `deadlock cause open, no repro`)
-{{#if seanceGuidance}}{{seanceGuidance}}{{/if}}
 {{#if evalToolsEnabled}}`tools`: eval-defined, run in your kernel.
 {{/if}}{{#if effortEnabled}}{{#if legacyEffort}}`effort`: `"lo"`|`"med"`|`"hi"` legacy coarse hint (model-relative; capped by task.maxEffort).
 {{else}}`effort`: `minimal|low|medium|high|xhigh|max` explicit per-spawn effort; unsupported levels fail.{{/if}}
@@ -36,8 +33,9 @@ Read `model://<selector>` before choosing unfamiliar reasoning levels: resolved 
 
 # Format
 {{#if batchEnabled}}`context`: shared (`# Goal`, `# Contract` interfaces); NEVER repeat per task.
-{{/if}}`task`{{#if file}} or the contents of `taskFile`{{/if}}: self-contained (`# Target` files/non-goals, `# Change` steps/APIs, `# Acceptance` observable result).
-
+{{/if}}{{#if steps}}`steps`: ordered stages for one agent; each is sent only after it finishes the previous one. Earlier stages' reports arrive as progress messages; the last stage's result is returned. First step carries `# Target` files/non-goals{{#if batchEnabled}} beyond `context`{{/if}}; each step one `# Change` stage; last step adds `# Acceptance` observable result. Independent work → separate tasks.
+{{else}}`task`: self-contained (`# Target` files/non-goals, `# Change` steps/APIs, `# Acceptance` observable result).
+{{/if}}
 # Available Agents
 {{#if spawningDisabled}}Agent spawning is currently disabled.
 {{else}}{{#if hasModelMentions}}`m<N>` = user-tagged model (`<model agent="m<N>" name="…"/>`), not specialist; spawn only when user names it.

@@ -20,7 +20,7 @@ const TRUNKS = ["origin/nightly", "upstream/main", "origin/main"] as const satis
 // (path-patch rendering is machine-local), but cargo dev tasks keep their
 // historical scope: the forks are not held to workspace format/lint/test gates.
 //
-// pi-builtins is NOT excluded. It is first-party, and although it opts out of
+// omp-builtins is NOT excluded. It is first-party, and although it opts out of
 // the workspace's pedantic/nursery lints in its own manifest (most of it is
 // ported third-party code), it is held to default clippy and to zero rustc
 // warnings like everything else.
@@ -29,6 +29,10 @@ const VENDORED_FORK_EXCLUDES = [
 	"cfg_aliases",
 	"--exclude",
 	"jaq-core",
+	"--exclude",
+	"jaq-json",
+	"--exclude",
+	"jaq-std",
 	"--exclude",
 	"napi",
 ] as const satisfies readonly string[];

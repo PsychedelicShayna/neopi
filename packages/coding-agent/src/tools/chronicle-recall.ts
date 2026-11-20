@@ -13,6 +13,7 @@ import {
 import { formatRecallResult } from "../chronicler/temporal/format";
 import { recallChronicle } from "../chronicler/temporal/recall";
 import { parseKeywords, resolveRecallSessions } from "../chronicler/temporal/prefilter";
+import { journalJudgmentUsage } from "../judgment";
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import chronicleRecallDescription from "../prompts/tools/chronicle-recall.md" with { type: "text" };
@@ -86,7 +87,12 @@ export class ChronicleRecallTool implements AgentTool<typeof chronicleRecallSche
 		const settings = this.session.settings;
 		const defaults = recallDefaultsFromSettings(settings);
 		const root = resolveViewRoot(settings, settings.getAgentDir());
-		const ranker = resolveRanker(settings, this.session.modelRegistry);
+		const ranker = await resolveRanker(settings, this.session.modelRegistry, undefined, {
+			sessionId: this.session.getSessionId?.() ?? undefined,
+			onUsage: journalJudgmentUsage(this.session.sessionManager),
+			telemetry: this.session.getTelemetry?.(),
+			costGate: this.session.costGate,
+		});
 		const from = params.from ? parseTimeBound(params.from) : undefined;
 		const to = params.to ? parseTimeBound(params.to) : undefined;
 		if (params.keywords !== undefined) parseKeywords(params.keywords);

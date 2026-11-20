@@ -1,4 +1,7 @@
 import { afterEach, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -52,7 +55,7 @@ test("recall uses its assigned model and effort while summaries keep their own m
 		stopReason: "end_turn",
 		content: [{ type: "text", text: '{"scores":[{"key":"a","score":8}]}' }],
 	} as never);
-	const ranker = resolveRanker(settings, registry, "model");
+	const ranker = await resolveRanker(settings, registry, "model");
 	expect(await ranker.score("auth", [{ key: "a", label: "Auth", text: "Token changes" }])).toEqual({ scores: [0.8] });
 	expect(complete.mock.calls[0]?.[0].id).toBe(recall.id);
 	expect(complete.mock.calls[0]?.[2]?.reasoning).toBe(Effort.Low);
@@ -60,3 +63,35 @@ test("recall uses its assigned model and effort while summaries keep their own m
 	expect(complete.mock.calls[1]?.[0].id).toBe(summary.id);
 	expect(complete.mock.calls[1]?.[2]?.reasoning).toBe(Effort.High);
 });
+
+test("recall help remains usable in a fresh CLI process", async () => {
+	const home = await fs.mkdtemp(path.join(os.tmpdir(), "chronicle-recall-cli-"));
+	try {
+		const child = Bun.spawn(
+			[process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts"), "chronicle", "recall", "--help"],
+			{
+				cwd: home,
+				env: {
+					PATH: process.env.PATH,
+					HOME: home,
+					USERPROFILE: home,
+					TMPDIR: process.env.TMPDIR,
+					NO_COLOR: "1",
+				},
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode, stderr).toBe(0);
+		expect(stdout).toContain("--ranker");
+		expect(stdout).toContain("judge");
+	} finally {
+		await fs.rm(home, { recursive: true, force: true });
+	}
+}, 30_000);
