@@ -113,9 +113,8 @@ async function fixture() {
 	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([MODEL]);
 	vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in policy-context tests"));
 	vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [WORKER], projectAgentsDir: null });
-	const mock = createMockModel({
-		handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { complete: true } } }] },
-	});
+	// No output schema → no `yield` tool (usesYield contract); the final message is the result.
+	const mock = createMockModel({ handler: { content: ["Policy context checked."] } });
 	vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation(() => mock.stream);
 	const realCreate = sdk.createAgentSession;
 	vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {

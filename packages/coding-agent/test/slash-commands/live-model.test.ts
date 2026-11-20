@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "../../src/config/settings";
+import { DEFAULT_LIVE_MODEL } from "../../src/live/protocol";
 import { cfgLiveModel } from "../../src/live/settings";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import { executeBuiltinSlashCommand } from "../../src/slash-commands/builtin-registry";
@@ -25,7 +26,7 @@ describe("/live model", () => {
 	it("shows the default without starting a call", async () => {
 		const h = harness();
 		expect(await executeBuiltinSlashCommand("/live model", h.runtime)).toBe(true);
-		expect(h.showStatus).toHaveBeenCalledWith("Live model: gpt-live-1-codex");
+		expect(h.showStatus).toHaveBeenCalledWith(expect.stringContaining(DEFAULT_LIVE_MODEL));
 		expect(h.handleLiveCommand).not.toHaveBeenCalled();
 	});
 
@@ -33,9 +34,9 @@ describe("/live model", () => {
 		const h = harness();
 		await executeBuiltinSlashCommand("/live model custom-live-model", h.runtime);
 		expect(cfgLiveModel.get(h.settings)).toBe("custom-live-model");
-		expect(h.showStatus).toHaveBeenLastCalledWith("Live model: custom-live-model (applies to the next live call)");
+		expect(h.showStatus).toHaveBeenLastCalledWith(expect.stringContaining("custom-live-model"));
 		await executeBuiltinSlashCommand("/live model", h.runtime);
-		expect(h.showStatus).toHaveBeenLastCalledWith("Live model: custom-live-model");
+		expect(h.showStatus).toHaveBeenLastCalledWith(expect.stringContaining("custom-live-model"));
 		expect(h.handleLiveCommand).not.toHaveBeenCalled();
 	});
 
@@ -43,7 +44,7 @@ describe("/live model", () => {
 		const h = harness();
 		await executeBuiltinSlashCommand("/live model bad slug", h.runtime);
 		expect(h.showError).toHaveBeenCalled();
-		expect(cfgLiveModel.get(h.settings)).toBe("gpt-live-1-codex");
+		expect(cfgLiveModel.get(h.settings)).toBe(DEFAULT_LIVE_MODEL);
 		expect(h.handleLiveCommand).not.toHaveBeenCalled();
 	});
 

@@ -25,6 +25,7 @@
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import issueDoc from "../prompts/internal-urls/issue.md" with { type: "text" };
+import issueReferenceDoc from "../prompts/internal-urls/issue-reference.md" with { type: "text" };
 import {
 	formatRepoRef,
 	getOrFetchIssue,
@@ -449,6 +450,10 @@ export class IssueProtocolHandler implements ProtocolHandler {
 		if (!github.available()) return undefined;
 		const { text } = resolvePromptAsset("internal-urls/issue.md", issueDoc);
 		return (text === issueDoc ? text : renderPrompt(text)).trim();
+	}
+
+	promptReference(): string | undefined {
+		return github.available() ? issueReferenceDoc.trim() : undefined;
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {

@@ -3,6 +3,7 @@ import { transcribeAudio } from "@oh-my-pi/pi-ai/transcription";
 import type { Api, Model } from "@oh-my-pi/pi-catalog/types";
 import type { ModelBrowserRegistry } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { logger } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import { type RoleChainCandidate, resolveConfiguredModelPatterns, resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { type Settings, settings } from "../config/settings";
@@ -51,6 +52,7 @@ export interface STTControllerDependencies {
 	settings: Settings;
 	registry: SttRegistry;
 	getSessionId?: () => string;
+	getSessionProvider?: () => string | undefined;
 }
 
 /** Coordinates native microphone capture with streaming local or buffered cloud transcription. */
@@ -68,6 +70,7 @@ export class STTController {
 	readonly #settings: Settings;
 	readonly #registry: SttRegistry | undefined;
 	readonly #getSessionId: (() => string) | undefined;
+	readonly #getSessionProvider: (() => string | undefined) | undefined;
 
 	// Live streaming capture.
 	#stream: SttStreamHandle | null = null;
@@ -98,11 +101,13 @@ export class STTController {
 			this.#settings = dependencies?.settings ?? settings;
 			this.#registry = dependencies?.registry;
 			this.#getSessionId = dependencies?.getSessionId;
+			this.#getSessionProvider = dependencies?.getSessionProvider;
 		} else {
 			this.#createCapture = onAudio => sharedAudioCapture(16_000, onAudio);
 			this.#settings = createCaptureOrDependencies?.settings ?? settings;
 			this.#registry = createCaptureOrDependencies?.registry;
 			this.#getSessionId = createCaptureOrDependencies?.getSessionId;
+			this.#getSessionProvider = createCaptureOrDependencies?.getSessionProvider;
 		}
 	}
 
@@ -180,7 +185,9 @@ export class STTController {
 	#resolveCandidate(): RoleChainCandidate | undefined {
 		if (!this.#registry) return undefined;
 		const pool = roleCandidatePool("dictation", this.#settings, this.#registry);
-		return resolveRoleChain("dictation", this.#settings, pool)[0];
+		return resolveRoleChain("dictation", this.#settings, pool).find(
+			candidate => !cfgOffline.get(this.#settings) || candidate.model.provider === this.#getSessionProvider?.(),
+		);
 	}
 
 	/** Transcribe a complete wake recording once, using the same dictation role. */
@@ -287,6 +294,10 @@ export class STTController {
 
 	async #startWith(editor: SttTarget, options: SttCallbacks, signal: AbortSignal): Promise<void> {
 		const first = this.#resolveCandidate();
+		if (cfgOffline.get(this.#settings) && !first) {
+			options.showWarning("No dictation model matches the active session provider in offline mode.");
+			return;
+		}
 		if (first?.replaces) {
 			options.showWarning(
 				`Dictation model ${first.replaces} not found; using ${first.model.provider}/${first.model.id}`,
@@ -312,6 +323,10 @@ export class STTController {
 		let modelKey = await this.#ensureDeps(options, this.#resolveModelKey(model), signal);
 		if (!modelKey || signal.aborted) return;
 		model = this.#resolveCandidate()?.model;
+		if (cfgOffline.get(this.#settings) && !model) {
+			options.showWarning("No dictation model matches the active session provider in offline mode.");
+			return;
+		}
 		if (model?.api === "openai-transcriptions" || model?.api === "xai-stt") {
 			this.#startBuffered(editor, options, model);
 			return;
@@ -324,6 +339,10 @@ export class STTController {
 		if (startModelKey !== modelKey) {
 			modelKey = await this.#ensureDeps(options, startModelKey, signal);
 			if (this.#disposed || !modelKey || signal.aborted) return;
+		}
+		if (cfgOffline.get(this.#settings) && model?.provider !== this.#getSessionProvider?.()) {
+			options.showWarning("Dictation is unavailable: the active session provider changed in offline mode.");
+			return;
 		}
 		await this.#startStreaming(editor, options, modelKey);
 	}
@@ -414,6 +433,9 @@ export class STTController {
 		let finalText = "";
 		let recordingPath: string | undefined;
 		try {
+			if (cfgOffline.get(this.#settings) && model.provider !== this.#getSessionProvider?.()) {
+				throw new Error("Dictation is unavailable: the active session provider changed in offline mode.");
+			}
 			if (!file.empty) {
 				recordingPath = file.finalize();
 				this.#cloudFile = null;

@@ -1,7 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { EvalPreludeDefinition } from "../eval/preludes";
+import type { HostEvalPreludeDefinition } from "../eval/preludes";
 import { render as renderPrompt } from "@oh-my-pi/pi-utils/prompt";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import archiveDocumentation from "../prompts/tools/archive.md" with { type: "text" };
@@ -78,7 +78,7 @@ function describeArchiveCall(parameters: unknown): string | undefined {
 }
 
 /** Create the read-only archive prelude: prompt history, recent projects, past sessions, and recaps. */
-export function createArchivePrelude(session: ToolSession): EvalPreludeDefinition {
+export function createArchivePrelude(session: ToolSession): HostEvalPreludeDefinition {
 	return {
 		name: "archive",
 		get documentation(): string {

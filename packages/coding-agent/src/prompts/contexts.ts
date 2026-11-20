@@ -50,6 +50,7 @@ export const systemPromptContextFixture = {
 	},
 	hasSkillUriAccess: true,
 	internalUrls: ["skill://<name>: installed skills"],
+	internalUrlReference: ["proc://<id>/streams lists a bash job's pipes."],
 	skills: [
 		{
 			name: "review",
@@ -86,11 +87,14 @@ export const systemPromptContextFixture = {
 	scoutAvailable: true,
 	taskIrcEnabled: true,
 	secretsEnabled: false,
+	encourageEdits: true,
+	resultShaping: "",
 	browserEnabled: false,
 	computerEnabled: false,
 	includeWorkspaceTree: true,
 	renderMermaid: false,
 	renderSvg: false,
+	renderEmbeds: false,
 	autoGraph: false,
 	reactions: false,
 	xdevTools: [{ name: "report_issue", summary: "Report a defect.", dynamic: false }],
@@ -123,8 +127,9 @@ export const bashPromptContextFixture = {
 	hasRead: true,
 	hasSkills: true,
 	hasLaunch: true,
+	hasPty: true,
 	hasEval: true,
-	hasShellBuiltins: true,
+	builtins: ["ls", "cat", "rg"],
 	isWindows: false,
 };
 
