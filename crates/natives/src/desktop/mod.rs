@@ -2135,7 +2135,9 @@ impl SessionCore {
 			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
 			.and_then(|()| {
 				rxr.recv_deadline(reply_by).map_err(|e| {
-					self.display_awake.cancel_and_release(&self.cancellation, CancellationReason::Timeout);
+					self
+						.display_awake
+						.cancel_and_release(&self.cancellation, CancellationReason::Timeout);
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
 			});
@@ -2148,7 +2150,9 @@ impl SessionCore {
 		// cancel and starts behind it, holding the display past this release.
 		let mut lifecycle = self.lifecycle.lock();
 		lifecycle.closed = true;
-		self.display_awake.cancel_and_release(&self.cancellation, CancellationReason::Closed);
+		self
+			.display_awake
+			.cancel_and_release(&self.cancellation, CancellationReason::Closed);
 		let Some(tx) = lifecycle.tx.take() else {
 			return Ok(());
 		};
@@ -2176,7 +2180,9 @@ impl SessionCore {
 }
 impl Drop for SessionCore {
 	fn drop(&mut self) {
-		self.display_awake.cancel_and_release(&self.cancellation, CancellationReason::Closed);
+		self
+			.display_awake
+			.cancel_and_release(&self.cancellation, CancellationReason::Closed);
 		let lifecycle = self.lifecycle.get_mut();
 		if let Some(tx) = lifecycle.tx.take() {
 			let (reply, _) = flume::bounded(1);
