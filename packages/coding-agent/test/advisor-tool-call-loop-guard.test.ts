@@ -507,7 +507,8 @@ describe("advisor tool-call loop guard", () => {
 		const primaryStream = live.agent.streamFn;
 		let primaryRequests = 0;
 		live.agent.streamFn = (model, context, options) => {
-			if (++primaryRequests === 2) cfgAdvisorSyncBacklog.set(live.settings, "off");
+			// Settings.isolated seeds the runtime layer; a global write cannot replace it.
+			if (++primaryRequests === 2) cfgAdvisorSyncBacklog.override(live.settings, "off");
 			return primaryStream(model, context, options);
 		};
 
