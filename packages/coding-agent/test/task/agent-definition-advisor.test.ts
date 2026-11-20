@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listNamedAdvisors, loadWatchdogConfigFile } from "@oh-my-pi/pi-coding-agent/advisor/config";
+import {
+	listNamedAdvisors,
+	loadWatchdogConfigFile,
+	saveWatchdogConfigFile,
+} from "@oh-my-pi/pi-coding-agent/advisor/config";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildAgentAdvisorSpawnConfig } from "@oh-my-pi/pi-coding-agent/task/agent-advisor";
 import {
@@ -71,24 +75,45 @@ describe("agent advisor frontmatter and spawn configuration", () => {
 	});
 
 	test("named advisor instructions expand imports relative to the selected source file", async () => {
-		await Bun.write(path.join(project, ".omp", "instructions.md"), "Imported named advisor instructions");
-		const sourcePath = path.join(project, ".omp", "WATCHDOG.yml");
+		const scopeDir = path.join(project, ".omp");
+		const sourcePath = path.join(scopeDir, "WATCHDOG.yml");
 		const source = "advisors:\n  - name: velvet\n    instructions: '@instructions.md'\n";
 		await Bun.write(sourcePath, source);
+		await Bun.write(path.join(scopeDir, "instructions.md"), "Imported named advisor instructions\n@notes/detail.md");
+		await Bun.write(path.join(scopeDir, "notes", "detail.md"), "Nested advisor instructions\n@follow-up.md");
+		// The nested import cannot resolve this from notes/, but a second pass from .omp/ would.
+		await Bun.write(path.join(scopeDir, "follow-up.md"), "Incorrectly rebased advisor instructions");
+
+		const expanded = "Imported named advisor instructions\nNested advisor instructions\n@follow-up.md";
+		expect((await listNamedAdvisors(project, agentDir)).find(advisor => advisor.name === "velvet")).toMatchObject({
+			scope: "project-omp",
+			sourcePath,
+			config: { instructions: expanded },
+		});
+		expect((await loadWatchdogConfigFile(sourcePath)).advisors[0]?.instructions).toBe("@instructions.md");
+		expect(await Bun.file(sourcePath).text()).toBe(source);
+
 		const launch = await buildAgentAdvisorSpawnConfig({
 			advisor: { ref: "velvet", scope: "project-omp" },
 			settings: Settings.isolated(),
 			cwd: project,
 			agentDir,
 		});
-		expect(launch.advisorConfigs?.[0]?.instructions).toContain("Imported named advisor instructions");
-		expect((await listNamedAdvisors(project, agentDir)).find(advisor => advisor.name === "velvet")).toMatchObject({
-			scope: "project-omp",
-			sourcePath,
-			config: { instructions: launch.advisorConfigs?.[0]?.instructions },
-		});
-		expect((await loadWatchdogConfigFile(sourcePath)).advisors[0]?.instructions).toBe("@instructions.md");
-		expect(await Bun.file(sourcePath).text()).toBe(source);
+		expect(launch.advisorConfigs?.[0]?.instructions).toBe(expanded);
+	});
+
+	test("saving an unrelated advisor field preserves the instruction import reference", async () => {
+		const scopeDir = path.join(project, ".omp");
+		const sourcePath = path.join(scopeDir, "WATCHDOG.yml");
+		await Bun.write(path.join(scopeDir, "instructions.md"), "Imported named advisor instructions");
+		await Bun.write(sourcePath, "advisors:\n  - name: velvet\n    instructions: '@instructions.md'\n");
+
+		const doc = await loadWatchdogConfigFile(sourcePath);
+		doc.advisors[0]!.reviewInterval = 3;
+		await saveWatchdogConfigFile(sourcePath, doc);
+
+		expect(await Bun.file(sourcePath).text()).toContain("instructions: '@instructions.md'");
+		expect((await loadWatchdogConfigFile(sourcePath)).advisors[0]?.reviewInterval).toBe(3);
 	});
 
 	test("private inline model, prompt, cadence and delivery survive load and child settings without catalog writes", async () => {
