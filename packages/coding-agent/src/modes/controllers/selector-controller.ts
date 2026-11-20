@@ -683,8 +683,7 @@ export class SelectorController {
 		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(initialScope));
 		getAvailableThemes()
 			.then(async availableThemes => {
-				const recheck = this.ctx.settings.recheckSettingsFiles();
-				if (recheck) await recheck;
+				await this.ctx.settings.recheckSettingsFiles();
 				const scope = initialScope ?? cfgSettingsDefaultScope.get(this.ctx.settings);
 				const settingsHost = createSettingsHost(this.ctx.settings, scope);
 				// Fullscreen settings editor on the alternate screen: the overlay

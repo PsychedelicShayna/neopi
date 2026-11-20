@@ -78,11 +78,13 @@ interface OverlayUi {
 function overlayUi(): {
 	ui: OverlayUi;
 	shown: Component[];
+	mounted: Promise<Component>;
 	setFocus: OverlayUi["setFocus"];
 	overlayStack: TUI["overlayStack"];
 } {
 	const overlayStack: TUI["overlayStack"] = [];
 	const shown: Component[] = [];
+	const mounted = Promise.withResolvers<Component>();
 	let focused: Component | null = null;
 	const setFocus = vi.fn<(component: Component | null) => void>(component => {
 		focused = component;
@@ -91,6 +93,7 @@ function overlayUi(): {
 		const entry = { component, options, preFocus: null, hidden: false, released: false };
 		overlayStack.push(entry);
 		shown.push(component);
+		mounted.resolve(component);
 		return {
 			hide: () => {
 				const at = overlayStack.indexOf(entry);
@@ -102,7 +105,13 @@ function overlayUi(): {
 			isHidden: () => entry.hidden,
 		};
 	};
-	return { shown, setFocus, overlayStack, ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused } };
+	return {
+		shown,
+		mounted: mounted.promise,
+		setFocus,
+		overlayStack,
+		ui: { overlayStack, setFocus, showOverlay, getFocused: () => focused },
+	};
 }
 
 /** The compact model picker context: the fork's session `/model` opens it only with `models.sessionPicker: small`. */
@@ -388,12 +397,14 @@ describe("single-instance menus", () => {
 		const themes = Promise.resolve(["dark"]);
 		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
 		const overlays: Component[] = [];
+		const mounted = Promise.withResolvers<void>();
 		const setFocus = vi.fn<(component: Component | null) => void>();
 		const ctx = createInteractiveModeContext({
 			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
 			ui: {
 				showOverlay: (component: Component, _options?: OverlayOptions): OverlayHandle => {
 					overlays.push(component);
+					mounted.resolve();
 					return { hide: () => {}, setHidden: () => {}, isHidden: () => false };
 				},
 				setFocus,
@@ -403,8 +414,7 @@ describe("single-instance menus", () => {
 
 		controller.showSettingsSelector();
 		controller.showSettingsSelector();
-		// The controller's continuation was queued first, so the menu is mounted.
-		await themes;
+		await mounted.promise;
 		expect(overlays).toHaveLength(1);
 		controller.showSettingsSelector();
 		expect(overlays).toHaveLength(1);
@@ -424,7 +434,7 @@ describe("single-instance menus", () => {
 			opened(context.settings.scope);
 			return { render: () => [], dispose: () => {} };
 		} as never);
-		const { ui } = overlayUi();
+		const { ui, mounted } = overlayUi();
 		const ctx = createInteractiveModeContext({
 			settings: Settings.isolated(),
 			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
@@ -434,7 +444,7 @@ describe("single-instance menus", () => {
 		ctx.showSettingsSelector = scope => controller.showSettingsSelector(scope);
 
 		await executeBuiltinSlashCommand(command, { ctx });
-		await themes;
+		await mounted;
 		expect(opened).toHaveBeenCalledWith(scope);
 	});
 
@@ -457,7 +467,7 @@ describe("single-instance menus", () => {
 			await Bun.write(sidecar, "colorBlindMode: false\n");
 			await settings.attachSessionFile(path.join(dir, "session.jsonl"));
 			settings.writeScopeValue(cfgAutoResume, true, "session");
-			const { ui, shown } = overlayUi();
+			const { ui, mounted } = overlayUi();
 			const environment = new SessionEnvironment({ VISUAL: "test-editor" });
 			const ctx = createInteractiveModeContext({
 				settings,
@@ -465,8 +475,7 @@ describe("single-instance menus", () => {
 				ui: { ...ui, stop: () => {}, start: () => editorClosed.resolve() },
 			});
 			new SelectorController(ctx).showSettingsSelector("project");
-			await themes;
-			press(shown[0]!, "\x13", "\x07"); // Ctrl+S, Ctrl+G
+			press(await mounted, "\x13", "\x07"); // Ctrl+S, Ctrl+G
 			await editorClosed.promise;
 			expect(openEditor).toHaveBeenCalledWith("test-editor", sidecar, environment.snapshot());
 			expect(editorInput).toContain("autoResume: true");
@@ -492,14 +501,14 @@ describe("single-instance menus", () => {
 			callbacks = args[1] as settingsSelector.SettingsCallbacks;
 			return { render: () => [], dispose: () => {} };
 		} as never);
-		const { ui } = overlayUi();
+		const { ui, mounted } = overlayUi();
 		const ctx = createInteractiveModeContext({
 			settings: Settings.isolated(),
 			session: { getAvailableThinkingLevels: () => [], getAvailableModels: () => [] },
 			ui,
 		});
 		new SelectorController(ctx).showSettingsSelector("global");
-		await themes;
+		await mounted;
 		expect(await callbacks?.onApply?.("session")).toBe("Session scope is local — no broadcast needed");
 		expect(broadcast).not.toHaveBeenCalled();
 		expect(await callbacks?.onApply?.("global")).toBe("Applied to 2 sessions; 1 need restart/upgrade; 1 failed");

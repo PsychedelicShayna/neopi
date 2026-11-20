@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectAgentDir, logger } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 import { Settings } from "../src/config/settings";
 import { createSettingsHost } from "../src/config/settings-ui";
 import { cfgAutoResume, cfgColorBlindMode, cfgSettingsDefaultScope } from "../src/modes/settings";
@@ -103,20 +105,29 @@ describe("settings scopes", () => {
 		}
 	});
 
-	it("does not open unchanged settings files for another content read", async () => {
+	it("reads unchanged settings files without parsing or applying them again", async () => {
 		const cwd = path.join(root, "project");
-		await Bun.write(path.join(root, "profile", "config.yml"), "colorBlindMode: false\n");
-		await Bun.write(path.join(getProjectAgentDir(cwd), "config.yml"), "autoResume: true\n");
-		await Bun.write(path.join(root, "sessions", "conversation", "settings.yml"), "colorBlindMode: true\n");
+		const global = path.join(root, "profile", "config.yml");
+		const project = path.join(getProjectAgentDir(cwd), "config.yml");
+		const session = path.join(root, "sessions", "conversation", "settings.yml");
+		await Bun.write(global, "colorBlindMode: false\n");
+		await Bun.write(project, "autoResume: true\n");
+		await Bun.write(session, "colorBlindMode: true\n");
 		const settings = await sessionSettings(cwd);
-		const open = spyOn(Bun, "file");
-		const read = spyOn(fs, "readFile");
+		const read = spyOn(nodeFs.promises, "readFile");
+		const parse = spyOn(YAML, "parse");
+		const changes: string[] = [];
+		const stop = settings.onEffectiveChange([cfgAutoResume, cfgColorBlindMode], setting => changes.push(setting.id));
 		try {
 			await settings.recheckSettingsFiles();
-			expect(open).not.toHaveBeenCalled();
-			expect(read).not.toHaveBeenCalled();
+			expect(read).toHaveBeenCalledWith(global);
+			expect(read).toHaveBeenCalledWith(project);
+			expect(read).toHaveBeenCalledWith(session);
+			expect(parse).not.toHaveBeenCalled();
+			expect(changes).toEqual([]);
 		} finally {
-			open.mockRestore();
+			stop();
+			parse.mockRestore();
 			read.mockRestore();
 		}
 	});

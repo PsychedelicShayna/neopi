@@ -145,29 +145,15 @@ export interface RawSettings {
 	[key: string]: unknown;
 }
 
-/** `null` means absent; metadata lets an unchanged file skip the content read. */
-type SettingsFileStamp = { hash: bigint; metadata?: string } | null;
-type SettingsFileCheck = { stamp: SettingsFileStamp; content?: string };
+/** `null` means absent; present files are compared by content hash. */
+type SettingsFileStamp = bigint | null;
+type SettingsFileCheck = { stamp: SettingsFileStamp; content?: Buffer };
 type SettingsFileStamps = Map<string, SettingsFileStamp>;
 
-function settingsFileMetadata({ dev, ino, size, mtimeNs, ctimeNs }: fs.BigIntStats): string {
-	return `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}`;
-}
-
-function settingsFileNeedsCheck(filePath: string, previous: SettingsFileStamp): boolean {
+async function checkSettingsFile(filePath: string): Promise<SettingsFileCheck> {
 	try {
-		return settingsFileMetadata(fs.statSync(filePath, { bigint: true })) !== previous?.metadata;
-	} catch (error) {
-		return !isEnoent(error) || previous !== null;
-	}
-}
-
-async function checkSettingsFile(filePath: string, previous?: SettingsFileStamp): Promise<SettingsFileCheck> {
-	try {
-		const metadata = settingsFileMetadata(await fs.promises.stat(filePath, { bigint: true }));
-		if (previous?.metadata === metadata) return { stamp: previous };
-		const content = await Bun.file(filePath).text();
-		return { stamp: { metadata, hash: Bun.hash.xxHash64(content) }, content };
+		const content = await fs.promises.readFile(filePath);
+		return { stamp: Bun.hash.xxHash64(content), content };
 	} catch (error) {
 		if (isEnoent(error)) return { stamp: null };
 		throw error;
@@ -178,7 +164,7 @@ async function checkSettingsFiles(paths: Iterable<string>, previous: SettingsFil
 	const entries = await Promise.all(
 		Array.from(paths, async filePath => {
 			try {
-				return [filePath, (await checkSettingsFile(filePath, previous.get(filePath))).stamp] as const;
+				return [filePath, (await checkSettingsFile(filePath)).stamp] as const;
 			} catch {
 				// The actual config loaders own diagnostics for unreadable files.
 				return [filePath, previous.get(filePath) ?? null] as const;
@@ -190,7 +176,7 @@ async function checkSettingsFiles(paths: Iterable<string>, previous: SettingsFil
 
 function settingsFilesChanged(previous: SettingsFileStamps, current: SettingsFileStamps): boolean {
 	for (const [filePath, stamp] of current) {
-		if (stamp?.hash !== previous.get(filePath)?.hash) return true;
+		if (stamp !== (previous.get(filePath) ?? null)) return true;
 	}
 	return false;
 }
@@ -1000,7 +986,7 @@ export class Settings {
 	#sessionSettingsPath: string | undefined;
 	#sessionFileStamp: SettingsFileStamp = null;
 	#sessionFileBase: RawSettings = {};
-	#sessionConflictStamp: SettingsFileStamp | undefined;
+	#warnedSessionFileConflict = false;
 	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
@@ -1660,31 +1646,10 @@ export class Settings {
 	}
 
 	/** Reconcile external file changes before opening the settings editor. */
-	recheckSettingsFiles(): Promise<void> | undefined {
+	async recheckSettingsFiles(): Promise<void> {
 		// Worker mirrors never read from disk. The interactive editor runs on the owner.
 		if (this.#mirror) return;
-		const parent = this.#parent?.recheckSettingsFiles();
-		const sessionPath = this.#sessionSettingsPath;
-		const sessionStamp =
-			this.#sessionConflictStamp === undefined ? this.#sessionFileStamp : this.#sessionConflictStamp;
-		if (!parent && !(sessionPath && settingsFileNeedsCheck(sessionPath, sessionStamp))) {
-			let changed = false;
-			for (const files of [this.#globalSettingsFiles, this.#projectSettingsFiles]) {
-				for (const [filePath, stamp] of files) {
-					if (settingsFileNeedsCheck(filePath, stamp)) {
-						changed = true;
-						break;
-					}
-				}
-				if (changed) break;
-			}
-			if (!changed) return;
-		}
-		return this.#recheckChangedSettingsFiles(parent);
-	}
-
-	async #recheckChangedSettingsFiles(parent: Promise<void> | undefined): Promise<void> {
-		await parent;
+		await this.#parent?.recheckSettingsFiles();
 		await this.#exclusive("recheck", async () => {
 			await this.#recheckSessionSettings();
 			const [global, project] = await Promise.all([
@@ -1693,14 +1658,12 @@ export class Settings {
 			]);
 			const globalChanged = settingsFilesChanged(this.#globalSettingsFiles, global);
 			const projectChanged = settingsFilesChanged(this.#projectSettingsFiles, project);
-			if (!globalChanged) this.#globalSettingsFiles = global;
-			if (!projectChanged) this.#projectSettingsFiles = project;
+			// Leave synchronous directory re-arming to the existing periodic watcher recovery.
 			if (globalChanged || projectChanged) {
 				await this.#reloadPersistedLayers("keep-last-good", {
 					global: globalChanged ? global : undefined,
 					project: projectChanged ? project : undefined,
 				});
-				this.#syncFileWatchers();
 			}
 		});
 	}
@@ -1710,19 +1673,17 @@ export class Settings {
 		if (!filePath) return;
 		try {
 			const baseline = this.#sessionFileStamp;
-			const conflict = this.#sessionConflictStamp;
-			const file = await checkSettingsFile(filePath, conflict === undefined ? baseline : conflict);
+			const file = await checkSettingsFile(filePath);
 			if (filePath !== this.#sessionSettingsPath || baseline !== this.#sessionFileStamp) return;
-			if (file.stamp?.hash === baseline?.hash) {
-				this.#sessionFileStamp = file.stamp;
-				this.#sessionConflictStamp = undefined;
+			if (file.stamp === baseline) {
+				this.#warnedSessionFileConflict = false;
 			} else if (this.#sessionDirty) {
-				if (conflict === undefined) {
+				if (!this.#warnedSessionFileConflict) {
 					logger.warn("Settings: session file changed with unsaved edits; keeping the in-memory layer", {
 						path: filePath,
 					});
 				}
-				this.#sessionConflictStamp = file.stamp;
+				this.#warnedSessionFileConflict = true;
 			} else {
 				this.#replaceSessionLayer(filePath, this.#readSessionSettings(filePath, file.content), file.stamp);
 			}
@@ -1734,9 +1695,9 @@ export class Settings {
 		}
 	}
 
-	#readSessionSettings(filePath: string | undefined, content: string | undefined): RawSettings {
+	#readSessionSettings(filePath: string | undefined, content: Buffer | undefined): RawSettings {
 		if (content === undefined) return {};
-		const parsed: unknown = YAML.parse(content);
+		const parsed: unknown = YAML.parse(content.toString("utf8"));
 		if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${filePath}`);
 		assertKnownSettingPaths(parsed);
 		for (const setting of allSettings()) {
@@ -1752,7 +1713,7 @@ export class Settings {
 		this.#session = loaded;
 		this.#sessionFileStamp = stamp;
 		this.#sessionFileBase = loaded;
-		this.#sessionConflictStamp = undefined;
+		this.#warnedSessionFileConflict = false;
 		this.#sessionDirty = false;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
@@ -1768,9 +1729,9 @@ export class Settings {
 		const filePath = this.#sessionSettingsPath;
 		if (!this.#sessionDirty || !filePath) return;
 		const baseline = this.#sessionFileStamp;
-		const file = await checkSettingsFile(filePath, baseline);
+		const file = await checkSettingsFile(filePath);
 		if (filePath !== this.#sessionSettingsPath || !this.#sessionDirty) return;
-		if (file.stamp?.hash !== baseline?.hash) {
+		if (file.stamp !== baseline) {
 			const external = this.#readSessionSettings(filePath, file.content);
 			const merged = structuredClone(external);
 			for (const { id, segments } of allSettings()) {
@@ -1796,10 +1757,8 @@ export class Settings {
 		await writeFileAtomically(filePath, content);
 		if (filePath !== this.#sessionSettingsPath) return;
 		this.#sessionFileBase = snapshot;
-		// The next stat/read verifies our written hash without assigning unrelated
-		// metadata to it if another process has already replaced the file.
-		this.#sessionFileStamp = { hash: Bun.hash.xxHash64(content) };
-		this.#sessionConflictStamp = undefined;
+		this.#sessionFileStamp = Bun.hash.xxHash64(content);
+		this.#warnedSessionFileConflict = false;
 		if (snapshot === this.#session) {
 			this.#sessionDirty = false;
 			this.#rebuildMerged();
