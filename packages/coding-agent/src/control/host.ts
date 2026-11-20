@@ -1581,11 +1581,19 @@ export class ControlHost {
 		}
 		const hideValue = secretInputDisabled();
 		try {
-			await writeSetting(session.settings, setting, {
+			const status = await writeSetting(session.settings, setting, {
 				scope,
 				member,
 				value: type === "settings_unset" ? undefined : frame.value,
 			});
+			if (status === "conflict") {
+				this.#reply(connection, frame, {
+					success: false,
+					error: `The ${scope} settings file changed on disk; ${path} was not written`,
+					code: "conflict",
+				});
+				return;
+			}
 			this.#notify(connection, `settings ${path}`);
 			this.#reply(connection, frame, {
 				success: true,

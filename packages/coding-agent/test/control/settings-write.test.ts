@@ -165,6 +165,66 @@ test("runtime writes and unsets, including model role members, never change the 
 	expect(await Bun.file(globalFile).text()).toBe(globalBefore);
 });
 
+test("a default-scope model role write keeps an outside sibling edit and moves a runtime override", async () => {
+	const { client, globalFile, settings } = await start("roles-global");
+	const role = { path: "modelRoles", member: "default" };
+	expect(
+		await client.request({ type: "settings_set", ...role, scope: "runtime", value: "openai/gpt-5.1" }),
+	).toMatchObject({ success: true });
+	await Bun.write(
+		globalFile,
+		YAML.stringify({ modelRoles: { default: "anthropic/claude-sonnet-4-5", smol: "openai/gpt-5-mini" } }),
+	);
+	expect(await client.request({ type: "settings_set", ...role, value: "openai/gpt-5.2" })).toMatchObject({
+		success: true,
+		data: { ...role, value: "openai/gpt-5.2" },
+	});
+	await settings.flush();
+	expect(YAML.parse(await Bun.file(globalFile).text())).toMatchObject({
+		modelRoles: { default: "openai/gpt-5.2", smol: "openai/gpt-5-mini" },
+	});
+	expect(await client.request({ type: "settings_get", ...role })).toMatchObject({
+		data: { ...role, value: "openai/gpt-5.2" },
+	});
+});
+
+test("a refused global model role write leaves the file and the runtime override as they were", async () => {
+	const { client, globalFile } = await start("roles-conflict");
+	const role = { path: "modelRoles", member: "default" };
+	expect(
+		await client.request({ type: "settings_set", ...role, scope: "runtime", value: "openai/gpt-5.1" }),
+	).toMatchObject({ success: true });
+	await Bun.write(globalFile, YAML.stringify({ modelRoles: { default: "openai/gpt-5-mini" } }));
+	const bytes = await Bun.file(globalFile).text();
+	expect(await client.request({ type: "settings_set", ...role, value: "openai/gpt-5.2" })).toMatchObject({
+		success: false,
+		code: "conflict",
+	});
+	expect(await Bun.file(globalFile).text()).toBe(bytes);
+	expect(await client.request({ type: "settings_get", ...role })).toMatchObject({
+		data: { ...role, value: "openai/gpt-5.1" },
+	});
+});
+
+test("after a refused project write the session holds the outside value, not the refused one", async () => {
+	const { client, projectFile } = await start("project-conflict-live");
+	await Bun.write(projectFile, YAML.stringify({ theme: { dark: "outside" } }));
+	await client.request({ type: "settings_set", path: "theme.dark", scope: "project", value: "inside" });
+	expect(await client.request({ type: "settings_get", path: "theme.dark" })).toMatchObject({
+		data: { path: "theme.dark", value: "outside" },
+	});
+});
+
+test("a project write refused because the file changed outside replies conflict and leaves the file alone", async () => {
+	const { client, projectFile } = await start("project-conflict");
+	await Bun.write(projectFile, YAML.stringify({ theme: { dark: "outside" } }));
+	const bytes = await Bun.file(projectFile).text();
+	expect(
+		await client.request({ type: "settings_set", path: "theme.dark", scope: "project", value: "inside" }),
+	).toMatchObject({ success: false, code: "conflict" });
+	expect(await Bun.file(projectFile).text()).toBe(bytes);
+});
+
 test("credential writes acknowledge without echoing own, inherited, or shadowing values", async () => {
 	const { client, settings } = await start("target");
 	const credential = { path: "auth.broker.token" };

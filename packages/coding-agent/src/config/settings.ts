@@ -3070,6 +3070,24 @@ export class Settings {
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		if (this.#mirror) return this.#forward(this.#mirror, { op: "setModelRole", role, modelId });
+		this.#stageGlobalModelRole(role, modelId);
+		this.#syncRuntimeModelRole(role, modelId);
+	}
+
+	/**
+	 * Persists one global model role under a receipt like {@link setModelRole}, but moves the role's
+	 * runtime override only when the write was applied, so a refused write leaves the running model alone.
+	 */
+	async persistModelRoleWithReceipt(
+		role: ModelRole | string,
+		modelId: string | undefined,
+	): Promise<SettingsMutationReceipt> {
+		const receipt = await this.persistWithReceipt(() => this.#stageGlobalModelRole(role, modelId));
+		if (receipt.status === "applied") this.#syncRuntimeModelRole(role, modelId);
+		return receipt;
+	}
+
+	#stageGlobalModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const prev = cfgModelRoles.get(this);
 		// Re-setting the persisted role (or clearing an absent one) stages no config.yml rewrite;
 		// the runtime-override sync below still applies.
@@ -3093,6 +3111,9 @@ export class Settings {
 			this.#queueSave();
 		}
 		this.#fireIfChanged(cfgModelRoles, prev);
+	}
+
+	#syncRuntimeModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
 			return;
 		}
@@ -6037,7 +6058,15 @@ export class Settings {
 				for (const [key, receipt] of receipts) {
 					if (this.#projectInFlightReceipts.get(key) === receipt) this.#projectInFlightReceipts.delete(key);
 				}
-				await this.#writeSettingsTarget(target, projectSettings, canPatchDocument ? source : undefined, mutations);
+				// A batch whose every change was refused leaves the file exactly as the outside writer left it.
+				if (mutations.length > 0) {
+					await this.#writeSettingsTarget(
+						target,
+						projectSettings,
+						canPatchDocument ? source : undefined,
+						mutations,
+					);
+				}
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#projectToml = target.toml ?? {};
 				for (const [key, pending] of this.#modifiedProjectMutations) {

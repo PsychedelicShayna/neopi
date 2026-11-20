@@ -26,8 +26,30 @@ export function readSetting(settings: Settings, path: string, member?: string): 
 	return isRecord(value) ? value[member] : undefined;
 }
 
-export async function writeSetting(settings: Settings, setting: AnySetting, write: SettingsWrite): Promise<void> {
+/**
+ * Applies one socket write to the addressed host. `conflict` means a global or project file edit was
+ * refused because the file changed underneath it; nothing was written.
+ */
+export async function writeSetting(
+	settings: Settings,
+	setting: AnySetting,
+	write: SettingsWrite,
+): Promise<"applied" | "conflict"> {
 	const { member, scope, value } = write;
+	if (scope === "global" && member) {
+		// Per-entry persistence: only this entry is merged into the re-read file, so a concurrent
+		// edit to a sibling entry is kept. A model role's runtime override follows only once the
+		// write was applied, so a refused write leaves the running model alone.
+		if (setting.id === "modelRoles") {
+			const receipt = await settings.persistModelRoleWithReceipt(
+				member,
+				value === undefined ? undefined : String(value),
+			);
+			return receipt.status;
+		}
+		const receipt = await settings.persistWithReceipt(() => setting.setEntry(settings, member, value as never));
+		return receipt.status;
+	}
 	let next = value;
 	if (member) {
 		const current =
@@ -42,9 +64,13 @@ export async function writeSetting(settings: Settings, setting: AnySetting, writ
 	}
 	if (scope === "runtime") {
 		setting.override(settings, next);
-		return;
+		return "applied";
 	}
-	settings.writeScopeValue(setting, next, scope);
-	if (scope === "session") await settings.saveSessionSettings();
-	else await settings.flush();
+	if (scope === "session") {
+		settings.writeScopeValue(setting, next, scope);
+		await settings.saveSessionSettings();
+		return "applied";
+	}
+	const receipt = await settings.persistWithReceipt(() => settings.writeScopeValue(setting, next, scope));
+	return receipt.status;
 }
