@@ -6,7 +6,7 @@
  * hopping to a provider whose models the role rejects (LiteLLM for `web`)
  * surfaced its whole catalog; picking one persisted an unresolvable selector.
  */
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	ModelHubComponent,
@@ -171,23 +171,56 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 });
 
 describe("model hub scope after a catalog refresh", () => {
-	test("a scope that resolves during the hub's own catalog refresh narrows the open hub", async () => {
+	test("opening never refreshes the catalog; a scope that resolves during an explicit refresh narrows the open hub", async () => {
 		const catalog = () => [webModel, chatModel];
-		const registry: ModelHubRegistry = { ...registryStub, getAll: catalog, getAvailable: catalog };
+		const refreshes: string[] = [];
+		const registry: ModelHubRegistry = {
+			...registryStub,
+			getAll: catalog,
+			getAvailable: catalog,
+			refresh: async () => {
+				refreshes.push("all");
+			},
+			refreshProvider: async provider => {
+				refreshes.push(provider);
+			},
+		};
+		const adopted = Promise.withResolvers<void>();
 		const callbacks: ModelHubCallbacks = {
 			onAssign: () => true,
 			onUnassign: () => {},
 			onCancel: () => {},
-			onCatalogRefreshed: () => [{ model: webModel }],
+			onCatalogRefreshed: () => {
+				adopted.resolve();
+				return [{ model: webModel }];
+			},
 		};
-		const hub = new ModelHubComponent(tuiStub, createSource(), registry, [], callbacks);
-		const body = () => hub.render(120).join("\n").replace(ANSI_PATTERN, "");
-		expect(body()).toContain("chat-only");
+		vi.useFakeTimers();
+		try {
+			const hub = new ModelHubComponent(tuiStub, createSource(), registry, [], callbacks);
+			const body = () => hub.render(120).join("\n").replace(ANSI_PATTERN, "");
+			expect(body()).toContain("chat-only");
 
-		await Bun.sleep(0);
+			vi.advanceTimersByTime(1);
 
-		expect(body()).toContain("web-search-pro");
-		expect(body()).not.toContain("chat-only");
-		hub.dispose();
+			// Opening is offline: no refresh starts, and both models stay listed.
+			expect(refreshes).toEqual([]);
+			expect(body()).toContain("chat-only");
+			expect(body()).toContain("web-search-pro");
+
+			// The same scope adoption still happens when the user asks for Refresh all.
+			hub.handleNativeEvent({ type: "action", key: "", act: "refreshAll", mods: [] });
+			vi.advanceTimersByTime(1);
+			await adopted.promise;
+			// The hub applies the returned scope in the continuation after onCatalogRefreshed.
+			for (let turn = 0; turn < 10 && body().includes("chat-only"); turn++) await Promise.resolve();
+
+			expect(refreshes).toEqual(["all"]);
+			expect(body()).toContain("web-search-pro");
+			expect(body()).not.toContain("chat-only");
+			hub.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
