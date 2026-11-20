@@ -17,6 +17,8 @@ import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import {
+	cfgAutoResume,
+	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgStatusLinePreset,
 	cfgStatusLineLeftSegments,
@@ -436,10 +438,15 @@ describe("single-instance menus", () => {
 		expect(opened).toHaveBeenCalledWith(scope);
 	});
 
-	it("opens the session settings sidecar with Ctrl+G after switching scope with Ctrl+S", async () => {
+	it("flushes and reloads the session settings sidecar with Ctrl+G after switching scope with Ctrl+S", async () => {
 		const themes = Promise.resolve(["dark"]);
 		spyOn(themeModule, "getAvailableThemes").mockReturnValue(themes);
-		const openEditor = spyOn(externalEditor, "openEditorOnPath").mockResolvedValue(0);
+		let editorInput: string | undefined;
+		const openEditor = spyOn(externalEditor, "openEditorOnPath").mockImplementation(async (_command, filePath) => {
+			editorInput = await Bun.file(filePath).text();
+			await Bun.write(filePath, editorInput.replace("colorBlindMode: false", "colorBlindMode: true"));
+			return 0;
+		});
 		const editorClosed = Promise.withResolvers<void>();
 		const agentDir = getAgentDir();
 		await fs.mkdir(agentDir, { recursive: true });
@@ -447,8 +454,9 @@ describe("single-instance menus", () => {
 		try {
 			const settings = await Settings.loadIsolated({ agentDir: dir, cwd: dir });
 			const sidecar = path.join(dir, "session/settings.yml");
-			await Bun.write(sidecar, "colorBlindMode: true\n");
+			await Bun.write(sidecar, "colorBlindMode: false\n");
 			await settings.attachSessionFile(path.join(dir, "session.jsonl"));
+			settings.writeScopeValue(cfgAutoResume, true, "session");
 			const { ui, shown } = overlayUi();
 			const environment = new SessionEnvironment({ VISUAL: "test-editor" });
 			const ctx = createInteractiveModeContext({
@@ -461,6 +469,11 @@ describe("single-instance menus", () => {
 			press(shown[0]!, "\x13", "\x07"); // Ctrl+S, Ctrl+G
 			await editorClosed.promise;
 			expect(openEditor).toHaveBeenCalledWith("test-editor", sidecar, environment.snapshot());
+			expect(editorInput).toContain("autoResume: true");
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}

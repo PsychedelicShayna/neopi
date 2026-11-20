@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
 import { createSettingsHost } from "../src/config/settings-ui";
-import { cfgSettingsDefaultScope, cfgAutoResume } from "../src/modes/settings";
+import { cfgAutoResume, cfgColorBlindMode, cfgSettingsDefaultScope } from "../src/modes/settings";
 import { cfgModelRoles } from "../src/config/model-settings";
 import { SESSION_SETTINGS_QUIT_CHOICES, settleSessionSettingsOnQuit } from "../src/config/session-settings-quit";
 import { cfgHindsightApiToken } from "../src/hindsight/settings";
@@ -56,6 +56,49 @@ describe("settings scopes", () => {
 		await resumed.clearScope("session");
 		const cleared = await sessionSettings();
 		expect(cfgAutoResume.get(cleared)).toBe(false);
+	});
+
+	it("keeps external sidecar changes and flushed session edits across a later save", async () => {
+		const settings = await sessionSettings();
+		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
+		settings.writeScopeValue(cfgAutoResume, true, "session");
+		expect(settings.hasUnsavedSessionSettings).toBe(true);
+		await settings.saveSessionSettings();
+
+		const persisted = await Bun.file(sidecar).text();
+		await Bun.write(sidecar, `${persisted.trimEnd()}\ncolorBlindMode: true\n`);
+		const changes: boolean[] = [];
+		const stop = settings.onEffectiveChange([cfgColorBlindMode], () => changes.push(cfgColorBlindMode.get(settings)));
+		try {
+			await settings.reloadSessionSettings();
+			expect(settings.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+			expect(changes).toEqual([true]);
+			expect(settings.hasUnsavedSessionSettings).toBe(false);
+		} finally {
+			stop();
+		}
+
+		settings.writeScopeValue(cfgSettingsDefaultScope, "project", "session");
+		await settings.saveSessionSettings();
+		const resumed = await sessionSettings();
+		expect(resumed.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+		expect(resumed.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({ value: true, source: "session" });
+	});
+
+	it("leaves the session layer unchanged when an external sidecar edit fails validation", async () => {
+		const settings = await sessionSettings();
+		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
+		settings.writeScopeValue(cfgAutoResume, true, "session");
+		await settings.saveSessionSettings();
+		await Bun.write(sidecar, "autoResume: false\nnotASetting: true\n");
+
+		await expect(settings.reloadSessionSettings()).rejects.toThrow('Unknown setting "notASetting"');
+		expect(settings.resolveFileScopeValue(cfgAutoResume, "session")).toEqual({ value: true, source: "session" });
+		expect(settings.hasUnsavedSessionSettings).toBe(false);
 	});
 
 	it("edits the selected layer while shadow details retain all three values", () => {

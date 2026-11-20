@@ -1585,23 +1585,39 @@ export class Settings {
 			: undefined;
 		if (nextPath === this.#sessionSettingsPath) return;
 		await this.saveSessionSettings();
-		let loaded: RawSettings = {};
-		if (nextPath) {
-			try {
-				const parsed: unknown = YAML.parse(await Bun.file(nextPath).text());
-				if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${nextPath}`);
-				assertKnownSettingPaths(parsed);
-				for (const setting of allSettings()) {
-					const value = getByPath(parsed, setting.segments);
-					if (value !== undefined) setting.assertWritable(value);
-				}
-				loaded = parsed;
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
+		this.#replaceSessionLayer(nextPath, nextPath ? await this.#readSessionSettings(nextPath) : {});
+	}
+
+	/** Reload the bound sidecar after editing it. Save pending session settings before opening the editor. */
+	async reloadSessionSettings(): Promise<void> {
+		if (this.#mirror) throw new Error("Session settings must be reloaded on the owning instance.");
+		const filePath = this.#sessionSettingsPath;
+		if (!filePath) return;
+		const loaded = await this.#readSessionSettings(filePath);
+		if (filePath !== this.#sessionSettingsPath) return;
+		if (this.#sessionDirty) throw new Error("Cannot reload session settings with unsaved changes.");
+		this.#replaceSessionLayer(filePath, loaded);
+	}
+
+	async #readSessionSettings(filePath: string): Promise<RawSettings> {
+		try {
+			const parsed: unknown = YAML.parse(await Bun.file(filePath).text());
+			if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${filePath}`);
+			assertKnownSettingPaths(parsed);
+			for (const setting of allSettings()) {
+				const value = getByPath(parsed, setting.segments);
+				if (value !== undefined) setting.assertWritable(value);
 			}
+			return parsed;
+		} catch (error) {
+			if (isEnoent(error)) return {};
+			throw error;
 		}
+	}
+
+	#replaceSessionLayer(filePath: string | undefined, loaded: RawSettings): void {
 		const previous = this.#snapshot();
-		this.#sessionSettingsPath = nextPath;
+		this.#sessionSettingsPath = filePath;
 		this.#session = loaded;
 		this.#sessionDirty = false;
 		this.#rebuildMerged();

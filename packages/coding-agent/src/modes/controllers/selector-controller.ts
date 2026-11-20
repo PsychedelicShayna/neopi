@@ -653,6 +653,9 @@ export class SelectorController {
 			this.ctx,
 			async command => {
 				await this.ctx.settings.flush();
+				if (target.kind === "settings" && target.scope === "session") {
+					await this.ctx.settings.saveSessionSettings();
+				}
 				const filePath = await resolveConfigViewFile(target, {
 					settings: this.ctx.settings,
 					models: this.ctx.session.modelRegistry,
@@ -660,7 +663,7 @@ export class SelectorController {
 				if (!filePath) {
 					this.ctx.showWarning(
 						target.kind === "settings" && target.scope === "session"
-							? "This session has no saved settings file."
+							? "This session has no settings file (it is not being saved)."
 							: "This built-in configuration has no backing file.",
 					);
 					return;
@@ -738,7 +741,9 @@ export class SelectorController {
 							const selectedScope = settingsHost.scope ?? scope;
 							return this.#openConfigFile(
 								{ kind: "settings", scope: selectedScope },
-								selectedScope === "session" ? undefined : () => this.ctx.settings.reloadFromDisk(),
+								selectedScope === "session"
+									? () => this.ctx.settings.reloadSessionSettings()
+									: () => this.ctx.settings.reloadFromDisk(),
 							);
 						},
 						onThemePreview: async themeName => {

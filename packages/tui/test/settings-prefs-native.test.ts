@@ -286,7 +286,8 @@ function scopedSettings(
 		scope,
 		get: path => resolve(path).value,
 		resolve,
-		own: path => own.get(path),
+		// Like the real host (readScopeValue uses ??): a key stored as null reads as undefined.
+		own: path => own.get(path) ?? undefined,
 		set: (path, value) => {
 			writes.push([path, value]);
 			own.set(path, value);
@@ -381,6 +382,12 @@ describe("settings as a native prefs page", () => {
 		expect(unsets).toEqual([COLOR_BLIND]);
 		expect(row(prefs(selector).props, COLOR_BLIND).changed).toBeUndefined();
 		expect(ansiRow(selector, "Color-blind mode")).toContain(theme.fg("muted", "false"));
+	});
+
+	it("Backspace removes a key the selected file sets to null", () => {
+		const { selector, unsets } = scopedSettings({ [COLOR_BLIND]: true }, { [COLOR_BLIND]: null });
+		send(selector, { type: "change", key: "", item: COLOR_BLIND, value: null });
+		expect(unsets).toEqual([COLOR_BLIND]);
 	});
 
 	it("edits only the project provider map without pinning inherited global limits", () => {

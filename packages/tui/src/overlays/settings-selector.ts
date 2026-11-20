@@ -1476,12 +1476,10 @@ export class SettingsSelectorComponent implements Component {
 
 	#unsetSetting(def: SettingDef, list: SettingsList): void {
 		const settings = this.#context.settings;
-		if (settings.resolve) {
-			const hasOwn = settings.own
-				? settings.own(def.path) !== undefined
-				: settings.scope !== undefined && settings.resolve(def.path).source === settings.scope;
-			if (!hasOwn) return;
-		}
+		// Ownership follows presence, the same rule as the yellow colour: a key set to null in the
+		// selected file is present and removable even though its own value reads as undefined.
+		if (settings.resolve && (settings.scope === undefined || settings.resolve(def.path).source !== settings.scope))
+			return;
 		if (list.openSubmenu) list.handleInput(ESCAPE);
 		settings.unset(def.path);
 		this.#callbacks.onChange(def.path, settings.get(def.path));

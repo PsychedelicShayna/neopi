@@ -57,7 +57,7 @@ describe("configuration view file mapping", () => {
 		);
 	});
 
-	test("maps session settings to the attached sidecar only when it exists", async () => {
+	test("maps session settings to the attached sidecar, created or not", async () => {
 		const { dir, files } = await fixture();
 		const settings = Settings.isolated();
 		const target = { kind: "settings", scope: "session" } as const;
@@ -65,9 +65,9 @@ describe("configuration view file mapping", () => {
 		expect(await resolve()).toBeUndefined();
 
 		await settings.attachSessionFile(path.join(dir, "session.jsonl"));
-		expect(await resolve()).toBeUndefined();
-
 		const sidecar = path.join(dir, "session/settings.yml");
+		expect(await resolve()).toBe(sidecar);
+
 		await Bun.write(sidecar, "colorBlindMode: true\n");
 		await Bun.write(path.join(dir, "session/settings.toml"), "colorBlindMode = false\n");
 		expect(await resolve()).toBe(sidecar);

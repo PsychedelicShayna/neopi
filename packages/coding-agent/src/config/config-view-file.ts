@@ -24,10 +24,8 @@ export async function resolveConfigViewFile(
 	let settingsFile = false;
 	switch (target.kind) {
 		case "settings":
-			if (target.scope === "session") {
-				const sidecar = files.settings.mirrorState().sessionSettingsPath;
-				return sidecar && (await Bun.file(sidecar).exists()) ? sidecar : undefined;
-			}
+			// The bound sidecar opens even before its first save; only a session without a file has none.
+			if (target.scope === "session") return files.settings.mirrorState().sessionSettingsPath;
 			filePath = files.settings.getConfigFile(target.scope);
 			settingsFile = true;
 			break;
