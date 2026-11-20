@@ -678,14 +678,13 @@ export class SelectorController {
 		);
 	}
 
-	showSettingsSelector(
-		scope: SettingsScope = cfgSettingsDefaultScope.get(this.ctx.settings),
-		openPersonality = false,
-	): void {
+	showSettingsSelector(initialScope?: SettingsScope, openPersonality = false): void {
 		if (this.#focusOpenMenu("settings")) return;
-		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(scope));
+		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(initialScope));
 		getAvailableThemes()
 			.then(async availableThemes => {
+				await this.ctx.settings.recheckSettingsFiles();
+				const scope = initialScope ?? cfgSettingsDefaultScope.get(this.ctx.settings);
 				const settingsHost = createSettingsHost(this.ctx.settings, scope);
 				// Fullscreen settings editor on the alternate screen: the overlay
 				// enables mouse tracking (click/hover/wheel) for its lifetime and

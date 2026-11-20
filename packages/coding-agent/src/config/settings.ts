@@ -145,6 +145,42 @@ export interface RawSettings {
 	[key: string]: unknown;
 }
 
+/** `null` means absent; present files are compared by content hash. */
+type SettingsFileStamp = bigint | null;
+type SettingsFileCheck = { stamp: SettingsFileStamp; content?: Buffer };
+type SettingsFileStamps = Map<string, SettingsFileStamp>;
+
+async function checkSettingsFile(filePath: string): Promise<SettingsFileCheck> {
+	try {
+		const content = await fs.promises.readFile(filePath);
+		return { stamp: Bun.hash.xxHash64(content), content };
+	} catch (error) {
+		if (isEnoent(error)) return { stamp: null };
+		throw error;
+	}
+}
+
+async function checkSettingsFiles(paths: Iterable<string>, previous: SettingsFileStamps): Promise<SettingsFileStamps> {
+	const entries = await Promise.all(
+		Array.from(paths, async filePath => {
+			try {
+				return [filePath, (await checkSettingsFile(filePath)).stamp] as const;
+			} catch {
+				// The actual config loaders own diagnostics for unreadable files.
+				return [filePath, previous.get(filePath) ?? null] as const;
+			}
+		}),
+	);
+	return new Map(entries);
+}
+
+function settingsFilesChanged(previous: SettingsFileStamps, current: SettingsFileStamps): boolean {
+	for (const [filePath, stamp] of current) {
+		if (stamp !== (previous.get(filePath) ?? null)) return true;
+	}
+	return false;
+}
+
 type YamlContentGeneration = {
 	kind: "content";
 	source: string;
@@ -236,6 +272,7 @@ type MainYamlReadResult = {
 	configPath: string | null;
 	toml?: RawSettings;
 	tomlPath?: string;
+	files: SettingsFileStamps;
 };
 
 type ProjectSettingsReadResult = {
@@ -248,6 +285,7 @@ type ProjectSettingsReadResult = {
 	sourcePaths: string[];
 	/** Project warnings surfaced for this read; commit with the layer as `#projectSettingsWarningsSeen`. */
 	warningsSeen: Set<string>;
+	files: SettingsFileStamps;
 };
 
 /** A project-layer read before `disabledProviders` filtering; `#resolveProjectRead` merges it. */
@@ -261,13 +299,14 @@ type ProjectSettingsDiscovery = {
 	toml: RawSettings;
 	tomlPath?: string;
 	warningsSeen: Set<string>;
+	files: SettingsFileStamps;
 };
 
 /** `strict` rejects on any unreadable layer; `keep-last-good` keeps each failed layer's previous value. */
 type PersistedReloadMode = "strict" | "keep-last-good";
 
 /** Layer refreshes serialized by `Settings.#exclusive`: disk reloads and cwd re-scopes. */
-type LayerRefreshKind = PersistedReloadMode | "rescope";
+type LayerRefreshKind = PersistedReloadMode | "rescope" | "recheck" | "session-save";
 
 /** Quiet period after the last config-file event before the watcher reloads from disk. */
 const CONFIG_WATCH_DEBOUNCE_MS = 200;
@@ -924,6 +963,8 @@ export class Settings {
 	#project: RawSettings = {};
 	#globalToml: RawSettings = {};
 	#projectToml: RawSettings = {};
+	#globalSettingsFiles: SettingsFileStamps = new Map();
+	#projectSettingsFiles: SettingsFileStamps = new Map();
 	/** Last successfully loaded native .omp/config.yml contents. */
 	#projectFileSettings: RawSettings = {};
 	/** Logical config paths whose malformed targets were moved aside. */
@@ -943,6 +984,10 @@ export class Settings {
 	/** User session overrides travel with the transcript's artifact directory, not cwd. */
 	#session: RawSettings = {};
 	#sessionSettingsPath: string | undefined;
+	#sessionFileStamp: SettingsFileStamp = null;
+	#sessionFileBase: RawSettings = {};
+	/** Unresolved same-key edits remain conflicts even after the file baseline advances. */
+	#sessionFileConflicts: ReadonlySet<string> | undefined;
 	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
@@ -1585,7 +1630,8 @@ export class Settings {
 			: undefined;
 		if (nextPath === this.#sessionSettingsPath) return;
 		await this.saveSessionSettings();
-		this.#replaceSessionLayer(nextPath, nextPath ? await this.#readSessionSettings(nextPath) : {});
+		const file = nextPath ? await checkSettingsFile(nextPath) : { stamp: null };
+		this.#replaceSessionLayer(nextPath, this.#readSessionSettings(nextPath, file.content), file.stamp);
 	}
 
 	/** Reload the bound sidecar after editing it. Save pending session settings before opening the editor. */
@@ -1593,42 +1639,147 @@ export class Settings {
 		if (this.#mirror) throw new Error("Session settings must be reloaded on the owning instance.");
 		const filePath = this.#sessionSettingsPath;
 		if (!filePath) return;
-		const loaded = await this.#readSessionSettings(filePath);
+		const file = await checkSettingsFile(filePath);
+		const loaded = this.#readSessionSettings(filePath, file.content);
 		if (filePath !== this.#sessionSettingsPath) return;
 		if (this.#sessionDirty) throw new Error("Cannot reload session settings with unsaved changes.");
-		this.#replaceSessionLayer(filePath, loaded);
+		this.#replaceSessionLayer(filePath, loaded, file.stamp);
 	}
 
-	async #readSessionSettings(filePath: string): Promise<RawSettings> {
-		try {
-			const parsed: unknown = YAML.parse(await Bun.file(filePath).text());
-			if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${filePath}`);
-			assertKnownSettingPaths(parsed);
-			for (const setting of allSettings()) {
-				const value = getByPath(parsed, setting.segments);
-				if (value !== undefined) setting.assertWritable(value);
+	/** Reconcile external file changes before opening the settings editor. */
+	async recheckSettingsFiles(): Promise<void> {
+		// Worker mirrors never read from disk. The interactive editor runs on the owner.
+		if (this.#mirror) return;
+		await this.#parent?.recheckSettingsFiles();
+		await this.#exclusive("recheck", async () => {
+			await this.#recheckSessionSettings();
+			const [global, project] = await Promise.all([
+				checkSettingsFiles(this.#globalSettingsFiles.keys(), this.#globalSettingsFiles),
+				checkSettingsFiles(this.#projectSettingsFiles.keys(), this.#projectSettingsFiles),
+			]);
+			const globalChanged = settingsFilesChanged(this.#globalSettingsFiles, global);
+			const projectChanged = settingsFilesChanged(this.#projectSettingsFiles, project);
+			// Leave synchronous directory re-arming to the existing periodic watcher recovery.
+			if (globalChanged || projectChanged) {
+				await this.#reloadPersistedLayers("keep-last-good", {
+					global: globalChanged ? global : undefined,
+					project: projectChanged ? project : undefined,
+				});
 			}
-			return parsed;
+		});
+	}
+
+	async #recheckSessionSettings(): Promise<void> {
+		const filePath = this.#sessionSettingsPath;
+		if (!filePath) return;
+		try {
+			const baseline = this.#sessionFileStamp;
+			const file = await checkSettingsFile(filePath);
+			if (filePath !== this.#sessionSettingsPath || baseline !== this.#sessionFileStamp || file.stamp === baseline) {
+				return;
+			}
+			const external = this.#readSessionSettings(filePath, file.content);
+			if (this.#sessionDirty) this.#reconcileSessionSettings(filePath, external, file.stamp, "recheck");
+			else this.#replaceSessionLayer(filePath, external, file.stamp);
 		} catch (error) {
-			if (isEnoent(error)) return {};
-			throw error;
+			logger.warn("Settings: keeping last good session config; on-disk change failed to load", {
+				path: filePath,
+				error: String(error),
+			});
 		}
 	}
 
-	#replaceSessionLayer(filePath: string | undefined, loaded: RawSettings): void {
+	#readSessionSettings(filePath: string | undefined, content: Buffer | undefined): RawSettings {
+		if (content === undefined) return {};
+		const parsed: unknown = YAML.parse(content.toString("utf8"));
+		if (!isRecord(parsed)) throw new Error(`Session settings must be a mapping: ${filePath}`);
+		assertKnownSettingPaths(parsed);
+		for (const setting of allSettings()) {
+			const value = getByPath(parsed, setting.segments);
+			if (value !== undefined) setting.assertWritable(value);
+		}
+		return parsed;
+	}
+
+	#replaceSessionLayer(
+		filePath: string | undefined,
+		loaded: RawSettings,
+		stamp: SettingsFileStamp,
+		merged = loaded,
+		conflicts?: ReadonlySet<string>,
+	): void {
 		const previous = this.#snapshot();
 		this.#sessionSettingsPath = filePath;
-		this.#session = loaded;
-		this.#sessionDirty = false;
+		this.#session = merged;
+		this.#sessionFileStamp = stamp;
+		this.#sessionFileBase = loaded;
+		this.#sessionFileConflicts = conflicts;
+		this.#sessionDirty = merged !== loaded;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
+	}
+
+	#reconcileSessionSettings(
+		filePath: string,
+		external: RawSettings,
+		stamp: SettingsFileStamp,
+		mode: "recheck" | "save",
+	): void {
+		let merged = external;
+		let conflicts: Set<string> | undefined;
+		for (const { id, segments } of allSettings()) {
+			const old = getByPath(this.#sessionFileBase, segments);
+			const local = getByPath(this.#session, segments);
+			if (settingValuesEqual(old, local)) continue;
+			const remote = getByPath(external, segments);
+			if (settingValuesEqual(local, remote)) continue;
+			if (this.#sessionFileConflicts?.has(id) || !settingValuesEqual(old, remote)) {
+				if (mode === "save") {
+					throw new Error(`Cannot save session settings: ${id} changed both on disk and in memory (${filePath}).`);
+				}
+				(conflicts ??= new Set()).add(id);
+			}
+			if (merged === external) merged = structuredClone(external);
+			if (local === undefined) deleteByPath(merged, segments);
+			else setByPath(merged, segments, local);
+		}
+		if (conflicts && !this.#sessionFileConflicts) {
+			logger.warn(
+				"Settings: session file changed with conflicting unsaved edits; keeping the local values for those settings",
+				{
+					path: filePath,
+					settings: [...conflicts],
+				},
+			);
+		}
+		this.#replaceSessionLayer(filePath, external, stamp, merged, conflicts);
 	}
 
 	async saveSessionSettings(): Promise<void> {
 		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "saveSessionSettings" });
 		if (!this.#sessionDirty || !this.#sessionSettingsPath) return;
+		await this.#exclusive("session-save", () => this.#saveSessionSettings());
+	}
+
+	async #saveSessionSettings(): Promise<void> {
+		const filePath = this.#sessionSettingsPath;
+		if (!this.#sessionDirty || !filePath) return;
+		const baseline = this.#sessionFileStamp;
+		const file = await checkSettingsFile(filePath);
+		if (filePath !== this.#sessionSettingsPath || !this.#sessionDirty) return;
+		if (file.stamp !== baseline || this.#sessionFileConflicts) {
+			const external =
+				file.stamp === baseline ? this.#sessionFileBase : this.#readSessionSettings(filePath, file.content);
+			this.#reconcileSessionSettings(filePath, external, file.stamp, "save");
+			if (!this.#sessionDirty) return;
+		}
 		const snapshot = this.#session;
-		await writeFileAtomically(this.#sessionSettingsPath, stringifyYamlConfig(snapshot));
+		const content = stringifyYamlConfig(snapshot);
+		await writeFileAtomically(filePath, content);
+		if (filePath !== this.#sessionSettingsPath) return;
+		this.#sessionFileBase = snapshot;
+		this.#sessionFileStamp = Bun.hash.xxHash64(content);
+		this.#sessionFileConflicts = undefined;
 		if (snapshot === this.#session) {
 			this.#sessionDirty = false;
 			this.#rebuildMerged();
@@ -2310,11 +2461,15 @@ export class Settings {
 			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
+		cloned.#globalSettingsFiles = this.#globalSettingsFiles;
 		cloned.#globalToml = structuredClone(this.#globalToml);
 		cloned.#globalTomlPath = this.#globalTomlPath;
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
 		cloned.#session = structuredClone(this.#session);
 		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
+		cloned.#sessionFileStamp = this.#sessionFileStamp;
+		cloned.#sessionFileBase = this.#sessionFileBase;
+		cloned.#sessionFileConflicts = this.#sessionFileConflicts;
 		cloned.#sessionDirty = this.#sessionDirty;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
@@ -2375,7 +2530,10 @@ export class Settings {
 		}
 	}
 
-	async #reloadPersistedLayers(mode: PersistedReloadMode): Promise<void> {
+	async #reloadPersistedLayers(
+		mode: PersistedReloadMode,
+		changed?: { global?: SettingsFileStamps; project?: SettingsFileStamps },
+	): Promise<void> {
 		const keepLastGood = mode === "keep-last-good";
 		for (;;) {
 			try {
@@ -2387,11 +2545,15 @@ export class Settings {
 			}
 			const mutationGeneration = this.#persistedMutationGeneration;
 
-			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
-				this.#readExistingMainYaml(false),
-				this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood }),
-				this.#readConfigOverlays(false),
+			const reads = await Promise.allSettled([
+				!changed || changed.global ? this.#readExistingMainYaml(false, changed?.global) : undefined,
+				!changed || changed.project
+					? this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood, files: changed?.project })
+					: undefined,
+				changed ? undefined : this.#readConfigOverlays(false),
 			]);
+			const [globalResult, , overlayResult] = reads;
+			let [, projectResult] = reads;
 			if (mutationGeneration !== this.#persistedMutationGeneration) continue;
 			for (const result of [globalResult, projectResult, overlayResult]) {
 				if (result.status === "fulfilled") continue;
@@ -2402,8 +2564,8 @@ export class Settings {
 			}
 
 			const refreshed: LayerRefresh[] = [];
-			if (globalResult.status === "fulfilled") {
-				const { configPath } = globalResult.value;
+			if (globalResult.status === "fulfilled" && globalResult.value) {
+				const { configPath, files, tomlPath } = globalResult.value;
 				// A config this instance moved aside as malformed reads as missing until a save
 				// recreates it; keep the last good layer instead of rebuilding it from pending writes.
 				const quarantined = this.#configPath !== null && this.#quarantinedYamlTargets.has(this.#configPath);
@@ -2416,11 +2578,12 @@ export class Settings {
 					source: configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 					commit: () => {
 						this.#configPath = configPath;
-						this.#globalTomlPath = globalResult.value.tomlPath;
+						this.#globalTomlPath = tomlPath;
+						this.#globalSettingsFiles = files;
 					},
 				});
 			}
-			if (overlayResult.status === "fulfilled") {
+			if (overlayResult.status === "fulfilled" && overlayResult.value) {
 				const { settings, shellPathSource } = overlayResult.value;
 				refreshed.push({
 					layer: "configOverlay",
@@ -2444,7 +2607,24 @@ export class Settings {
 				layers = trial;
 				adopted.push(refresh);
 			}
-			if (projectResult.status === "fulfilled") {
+			if (
+				changed?.global &&
+				!changed.project &&
+				!Bun.deepEquals(
+					this.#disabledProviderIds(this.#ownLayers(), this.#cwd),
+					this.#disabledProviderIds(layers, this.#cwd),
+				)
+			) {
+				// Filter project providers again if the newly adopted global config could change their eligibility.
+				[projectResult] = await Promise.allSettled([this.#readProjectSettings(false, { rejectNewWarnings: true })]);
+				if (mutationGeneration !== this.#persistedMutationGeneration) continue;
+				if (projectResult.status === "rejected") {
+					logger.warn("Settings: keeping last good config; on-disk change failed to load", {
+						error: String(projectResult.reason),
+					});
+				}
+			}
+			if (projectResult.status === "fulfilled" && projectResult.value) {
 				const project = this.#resolveProjectRead(projectResult.value, layers);
 				this.#applyPendingProjectWrites(project.settings);
 				const source = project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd);
@@ -2460,6 +2640,7 @@ export class Settings {
 					});
 				}
 			}
+			if (changed && adopted.length === 0) return;
 			const settled = this.#settlePins(layers);
 			if (!keepLastGood) this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(layers)), this.#cwd);
 
@@ -3406,7 +3587,7 @@ export class Settings {
 			this.#global = existingConfig;
 		} else {
 			await this.#migrateFromLegacy();
-			this.#global = await this.#loadYaml(this.#configPath!);
+			this.#global = (await this.#loadExistingMainYaml()) ?? {};
 		}
 		await this.#seedLastChangelogVersionMarker();
 	}
@@ -3830,8 +4011,15 @@ export class Settings {
 		}
 	}
 
-	async #readExistingMainYaml(quarantineInvalid: boolean): Promise<MainYamlReadResult> {
-		if (!this.#configPath) return { settings: null, configPath: null };
+	async #readExistingMainYaml(
+		quarantineInvalid: boolean,
+		previous = this.#globalSettingsFiles,
+	): Promise<MainYamlReadResult> {
+		if (!this.#configPath) return { settings: null, configPath: null, files: new Map() };
+		const files = await checkSettingsFiles(
+			[...MAIN_CONFIG_FILENAMES, SETTINGS_TOML, CONFIG_TOML].map(name => path.join(this.#agentDir, name)),
+			previous,
+		);
 		const source = await settingsTomlSource(this.#agentDir);
 		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		for (const filename of MAIN_CONFIG_FILENAMES) {
@@ -3840,13 +4028,14 @@ export class Settings {
 				? await this.#loadYamlIfPresentForStartup(configPath)
 				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
 			if (loaded)
-				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath };
+				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath, files };
 		}
 		return {
 			settings: source ? toml : null,
 			toml,
 			configPath: path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]),
 			tomlPath: source?.filePath,
+			files,
 		};
 	}
 
@@ -3855,6 +4044,7 @@ export class Settings {
 		this.#configPath = result.configPath;
 		this.#globalToml = result.toml ?? {};
 		this.#globalTomlPath = result.tomlPath;
+		this.#globalSettingsFiles = result.files;
 		return result.settings;
 	}
 
@@ -3868,7 +4058,7 @@ export class Settings {
 	 */
 	async #readProjectSettings(
 		quarantineInvalid: boolean,
-		options: { rejectNewWarnings?: boolean; cwd?: string } = {},
+		options: { rejectNewWarnings?: boolean; cwd?: string; files?: SettingsFileStamps } = {},
 	): Promise<ProjectSettingsDiscovery> {
 		const cwd = options.cwd ?? this.#cwd;
 		// Resolve once: capability discovery, fs-cache invalidation, and the
@@ -3877,6 +4067,15 @@ export class Settings {
 		const discoveryCwd = path.resolve(cwd);
 		const projectConfigDir = getProjectAgentDir(cwd);
 		const projectConfigPath = path.join(projectConfigDir, "config.yml");
+		const knownSources = [
+			projectConfigPath,
+			path.join(projectConfigDir, SETTINGS_TOML),
+			path.join(projectConfigDir, CONFIG_TOML),
+			path.join(projectConfigDir, "settings.json"),
+			path.join(discoveryCwd, ".claude", "settings.json"),
+			...(cwd === this.#cwd ? this.#projectSourcePaths : []),
+		];
+		const files = await checkSettingsFiles(new Set(knownSources), options.files ?? this.#projectSettingsFiles);
 		invalidateCapabilityFsCache(projectConfigPath);
 		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
 		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
@@ -3925,6 +4124,10 @@ export class Settings {
 				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
 		const source = await settingsTomlSource(projectConfigDir);
 		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
+		const newSources = new Set(projectItems.map(item => item.path).filter(filePath => !files.has(filePath)));
+		for (const [filePath, stamp] of await checkSettingsFiles(newSources, this.#projectSettingsFiles)) {
+			files.set(filePath, stamp);
+		}
 		return {
 			cwd,
 			quarantineInvalid,
@@ -3934,6 +4137,7 @@ export class Settings {
 			toml,
 			tomlPath: source?.filePath,
 			warningsSeen,
+			files,
 		};
 	}
 
@@ -3984,6 +4188,7 @@ export class Settings {
 				]),
 			],
 			warningsSeen: read.warningsSeen,
+			files: read.files,
 		};
 	}
 
@@ -4030,6 +4235,7 @@ export class Settings {
 		this.#projectShellPathSource = result.shellPathSource;
 		this.#projectSourcePaths = result.sourcePaths;
 		this.#projectSettingsWarningsSeen = result.warningsSeen;
+		this.#projectSettingsFiles = result.files;
 	}
 
 	async #readConfigOverlays(captureLegacyChangelogVersion = true): Promise<ConfigOverlayReadResult> {
