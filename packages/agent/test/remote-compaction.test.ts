@@ -3303,6 +3303,7 @@ describe("compact() remote compaction failure handling", () => {
 		expect(requestInputs).toHaveLength(1);
 		expect(requestInputs[0]).toContain("long history");
 		expect(requestInputs[0]).not.toContain("call_kept");
+		expect(requestInputs[0]).not.toContain(JSON.stringify(getContextWindowTruncatedOutputMessage()));
 		expect(requestInputs[0]).not.toContain(getContextWindowTruncatedOutputMessage());
 		expect(result.providerReplayThroughEntryId).toBe("summarized-last");
 	});
