@@ -61,6 +61,7 @@ describe("dictation during a live call", () => {
 		const liveAudio: Float32Array[] = [];
 		const session = {
 			modelRegistry: { authStorage: {} },
+			settings,
 			sessionId: "concurrent-input-test",
 			sessionManager: { getCwd: () => process.cwd() },
 			subscribe: () => () => {},

@@ -2,12 +2,11 @@
  * Idle maintenance owned by one session: the idle recap and idle compaction that run once the
  * session has been quiet for a while and its owner does not hold them back.
  *
- * A stretch of activity ends at `agent_end`. Its recap is armed once the run that produced the
- * `agent_end` has unwound and nothing is admitted, queued or scheduled; background work does not
- * hold it back. Idle compaction also waits until no background job or delivery can wake the
- * session. New activity, compaction, a session transition or disposal invalidates everything
- * captured before it: timers, the settling check and an in-flight recap, so a late reply can never
- * be announced.
+ * A stretch of activity ends at the run's `agent_end`. Recap and idle compaction are armed once
+ * that run has unwound, nothing is admitted, queued or scheduled, and no background job or delivery
+ * (one started even while idle) can still wake the session. New activity, compaction, a session
+ * transition or disposal invalidates everything captured before it: timers, the settling check and
+ * an in-flight recap, so a late reply can never be announced.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { isPromptCachePersistent } from "@oh-my-pi/pi-catalog/compat/prompt-cache-persistent";
@@ -48,7 +47,7 @@ export type IdleMaintenanceSession = SessionSettleHost &
 		| "model"
 		| "messages"
 		| "subscribe"
-		| "waitForIdle"
+		| "waitForRunEnd"
 		| "waitForAdmittedSubmissions"
 		| "getContextUsage"
 		| "getGoalModeState"
@@ -167,12 +166,13 @@ export class IdleMaintenance {
 	}
 
 	/**
-	 * Nothing is live, admitted, queued or scheduled. Background work may still wake the session;
+	 * No run is open, live, admitted, queued or scheduled. Background work may still wake the session;
 	 * both recap and idle compaction additionally require {@link #isSettled}.
 	 */
 	#isQuiet(): boolean {
 		const session = this.#session;
 		return (
+			!session.isRunActive &&
 			!session.isStreaming &&
 			!session.hasAdmittedSubmission &&
 			session.queuedMessageCount === 0 &&
@@ -195,7 +195,7 @@ export class IdleMaintenance {
 
 	/**
 	 * Restart the settling check for the current stretch, replacing any earlier one and the armed timers.
-	 * The check is launched off the caller's stack: the terminal `agent_end` is published while its own
+	 * The check is launched off the caller's stack: the run's `agent_end` is published while its own
 	 * prompt is still admitted, so it must wait for the authoritative barriers before judging the session.
 	 */
 	#schedule(): void {
@@ -210,7 +210,7 @@ export class IdleMaintenance {
 	async #armWhenQuiet(isCurrent: () => boolean): Promise<void> {
 		const session = this.#session;
 		for (;;) {
-			await session.waitForIdle();
+			await session.waitForRunEnd();
 			if (!isCurrent()) return;
 			if (!session.hasAdmittedSubmission) break;
 			await session.waitForAdmittedSubmissions();
@@ -349,7 +349,7 @@ export class IdleMaintenance {
 				},
 				{ cwd: session.sessionManager.getCwd(), kind: "notice" },
 			);
-			const { replyText } = await session.runEphemeralTurn({ promptText, signal: run.signal });
+			const { replyText } = await session.runEphemeralTurn({ promptText, purpose: "recap", signal: run.signal });
 			if (this.#recapRun !== run || run.signal.aborted) return;
 			if (this.#isBlocked()) return;
 			if (!this.#isSettled()) {

@@ -222,6 +222,7 @@
 				"advisor.delivery.blocker",
 				"advisor.delivery.concern",
 				"advisor.delivery.nit",
+				"chronicler.recall.branchFloor",
 				"chronicler.notices",
 				"customPersonalities",
 				"models.defaultScope",

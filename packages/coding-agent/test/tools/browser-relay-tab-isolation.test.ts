@@ -137,7 +137,7 @@ async function launchRelayFixture(
 					: route === "/second"
 						? "<title>Second</title><button>Second</button>"
 						: route === "/login"
-							? `<title>Login ${url.searchParams.get("who")}</title><input id="pw" type="password">`
+							? `<title>Login ${url.searchParams.get("who")}</title><form onsubmit="event.preventDefault(); document.title = 'Signed in'"><input id="pw" type="password"><button id="go">Log in</button></form>`
 							: route === "/download"
 								? `<title>Download</title><a id="report" href="/report.csv">Report</a><a id="held" href="/held.csv">Held</a>`
 								: route === "/framed"
@@ -152,7 +152,7 @@ async function launchRelayFixture(
 		// A failed test may leave a held download open; end it so the browser and server can stop.
 		for (const release of held) release.resolve();
 		try {
-			await Promise.all(browsers.map(browser => closeLaunchedBrowser(browser)));
+			await Promise.all(browsers.map(browser => closeLaunchedBrowser({ browser })));
 		} finally {
 			server.stop();
 			pages.stop(true);
@@ -173,10 +173,13 @@ async function launchRelayFixture(
 			headless: true,
 			pipe: true,
 			userDataDir,
-			enableExtensions: [extensionDir, ...extensions],
+			enableExtensions: true,
 			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain", ...RENDERER_PRIORITY_ARGS],
 		});
 		browsers.push(browser);
+		// Puppeteer's `enableExtensions` list does not wait for its installs, so a page could load before a stand-in
+		// vault's content script is registered.
+		for (const extension of [extensionDir, ...extensions]) await browser.installExtension(extension);
 		const extensionId = await unpackedExtensionId(extensionDir);
 		if (!extensionId) throw new Error("Missing relay extension directory");
 		// A service worker is transient: it may start and stop before Puppeteer observes its target.
@@ -385,7 +388,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("relay tab ownership", () => {
 			const surviving = await runInTab(names[1]!, { code: "return await tab.title();", timeoutMs: 10_000, session });
 			expect(surviving.returnValue).toBe("Second");
 
-			// `app.target` borrows the user's page; closing releases it without closing it.
+			// `target` borrows the user's page; closing releases it without closing it.
 			const borrowed = await acquireTab(names[2]!, relay, { target: "Human sentinel", timeoutMs: 15_000 });
 			expect(borrowed.tab.targetId).not.toBe(first.tab.targetId);
 			await releaseTab(names[2]!);
@@ -608,6 +611,7 @@ document.addEventListener("keydown", event => {
 			await fs.rm(vaultDir, { recursive: true, force: true });
 		}
 	}, 60_000);
+
 	it("closes an owned relay tab whose debugger the user dismissed", async () => {
 		const detached = Promise.withResolvers<void>();
 		let ownedTabId = 0;

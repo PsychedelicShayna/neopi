@@ -113,7 +113,7 @@ describe("model:// session lookup", () => {
 		for (const [url, selector] of cases) {
 			const result = await router.resolve(url, { session, settings: Settings.isolated() });
 			expect(lookup).toHaveBeenLastCalledWith(selector, session);
-			expect(JSON.parse(result.content)).toEqual(fixtureResult);
+			expect(JSON.parse(String(result.content))).toEqual(fixtureResult);
 			expect(result.shape).toBe("value");
 		}
 	});

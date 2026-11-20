@@ -1,4 +1,4 @@
-/** Voices accepted by Codex-backed realtime sessions and exposed in settings. */
+/** Voices Codex-backed realtime sessions accept, offered as `live.voice` suggestions. */
 export const LIVE_VOICE_OPTIONS = [
 	{ value: "arbor", label: "Arbor" },
 	{ value: "aube", label: "Aube" },
@@ -25,8 +25,6 @@ export const LIVE_VOICE_OPTIONS = [
 	{ value: "viola", label: "Viola" },
 ] as const;
 
-/** Accepted values for the live voice setting. */
-export const LIVE_VOICE_VALUES = LIVE_VOICE_OPTIONS.map(({ value }) => value);
-
 /** Voice used when no live voice preference is configured. */
+export const LIVE_VOICE_VALUES = LIVE_VOICE_OPTIONS.map(({ value }) => value);
 export const DEFAULT_LIVE_VOICE = "sol";

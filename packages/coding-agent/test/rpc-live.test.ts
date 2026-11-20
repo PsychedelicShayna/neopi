@@ -8,6 +8,7 @@ import { RpcLiveBridge, type RpcLiveSession } from "@oh-my-pi/pi-coding-agent/mo
 import type { RpcLiveFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { readLines, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { DEFAULT_LIVE_MODEL } from "../src/live/protocol";
 import { cfgLiveDelegationDelivery, cfgLiveModel } from "../src/live/settings";
 
 class FakeLiveSession implements RpcLiveSession {
@@ -109,9 +110,9 @@ describe("RpcLiveBridge", () => {
 		const { bridge, sessions } = harness();
 		const first = bridge.start();
 		const live = sessions[0]!;
-		expect(live.options.model).toBe("gpt-live-1-codex");
+		expect(live.options.model).toBe(DEFAULT_LIVE_MODEL);
 		cfgLiveModel.set(live.options.session.settings, "custom-live-model");
-		expect(live.options.model).toBe("gpt-live-1-codex");
+		expect(live.options.model).toBe(DEFAULT_LIVE_MODEL);
 		live.started.resolve();
 		await first;
 		await bridge.stop();

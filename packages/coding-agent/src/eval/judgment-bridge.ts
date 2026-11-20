@@ -249,6 +249,7 @@ export function sessionJudge(
 	return resolveJudge({
 		settings: session.settings,
 		registry,
+		sessionModel: session.getActiveModel?.(),
 		sessionId: session.getSessionId?.() ?? undefined,
 		sessionManager: session.sessionManager,
 		onEffortDisclosure,
