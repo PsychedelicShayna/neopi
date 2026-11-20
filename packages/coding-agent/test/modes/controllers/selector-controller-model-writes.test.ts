@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -7,6 +7,7 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { EffortSelection } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
+import { cfgModelsDefaultScope, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type RawSettings, Settings, type SettingsScope } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
@@ -379,7 +380,7 @@ describe("SelectorController model selector writes", () => {
 
 	it("preserves other persisted chains and drops emptied effort selections when editing a chain", async () => {
 		const agentDir = tempDir.join("agent");
-		await mkdir(agentDir, { recursive: true });
+		await fs.mkdir(agentDir, { recursive: true });
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
 			YAML.stringify({
@@ -472,15 +473,26 @@ describe("SelectorController model selector writes", () => {
 		expect(await Bun.file(path.join(agentDir, "config.yml")).exists()).toBe(false);
 	});
 
-	it.each(["default", "smol"])(
-		"saves an unscoped %s assignment globally without touching project roles",
-		async role => {
+	it.each([
+		["default", "built-in"],
+		["smol", "built-in"],
+		["default", "configured global"],
+		["smol", "configured global"],
+	] as const)(
+		"saves an unscoped %s assignment using the %s default scope without touching project roles",
+		async (role, scenario) => {
 			const agentDir = tempDir.join("agent");
+			const globalPath = path.join(agentDir, "config.yml");
 			const projectPath = tempDir.join(".omp", "config.yml");
 			const project = { modelRoles: { [role]: "anthropic/claude-opus-4-5" } };
 			await Bun.write(projectPath, YAML.stringify(project));
-			await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ modelRoleStorage: "project" }));
+			const global: RawSettings = {
+				modelRoleStorage: "project",
+				...(scenario === "configured global" && { models: { defaultScope: "global" } }),
+			};
+			await Bun.write(globalPath, YAML.stringify(global));
 			const settings = await Settings.init({ agentDir, cwd: tempDir.path() });
+			const scope = cfgModelsDefaultScope.get(settings);
 			const { controller, showError } = start(settings, model("claude-opus-4-5"));
 
 			await openModelHub(controller).onAssign(
@@ -492,13 +504,14 @@ describe("SelectorController model selector writes", () => {
 			await settings.flush();
 
 			expect(showError).not.toHaveBeenCalled();
-			const saved = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text()) as RawSettings;
-			expect(saved).toEqual({
-				modelRoleStorage: "project",
-				modelRoles: { [role]: "anthropic/claude-sonnet-4-5" },
-			});
+			const assignedRoles = { [role]: "anthropic/claude-sonnet-4-5" };
+			expect(settings.readScopeValue(cfgModelRoles, scope)).toEqual(assignedRoles);
+			const saved = YAML.parse(await Bun.file(globalPath).text()) as RawSettings;
+			expect(saved).toEqual(scope === "global" ? { ...global, modelRoles: assignedRoles } : global);
 			expect(YAML.parse(await Bun.file(projectPath).text())).toEqual(project);
-			expect(session?.model?.id).toBe("claude-opus-4-5");
+			expect(session?.model?.id).toBe(
+				role === "default" && scope === "session" ? "claude-sonnet-4-5" : "claude-opus-4-5",
+			);
 		},
 	);
 

@@ -10,6 +10,8 @@ Settings are stored as plain YAML mappings. Every key, its type, default, and en
 - For the full catalog of environment variables, see [Environment variables](./environment-variables.md).
 - For prompt words that activate specialized per-turn behavior, see [Magic keywords](./magic-keywords.md).
 
+Use **Settings > Chronicler**, next to **Memory**, to configure Chronicle capture, indexing, recall, and backfill. See [Chronicle settings](./chronicle.md#settings) for defaults and examples.
+
 ## Where settings live
 
 | Scope             | Path                                                          | Read behavior                                                                                                                            | Write behavior                                                                                          |

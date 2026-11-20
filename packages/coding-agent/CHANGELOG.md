@@ -93,7 +93,7 @@
 - Set model context limits with exact, glob, or regex rules in `/models`, and see the effective maintenance window separately from catalog capacity ([#511](https://github.com/PsychedelicShayna/neopi/issues/511)).
 
 - Choose a separate `title` model for session titles and `/rename` suggestions; until set it follows `tiny`, and explicit fork-mode titling still uses the foreground model ([#515](https://github.com/PsychedelicShayna/neopi/issues/515)).
-- Configure Chronicler capture thresholds, prompt word targets, recall search limits, indexing budgets, and on-demand backfill timing in Settings > Memory > Chronicler ([#510](https://github.com/PsychedelicShayna/neopi/issues/510)).
+- Configure Chronicler capture thresholds, prompt word targets, recall search limits, indexing budgets, and on-demand backfill timing in Settings ([#510](https://github.com/PsychedelicShayna/neopi/issues/510)).
 - Assign Chronicler recall its own `chronicler-recall` model, shown as CHRONREC; until set, it follows the summary model and effort ([#509](https://github.com/PsychedelicShayna/neopi/issues/509)).
 - Every model role is visible in `/models`, with editable descriptions on `D` and dedicated agent-creation and compaction roles; RPC clients receive the descriptions too ([#508](https://github.com/PsychedelicShayna/neopi/issues/508)).
 - RPC model lists and session snapshots now report native Fast mode support separately from the requested and active session toggles ([NeoCode #129](https://github.com/PsychedelicShayna/neocode/issues/129)).
@@ -169,6 +169,9 @@
 - Added post-processing chains: named, ordered model steps in `CHAINS.yml` (user and project) that rewrite composer text before it is sent. Alt+C sends one prompt through the active chain; `/chaining on|off|use|status|configure` manages automatic mode, the active chain, and a fullscreen editor. Steps without a model use the new Prose role, which falls back to the configured `smol` role.
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
+
+- Restored **Refresh provider** in the model hub when a model scope is active ([#731](https://github.com/PsychedelicShayna/neopi/pull/731)).
+- Edit judge recall's per-level branch floors directly in **Settings > Chronicler** ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 
 - A control-socket `settings_unset` with scope `runtime` now removes only the runtime override instead of deleting the key from the global settings file; a malformed `member` or a `settings_set` without a value is refused instead of erasing a saved map, and credential values are no longer echoed in write replies when secret input is disabled.
 - The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.
@@ -305,6 +308,7 @@
 
 ### Changed
 
+- Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.
 - The Chronicler summary role's description now says it summarizes index nodes only when `/chron index` or the chronicle index command runs; nothing indexes automatically.
 - `/settings` and `/roles` open at session scope by default; set `settings.defaultScope` or `models.defaultScope` to `project` or `global` for a wider default ([#760](https://github.com/PsychedelicShayna/neopi/issues/760)).

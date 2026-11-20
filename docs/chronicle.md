@@ -35,7 +35,7 @@ An atom can optionally carry `chronicler_note` in its YAML front matter: Luna's 
 
 These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
 
-Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. The startup consent notice tells the primary agent it may also refuse or set limits by addressing `@chronicler` directly.
+Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. The startup consent notice tells the primary agent it may also refuse or set limits by addressing `@chronicler` directly.
 
 Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
 
@@ -114,7 +114,7 @@ Before a judge-ranked atom can consume a result slot or become a hint anchor, it
 
 ## Settings
 
-Chronicler controls are editable in **Settings > Memory > Chronicler**, with descriptions and custom numeric input; the structured `chronicler.recall.branchFloor` map is configured in the config file. The original values remain the defaults. Capture settings control pass size, deferred flush size, context budget, prompt capture criteria and word targets, retries, watchdogs, and shutdown drain. Recall settings control ranking thresholds, search budgets, evidence length, and neighbors. Index settings control summary and routing budgets. Backfill settings control parallel sessions and coverage scans, capture and drain deadlines, and coverage polling.
+Chronicler controls are editable in **Settings > Chronicler**, with descriptions and custom numeric input. For **Recall branch floors** (`chronicler.recall.branchFloor`), enter a JSON object such as `{"day": 0.3}` with only the levels you want to override. Higher floors can prune relevant branches before their atoms are checked. The original values remain the defaults. Capture settings control pass size, deferred flush size, context budget, prompt capture criteria and word targets, retries, watchdogs, and shutdown drain. Recall settings control ranking thresholds, search budgets, evidence length, and neighbors. Index settings control summary and routing budgets. Backfill settings control parallel sessions and coverage scans, capture and drain deadlines, and coverage polling.
 
 Backfill command flags override their matching settings. Its `pollMs` setting only controls progress checks during an explicitly requested run; it does not start a backfill or refresh the index. Selection flags such as `--all`, `--force`, and `--dry-run` stay explicit per invocation.
 
