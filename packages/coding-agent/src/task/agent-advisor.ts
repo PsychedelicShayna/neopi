@@ -6,7 +6,6 @@ import {
 	resolveAgentAdvisorSelection,
 } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import { expandAtImports } from "../discovery/at-imports";
 
 /** Explicit definitions replace catalog discovery for this spawn only; no catalog is written. */
 export async function resolveSpawnAdvisorConfig(
@@ -25,9 +24,6 @@ export async function resolveSpawnAdvisorConfig(
 	if (!match)
 		throw new Error(`Unknown advisor '${definition.ref}'${definition.scope ? ` in ${definition.scope}` : ""}`);
 	const config = structuredClone(match.config);
-	config.instructions = config.instructions?.trim()
-		? (await expandAtImports(config.instructions, match.sourcePath)).trim() || undefined
-		: undefined;
 	return [{ ...config, scope: "all" }];
 }
 
