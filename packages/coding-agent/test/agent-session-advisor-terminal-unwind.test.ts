@@ -109,7 +109,6 @@ it.each([
 		const advisorStarted = Promise.withResolvers<void>();
 		const releaseAdvisor = Promise.withResolvers<void>();
 		const adviceAccepted = Promise.withResolvers<boolean>();
-		const completedReviewStarted = Promise.withResolvers<void>();
 		const continuationStarted = Promise.withResolvers<void>();
 		const releaseContinuation = Promise.withResolvers<void>();
 		const thirdTurnStart = Promise.withResolvers<void>();
@@ -154,7 +153,6 @@ it.each([
 						severity,
 					});
 				}
-				completedReviewStarted.resolve();
 				return textResponse("advisor quiet");
 			},
 		});
@@ -205,7 +203,6 @@ it.each([
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry: new ModelRegistry(auth, temp.join("models.yml")),
-			advisorTools: [],
 			advisorStreamFn: advisorMock.stream,
 		});
 		active = { session, auth, temp };
@@ -238,9 +235,6 @@ it.each([
 			if (continuation) {
 				await continuationStarted.promise;
 				await thirdTurnStart.promise;
-				// The queued completed review may still finish while the advisor's
-				// actual-yield continuation starts; delivery is cadence-independent.
-				await completedReviewStarted.promise;
 				expect(agent.state.isStreaming).toBe(true);
 				expect(agentStarts).toBe(2);
 				expect(turnStarts).toBe(3);
@@ -365,7 +359,6 @@ it("continues once on a late nit at advisor.continueSeverity=nit without re-revi
 		sessionManager: SessionManager.inMemory(),
 		settings,
 		modelRegistry: new ModelRegistry(auth, temp.join("models.yml")),
-		advisorTools: [],
 		advisorStreamFn: (advisorModel, context, options) => {
 			if (context.messages.at(-1)?.role === "user") reviewStarts++;
 			return advisorMock.stream(advisorModel, context, options);

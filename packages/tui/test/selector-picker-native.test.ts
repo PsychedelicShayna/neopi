@@ -121,7 +121,6 @@ describe("short-list native picker search", () => {
 		selector.handleNativeEvent(act(action));
 		expect(log).toEqual(["cancel"]);
 	});
-
 });
 
 describe("thinking selector picker", () => {

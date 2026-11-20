@@ -23,7 +23,7 @@ import type { Component } from "../../tui";
 import { col, keyed, node, span, text } from "../../native/describe";
 import { Memo } from "../../native/memo";
 import type { DescribeContext, NativeNode, NativeScroll, NativeUiEvent } from "../../native/node";
-import { actionBar, actionButton } from "../../native/overlay";
+import { actionBar, actionButton, iconButton } from "../../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../../native/picker";
 import type { KeyId } from "../../keys";
 import { parseSgrMouse } from "../../mouse";
@@ -372,8 +372,8 @@ export class ExtensionDashboard implements Component {
 			return;
 		}
 		if (overList) {
-			this.#setPane("list");
 			this.#mainList.handleClick(paneLine);
+			this.#setPane("list");
 			this.#requestRender();
 		}
 	}
@@ -617,6 +617,7 @@ export class ExtensionDashboard implements Component {
 		this.#pane = pane;
 		this.#mainList.setFocused(pane === "list");
 		this.#mainList.focusFilter(false);
+		this.#syncSearch();
 		this.#keys.reset();
 		this.#requestRender();
 	}
@@ -796,13 +797,12 @@ export class ExtensionDashboard implements Component {
 					text(DASHBOARD_TITLE, { role: "omp.app.title" }),
 					text([span(query ? `${shown} of ${total}` : `${total} extensions`, "muted")], { truncate: "end" }),
 				]),
-				node("icon", {
-					name: "x",
-					role: "omp.app.ibtn",
-					title: this.#mainList.filterFocused ? "Back to list  Esc" : `Close  ${formatTooltipKey("escape")}`,
-					aria: this.#mainList.filterFocused ? "Back to list" : "Close",
-					actions: { click: "close" },
-				}),
+				iconButton(
+					"x",
+					"close",
+					this.#mainList.filterFocused ? "Back to list  Esc" : `Close  ${formatTooltipKey("escape")}`,
+					{ aria: this.#mainList.filterFocused ? "Back to list" : "Close" },
+				),
 			],
 			"head",
 		);

@@ -48,7 +48,9 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			tui.start();
 			await scheduler.drain(term);
 
-			const headerRowBefore = term.getViewport().findIndex(row => Bun.stripANSI(row).includes("Resume Session"));
+			const before = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			const headerRowBefore = before.findIndex(row => row.trim().length > 0);
+			const header = before[headerRowBefore];
 			expect(headerRowBefore).toBeGreaterThanOrEqual(0);
 
 			// Press Delete (CSI 3 ~) to open the confirmation dialog, then
@@ -61,7 +63,7 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			for (let i = 0; i < 8; i++) await Promise.resolve();
 			await scheduler.drain(term);
 			const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-			const headerRowAfter = viewport.findIndex(row => row.includes("Resume Session"));
+			const headerRowAfter = viewport.findIndex(row => row === header);
 
 			// Regression: dialog growing the frame and then shrinking must
 			// not push the picker header further down into the viewport
@@ -94,7 +96,9 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		try {
 			tui.start();
 			await scheduler.drain(term);
-			const headerRowBefore = term.getViewport().findIndex(row => Bun.stripANSI(row).includes("Resume Session"));
+			const before = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			const headerRowBefore = before.findIndex(row => row.trim().length > 0);
+			const header = before[headerRowBefore];
 			expect(headerRowBefore).toBeGreaterThanOrEqual(0);
 
 			// Open dialog, then Esc to cancel without deleting.
@@ -105,7 +109,7 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			await scheduler.drain(term);
 
 			const viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-			const headerRowAfter = viewport.findIndex(row => row.includes("Resume Session"));
+			const headerRowAfter = viewport.findIndex(row => row === header);
 			expect(headerRowAfter).toBe(headerRowBefore);
 			// Dialog gone, no scroll-down artefact.
 			expect(viewport.some(row => row.includes("Delete session?"))).toBe(false);
@@ -162,5 +166,12 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		// previous 12-row reserve guess.
 		selector.handleInput("\x1b[3~");
 		expect(selector.render(NARROW_WIDTH).length).toBeLessThanOrEqual(TERMINAL_ROWS);
+		selector.handleInput("\x1b");
+		selector.handleInput("\x1b[F");
+		const selected = selector.getSessionList().selectedSession;
+		expect(selected).toBeDefined();
+		const atEnd = selector.render(NARROW_WIDTH);
+		expect(atEnd.length).toBeLessThanOrEqual(TERMINAL_ROWS);
+		expect(Bun.stripANSI(atEnd.join("\n"))).toContain(selected!.title!.slice(0, 12));
 	});
 });

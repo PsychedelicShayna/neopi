@@ -1,6 +1,10 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
-import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
-import { SessionSelectorComponent, type SessionSelectorEntry } from "../src/overlays/session-selector";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import {
+	SessionSelectorComponent,
+	type SessionSelectorEntry,
+	type SessionListing,
+} from "../src/overlays/session-selector";
 import type { DescribeContext } from "../src/native/node";
 import { initTheme } from "../src/theme";
 
@@ -25,7 +29,12 @@ const sessions: SessionSelectorEntry[] = Array.from({ length: 40 }, (_, i) => ({
 function snapshot(selector: SessionSelectorComponent) {
 	return selector.navigationSnapshot() as {
 		scope: string;
-		list: { search: { value: string; cursor: number; focused: boolean }; selected: string; top: unknown };
+		list: {
+			search: { value: string; cursor: number; focused: boolean };
+			selected: string;
+			order: string[];
+			top: unknown;
+		};
 	};
 }
 function make() {
@@ -93,7 +102,7 @@ describe("session selector Vim navigation and safe history", () => {
 
 	it("restores query caret, scope, result order, selected session and viewport without resuming", () => {
 		const resumed = vi.fn();
-		const options = { allSessions: sessions.slice(), getTerminalRows: () => 24 };
+		const options = { allSessions: { sessions: sessions.slice() }, getTerminalRows: () => 24 };
 		const selector = new SessionSelectorComponent(
 			sessions.slice(0, 5),
 			resumed,
@@ -128,6 +137,8 @@ describe("session selector Vim navigation and safe history", () => {
 			expect(resumed).not.toHaveBeenCalled();
 			reopened.handleInput("\x10"); // No path handler exists here: Ctrl-P is previous scope.
 			expect(snapshot(reopened).scope).toBe("folder");
+			reopened.restoreNavigation(reopened.navigationSnapshot());
+			expect(Bun.stripANSI(reopened.render(120).join("\n"))).not.toContain("/work");
 		} finally {
 			selector.dispose();
 			reopened.dispose();
@@ -165,7 +176,7 @@ describe("session selector Vim navigation and safe history", () => {
 	});
 
 	it("allows history during a read-only scope load and ignores its late completion after leaving", async () => {
-		const loaded = Promise.withResolvers<SessionSelectorEntry[]>();
+		const loaded = Promise.withResolvers<SessionListing>();
 		const repaint = vi.fn();
 		const selector = new SessionSelectorComponent(
 			sessions.slice(0, 2),
@@ -183,7 +194,7 @@ describe("session selector Vim navigation and safe history", () => {
 			const saved = selector.navigationSnapshot();
 			selector.leaveMenu();
 			const rendersBeforeCompletion = repaint.mock.calls.length;
-			loaded.resolve(sessions.slice());
+			loaded.resolve({ sessions: sessions.slice() });
 			await loaded.promise;
 			expect(snapshot(selector).scope).toBe("folder");
 			expect(repaint).toHaveBeenCalledTimes(rendersBeforeCompletion);
@@ -191,6 +202,108 @@ describe("session selector Vim navigation and safe history", () => {
 			expect(snapshot(selector).scope).toBe("folder");
 		} finally {
 			selector.dispose();
+		}
+	});
+
+	it("keeps completed rows across hidden-menu and fresh-instance history returns without repainting the old menu", async () => {
+		const complete = Promise.withResolvers<SessionSelectorEntry[]>();
+		const repaint = vi.fn();
+		const selector = new SessionSelectorComponent(
+			sessions.slice(0, 2),
+			() => {},
+			() => {},
+			() => {},
+			{ allSessions: { sessions: sessions.slice(0, 2), complete: complete.promise } },
+		);
+		const reopened = new SessionSelectorComponent(
+			sessions.slice(0, 2),
+			() => {},
+			() => {},
+			() => {},
+			{ allSessions: { sessions: sessions.slice() } },
+		);
+		try {
+			selector.setOnRequestRender(repaint);
+			selector.handleInput("\x0e");
+			const saved = selector.navigationSnapshot();
+			selector.leaveMenu();
+			const rendersBeforeCompletion = repaint.mock.calls.length;
+			complete.resolve(sessions.slice());
+			await complete.promise;
+			expect(repaint).toHaveBeenCalledTimes(rendersBeforeCompletion);
+			for (const current of [selector, reopened]) {
+				current.restoreNavigation(saved);
+				current.handleInput("G");
+				expect(snapshot(current).list.selected).toBe(sessions[39]!.path);
+				expect(Bun.stripANSI(current.render(120).join("\n"))).toContain("Session 39");
+			}
+		} finally {
+			selector.dispose();
+			reopened.dispose();
+		}
+	});
+
+	it("retains deep-history membership and selection when a restored full listing finishes fuzzy scanning", async () => {
+		vi.useFakeTimers();
+		const rows: SessionSelectorEntry[] = Array.from({ length: 122 }, (_, i) => ({
+			cwd: "/work",
+			modified: new Date(2024, 0, 1, 0, 0, i),
+			size: 100,
+			path: `/work/noise-${i}.jsonl`,
+			id: `noise-${i}`,
+			title: "zzzz",
+			firstMessage: "zzzz",
+			allMessagesText: "zzzz",
+		}));
+		const history = rows[0]!;
+		history.title = "Buried prompt";
+		const fuzzy = rows.at(-1)!;
+		fuzzy.title = "a b c";
+		const complete = Promise.withResolvers<SessionSelectorEntry[]>();
+		const repaint = vi.fn();
+		const selector = new SessionSelectorComponent(
+			rows.slice(0, 2),
+			() => {},
+			() => {},
+			() => {},
+			{
+				allSessions: { sessions: rows.slice(0, 2), complete: complete.promise },
+				historyMatcher: () => [history.id],
+			},
+		);
+		const reopened = new SessionSelectorComponent(
+			rows.slice(0, 2),
+			() => {},
+			() => {},
+			() => {},
+			{ allSessions: { sessions: rows }, historyMatcher: () => [history.id] },
+		);
+		try {
+			selector.setOnRequestRender(repaint);
+			for (const key of ["\x0e", "/", "abc", "\n"]) selector.handleInput(key);
+			vi.runAllTimers();
+			expect(snapshot(selector).list.order).toEqual([history.path]);
+			const saved = selector.navigationSnapshot();
+			selector.leaveMenu();
+			const rendersBeforeCompletion = repaint.mock.calls.length;
+			complete.resolve(rows);
+			await complete.promise;
+			expect(repaint).toHaveBeenCalledTimes(rendersBeforeCompletion);
+
+			for (const current of [selector, reopened]) {
+				current.restoreNavigation(saved);
+				expect(snapshot(current).list.order).toEqual([history.path]);
+				vi.runAllTimers();
+				expect(snapshot(current).list.order).toEqual([history.path, fuzzy.path]);
+				expect(snapshot(current).list.selected).toBe(history.path);
+				expect(Bun.stripANSI(current.render(120).join("\n"))).toContain("Buried prompt");
+				current.handleInput("G");
+				expect(snapshot(current).list.selected).toBe(fuzzy.path);
+				expect(Bun.stripANSI(current.render(120).join("\n"))).toContain("a b c");
+			}
+		} finally {
+			selector.dispose();
+			reopened.dispose();
 		}
 	});
 

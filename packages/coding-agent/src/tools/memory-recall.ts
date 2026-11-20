@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, untilAborted, toError } from "@oh-my-pi/pi-utils";
 import { isHindsightConfigured, loadHindsightConfig } from "../hindsight/config";
 import { formatCurrentTime, formatMemories } from "../hindsight/content";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
@@ -73,7 +73,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 					};
 				} catch (err) {
 					logger.warn("recall failed", { backend: "mnemopi", bank: state.config.bank, error: String(err) });
-					throw err instanceof Error ? err : new Error(String(err));
+					throw toError(err);
 				}
 			}
 
@@ -110,7 +110,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 				};
 			} catch (err) {
 				logger.warn("recall failed", { bankId: state.bankId, error: String(err) });
-				throw err instanceof Error ? err : new Error(String(err));
+				throw toError(err);
 			}
 		});
 	}

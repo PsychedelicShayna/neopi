@@ -14,7 +14,7 @@
  * shown, and (TUI only) where manual code input comes from.
  */
 import * as path from "node:path";
-import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
+import { getMCPConfigPath, getProjectDir, toError } from "@oh-my-pi/pi-utils";
 import type { OAuthController } from "@oh-my-pi/pi-ai/oauth/types";
 import { expandEnvVarsDeep } from "../discovery/helpers";
 import { connectToServer, disconnectServer } from "./client";
@@ -31,7 +31,12 @@ import {
 	lookupMcpOAuthCredentialForServer,
 	removeManagedMcpOAuthCredential,
 } from "./oauth-credentials";
-import { MCPOAuthFlow, type MCPStoredOAuthCredential, mcpOAuthCredentialId } from "./oauth-flow";
+import {
+	MCPOAuthClientIdRequiredError,
+	MCPOAuthFlow,
+	type MCPStoredOAuthCredential,
+	mcpOAuthCredentialId,
+} from "./oauth-flow";
 import type { AuthStorage } from "../session/auth-storage";
 import type { MCPAuthChallenge, MCPAuthConfig, MCPServerConfig } from "./types";
 
@@ -406,7 +411,7 @@ export async function resolveMcpOAuthEndpointsFromServer(
 		});
 		connectionSucceeded = true;
 	} catch (error) {
-		connectionError = error instanceof Error ? error : new Error(String(error));
+		connectionError = toError(error);
 	}
 
 	if (connectionSucceeded && !opts.authChallenge) {
@@ -622,6 +627,9 @@ export async function runMcpOAuthFlow(opts: McpOAuthFlowRunOptions): Promise<OAu
 		if (cancellationRequested) {
 			throw new MCPOAuthCancelledError();
 		}
+
+		// Already a complete diagnostic; its "HTTP 403" must not hit the generic remap below.
+		if (error instanceof MCPOAuthClientIdRequiredError) throw error;
 
 		const errorMsg = error instanceof Error ? error.message : String(error);
 

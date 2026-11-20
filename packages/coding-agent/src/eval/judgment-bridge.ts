@@ -249,6 +249,7 @@ export function sessionJudge(
 	return resolveJudge({
 		settings: session.settings,
 		registry,
+		sessionModel: session.getActiveModel?.(),
 		sessionId: session.getSessionId?.() ?? undefined,
 		sessionManager: session.sessionManager,
 		onEffortDisclosure,
@@ -287,7 +288,9 @@ export async function runEvalJudgment(
 			const images = await loadEvalJudgmentImages(args.images, options.session.cwd);
 			signal?.throwIfAborted();
 			return {
-				...toEvalJudgmentResult(await judge.judge({ state, questions, ...(images === undefined ? {} : { images }) }, { signal })),
+				...toEvalJudgmentResult(
+					await judge.judge({ state, questions, ...(images === undefined ? {} : { images }) }, { signal }),
+				),
 				...(notices.length ? { notices } : {}),
 			};
 		} finally {

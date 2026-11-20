@@ -1,12 +1,26 @@
 import "@oh-my-pi/pi-utils/env";
+import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { APP_NAME, CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { BUILTIN_TOOL_HELP, type BuiltinToolHelp } from "../tools/builtin-names";
+
+function renderBuiltinToolSummary(help: BuiltinToolHelp): string {
+	return help.defaultState === "detected" ? `${help.summary} (when ${help.detectedWhen})` : help.summary;
+}
+
+/** Lists tools in `BUILTIN_TOOL_HELP` entry order, which ranks them by how often they are used. */
+function renderBuiltinTools(group: "default" | "optional"): string {
+	return Object.entries(BUILTIN_TOOL_HELP)
+		.filter(([, help]) => (help.defaultState === "off") === (group === "optional"))
+		.map(([name, help]) => `  ${name.padEnd(14)}- ${renderBuiltinToolSummary(help)}`)
+		.join("\n");
+}
 
 export function getExtraHelpText(): string {
 	return `${chalk.bold("NeoProxy connection:")}
   ${APP_NAME} login neoproxy --url https://proxy.example.com
   Prompts for your existing administrator-assigned API key in a hidden field.
-  Discovers granted models automatically. Use /login in-session, then /model or /models.
+  Discovers granted models automatically. Use /login in-session, then /model or /roles.
   Remote servers require validated HTTPS; loopback HTTP is supported for local use.
 
 ${chalk.bold("Environment Variables:")}
@@ -36,6 +50,7 @@ ${chalk.bold("Environment Variables:")}
   ZAI_API_KEY                - z.ai models (ZhipuAI/GLM)
   UMANS_AI_CODING_PLAN_API_KEY - Umans AI Coding Plan models
   ABLITERATION_API_KEY       - Abliteration uncensored GLM models
+  KIRO_API_KEY               - Kiro agentic IDE models
   UMANS_WEBSEARCH_PROVIDER    - Umans gateway web search backend (native or exa)
   MINIMAX_API_KEY            - MiniMax models
   OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
@@ -50,6 +65,9 @@ ${chalk.bold("Environment Variables:")}
   YOLO_AUTO_API_KEY          - Yolo-Auto flat-rate Qwen models
   SINGULARITYAPI_DEV_API_KEY - SingularityAPI universal gateway (300+ models)
   SINGULARITYAPI_TECH_API_KEY - SingularityAPI reserved DeepSeek lanes
+  SCW_SECRET_KEY             - Scaleway Generative APIs models
+  OTARI_API_KEY              - Otari AI gateway (workspace models)
+  OTARI_BASE_URL             - Otari self-hosted API root (e.g. https://host/api/v1)
 
   ${chalk.dim("# Cloud Providers")}
   AWS_PROFILE                - AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)
@@ -63,6 +81,8 @@ ${chalk.bold("Environment Variables:")}
   PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
   TAVILY_API_KEY             - Tavily web search
   TINYFISH_API_KEY           - TinyFish web search
+  KEENABLE_API_KEY           - Keenable web search (optional; keyless public fallback)
+  SOFYA_API_KEY              - Sofya web search
   FIRECRAWL_API_KEY          - Firecrawl web search + fetch reader backend
   ANTHROPIC_SEARCH_API_KEY   - Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)
   ANTHROPIC_SEARCH_BASE_URL  - Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)
@@ -79,22 +99,15 @@ ${chalk.bold("Environment Variables:")}
   PI_NO_PTY                  - Disable PTY-based interactive bash execution
   For complete environment variable reference, see:
   ${chalk.dim("docs/environment-variables.md")}
-${chalk.bold("Available Tools (default-enabled unless noted):")}
-  read          - Read file contents
-  bash          - Execute bash commands
-  edit          - Edit files with find/replace
-  write         - Write files (creates/overwrites)
-  grep          - Search file contents
-  glob          - Find files by glob pattern
-  lsp           - Language server protocol (code intelligence)
-  python        - Execute Python code (requires: ${APP_NAME} setup python)
-  notebook      - Edit Jupyter notebooks
-  browser       - Browser automation (Puppeteer)
-  computer      - Native host desktop capture and input (disabled by default)
-  task          - Launch sub-agents for parallel tasks
-  todo          - Manage todo/task lists
-  web_search    - Search the web
-  ask           - Ask user questions (interactive mode only)
+${chalk.bold("Built-in Tools (names accepted by --tools):")}
+  ${chalk.dim("# Enabled by default")}
+${renderBuiltinTools("default")}
+
+  ${chalk.dim("# Optional (off by default; enable in settings)")}
+${renderBuiltinTools("optional")}
+
+  Browser and computer use run inside eval: toggle with the browser.enabled
+  (default on) and computer.enabled (default off) settings.
 
 ${chalk.bold("Plugin Options:")}
   --plugin-dir <path>        Load plugin from directory (repeatable)

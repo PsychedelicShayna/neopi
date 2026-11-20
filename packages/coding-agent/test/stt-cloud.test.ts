@@ -6,6 +6,7 @@ import * as transcription from "@oh-my-pi/pi-ai/transcription";
 import type { TranscriptionResult } from "@oh-my-pi/pi-ai/transcription";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
+import { cfgOffline } from "@oh-my-pi/pi-coding-agent/config/auxiliary-model-policy";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
 import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
@@ -83,6 +84,26 @@ describe("STTController cloud transcription", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
+	it("offline prevents recording and transcription through a foreign provider", async () => {
+		const model = getBundledModel("openai", "whisper-1");
+		settings.setModelRole("dictation", "openai/whisper-1");
+		cfgOffline.override(settings, true);
+		const transcribe = vi.spyOn(transcription, "transcribeAudio");
+		const capture = vi.fn(() => ({ stop: vi.fn() }));
+		controller = new STTController(capture, {
+			settings,
+			registry: registryFor(model),
+			getSessionProvider: () => "local",
+		});
+		const options = makeOptions();
+
+		await controller.toggle(makeEditor(), options);
+
+		expect(capture).not.toHaveBeenCalled();
+		expect(transcribe).not.toHaveBeenCalled();
+		expect(options.showWarning).toHaveBeenCalled();
+	});
+
 	it("buffers microphone PCM into a valid mono 16-bit WAV and commits the cloud transcript", async () => {
 		const model = getBundledModel("openai", "whisper-1");
 		settings.setModelRole("dictation", "openai/whisper-1");
@@ -157,10 +178,18 @@ describe("STTController cloud transcription", () => {
 				text: "please review this submit.",
 				usage: ZERO_USAGE,
 			});
-			controller = new STTController(() => ({ stop: vi.fn() }), { settings, registry: registryFor(model) });
+			let onAudio: ((error: Error | null, samples: Float32Array) => void) | undefined;
+			controller = new STTController(
+				callback => {
+					onAudio = callback;
+					return { stop: vi.fn() };
+				},
+				{ settings, registry: registryFor(model) },
+			);
 			const editor = makeEditor();
 
 			await controller.start(editor, { ...makeOptions(), manualSubmit });
+			onAudio?.(null, new Float32Array([0.25]));
 			await controller.stop();
 
 			expect(editor.commitVolatileText).toHaveBeenCalledWith("please review this submit.");

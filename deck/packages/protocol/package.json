@@ -6,7 +6,9 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./settings-toml-codec": "./src/settings-toml-codec.ts",
+		"./toml-frontmatter": "./src/toml-frontmatter.ts"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",

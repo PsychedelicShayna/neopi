@@ -53,6 +53,11 @@ describe("setup choice shortcuts", () => {
 				expect(list.getFilter()).toBe("2");
 				controller.handleInput?.("\x1b");
 				expect(list.filterFocused).toBe(false);
+				expect(list.getFilter()).toBe("");
+				controller.handleInput?.("/");
+				controller.handleInput?.("2");
+				controller.handleInput?.("\r");
+				expect(list.filterFocused).toBe(false);
 				expect(list.getFilter()).toBe("2");
 			} finally {
 				controller.dispose?.();

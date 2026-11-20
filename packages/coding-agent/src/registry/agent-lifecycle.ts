@@ -28,20 +28,22 @@
  */
 
 import * as fs from "node:fs/promises";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, postmortem, untilAborted } from "@oh-my-pi/pi-utils";
 import { isAgentTranscriptReadOnly } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
-import type { AgentSession } from "../session/agent-session";
+import type { AgentSessionHandle } from "../session/agent-session-handle";
+import type { AgentSessionDisposeOptions } from "../session/agent-session-types";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import {
 	type AgentRef,
 	type AgentRefExpectation,
 	AgentRegistry,
+	type AgentRegistryApi,
 	MAIN_AGENT_ID,
 	type RegistryEvent,
 } from "./agent-registry";
 import { getAgentTombstonePath } from "./agent-tombstone";
 
-export type AgentReviver = (expected: AgentRef) => Promise<AgentSession>;
+export type AgentReviver = (expected: AgentRef) => Promise<AgentSessionHandle>;
 
 const AGENT_RELEASE_GRACE_MS = 5000;
 
@@ -83,6 +85,12 @@ export interface AdoptOptions {
 	onRelease?: () => Promise<void>;
 	/** Root generation that spawned this agent; defaults to resolving its registered parent chain. */
 	root?: AgentRef;
+	/**
+	 * Called once when this adoption stops holding `revive` — released, replaced by
+	 * a re-adopt, removed from the registry, or its reviver forgotten — so whoever
+	 * tracks the reviver can let go of it.
+	 */
+	onReviverDropped?: () => void;
 }
 
 /**
@@ -100,7 +108,20 @@ interface AdoptedAgent {
 	idleTtlMs: number;
 	revive?: AgentReviver;
 	onRelease?: () => Promise<void>;
+	onReviverDropped?: () => void;
 	timer?: NodeJS.Timeout;
+}
+
+/** Fire (at most once) the adoption's reviver-dropped hook. */
+function dropReviver(adopted: AdoptedAgent | undefined): void {
+	const hook = adopted?.onReviverDropped;
+	if (!adopted || !hook) return;
+	adopted.onReviverDropped = undefined;
+	try {
+		hook();
+	} catch (error) {
+		logger.warn("AgentLifecycleManager: onReviverDropped hook failed", { error: String(error) });
+	}
 }
 
 interface ParkInFlight {
@@ -118,7 +139,7 @@ interface ParkInFlight {
 
 interface RevivingAgent {
 	ref: AgentRef;
-	promise: Promise<AgentSession>;
+	promise: Promise<AgentSessionHandle>;
 }
 
 interface ReopeningAgent {
@@ -128,10 +149,63 @@ interface ReopeningAgent {
 	promise: Promise<AgentRef>;
 }
 
-export class AgentLifecycleManager {
-	static #global: AgentLifecycleManager | undefined;
+/** How {@link AgentLifecycleApi.release} ends an agent. */
+export interface AgentReleaseOptions {
+	/** Explicit kill: keep a terminal `aborted` row and persist the kill marker. */
+	tombstone?: boolean;
+	/** Refuse a release if this exact ref has begun another run since the caller's snapshot. */
+	expectedRunGeneration?: number;
+	/** Forwarded to the live session's dispose (e.g. the reason its `session_exit` record carries). */
+	dispose?: AgentSessionDisposeOptions;
+}
 
-	static global(): AgentLifecycleManager {
+/** Public surface of the process-global agent lifecycle, implemented locally on main and by a proxy in workers. */
+export interface AgentLifecycleApi {
+	/** Install the factory used to cold-revive `parked` refs restored from disk. */
+	setPersistedSubagentReviverFactory(
+		factory: PersistedSubagentReviverFactory,
+		idleTtlMs: () => number,
+		owner?: AgentRef,
+	): void;
+	/** Take ownership of a finished subagent and arm its idle TTL. */
+	adopt(id: string, opts: AdoptOptions, expected?: AgentRefExpectation): boolean;
+	/** True if the id is adopted (and still bound to `expected` when given). */
+	has(id: string, expected?: AgentRefExpectation): boolean;
+	/** Reclaim a provably-dead parked corpse so a fresh spawn can reuse its id. */
+	reclaimDeadCorpse(id: string, expected: AgentRef): Promise<boolean>;
+	/** True when this lifecycle owns `registry` (identity comparison). */
+	manages(registry: AgentRegistryApi): boolean;
+	/** True while a park is disposing this agent's session. */
+	isParking(id: string, expected?: AgentRefExpectation): boolean;
+	/** Dispose the live session of an adopted agent and mark it `parked`. */
+	park(id: string): Promise<void>;
+	/** Return the live session, reviving it if parked or killed. */
+	ensureLive(id: string): Promise<AgentSessionHandle>;
+	/** Dispose if live and drop timers; `tombstone` keeps a terminal `aborted` row. */
+	release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean>;
+	/** Main-thread root owner: snapshot descendant run epochs for guarded cancellation. */
+	snapshotRootAgentGenerations(root: AgentRef): Map<AgentRef, number>;
+	/** Main-thread root owner: release only this root's adopted descendants. */
+	releaseRootAgents(
+		root: AgentRef,
+		deadlineAt?: number,
+		generations?: ReadonlyMap<AgentRef, number>,
+		disposeOptions?: AgentSessionDisposeOptions,
+	): Promise<void>;
+	/** Main-thread root owner: tear down this root generation without disturbing other roots. */
+	disposeRoot(root: AgentRef, deadlineAt?: number): Promise<void>;
+	/** Tear down every adopted agent. */
+	dispose(deadlineAt?: number): Promise<void>;
+}
+
+export class AgentLifecycleManager implements AgentLifecycleApi {
+	static #global: AgentLifecycleManager | undefined;
+	/** Lifecycle installed by a worker bootstrap; takes precedence over the local manager. */
+	static #installed: AgentLifecycleApi | undefined;
+
+	/** The installed lifecycle; lazily a local manager bound to {@link AgentRegistry.global}. */
+	static global(): AgentLifecycleApi {
+		if (AgentLifecycleManager.#installed) return AgentLifecycleManager.#installed;
 		const current = AgentLifecycleManager.#global;
 		if (current) {
 			// The manager captures its registry at construction and subscribes to
@@ -153,11 +227,17 @@ export class AgentLifecycleManager {
 		return AgentLifecycleManager.#global;
 	}
 
+	/** Install the process-global lifecycle. Worker bootstrap only. */
+	static installGlobal(api: AgentLifecycleApi): void {
+		AgentLifecycleManager.#installed = api;
+	}
+
 	/** Reset the global manager. Test-only. */
 	static resetGlobalForTests(): void {
 		const current = AgentLifecycleManager.#global;
 		if (current) current.#retire();
 		AgentLifecycleManager.#global = undefined;
+		AgentLifecycleManager.#installed = undefined;
 	}
 
 	/** Detach from the registry and cancel every pending timer/park/revival. */
@@ -166,6 +246,7 @@ export class AgentLifecycleManager {
 		this.#unsubscribe = undefined;
 		for (const adopted of this.#adopted.values()) {
 			clearTimeout(adopted.timer);
+			dropReviver(adopted);
 		}
 		this.#adopted.clear();
 		this.#revivals.clear();
@@ -175,7 +256,7 @@ export class AgentLifecycleManager {
 		this.#persistedReviverOwner = undefined;
 	}
 
-	readonly #registry: AgentRegistry;
+	readonly #registry: AgentRegistryApi;
 	readonly #adopted = new Map<string, AdoptedAgent>();
 	/**
 	 * In-flight park attempts, each bound to the ref it started from. A park is
@@ -196,7 +277,7 @@ export class AgentLifecycleManager {
 	/** Set once {@link dispose} runs; blocks late revivals from adopting into a torn-down manager. */
 	#disposed = false;
 
-	constructor(registry: AgentRegistry = AgentRegistry.global()) {
+	constructor(registry: AgentRegistryApi = AgentRegistry.global()) {
 		this.#registry = registry;
 		this.#unsubscribe = registry.onChange(event => this.#onRegistryEvent(event));
 	}
@@ -237,23 +318,32 @@ export class AgentLifecycleManager {
 	 * the caller still owns the session and must dispose it.
 	 */
 	adopt(id: string, opts: AdoptOptions, expected?: AgentRefExpectation): boolean {
-		if (id === MAIN_AGENT_ID) return false;
+		if (id === MAIN_AGENT_ID) {
+			opts.onReviverDropped?.();
+			return false;
+		}
 		const ref = this.#registry.get(id);
 		// Top-level roots own their own teardown; only descendants are adopted.
-		if (ref?.kind === "main") return false;
+		if (ref?.kind === "main") {
+			opts.onReviverDropped?.();
+			return false;
+		}
 		if (!ref || (expected !== undefined && ref !== expected && ref.session !== expected)) {
 			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
+			opts.onReviverDropped?.();
 			return false;
 		}
 		// Disposal already captured its release list; an adoption now would
 		// leave the agent live with nothing left to park or release it.
 		if (this.#disposed) {
 			logger.debug("AgentLifecycleManager.adopt: lifecycle is disposing", { id });
+			opts.onReviverDropped?.();
 			return false;
 		}
 		const root = opts.root ?? this.#registry.rootOf(id);
 		if (root && disposedRoots.has(root)) {
 			logger.debug("AgentLifecycleManager.adopt: owning root already disposed", { id, root: root.id });
+			opts.onReviverDropped?.();
 			return false;
 		}
 		const existing = this.#adopted.get(id);
@@ -264,9 +354,28 @@ export class AgentLifecycleManager {
 			idleTtlMs: opts.idleTtlMs,
 			revive: opts.revive,
 			onRelease: opts.onRelease,
+			onReviverDropped: opts.onReviverDropped,
 		};
+		dropReviver(existing);
 		this.#adopted.set(id, adopted);
 		this.#armTimer(id, adopted);
+		return true;
+	}
+
+	/**
+	 * Drop `revive` from the adoption of `id` — a warm reviver whose host thread
+	 * died with the agent's session. The adoption itself stays, so its
+	 * `onRelease` (e.g. a retained isolation workspace) still runs at final
+	 * release, and the next {@link ensureLive} cold-revives through the persisted
+	 * reviver factory. Main-thread bridging only. Returns true when dropped.
+	 */
+	forgetReviver(id: string, revive: AgentReviver): boolean {
+		const adopted = this.#adopted.get(id);
+		if (adopted?.revive !== revive) return false;
+		clearTimeout(adopted.timer);
+		adopted.timer = undefined;
+		adopted.revive = undefined;
+		dropReviver(adopted);
 		return true;
 	}
 
@@ -318,7 +427,7 @@ export class AgentLifecycleManager {
 	 * (e.g. a custom-registry {@link IrcBus} that fell back to the global
 	 * manager) skip lifecycle gating that would consult unrelated park state.
 	 */
-	manages(registry: AgentRegistry): boolean {
+	manages(registry: AgentRegistryApi): boolean {
 		return this.#registry === registry;
 	}
 
@@ -452,7 +561,7 @@ export class AgentLifecycleManager {
 	 * Never returns a session that is mid-dispose: an in-flight park is either
 	 * cancelled (session still live) or awaited to completion before revive.
 	 */
-	async ensureLive(id: string): Promise<AgentSession> {
+	async ensureLive(id: string): Promise<AgentSessionHandle> {
 		const initial = this.#registry.get(id);
 		if (initial && isAgentTranscriptReadOnly(initial)) {
 			throw new Error(`Agent "${id}" is a read-only transcript and cannot be revived.`);
@@ -466,9 +575,10 @@ export class AgentLifecycleManager {
 			if (parked?.session && !park.detached && park.cancel()) {
 				await park.promise;
 				const keptRef = this.#registry.get(id);
-				const kept = keptRef && keptRef === initial && keptRef.status !== "aborted" && !isAgentTranscriptReadOnly(keptRef)
-					? keptRef.session
-					: null;
+				const kept =
+					keptRef && keptRef === initial && keptRef.status !== "aborted" && !isAgentTranscriptReadOnly(keptRef)
+						? keptRef.session
+						: null;
 				if (kept) {
 					// Park cleared the idle timer; re-arm so TTL park still works.
 					const adopted = this.#adopted.get(id);
@@ -573,23 +683,32 @@ export class AgentLifecycleManager {
 	 * adopt it so the agent rejoins the normal idle↔parked lifecycle. Throws
 	 * when the agent is not revivable or no reviver can be produced.
 	 */
-	async #resolveAndRevive(id: string, ref: AgentRef): Promise<AgentSession> {
+	async #resolveAndRevive(id: string, ref: AgentRef): Promise<AgentSessionHandle> {
 		let adoption = this.#adopted.get(id);
-		let revive = adoption?.ref === ref ? adoption.revive : undefined;
+		// A reviver-less adoption of this ref (its warm reviver's thread died) keeps
+		// its release hook through cold revival and restores it if that fails.
+		const prior = adoption?.ref === ref ? adoption : undefined;
+		let revive = prior?.revive;
 		let coldAdopted = false;
+		const root = prior?.root ?? this.#registry.rootOf(id);
 		if (!revive && ref.status === "parked" && ref.sessionFile && this.#persistedReviverFactory) {
 			revive = await this.#persistedReviverFactory(ref);
 			// Teardown can complete during the factory await. A late cold revive must
 			// not cold-adopt (and later attach a live session + TTL) into a disposed
 			// manager — reject deterministically before creating any session.
-			const root = this.#registry.rootOf(id);
 			if (this.#disposed || (root && disposedRoots.has(root))) {
 				throw new Error(
 					`Agent "${id}" revival aborted: its lifecycle was disposed while its persisted session was being prepared.`,
 				);
 			}
 			if (revive) {
-				adoption = { ref, root, idleTtlMs: this.#persistedReviveTtlMs(), revive };
+				adoption = {
+					ref,
+					root,
+					idleTtlMs: prior?.idleTtlMs ?? this.#persistedReviveTtlMs(),
+					revive,
+					onRelease: prior?.onRelease,
+				};
 				this.#adopted.set(id, adoption);
 				coldAdopted = true;
 			}
@@ -608,7 +727,10 @@ export class AgentLifecycleManager {
 			// A failed cold revive (stale ctx, missing cwd, bad MCP) must not leave a
 			// poisoned reviver stuck in #adopted — drop it so a later ensureLive
 			// rebuilds via the factory (which may have fresher context by then).
-			if (coldAdopted && this.#adopted.get(id) === adoption) this.#adopted.delete(id);
+			if (coldAdopted && this.#adopted.get(id) === adoption) {
+				if (prior) this.#adopted.set(id, prior);
+				else this.#adopted.delete(id);
+			}
 			throw error;
 		}
 	}
@@ -628,11 +750,7 @@ export class AgentLifecycleManager {
 	 * it does not destroy it: {@link ensureLive} (a message, Hub revive/focus)
 	 * reopens the transcript.
 	 */
-	async release(
-		id: string,
-		expected?: AgentRefExpectation,
-		options?: { tombstone?: boolean; expectedRunGeneration?: number },
-	): Promise<boolean> {
+	async release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean> {
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
 		const currentMatches =
@@ -667,6 +785,7 @@ export class AgentLifecycleManager {
 		}
 		if (adopted?.ref === ref && this.#adopted.get(id) === adopted) {
 			this.#adopted.delete(id);
+			dropReviver(adopted);
 		}
 
 		const live = this.#registry.get(id) === ref ? ref.session : null;
@@ -694,7 +813,7 @@ export class AgentLifecycleManager {
 			// dispose the captured session, even when tombstone persistence fails.
 			if (live) {
 				try {
-					await live.dispose();
+					await live.dispose(options?.dispose);
 				} catch (error) {
 					logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: String(error) });
 				}
@@ -721,6 +840,7 @@ export class AgentLifecycleManager {
 		await this.#releaseBefore(
 			ids.map(id => ({ id })),
 			deadlineAt,
+			{ reason: postmortem.Reason.EXIT },
 		);
 		this.#revivals.clear();
 		this.#parks.clear();
@@ -749,7 +869,7 @@ export class AgentLifecycleManager {
 			this.#persistedReviverFactory = undefined;
 			this.#persistedReviverOwner = undefined;
 		}
-		await this.releaseRootAgents(root, deadlineAt);
+		await this.releaseRootAgents(root, deadlineAt, undefined, { reason: postmortem.Reason.EXIT });
 	}
 
 	/**
@@ -764,6 +884,7 @@ export class AgentLifecycleManager {
 		root: AgentRef,
 		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
 		generations?: ReadonlyMap<AgentRef, number>,
+		disposeOptions?: AgentSessionDisposeOptions,
 	): Promise<void> {
 		const owned = [...this.#adopted]
 			.filter(
@@ -778,17 +899,23 @@ export class AgentLifecycleManager {
 				expected: adopted.ref,
 				expectedRunGeneration: generations?.get(adopted.ref),
 			}));
-		await this.#releaseBefore(owned, deadlineAt);
+		await this.#releaseBefore(owned, deadlineAt, disposeOptions);
 	}
 
 	/** Release each id, waiting at most until `deadlineAt`; overrunning releases continue as tracked late cleanup. */
 	async #releaseBefore(
 		targets: readonly { id: string; expected?: AgentRef; expectedRunGeneration?: number }[],
 		deadlineAt: number,
+		disposeOptions?: AgentSessionDisposeOptions,
 	): Promise<void> {
 		await Promise.all(
 			targets.map(async ({ id, expected, expectedRunGeneration }) => {
-				const release = this.release(id, expected, { expectedRunGeneration }).then(() => {});
+				const ref = expected ?? this.#registry.get(id);
+				const release = this.release(id, expected, {
+					expectedRunGeneration,
+					// Only teardown cuts a running turn off as a process exit; ordinary root cancellation does not.
+					dispose: ref?.status === "running" ? disposeOptions : undefined,
+				}).then(() => {});
 				try {
 					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
 				} catch (error) {
@@ -804,7 +931,7 @@ export class AgentLifecycleManager {
 		);
 	}
 
-	async #revive(id: string, revive: AgentReviver, ref: AgentRef, adopted: AdoptedAgent): Promise<AgentSession> {
+	async #revive(id: string, revive: AgentReviver, ref: AgentRef, adopted: AdoptedAgent): Promise<AgentSessionHandle> {
 		const session = await revive(ref);
 		if (this.#disposed || (adopted.root && disposedRoots.has(adopted.root))) {
 			// The owning lifecycle tore down while the reviver was in flight; dispose
@@ -870,6 +997,7 @@ export class AgentLifecycleManager {
 		if (event.type === "removed") {
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(event.ref.id);
+			dropReviver(adopted);
 			return;
 		}
 		if (event.type !== "status_changed") return;

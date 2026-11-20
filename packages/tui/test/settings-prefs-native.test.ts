@@ -2,17 +2,26 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import type { TspPrefsProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { InstalledPlugin, PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
-import type { SettingsDisplayEntry, SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import {
+	SETTINGS_FILE_SCOPES,
+	type SettingsDisplayEntry,
+	type SettingsFileScope,
+	type SettingsHost,
+	type SettingsResolution,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
-import { getCurrentThemeName, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { getCurrentThemeName, getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SelectListNavigationState } from "../src/components/select-list";
 import { getMenuSearchVimMode, isMenuHistoryLeaver, setMenuSearchVimMode } from "../src/components/menu-navigation";
+import { loadThemeSync } from "../src/theme/loader";
+import { getAvailableSymbolPresets, SYMBOL_PRESETS } from "../src/theme/symbols";
 import { visibleWidth } from "../src/utils";
 
 const ENTER = "\n";
 const DOWN = "\x1b[B";
+const BACKSPACE = "\x7f";
 
 let previousVimMode: boolean;
 beforeEach(() => {
@@ -59,6 +68,13 @@ const ENTRIES: SettingsDisplayEntry[] = [
 		},
 	},
 	{ path: "shell.path", type: "string", defaultValue: "", ui: { tab: "shell", label: "Shell path", description: "" } },
+	{
+		path: "edit.mode",
+		type: "enum",
+		enumValues: ["apply_patch", "hashline", "patch", "replace", "sloppy", "none"],
+		defaultValue: "hashline",
+		ui: { tab: "files", group: "Editing", label: "Edit Mode", description: "" },
+	},
 	{
 		path: "providers.order",
 		type: "array",
@@ -111,6 +127,7 @@ interface Harness {
 
 interface HarnessOptions {
 	entries?: readonly SettingsDisplayEntry[];
+	settings?: SettingsHost;
 	plugins?: PluginSettingsHost;
 	providers?: string[];
 	onPluginsChanged?: () => void | Promise<void>;
@@ -154,7 +171,7 @@ function harness(initial: Record<string, unknown> = {}, options: HarnessOptions 
 	const values = new Map<string, unknown>();
 	for (const entry of entries) values.set(entry.path, entry.defaultValue);
 	for (const key in initial) values.set(key, initial[key]);
-	const settings: SettingsHost = {
+	const settings: SettingsHost = options.settings ?? {
 		entries,
 		get: path => values.get(path),
 		set: (path, value) => void values.set(path, value),
@@ -226,11 +243,164 @@ function send(selector: SettingsSelectorComponent, event: NativeUiEvent): void {
 	selector.handleNativeEvent(event);
 }
 
+const LIMITS_LABEL = "Max In-Flight Requests";
+const LIMITS: SettingsDisplayEntry = {
+	path: "providers.maxInFlightRequests",
+	type: "record",
+	defaultValue: {},
+	ui: { tab: "providers", label: LIMITS_LABEL, description: "" },
+};
+const COLOR_BLIND = "display.colorBlind";
+const RISKY = "display.risky";
+
+function scopedSettings(
+	global: Record<string, unknown>,
+	project: Record<string, unknown>,
+	scope: SettingsFileScope = "project",
+) {
+	const entries = [...ENTRIES, LIMITS];
+	const layers: Record<SettingsFileScope, Map<string, unknown>> = {
+		global: new Map(Object.entries(global)),
+		project: new Map(Object.entries(project)),
+		session: new Map(),
+	};
+	const own = layers[scope];
+	const resolve = (path: string): SettingsResolution => {
+		let value = entries.find(entry => entry.path === path)?.defaultValue;
+		let source: SettingsFileScope | undefined;
+		for (const layer of SETTINGS_FILE_SCOPES) {
+			const settings = layers[layer];
+			if (settings.has(path)) {
+				const stored = settings.get(path);
+				value = path === LIMITS.path ? { ...providerLimits(value), ...providerLimits(stored) } : stored;
+				source = layer;
+			}
+			if (layer === scope) break;
+		}
+		return { value, source };
+	};
+	const writes: [string, unknown][] = [];
+	const unsets: string[] = [];
+	const settings: SettingsHost = {
+		entries,
+		scope,
+		get: path => resolve(path).value,
+		resolve,
+		// Like the real host (readScopeValue uses ??): a key stored as null reads as undefined.
+		own: path => own.get(path) ?? undefined,
+		set: (path, value) => {
+			writes.push([path, value]);
+			own.set(path, value);
+		},
+		unset: path => {
+			unsets.push(path);
+			own.delete(path);
+		},
+		normalizeProviderLimits: providerLimits,
+		validateProviderLimits: providerLimits,
+	};
+	return { ...harness({}, { entries, settings }), writes, unsets, global: layers.global };
+}
+
+function ansiRow(selector: SettingsSelectorComponent, label: string): string {
+	const line = selector.render(160).find(line => line.includes(label));
+	if (!line) throw new Error(`no ANSI row ${label}`);
+	return line;
+}
+
 describe("settings as a native prefs page", () => {
 	beforeAll(async () => {
 		const dark = await getThemeByName("dark");
 		if (!dark) throw new Error("Failed to load dark theme");
 		setThemeInstance(dark);
+	});
+
+	it("colors scoped values by file presence, including values explicitly set to their default", () => {
+		const { selector } = scopedSettings({}, { [COLOR_BLIND]: false });
+		const { props } = prefs(selector);
+		expect(props.pages.find(page => page.id === "appearance")?.changed).toBe(1);
+		expect(row(props, COLOR_BLIND)).toMatchObject({ changed: true, control: { k: "switch", on: false } });
+		expect(row(props, "theme.dark").changed).toBeUndefined();
+		expect(ansiRow(selector, "Color-blind mode")).toContain(theme.fg("statusLineGitDirty", "false"));
+		expect(ansiRow(selector, "Dark theme")).toContain(theme.fg("muted", "dark"));
+	});
+
+	for (const preset of getAvailableSymbolPresets()) {
+		it(`shows the inherited global and project scope icons with the ${preset} preset`, () => {
+			setThemeInstance(loadThemeSync("dark", { symbolPresetOverride: preset }));
+			try {
+				const { selector } = scopedSettings({ [COLOR_BLIND]: true }, { [RISKY]: true }, "session");
+				const { props } = prefs(selector);
+				const symbols = SYMBOL_PRESETS[preset];
+				expect(ansiRow(selector, "Color-blind mode")).toContain(`true ${symbols["scope.global"]}`);
+				expect(ansiRow(selector, "Risky")).toContain(`true ${symbols["scope.project"]}`);
+				expect(row(props, COLOR_BLIND)).toMatchObject({
+					label: `Color-blind mode ${symbols["scope.global"]}`,
+					changed: true,
+					control: { k: "switch", on: true },
+				});
+				expect(row(props, RISKY).label).toBe(`Risky ${symbols["scope.project"]}`);
+			} finally {
+				setThemeInstance(loadThemeSync("dark"));
+			}
+		});
+	}
+
+	it("unsets the hovered row, shows its inherited value, and does nothing when repeated", () => {
+		const { selector, unsets, changes } = scopedSettings({ [COLOR_BLIND]: true }, { [COLOR_BLIND]: false });
+		const lines = selector.render(160);
+		const line = lines.findIndex(line => line.includes("Color-blind mode")) + 1;
+		expect(line).toBeGreaterThan(0);
+		selector.handleInput(`\x1b[<35;55;${line}M`);
+		selector.handleInput(BACKSPACE);
+		expect(unsets).toEqual([COLOR_BLIND]);
+		expect(changes).toEqual([[COLOR_BLIND, true]]);
+		expect(ansiRow(selector, "Color-blind mode")).toContain(`true ${theme.symbol("scope.global")}`);
+		selector.handleInput(BACKSPACE);
+		expect(unsets).toEqual([COLOR_BLIND]);
+		expect(changes).toEqual([[COLOR_BLIND, true]]);
+	});
+
+	it("lets search and text editors handle Backspace before unsetting a row", () => {
+		const { selector, unsets } = scopedSettings({}, { [COLOR_BLIND]: true, "shell.path": "ab" });
+		send(selector, { type: "select", key: "", item: COLOR_BLIND });
+		for (const key of ["/", "Color", BACKSPACE]) selector.handleInput(key);
+		expect(prefs(selector).props.query).toBe("Colo");
+		expect(unsets).toEqual([]);
+		selector.handleInput("\x03");
+		send(selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });
+		send(selector, { type: "activate", key: "", item: "shell.path" });
+		selector.handleInput(BACKSPACE);
+		selector.handleInput(ENTER);
+		expect(row(prefs(selector).props, "shell.path").control).toMatchObject({ k: "text", value: "a" });
+		expect(unsets).toEqual([]);
+	});
+
+	it("native Reset clears an own file value even when it matches the default", () => {
+		const { selector, unsets } = scopedSettings({}, { [COLOR_BLIND]: false });
+		send(selector, { type: "change", key: "", item: COLOR_BLIND, value: null });
+		expect(unsets).toEqual([COLOR_BLIND]);
+		expect(row(prefs(selector).props, COLOR_BLIND).changed).toBeUndefined();
+		expect(ansiRow(selector, "Color-blind mode")).toContain(theme.fg("muted", "false"));
+	});
+
+	it("Backspace removes a key the selected file sets to null", () => {
+		const { selector, unsets } = scopedSettings({ [COLOR_BLIND]: true }, { [COLOR_BLIND]: null });
+		send(selector, { type: "change", key: "", item: COLOR_BLIND, value: null });
+		expect(unsets).toEqual([COLOR_BLIND]);
+	});
+
+	it("edits only the project provider map without pinning inherited global limits", () => {
+		const { selector, writes, global } = scopedSettings({ [LIMITS.path]: { a: 2 } }, { [LIMITS.path]: { b: 3 } });
+		send(selector, { type: "action", key: "", act: "page", value: "providers", mods: [] });
+		expect(ansiRow(selector, LIMITS_LABEL)).toContain("a: 2, b: 3");
+		send(selector, { type: "activate", key: "", item: LIMITS.path });
+		for (const key of [DOWN, ENTER, "\x01", "\x0b", "5", ENTER]) selector.handleInput(key);
+		expect(writes).toEqual([[LIMITS.path, { b: 5 }]]);
+		expect(ansiRow(selector, LIMITS_LABEL)).toContain("a: 2, b: 5");
+		global.set(LIMITS.path, { a: 7 });
+		selector.refreshValues();
+		expect(ansiRow(selector, LIMITS_LABEL)).toContain("a: 7, b: 5");
 	});
 
 	it("falls back to the overlay card when the terminal lacks prefs", () => {
@@ -346,6 +516,68 @@ describe("settings as a native prefs page", () => {
 			const reopened = harness().selector;
 			reopened.restoreNavigation(nested);
 			expect(prefs(reopened).props.editing).toEqual({ row: "theme.dark", option: "titanium" });
+		},
+	);
+
+	it.each(["plain", "filtered", "remapped-filter"] as const)(
+		"commits a native enum pick and closes only its menu (%s)",
+		mode => {
+			const previous = getKeybindings();
+			if (mode === "remapped-filter") {
+				setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+			}
+			try {
+				let closed = 0;
+				const { selector, values, changes } = harness(
+					{},
+					{
+						// SelectList offers search only for an overflowing choice list.
+						entries: ENTRIES.map(entry =>
+							entry.path === "edit.mode"
+								? {
+										...entry,
+										enumValues: [
+											...entry.enumValues!,
+											"custom-1",
+											"custom-2",
+											"custom-3",
+											"custom-4",
+											"custom-5",
+										],
+									}
+								: entry,
+						),
+						onCancel: () => {
+							closed++;
+						},
+					},
+				);
+				send(selector, { type: "action", key: "", act: "page", value: "files", mods: [] });
+				send(selector, { type: "activate", key: "", item: "edit.mode" });
+				expect(prefs(selector).props.editing).toEqual({ row: "edit.mode", option: "hashline" });
+
+				if (mode !== "plain") {
+					for (const key of ["/", "s", "l"]) selector.handleInput(key);
+					expect(selector.navigationSnapshot()).toMatchObject({
+						list: { submenu: { filterFocused: true, filterDraft: "sl" } },
+					});
+				}
+				send(selector, { type: "select", key: "", item: "edit.mode=sloppy" });
+				expect(prefs(selector).props.editing).toEqual({ row: "edit.mode", option: "sloppy" });
+				expect(values.get("edit.mode")).toBe("hashline");
+				expect(changes).toEqual([]);
+
+				send(selector, { type: "change", key: "", item: "edit.mode", value: "sloppy" });
+				expect(values.get("edit.mode")).toBe("sloppy");
+				expect(changes).toEqual([["edit.mode", "sloppy"]]);
+				expect(prefs(selector).props.editing).toBeNull();
+				expect(prefs(selector).props.page).toBe("files");
+				expect(closed).toBe(0);
+				send(selector, { type: "action", key: "", act: "close", mods: [] });
+				expect(closed).toBe(1);
+			} finally {
+				setKeybindings(previous);
+			}
 		},
 	);
 

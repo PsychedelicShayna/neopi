@@ -527,6 +527,7 @@ describe("selector navigation keybindings", () => {
 			prompt => selected.push(prompt),
 			() => {},
 		);
+		selector.handleInput("\r"); // Confirm the empty search field before navigating the list.
 		selector.handleInput(CTRL_N);
 		selector.handleInput("\n");
 

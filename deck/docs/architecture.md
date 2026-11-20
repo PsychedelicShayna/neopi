@@ -156,7 +156,7 @@ Tables:
 - `task_states` — kanban columns. Configurable.
 - `tasks` — backlog/active/blocked/done items. `display_id` for human IDs (`T-1`, ...).
 - `inbox_items` — quick captures + promote-to-task records.
-- `routines` — cron / webhook / manual / event definitions: V0 single-action, V1 pipelines in `spec_yaml`, or V2 native graphs in `graph_json`.
+- `routines` — cron / webhook / manual / event definitions: V0 single-action, V1 direct `RoutineSpec` TOML in `spec_toml`, or V2 native graphs in `graph_json`. The additive TOML column leaves legacy `spec_yaml` intact as read-only import provenance.
 - `routine_runs` — per-run history with status, duration, total cost, pinned NeoPi backend identity for agent steps, and immutable V2 execution traces in `graph_run_json`.
 - `routine_step_runs` — per-step records inside a V1 run (stdout / stderr excerpts, JSON output, model, tokens, cost, retry attempt).
 - `routine_state` — cross-run persistent state per routine, addressable from the templating engine.
@@ -170,7 +170,16 @@ On first boot against an empty `tasks` table the deck seeds a single
 
 ### One-shot routine conversion
 
-`GET /api/routine-migrations` inventories raw database columns and YAML, not
+At startup, valid legacy V1 YAML is imported losslessly into `spec_toml` once;
+first reads also import legacy rows added after startup. Invalid or unsupported
+values leave both the original YAML and any existing TOML unchanged and produce
+source-free diagnostics. All V1 API writes, execution parsers and bundled
+`.toml` templates use the shared portable TOML codec bound to `smol-toml`;
+YAML parsing is import-only. Reserved `[__npi]` metadata with `version = 1`
+and JSON Pointer `null_paths` preserves explicit JSON nulls without wrapping
+the routine spec. Metadata is decoded before schema validation or execution.
+
+`GET /api/routine-migrations` inventories raw database columns and TOML, not
 the normalized routine reader. `POST /api/routine-migrations/:id` explicitly
 converts one supported original in place. Neither listing, server startup nor
 conversion invokes an action. Active or queued routine work blocks the API
@@ -187,7 +196,7 @@ The `routine_graph_conversions` journal saves the raw row, converted graph,
 source digest and backup path in the same transaction as the definition.
 Routine ids, enabled state, timestamps, schedules, state, credential
 registrations and historical relationships are not rewritten. A converted
-row has `spec_version=2`, `graph_json` populated and `spec_yaml=NULL`. Execution
+row has `spec_version=2`, `graph_json` populated and `spec_toml=NULL`; its legacy `spec_yaml` is untouched. Execution
 never consults the original backup. Repeating conversion after restart is a
 no-op for a native row.
 
@@ -195,9 +204,9 @@ Reports identify each original by digest and exact field path without
 including its value. Supported fields have a native configuration or
 unchanged metadata mapping. Informational state declarations and visual
 legacy edges remain in the protected original. Those visual edges do not
-become executable connections. Semantic export does not reproduce YAML
-comments, anchors, formatting or key order, which the report names as a
-syntax loss. The raw snapshot retains them exactly.
+become executable connections. Semantic TOML export does not reproduce source
+comments, formatting or key order, which the report names as a syntax loss.
+The raw snapshot retains them exactly.
 
 Conversion supports V1 `run`, `write`, `http`, `deck`, `mcp`, `transform`,
 `wait` and `set_state` actions. The production registry validates every
@@ -273,7 +282,7 @@ its WAL/SHM files separately, replace the database with the protected snapshot
 and remove the old WAL/SHM files before restarting. A full rollback also
 rewinds unrelated database changes since the snapshot.
 
-This is not the completed #163 cutover. V0/V1 readers and YAML authoring,
+This is not the completed [NeoPi #748](https://github.com/PsychedelicShayna/neopi/issues/748) cutover. V0/V1 readers and YAML authoring,
 templates, the old builder/compiler and legacy runtime dispatch still serve
 unconverted callers and rows. They must be removed only after that dependency
 count reaches zero. Studio TOML documents in `studio_graphs` are a distinct
@@ -475,7 +484,7 @@ mutations, message sends, writing `gh` calls, fake target identities or live
 reservations. `RoutinesRunner.fire`/`fireGraphEvent` and `executeGraph` expose
 the same `dryRun` option. Traces identify simulation with `dryRun: true`.
 Simulation starts a separate trace before live event admission and must never
-claim or discard a pending inbox delivery. When integrating inbox intake (#204),
+claim or discard a pending inbox delivery. When integrating inbox intake ([neodeck#204](https://github.com/PsychedelicShayna/neodeck/pull/204)),
 forward `dryRun` through event activation, bypass live intake filtering/discard
 for simulations, and keep `admitInboxGraphEvent` exclusively after the simulation
 guard. A later live call must still admit the committed delivery exactly once.
@@ -489,7 +498,7 @@ on first execution and replay, including redacted card front matter. The
 created card itself retains its requested properties; receipt bindings do not
 expose credential properties from it.
 
-Bounded/nested iteration belongs to #159 and is not implemented by this action
+Bounded/nested iteration belongs to [neodeck#159](https://github.com/PsychedelicShayna/neodeck/issues/159) and is not implemented by this action
 slice. Its per-occurrence identity and dry-run propagation must be added with
 that executor; do not reuse one operation identity for distinct iterations.
 
@@ -527,7 +536,7 @@ Chat is fully store-driven because it needs cross-session state.
 
 The deck typechecks against NeoPi's workspace packages in the same repository.
 At runtime it loads the source tree selected by `NPI_DECK_BACKEND` or
-`activeBackend` in `~/.npi-deck/config.yml`. Point that selection at the repository
+`activeBackend` in `~/.npi-deck/config.toml`. Point that selection at the repository
 root to run the in-tree NeoPi. The deck reads from:
 
 - NeoPi's agent dir (`getAgentDir()`, default `~/.omp/agent/`; `PI_CODING_AGENT_DIR` overrides) — sessions JSONL, auth.db,

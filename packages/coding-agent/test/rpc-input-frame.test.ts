@@ -371,6 +371,33 @@ describe("RpcInputDispatcher", () => {
 		expect(outputs.map(frame => (frame as RpcResponse).id)).toEqual(["abort", "steer"]);
 	});
 
+	test("a pending handoff leaves the RPC queue available for abort", async () => {
+		const settled = Promise.withResolvers<void>();
+		const { deps, outputs } = makeDeps(async command => {
+			switch (command.type) {
+				case "handoff":
+					await settled.promise;
+					return { id: command.id, type: "response", command: "handoff", success: true, data: {} };
+				case "abort":
+					return { id: command.id, type: "response", command: "abort", success: true };
+				default:
+					throw new Error(`unexpected command: ${command.type}`);
+			}
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "summary", type: "handoff" });
+		dispatcher.dispatch({ id: "cancel", type: "abort" });
+		try {
+			await flushMicrotasks();
+			expect(outputs).toEqual([expect.objectContaining({ id: "cancel", command: "abort", success: true })]);
+		} finally {
+			settled.resolve();
+		}
+		await flushMicrotasks();
+		expect(outputs[1]).toMatchObject({ id: "summary", command: "handoff", success: true });
+	});
+
 	test("a pending predict_word does not hold back later commands", async () => {
 		const releasePrediction = Promise.withResolvers<void>();
 		const { deps, outputs } = makeDeps(async command => {
@@ -528,7 +555,11 @@ describe("RpcInputDispatcher", () => {
 		await dispatcher.drain();
 
 		expect(started).toEqual(["active", "queued"]);
-		expect(hostToolFrames).toHaveLength(1);
+		expect(hostToolFrames.filter(frame => frame.type === "host_tool_call")).toHaveLength(1);
+		expect(hostToolFrames[1]).toMatchObject({
+			type: "host_tool_cancel",
+			targetId: hostToolFrames[0].id,
+		});
 		expect(outputs).toEqual([
 			{
 				id: "active",

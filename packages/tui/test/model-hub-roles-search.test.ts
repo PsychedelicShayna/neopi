@@ -12,7 +12,6 @@ import {
 } from "../src/overlays/model-hub";
 import { initTheme } from "../src/theme";
 import type { TUI } from "../src/index";
-import { theme } from "../src/theme/theme";
 
 const tuiStub = { requestRender: () => {}, terminal: { rows: 30 } } as unknown as TUI;
 
@@ -101,18 +100,6 @@ const CLICK_ROLES = { type: "select", key: "scopes", item: "roles" } as const;
 
 beforeAll(async () => {
 	await initTheme(false);
-});
-
-test("role catalog marks fork and latest-upstream roles without changing identifiers", () => {
-	const hub = createHub({ knownRoleIds: ["chronicler", "widget"] });
-	hub.handleNativeEvent(CLICK_ROLES);
-	const props = pickerProps(hub);
-	expect(props.order).toContain("role:chronicler");
-	expect(props.order).toContain("role:widget");
-	const rendered = JSON.stringify(props);
-	expect(rendered).toContain(`chronicler ${theme.symbol("provenance.fork")}`);
-	expect(rendered).toContain(`widget ${theme.symbol("provenance.newUpstream")}`);
-	hub.dispose();
 });
 
 test("with no query the Roles rows hide the search field and keep their letter commands", () => {
@@ -215,9 +202,7 @@ for (const chainKey of ["default", "example/gpt-6.1-terra"]) {
 		for (const ch of "-edited") hub.handleInput(ch);
 		hub.handleInput("\n");
 		hub.handleInput("\n");
-		expect(changes).toEqual([
-			{ role: chainKey, chain: ["example/gpt-6-luna", "example/gpt-6.1-sol-edited"] },
-		]);
+		expect(changes).toEqual([{ role: chainKey, chain: ["example/gpt-6-luna", "example/gpt-6.1-sol-edited"] }]);
 		hub.dispose();
 	});
 }

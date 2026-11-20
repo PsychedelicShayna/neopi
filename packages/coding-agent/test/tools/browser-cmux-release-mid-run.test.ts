@@ -36,6 +36,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { CmuxKind } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/rpc";
 import { CmuxSocketClient } from "@oh-my-pi/pi-coding-agent/tools/browser/cmux/socket-client";
 import { acquireBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
+import { browserScreenshotResizeOptions } from "@oh-my-pi/pi-coding-agent/tools/browser/screenshot";
 import {
 	acquireTab,
 	getTabsMapForTest,
@@ -511,18 +512,33 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 	});
 
 	it("rejects invalid screenshot limits before the capture can bypass its image budget", () => {
-		expect(() => Settings.isolated({ "browser.screenshotMaxWidth": 0 })).toThrow(
-			"browser.screenshotMaxWidth must be a positive integer",
-		);
 		expect(() => Settings.isolated({ "browser.screenshotMaxHeight": -1 })).toThrow(
-			"browser.screenshotMaxHeight must be a positive integer",
+			"browser.screenshotMaxHeight must be a non-negative integer",
 		);
 		expect(() => Settings.isolated({ "browser.screenshotMaxWidth": 1.5 })).toThrow(
-			"browser.screenshotMaxWidth must be a positive integer",
+			"browser.screenshotMaxWidth must be a non-negative integer",
 		);
+		// 0 is the explicit spelling of "no cap".
+		expect(() =>
+			Settings.isolated({ "browser.screenshotMaxWidth": 0, "browser.screenshotMaxHeight": 0 }),
+		).not.toThrow();
 	});
 
-	it("applies configurable screenshot dimensions to successive cmux captures", async () => {
+	it("sizes diff captures at upstream's 1024px edge unless an operator cap is set", () => {
+		const edges = (limits?: { maxWidth: number; maxHeight: number }) => {
+			const options = browserScreenshotResizeOptions({
+				cwd: "/tmp",
+				browserScreenshotMaxWidth: limits?.maxWidth,
+				browserScreenshotMaxHeight: limits?.maxHeight,
+			});
+			return [options.maxWidth, options.maxHeight];
+		};
+		expect(edges()).toEqual([1024, 1024]);
+		expect(edges({ maxWidth: 0, maxHeight: 0 })).toEqual([1024, 1024]);
+		expect(edges({ maxWidth: 600, maxHeight: 500 })).toEqual([600, 500]);
+	});
+
+	it("caps successive cmux captures only when screenshot dimensions are set", async () => {
 		const seed = Buffer.from(
 			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
 			"base64",
@@ -554,7 +570,9 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 		const savedPaths: string[] = [];
 		try {
 			for (const [session, expected] of [
-				[makeSession("/tmp"), { width: 1024, height: 768 }],
+				// Unset or 0: no operator cap, so the 1600x1200 capture stays under upstream's model-aware edge.
+				[makeSession("/tmp"), { width: 1600, height: 1200 }],
+				[makeSession("/tmp", undefined, { maxWidth: 0, maxHeight: 0 }), { width: 1600, height: 1200 }],
 				[makeSession("/tmp", undefined, { maxWidth: 600, maxHeight: 500 }), { width: 600, height: 450 }],
 			] as const) {
 				const result = await runInTab("screenshot-dimensions", {
@@ -622,14 +640,28 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 	});
 
 	it.each([
-		{ name: "measured", width: { value: 1000 }, note: "by 0.98 to get viewport CSS pixels for tab.clickAt" },
-		{ name: "missing", width: { value: "" }, note: "scale to CSS pixels could not be read" },
-		{ name: "failed", width: new Error("eval failed"), note: "scale to CSS pixels could not be read" },
-	])("screenshot coordinate note with $name viewport width", async ({ width, note }) => {
+		// The 2000x20 capture is drawn inside a 2000x200 image (the vision limits pad it), so a click at the
+		// image's centre is the centre of the 1000x10 viewport.
+		{ name: "measured", width: { value: 1000 }, note: "1000x10 viewport", clicked: '"x":500,"y":5' },
+		// With no scale to map by, the click takes the position as CSS pixels.
+		{
+			name: "missing",
+			width: { value: "" },
+			note: "scale to CSS pixels could not be read",
+			clicked: '"x":1000,"y":100',
+		},
+		{
+			name: "failed",
+			width: new Error("eval failed"),
+			note: "scale to CSS pixels could not be read",
+			clicked: '"x":1000,"y":100',
+		},
+	])("screenshot and clickAt with $name viewport width", async ({ width, note, clicked }) => {
 		spyOn(CmuxSocketClient.prototype, "connect").mockResolvedValue(undefined);
 		spyOn(CmuxSocketClient.prototype, "close").mockImplementation(() => undefined);
 		// A 2x capture of a 1000 CSS px wide viewport.
 		const png = encodeRawPng(new Uint8Array(2000 * 20 * 3), 2000, 20, 3).toBase64();
+		const scripts: string[] = [];
 		spyOn(CmuxSocketClient.prototype, "request").mockImplementation(
 			async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
 				switch (method) {
@@ -640,6 +672,7 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 					case "browser.snapshot":
 						return { page: { html: "" } };
 					case "browser.eval":
+						if (typeof params.script === "string") scripts.push(params.script);
 						if (params.script !== "window.innerWidth") return { value: "" };
 						if (width instanceof Error) throw width;
 						return width;
@@ -658,13 +691,14 @@ describe("browser tab-supervisor — cmux tab close mid-run (#4499)", () => {
 		});
 
 		const result = await runInTab("screenshot-scale", {
-			code: "return await tab.screenshot();",
+			code: "const shot = await tab.screenshot(); await tab.clickAt(1000, 100); return shot;",
 			timeoutMs: 5_000,
 			session: makeSession("/tmp"),
 		});
 		const text = result.displays.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 		expect(text).toContain(note);
 		expect(result.displays.filter(block => block.type === "image")).toHaveLength(1);
+		expect(scripts.find(script => script.includes("clickCount"))).toContain(clicked);
 		if (typeof result.returnValue === "string") await fs.rm(result.returnValue);
 	});
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "../../src/config/settings";
 import type { AgentSession } from "../../src/session/agent-session";
 import type { AgentSessionEvent } from "../../src/session/agent-session-events";
 import { LIVE_DELEGATION_MESSAGE_TYPE } from "../../src/session/messages";
@@ -39,8 +40,10 @@ function harness(includeVoiceNote: () => boolean = () => true) {
 	let onSend: ((message: { details?: { noteId?: string } }) => void) | undefined;
 	const session = {
 		modelRegistry: { authStorage: {} },
+		settings: Settings.isolated(),
 		sessionId: "delegation-note-test",
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			allocateArtifactPath: async () => ({}),
 			appendCustomEntry(type: string, data: unknown) {
 				entries.push({ type, data });

@@ -35,9 +35,10 @@ import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
 import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
-import { parseAgentAdvisor } from "../task/agent-advisor";
+import { parseAgentAdvisor } from "../advisor/config";
 
 import { realpathIfExists, resolveContainedPath } from "./contained-path";
+import { invalidateDependentPluginCaches } from "./plugin-cache-invalidators";
 import { buildPluginDirRoot } from "./plugin-dir-roots";
 
 /**
@@ -241,6 +242,9 @@ function buildRule(
 		rawMode === "never" || rawMode === "prose-only" || rawMode === "tool-only" || rawMode === "always"
 			? rawMode
 			: undefined;
+	const rawRepeat = frontmatter.repeatMode;
+	const repeatMode: Rule["repeatMode"] =
+		rawRepeat === "once" || rawRepeat === "after-gap" || rawRepeat === "always" ? rawRepeat : undefined;
 	return {
 		name: resolvedName,
 		path: filePath,
@@ -254,6 +258,7 @@ function buildRule(
 		scope,
 		agents: parseRuleAgents(frontmatter.agents),
 		interruptMode,
+		repeatMode,
 		_source: source,
 	};
 }
@@ -307,7 +312,7 @@ export interface ParsedAgentFields {
 	autoloadSkills?: string[];
 	readSummarize?: boolean;
 	blocking?: boolean;
-	/** `true` = keep `yield` and the output schema when `task.structured` is off. */
+	/** `true` = keep the output schema (and with it `yield`) when `task.structured` is off. */
 	structured?: boolean;
 	/** `true` = prewalk into the default target; string = prewalk into that model pattern. */
 	prewalk?: boolean | string;
@@ -1231,13 +1236,6 @@ const pluginRootsCache = new Map<string, PluginRootsCacheEntry>();
  */
 const registeredPluginRootIds = new Map<string, string>();
 
-const pluginCacheInvalidators = new Set<() => void>();
-
-/** Register a process-global plugin cache invalidator called whenever plugin roots are cleared. */
-export function registerPluginCacheInvalidator(invalidator: () => void): void {
-	pluginCacheInvalidators.add(invalidator);
-}
-
 /** The registry files {@link listClaudePluginRoots} reads for `home` and `cwd`. */
 async function resolvePluginRegistryFiles(home: string, cwd: string | undefined) {
 	const claudeConfigDir = resolveClaudePaths(home).configDir;
@@ -1569,7 +1567,7 @@ async function loadClaudePluginRoots({
  */
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
-	for (const invalidate of pluginCacheInvalidators) invalidate();
+	invalidateDependentPluginCaches();
 	preloadedPluginRoots = [...injectedPluginDirRoots];
 	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
 	if (lastPreloadHome) {

@@ -131,6 +131,7 @@ await runRpcMode(session, {
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -210,6 +211,7 @@ await runRpcMode(session);
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -316,6 +318,35 @@ await runRpcMode(session);
 
 		respond(pendingRequests, request.id, { value: "Deploy" });
 		expect(await result).toBe("Deploy");
+	});
+
+	it("carries checkbox state so hosts can show which options are already checked", async () => {
+		const pendingRequests = new Map<string, PendingExtensionRequest>();
+		const output = vi.fn<(frame: object) => void>();
+		const checkedIndices = [0, 1];
+		const result = requestRpcSelect(
+			pendingRequests,
+			output,
+			"(2 selected) Choose enabled jobs",
+			["pytest", "go-quality", "lint", "Other (type your own)", "Done selecting"],
+			{ initialIndex: 2, selectionMarker: "checkbox", checkedIndices, markableCount: 4 },
+		);
+		const request = requireRequest(output.mock.calls[0]?.[0]);
+
+		expect(JSON.parse(JSON.stringify(output.mock.calls[0]?.[0]))).toEqual({
+			type: "extension_ui_request",
+			id: request.id,
+			method: "select",
+			title: "(2 selected) Choose enabled jobs",
+			options: ["pytest", "go-quality", "lint", "Other (type your own)", "Done selecting"],
+			initialIndex: 2,
+			selectionMarker: "checkbox",
+			checkedIndices: [0, 1],
+			markableCount: 4,
+		});
+
+		respond(pendingRequests, request.id, { value: "lint" });
+		expect(await result).toBe("lint");
 	});
 
 	it("cancels the remote dialog when its signal aborts", async () => {
@@ -450,6 +481,7 @@ export default function(pi) {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -483,7 +515,7 @@ export default function(pi) {
 		};
 
 		try {
-			await send({ type: "login", providerId: "rpc-secret", id: "secret" });
+			await send({ type: "login", providerId: "rpc-secret", id: "secret", allowSecretInput: true });
 			for await (const frame of readJsonl<unknown>(stdout)) {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "extension_ui_request" && frame.method === "input") {
@@ -579,6 +611,79 @@ export default function(pi) {
 					expect.objectContaining({ id: "rpc-alias", authenticated: false }),
 				]),
 			},
+		});
+	}, 30_000);
+
+	it("routes a provider's login-warning acceptance to the host before any auth URL (#19523)", async () => {
+		await using temp = await TempDir.create("@rpc-login-warning-");
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				path.join(import.meta.dir, "..", "src", "cli.ts"),
+				"--mode",
+				"rpc",
+				"--provider",
+				"anthropic",
+				"--model",
+				"claude-sonnet-4-5",
+			],
+			{
+				cwd: temp.path(),
+				env: {
+					PATH: Bun.env.PATH,
+					HOME: temp.join("home"),
+					PI_CODING_AGENT_DIR: temp.join("agent"),
+					XDG_CONFIG_HOME: temp.join("config"),
+					XDG_DATA_HOME: temp.join("data"),
+					XDG_CACHE_HOME: temp.join("cache"),
+					CI: "true",
+					PI_NO_TITLE: "1",
+				},
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: 20_000,
+			},
+		);
+		const stdout = new Response(child.stdout).body;
+		if (!stdout) throw new Error("RPC login fixture did not expose stdout");
+		const stderr = new Response(child.stderr).text();
+		const send = async (frame: object) => {
+			child.stdin.write(`${JSON.stringify(frame)}\n`);
+			await child.stdin.flush();
+		};
+		const inputTitles: string[] = [];
+		let loginResponse: unknown;
+		try {
+			// antigravity-cli declares `login-warning`; declining it must cancel before any login work starts.
+			await send({ type: "login", providerId: "antigravity-cli", id: "login" });
+			for await (const frame of readJsonl<unknown>(stdout)) {
+				if (!isRecord(frame)) continue;
+				if (frame.type === "extension_ui_request" && frame.method === "input") {
+					if (typeof frame.id !== "string" || typeof frame.title !== "string") {
+						throw new Error("RPC input request did not carry string id and title");
+					}
+					inputTitles.push(frame.title);
+					await send({ type: "extension_ui_response", id: frame.id, value: "no" });
+				} else if (frame.type === "response" && frame.id === "login") {
+					loginResponse = frame;
+					break;
+				}
+			}
+		} finally {
+			child.stdin.end();
+			child.kill();
+			await child.exited;
+		}
+
+		if (!loginResponse) throw new Error(`RPC login fixture did not finish: ${await stderr}`);
+		await stderr;
+		expect(inputTitles).toEqual([expect.stringContaining("use at your own risk")]);
+		expect(loginResponse).toMatchObject({
+			type: "response",
+			command: "login",
+			success: false,
+			error: "Login cancelled",
 		});
 	}, 30_000);
 });
@@ -710,7 +815,7 @@ describe("RPC ask dialog", () => {
 		expect(onTimeout).not.toHaveBeenCalled();
 	});
 
-	it("keeps select prompts until the host opts in, then sends each ask as one dialog", async () => {
+	it("answers questions through fallback select and the negotiated ask frame", async () => {
 		await using temp = await TempDir.create("@rpc-ask-dialog-");
 		const extensionPath = temp.join("scripted-ask.ts");
 		await Bun.write(extensionPath, scriptedAskProvider);
@@ -728,6 +833,7 @@ describe("RPC ask dialog", () => {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -754,6 +860,7 @@ describe("RPC ask dialog", () => {
 		const toolResults: unknown[] = [];
 		let optInResponse: unknown;
 		let finished = false;
+		const args = JSON.stringify({ questions: [dbQuestion] });
 
 		try {
 			// The provider exists only once the extension loads, so select it over RPC.
@@ -762,7 +869,7 @@ describe("RPC ask dialog", () => {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "response" && frame.id === "model") {
 					if (frame.success !== true) throw new Error(`Scripted model unavailable: ${JSON.stringify(frame)}`);
-					await send({ type: "prompt", id: "fallback", message: JSON.stringify({ questions: [dbQuestion] }) });
+					await send({ type: "prompt", id: "fallback", message: args });
 				} else if (frame.type === "extension_ui_request" && frame.method === "select") {
 					selectRequests.push(frame);
 					await send({ type: "extension_ui_response", id: frame.id, value: "Postgres" });
@@ -771,10 +878,7 @@ describe("RPC ask dialog", () => {
 					await send({
 						type: "extension_ui_response",
 						id: frame.id,
-						answers: [
-							{ id: "db", selectedOptions: [], customInput: "DuckDB" },
-							{ id: "features", selectedOptions: ["Auth", "Search"] },
-						],
+						answers: [{ id: "db", selectedOptions: ["Postgres"] }],
 					});
 				} else if (frame.type === "tool_execution_end" && frame.toolName === "ask") {
 					toolResults.push(frame.result);
@@ -782,11 +886,7 @@ describe("RPC ask dialog", () => {
 					await send({ type: "set_ask_dialog", id: "opt-in", enabled: true });
 				} else if (frame.type === "response" && frame.id === "opt-in") {
 					optInResponse = frame;
-					await send({
-						type: "prompt",
-						id: "dialog",
-						message: JSON.stringify({ questions: [dbQuestion, featuresQuestion] }),
-					});
+					await send({ type: "prompt", id: "dialog", message: args });
 				} else if (frame.type === "prompt_result" && frame.id === "dialog") {
 					finished = true;
 					break;
@@ -809,24 +909,10 @@ describe("RPC ask dialog", () => {
 			success: true,
 			data: { enabled: true },
 		});
-		expect(askRequests).toEqual([
-			{
-				type: "extension_ui_request",
-				id: expect.any(String),
-				method: "ask",
-				questions: [dbQuestion, featuresQuestion],
-			},
-		]);
-		expect(toolResults).toEqual([
-			expect.objectContaining({ details: expect.objectContaining({ selectedOptions: ["Postgres"] }) }),
-			expect.objectContaining({
-				details: {
-					results: [
-						expect.objectContaining({ id: "db", selectedOptions: [], customInput: "DuckDB" }),
-						expect.objectContaining({ id: "features", selectedOptions: ["Auth", "Search"] }),
-					],
-				},
-			}),
-		]);
+		expect(askRequests).toMatchObject([{ method: "ask", questions: [dbQuestion] }]);
+		const answered = expect.objectContaining({
+			details: expect.objectContaining({ selectedOptions: ["Postgres"] }),
+		});
+		expect(toolResults).toEqual([answered, answered]);
 	}, 60_000);
 });

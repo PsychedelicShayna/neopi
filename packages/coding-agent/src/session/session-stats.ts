@@ -6,7 +6,7 @@ import {
 	type SessionMessageEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, ProviderResponseMetadata, Usage } from "@oh-my-pi/pi-ai";
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { type } from "@oh-my-pi/omptype";
 import type { ModelRegistry } from "../config/model-registry";
 import { isMixtureModel } from "../moa/provider";
 import { MIXTURE_USAGE_PURPOSE } from "../moa/types";
@@ -327,12 +327,10 @@ export class SessionStatsTracker {
 		const rawContextWindow = options?.contextWindow ?? this.#host.model()?.contextWindow ?? 0;
 		const contextWindow = Number.isFinite(rawContextWindow) && rawContextWindow > 0 ? rawContextWindow : 0;
 		const settings = this.#host.session.settings;
-		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(
-			this.#host.session,
-			this.#tokenizer,
-			settings?.revision,
-		);
-		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
+		const { skillsTokens, instructionFilesTokens, toolsTokens, systemContextTokens, systemPromptTokens } =
+			computeNonMessageBreakdown(this.#host.session, this.#tokenizer, settings?.revision);
+		const categoryNonMessageTokens =
+			skillsTokens + instructionFilesTokens + toolsTokens + systemContextTokens + systemPromptTokens;
 		const current = {
 			nonMessageTokens: computeNonMessageTokens(this.#host.session, this.#tokenizer, settings?.revision),
 			toolSchemaTokens: toolsTokens,
@@ -419,6 +417,7 @@ export class SessionStatsTracker {
 			systemPromptTokens,
 			systemToolsTokens: toolsTokens,
 			systemContextTokens,
+			instructionFilesTokens,
 			skillsTokens,
 			messagesTokens: Math.max(0, usedTokens - categoryNonMessageTokens),
 		};
@@ -547,14 +546,15 @@ function taskToolUsage(details: unknown): Usage | undefined {
 	return isUsage(usage) ? usage : undefined;
 }
 
+const UsageShape = type({
+	input: "number",
+	output: "number",
+	cacheRead: "number",
+	cacheWrite: "number",
+	totalTokens: "number",
+	cost: { total: "number" },
+});
+
 function isUsage(value: unknown): value is Usage {
-	if (!isRecord(value) || !isRecord(value.cost)) return false;
-	return (
-		typeof value.input === "number" &&
-		typeof value.output === "number" &&
-		typeof value.cacheRead === "number" &&
-		typeof value.cacheWrite === "number" &&
-		typeof value.totalTokens === "number" &&
-		typeof value.cost.total === "number"
-	);
+	return UsageShape.allows(value);
 }

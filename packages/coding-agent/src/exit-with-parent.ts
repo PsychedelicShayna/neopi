@@ -163,7 +163,7 @@ export async function tearDownExitTarget(
 			mnemopiConsolidateTimeoutMs: Math.min(teardownMs, SHUTDOWN_CONSOLIDATE_BUDGET_MS),
 		}),
 	];
-	if (session.asyncJobManager) work.push(session.asyncJobManager.dispose({ timeoutMs: teardownMs }));
+	session.cancelAsyncJobsForShutdown();
 	if (mcpManager) work.push(mcpManager.disconnectAll());
 	await Promise.allSettled(work);
 }

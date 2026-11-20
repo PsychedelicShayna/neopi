@@ -3,7 +3,12 @@ import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test
 import type { TUI } from "../src/tui";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode } from "../src/native/node";
-import type { AdvisorConfig, AdvisorConfigCallbacks, AdvisorConfigDeps, WatchdogConfigDoc } from "../src/overlays/advisor-config";
+import type {
+	AdvisorConfig,
+	AdvisorConfigCallbacks,
+	AdvisorConfigDeps,
+	WatchdogConfigDoc,
+} from "../src/overlays/advisor-config";
 import { AdvisorScopeOverlayComponent, type AdvisorConfigFile } from "../src/overlays/advisor-scopes";
 import { getThemeByName, setThemeInstance } from "../src/theme";
 
@@ -37,7 +42,9 @@ function pickerProps(node: NativeNode): TspPickerProps {
 	if (node.k === "picker") return node.p!;
 	for (const child of node.c ?? []) {
 		if ("k" in child) {
-			try { return pickerProps(child); } catch {}
+			try {
+				return pickerProps(child);
+			} catch {}
 		}
 	}
 	throw new Error("No picker");
@@ -73,14 +80,27 @@ function fixture(
 		},
 		requestRender: () => {},
 		notify: () => {},
-		copyPrompt: prompt => { prompts.push(prompt); },
+		copyPrompt: prompt => {
+			prompts.push(prompt);
+		},
 		generateAdvisor,
 	});
 	overlay.handleInput("j"); // Leave the first, initially focused scope row.
 	const action = (act: string) => overlay.handleNativeEvent({ type: "action", key: "", act, mods: [] });
 	const select = (item: string) => overlay.handleNativeEvent({ type: "select", key: "", item });
 	const activate = (item: string) => overlay.handleNativeEvent({ type: "activate", key: "", item });
-	return { overlay, files, disk, writes, prompts, action, select, activate, applies: () => applies, closes: () => closes };
+	return {
+		overlay,
+		files,
+		disk,
+		writes,
+		prompts,
+		action,
+		select,
+		activate,
+		applies: () => applies,
+		closes: () => closes,
+	};
 }
 
 beforeAll(async () => {
@@ -95,7 +115,11 @@ describe("advisor file scopes", () => {
 		expect(strip(overlay)).toContain("● enabled User");
 		overlay.handleInput("k");
 		overlay.handleInput("l");
-		expect(pickerProps(overlay.describe(cx)).items?.map(item => item.detail).filter(Boolean)).toContain("/project/WATCHDOG.yml");
+		expect(
+			pickerProps(overlay.describe(cx))
+				.items?.map(item => item.detail)
+				.filter(Boolean),
+		).toContain("/project/WATCHDOG.yml");
 		expect(strip(overlay)).toContain("○ disabled Root");
 		overlay.handleInput("\x1b[C");
 		expect(strip(overlay)).toContain("/project/.omp/WATCHDOG.yml");
@@ -118,7 +142,6 @@ describe("advisor file scopes", () => {
 		expect(line).toBeGreaterThan(0);
 		overlay.handleInput(`\x1b[<35;5;${line + 1}M`);
 		expect(strip(overlay)).toContain("○ disabled Root");
-		expect(strip(overlay)).toContain("Disable all active advisors");
 	});
 
 	it("persists a file toggle without changing entries, applies on request, and restores on toggle", async () => {
@@ -157,25 +180,53 @@ describe("advisor file scopes", () => {
 		expect(f.disk.get(f.files[0].path)?.advisors).toEqual([{ name: "User" }]);
 	});
 
-	it("bulk disables, enables and inverts the effective states across all files", async () => {
-		const f = fixture();
+	it("bulk actions affect only the selected scope's entry flags, including disabled files", async () => {
+		const f = fixture({ enabled: true, advisors: [{ name: "User" }] });
+		const root = f.disk.get(f.files[1].path)!;
+		root.enabled = false;
+		root.advisors.push({ name: "Root enabled", enabled: true });
+		f.disk.get(f.files[2].path)!.enabled = true;
+		const untouched = [0, 3, 4].map(index => structuredClone(f.disk.get(f.files[index].path)));
+		f.overlay.handleInput("k");
+		f.overlay.handleInput("l"); // Project root, retained when an action row is selected.
+		f.overlay.handleInput("j");
+		f.activate("invert");
+		await settle();
+		expect(f.disk.get(f.files[1].path)).toEqual({
+			enabled: false,
+			advisors: [
+				{ name: "Root", enabled: undefined },
+				{ name: "Root enabled", enabled: false },
+			],
+		});
+		expect(f.disk.get(f.files[2].path)).toEqual({
+			enabled: true,
+			advisors: [{ name: "Nested", enabled: false }],
+		});
 		f.activate("disable");
 		await settle();
-		expect([...f.disk.values()].every(doc => doc.enabled === false)).toBe(true);
-		expect([...f.disk.values()].flatMap(doc => doc.advisors).every(advisor => advisor.enabled === false)).toBe(true);
-		f.action("toggle"); // First selected row remains the disable action, not a file.
+		expect(
+			[1, 2].flatMap(index => f.disk.get(f.files[index].path)!.advisors).map(advisor => advisor.enabled),
+		).toEqual([false, false, false]);
+		f.action("toggle"); // The action row is not a whole-file toggle target.
 		await settle();
 		f.activate("enable");
 		await settle();
 		expect(
-			[...f.disk.values()].every(
-				doc => doc.enabled !== false && doc.advisors.every(advisor => advisor.enabled !== false),
-			),
-		).toBe(true);
-		f.activate("invert");
-		await settle();
-		expect([...f.disk.values()].flatMap(doc => doc.advisors).every(advisor => advisor.enabled === false)).toBe(true);
+			[1, 2].flatMap(index => f.disk.get(f.files[index].path)!.advisors).map(advisor => advisor.enabled),
+		).toEqual([undefined, undefined, undefined]);
+		expect(f.disk.get(f.files[1].path)?.enabled).toBe(false);
+		expect(f.disk.get(f.files[2].path)?.enabled).toBe(true);
+		expect([0, 3, 4].map(index => f.disk.get(f.files[index].path))).toEqual(untouched);
+		expect(f.writes).toEqual([1, 2, 1, 1, 2].map(index => f.files[index].path));
 		expect(f.applies()).toBe(0);
+		// Moving to a different scope changes the bulk target, not the previous selection.
+		f.overlay.handleNativeEvent({ type: "select", key: "scope/Scope", item: "2" });
+		f.activate("disable");
+		await settle();
+		expect(f.disk.get(f.files[3].path)?.advisors).toEqual([{ name: "Native", enabled: false }]);
+		expect(f.writes.at(-1)).toBe(f.files[3].path);
+		expect(f.disk.get(f.files[1].path)?.advisors[0].enabled).toBeUndefined();
 	});
 
 	it("keeps filter text literal, Esc returns to navigation, and menu history restores the exact file editor", async () => {
@@ -203,17 +254,14 @@ describe("advisor file scopes", () => {
 		expect(strip(f.overlay)).toContain("Root");
 	});
 
-	it("bulk switches also disable or invert an implicit default without explicit advisor rows", async () => {
-		const f = fixture({ advisors: [] });
-		f.activate("invert");
-		await settle();
-		expect(f.disk.get(f.files[0].path)?.enabled).toBe(false);
-		f.activate("invert");
-		await settle();
-		expect(f.disk.get(f.files[0].path)?.enabled).toBeUndefined();
-		f.activate("disable");
-		await settle();
-		expect(f.disk.get(f.files[0].path)?.enabled).toBe(false);
+	it("bulk actions preserve implicit defaults and whole-file gates without explicit entries", async () => {
+		const f = fixture({ enabled: true, advisors: [] });
+		for (const action of ["invert", "disable", "enable"]) {
+			f.activate(action);
+			await settle();
+			expect(f.disk.get(f.files[0].path)).toEqual({ enabled: true, advisors: [] });
+		}
+		expect(f.writes).toEqual([]);
 	});
 
 	it("scrolls long file previews without moving the file selection and restores the reading position", () => {

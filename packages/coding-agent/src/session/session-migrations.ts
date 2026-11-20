@@ -1,5 +1,5 @@
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import type { CompactionEntry, FileEntry, SessionHeader } from "./session-entries";
+import { type CompactionEntry, CURRENT_SESSION_VERSION, type FileEntry, type SessionHeader } from "./session-entries";
 
 /** Generate a unique short ID (8 hex chars, collision-checked) */
 export function generateId(byId: { has(id: string): boolean }): string {
@@ -22,6 +22,7 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 		}
 
 		entry.id = generateId(ids);
+		ids.add(entry.id);
 		entry.parentId = prevId;
 		prevId = entry.id;
 
@@ -56,10 +57,6 @@ function migrateV2ToV3(entries: FileEntry[]): void {
 	}
 }
 
-/**
- * Run all necessary migrations to bring entries to current version.
- * Mutates entries in place. Returns true if any migration was applied.
- */
 /** Normalize the legacy Python-only record into the canonical generic eval message. */
 function migratePythonExecutionMessages(entries: FileEntry[]): boolean {
 	let migrated = false;
@@ -74,21 +71,30 @@ function migratePythonExecutionMessages(entries: FileEntry[]): boolean {
 	return migrated;
 }
 
+/** Whether every non-header entry lacks a persisted tree ID. Check before migration assigns any. */
+export function hasUnindexedSessionEntries(entries: readonly FileEntry[]): boolean {
+	return (
+		entries.some(entry => entry.type !== "session") &&
+		entries.every(entry => entry.type === "session" || typeof entry.id !== "string" || entry.id.length === 0)
+	);
+}
+
+/**
+ * Run all necessary migrations to bring entries to current version.
+ * Mutates entries in place. Returns true if any migration was applied.
+ */
 export function migrateToCurrentVersion(entries: FileEntry[]): boolean {
 	const header = entries.find(e => e.type === "session") as SessionHeader | undefined;
 	const version = header?.version ?? 1;
-	let migrated = migratePythonExecutionMessages(entries);
+	const migrated = migratePythonExecutionMessages(entries);
+	const unindexed = hasUnindexedSessionEntries(entries);
 
-	if (version < 2) {
-		migrateV1ToV2(entries);
-		migrated = true;
-	}
-	if (version < 3) {
-		migrateV2ToV3(entries);
-		migrated = true;
-	}
+	if (version >= CURRENT_SESSION_VERSION && !unindexed) return migrated;
 
-	return migrated;
+	if (version < 2 || unindexed) migrateV1ToV2(entries);
+	if (version < 3) migrateV2ToV3(entries);
+	else if (header) header.version = CURRENT_SESSION_VERSION;
+	return true;
 }
 
 /** Exported for testing */

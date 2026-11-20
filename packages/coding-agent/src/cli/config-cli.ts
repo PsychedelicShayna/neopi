@@ -5,7 +5,7 @@
  * The settings registry (`config/registry.ts`) is the source of truth for available settings.
  */
 
-import { APP_NAME, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
 import { type AnySetting, lookup } from "../config/registry";
@@ -14,6 +14,8 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { initXdg } from "./commands/init-xdg";
 import { dumpSettingsToml } from "../config/settings-toml";
 import { convertMainSettingsToToml } from "../config/settings-to-toml";
+import { releaseRollbackHold } from "./neopi-updater";
+import { defaultUpdateChannel } from "./update-config";
 
 // =============================================================================
 // Types
@@ -371,6 +373,8 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		process.exit(1);
 	}
 
+	const previousUpdateChannel =
+		def.path === "update.channel" ? (globalValue(def.setting) ?? defaultUpdateChannel()) : undefined;
 	try {
 		def.setting.set(settings, def.setting.parse(value));
 		await settings.flush();
@@ -378,6 +382,7 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		console.error(chalk.red(String(err)));
 		process.exit(1);
 	}
+	await releaseHoldForChannelMutation(def, previousUpdateChannel);
 
 	// Report the value written to config.yml. When another layer or an environment variable still
 	// supplies the effective value, say which instead of echoing its value as if it had been set.
@@ -397,6 +402,18 @@ function globalValue(setting: AnySetting): unknown {
 	let value: unknown = settings.getGlobalSettings();
 	for (const segment of setting.segments) value = isRecord(value) ? value[segment] : undefined;
 	return value;
+}
+
+/** Only successful global preference mutations release a destination's rollback hold. */
+async function releaseHoldForChannelMutation(def: CliSettingDef, previous: unknown): Promise<void> {
+	if (def.path !== "update.channel") return;
+	const next = globalValue(def.setting) ?? defaultUpdateChannel();
+	if (next === previous || (next !== "stable" && next !== "nightly")) return;
+	try {
+		await releaseRollbackHold(next);
+	} catch (error) {
+		logger.warn("NeoPi rollback hold release failed after channel preference change", { error: String(error) });
+	}
 }
 
 /** Where the effective value comes from when it is not the global config (or the default), if anywhere. */
@@ -451,6 +468,8 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		process.exit(1);
 	}
 
+	const previousUpdateChannel =
+		def.path === "update.channel" ? (globalValue(def.setting) ?? defaultUpdateChannel()) : undefined;
 	try {
 		// Remove the key rather than writing the default, so later default changes still apply.
 		def.setting.unset(settings);
@@ -459,6 +478,7 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		console.error(chalk.red(String(err)));
 		process.exit(1);
 	}
+	await releaseHoldForChannelMutation(def, previousUpdateChannel);
 
 	// The effective value may now come from another layer or the environment: never echo a credential.
 	const value = def.setting.get(settings);

@@ -6,12 +6,13 @@ import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui
 import { parseSettingsToml } from "@oh-my-pi/pi-coding-agent/config/settings-toml";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
+import { cfgTaskPerCallModelAllow } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { cfgSearxngEndpoint } from "@oh-my-pi/pi-coding-agent/web/settings";
 
 let state: SettingsTestState | undefined;
@@ -83,3 +84,22 @@ it.each(["yaml", "toml"])(
 		expect(cfgSearxngEndpoint.get(settings)).toBe("https://env.example");
 	},
 );
+
+it("hides a scoped project's per-call allowlist editor even when the global singleton belongs to another project", async () => {
+	const projectConfig = path.join(getProjectAgentDir(projectDir), "settings.json");
+	fs.mkdirSync(path.dirname(projectConfig), { recursive: true });
+	await Bun.write(projectConfig, JSON.stringify({ task: { perCallModelAllow: ["mock/target"] } }));
+	await Settings.init({ cwd: tempDir.join("other-project"), agentDir });
+	const scope = await Settings.loadReadOnly({ cwd: projectDir, agentDir });
+	expect(cfgTaskPerCallModelAllow.provenance(scope)).toBe("project");
+	expect(cfgTaskPerCallModelAllow.provenance(Settings.instance)).not.toBe("project");
+	const entry = createSettingsHost(scope).entries.find(candidate => candidate.path === "task.perCallModelAllow");
+	expect(entry?.condition?.()).toBe(false);
+});
+
+it("keeps the per-call allowlist editor when only the global layer supplies it", async () => {
+	await Bun.write(path.join(agentDir, "config.yml"), YAML.stringify({ task: { perCallModelAllow: ["mock/target"] } }));
+	const scope = await Settings.init({ cwd: projectDir, agentDir });
+	const entry = createSettingsHost(scope).entries.find(candidate => candidate.path === "task.perCallModelAllow");
+	expect(entry?.condition?.()).toBe(true);
+});

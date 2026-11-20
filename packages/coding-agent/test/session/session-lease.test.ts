@@ -26,7 +26,7 @@ import { makeAssistantMessage } from "../session-manager/helpers";
 async function seedSession(cwd: string, dir: string, question: string): Promise<{ file: string; id: string }> {
 	const manager = SessionManager.create(cwd, dir);
 	manager.appendMessage({ role: "user", content: question, timestamp: Date.now() });
-	manager.appendMessage(makeAssistantMessage());
+	manager.appendMessage({ ...makeAssistantMessage(), model: "claude-sonnet-4-5" });
 	await manager.close();
 	const file = manager.getSessionFile();
 	if (!file || !fs.existsSync(file)) throw new Error("seed session was not persisted");

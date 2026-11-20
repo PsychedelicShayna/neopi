@@ -4,8 +4,8 @@ import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { logger, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
-import type { AsyncJobManager } from "../async/job-manager";
+import { logger, PRODUCT_NAME, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AsyncJobManagerApi } from "../async/job-manager";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { ToolDefinition } from "../extensibility/extensions";
@@ -87,7 +87,7 @@ export interface SecurityCoordinatorHost {
 	activeModel?: Model;
 	sessionId?: string;
 	agentId?: string;
-	asyncJobManager?: AsyncJobManager;
+	asyncJobManager?: AsyncJobManagerApi;
 }
 
 export interface SecurityPreflightInput {
@@ -111,6 +111,11 @@ export interface SecurityScanSession {
 		options?: { expandPromptTemplates?: boolean; synthetic?: boolean; userInitiated?: boolean },
 	): Promise<boolean>;
 	waitForIdle(): Promise<void>;
+	/**
+	 * Resolves once the session's run is over: no turn is live and nothing it owns (a detached `task`
+	 * worker, a child agent) can still wake it.
+	 */
+	waitForRunEnd(): Promise<void>;
 	getSessionStats?(): {
 		tokens: {
 			input: number;
@@ -578,6 +583,7 @@ export class SecurityCoordinator {
 		const startedAt = toIsoTimestamp(this.#now);
 		let session: SecurityScanSession | undefined;
 		let publishedBundle: SecurityScanBundle | undefined;
+		const published = Promise.withResolvers<void>();
 		let executionTarget: PreparedSecurityExecutionTarget | undefined;
 		try {
 			await store.putBundle(
@@ -617,6 +623,7 @@ export class SecurityCoordinator {
 				operationId: record.snapshot.operationId,
 				onPublished: async bundle => {
 					publishedBundle = bundle;
+					published.resolve();
 					record.snapshot.findingCount = bundle.findings.length;
 					this.#update(record, "publishing");
 				},
@@ -647,6 +654,14 @@ export class SecurityCoordinator {
 					userInitiated: false,
 				});
 				await session.waitForIdle();
+				// With `async.enabled`, `task` workers run in the background and the coordinator
+				// may end its turn awaiting them; their delivered results wake it to publish. The
+				// run ends once nothing can wake it anymore. A publication ends the wait early,
+				// but the turn that published still finishes.
+				if (!publishedBundle) {
+					await untilAborted(signal, Promise.race([session.waitForRunEnd(), published.promise]));
+					await session.waitForIdle();
+				}
 				record.snapshot.sessionFile = session.sessionFile;
 				if (publishedBundle) {
 					const stats = session.getSessionStats?.();

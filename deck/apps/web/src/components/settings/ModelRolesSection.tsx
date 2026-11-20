@@ -241,7 +241,7 @@ export function RoleRow({ role, pool, models, thinkingLevels, cwd, disabled, onS
 
 function notes(role: NpiModelRole, cwd: string): string[] {
 	const out: string[] = [];
-	if (role.provenance === "project" || role.provenance === "overlay" || role.provenance === "runtime")
+	if (role.provenance === "project" || role.provenance === "overlay" || role.provenance === "runtime" || role.provenance === "session")
 		out.push(`A ${role.provenance} layer assigns ${role.effectiveValue ?? "a value"} in ${cwd}; saving here changes the global file only.`);
 	if (role.provenance === "default" && role.patterns.length > 0)
 		out.push(`Built-in chain: ${role.patterns.slice(0, 4).join(", ")}${role.patterns.length > 4 ? `, +${role.patterns.length - 4} more` : ""}`);

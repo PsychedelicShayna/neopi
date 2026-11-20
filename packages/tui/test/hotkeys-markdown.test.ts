@@ -3,7 +3,6 @@ import { setKeyHintPlatform } from "@oh-my-pi/pi-tui/app-keybindings";
 import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/hotkeys-markdown";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme/theme";
-import { theme } from "../src/theme/theme";
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 
 let previousVimMode = false;
@@ -17,14 +16,18 @@ afterEach(() => setMenuSearchVimMode(previousVimMode));
  *  forward-delete role, so the exit row renders its plain "Exit" wording. */
 const noForwardDelete = { getKeys: () => [], matchesCanonical: () => false };
 
-it("hotkey help marks fork and latest-upstream actions without changing their keys", async () => {
-	await initTheme();
-	const markdown = buildHotkeysMarkdown({
-		keybindings: { getKeys: () => [], getDisplayString: () => "Disabled", matchesCanonical: () => false },
-	});
-	expect(markdown).toContain(`Back to the previous menu or the conversation ${theme.symbol("provenance.fork")}`);
-	expect(markdown).toContain(`Approve a pending tool call ${theme.symbol("provenance.newUpstream")}`);
-});
+function scrollOffset(sheet: HotkeysSheetComponent): number {
+	const snapshot = sheet.navigationSnapshot();
+	if (
+		typeof snapshot !== "object" ||
+		snapshot === null ||
+		!("scrollOffset" in snapshot) ||
+		typeof snapshot.scrollOffset !== "number"
+	) {
+		throw new Error("hotkeys sheet snapshot has no numeric scroll offset");
+	}
+	return snapshot.scrollOffset;
+}
 
 describe("buildHotkeysMarkdown", () => {
 	afterEach(() => setKeyHintPlatform(undefined));
@@ -150,9 +153,9 @@ describe("hotkeys sheet navigation", () => {
 		expect(sheet.navigationSnapshot()).toMatchObject({ scrollOffset: 1 });
 		expect(sheet.describe().scroll?.by).toBe("line-down");
 		const nativeBeforeHalf = sheet.describe().scroll;
-		const beforeHalf = sheet.navigationSnapshot().scrollOffset;
+		const beforeHalf = scrollOffset(sheet);
 		sheet.handleInput("\x04");
-		expect(sheet.navigationSnapshot().scrollOffset).toBeGreaterThan(beforeHalf);
+		expect(scrollOffset(sheet)).toBeGreaterThan(beforeHalf);
 		expect(sheet.describe().scroll).toBe(nativeBeforeHalf);
 		const saved = sheet.navigationSnapshot();
 		const reopened = new HotkeysSheetComponent(

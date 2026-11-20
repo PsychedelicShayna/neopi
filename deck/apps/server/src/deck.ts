@@ -202,7 +202,6 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 	});
 	const routinesRunner = new RoutinesRunner();
 	routinesRunner.start();
-	let server: Server<ConnectionData>;
 	const supervisor = buildDefaultBridgeSupervisor();
 	const marketplaceService = new MarketplaceService();
 	const skillsService = new SkillsService(config, marketplaceService);
@@ -278,7 +277,7 @@ export async function startDeck(opts: StartDeckOptions = {}): Promise<DeckHandle
 		} finally { if (!committed) switching = false; }
 	}
 
-	server = Bun.serve<ConnectionData>({
+	const server: Server<ConnectionData> = Bun.serve<ConnectionData>({
 		hostname: config.host,
 		port: config.port,
 		async fetch(req, srv) {

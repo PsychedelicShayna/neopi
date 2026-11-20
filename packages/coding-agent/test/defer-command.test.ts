@@ -67,8 +67,9 @@ function harness() {
 		locallySubmittedUserSignatures: new Set(),
 		compactionQueuedMessages: [],
 	});
-	new InputController(ctx).setupEditorSubmitHandler();
-	return { ctx, editor, session, mock, submit: async (text: string) => await editor.onSubmit?.(text) };
+	const controller = new InputController(ctx);
+	controller.setupEditorSubmitHandler();
+	return { ctx, editor, session, mock, controller, submit: async (text: string) => await editor.onSubmit?.(text) };
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
@@ -111,19 +112,14 @@ describe("/defer", () => {
 		expect(h.editor.pendingImages).toEqual([image]);
 	});
 
-	it("executes deferred slash commands through the same interpreter", async () => {
-		const h = harness();
-		const tan = vi.spyOn(h.ctx, "handleTanCommand").mockResolvedValue(true);
-		await h.submit("/defer 5ms /tan finish the task");
-		await waitUntil(() => tan.mock.calls.length === 1);
-		expect(tan).toHaveBeenCalledWith("finish the task");
-		expect(h.mock.calls).toHaveLength(0);
-	});
-
 	for (const payload of ["plain delayed text", "/tan delayed command"]) {
 		it(`does not retire live speech or restore a live submitted snapshot for ${payload}`, async () => {
 			const h = harness();
-			const prompt = vi.spyOn(h.session, "prompt").mockResolvedValue(true);
+			if (payload.startsWith("/tan"))
+				h.ctx.handleTanCommand = async text => {
+					await h.session.prompt(text);
+					return true;
+				};
 			const onSubmit = h.editor.onSubmit;
 			h.editor.onSubmit = () => {};
 			h.editor.setText("previous spoken submission");
@@ -146,13 +142,17 @@ describe("/defer", () => {
 				routeLiveSubmit: route,
 				shareLiveSubmit: vi.fn(),
 			});
-			await Bun.sleep(30);
+			await waitUntil(() => h.mock.calls.length === 1);
 			expect(retire).not.toHaveBeenCalled();
 			expect(route).not.toHaveBeenCalled();
 			expect(speech).toEqual(["unclaimed operator speech", "accepted pending handoff"]);
 			expect(h.editor.getText()).toBe("current operator draft");
-			if (payload.startsWith("/tan")) expect(h.ctx.handleTanCommand).toHaveBeenCalledWith("delayed command");
-			else expect(prompt).toHaveBeenCalledWith(payload, expect.objectContaining({ streamingBehavior: "steer" }));
+			expect(h.session.messages).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: [{ type: "text", text: payload.startsWith("/tan") ? "delayed command" : payload }],
+				}),
+			);
 		});
 	}
 
@@ -339,6 +339,67 @@ describe("/defer", () => {
 		});
 	}
 
+	for (const cancelKey of ["Enter", "follow-up"] as const) {
+		it(`cancels through ${cancelKey} without letting later input overtake a held hook`, async () => {
+			const h = harness();
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const inputs: string[] = [];
+			const runtime = new ExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					pi.on("input", async event => {
+						inputs.push(event.text);
+						if (event.text === "held deferred") {
+							entered.resolve();
+							await release.promise;
+						}
+						return {};
+					});
+				},
+				h.session.sessionManager.getCwd(),
+				new EventBus(),
+				runtime,
+				"defer-cancel-order",
+			);
+			const runner = new ExtensionRunner(
+				[extension],
+				runtime,
+				h.session.sessionManager.getCwd(),
+				h.session.sessionManager,
+				h.session.modelRegistry,
+			);
+			Object.defineProperty(h.session, "extensionRunner", { configurable: true, value: runner });
+			await h.submit("/defer 5ms held deferred");
+			await entered.promise;
+			const pending: Promise<unknown>[] = [];
+			try {
+				if (cancelKey === "Enter") await h.submit("/defer cancel all");
+				else {
+					h.editor.setText("/defer cancel all");
+					await h.controller.handleFollowUp();
+				}
+				pending.push(h.submit("later Enter"));
+				h.editor.setText("later follow-up");
+				pending.push(h.controller.handleFollowUp());
+				await Bun.sleep(0);
+				expect(inputs).toEqual(["held deferred"]);
+			} finally {
+				release.resolve();
+			}
+			await Promise.all(pending);
+			await h.session.waitForIdle();
+			expect(inputs).toEqual(["held deferred", "later Enter", "later follow-up"]);
+			expect(h.session.messages).not.toContainEqual(
+				expect.objectContaining({ role: "user", content: [{ type: "text", text: "held deferred" }] }),
+			);
+			for (const text of ["later Enter", "later follow-up"])
+				expect(h.session.messages).toContainEqual(
+					expect.objectContaining({ role: "user", content: [{ type: "text", text }] }),
+				);
+		});
+	}
+
 	for (const admission of ["prompt", "steer", "followUp", "custom", "subagent"] as const) {
 		it(`rejects ${admission} from a deferred slash handler resumed in a new session`, async () => {
 			const h = harness();
@@ -420,6 +481,7 @@ describe("/defer", () => {
 				optimisticSkillMessagePending: false,
 				renderOptimisticSkillMessage: vi.fn(),
 				clearOptimisticSkillMessage: vi.fn(),
+				restoreDroppedPrompt: vi.fn(),
 			};
 			await h.submit("/defer 5ms old handed-off payload");
 			const input = await received.promise;

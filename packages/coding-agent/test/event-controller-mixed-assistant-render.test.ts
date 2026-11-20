@@ -141,7 +141,8 @@ describe("EventController mixed assistant text/tool rendering", () => {
 				event.type === "message_update" &&
 				event.message.role === "assistant" &&
 				event.message.responseId === primary.responseId
-			) firstDelta.resolve();
+			)
+				firstDelta.resolve();
 		});
 		const manager = SessionManager.inMemory();
 		const frames: RpcProjectedSessionEventFrame[] = [];

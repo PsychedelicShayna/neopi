@@ -3,7 +3,7 @@ import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import type { SessionState, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import type { ContextLineMode, StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "./schema";
-import type { ActiveRepoContext, StatusLineSession } from "./host";
+import type { ActiveRepoContext, PromptCacheStatus, StatusLineSession } from "./host";
 import type { LoopConditionConfig, LoopLimitRuntime } from "./loop";
 
 export type { ContextLineMode, StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle };
@@ -89,6 +89,8 @@ export interface SegmentContext {
 	sessionAccent?: boolean;
 	/** Stand-in session title for previews; `session_name` renders it when the session is unnamed. */
 	previewTitle?: string;
+	/** The viewed session is pinned; `session_name` prefixes the pin icon. */
+	isPinned?: boolean;
 	activeRepo: ActiveRepoContext | null;
 	width: number;
 	options: StatusLineSegmentOptions;
@@ -181,6 +183,8 @@ export interface SegmentContext {
 	 * spinner + turn timer.
 	 */
 	turnElapsedMs: number | null;
+	/** The turn waits on the user's answer to an ask: the `pi` segment's spinner becomes a question mark. */
+	awaitingAnswer?: boolean;
 	/**
 	 * Sampled foreground ANSI for the `pi` brand segment — tweened between dim
 	 * gray (idle) and the accent (working) across turn edges (the upstream Rust
@@ -219,6 +223,8 @@ export interface SegmentContext {
 			expiring?: StatusResetExpiry;
 		};
 	} | null;
+	/** What the next request finds in the prompt cache; read only when the `cache` segment is configured. */
+	promptCache?: PromptCacheStatus;
 }
 
 /** How close an account's saved resets are to expiring, when it is worth a warning. */
@@ -266,6 +272,8 @@ export interface ComposerFacts {
 	/**
 	 * `status` (role `omp.composer.extras`, `grow: 1`) of the other configured
 	 * segments as `seg`s; the bar's flexible space, so present even when empty.
+	 * The prompt cache's (role `omp.composer.cache`) sits on its right side, beside
+	 * the usage, with a hover card and a click opening `/session`.
 	 */
 	readonly extras: NativeNode;
 	/** `text` (role `omp.composer.usage`): the session cost (empty when there is none). */

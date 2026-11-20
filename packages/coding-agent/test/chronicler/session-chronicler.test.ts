@@ -25,6 +25,7 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentPromptOptions } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Context, ImageContent, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockHandler, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
+import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -58,6 +59,7 @@ import {
 	readChroniclerBlindMetadata,
 	writeChroniclerBlindMetadata,
 } from "../../src/chronicler/blind-metadata";
+import { fixedAdvisorTools } from "../helpers/agent-session-setup";
 
 const FINISH_TOOL = "finish_chronicle";
 const CAPTURE_MODEL_ID = "chronicler-mock";
@@ -1090,6 +1092,43 @@ describe("SessionChronicler capture runtime", () => {
 		const harness = startChronicler(manager, newSettings());
 		const batches = await waitForBatches(root, 3);
 		await shutdown(harness);
+		// Exercise the actual private tools through the provider's request converter.
+		const codex = getBundledModel<"openai-codex-responses">("openai-codex", "gpt-6.1-sol");
+		if (!codex || codex.api !== "openai-codex-responses") throw new Error("Expected a bundled Codex model");
+		const wireTools = convertOpenAICodexResponsesTools(passes[1]!.agent.state.tools, codex);
+		expect(wireTools.map(tool => tool.name).sort()).toEqual(
+			["chronicle", FINISH_TOOL, "note", "read_chronicle"].sort(),
+		);
+		for (const tool of wireTools) {
+			if (tool.type !== "function") throw new Error("Expected a function tool");
+			const parameters = tool.parameters as { required?: string[]; properties: Record<string, unknown> };
+			if (tool.name === "note") {
+				expect(parameters.required).toEqual(["note"]);
+				expect(parameters.properties).toMatchObject({ note: { type: "string" } });
+				continue;
+			}
+			expect(tool.strict).toBe(false);
+			if (tool.name === "chronicle") {
+				expect([...(parameters.required ?? [])].sort()).toEqual(["body", "kind", "sources", "title", "topics"]);
+				expect(parameters.properties).toMatchObject({
+					event_time: { type: "string" },
+					related: { type: "array", items: { type: "string" } },
+					supersedes: { type: "string" },
+					uncertainty: { type: "string" },
+				});
+			} else if (tool.name === "read_chronicle") {
+				expect(parameters.required ?? []).toEqual([]);
+				expect(parameters.properties).toMatchObject({
+					id: { type: "string" },
+					offset: { type: "integer", minimum: 0 },
+					limit: { type: "integer", minimum: 1, maximum: 100 },
+				});
+			} else {
+				expect(tool.name).toBe(FINISH_TOOL);
+				expect(parameters.required).toEqual(["carry"]);
+				expect(parameters.properties.carry).toMatchObject({ anyOf: expect.arrayContaining([{ type: "null" }]) });
+			}
+		}
 		const results = passes[1]!.agent.state.messages.filter(message => message.role === "toolResult");
 		for (const result of results.slice(0, validCount))
 			expect(result.isError, JSON.stringify(result.content)).toBe(false);
@@ -1850,7 +1889,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		scripts.push(beatPass(), beatPass(), beatPass());
@@ -2094,7 +2133,7 @@ describe("SessionChronicler capture runtime", () => {
 				sessionManager: manager,
 				settings: newSettings(),
 				modelRegistry,
-				advisorTools: [],
+				advisorTools: fixedAdvisorTools(),
 			});
 			session.subscribe(() => {});
 			sessions.push({ session, manager, marker: "owned intention number " + index });
@@ -2188,7 +2227,13 @@ describe("SessionChronicler capture runtime", () => {
 		});
 		const settings = newSettings();
 		cfgChroniclerEnabled.override(settings, "ask");
-		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, advisorTools: [] });
+		const session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			settings,
+			modelRegistry,
+			advisorTools: fixedAdvisorTools(),
+		});
 		session.subscribe(() => {});
 		const notices = spyOn(session, "sendChroniclerNotice");
 		try {
@@ -2229,7 +2274,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		scripts.push(ackPass());
@@ -2257,7 +2302,13 @@ describe("SessionChronicler capture runtime", () => {
 		});
 		const settings = newSettings();
 		cfgRetryEnabled.override(settings, false);
-		const session = new AgentSession({ agent, sessionManager: manager, settings, modelRegistry, advisorTools: [] });
+		const session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			settings,
+			modelRegistry,
+			advisorTools: fixedAdvisorTools(),
+		});
 		session.subscribe(() => {});
 		scripts.push(beatPass());
 		try {
@@ -2351,7 +2402,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 		});
 		session.subscribe(() => {});
 		for (let index = 0; index < 6; index++) scripts.push(beatPass());
@@ -2452,7 +2503,7 @@ describe("SessionChronicler capture runtime", () => {
 			sessionManager: manager,
 			settings: newSettings(),
 			modelRegistry,
-			advisorTools: [],
+			advisorTools: fixedAdvisorTools(),
 			extensionRunner,
 		});
 		session.subscribe(() => {});

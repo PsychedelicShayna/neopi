@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as compatAuth from "@oh-my-pi/pi-catalog/compat/auth";
 import * as fs from "node:fs";
 import type { Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { buildRequest as buildGeminiRequest } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
@@ -18,6 +19,7 @@ import * as settingsStream from "@oh-my-pi/pi-coding-agent/session/settings-stre
 import type { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { localSession } from "../helpers/local-session";
 
 describe("task sibling prompt-cache routing", () => {
 	const sessions: AgentSession[] = [];
@@ -185,6 +187,10 @@ describe("task sibling prompt-cache routing", () => {
 		async (_name, provider, modelId, parentCacheKey, parentTaskKey, expected) => {
 			using directory = TempDir.createSync("@omp-task-cache-");
 			vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in this test"));
+			// Antigravity is paused in its auth rules; its transport stays for when it is turned back on.
+			if (provider === "google-antigravity") {
+				vi.spyOn(compatAuth, "providerDisabledReason").mockReturnValue(undefined);
+			}
 			const authStorage = await AuthStorage.create(directory.join("auth.db"));
 			const parentOverride = unoptedParentLanes[_name];
 			const [parentProvider, parentModelId] = parentOverride ?? [provider, modelId];
@@ -288,6 +294,7 @@ describe("task sibling prompt-cache routing", () => {
 			);
 			try {
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -318,6 +325,7 @@ describe("task sibling prompt-cache routing", () => {
 					const result = await tool.execute(name, {
 						name,
 						task: `Review ${name}.`,
+						outputSchema: {},
 					});
 					expect(result.isError, JSON.stringify(result)).not.toBe(true);
 					expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
@@ -339,10 +347,11 @@ describe("task sibling prompt-cache routing", () => {
 					);
 				}
 				if (provider === "openai" || provider === "openai-codex") {
-					const child = AgentRegistry.global()
+					const childHandle = AgentRegistry.global()
 						.list()
 						.find(candidate => candidate.session && candidate.session !== parent)?.session;
-					if (!child) throw new Error("Expected a live Task child");
+					if (!childHandle) throw new Error("Expected a live Task child");
+					const child = localSession(childHandle);
 					const originalKey = child.agent.sessionId;
 					const originalFile = child.sessionManager.getSessionFile();
 					if (!originalFile) throw new Error("Expected a persisted Task child");
@@ -383,10 +392,10 @@ describe("task sibling prompt-cache routing", () => {
 						.list()
 						.find(candidate => candidate.session && candidate.session !== parent);
 					if (!ref?.session || !ref.sessionFile) throw new Error("Expected a revivable Task child");
-					await ref.session.sessionManager.setTaskPromptCacheKey("persisted:task");
+					await localSession(ref.session).sessionManager.setTaskPromptCacheKey("persisted:task");
 					const lifecycle = AgentLifecycleManager.global();
 					await lifecycle.park(ref.id);
-					const restored = await lifecycle.ensureLive(ref.id);
+					const restored = localSession(await lifecycle.ensureLive(ref.id));
 					await restored.prompt("Continue the review.");
 					expect(requests.findLast(request => request.sessionId === restored.agent.sessionId)?.wireKey).toBe(
 						"persisted:task",
@@ -400,7 +409,7 @@ describe("task sibling prompt-cache routing", () => {
 						if (record.type === "session") delete record.taskPromptCacheKey;
 					}
 					await Bun.write(ref.sessionFile, `${records.map(record => JSON.stringify(record)).join("\n")}\n`);
-					const withoutCandidate = await lifecycle.ensureLive(ref.id);
+					const withoutCandidate = localSession(await lifecycle.ensureLive(ref.id));
 					await withoutCandidate.prompt("Continue without inherited affinity.");
 					expect(
 						requests.findLast(request => request.sessionId === withoutCandidate.agent.sessionId)?.wireKey,
@@ -489,6 +498,7 @@ describe("task sibling prompt-cache routing", () => {
 				const lineage = `parent-lineage-${suffix}`;
 				const childName = `sibling-${suffix}`;
 				const { session: parent } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -517,7 +527,11 @@ describe("task sibling prompt-cache routing", () => {
 				// boundary verbatim; only the derivation step may decline to use it.
 				expect(parent.getPromptCacheKeyForModel(parent.agent.state.model)).toBe("");
 				const tool = parent.getToolByName("task") as TaskTool;
-				const result = await tool.execute(childName, { name: childName, task: "Review the sibling." });
+				const result = await tool.execute(childName, {
+					name: childName,
+					task: "Review the sibling.",
+					outputSchema: {},
+				});
 				expect(result.isError, JSON.stringify(result)).not.toBe(true);
 				expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 			}
@@ -614,6 +628,7 @@ describe("task sibling prompt-cache routing", () => {
 		);
 		async function createParent(lineage: string, model: Model, explicitKey?: string) {
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -638,7 +653,7 @@ describe("task sibling prompt-cache routing", () => {
 		async function runTask(tool: TaskTool, name: string) {
 			inTaskExecute = true;
 			try {
-				const result = await tool.execute(name, { name, task: `Review ${name}.` });
+				const result = await tool.execute(name, { name, task: `Review ${name}.`, outputSchema: {} });
 				expect(result.isError, JSON.stringify(result)).not.toBe(true);
 				expect(result.details?.results[0]?.exitCode, JSON.stringify(result)).toBe(0);
 			} finally {
@@ -775,11 +790,12 @@ describe("task sibling prompt-cache routing", () => {
 			authStorage.keys.setRuntime(provider, "test-key");
 			try {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheParent${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
 					modelPattern: requested,
-					modelPatternAuthFallback: `${provider}/${modelId}`,
+					modelPatternParentFallback: `${provider}/${modelId}`,
 					taskPromptCacheKey: "parent:task",
 					sessionManager: SessionManager.inMemory(directory.path()),
 					settings: Settings.isolated({
@@ -855,6 +871,7 @@ describe("task sibling prompt-cache routing", () => {
 			if (!muse) throw new Error(`Model missing from offline catalog fixture: muse-code/${modelId}`);
 			const luna = getBundledModel("openai-codex", "gpt-6-luna");
 			const { session } = await sdk.createAgentSession({
+				agentId: `CacheParent${Bun.randomUUIDv7()}`,
 				cwd: directory.path(),
 				agentDir: directory.path(),
 				authStorage,
@@ -998,6 +1015,7 @@ describe("task sibling prompt-cache routing", () => {
 			const reopened = await SessionManager.open(forkFile, directory.path());
 			for (const sessionManager of [forked, reopened]) {
 				const { session } = await sdk.createAgentSession({
+					agentId: `CacheCopy${Bun.randomUUIDv7()}`,
 					cwd: directory.path(),
 					agentDir: directory.path(),
 					authStorage,
@@ -1056,6 +1074,7 @@ describe("task sibling prompt-cache routing", () => {
 			const altCwd = directory.join("alt");
 			fs.mkdirSync(altCwd, { recursive: true });
 			const { session: alt } = await sdk.createAgentSession({
+				agentId: `CacheAlternate${Bun.randomUUIDv7()}`,
 				cwd: altCwd,
 				agentDir: directory.path(),
 				authStorage,
@@ -1266,7 +1285,7 @@ describe("task sibling prompt-cache routing", () => {
 			if (!ref) throw new Error("Expected a registered Task child");
 			const lifecycle = AgentLifecycleManager.global();
 			await lifecycle.park(ref.id);
-			const revived = await lifecycle.ensureLive(ref.id);
+			const revived = localSession(await lifecycle.ensureLive(ref.id));
 
 			// The revival rebuilt the manager from disk: still no header copy,
 			// so only a captured-and-restored candidate can carry the family.

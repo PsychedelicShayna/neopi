@@ -39,6 +39,21 @@ function mcpExtension(state: Extension["state"] = "active"): Extension {
 	};
 }
 
+function projectMcpExtension(): Extension {
+	const source = {
+		...githubServer._source,
+		providerName: "OMP (Project)",
+		path: "/project/.omp/mcp.json",
+		level: "project" as const,
+	};
+	return {
+		...mcpExtension(),
+		path: source.path,
+		source,
+		raw: { ...githubServer, _source: source },
+	};
+}
+
 function connectedSource(): MCPRuntimeSource {
 	const conn: MCPConnectionDisplay = {
 		name: "github",
@@ -339,7 +354,7 @@ describe("MCP list runtime join", () => {
 	});
 
 	test("shadowed same-name config does not inherit the winner's health or tools", () => {
-		const winner = mcpExtension("active");
+		const winner = projectMcpExtension();
 		const shadowed: Extension = {
 			...mcpExtension("shadowed"),
 			id: "mcp:github",
@@ -370,7 +385,7 @@ describe("MCP list runtime join", () => {
 
 	test("shadowed rows with the production duplicate id are not toggleable", () => {
 		const toggles: Array<{ id: string; enabled: boolean }> = [];
-		const winner = mcpExtension("active");
+		const winner = projectMcpExtension();
 		const shadowed: Extension = {
 			...mcpExtension("shadowed"),
 			id: "mcp:github",
@@ -398,7 +413,7 @@ describe("MCP list runtime join", () => {
 
 	test("disabled shadowed loser with the production duplicate id is not toggleable", () => {
 		const toggles: Array<{ id: string; enabled: boolean }> = [];
-		const winner = mcpExtension("active");
+		const winner = projectMcpExtension();
 		const loser: Extension = {
 			...mcpExtension("disabled"),
 			id: "mcp:github",

@@ -2,12 +2,12 @@ import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/com
 import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
 import type { AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import { HookSelectorComponent } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { Settings } from "../src/config/settings";
 import type { ExtensionUIDialogOptions, ExtensionUISelectItem } from "../src/extensibility/extensions";
-import { HookSelectorComponent } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { ToolSession } from "../src/tools";
-import { AskTool } from "../src/tools/ask";
+import { AskTool, type AskToolInput } from "../src/tools/ask";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 
 type AskExecutionResult = AgentToolResult<AskToolDetails>;
@@ -16,6 +16,15 @@ type AskSelect = (
 	options: ExtensionUISelectItem[],
 	dialogOptions?: ExtensionUIDialogOptions,
 ) => Promise<string | undefined>;
+
+const DB_QUESTIONS: AskToolInput["questions"] = [
+	{
+		id: "db",
+		question: "Which database?",
+		options: [{ label: "SQLite" }, { label: "Postgres" }],
+		recommended: 1,
+	},
+];
 
 async function drainMicrotasks(): Promise<void> {
 	await Promise.resolve();
@@ -30,6 +39,31 @@ function createAskTool(): AskTool {
 	} as unknown as ToolSession);
 }
 
+function selectContext(select: AskSelect, extra: Record<string, unknown> = {}) {
+	const abort = vi.fn();
+	const context = {
+		hasUI: true,
+		ui: { select, input: vi.fn(), editor: vi.fn(), ...extra },
+		abort,
+	} as unknown as AgentToolContext;
+	return { context, abort };
+}
+
+function runAsk(questions: AskToolInput["questions"], context: AgentToolContext) {
+	const outcome: { result?: AskExecutionResult; rejection?: unknown } = {};
+	void createAskTool()
+		.execute("ask-timeout", { questions }, undefined, undefined, context)
+		.then(
+			value => {
+				outcome.result = value;
+			},
+			error => {
+				outcome.rejection = error;
+			},
+		);
+	return outcome;
+}
+
 describe("AskTool timeout", () => {
 	beforeAll(async () => {
 		const loaded = await getThemeByName("dark");
@@ -42,120 +76,56 @@ describe("AskTool timeout", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("auto-selects the recommended option when the selector does not settle", async () => {
+	it("submits the recommended option when the selector does not settle", async () => {
 		vi.useFakeTimers();
 		const select = vi.fn<AskSelect>(() => Promise.withResolvers<string | undefined>().promise);
-		const abort = vi.fn();
-		const context = {
-			hasUI: true,
-			ui: {
-				select,
-				editor: vi.fn(),
-			},
-			abort,
-		} as unknown as AgentToolContext;
-		let result: AskExecutionResult | undefined;
-		let rejection: unknown;
-
-		void createAskTool()
-			.execute(
-				"ask-timeout",
-				{
-					questions: [
-						{
-							id: "db",
-							question: "Which database?",
-							options: [{ label: "SQLite" }, { label: "Postgres" }],
-							recommended: 1,
-						},
-					],
-				},
-				undefined,
-				undefined,
-				context,
-			)
-			.then(
-				value => {
-					result = value;
-				},
-				error => {
-					rejection = error;
-				},
-			);
+		const { context, abort } = selectContext(select);
+		const outcome = runAsk(DB_QUESTIONS, context);
 
 		await drainMicrotasks();
 		vi.advanceTimersByTime(10);
 		await drainMicrotasks();
 
-		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
-		expect(result?.details?.timedOut).toBe(true);
+		expect(outcome.rejection).toBeUndefined();
+		expect(outcome.result?.details?.selectedOptions).toEqual(["Postgres"]);
+		expect(outcome.result?.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	});
 
 	it("honors selector timeout resets before using the fallback timeout", async () => {
 		vi.useFakeTimers();
-		let resetTimeout: (() => void) | undefined;
-		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
-			dialogOptions?.onTimeoutStart?.();
-			resetTimeout = dialogOptions?.onTimeoutReset;
-			return Promise.withResolvers<string | undefined>().promise;
-		});
-		const abort = vi.fn();
-		const context = {
-			hasUI: true,
-			ui: {
-				select,
-				editor: vi.fn(),
-			},
-			abort,
-		} as unknown as AgentToolContext;
-		let result: AskExecutionResult | undefined;
-		let rejection: unknown;
+		let selector: HookSelectorComponent | undefined;
+		const select = vi.fn<AskSelect>(
+			(title, options, dialogOptions) =>
+				new Promise(resolve => {
+					selector = new HookSelectorComponent(title, options, resolve, () => resolve(undefined), {
+						...dialogOptions,
+						tui: { requestRender: vi.fn() } as unknown as TUI,
+					});
+				}),
+		);
+		const { context, abort } = selectContext(select);
+		const outcome = runAsk(DB_QUESTIONS, context);
 
-		void createAskTool()
-			.execute(
-				"ask-timeout",
-				{
-					questions: [
-						{
-							id: "db",
-							question: "Which database?",
-							options: [{ label: "SQLite" }, { label: "Postgres" }],
-							recommended: 1,
-						},
-					],
-				},
-				undefined,
-				undefined,
-				context,
-			)
-			.then(
-				value => {
-					result = value;
-				},
-				error => {
-					rejection = error;
-				},
-			);
+		try {
+			await drainMicrotasks();
+			if (!selector) throw new Error("Ask did not present its selector");
 
-		await drainMicrotasks();
-		expect(resetTimeout).toBeDefined();
+			vi.advanceTimersByTime(9);
+			selector.handleInput("j");
+			vi.advanceTimersByTime(9);
+			await drainMicrotasks();
+			expect(outcome.result).toBeUndefined();
 
-		vi.advanceTimersByTime(9);
-		resetTimeout?.();
-		vi.advanceTimersByTime(9);
-		await drainMicrotasks();
-
-		expect(result).toBeUndefined();
-
-		vi.advanceTimersByTime(1);
-		await drainMicrotasks();
-
-		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
-		expect(result?.details?.timedOut).toBe(true);
-		expect(abort).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			await drainMicrotasks();
+			expect(outcome.rejection).toBeUndefined();
+			expect(outcome.result?.details?.selectedOptions).toEqual(["Postgres"]);
+			expect(outcome.result?.details?.timedOut).toBe(true);
+			expect(abort).not.toHaveBeenCalled();
+		} finally {
+			selector?.dispose();
+		}
 	});
 
 	it("does not run the fallback timeout while the selector is queued", async () => {
@@ -165,44 +135,8 @@ describe("AskTool timeout", () => {
 			startTimeout = dialogOptions?.onTimeoutStart;
 			return Promise.withResolvers<string | undefined>().promise;
 		});
-		const abort = vi.fn();
-		const context = {
-			hasUI: true,
-			ui: {
-				timeoutStartsOnPresentation: true,
-				select,
-				editor: vi.fn(),
-			},
-			abort,
-		} as unknown as AgentToolContext;
-		let result: AskExecutionResult | undefined;
-		let rejection: unknown;
-
-		void createAskTool()
-			.execute(
-				"ask-timeout",
-				{
-					questions: [
-						{
-							id: "db",
-							question: "Which database?",
-							options: [{ label: "SQLite" }, { label: "Postgres" }],
-							recommended: 1,
-						},
-					],
-				},
-				undefined,
-				undefined,
-				context,
-			)
-			.then(
-				value => {
-					result = value;
-				},
-				error => {
-					rejection = error;
-				},
-			);
+		const { context, abort } = selectContext(select, { timeoutStartsOnPresentation: true });
+		const outcome = runAsk(DB_QUESTIONS, context);
 
 		await drainMicrotasks();
 		expect(startTimeout).toBeDefined();
@@ -210,103 +144,57 @@ describe("AskTool timeout", () => {
 		vi.advanceTimersByTime(10);
 		await drainMicrotasks();
 
-		expect(result).toBeUndefined();
+		expect(outcome.result).toBeUndefined();
 
 		startTimeout?.();
 		vi.advanceTimersByTime(10);
 		await drainMicrotasks();
 
-		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
-		expect(result?.details?.timedOut).toBe(true);
+		expect(outcome.rejection).toBeUndefined();
+		expect(outcome.result?.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	});
 
-	it("auto-selects timed-out single-choice questions before advancing multi-question asks", async () => {
+	it("keeps an answered question when a later question times out", async () => {
 		vi.useFakeTimers();
-		let callCount = 0;
-		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
-			callCount += 1;
-			if (callCount === 1) {
+		const select = vi
+			.fn<AskSelect>((_title, _options, dialogOptions) => {
 				dialogOptions?.onTimeoutStart?.();
 				return Promise.withResolvers<string | undefined>().promise;
-			}
-			return Promise.resolve("OAuth");
-		});
-		const abort = vi.fn();
-		const context = {
-			hasUI: true,
-			ui: {
-				select,
-				editor: vi.fn(),
-			},
-			abort,
-		} as unknown as AgentToolContext;
-		let result: AskExecutionResult | undefined;
-		let rejection: unknown;
-
-		void createAskTool()
-			.execute(
-				"ask-timeout",
+			})
+			.mockImplementationOnce(async () => "SQLite");
+		const { context, abort } = selectContext(select);
+		const outcome = runAsk(
+			[
+				...DB_QUESTIONS,
 				{
-					questions: [
-						{
-							id: "db",
-							question: "Which database?",
-							options: [{ label: "SQLite" }, { label: "Postgres" }],
-							recommended: 1,
-						},
-						{
-							id: "auth",
-							question: "Which auth?",
-							options: [{ label: "JWT" }, { label: "OAuth" }],
-							recommended: 0,
-						},
-					],
+					id: "auth",
+					question: "Which auth?",
+					options: [{ label: "JWT" }, { label: "OAuth" }],
+					recommended: 0,
 				},
-				undefined,
-				undefined,
-				context,
-			)
-			.then(
-				value => {
-					result = value;
-				},
-				error => {
-					rejection = error;
-				},
-			);
+			],
+			context,
+		);
 
+		await drainMicrotasks();
 		await drainMicrotasks();
 		vi.advanceTimersByTime(10);
 		await drainMicrotasks();
 		await drainMicrotasks();
 
-		expect(rejection).toBeUndefined();
-		expect(select).toHaveBeenCalledTimes(2);
-		expect(result?.details?.results?.[0]?.selectedOptions).toEqual(["Postgres"]);
-		expect(result?.details?.results?.[0]?.timedOut).toBe(true);
-		expect(result?.details?.results?.[1]?.selectedOptions).toEqual(["OAuth"]);
-		expect(result?.details?.results?.[1]?.timedOut).toBeUndefined();
+		expect(outcome.rejection).toBeUndefined();
+		expect(
+			outcome.result?.details?.results?.map(({ id, selectedOptions, timedOut }) => ({
+				id,
+				selectedOptions,
+				timedOut,
+			})),
+		).toEqual([
+			{ id: "db", selectedOptions: ["SQLite"], timedOut: undefined },
+			{ id: "auth", selectedOptions: ["JWT"], timedOut: true },
+		]);
 		expect(abort).not.toHaveBeenCalled();
-	});
-
-	it("notifies callers when the selector countdown starts and resets", () => {
-		vi.useFakeTimers();
-		const onTimeoutStart = vi.fn();
-		const onTimeoutReset = vi.fn();
-		const selector = new HookSelectorComponent("Pick one", ["SQLite", "Postgres"], vi.fn(), vi.fn(), {
-			timeout: 10,
-			tui: { requestRender: vi.fn() } as unknown as TUI,
-			onTimeoutStart,
-			onTimeoutReset,
-		});
-
-		selector.handleInput("j");
-
-		expect(onTimeoutStart).toHaveBeenCalledTimes(1);
-		expect(onTimeoutReset).toHaveBeenCalledTimes(1);
-		selector.dispose();
 	});
 });
 

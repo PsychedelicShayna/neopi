@@ -19,9 +19,10 @@ import type { TranscriptLiveState, TranscriptLiveTool } from "@oh-my-pi/pi-tui/c
 import type { ToolResultFrame } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import type { AgentRef, AgentRegistry, AgentStatus, RegistryEvent } from "../registry/agent-registry";
+import type { AgentRef, AgentRegistryApi, AgentStatus, RegistryEvent } from "../registry/agent-registry";
 import { liveAdvisorAgent } from "../registry/live-advisors";
 import type { AgentSession } from "../session/agent-session";
+import { isAgentViewSession } from "../session/agent-session-handle";
 import { readTranscriptSlice, type TranscriptSlice } from "../session/transcript-slice";
 
 type MonitoredKind = "sub" | "advisor";
@@ -148,17 +149,20 @@ interface LiveSource {
 	subscribe(listener: (event: AgentEvent) => void): () => void;
 	streamMessage(): LiveAssistant | undefined;
 	activeTools(): TranscriptLiveTool[];
+	/** Persistence commands also flush a worker's watched view before their reply. */
+	settle?(): Promise<void>;
 }
 
-function liveSourceFor(registry: AgentRegistry, ref: AgentRef): LiveSource | undefined {
+function liveSourceFor(registry: AgentRegistryApi, ref: AgentRef): LiveSource | undefined {
 	if (ref.kind === "sub") {
 		const session = ref.session;
-		if (!session) return undefined;
+		if (!session || !isAgentViewSession(session)) return undefined;
 		return {
 			identity: session,
 			// Session events are a superset of agent events; the stream reads only the agent ones.
 			subscribe: listener => session.subscribe(event => listener(event as AgentEvent)),
 			streamMessage: () => assistantOf(session.agent.state.streamMessage),
+			settle: () => session.settleInFlightMessagePersistence(),
 			activeTools: () =>
 				session.activeToolExecutionUpdates().map(update => ({
 					toolCallId: update.toolCallId,
@@ -183,7 +187,7 @@ function liveSourceFor(registry: AgentRegistry, ref: AgentRef): LiveSource | und
 
 export interface MonitorServiceOptions {
 	session: AgentSession;
-	registry: AgentRegistry;
+	registry: AgentRegistryApi;
 	/** The host's current session generation (bumps on new/switch/branch of the root session). */
 	generation: () => number;
 	lifecycle?: () => Pick<AgentLifecycleManager, "ensureLive">;
@@ -203,7 +207,7 @@ export class ControlMonitorService {
 		});
 	}
 
-	get registry(): AgentRegistry {
+	get registry(): AgentRegistryApi {
 		return this.#options.registry;
 	}
 
@@ -551,9 +555,56 @@ class MonitorStream {
 		const source = liveSourceFor(this.#service.registry, ref);
 		this.#source = source;
 		if (!source) return;
+		let snapshotPending = source.settle !== undefined;
+		const changedTools = new Set<string>();
+		let toolsReset = false;
+		this.#unsubscribeSource = source.subscribe(event => {
+			if (snapshotPending) {
+				switch (event.type) {
+					case "tool_execution_start":
+					case "tool_execution_update":
+					case "tool_execution_end":
+						changedTools.add(event.toolCallId);
+						break;
+					case "agent_end":
+						toolsReset = true;
+						break;
+				}
+			}
+			this.#onEvent(event);
+		});
 		this.#assistant = source.streamMessage();
-		for (const tool of source.activeTools()) this.#tools.set(tool.toolCallId, tool);
-		this.#unsubscribeSource = source.subscribe(event => this.#onEvent(event));
+		for (const tool of source.activeTools()) {
+			if (!changedTools.has(tool.toolCallId)) this.#tools.set(tool.toolCallId, tool);
+		}
+		if (source.settle) {
+			// Watch is sent first; the home flushes its initial view before this
+			// command replies. No later tool event is needed to recover mid-tool state.
+			void source.settle().then(
+				() => {
+					snapshotPending = false;
+					if (this.#stopped || this.#source !== source) return;
+					// The snapshot contains updates, not every running tool. Preserve
+					// starts/updates/ends already observed while hydration was pending.
+					for (const id of this.#tools.keys()) {
+						if (!changedTools.has(id)) this.#tools.delete(id);
+					}
+					if (!toolsReset) {
+						for (const tool of source.activeTools()) {
+							if (!changedTools.has(tool.toolCallId)) this.#tools.set(tool.toolCallId, tool);
+						}
+					}
+					changedTools.clear();
+					this.#schedule();
+				},
+				error => {
+					snapshotPending = false;
+					changedTools.clear();
+					if (this.#stopped || this.#source !== source) return;
+					logger.warn("Monitor live snapshot synchronization failed", { agentId: ref.id, error: String(error) });
+				},
+			);
+		}
 	}
 
 	#onEvent(event: AgentEvent): void {

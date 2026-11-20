@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "bun:test";
+import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import {
 	BUILTIN_SLASH_COMMANDS,
@@ -7,7 +7,11 @@ import {
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
-import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
+import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
+
+beforeAll(async () => {
+	await initTheme(false);
+});
 
 function createRuntime() {
 	const handleForkCommand = vi.fn(async (_placement?: "pane" | "window") => undefined);
@@ -76,10 +80,11 @@ describe("/fork slash command", () => {
 		for (const character of "/fork") editor.handleInput(character);
 		await untilRendered(editor, () => editor.isShowingAutocomplete());
 
+		const accepted = nextAutocompleteUpdate(editor);
 		editor.handleInput("\t");
 		expect(editor.getText()).toBe("/fork ");
-		// Accepting a command name chains an argument-completion request; let it settle.
-		await nextAutocompleteUpdate(editor);
+		// Acceptance notifies synchronously, before any chained argument-completion request.
+		await accepted;
 
 		editor.handleInput("\r");
 		expect(submitted).toEqual(["/fork"]);

@@ -4,6 +4,7 @@ import { cfgLiveModel } from "../live/settings";
 import { eventAudioCommand } from "../event-audio/observer";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
+import type { AgentSessionHandle } from "../session/agent-session-handle";
 import { clearApprovalGrants } from "../tools/approval-cache";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
@@ -13,7 +14,7 @@ import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers
 import type { SlashCommandSpec } from "./types";
 
 /** Advisors with review work they can still run (not parked, yielded, or quota-paused). */
-function advisorUnsettledCount(session: AgentSession): number {
+function advisorUnsettledCount(session: AgentSessionHandle): number {
 	return session
 		.getAdvisorStatusOverview()
 		.advisors.filter(advisor => advisor.backlog > 0 && !advisor.isPaused && !advisor.yielded).length;
@@ -118,10 +119,12 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start Codex-backed realtime voice mode or choose its model",
+		description: "Start Codex-backed realtime voice mode or choose the model it requests",
 		allowArgs: true,
 		inlineHint: "[model [slug]]",
-		subcommands: [{ name: "model", description: "Show or set the model for the next live call", usage: "[slug]" }],
+		subcommands: [
+			{ name: "model", description: "Show or set the model requested for the next live call", usage: "[slug]" },
+		],
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			const { verb, rest } = parseSubcommand(command.args);
@@ -129,7 +132,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					if (rest) cfgLiveModel.set(runtime.ctx.settings, rest);
 					runtime.ctx.showStatus(
-						`Live model: ${cfgLiveModel.get(runtime.ctx.settings)}${rest ? " (applies to the next live call)" : ""}`,
+						`Requested live model: ${cfgLiveModel.get(runtime.ctx.settings)} (${rest ? "applies to the next live call" : "the service does not report which model answers"})`,
 					);
 				} catch (error) {
 					runtime.ctx.showError(errorMessage(error));

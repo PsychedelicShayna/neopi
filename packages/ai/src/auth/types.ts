@@ -1,5 +1,6 @@
 import type { ProviderTlsTrust } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver, ResolvedApiKey } from "../auth-retry";
+import type { SessionCredential } from "./affinity";
 import type {
 	OAuthAuthInfo,
 	OAuthController,
@@ -228,6 +229,8 @@ export type CompletionProbeCredential =
 	| {
 			type: "oauth";
 			accessToken: string;
+			/** The request key built by the provider's `getApiKey` hook, when it owns one; send it as-is. */
+			apiKey?: string;
 			refreshToken?: string;
 			expiresAt?: number;
 			accountId?: string;
@@ -295,9 +298,10 @@ export const REMOTE_REFRESH_SENTINEL = "__remote__" as const;
 /** Opaque marker for OAuth refresh tokens retained by a broker. */
 export type RemoteRefreshSentinel = typeof REMOTE_REFRESH_SENTINEL;
 
-/** OAuth credential with refresh token replaced by the broker sentinel. */
-export type RemoteOAuthCredential = Omit<OAuthCredential, "refresh"> & {
+/** OAuth credential with refresh token replaced by the broker sentinel and refresh-capable client secrets removed. */
+export type RemoteOAuthCredential = Omit<OAuthCredential, "refresh" | "kiroClientSecret"> & {
 	refresh: RemoteRefreshSentinel;
+	kiroClientSecret?: never;
 };
 
 /** Discriminated credential payload as published by the broker. */
@@ -348,8 +352,14 @@ export interface CredentialDisabledEvent {
 	orgName?: string;
 }
 
-/** Why a delegated OAuth refresh was requested. */
-export type OAuthRefreshReason = "auth-recovery" | "expiry";
+/**
+ * Why an OAuth refresh was requested.
+ * - `auth-recovery`: a provider rejected the bearer with a 401.
+ * - `expiry`: ordinary expiry refresh, eligible for broker recent-mint reuse.
+ * - `usage-probe`: an advisory background usage poll; definitive refresh failure
+ *   never disables the credential (an interactive request decides).
+ */
+export type OAuthRefreshReason = "auth-recovery" | "expiry" | "usage-probe";
 
 /** Configuration supplied when constructing credential storage. */
 export type AuthStorageOptions = {
@@ -363,7 +373,7 @@ export type AuthStorageOptions = {
 	usageLogger?: UsageLogger;
 	/**
 	 * Resolve a config value (API key, header value, etc.) to an actual value.
-	 * - coding-agent injects its resolveConfigValue (supports "!command" syntax via pi-natives)
+	 * - coding-agent injects its resolveConfigValue (supports "!command" syntax via omp-natives)
 	 * - Default: checks environment variable first, then treats as literal
 	 */
 	configValueResolver?: (config: string) => Promise<string | undefined>;
@@ -423,9 +433,11 @@ export type AuthStorageOptions = {
  * `getApiKey` will hand it out. When `false`, `retryAtMs` (epoch ms) carries
  * the earliest moment any same-type sibling's temporary block expires —
  * callers should prefer waiting until then over the provider's (often
- * multi-hour) retry-after when it is sooner. `retryAtMs` is `undefined` when
- * no sibling credentials exist at all, or when the session has no tracked
- * credential to rotate away from.
+ * multi-hour) retry-after when it is sooner. Siblings with a live model-policy
+ * block for the requested model are skipped: they were refused that model, so
+ * their expiry is no recovery. `retryAtMs` is `undefined` when no sibling
+ * credentials exist at all, when every blocked sibling was refused the model,
+ * or when the session has no tracked credential to rotate away from.
  *
  * `blockedUntilMs` (epoch ms) is the just-blocked credential's own unblock
  * deadline — the later of the caller's retry-after and any exhausted window
@@ -502,7 +514,10 @@ export interface ModelUsageHealthOptions {
 export type AuthApiKeyOptions = {
 	baseUrl?: string;
 	modelId?: string;
-	/** {@link oauthAccountKey}s or {@link apiKeyAccountKey}s of accounts known to serve `modelId` from multi-account discovery; selection prefers them and tries other accounts only as a last resort. */
+	/**
+	 * {@link oauthAccountKey}s or {@link apiKeyAccountKey}s known to serve `modelId` from discovery.
+	 * Unblocked matches win, then other unblocked plan-eligible accounts, before blocked fallbacks.
+	 */
 	accountIds?: readonly string[];
 	/**
 	 * Caller's cancel signal. Threaded into any broker-bound OAuth refresh so
@@ -559,6 +574,12 @@ export function apiKeyAccountKey(credential: { key: string; requestOrigin?: stri
 
 /** Non-secret identity bound to the OAuth credential selected for one request attempt. */
 export interface OAuthRequestIdentity {
+	/**
+	 * Provider account UUID of the selected credential (Anthropic
+	 * `oauth_account.account_uuid`). Non-secret; lets wire identity such as the
+	 * Claude `device_id` follow the account actually serving the request.
+	 */
+	accountId?: string;
 	orgId?: string;
 	region?: string;
 	inferenceRegion?: "global" | "eu" | "us";
@@ -629,8 +650,13 @@ export interface OAuthAccountIdentity {
 	orgName?: string;
 }
 
-/** Successful OAuth access or account-specific failure. */
-export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
+/**
+ * Successful OAuth access or account-specific failure. A success also carries
+ * `apiKey`: the bytes the provider's transport sends for this account, which
+ * differ from `accessToken` for providers whose API key is a structured
+ * credential (`api-key-format "structured"`) or a provider `getApiKey` hook.
+ */
+export type OAuthAccessResolution = ({ ok: true; apiKey: string } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
 
 /**
  * Read-only identity of one stored OAuth account, in stable storage order.
@@ -808,9 +834,13 @@ export type MarkUsageLimitOptions = {
 export type RotateCredentialOptions = {
 	error?: unknown;
 	modelId?: string;
+	/** Provider base URL for usage-report probes during a usage-limit block. */
+	baseUrl?: string;
 	apiKey?: string;
 	credentialId?: number;
 	signal?: AbortSignal;
+	/** Whether to wait for a briefly blocked sibling; defaults to true. The failed credential is blocked either way. */
+	waitForSibling?: boolean;
 };
 
 /**
@@ -913,6 +943,8 @@ export interface CredentialsApi {
 	 * Check if OAuth credentials are configured for a provider.
 	 */
 	hasOAuth(provider: string): boolean;
+	/** Check whether stored credentials use a subscription (OAuth or an opted-in login API key). */
+	hasSubscription(provider: string): boolean;
 	/**
 	 * Get OAuth credentials for a provider.
 	 */
@@ -1115,9 +1147,10 @@ export interface OAuthRefreshByIdOptions {
 	 */
 	reuseRecentMint?: boolean;
 	/**
-	 * Provider-401 recovery or ordinary expiry intent. Forwarded to a delegated
-	 * refresh (an auth broker), which may return a usable token it minted in the
-	 * last five minutes. Local reuse still requires {@link reuseRecentMint}.
+	 * Why the refresh was requested. `auth-recovery` and `expiry` are forwarded
+	 * to a delegated refresh (an auth broker), which may return a usable token
+	 * minted in the last five minutes. Local reuse still requires {@link reuseRecentMint}.
+	 * `usage-probe` never disables the row on a definitive refresh failure.
 	 */
 	reason?: OAuthRefreshReason;
 	/** The access token a provider 401 rejected; see {@link AuthApiKeyOptions.rejectedAccessToken}. */
@@ -1289,6 +1322,14 @@ export interface SessionsApi {
 	 * headroom, before considering a model/provider fallback.
 	 */
 	release(provider: string, sessionId: string): boolean;
+	/**
+	 * Read-only display and usage-attribution surface: the credential row that
+	 * most recently served `sessionId` for `provider`, including API-key rows
+	 * (which carry no OAuth identity). Selection, ranking, and rotation never
+	 * consult it. Optional because worker/broker seams may not expose it;
+	 * callers must treat its absence as "unknown attribution".
+	 */
+	sticky?(provider: string, sessionId: string | undefined): SessionCredential | undefined;
 }
 
 /** Usage reporting, observation, and provider configuration. */
@@ -1363,6 +1404,11 @@ export interface UsageApi {
 	setProvider(provider: Provider, usageProvider: UsageProvider, apiKey?: string): void;
 	/** Remove a runtime usage provider override and restore configured/default resolution. */
 	removeProvider(provider: Provider): void;
+	/**
+	 * Replace every configuration-sourced usage provider (models.yml gateways).
+	 * They sit below runtime overrides and above the built-in resolver.
+	 */
+	replaceConfiguredProviders(providers: ReadonlyMap<Provider, UsageProvider>): void;
 }
 
 /** Credential and model-level health probes. */
@@ -1444,7 +1490,7 @@ export interface LimitsApi {
 	 *
 	 * For usage-limit and account-policy failures with no free sibling, waits
 	 * (abortable via `options.signal`) when a sibling's block expires within a
-	 * few seconds, then reports `afterSiblingWait`.
+	 * few seconds, then reports `afterSiblingWait`, unless `options.waitForSibling` is false.
 	 */
 	rotate(
 		provider: string,

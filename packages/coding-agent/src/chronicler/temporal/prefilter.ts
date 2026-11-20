@@ -16,14 +16,25 @@ export function parseKeywords(expression: string): KeywordExpression {
 	let offset = 0;
 	while (offset < expression.length) {
 		const char = expression[offset]!;
-		if (/\s/.test(char)) { offset++; continue; }
-		if (char === "(" || char === ")") { tokens.push({ kind: char }); offset++; continue; }
+		if (/\s/.test(char)) {
+			offset++;
+			continue;
+		}
+		if (char === "(" || char === ")") {
+			tokens.push({ kind: char });
+			offset++;
+			continue;
+		}
 		if (char === '"') {
 			let value = "";
 			let closed = false;
 			while (++offset < expression.length) {
 				const next = expression[offset]!;
-				if (next === '"') { offset++; closed = true; break; }
+				if (next === '"') {
+					offset++;
+					closed = true;
+					break;
+				}
 				if (next === "\\" && (expression[offset + 1] === '"' || expression[offset + 1] === "\\")) {
 					value += expression[++offset]!;
 				} else value += next;
@@ -94,7 +105,10 @@ export async function prefilterTranscripts(options: {
 	const terms = new Map<string, Set<string>>();
 	const collect = (node: KeywordExpression): void => {
 		if ("term" in node) terms.set(node.term, new Set());
-		else { collect(node.left); collect(node.right); }
+		else {
+			collect(node.left);
+			collect(node.right);
+		}
 	};
 	collect(expression);
 	for (const term of terms.keys()) {
@@ -142,16 +156,19 @@ export function resolveRecallSessions(options: {
 	keywords?: string;
 	currentSessionId?: string;
 }): string[] | undefined {
-	const selected = [...(options.session === undefined ? [] : [options.session]), ...(options.sessions ?? [])]
-		.map(id => id.trim().toLowerCase());
+	const selected = [...(options.session === undefined ? [] : [options.session]), ...(options.sessions ?? [])].map(id =>
+		id.trim().toLowerCase(),
+	);
 	if (selected.some(id => !id)) throw new Error("Session ids must not be empty");
 	if (options.scope === "current") {
 		if (selected.length) throw new Error("scope current cannot be combined with session or sessions");
-		if (!options.currentSessionId) throw new Error("No current session is available; use scope all or select sessions");
+		if (!options.currentSessionId)
+			throw new Error("No current session is available; use scope all or select sessions");
 		return [options.currentSessionId.toLowerCase()];
 	}
 	if (options.scope === "session" && !options.session) throw new Error("scope session requires session");
-	if (options.scope === "sessions" && options.sessions === undefined) throw new Error("scope sessions requires sessions");
+	if (options.scope === "sessions" && options.sessions === undefined)
+		throw new Error("scope sessions requires sessions");
 	if (options.sessions !== undefined || options.session !== undefined) return [...new Set(selected)];
 	if (options.scope === "all" || options.keywords !== undefined) return undefined;
 	if (!options.currentSessionId) throw new Error("No current session is available; use scope all or select sessions");

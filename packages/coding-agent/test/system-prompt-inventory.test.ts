@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { DelegationBias } from "@oh-my-pi/pi-catalog/compat/delegation";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSystemPrompt as buildSdkSystemPrompt } from "@oh-my-pi/pi-coding-agent/sdk";
 import {
@@ -132,7 +133,7 @@ describe("system prompt tool inventory", () => {
 		const inventoryStart =
 			["# Tool Inventory", "# Inventory"].map(header => text.indexOf(header)).find(index => index >= 0) ?? -1;
 		expect(inventoryStart).toBeGreaterThan(-1);
-		const sectionEnds = ["\nENV\n", "\nTOOL POLICY", "\n§ ", "\n# "]
+		const sectionEnds = ["\nENV\n", "\nTOOL POLICY", "\n§ ", "\n⁂ ", "\n# "]
 			.map(marker => text.indexOf(marker, inventoryStart + 1))
 			.filter(index => index > inventoryStart);
 		const inventoryEnd = sectionEnds.length > 0 ? Math.min(...sectionEnds) : text.length;
@@ -226,7 +227,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("renders skill URL guidance when an override declares a skill URI reader", async () => {
@@ -253,7 +254,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("override-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("snapshots every full metadata getter once per rebuild and keeps fresh values", async () => {
@@ -518,8 +519,8 @@ describe("system prompt tool inventory", () => {
 		expect(text).not.toContain("`lsp`");
 	});
 
-	it("renders exactly one of the map-unknown-code and inline-first delegation rules per bias", async () => {
-		const renderDelegation = async (delegationBias: "eager" | "restrained" | "gated", eagerTasks: boolean) => {
+	it("renders exactly one of the map-unknown-code, explore and inline-first delegation rules per bias", async () => {
+		const renderDelegation = async (delegationBias: DelegationBias, eagerTasks: boolean) => {
 			const { systemPrompt } = await buildSystemPrompt({
 				cwd: tempDir,
 				contextFiles: [],
@@ -531,13 +532,15 @@ describe("system prompt tool inventory", () => {
 				eagerTasks,
 			});
 			const count = (needle: string) => systemPrompt[0].split(needle).length - 1;
-			return [count("Map unknown code via `task`"), count("Inline first.")];
+			return [count("Map unknown code via `task`"), count("Unfamiliar subsystem?"), count("Inline first.")];
 		};
-		expect(await renderDelegation("eager", false)).toEqual([1, 0]);
-		expect(await renderDelegation("eager", true)).toEqual([1, 0]);
-		expect(await renderDelegation("restrained", true)).toEqual([1, 0]);
-		expect(await renderDelegation("restrained", false)).toEqual([0, 1]);
-		expect(await renderDelegation("gated", true)).toEqual([0, 0]);
+		expect(await renderDelegation("eager", false)).toEqual([1, 0, 0]);
+		expect(await renderDelegation("eager", true)).toEqual([1, 0, 0]);
+		expect(await renderDelegation("balanced", false)).toEqual([0, 1, 0]);
+		expect(await renderDelegation("balanced", true)).toEqual([1, 0, 0]);
+		expect(await renderDelegation("restrained", true)).toEqual([1, 0, 0]);
+		expect(await renderDelegation("restrained", false)).toEqual([0, 0, 1]);
+		expect(await renderDelegation("gated", true)).toEqual([0, 0, 0]);
 	});
 
 	it("appends each advertised prelude's guidance as its own block", async () => {
@@ -704,8 +707,8 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("# Inventory");
-		expect(text).not.toContain("- `read`");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("# Tool Inventory");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("does not treat a custom tool named read as a skill URI reader", async () => {
@@ -728,7 +731,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("Custom instructions.");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps skill URL guidance for a custom declared skill URI reader", async () => {
@@ -759,7 +762,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("fetch-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("keeps skill URL guidance for a mounted skill URI reader", async () => {
@@ -774,7 +777,7 @@ describe("system prompt tool inventory", () => {
 		const text = await renderPrompt({ toolNames: directNames, tools });
 
 		expect(text).toContain("mounted-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when compact projection drops the mounted reader", async () => {
@@ -784,7 +787,7 @@ describe("system prompt tool inventory", () => {
 		const text = await renderPrompt({ toolNames: [], tools });
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when no skills are loaded", async () => {
@@ -800,7 +803,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("# Internal URLs");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps real provider tool definitions free of skill URL guidance", async () => {
@@ -832,7 +835,7 @@ describe("system prompt tool inventory", () => {
 			tools,
 		});
 
-		expect(systemPrompt.join("\n\n")).toContain("`skill://<name>`");
+		expect(systemPrompt.join("\n\n")).toContain("skill://<name>");
 	});
 
 	it("keeps visible skills when no tools map is provided", async () => {
@@ -876,7 +879,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("bash-only-skill");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance when glob is the only active resolver", async () => {
@@ -900,7 +903,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("glob-only-skill");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("keeps hidden skills out of the catalog while preserving URL guidance", async () => {
@@ -925,7 +928,7 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).not.toContain("hidden-workflow");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("preserves hidden skill URL guidance with a custom prompt", async () => {
@@ -952,7 +955,7 @@ describe("system prompt tool inventory", () => {
 
 		expect(text).toContain("Custom instructions.");
 		expect(text).not.toContain("hidden-workflow");
-		expect(text).toContain("`skill://<name>`");
+		expect(text).toContain("skill://<name>");
 	});
 
 	it("omits skill URL guidance from a custom prompt without loaded skills", async () => {
@@ -969,11 +972,11 @@ describe("system prompt tool inventory", () => {
 		const text = systemPrompt.join("\n\n");
 
 		expect(text).toContain("Custom instructions.");
-		expect(text).not.toContain("`skill://<name>`");
+		expect(text).not.toContain("skill://<name>");
 	});
 
 	it("omits the read-only scout delegation gate when scout is unavailable", async () => {
-		const opts = { toolNames: ["read", "bash", "task"], tools: TOOLS };
+		const opts = { toolNames: ["read", "bash", "task"], tools: TOOLS, delegationBias: "eager" as const };
 		const withScout = (
 			await buildSystemPrompt({
 				...opts,
@@ -1013,11 +1016,32 @@ describe("system prompt tool inventory", () => {
 			inlineToolDescriptors: false,
 		};
 		const withoutTodo = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash"] })).systemPrompt.join("\n\n");
-		expect(withoutTodo).not.toContain("todo-only turn");
+		expect(withoutTodo).not.toContain("Update todos");
 
 		const withTodo = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash", "todo"] })).systemPrompt.join(
 			"\n\n",
 		);
-		expect(withTodo).toContain("todo-only turn");
+		expect(withTodo).toContain("Update todos");
+	});
+
+	// A session without `read` cannot open `xd://read/urls`, so the grammar that link stands for must ship inline.
+	it("links the internal URL reference only while read can fetch it", async () => {
+		const opts = {
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			tools: TOOLS,
+			nativeTools: true,
+			inlineToolDescriptors: false,
+		};
+		const withRead = (await buildSystemPrompt({ ...opts, toolNames: ["read", "bash"] })).systemPrompt.join("\n\n");
+		expect(withRead).toContain("xd://read/urls");
+		expect(withRead).not.toContain("named service");
+
+		const withoutRead = (await buildSystemPrompt({ ...opts, toolNames: ["bash"] })).systemPrompt.join("\n\n");
+		expect(withoutRead).not.toContain("xd://read/urls");
+		expect(withoutRead).toContain("named service");
 	});
 });

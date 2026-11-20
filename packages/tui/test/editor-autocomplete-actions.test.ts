@@ -441,6 +441,23 @@ describe("Editor model mention autocomplete", () => {
 		expect(deleteEditor.getText()).toBe("^a");
 	});
 
+	it("reopens on a colon inside a mention so its effort levels can be listed", async () => {
+		const provider = new ModelMentionProvider(["^a:"]);
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(provider);
+		const rejectedChecked = onceAutocompleteUpdate(editor);
+		editor.handleInput("^a");
+		await rejectedChecked;
+		expect(editor.isShowingAutocomplete()).toBe(false);
+
+		editor.handleInput(":");
+		await untilAutocompleteShown(editor);
+		editor.handleInput("\t");
+
+		expect(editor.getText()).toBe("^a/x ");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+	});
+
 	it("accepts a stale popup while the live text is still a mention", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(new ModelMentionProvider());
@@ -1081,6 +1098,54 @@ class SyncSlashProvider implements AutocompleteProvider {
 }
 
 describe("Editor Enter handler sync slash completion", () => {
+	it.each(["models", "switch", "MoDeLs", "SwItCh", "launch"])(
+		"submits canonical hidden /%s rather than a competing popup row",
+		async alias => {
+			for (const popupResolved of [false, true]) {
+				const editor = new Editor(defaultEditorTheme);
+				editor.setAutocompleteProvider(
+					new CombinedAutocompleteProvider([
+						{ name: "model", hiddenAliases: ["switch"], description: "Switch model for this session" },
+						{ name: "roles", hiddenAliases: ["models", "launch"], description: "Configure model roles" },
+						{ name: "modelpreset", description: "Save and switch model presets" },
+						{ name: "launcher", description: "Open the launcher" },
+					]),
+				);
+				let submitted = "";
+				editor.onSubmit = text => {
+					submitted = text;
+				};
+				editor.handleInput(`/${alias}`);
+				if (popupResolved) await untilAutocompleteShown(editor);
+				editor.handleInput("\r");
+				expect(submitted).toBe(`/${alias.toLowerCase()}`);
+			}
+		},
+	);
+
+	it("accepts repeated inline prompt completions without submitting or erasing the draft", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider([
+				{ name: "prompts:review", description: "Review changes" },
+				{ name: "prompts:plan", description: "Plan changes" },
+			]),
+		);
+		let submitted: string | undefined;
+		editor.onSubmit = text => {
+			submitted = text;
+		};
+		editor.handleInput("Before /prompts:rev");
+		await untilAutocompleteShown(editor);
+		editor.handleInput("\t");
+		expect(editor.getText()).toBe("Before /prompts:review ");
+		editor.handleInput("and /prompts:pla");
+		await untilAutocompleteShown(editor);
+		editor.handleInput("\r");
+		expect(editor.getText()).toBe("Before /prompts:review and /prompts:plan ");
+		expect(submitted).toBeUndefined();
+	});
+
 	async function createRelocatedModelPopup() {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(

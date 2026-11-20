@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import { broadcastBus, type BroadcastFrame } from "./broadcast-bus.ts";
 import { KbService } from "./kb-service.ts";
+import { withCardProperties } from "./card-properties.ts";
 import { startKbWatcher } from "./kb-watcher.ts";
 
 let root: string;
@@ -211,7 +212,7 @@ describe("KbService orphan census", () => {
 
 describe("KbService literal full-text search", () => {
 	test("different warm queries preserve literal hits, snippets, scores and metadata", async () => {
-		put("notes/alpha.md", "---\nname: Human heading\ntags: [topic]\n---\nxxMiXeD::needleYY mixed::needle\n");
+		put("notes/alpha.md", "+++\nname = 'Human heading'\ntags = ['topic']\n+++\nxxMiXeD::needleYY mixed::needle\n");
 		put("notes/beta.md", "# Other\nOnly second/pattern appears here.\n");
 		// All query trigrams occur, but not in the query's order.
 		put("notes/decoy.md", "# Decoy\nmix ixe xed ed: d:: ::n :ne nee eed edl dle\n");
@@ -268,4 +269,97 @@ describe("KbService literal full-text search", () => {
 		expect((await kb.getBacklinks("notes/hub.md"))?.backlinks).toEqual([]);
 		expect((await kb.getBacklinks("archive/kept.md"))?.backlinks.map((b) => b.source).sort()).toEqual(["notes/hub.md", "notes/source.md"]);
 	});
+});
+
+describe("native TOML frontmatter and non-destructive YAML import", () => {
+	test("imports a same-mode sibling once, retains exact YAML and indexes one logical note", async () => {
+		const legacy = "---\n# exact YAML comment\nname: Human title # inline title comment\ntags: [entry, topic]\ncustom:\n  # nested KB comment\n  empty: null\n---\nUnique native search text\n[[kept]]\n";
+		put("notes/imported.md", legacy);
+		chmodSync(path.join(root, "notes/imported.md"), 0o640);
+		const kb = new KbService({ root });
+		const note = (await kb.getFile("notes/imported.md"))!;
+		expect(note.frontmatter).toEqual({ name: "Human title", tags: ["entry", "topic"], custom: { empty: null } });
+		expect(note.rawContent.startsWith("+++\n")).toBe(true);
+		expect(note.rawContent).toContain("# exact YAML comment");
+		expect(note.rawContent).toContain("inline title comment");
+		expect(note.rawContent).toContain("nested KB comment");
+		expect(note.absolutePath).toBe(path.join(root, "notes/imported.toml.md"));
+		expect(readFileSync(path.join(root, "notes/imported.md"), "utf8")).toBe(legacy);
+		expect(statSync(note.absolutePath).mode & 0o777).toBe(0o640);
+		expect((await kb.getTree("notes"))!.files.filter(file => file.name.startsWith("imported")).map(file => file.path)).toEqual(["notes/imported.md"]);
+		const graph = await kb.getGraph();
+		expect(graph.nodes.filter(node => node.path.includes("imported")).map(node => node.path)).toEqual(["notes/imported.md"]);
+		expect(graph.edges).toContainEqual({ source: "notes/imported.md", target: "archive/kept.md" });
+		expect((await kb.search("Unique native search", 20)).results.map(result => result.path)).toEqual(["notes/imported.md"]);
+		const edited = note.rawContent.replace("Human title", "Edited title");
+		expect((await kb.saveFile("notes/imported.md", edited, "update")).kind).toBe("ok");
+		const restarted = new KbService({ root });
+		expect((await restarted.getFile("notes/imported.md"))?.frontmatter.name).toBe("Edited title");
+		expect(readFileSync(path.join(root, "notes/imported.md"), "utf8")).toBe(legacy);
+	});
+
+	test("a canonical sibling wins without parsing or overwriting the original, including invalid native TOML", async () => {
+		const legacy = "---\nname: [broken\n---\nLegacy content\n";
+		put("notes/winner.md", legacy);
+		put("notes/winner.toml.md", "+++\nname = 'Native winner'\n+++\nCanonical content\n");
+		const kb = new KbService({ root });
+		expect((await kb.getFile("notes/winner.md"))?.frontmatter.name).toBe("Native winner");
+		expect((await kb.getTree("notes"))!.files.filter(file => file.name.startsWith("winner"))).toHaveLength(1);
+		put("notes/winner.toml.md", "+++\nname = [broken\n+++\nCanonical content\n");
+		kb.invalidate();
+		const invalid = (await kb.getFile("notes/winner.md"))!;
+		expect(invalid.frontmatterError).toBeDefined();
+		expect(invalid.rawContent).toContain("Canonical content");
+		expect(readFileSync(path.join(root, "notes/winner.md"), "utf8")).toBe(legacy);
+	});
+
+	test("raw editing accepts TOML, rejects YAML and malformed native headers without changing stored content", async () => {
+		const kb = new KbService({ root });
+		const raw = "+++\n# keep\nname = 'Native'\n[custom]\n# nested comment\ntags = ['one', 'two']\n+++\nBody\n";
+		expect((await kb.saveFile("notes/new.md", raw, "create")).kind).toBe("ok");
+		expect((await kb.getFile("notes/new.md"))?.rawContent).toBe(raw);
+		expect((await kb.saveFile("notes/new.md", "---\nname: Legacy\n---\nBody", "update")).kind).toBe("invalid-frontmatter");
+		expect((await kb.saveFile("notes/new.md", "+++\nname = [broken\n+++\nBody", "update")).kind).toBe("invalid-frontmatter");
+		expect((await kb.getFile("notes/new.md"))?.rawContent).toBe(raw);
+	});
+
+	test("external SKILL.md keeps interoperable YAML without creating an owned metadata sibling", async () => {
+		const raw = "---\nname: external-skill\ndescription: Keep external YAML\n---\n# Skill\n";
+		put("notes/example/SKILL.md", raw);
+		const kb = new KbService({ root });
+		const skill = (await kb.getFile("notes/example/SKILL.md"))!;
+		expect(skill.frontmatter).toEqual({ name: "external-skill", description: "Keep external YAML" });
+		expect(skill.body).toBe("# Skill\n");
+		expect(skill.rawContent).toBe(raw);
+		expect(readFileSync(path.join(root, "notes/example/SKILL.md"), "utf8")).toBe(raw);
+		expect(existsSync(path.join(root, "notes/example/SKILL.toml.md"))).toBe(false);
+	});
+});
+
+test("raw and rich KB writes retain multiline +++ metadata and exact Markdown boundaries", async () => {
+	const raw = "+++\n# preserve exact comment  \nname = \"\"\"Human\n+++\nTitle\"\"\"\nnotes = '''first\n+++\nlast'''\n+++\nBody\n+++\nProse fence\n";
+	const kb = new KbService({ root });
+	expect((await kb.saveFile("notes/multiline.md", raw, "create")).kind).toBe("ok");
+	const note = (await kb.getFile("notes/multiline.md"))!;
+	expect(note.rawContent).toBe(raw);
+	expect(note.body).toBe("Body\n+++\nProse fence\n");
+	expect(note.frontmatter).toEqual({ name: "Human\n+++\nTitle", notes: "first\n+++\nlast" });
+	expect((await kb.getGraph()).nodes.find(node => node.path === "notes/multiline.md")?.title).toBe("Human\n+++\nTitle");
+	const edited = raw.replace("Prose fence", "Edited prose");
+	expect((await kb.saveFile("notes/multiline.md", edited, "update")).kind).toBe("ok");
+	expect((await kb.getFile("notes/multiline.md"))?.rawContent).toBe(edited);
+	const rich = withCardProperties("Rich body\n", { notes: "before\n+++\nafter", custom: { details: "first\n+++\nlast" } });
+	expect((await kb.saveFile("notes/rich.md", rich, "create")).kind).toBe("ok");
+	expect((await kb.getFile("notes/rich.md"))?.frontmatter).toEqual({ notes: "before\n+++\nafter", custom: { details: "first\n+++\nlast" } });
+});
+
+test("legacy KB multiline values containing +++ publish a fully valid native sibling", async () => {
+	const original = "---\nlabel: |-\n  first\n  +++\n  last\n---\noriginal body\n";
+	put("notes/fence.md", original);
+	const kb = new KbService({ root });
+	const imported = (await kb.getFile("notes/fence.md"))!;
+	expect(imported.frontmatter.label).toBe("first\n+++\nlast");
+	expect(imported.body).toBe("original body\n");
+	expect(imported.absolutePath).toBe(path.join(root, "notes/fence.toml.md"));
+	expect(readFileSync(path.join(root, "notes/fence.md"), "utf8")).toBe(original);
 });

@@ -25,7 +25,7 @@ import { outputBlockContentWidth, renderStatusLine } from "../render";
 import { framedToolCard } from "../render/tool-card";
 import { wrapPrefixedLine } from "../render/hanging-wrap";
 
-import { formatErrorMessage, formatMeta, formatTitle, sanitizeCarriageReturns } from "../render/render-utils";
+import { formatErrorMessage, formatTitle, sanitizeCarriageReturns } from "../render/render-utils";
 
 /** An annotation on an offered option, selected or not. Repeated options carry separate notes. */
 export interface AskOptionNote {
@@ -530,7 +530,7 @@ export const askToolRenderer = {
 		if (args.multi) meta.push("multi");
 		const questionOptions = normalizeRenderOptions(args.options);
 		if (questionOptions?.length) meta.push(`options:${questionOptions.length}`);
-		const header = `${label}${formatMeta(meta, uiTheme)}`;
+		const header = renderStatusLine({ title: uiTheme.bold("Ask"), titleColor: "toolTitle", meta }, uiTheme);
 		const multi = args.multi;
 		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
 			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.

@@ -17,7 +17,7 @@ import {
 	renderHandoffSummaryContext,
 } from "@oh-my-pi/pi-agent-core/compaction/messages";
 import { getContextWindowTruncatedOutputMessage } from "@oh-my-pi/pi-agent-core/compaction/openai";
-import { formatFileOperations, getSummarizationSystemPrompt } from "@oh-my-pi/pi-agent-core/compaction/utils";
+import { getSummarizationSystemPrompt } from "@oh-my-pi/pi-agent-core/compaction/utils";
 import type { AssistantMessage, Context } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -139,13 +139,30 @@ describe("compaction prompt asset reload boundaries", () => {
 		expect(buildAnthropicCompactionInstructions("base", "focus", "memory")).toBe("base | focus | memory");
 	});
 
-	test("reads file-operation templates in agent and snapcompact packages at each use", async () => {
+	test("keeps ordinary and image-summary file overrides independent across reloads", async () => {
 		await override("compaction/file-operations.md", "Agent files: {{files}}");
 		await override("compaction/snapcompact/file-operations.md", "Image files: {{files}}");
-		expect(formatFileOperations(["src/a.ts"], [])).toContain("Agent files:");
-		expect(formatFileOperations(["src/a.ts"], [])).toContain("a.ts (Read)");
+		const readMessage = response();
+		readMessage.content = [{ type: "toolCall", id: "read", name: "read", arguments: { path: "src/a.ts" } }];
+		const entries: SessionEntry[] = [
+			{ type: "message", id: "user", parentId: null, timestamp: "2026-01-01T00:00:00Z", message: conversation[0] },
+			{ type: "message", id: "read", parentId: "user", timestamp: "2026-01-01T00:00:01Z", message: readMessage },
+		];
+		const options = {
+			cwd: root,
+			model: summarizerModel(),
+			apiKey: "key",
+			signal: new AbortController().signal,
+			completeImpl: async () => response(),
+		};
+		const first = await generateBranchSummary(entries, options);
+		expect(first.summary).toContain("Agent files:");
+		expect(first.summary).toContain("a.ts (Read)");
+		expect(first.summary).not.toContain("Image files:");
 		expect(snapcompact.upsertFileOperations("Summary", ["src/a.ts"], [])).toContain("Image files:");
+		await override("compaction/file-operations.md", "Reloaded agent files: {{files}}");
 		await override("compaction/snapcompact/file-operations.md", "Reloaded image files: {{files}}");
+		expect((await generateBranchSummary(entries, options)).summary).toContain("Reloaded agent files:");
 		expect(snapcompact.upsertFileOperations("Summary", ["src/a.ts"], [])).toContain("Reloaded image files:");
 	});
 

@@ -22,6 +22,7 @@ import type { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discovery from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { type ExecutorOptions, runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { localSession } from "../helpers/local-session";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
@@ -63,9 +64,9 @@ async function fixture() {
 	const repo = path.join(workspace, "repo");
 	const copy = path.join(home, ".omp", "wt", "isolated", "m");
 	const userFile = path.join(home, ".agents", "AGENTS.md");
-	const workspaceFile = path.join(workspace, "AGENTS.md");
-	const sourceFile = path.join(repo, "AGENTS.md");
-	const copyFile = path.join(copy, "AGENTS.md");
+	const workspaceFile = path.join(workspace, "CLAUDE.md");
+	const sourceFile = path.join(repo, "CLAUDE.md");
+	const copyFile = path.join(copy, "CLAUDE.md");
 	const markers = {
 		user: "User policy: CHILD_CONTEXT_USER_RULE.",
 		workspace: "Workspace policy: CHILD_CONTEXT_WORKSPACE_RULE.",
@@ -112,9 +113,8 @@ async function fixture() {
 	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([MODEL]);
 	vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is disabled in policy-context tests"));
 	vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [WORKER], projectAgentsDir: null });
-	const mock = createMockModel({
-		handler: { content: [{ type: "toolCall", name: "yield", arguments: { data: { complete: true } } }] },
-	});
+	// No output schema → no `yield` tool (usesYield contract); the final message is the result.
+	const mock = createMockModel({ handler: { content: ["Policy context checked."] } });
 	vi.spyOn(settingsStream, "createSettingsAwareStreamFn").mockImplementation(() => mock.stream);
 	const realCreate = sdk.createAgentSession;
 	vi.spyOn(sdk, "createAgentSession").mockImplementation(async options => {
@@ -170,7 +170,7 @@ async function fixture() {
 	function liveChild(id: string): AgentSession {
 		const child = AgentRegistry.global().get(id)?.session;
 		if (!child) throw new Error(`Expected live child ${id}`);
-		return child;
+		return localSession(child);
 	}
 
 	async function spawn(parent: AgentSession, id: string): Promise<AgentSession> {
@@ -252,12 +252,13 @@ describe("subagent policy context", () => {
 		);
 	});
 
-	it("discovers user, workspace and repository policy for an ordinary task child", async () => {
+	it("discovers workspace and repository policy for a task child without inheriting user AGENTS.md", async () => {
 		const h = await fixture();
 		const parent = await h.create();
 		const child = await h.spawn(parent, "OrdinaryPolicyChild");
 		const rendered = systemPrompt(child);
-		for (const marker of [h.markers.user, h.markers.workspace, h.markers.source]) expect(rendered).toContain(marker);
+		for (const marker of [h.markers.workspace, h.markers.source]) expect(rendered).toContain(marker);
+		expect(rendered).not.toContain(h.markers.user);
 		expect(rendered.indexOf(h.markers.workspace)).toBeLessThan(rendered.indexOf(h.markers.source));
 	});
 
@@ -274,7 +275,8 @@ describe("subagent policy context", () => {
 			},
 		});
 		const rendered = systemPrompt(child);
-		for (const marker of [h.markers.user, h.markers.workspace, h.markers.copy]) expect(rendered).toContain(marker);
+		for (const marker of [h.markers.workspace, h.markers.copy]) expect(rendered).toContain(marker);
+		expect(rendered).not.toContain(h.markers.user);
 		expect(rendered).not.toContain(h.markers.source);
 		expect(rendered).not.toContain(h.sourceFile);
 		expect(rendered).not.toContain("SOURCE_CHECKOUT_ONLY_TREE");
@@ -282,36 +284,41 @@ describe("subagent policy context", () => {
 
 		const grandchild = await h.spawn(child, "NestedPolicyChild");
 		const nested = systemPrompt(grandchild);
-		for (const marker of [h.markers.user, h.markers.workspace, h.markers.copy]) expect(nested).toContain(marker);
+		for (const marker of [h.markers.workspace, h.markers.copy]) expect(nested).toContain(marker);
+		expect(nested).not.toContain(h.markers.user);
 		expect(nested).not.toContain(h.markers.source);
 
 		child.setAdvisorEnabled(true);
 		const advisor = child.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected the child's read-only advisor");
 		const advisorPrompt = advisor.state.systemPrompt.join("\n");
-		for (const marker of [h.markers.user, h.markers.workspace, h.markers.copy])
-			expect(advisorPrompt).toContain(marker);
+		for (const marker of [h.markers.workspace, h.markers.copy]) expect(advisorPrompt).toContain(marker);
+		expect(advisorPrompt).not.toContain(h.markers.user);
 		expect(advisorPrompt).not.toContain(h.markers.source);
 	});
 
-	it.each([false, true])("preserves explicit SDK context verbatim, including AGENTS.md (empty=%s)", async empty => {
-		const h = await fixture();
-		const explicit = empty
-			? []
-			: [
-					{ path: h.directory.join("notes.txt"), content: "EXPLICIT_NON_POLICY_CONTEXT" },
-					{ path: h.directory.join("someone", "AGENTS.md"), content: "EXPLICIT_AGENT_POLICY_CONTEXT" },
-				];
-		const parent = await h.create({ contextFiles: explicit });
-		const child = await h.spawn(parent, empty ? "EmptyPolicyChild" : "ExplicitPolicyChild");
-		const rendered = systemPrompt(child);
-		for (const file of explicit) {
-			expect(rendered).toContain(file.content);
-			expect(rendered.split(file.content)).toHaveLength(2);
-		}
-		for (const marker of Object.values(h.markers)) expect(rendered).not.toContain(marker);
-		if (empty) expect(rendered).not.toContain("<repo-rules>");
-	});
+	it.each([false, true])(
+		"filters explicit AGENTS.md while preserving other SDK context verbatim (empty=%s)",
+		async empty => {
+			const h = await fixture();
+			const explicit = empty
+				? []
+				: [
+						{ path: h.directory.join("notes.txt"), content: "EXPLICIT_NON_POLICY_CONTEXT" },
+						{ path: h.directory.join("someone", "AGENTS.md"), content: "EXPLICIT_AGENT_POLICY_CONTEXT" },
+					];
+			const parent = await h.create({ contextFiles: explicit });
+			const child = await h.spawn(parent, empty ? "EmptyPolicyChild" : "ExplicitPolicyChild");
+			const rendered = systemPrompt(child);
+			if (!empty) {
+				expect(rendered).toContain("EXPLICIT_NON_POLICY_CONTEXT");
+				expect(rendered.split("EXPLICIT_NON_POLICY_CONTEXT")).toHaveLength(2);
+				expect(rendered).not.toContain("EXPLICIT_AGENT_POLICY_CONTEXT");
+			}
+			for (const marker of Object.values(h.markers)) expect(rendered).not.toContain(marker);
+			if (empty) expect(rendered).not.toContain("<repo-rules>");
+		},
+	);
 
 	it("rediscovers policy on warm revival after the normal capability-cache boundary", async () => {
 		const h = await fixture();
@@ -327,11 +334,11 @@ describe("subagent policy context", () => {
 		// /clear and /new use this public cache boundary; revival must not freeze the parent's old array.
 		resetCapabilities();
 		const revived = await lifecycle.ensureLive(childId);
-		const rendered = systemPrompt(revived);
+		const rendered = systemPrompt(localSession(revived));
 		expect(rendered).toContain(updated);
 		expect(rendered).not.toContain(h.markers.source);
 		expect(rendered).toContain(h.markers.workspace);
-		expect(rendered).toContain(h.markers.user);
+		expect(rendered).not.toContain(h.markers.user);
 	});
 
 	it("uses the same discovered policies for Vibe's public spawn path", async () => {
@@ -372,6 +379,7 @@ describe("subagent policy context", () => {
 		await job.promise;
 		expect(job.status, job.errorText ?? job.resultText).toBe("completed");
 		const rendered = systemPrompt(h.liveChild(spawned.id));
-		for (const marker of [h.markers.user, h.markers.workspace, h.markers.source]) expect(rendered).toContain(marker);
+		for (const marker of [h.markers.workspace, h.markers.source]) expect(rendered).toContain(marker);
+		expect(rendered).not.toContain(h.markers.user);
 	});
 });

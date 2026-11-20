@@ -54,7 +54,6 @@ describe("advisor auto thinking level", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry,
-			advisorTools: [],
 			advisorStreamFn,
 		});
 		return session;
@@ -219,8 +218,12 @@ describe("advisor auto thinking level", () => {
 
 	for (const { name, unverified, revertPolicy } of [
 		{ name: "classifies independently with no revert", unverified: false, revertPolicy: "never" },
-		{ name: "classifies during cooldown and restores fixed effort", unverified: false, revertPolicy: "cooldown-expiry" },
-		{ name: "leaves unverified thinking unset", unverified: true, revertPolicy: "never" },
+		{
+			name: "classifies during cooldown and restores fixed effort",
+			unverified: false,
+			revertPolicy: "cooldown-expiry",
+		},
+		{ name: "follows the primary while thinking is unverified", unverified: true, revertPolicy: "never" },
 	] as const) {
 		it(`a fixed-effort advisor on an :auto fallback ${name}`, async () => {
 			const provider = "meta";
@@ -232,7 +235,7 @@ describe("advisor auto thinking level", () => {
 					{
 						id: "fallback",
 						name: "Auto fallback",
-						reasoning: !unverified,
+						reasoning: unverified ? undefined : true,
 						input: ["text"],
 						supportsTools: true,
 						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -285,14 +288,14 @@ describe("advisor auto thinking level", () => {
 			await fellBack.promise;
 			expect(wire).toEqual([
 				{ id: model.id, reasoning: Effort.Low },
-				{ id: "fallback", reasoning: unverified ? undefined : Effort.High },
+				{ id: "fallback", reasoning: Effort.High },
 			]);
 			expect(classify).toHaveBeenCalledTimes(unverified ? 0 : 1);
 
 			s.setThinkingLevel(Effort.Medium);
 			await s.agent.prompt("follow the next primary turn");
 			expect(await s.waitForAdvisorCatchup(5000)).toBe(true);
-			expect(wire.at(-1)).toEqual({ id: "fallback", reasoning: unverified ? undefined : Effort.High });
+			expect(wire.at(-1)).toEqual({ id: "fallback", reasoning: Effort.High });
 			expect(classify).toHaveBeenCalledTimes(unverified ? 0 : 2);
 			expect(s.getAdvisorAgent()).toBe(advisor);
 

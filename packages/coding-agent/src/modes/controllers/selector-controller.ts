@@ -8,7 +8,7 @@ import bundledLiveClientProtocolTemplate from "../../live/prompts/live-client-pr
 import { renderChatAdvisorPrompt } from "../../chat/chat-system-prompt";
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
@@ -34,6 +34,7 @@ import {
 	saveWatchdogConfigFile,
 } from "../../advisor";
 import { createAdvisorGenerator } from "../../advisor/generate";
+import { createAdvisorActivationSetSource } from "../../advisor/activation-config";
 import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { type ChainConfigDeps, ChainConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/chain-config";
@@ -83,13 +84,7 @@ import {
 	MarketplaceManager,
 } from "../../extensibility/plugins/marketplace";
 import { getAvailableThemes, getSymbolTheme, previewTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import type {
-	AgentHubOpenOptions,
-	InteractiveModeContext,
-	ResumeSessionOptions,
-	SelectOnlyModelSelectorOptions,
-	SessionPickHandler,
-} from "../../modes/types";
+import type { AgentHubOpenOptions, InteractiveModeContext, ResumeSessionOptions } from "../../modes/types";
 import type { SessionOAuthAccountList } from "../../session/agent-session-types";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import {
@@ -102,6 +97,7 @@ import type { ForeignSessionInfo, ForeignSessionSource } from "../../session/for
 import { previewModelCompactionPoint, setModelCompactionPoint } from "../../session/model-compaction-threshold";
 import { isTranscriptEntry, type TranscriptEntry } from "../../session/session-context";
 import { isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import type { TurnAct, TurnMessage } from "@oh-my-pi/pi-tui/chat/transcript-actions";
 import type { SessionEntry, SessionTreeNode } from "../../session/session-entries";
 import { inspectSessionLease, SessionInUseError } from "../../session/session-lease";
 import { findSessionContinuation, readSessionInfo, type SessionInfo } from "../../session/session-listing";
@@ -129,7 +125,6 @@ import type { ToolSession } from "../../tools";
 import { AskTool, type AskToolInput } from "../../tools/ask";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { sanitizeDisplayWarnings, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
 import { ToolAbortError } from "../../tools/tool-errors";
 import { captureBrowserSession } from "../../utils/browser-session";
 import { copyToClipboard } from "../../utils/clipboard";
@@ -160,11 +155,12 @@ import { operatorIrcLogSource } from "../../irc/operator";
 import { cfgIrcViewerEnabled } from "../../irc/settings";
 import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
-import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import { COPY_SELECTOR_OVERLAY_OPTIONS, CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
+import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { ModelHubComponent, type ModelRoleSelectionScope } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatSessionContinuationNotice } from "../persistence-failure";
@@ -197,7 +193,12 @@ import type { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-
 
 import { cfgAdvisorSyncBacklog } from "../../advisor/settings";
 import { cfgBranchSummaryEnabled, cfgCompactionThresholdTokens } from "../../session/context-settings";
-import { cfgCycleOrder, cfgDisabledProviders, cfgModelsDefaultScope } from "../../config/model-settings";
+import {
+	cfgCycleOrder,
+	cfgDisabledProviders,
+	cfgModelsDefaultScope,
+	cfgSessionModelPicker,
+} from "../../config/model-settings";
 import { cfgRoleSettings, type RoleSettings } from "../../config/role-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
@@ -309,6 +310,11 @@ export interface MenuHost {
 	mount(component: Component, mount: () => OverlayHandle): void;
 	/** False when history already left this menu, so delayed cleanup must not steal focus. */
 	close(): boolean;
+}
+
+/** Return input to the current editor-slot owner after a fullscreen overlay closes. */
+export function focusActiveEditorArea(ctx: InteractiveModeContext): void {
+	ctx.ui.setFocus(ctx.editorContainer.children[0] ?? ctx.editor);
 }
 
 export class SelectorController {
@@ -581,8 +587,7 @@ export class SelectorController {
 	 * overlay hides to re-target focus at the visible slot owner.
 	 */
 	focusActiveEditorArea(): void {
-		const visible = this.ctx.editorContainer.children[0] ?? this.ctx.editor;
-		this.ctx.ui.setFocus(visible);
+		focusActiveEditorArea(this.ctx);
 	}
 
 	/**
@@ -648,12 +653,19 @@ export class SelectorController {
 			this.ctx,
 			async command => {
 				await this.ctx.settings.flush();
+				if (target.kind === "settings" && target.scope === "session") {
+					await this.ctx.settings.saveSessionSettings();
+				}
 				const filePath = await resolveConfigViewFile(target, {
 					settings: this.ctx.settings,
 					models: this.ctx.session.modelRegistry,
 				});
 				if (!filePath) {
-					this.ctx.showWarning("This built-in configuration has no backing file.");
+					this.ctx.showWarning(
+						target.kind === "settings" && target.scope === "session"
+							? "This session has no settings file (it is not being saved)."
+							: "This built-in configuration has no backing file.",
+					);
 					return;
 				}
 				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
@@ -666,14 +678,13 @@ export class SelectorController {
 		);
 	}
 
-	showSettingsSelector(
-		scope: SettingsScope = cfgSettingsDefaultScope.get(this.ctx.settings),
-		openPersonality = false,
-	): void {
+	showSettingsSelector(initialScope?: SettingsScope, openPersonality = false): void {
 		if (this.#focusOpenMenu("settings")) return;
-		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(scope));
+		const menu = this.#claimMenu("settings", () => this.showSettingsSelector(initialScope));
 		getAvailableThemes()
 			.then(async availableThemes => {
+				await this.ctx.settings.recheckSettingsFiles();
+				const scope = initialScope ?? cfgSettingsDefaultScope.get(this.ctx.settings);
 				const settingsHost = createSettingsHost(this.ctx.settings, scope);
 				// Fullscreen settings editor on the alternate screen: the overlay
 				// enables mouse tracking (click/hover/wheel) for its lifetime and
@@ -701,7 +712,6 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						currentPersonality: () => currentPersonalityName(this.ctx.settings),
 						personalityOptions: () => [
 							...BUILTIN_PERSONALITIES.map(name => ({ value: name, label: name, description: "Built-in" })),
 							...listCustomPersonalities(this.ctx.settings).map(entry => ({
@@ -726,8 +736,15 @@ export class SelectorController {
 							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
 							return `Applied to ${result.notified} sessions${result.unsupported ? `; ${result.unsupported} need restart/upgrade` : ""}${result.failed ? `; ${result.failed} failed` : ""}`;
 						},
-						onOpenConfigFile: () =>
-							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
+						onOpenConfigFile: () => {
+							const selectedScope = settingsHost.scope ?? scope;
+							return this.#openConfigFile(
+								{ kind: "settings", scope: selectedScope },
+								selectedScope === "session"
+									? () => this.ctx.settings.reloadSessionSettings()
+									: () => this.ctx.settings.reloadFromDisk(),
+							);
+						},
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -978,7 +995,17 @@ export class SelectorController {
 					usageModelSelectors,
 					unavailableAccounts,
 				),
-			loadActivity: loadDailyActivity,
+			// A rejection leaves the dashboard up with "History unavailable" in place of the heatmap.
+			loadActivity: async (push, signal) => {
+				try {
+					await loadDailyActivity(push, signal);
+				} catch (error) {
+					logger.warn("Usage activity history unavailable", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+					throw error;
+				}
+			},
 			refresh: () => this.ctx.session.fetchUsageReports(),
 			requestRender: () => this.ctx.ui.requestRender(),
 			onClose: done,
@@ -1004,7 +1031,12 @@ export class SelectorController {
 			const sessionDir = this.ctx.sessionManager.getArtifactsDir() ?? undefined;
 			const discovered = await discoverAdvisorConfigs(cwd, agentDir, sessionDir);
 			const candidates = [...discovered.files];
-			const scopes: AdvisorConfigScope[] = ["user", "project", "project-omp", ...(sessionDir ? ["session" as const] : [])];
+			const scopes: AdvisorConfigScope[] = [
+				"user",
+				"project",
+				"project-omp",
+				...(sessionDir ? ["session" as const] : []),
+			];
 			for (const scope of scopes) {
 				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir, sessionDir });
 				if (!candidates.some(file => file.path === filePath)) candidates.push({ path: filePath, scope });
@@ -1076,12 +1108,13 @@ export class SelectorController {
 					: undefined,
 			};
 			const overlay = new AdvisorScopeOverlayComponent(this.ctx.ui, deps, files, {
+				activationSets: createAdvisorActivationSetSource(this.ctx.settings, { cwd, agentDir, sessionDir }),
 				copyPrompt: copyToClipboard,
 				generateAdvisor: (bases, comment, signal) => generator.generate(bases, comment, signal),
 				openFile: filePath => this.#openConfigFile({ kind: "advisor", filePath }),
 				loadFile: loadWatchdogConfigFile,
-				saveFile: async (filePath, doc) => {
-					await saveWatchdogConfigFile(filePath, doc);
+				saveFile: async (filePath, doc, options) => {
+					await saveWatchdogConfigFile(filePath, doc, options);
 					this.ctx.showStatus(`Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.`);
 					this.ctx.ui.requestRender();
 				},
@@ -1089,7 +1122,11 @@ export class SelectorController {
 					// Re-discover the merged roster (project + user) so the live advisors
 					// reflect cross-level precedence, not just the edited file. Only
 					// advisors whose effective configuration changed restart.
-					const discovered = await discoverAdvisorConfigs(cwd, agentDir, this.ctx.sessionManager.getArtifactsDir() ?? undefined);
+					const discovered = await discoverAdvisorConfigs(
+						cwd,
+						agentDir,
+						this.ctx.sessionManager.getArtifactsDir() ?? undefined,
+					);
 					const count = this.ctx.session.applyAdvisorConfigs(
 						advisorRosterForRuntime(discovered),
 						discovered.sharedInstructions,
@@ -1503,6 +1540,10 @@ export class SelectorController {
 	showHistorySearch(): void {
 		const historyStorage = this.ctx.historyStorage;
 		if (!historyStorage) return;
+		// Ctrl+R also opens over hook/ask prompts that replace the composer in the
+		// editor slot; the pick belongs to that prompt, not the hidden composer.
+		const focused = this.ctx.ui.getFocused();
+		const target = focused instanceof HookEditorComponent ? focused : this.ctx.editor;
 
 		this.showSelector(
 			done => {
@@ -1510,7 +1551,7 @@ export class SelectorController {
 					historyStorage,
 					prompt => {
 						done();
-						this.ctx.editor.setText(prompt);
+						target.setText(prompt);
 						this.ctx.ui.requestRender();
 					},
 					() => {
@@ -1536,6 +1577,7 @@ export class SelectorController {
 			runtime: createExtensionDashboardRuntime({
 				cwd: getProjectDir(),
 				settings: this.ctx.settings,
+				extensionRoots: () => this.ctx.session.effectiveExtensionRoots,
 				mcpManager: this.ctx.mcpManager,
 				eventBus: this.ctx.eventBus,
 				onMcpToolsChanged: tools => this.ctx.session.refreshMCPTools(tools),
@@ -1566,7 +1608,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen git UI on the alternate screen (the /models idiom): split
+	 * Fullscreen git UI on the alternate screen (the /roles idiom): split
 	 * diff viewer, staging sidebar, and commit composer. Resolves focus back
 	 * to the editor when the user closes it.
 	 */
@@ -1574,9 +1616,13 @@ export class SelectorController {
 		const menu = this.openMenu("git", () => void this.showGitTui(revision));
 		if (!menu) return;
 		try {
-			await showGitOverlay(this.ctx.ui, { cwd: getProjectDir(), revision }, (component, mount) => {
-				menu.mount(component, mount);
-			});
+			await showGitOverlay(
+				this.ctx.ui,
+				{ cwd: getProjectDir(), revision, usageLedger: this.ctx.sessionManager },
+				(component, mount) => {
+					menu.mount(component, mount);
+				},
+			);
 		} catch (error) {
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
@@ -1587,7 +1633,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen agents hub on the alternate screen (the /models idiom): scope
+	 * Fullscreen agents hub on the alternate screen (the /roles idiom): scope
 	 * sidebar, agent rows, and chip strips that dive into the model browser.
 	 */
 	async showAgentsDashboard(): Promise<void> {
@@ -1621,6 +1667,8 @@ export class SelectorController {
 						model => this.ctx.session.effectiveServiceTier(model),
 						{
 							tools: () => this.ctx.session.getAllToolInfos(),
+							skills: () =>
+								this.ctx.session.skills.map(skill => ({ name: skill.name, description: skill.description })),
 							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
 							externalEditor: text => {
 								const env = this.ctx.session.environment.snapshot();
@@ -1654,25 +1702,22 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-	showModelSelector(options?: {
-		temporaryOnly?: boolean;
-		sessionOnly?: boolean;
-		scope?: SettingsScope;
-		selectOnly?: SelectOnlyModelSelectorOptions;
-	}): void {
-		if (options?.selectOnly) {
-			this.#showModelPicker({ selectOnly: options.selectOnly });
-			return;
-		}
-		if (options?.temporaryOnly || this.ctx.focusedAgentId) {
+	showModelSelector(options?: { temporaryOnly?: boolean; sessionOnly?: boolean; scope?: SettingsScope }): void {
+		if (
+			this.ctx.focusedAgentId ||
+			(options?.temporaryOnly && cfgSessionModelPicker.get(this.ctx.settings) === "small")
+		) {
 			this.#showModelPicker();
 			return;
 		}
-		this.#showModelHub({ sessionOnly: options?.sessionOnly, scope: options?.scope });
+		this.#showModelHub({
+			sessionOnly: options?.sessionOnly || options?.temporaryOnly,
+			scope: options?.scope,
+		});
 	}
 
 	/**
-	 * Session-only model switch (`/switch <selector>`) for the viewed session:
+	 * Session-only model switch (`/model <selector>`) for the viewed session:
 	 * applies the resolved model without persisting it. Compacts first when the
 	 * transcript exceeds the target's context window, mirroring an over-context
 	 * pick in the alt+p picker. Failures surface as status errors.
@@ -1708,8 +1753,8 @@ export class SelectorController {
 		const target = this.ctx.viewSession;
 		const focusedAgentId = this.ctx.focusedAgentId;
 		const apply = async () => {
-			const level = thinkingLevel ?? target.resolveTemporaryModelThinkingLevel(model);
-			await target.setModelTemporary(model, level);
+			// Without a slider level, the session's level carries over (clamped to the model).
+			await target.setModelTemporary(model, thinkingLevel);
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 			if (focusedAgentId) {
@@ -1717,7 +1762,7 @@ export class SelectorController {
 				return;
 			}
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
-			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /models for roles.`);
+			this.ctx.showStatus(`Session-only model: ${selector}. Use ${roleSelectorHint} or /roles for roles.`);
 		};
 		if (!compactFirst || focusedAgentId) {
 			await apply();
@@ -1729,48 +1774,34 @@ export class SelectorController {
 			switched = true;
 			await apply();
 		};
-		const outcome = await this.ctx.handleCompactCommand(undefined, undefined, switchAfterCompaction);
+		// The target reads what this pass writes: no provider-native method it cannot replay.
+		const outcome = await this.ctx.handleCompactCommand(undefined, undefined, switchAfterCompaction, {
+			readerModel: model,
+		});
 		await switchAfterCompaction(outcome);
 	}
 
 	/**
-	 * Compact session-only model picker (alt+p / `/switch`): a floating
+	 * Compact session-only model picker (alt+p / `/model`): a floating
 	 * bottom-anchored overlay over the transcript. The current model is
 	 * highlighted and preselected; a leading `@` searches ctrl+p quick roles.
 	 */
-	#showModelPicker(options?: { selectOnly?: SelectOnlyModelSelectorOptions }): void {
-		const selectOnly = options?.selectOnly;
-		const menuKind = selectOnly ? "model-picker-select" : "model-picker";
-		const closeOpenMenu = (kind: MenuKind) => {
-			const open = this.#openMenus.get(kind);
-			if (!open) return;
-			open.handle?.hide();
-			this.#releaseMenu(kind, open);
-		};
-		if (selectOnly) {
-			closeOpenMenu("model-picker");
-			closeOpenMenu("model-picker-select");
-		} else {
-			closeOpenMenu("model-picker-select");
-			if (this.#focusOpenMenu("model-picker")) return;
-		}
+	#showModelPicker(): void {
+		const menuKind = "model-picker";
+		if (this.#focusOpenMenu(menuKind)) return;
 		const viewed = this.ctx.viewSession;
 		const currentContextTokens = viewed.getContextUsage()?.tokens ?? 0;
 		const current = viewed.model;
 		const quickRoleOrder = cfgCycleOrder.get(this.ctx.settings);
 		const quickRoleCycle = viewed.getRoleModelCycle(quickRoleOrder);
-		const currentSelector = selectOnly
-			? selectOnly.currentSelector
-			: current
-				? `${current.provider}/${current.id}`
-				: undefined;
+		const currentSelector = current ? `${current.provider}/${current.id}` : undefined;
 		// Preselect the effective Task model in task mode: the configured override,
 		// else the session model (the bundled task agent inherits it by default).
 		const taskOverride = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
 		const taskSelector = (Array.isArray(taskOverride) ? taskOverride[0] : taskOverride) ?? currentSelector;
 		let closed = false;
 		const tracked: { close?: () => void } = {};
-		const menu = this.#claimMenu(menuKind, () => this.#showModelPicker({ selectOnly }));
+		const menu = this.#claimMenu(menuKind, () => this.#showModelPicker());
 		const done = () => {
 			if (closed || this.#openMenus.get(menuKind) !== menu) return;
 			closed = true;
@@ -1787,29 +1818,20 @@ export class SelectorController {
 			this.ctx.session.modelRegistry,
 			this.ctx.session.scopedModels,
 			{
-				onPick: async (model, selector, { overContext }) => {
+				onPick: async (model, selector, { overContext, thinkingLevel }) => {
 					if (!isCurrent()) return;
-					if (selectOnly) {
-						done();
-						try {
-							await selectOnly.onSelect(selector);
-						} catch (error) {
-							this.ctx.showError(sanitizeErrorLine(error));
-						}
-						return;
-					}
 					try {
 						// Over-context pick: close the picker first so the compaction
 						// loader is visible.
 						if (overContext) done();
-						await this.#applySessionModel(model, selector, undefined, overContext);
+						await this.#applySessionModel(model, selector, thinkingLevel, overContext);
 						if (!overContext) done();
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
 				onPickRole: async entry => {
-					if (!isCurrent() || selectOnly) return;
+					if (!isCurrent()) return;
 					try {
 						await this.ctx.viewSession.applyRoleModel(entry);
 						this.ctx.statusLine.invalidate();
@@ -1824,15 +1846,15 @@ export class SelectorController {
 					}
 				},
 				onPickTask: (_model, selector) => {
-					if (!isCurrent() || selectOnly) return;
-					// Session-only: layer the Task override onto the runtime settings
-					// layer so it is never persisted, mirroring the session-model pick.
-					cfgTaskAgentModelOverrides.override(this.ctx.settings, {
-						...cfgTaskAgentModelOverrides.get(this.ctx.settings),
-						task: selector,
-					});
-					this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
+					if (!isCurrent()) return;
+					this.#applyTaskModel(selector);
 					done();
+				},
+				onKeepThinking: level => {
+					if (!isCurrent() || level === viewed.configuredThinkingLevel()) return;
+					viewed.setThinkingLevel(level);
+					this.ctx.statusLine.invalidate();
+					this.ctx.updateEditorBorderColor();
 				},
 				onCancel: done,
 			},
@@ -1844,7 +1866,9 @@ export class SelectorController {
 				quickRoles: quickRoleCycle?.models,
 				quickRoleOrder,
 				currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
-				selectOnly: selectOnly !== undefined,
+				// The level the session runs at, auto's resolved effort once a turn settles it (as the
+				// status line shows); an untouched slider still carries the selection, auto included.
+				thinkingLevelFor: () => viewed.autoResolvedThinkingLevel() ?? viewed.configuredThinkingLevel(),
 			},
 		);
 
@@ -1866,6 +1890,15 @@ export class SelectorController {
 		});
 		tracked.close = closePicker;
 		this.ctx.ui.requestRender();
+	}
+
+	/** Both picker sizes apply the same runtime-only Task override. */
+	#applyTaskModel(selector: string): void {
+		cfgTaskAgentModelOverrides.override(this.ctx.settings, {
+			...cfgTaskAgentModelOverrides.get(this.ctx.settings),
+			task: selector,
+		});
+		this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
 	}
 
 	/**
@@ -1914,6 +1947,13 @@ export class SelectorController {
 						return false;
 					}
 				},
+				onPickTask: hubOptions.sessionOnly
+					? (_model, selector) => {
+							if (closed) return;
+							this.#applyTaskModel(selector);
+							done();
+						}
+					: undefined,
 				onEditFacts: hubOptions.sessionOnly
 					? undefined
 					: (provider, model) => {
@@ -2182,6 +2222,10 @@ export class SelectorController {
 					done();
 					void this.#loginThenReopenModelHub(providerId, hubOptions.sessionOnly);
 				},
+				onCatalogRefreshed: async () => {
+					await this.ctx.session.refreshScopedModels();
+					return this.ctx.session.scopedModels;
+				},
 				onCycleOrderChange: order => {
 					try {
 						cfgCycleOrder.set(this.ctx.settings, order);
@@ -2255,6 +2299,16 @@ export class SelectorController {
 			},
 			{
 				sessionOnly: hubOptions.sessionOnly,
+				taskModeKeys: this.ctx.keybindings.getKeys("app.model.selectTemporary"),
+				taskSelector: (() => {
+					const override = cfgTaskAgentModelOverrides.get(this.ctx.settings).task;
+					return (
+						(Array.isArray(override) ? override[0] : override) ??
+						(this.ctx.session.model
+							? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
+							: undefined)
+					);
+				})(),
 				initialProviderId: hubOptions.initialProviderId,
 				currentSelector: this.ctx.session.model
 					? `${this.ctx.session.model.provider}/${this.ctx.session.model.id}`
@@ -2438,7 +2492,8 @@ export class SelectorController {
 		}, menu);
 	}
 
-	showUserMessageSelector(): void {
+	/** The rewind selector (Esc Esc), its outline on the latest turn, or on entry `startAt` (a turn's Rewind to here…). */
+	showUserMessageSelector(startAt?: string): void {
 		if (this.#focusOpenMenu("rewind-selector")) return;
 		const entries = this.ctx.sessionManager.getBranch().filter(isTranscriptEntry);
 		if (entries.length === 0) {
@@ -2465,6 +2520,7 @@ export class SelectorController {
 			linkTargets: getAssistantMessageLinkTargets(this.ctx),
 			requestRender: () => this.ctx.ui.requestRender(),
 			siblingPaths: entryId => this.#siblingBranchPaths(entryId),
+			startAt,
 			onSelect: entryId => void this.#rewindFromTranscript(entryId, done),
 			onCancel: done,
 		});
@@ -2473,7 +2529,7 @@ export class SelectorController {
 			this.ctx.showStatus("No messages to branch from");
 			return;
 		}
-		const menu = this.#claimMenu("rewind-selector", () => this.showUserMessageSelector());
+		const menu = this.#claimMenu("rewind-selector", () => this.showUserMessageSelector(startAt));
 		this.#mountMenu(menu, selector, () => this.#showFullscreenMenu(selector));
 	}
 
@@ -2519,15 +2575,53 @@ export class SelectorController {
 	 * replaces the editor text, so it is a real move even when it is the
 	 * current leaf; every other target lands the leaf on the entry. `done`
 	 * closes the fullscreen selector after the transcript is rebuilt so the
-	 * alternate screen never flashes a stale transcript.
+	 * alternate screen never flashes a stale transcript. `resend` sends a user
+	 * target's prompt again at once (a turn's Retry) instead of leaving it in
+	 * the editor; otherwise the status toast offers Undo ({@link #undoRewind}).
 	 */
-	async #rewindFromTranscript(entryId: string, done: () => void): Promise<void> {
+	async #rewindFromTranscript(entryId: string, done: () => void, resend = false): Promise<void> {
+		const entry = this.ctx.sessionManager.getEntry(entryId);
+		if (!entry || !isTranscriptEntry(entry)) {
+			done();
+			return;
+		}
+
+		const isUserTarget = isUserRequestEntry(entry);
+		const realLeafId = this.ctx.sessionManager.getLeafId();
+		if (entryId === realLeafId && !isUserTarget) {
+			done();
+			this.ctx.showStatus("Already at this point");
+			return;
+		}
+		const branch = this.ctx.sessionManager.getBranch();
+		const at = branch.findIndex(e => e.id === entryId);
+		const dropped = at < 0 ? 0 : branch.slice(isUserTarget ? at : at + 1).filter(e => isUserRequestEntry(e)).length;
+		const draft = isUserTarget
+			? { text: this.ctx.editor.getExpandedText(), images: [...this.ctx.editor.pendingImages] }
+			: undefined;
 		try {
 			const outcome = await this.rewindToEntry(entryId, { prefillDraft: "auto" });
 			done();
-			if (outcome.status === "unchanged") this.ctx.showStatus("Already at this point");
-			else if (outcome.status === "cancelled") this.ctx.showStatus("Navigation cancelled");
-			else if (outcome.status === "rewound") this.ctx.showStatus("Rewound to selected point");
+			if (outcome.status !== "rewound") {
+				if (outcome.status === "unchanged") this.ctx.showStatus("Already at this point");
+				else if (outcome.status === "cancelled") this.ctx.showStatus("Navigation cancelled");
+				return;
+			}
+			if (resend) {
+				if (isUserTarget) this.ctx.editor.submit();
+				this.ctx.showStatus("Retrying the turn");
+				return;
+			}
+			this.ctx.showStatus(
+				dropped > 0 ? `Rewound ${dropped} turn${dropped === 1 ? "" : "s"}` : "Rewound to selected point",
+				{
+					action: {
+						act: "undo",
+						label: "Undo",
+						run: () => void this.#undoRewind(realLeafId, draft),
+					},
+				},
+			);
 		} catch (error) {
 			done();
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -2561,15 +2655,100 @@ export class SelectorController {
 		await this.ctx.reloadTodos();
 		const prefill =
 			options.prefillDraft === "auto" ? isUserTarget || !this.ctx.editor.getText().trim() : options.prefillDraft;
-		if (result.editorText && prefill) {
-			this.ctx.editor.setDraft(result.editorText, result.editorImages);
+		if (prefill && (result.editorText !== undefined || result.editorImages?.length)) {
+			this.ctx.editor.setDraft(result.editorText ?? "", result.editorImages);
 		}
 		return { status: "rewound" };
 	}
 
+	/**
+	 * Undo of a transcript rewind: the leaf goes back to `leafId`, where it was (the rewind kept that path as a
+	 * branch), and `draft`, what the editor held before the rewind put a prompt there, comes back.
+	 */
+	async #undoRewind(
+		leafId: string | null,
+		draft: { text: string; images: ImageContent[] } | undefined,
+	): Promise<void> {
+		if (!leafId) return;
+		try {
+			const result = await this.ctx.session.navigateTree(leafId, { summarize: false });
+			if (result.cancelled) {
+				this.ctx.showStatus("Navigation cancelled");
+				return;
+			}
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+			await this.ctx.reloadTodos();
+			if (draft) this.ctx.editor.setDraft(draft.text, draft.images);
+			this.ctx.showStatus("Rewind undone");
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	/**
+	 * A transcript turn's hold-menu action on `message`, found on the current branch by role and timestamp:
+	 * `rewind` opens the rewind selector on it; `edit` rewinds past the turn's prompt and puts it in the editor,
+	 * as Esc Esc does; `retry` rewinds past the prompt and sends it again; `fork` moves onto a new session
+	 * holding the conversation up to the message, the old one kept on disk.
+	 */
+	async runTurnAction(turn: TurnAct, message: TurnMessage): Promise<void> {
+		const branch = this.ctx.sessionManager.getBranch();
+		const index = branch.findLastIndex(
+			e => e.type === "message" && e.message.role === message.role && e.message.timestamp === message.at,
+		);
+		const entry = branch[index];
+		if (!entry) {
+			this.ctx.showStatus("That message is no longer on this branch");
+			return;
+		}
+		if (turn === "rewind") {
+			this.showUserMessageSelector(entry.id);
+			return;
+		}
+		if (turn === "fork") {
+			await this.#forkAt(entry.id);
+			return;
+		}
+		// The turn's prompt: the message itself, or the last one asked before the answer.
+		const prompt = message.role === "user" ? entry : branch.slice(0, index).findLast(e => isUserRequestEntry(e));
+		if (!prompt) {
+			this.ctx.showStatus("No prompt to resend before this answer");
+			return;
+		}
+		// Retry sends the prompt through the editor, which holds the user's unsent draft.
+		if (turn === "retry" && (this.ctx.editor.getText().trim() || this.ctx.editor.pendingImages.length > 0)) {
+			this.ctx.showStatus("Send or clear the draft to retry this turn");
+			return;
+		}
+		await this.#rewindFromTranscript(prompt.id, () => this.ctx.ui.requestRender(), turn === "retry");
+	}
+
+	/** Fork from here: the session moves onto a new file holding the conversation up to `entryId`. */
+	async #forkAt(entryId: string): Promise<void> {
+		// An entry fork requires an idle session; stop the running turn first.
+		if (this.ctx.session.isStreaming) await this.ctx.session.abort();
+		const previous = this.ctx.sessionManager.isSessionOnDisk() ? this.ctx.sessionManager.getSessionId() : undefined;
+		try {
+			if (!(await this.ctx.session.fork(entryId))) {
+				this.ctx.showError("Fork failed (session not persisted or cancelled)");
+				return;
+			}
+		} catch (error) {
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
+		await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+		await this.ctx.reloadTodos();
+		this.ctx.statusLine.invalidate();
+		this.ctx.showStatus(
+			previous ? `Forked into a new session · /resume ${previous} returns` : "Forked into a new session",
+		);
+	}
 	showCopySelector(): void {
 		if (this.#focusOpenMenu("copy-selector")) return;
-		const entries = this.ctx.sessionManager.getBranch().filter(isTranscriptEntry);
+		// The session on screen: a focused subagent's transcript, else the main one.
+		const session = this.ctx.viewSession;
+		const entries = session.sessionManager.getBranch().filter(isTranscriptEntry);
 		if (entries.length === 0) {
 			this.ctx.showStatus("Nothing to copy yet.");
 			return;
@@ -2584,10 +2763,10 @@ export class SelectorController {
 		};
 		const selector = new CopySelectorComponent(entries, {
 			ui: this.ctx.ui,
-			getTool: name => this.ctx.session.getToolByName(name),
-			isBuiltInTool: name => this.ctx.session.hasBuiltInTool(name),
-			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
-			cwd: this.ctx.sessionManager.getCwd(),
+			getTool: name => session.getToolByName(name),
+			isBuiltInTool: name => session.hasBuiltInTool(name),
+			getMessageRenderer: type => session.extensionRunner?.getMessageRenderer(type),
+			cwd: session.sessionManager.getCwd(),
 			hideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			proseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			expandThinkingBlocks: () => this.ctx.expandThinkingBlocks,
@@ -2874,12 +3053,8 @@ export class SelectorController {
 			if (error instanceof ToolAbortError) return undefined;
 			throw error;
 		}
-		// The rich ask dialog can race a collab guest choosing "Chat about this"
-		// (`AskTool`'s `chatRedirect` result); that's meaningful inside a live
-		// agent turn, where the model sees the redirect and starts a
-		// conversation, but this standalone re-answer has no turn to hand it
-		// to — completing the navigation with it would silently drop the
-		// user's intent to chat (roboomp review on #5895).
+		// A standalone re-answer has no live agent turn to consume a Chat redirect.
+		// Do not commit a sibling answer that silently discards the user's intent.
 		if (result.details?.chatRedirect) {
 			this.ctx.showError(
 				"Chat about this isn't available when re-answering from the tree — pick an option or type a custom answer instead.",
@@ -2889,9 +3064,9 @@ export class SelectorController {
 		return result;
 	}
 
-	async showSessionSelector(source?: ForeignSessionSource, onSelect?: SessionPickHandler): Promise<void> {
+	async showSessionSelector(source?: ForeignSessionSource): Promise<void> {
 		if (this.#focusOpenMenu("session-selector")) return;
-		const menu = this.#claimMenu("session-selector", () => void this.showSessionSelector(source, onSelect));
+		const menu = this.#claimMenu("session-selector", () => void this.showSessionSelector(source));
 		let sessions: SessionInfo[];
 		let onSelectSession: (session: SessionInfo) => Promise<boolean>;
 		let selectorOptions: SessionSelectorOptions<SessionInfo>;
@@ -2944,84 +3119,78 @@ export class SelectorController {
 				showCwd: true,
 			};
 		} else {
-			const [loadedSessions, pinnedIds] = await Promise.all([
+			const [listing, pinnedIds] = await Promise.all([
 				SessionManager.listForPicker(
 					this.ctx.sessionManager.getCwd(),
 					this.ctx.sessionManager.getSessionDir(),
 					undefined,
 					cfgSessionWorktreeScope.get(this.ctx.settings),
+					this.ctx.settings,
 				),
 				loadPinnedSessionIds(),
 			]).catch(error => {
 				this.#releaseMenu(menu.kind, menu);
 				throw error;
 			});
-			sessions = loadedSessions;
+			sessions = listing.sessions;
 			const historyStorage = this.ctx.historyStorage;
 			const historyMatcher = historyStorage
 				? (query: string) => historyStorage.matchingSessionIds(query)
 				: undefined;
 			onSelectSession = session => this.handleResumeSession(session.path, { followContinuation: true });
 			selectorOptions = {
-				...(!onSelect
-					? {
-							onDelete: async (session: SessionInfo) => {
-								if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-									return false;
-								}
-								const storage = new FileSessionStorage();
-								try {
-									await storage.deleteSessionWithArtifacts(session.path);
-									return true;
-								} catch (error) {
-									throw new Error(
-										`Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
-										{ cause: error },
-									);
-								}
-							},
-							onRename: async (session: SessionInfo, title: string): Promise<string | null> => {
-								if (this.ctx.sessionManager.getSessionFile() === session.path) {
-									// A session that has only been read does not hold
-									// its ownership lease, so another omp process can
-									// claim it; the live rename would then fork onto
-									// a sibling and still report success, leaving the
-									// row here pointing at the old path. Claim the
-									// lease up front and refuse while it is held by
-									// someone else.
-									const claim = new FileSessionStorage().claimSession(session.id, session.path);
-									if (!claim) {
-										throw new Error(
-											"Failed to rename session: it is currently in use by another omp process",
-										);
-									}
-									try {
-										const renamed = await this.ctx.sessionManager.setSessionName(title, "user");
-										return renamed ? (this.ctx.sessionManager.getSessionName() ?? null) : null;
-									} finally {
-										claim();
-									}
-								}
-								const renamed = await SessionManager.renameSessionTitle(session.path, title, {
-									cwd: session.cwd,
-								});
-								// The picker renders the failure itself; throwing
-								// hands it the reason so it can show one message
-								// instead of two.
-								if (!renamed) {
-									throw new Error("Failed to rename session: it is currently in use or no longer available");
-								}
-								return renamed;
-							},
-							onSetPinned: (session: SessionInfo, pinned: boolean) => setSessionPinned(session.id, pinned),
+				onDelete: async (session: SessionInfo) => {
+					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+						return false;
+					}
+					const storage = new FileSessionStorage();
+					try {
+						await storage.deleteSessionWithArtifacts(session.path);
+						return true;
+					} catch (error) {
+						throw new Error(
+							`Failed to delete session: ${error instanceof Error ? error.message : String(error)}`,
+							{ cause: error },
+						);
+					}
+				},
+				onRename: async (session: SessionInfo, title: string): Promise<string | null> => {
+					if (this.ctx.sessionManager.getSessionFile() === session.path) {
+						// A session that has only been read does not hold
+						// its ownership lease, so another omp process can
+						// claim it; the live rename would then fork onto
+						// a sibling and still report success, leaving the
+						// row here pointing at the old path. Claim the
+						// lease up front and refuse while it is held by
+						// someone else.
+						const claim = new FileSessionStorage().claimSession(session.id, session.path);
+						if (!claim) {
+							throw new Error("Failed to rename session: it is currently in use by another omp process");
 						}
-					: {
-							title: "Select a Session to Consult",
-							actionLabel: "Select",
-							scopeLabel: false,
-							showCwd: true,
-						}),
+						try {
+							const renamed = await this.ctx.sessionManager.setSessionName(title, "user");
+							return renamed ? (this.ctx.sessionManager.getSessionName() ?? null) : null;
+						} finally {
+							claim();
+						}
+					}
+					const renamed = await SessionManager.renameSessionTitle(session.path, title, {
+						cwd: session.cwd,
+					});
+					// The picker renders the failure itself; throwing
+					// hands it the reason so it can show one message
+					// instead of two.
+					if (!renamed) {
+						throw new Error("Failed to rename session: it is currently in use or no longer available");
+					}
+					return renamed;
+				},
+				onSetPinned: async (session: SessionInfo, pinned: boolean) => {
+					await setSessionPinned(session.id, pinned);
+					this.ctx.applySessionPin(session.id, pinned);
+				},
 				historyMatcher,
+				completeSessions: listing.complete,
 				loadAllSessions: () => SessionManager.listAllForPicker(),
 				pinnedIds,
 				// Live getter so detach/newSession stays accurate; tolerant of partial
@@ -3043,17 +3212,6 @@ export class SelectorController {
 			sessions,
 			async (session: SessionInfo) => {
 				selector.lockInput();
-				if (onSelect) {
-					// Selection-only callers may open a follow-up picker; remove this
-					// fullscreen overlay before invoking them.
-					done();
-					try {
-						await onSelect(session);
-					} catch (error) {
-						this.ctx.showError(sanitizeErrorLine(error));
-					}
-					return;
-				}
 				let keepOpen = false;
 				try {
 					const success = await onSelectSession(session);
@@ -3161,8 +3319,7 @@ export class SelectorController {
 		const continuation =
 			options?.continuation ??
 			(options?.followContinuation ? await findSessionContinuation(sessionPath) : undefined);
-		const target = await this.#relocateFromRemovedWorktree(continuation?.session.path ?? sessionPath);
-		if (!target) return false;
+		const target = await this.#relocateStranded(continuation?.session.path ?? sessionPath);
 		await this.ctx.prepareSessionSwitch();
 		this.ctx.resetObserverRegistry();
 		// AgentSession owns the transaction. It restores the complete source state
@@ -3184,21 +3341,26 @@ export class SelectorController {
 		this.ctx.clearTransientSessionUi();
 		const newCwd = this.ctx.sessionManager.getCwd();
 		const movedProject = normalizePathForComparison(newCwd) !== normalizePathForComparison(previousCwd);
+		const recordedCwd = this.ctx.sessionManager.getRecordedCwd();
+		const directoryUnavailable =
+			recordedCwd !== undefined && normalizePathForComparison(recordedCwd) !== normalizePathForComparison(newCwd);
 		this.#refreshSessionTerminalTitle();
 		this.ctx.updateEditorBorderColor();
 
 		// Clear and re-render the chat
 		await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();
-		const recordedCwd = this.ctx.sessionManager.getRecordedCwd();
-		if (target.movedFrom) {
-			this.ctx.showStatus(`Resumed session, moved here from removed worktree ${shortenPath(target.movedFrom)}`);
-		} else if (recordedCwd && normalizePathForComparison(recordedCwd) !== normalizePathForComparison(newCwd)) {
-			this.ctx.showStatus(
-				`Resumed session in ${shortenPath(newCwd)}; its original directory ${shortenPath(recordedCwd)} no longer exists`,
+		this.ctx.showStatus(
+			target.movedFrom
+				? `Resumed session, moved here from missing ${shortenPath(target.movedFrom)}`
+				: movedProject
+					? `Resumed session in ${shortenPath(newCwd)}`
+					: "Resumed session",
+		);
+		if (directoryUnavailable) {
+			this.ctx.showWarning(
+				`Session directory ${shortenPath(recordedCwd)} is missing or cannot be entered; continuing in ${shortenPath(newCwd)}`,
 			);
-		} else {
-			this.ctx.showStatus(movedProject ? `Resumed session in ${shortenPath(newCwd)}` : "Resumed session");
 		}
 		if (continuation) this.ctx.showWarning(formatSessionContinuationNotice(continuation));
 		if (modelFallbackWarning) this.ctx.showWarning(modelFallbackWarning);
@@ -3242,30 +3404,31 @@ export class SelectorController {
 	}
 
 	/**
-	 * Move a session recorded in a removed worktree of this repository into the
-	 * current folder before resuming it: its own directory cannot be entered.
-	 * Returns the session file to switch to, or undefined after reporting a failed move.
+	 * Move a session stranded under the current folder (see
+	 * {@link SessionManager.isStrandedIn}) into it before resuming: its recorded
+	 * directory is gone and cannot be entered.
+	 * Returns the session file to switch to.
+	 * @throws when the move fails, e.g. another NeoPi process writes the session.
 	 */
-	async #relocateFromRemovedWorktree(
-		sessionPath: string,
-	): Promise<{ sessionPath: string; movedFrom?: string } | undefined> {
+	async #relocateStranded(sessionPath: string): Promise<{ sessionPath: string; movedFrom?: string }> {
 		const sessionManager = this.ctx.sessionManager;
 		// Never move the live session out from under its own writer.
 		if (sessionManager.getSessionFile() === sessionPath) return { sessionPath };
 		const cwd = sessionManager.getCwd();
 		const sessionDir = sessionManager.getSessionDir();
 		const info = await readSessionInfo(sessionPath);
-		if (!info || !(await SessionManager.isFromRemovedWorktree(info, cwd, sessionDir))) return { sessionPath };
+		if (!info || !(await SessionManager.isStrandedIn(info, cwd, sessionDir, this.ctx.settings)))
+			return { sessionPath };
 		try {
 			const relocated = await SessionManager.openRelocated(sessionPath, info.cwd, cwd, sessionDir);
 			const movedPath = relocated.getSessionFile() ?? sessionPath;
 			await relocated.close();
 			return { sessionPath: movedPath, movedFrom: info.cwd };
 		} catch (error) {
-			this.ctx.showError(
-				`Could not move the session out of removed worktree ${shortenPath(info.cwd)}: ${error instanceof Error ? error.message : String(error)}`,
+			throw new Error(
+				`Could not move the session here from missing ${shortenPath(info.cwd)}: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
 			);
-			return undefined;
 		}
 	}
 
@@ -3398,11 +3561,7 @@ export class SelectorController {
 			// are left untouched. `refreshProvider` swallows discovery failures, so
 			// awaiting cannot reject the login.
 			await this.ctx.session.modelRegistry.refreshProvider(getOAuthCredentialProvider(providerId), "online");
-			try {
-				await this.ctx.refreshScopedModelsAfterLogin?.();
-			} catch (error) {
-				logger.warn("Scoped model refresh after login failed", { error: String(error) });
-			}
+			await this.ctx.session.refreshScopedModels();
 			const block = new TranscriptBlock();
 			// Name the account (and Anthropic organization) that was stored so a
 			// login that lands on an unintended account/subscription is visible
@@ -3437,10 +3596,9 @@ export class SelectorController {
 	async #handleCredentialLogout(providerId: string, account: LogoutAccount): Promise<void> {
 		try {
 			const { removed, remainingSource } = await logoutCredential(
-				this.ctx.session.modelRegistry,
+				this.ctx.session,
 				providerId,
 				account.credentialId,
-				this.ctx.session.sessionId,
 			);
 			if (!removed) {
 				this.ctx.showError(`Logout skipped: ${account.label} is no longer stored for ${providerId}.`);

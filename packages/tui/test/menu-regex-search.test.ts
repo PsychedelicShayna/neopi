@@ -10,7 +10,8 @@ describe("menu regex search", () => {
 			const query = `${prefix}<live|<voice>`;
 			expect(fuzzyFilter(labels, query, text => text)).toEqual(["Live voice", "Voice input"]);
 			expect(new FuzzyCorpus(labels, text => text).rank(query).map(result => result.item)).toEqual([
-				"Live voice", "Voice input",
+				"Live voice",
+				"Voice input",
 			]);
 			expect(new FuzzyText("Live voice").match(query).matches).toBe(true);
 			expect(new FuzzyQuery(query).match("Revoice").matches).toBe(false);
@@ -58,8 +59,9 @@ describe("menu regex search", () => {
 		}
 		for (const query of [".{1000}", "..."]) {
 			expect(fuzzyFilter(texts, query, text => text)).toEqual(texts.filter(text => text.includes(query)));
-			expect(new FuzzyCorpus(texts, text => text).rank(query).map(row => row.item))
-				.toEqual(texts.filter(text => text.includes(query)));
+			expect(new FuzzyCorpus(texts, text => text).rank(query).map(row => row.item)).toEqual(
+				texts.filter(text => text.includes(query)),
+			);
 		}
 	});
 

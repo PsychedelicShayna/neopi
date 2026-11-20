@@ -23,3 +23,14 @@ Review upstream changes to every fork integration point, including files Git mer
 Keep open PRs separate until their contracts have been compared with the new upstream behavior. If upstream replaces part of a PR, retain the remaining requirement and adapt its tests; do not infer redundancy from similar changelog wording. Report the recommended merge order and unresolved behavior decisions before promoting an integration that depends on those decisions.
 
 Validate both upstream regressions and fork contracts at the affected boundaries. Record source changes, failed or unavailable checks, and actual test results separately. Apply the binary installation rules in AGENTS.md when reaching the installation stage.
+
+## Command and Settings provenance
+
+For every upstream sync or “synchronize moon and stars” request, MUST follow
+[Synchronize moon and stars](../../.agents/skills/sync-moon-and-stars/SKILL.md).
+That skill owns the classification evidence, published stable-tag rule, moon
+convention, upstream cohort aging and rendering verification.
+
+New commands, settings and interactive TUI features follow
+[Feature provenance](development.md#feature-provenance) in their introducing PR.
+

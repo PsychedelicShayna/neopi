@@ -6,7 +6,7 @@
   ...
 }:
 let
-  cfg = config.programs.omomp;
+  cfg = config.programs.omp;
   yaml = pkgs.formats.yaml { };
   configFile = yaml.generate "omp-config.yml" cfg.settings;
 in

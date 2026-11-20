@@ -1,4 +1,4 @@
-import { uiProvenanceSuffix } from "../theme/provenance";
+import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -9,7 +9,7 @@ import { parseModelString, splitUpstreamRouting } from "./model-selector";
  * pick a role, pick a model, adjust thinking in an inline strip, or clear the
  * role back to auto-selection. Locked providers forward to the /login flow.
  * Fully mouse-navigable (hover, wheel, click). `/model` reuses the browser in
- * session-only mode; alt+p keeps its compact picker ({@link ./model-picker}).
+ * session-only mode; either picker can target a temporary Task model.
  */
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
@@ -19,6 +19,7 @@ import type {
 	TspPickerItem,
 	TspPickerProps,
 	TspPickerScope,
+	TspProps,
 	TspSpan,
 } from "@oh-my-pi/pi-wire";
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
@@ -28,7 +29,8 @@ import { THINKING_CHOICES, THINKING_EFFORTS, type ThinkingEffort } from "@oh-my-
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
-import { extractPrintableText, matchesKey } from "../keys";
+import { extractPrintableText, type KeyId, matchesKey, parseKey } from "../keys";
+import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { FuzzyCorpus } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -238,7 +240,7 @@ export interface ModelHubRegistry extends ModelBrowserRegistry {
 		  }
 		| undefined;
 	find(provider: string, id: string): Model | undefined;
-	refresh(strategy: "online" | "offline"): Promise<void>;
+	refresh(strategy: "online" | "offline", options?: { refreshCommandCredentials?: boolean }): Promise<void>;
 	refreshProvider(
 		provider: string,
 		strategy: "online",
@@ -257,6 +259,8 @@ export type ModelRoleSelectionScope = "global" | "project" | "session";
 export interface ModelHubCallbacks {
 	/** Select a model without authoring a role or changing saved preferences. */
 	onPick?: (model: Model, selector: string) => void | boolean | Promise<void | boolean>;
+	/** Select a temporary Task-subagent model without changing saved role preferences. */
+	onPickTask?: (model: Model, selector: string) => void;
 	/** Open fact sources and per-field overrides in the full model configuration UI. */
 	onEditFacts?: (provider?: string, model?: Model) => void;
 	/** Persist a role assignment. */
@@ -291,6 +295,10 @@ export interface ModelHubCallbacks {
 	onLoginRequest?: (providerId: string) => void;
 	/** Open the mixture graph editor from a selected mixture model. */
 	onDefineMixture?: (name?: string) => void;
+	/** Returns the rebuilt `--models` scope for the hub to list; `undefined` keeps the current one. */
+	onCatalogRefreshed?: (
+		providerId?: string,
+	) => ReadonlyArray<ScopedModelItem> | undefined | Promise<ReadonlyArray<ScopedModelItem> | undefined>;
 	/** Save the current role assignments and default thinking level as a named model preset. */
 	onSavePreset?: (name: string) => void;
 	/**
@@ -338,6 +346,10 @@ export interface ModelHubOptions {
 	initialProviderId?: string;
 	/** `provider/id` of the session's model, marked current in the native picker. */
 	currentSelector?: string;
+	/** The session picker shortcut, repeated to toggle the temporary Task target. */
+	taskModeKeys?: readonly KeyId[];
+	/** Effective Task override, or the session model when Task inherits it. */
+	taskSelector?: string;
 	/** Provider entries available even before their first model exists. */
 	pinnedProviders?: ReadonlyArray<{ id: string; label: string; action: { label: string; onSelect: () => void } }>;
 }
@@ -460,6 +472,7 @@ type StripState =
 interface ModelHubPageNavigation {
 	entry: string;
 	focus: "scope" | "list";
+	taskMode: boolean;
 	modelKind: "all" | ModelKind;
 	roleTab: RoleTab;
 	filterFocused: boolean;
@@ -545,7 +558,6 @@ const MODEL_KIND_LABELS: Record<"all" | ModelKind, string> = {
 	video: "Video",
 };
 
-const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
 /** Accepted compaction limit input, shown beside the field: a scaled base, a fixed trigger, or a percentage. */
 const COMPACTION_INPUT_HINT = "400k base · f400k fixed · 80% · empty resets";
@@ -626,8 +638,13 @@ export class ModelHubComponent implements Component {
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#callbacks: ModelHubCallbacks;
 	readonly #sessionOnly: boolean;
+	#taskMode = false;
+	readonly #taskMatchKeys = new Set<string>();
+	readonly #taskModeKey: KeyId | undefined;
+	readonly #taskSelector: string | undefined;
 
 	#browser: ModelBrowser;
+	#catalogModels: ReadonlyArray<Model> = [];
 	#roles: RoleAssignments = {};
 	#availableItems: ModelBrowserItem[] = [];
 	#recentItems: ModelBrowserItem[] = [];
@@ -761,9 +778,11 @@ export class ModelHubComponent implements Component {
 	/** Per-provider fuzzy match counts while a query is active; null when not searching. */
 	#searchCounts: Map<string, number> | null = null;
 
-	// Provider discovery refresh (debounced per sidebar selection, with spinner).
+	// Provider discovery refresh, queued off the input stack, with spinner.
 	#refreshingProviders = new Set<string>();
 	#scheduledProviderRefreshes = new Map<string, Timer>();
+	#scheduledCatalogRefresh?: Timer;
+	#refreshingAllProviders = false;
 	/** F5 while a catalog-only refresh is in flight: re-run with credentials after it settles. */
 	#pendingCredentialRefreshProviders = new Set<string>();
 	#refreshSpinnerFrame = 0;
@@ -820,8 +839,6 @@ export class ModelHubComponent implements Component {
 	#nativeVersion = 0;
 	#nativeCache: { version: number; picker: boolean; node: NativeNode } | undefined;
 	#currentSelector: string | undefined;
-	/** The opening online catalog refresh is still in flight (an empty scope then shows as loading). */
-	#catalogRefreshing = false;
 	#kindTabsMemo: { candidates: readonly ModelBrowserItem[]; tabs: TspPickerProps["tabs"] } | undefined;
 	#pickerRoleItems:
 		| {
@@ -857,6 +874,11 @@ export class ModelHubComponent implements Component {
 		this.#callbacks = callbacks;
 		this.#sessionOnly = options.sessionOnly === true;
 		this.#currentSelector = options.currentSelector;
+		this.#taskSelector = options.taskSelector;
+		if (this.#sessionOnly && callbacks.onPickTask) {
+			this.#taskModeKey = options.taskModeKeys?.[0];
+			for (const key of options.taskModeKeys ?? []) addKeyAliases(this.#taskMatchKeys, key);
+		}
 		this.#pinnedProviders = options.pinnedProviders ?? [];
 
 		this.#browser = new ModelBrowser(settings, {
@@ -881,24 +903,8 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry(this.#sessionOnly ? "recent" : "all");
 		}
 
-		// Reconcile catalogs in the background. This is online discovery only —
-		// it must not re-run `!command` credential helpers (F5 / `npi models
-		// refresh` passes refreshCommandCredentials for that). A --models scope is
-		// registry-independent, so the reload would only repeat the hydration
-		// above.
-		if (this.#scopedModels.length === 0) {
-			this.#catalogRefreshing = true;
-			this.#registry
-				.refresh("online")
-				.then(() => this.#syncFromRegistryState())
-				.catch(error => {
-					this.#configError = error instanceof Error ? error.message : String(error);
-				})
-				.finally(() => {
-					this.#catalogRefreshing = false;
-					this.#requestRender();
-				});
-		}
+		// Opening and highlighting are cache-only. Discovery starts on explicit
+		// provider entry, F5 (current provider), or Ctrl+F5 (all providers).
 	}
 
 	#copyStrip(strip: StripState | null): StripState | null {
@@ -947,6 +953,7 @@ export class ModelHubComponent implements Component {
 		return {
 			entry: this.#activeEntryId,
 			focus: this.#focus,
+			taskMode: this.#taskMode,
 			modelKind: this.#modelKindTab,
 			roleTab: this.#roleTab,
 			filterFocused: this.#filterEditing,
@@ -977,6 +984,7 @@ export class ModelHubComponent implements Component {
 		if (!snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as Partial<ModelHubNavigation>;
 		if (typeof state.entry !== "string" || !state.browser) return;
+		this.#taskMode = state.taskMode === true && this.#sessionOnly && this.#callbacks.onPickTask !== undefined;
 		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
 		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
 		this.#assigning = state.assigning ? { ...state.assigning } : null;
@@ -1088,6 +1096,8 @@ export class ModelHubComponent implements Component {
 		this.#disposed = true;
 		for (const [, timer] of this.#scheduledProviderRefreshes) clearTimeout(timer);
 		this.#scheduledProviderRefreshes.clear();
+		clearTimeout(this.#scheduledCatalogRefresh);
+		this.#scheduledCatalogRefresh = undefined;
 		this.#refreshingProviders.clear();
 		this.#pendingCredentialRefreshProviders.clear();
 		if (this.#refreshSpinnerInterval) {
@@ -1117,7 +1127,7 @@ export class ModelHubComponent implements Component {
 
 	/** Resolve every known role: configured values first, auto-selection for the rest. */
 	#reloadRoles(autoCandidates: ReadonlyArray<Model>): void {
-		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#registry.getAll("all");
+		const allModels = this.#scopedModels.length > 0 ? autoCandidates : this.#catalogModels;
 		this.#roles = resolveRoleAssignments(this.#settings, allModels, autoCandidates);
 	}
 
@@ -1154,6 +1164,7 @@ export class ModelHubComponent implements Component {
 				availableModels = [];
 			}
 		}
+		this.#catalogModels = allModels;
 
 		this.#reloadRoles(availableModels);
 		this.#buildRolesRows();
@@ -1388,14 +1399,13 @@ export class ModelHubComponent implements Component {
 		// navigation active. Diving into the roles rows is explicit (Enter, →,
 		// or a click on the Roles entry).
 		this.#focus = "scope";
-		if (
-			entry.kind === "provider" &&
-			!entry.locked &&
-			!this.#pinnedProviders.some(pinned => pinned.id === entry.providerId)
-		) {
+	}
+
+	/** Entering, not highlighting, is the discovery boundary for a provider. */
+	#enterProvider(): void {
+		const entry = this.#activeEntry();
+		if (entry.kind === "provider" && !entry.locked && !this.#pinnedProviders.some(p => p.id === entry.providerId))
 			this.#scheduleProviderRefresh(entry.providerId ?? "");
-		}
-		this.#cancelScheduledRefreshesExcept(entry.kind === "provider" ? entry.providerId : undefined);
 	}
 
 	/** Push the active scope's items into the browser. */
@@ -1429,18 +1439,22 @@ export class ModelHubComponent implements Component {
 	}
 
 	/**
-	 * Push the active scope's items into the browser. While assigning a role,
-	 * the role's `accepts` predicate is re-applied here so a scope hop
-	 * (provider/all/recent) can never surface a model the role rejects — role
-	 * resolution and the runtime candidate pool filter the same way, so an
-	 * unaccepted pick would persist a selector that never resolves.
+	 * Push the active scope's items into the browser. While assigning a role or
+	 * a role-keyed fallback, the role's `accepts` predicate is re-applied here so
+	 * a scope hop (provider/all/recent) can never surface a model the role
+	 * rejects — role resolution and the runtime candidate pool filter the same
+	 * way, so an unaccepted pick would persist a selector that never resolves.
+	 * Model-keyed chains (`provider/model-id`, `provider/*`) have no role
+	 * predicate and stay unfiltered.
 	 */
 	#setCandidateItems(items: ReadonlyArray<ModelBrowserItem>): void {
 		const assigning = this.#assigning;
+		const role =
+			assigning?.kind === "role" || (assigning?.kind === "fallback" && !assigning.role.includes("/"))
+				? assigning.role
+				: undefined;
 		const scoped =
-			assigning?.kind === "role"
-				? items.filter(item => this.#settings.getRoleInfo(assigning.role).accepts(item.model))
-				: items;
+			role !== undefined ? items.filter(item => this.#settings.getRoleInfo(role).accepts(item.model)) : items;
 		this.#candidateItems = [...scoped];
 		this.#candidateCatalog = scoped === this.#availableItems ? this.#availableItems : undefined;
 		this.#applyModelKind();
@@ -1684,18 +1698,6 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
-	#cancelScheduledRefreshesExcept(keepProviderId?: string): void {
-		// Hover debounce only. An explicit F5 queued behind an in-flight catalog
-		// fetch must still re-mint credentials after that fetch settles, even if
-		// the user has moved to All models or another provider.
-		for (const [providerId, timer] of this.#scheduledProviderRefreshes) {
-			if (providerId === keepProviderId) continue;
-			clearTimeout(timer);
-			this.#scheduledProviderRefreshes.delete(providerId);
-			this.#setProviderRefreshing(providerId, false);
-		}
-	}
-
 	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
 		if (this.#scopedModels.length > 0 || !providerId) return;
 		const force = options?.force === true;
@@ -1706,29 +1708,34 @@ export class ModelHubComponent implements Component {
 				// instead of returning at the pending-guard and dropping force.
 				clearTimeout(pending);
 				this.#scheduledProviderRefreshes.delete(providerId);
-				autoRefreshedProviders.add(providerId);
-				void this.#refreshProviderInBackground(providerId, true);
-				return;
 			}
-			if (this.#refreshingProviders.has(providerId)) {
+			if (!pending && this.#refreshingProviders.has(providerId)) {
 				this.#pendingCredentialRefreshProviders.add(providerId);
 				return;
 			}
 		} else if (this.#scheduledProviderRefreshes.has(providerId) || this.#refreshingProviders.has(providerId)) {
 			return;
 		}
-		// Hovering a provider must not re-fetch on every visit: auto-refresh runs
-		// at most once per provider for the process lifetime. F5 forces a re-fetch.
+		// Explicit provider entry auto-refreshes at most once per process.
+		// F5 always forces a re-fetch; queue it off the key-input stack.
 		if (!force && autoRefreshedProviders.has(providerId)) return;
 		this.#setProviderRefreshing(providerId, true);
 		const timer = setTimeout(() => {
-			// Consume the once-guard only when the fetch actually starts: hopping
-			// through a provider cancels the debounce and must not burn its slot.
+			// Consume the once-guard only when the queued fetch starts.
 			autoRefreshedProviders.add(providerId);
 			this.#scheduledProviderRefreshes.delete(providerId);
 			void this.#refreshProviderInBackground(providerId, force);
-		}, PROVIDER_REFRESH_DEBOUNCE_MS);
+		}, 0);
 		this.#scheduledProviderRefreshes.set(providerId, timer);
+	}
+
+	async #afterRegistryRefresh(providerId?: string): Promise<void> {
+		// An all-provider pass publishes one complete snapshot, not one full
+		// catalog rebuild for every provider that happens to finish along the way.
+		if (this.#disposed || (providerId !== undefined && this.#refreshingAllProviders)) return;
+		const scope = await this.#callbacks.onCatalogRefreshed?.(providerId);
+		if (scope) this.#scopedModels = scope;
+		if (!this.#disposed) this.#syncFromRegistryState();
 	}
 
 	async #refreshProviderInBackground(providerId: string, refreshCommandCredentials = false): Promise<void> {
@@ -1740,17 +1747,55 @@ export class ModelHubComponent implements Component {
 			}
 			// The provider refresh already updated the registry snapshot;
 			// re-reading it here stays purely in-memory.
-			this.#syncFromRegistryState();
+			await this.#afterRegistryRefresh(providerId);
 		} catch (error) {
 			this.#configError = error instanceof Error ? error.message : String(error);
 		} finally {
-			this.#setProviderRefreshing(providerId, false);
-			if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
-				this.#setProviderRefreshing(providerId, true);
-				autoRefreshedProviders.add(providerId);
-				void this.#refreshProviderInBackground(providerId, true);
+			if (!this.#refreshingAllProviders) {
+				this.#setProviderRefreshing(providerId, false);
+				if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
+					this.#setProviderRefreshing(providerId, true);
+					autoRefreshedProviders.add(providerId);
+					void this.#refreshProviderInBackground(providerId, true);
+				}
 			}
 			this.#requestRender();
+		}
+	}
+
+	#refreshAllProviders(): void {
+		if (this.#scopedModels.length > 0 || this.#refreshingAllProviders || this.#disposed) return;
+		const providerIds = this.#entries.flatMap(entry =>
+			entry.kind === "provider" && !entry.locked && !this.#pinnedProviders.some(p => p.id === entry.providerId)
+				? [entry.providerId ?? ""]
+				: [],
+		);
+		this.#refreshingAllProviders = true;
+		for (const timer of this.#scheduledProviderRefreshes.values()) clearTimeout(timer);
+		this.#scheduledProviderRefreshes.clear();
+		for (const providerId of providerIds) this.#setProviderRefreshing(providerId, true);
+		this.#scheduledCatalogRefresh = setTimeout(() => {
+			this.#scheduledCatalogRefresh = undefined;
+			void this.#refreshCatalogInBackground(providerIds);
+		}, 0);
+	}
+
+	async #refreshCatalogInBackground(providerIds: readonly string[]): Promise<void> {
+		for (const providerId of providerIds) autoRefreshedProviders.add(providerId);
+		try {
+			await this.#registry.refresh("online", { refreshCommandCredentials: true });
+			await this.#afterRegistryRefresh();
+		} catch (error) {
+			this.#configError = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#refreshingAllProviders = false;
+			for (const providerId of providerIds) {
+				this.#setProviderRefreshing(providerId, false);
+				if (!this.#disposed && this.#pendingCredentialRefreshProviders.delete(providerId)) {
+					this.#scheduleProviderRefresh(providerId, { force: true });
+				}
+			}
+			if (!this.#disposed) this.#requestRender();
 		}
 	}
 
@@ -1805,7 +1850,9 @@ export class ModelHubComponent implements Component {
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
 		if (this.#sessionOnly) {
-			const result = this.#callbacks.onPick?.(item.model, item.selector);
+			const result = this.#taskMode
+				? this.#callbacks.onPickTask?.(item.model, item.selector)
+				: this.#callbacks.onPick?.(item.model, item.selector);
 			this.#finishAssignment(result, () => this.#requestRender());
 			return;
 		}
@@ -1834,7 +1881,9 @@ export class ModelHubComponent implements Component {
 		const roleValue =
 			scope === "session"
 				? this.#settings.getSessionModelRole?.(role)
-				: scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+				: scope === "project"
+					? this.#settings.getProjectModelRole(role)
+					: this.#settings.getGlobalModelRole(role);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1845,11 +1894,12 @@ export class ModelHubComponent implements Component {
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
 				scope === "session"
-					? (this.#settings.getSessionModelRole?.(scopedRole) ?? this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					:
-				scope === "project"
-					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					: this.#settings.getGlobalModelRole(scopedRole),
+					? (this.#settings.getSessionModelRole?.(scopedRole) ??
+						this.#settings.getProjectModelRole(scopedRole) ??
+						this.#settings.getGlobalModelRole(scopedRole))
+					: scope === "project"
+						? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
+						: this.#settings.getGlobalModelRole(scopedRole),
 		};
 		return this.#settings.resolveRoleValue(roleValue, allModels, roleLookup);
 	}
@@ -1966,7 +2016,9 @@ export class ModelHubComponent implements Component {
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
 		const scopes: readonly ModelRoleSelectionScope[] = this.#settings.editingScope
 			? [this.#settings.editingScope]
-			: scopedStorage ? ["global", "project"] : ["global"];
+			: scopedStorage
+				? ["global", "project"]
+				: ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -2029,12 +2081,11 @@ export class ModelHubComponent implements Component {
 		committedLevel?: ConfiguredThinkingLevel,
 	): void {
 		const scoped = scope ?? "global";
-		const saved =
-			this.#settings.editingScope
-				? this.#settings.getRoleEffortSelection(role)
-				: scoped === "project"
-					? this.#settings.getProjectRoleEffortSelection(role)
-					: this.#settings.getGlobalRoleEffortSelection(role);
+		const saved = this.#settings.editingScope
+			? this.#settings.getRoleEffortSelection(role)
+			: scoped === "project"
+				? this.#settings.getProjectRoleEffortSelection(role)
+				: this.#settings.getGlobalRoleEffortSelection(role);
 		const selection =
 			saved?.mode === "auto" && saved.selector && saved.selector !== item.selector ? undefined : saved;
 		const options = this.#thinkingOptionsFor(item.model, role);
@@ -3115,6 +3166,19 @@ export class ModelHubComponent implements Component {
 		this.#finishAssignment(onSwitchPreset(name), settle);
 	}
 
+	#toggleTaskMode(): void {
+		if (!this.#sessionOnly || !this.#callbacks.onPickTask || this.#assignmentPending) return;
+		this.#taskMode = !this.#taskMode;
+		const selector = this.#taskMode ? this.#taskSelector : this.#currentSelector;
+		if (selector && !this.#browser.selectSelector(selector)) {
+			this.#setActiveEntry("all");
+			this.#browser.setQuery("");
+			this.#browser.selectSelector(selector);
+		}
+		this.#focus = "list";
+		this.#requestRender();
+	}
+
 	handleInput(rawData: string): void {
 		if (rawData.startsWith("\x1b[<")) {
 			this.#nativeVersion++;
@@ -3146,6 +3210,13 @@ export class ModelHubComponent implements Component {
 
 	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
+		if (this.#taskMatchKeys.size > 0 && !this.#filterEditing) {
+			const parsed = parseKey(rawData);
+			if (parsed !== undefined && this.#taskMatchKeys.has(canonicalKeyId(parsed))) {
+				this.#toggleTaskMode();
+				return;
+			}
+		}
 		if (
 			!this.#sessionOnly &&
 			matchesKey(rawData, "ctrl+g") &&
@@ -3196,7 +3267,9 @@ export class ModelHubComponent implements Component {
 			if (this.#focus === "list" || panel.editing) {
 				if (
 					!panel.editing &&
-					(matchesKey(rawData, "tab") || matchesKey(rawData, "left") || (getMenuSearchVimMode() && rawData === "h"))
+					(matchesKey(rawData, "tab") ||
+						matchesKey(rawData, "left") ||
+						(getMenuSearchVimMode() && rawData === "h"))
 				) {
 					this.#focus = "scope";
 				} else panel.handleInput(rawData);
@@ -3254,7 +3327,9 @@ export class ModelHubComponent implements Component {
 		const actionKey =
 			(rolesView && printable !== undefined && Object.hasOwn(ROLES_ACTION_KEYS, printable)) ||
 			(effortView && (printable === "x" || printable === "[" || printable === "]")) ||
-			(entry.kind === "provider" && printable === "e" && this.#pinnedProviders.some(provider => provider.id === entry.providerId));
+			(entry.kind === "provider" &&
+				printable === "e" &&
+				this.#pinnedProviders.some(provider => provider.id === entry.providerId));
 		if (
 			!action &&
 			!getMenuSearchVimMode() &&
@@ -3280,6 +3355,11 @@ export class ModelHubComponent implements Component {
 		}
 		if (action?.kind === "context") {
 			this.#focus = this.#focus === "scope" ? "list" : "scope";
+			if (this.#focus === "list") this.#enterProvider();
+			return;
+		}
+		if (matchesKey(data, "ctrl+f5")) {
+			this.#refreshAllProviders();
 			return;
 		}
 		if (matchesKey(data, "f5")) {
@@ -3319,7 +3399,10 @@ export class ModelHubComponent implements Component {
 
 		if (action?.kind === "horizontal") {
 			if (action.delta < 0) this.#focus = "scope";
-			else if (rolesView || effortView || this.#isBrowserView(entry)) this.#focus = "list";
+			else if (rolesView || effortView || this.#isBrowserView(entry)) {
+				this.#focus = "list";
+				this.#enterProvider();
+			}
 			return;
 		}
 		if (action && (this.#focus === "scope" || rolesView || effortView) && this.#applyPanelMotion(action)) return;
@@ -3385,6 +3468,7 @@ export class ModelHubComponent implements Component {
 		// rows instead of acting on a row the user cannot see is selected.
 		if (this.#focus === "scope" && (action?.kind === "confirm" || action?.kind === "toggle")) {
 			this.#focus = "list";
+			this.#enterProvider();
 			if (pinned && !this.#browser.getSelected()) this.#pinnedActionFocused = true;
 			return;
 		}
@@ -3933,6 +4017,7 @@ export class ModelHubComponent implements Component {
 		const already = clicked.id === this.#activeEntryId;
 		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#assigning = null;
 		this.#setActiveEntry(clicked.id);
+		if (clicked.kind === "provider") this.#enterProvider();
 		// A click on settings deliberately dives into its rows.
 		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#focus = "list";
 		if (already && clicked.kind === "provider" && clicked.locked) {
@@ -4210,7 +4295,7 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role, true);
 			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
@@ -4222,12 +4307,11 @@ export class ModelHubComponent implements Component {
 				tagStyled = theme.fg(info.color ?? "muted", tag);
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const source = this.#settings.getModelRoleSource(role);
-				const policy =
-					this.#settings.editingScope
-						? this.#settings.getRoleEffortSelection(role)
-						: source === "project"
-							? this.#settings.getProjectRoleEffortSelection(role)
-							: this.#settings.getGlobalRoleEffortSelection(role);
+				const policy = this.#settings.editingScope
+					? this.#settings.getRoleEffortSelection(role)
+					: source === "project"
+						? this.#settings.getProjectRoleEffortSelection(role)
+						: this.#settings.getGlobalRoleEffortSelection(role);
 				const effective =
 					policy?.mode === "auto"
 						? AUTO_THINKING
@@ -4263,7 +4347,9 @@ export class ModelHubComponent implements Component {
 			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
 			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
-			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled]
+				.filter(part => part.length > 0)
+				.join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4342,7 +4428,7 @@ export class ModelHubComponent implements Component {
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
 			lines.push(truncateToWidth(theme.fg("dim", `  ${catalogCount} models in catalog:`), width));
-			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
+			const preview = this.#scopedModels.length > 0 ? [] : this.#catalogModels;
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
 				if (lines.length >= rows) break;
@@ -4357,6 +4443,10 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		const configFile = !this.#sessionOnly && this.#callbacks.onOpenConfigFile ? " · Ctrl+G config file" : "";
 		if (entry.kind === "overrides" && this.#assigning === null) return `${this.#overrides().hint}${configFile}`;
+		const refreshHint =
+			this.#scopedModels.length === 0 && !this.#strip && !this.#filterEditing
+				? `${entry.kind === "provider" && !entry.locked ? " · F5 refresh" : ""} · Ctrl+F5 refresh all`
+				: "";
 		const facts =
 			!this.#sessionOnly && this.#callbacks.onEditFacts && this.#assigning === null
 				? ` · ${formatKeyHint("f6")} model facts`
@@ -4369,10 +4459,10 @@ export class ModelHubComponent implements Component {
 			this.#isBrowserView(entry) &&
 			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
 		)
-			return `${MODEL_SCOPE_HINT}${facts}${configFile}`;
+			return `${MODEL_SCOPE_HINT}${refreshHint}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `/ search · ${detail}${facts}${configFile}`;
+		return `/ search · ${detail}${refreshHint}${facts}${configFile}`;
 	}
 
 	#surfaceFooterHint(): string {
@@ -4388,7 +4478,8 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
-				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · ${cancel} leave field`;
+				if (strip.purpose === "roleBudget")
+					return `${enter} save token budget · empty inherits · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4413,7 +4504,10 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
-			return `${enter} use for session · ${upDown} models · ${left} providers · ${cancel} close`;
+			const toggle = this.#taskModeKey
+				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "Task model"}`
+				: "";
+			return `${enter} ${this.#taskMode ? "use for Task subagents (session-only)" : "use for session"} · ${upDown} models · ${left} providers · ${cancel} close${toggle}`;
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
@@ -4442,7 +4536,7 @@ export class ModelHubComponent implements Component {
 				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
-			const copyKeys = getMenuSearchVimMode() ? ["y", "shift+y"] as const : ["alt+y", "alt+shift+y"] as const;
+			const copyKeys = getMenuSearchVimMode() ? (["y", "shift+y"] as const) : (["alt+y", "alt+shift+y"] as const);
 			const pasteKey = getMenuSearchVimMode() ? "p" : "alt+p";
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
@@ -4521,14 +4615,14 @@ export class ModelHubComponent implements Component {
 				strip.purpose === "roleBudget"
 					? `${strip.role} token budget:`
 					: strip.purpose === "compaction"
-					? `${strip.model.id} limit:`
-					: strip.purpose === "contextRule"
-						? `${strip.selector} limit:`
-						: strip.purpose === "description"
-							? `${strip.role} description:`
-							: strip.purpose === "preset"
-								? "Preset name:"
-								: "New role name:";
+						? `${strip.model.id} limit:`
+						: strip.purpose === "contextRule"
+							? `${strip.selector} limit:`
+							: strip.purpose === "description"
+								? `${strip.role} description:`
+								: strip.purpose === "preset"
+									? "Preset name:"
+									: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
@@ -4638,7 +4732,13 @@ export class ModelHubComponent implements Component {
 		).map(line => theme.fg("dim", line));
 		if (strip) footer.unshift(this.#renderFooter(innerWidth));
 		else this.#frame.chipRanges = [];
-		return this.#help.render(this.#frame.render(width, height, this.#entries, footer), width);
+		return this.#help.render(
+			this.#frame.render(width, height, this.#entries, footer, {
+				title: this.#taskMode ? "Task model" : this.#sessionOnly ? "Session model" : "Models",
+				borderColor: this.#taskMode ? "error" : undefined,
+			}),
+			width,
+		);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════════
@@ -4666,10 +4766,11 @@ export class ModelHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.overlay.model-hub",
-			"Models",
+			this.#taskMode ? "Task model · session-only override" : this.#sessionOnly ? "Session model" : "Models",
 			describeHubSidebar(this.#entries, this.#activeEntryId, this.#nativeSidebarStyle, "scopes"),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
+			this.#taskMode ? "error" : undefined,
 		);
 		this.#nativeCache = { version: this.#nativeVersion, picker: false, node: described };
 		return described;
@@ -4985,7 +5086,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+		const tag = info.tag ?? info.name ?? role;
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -5005,6 +5106,9 @@ export class ModelHubComponent implements Component {
 			detail = assignment
 				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
+		}
+		if (uiProvenance("roles", role)) {
+			label.push(span(uiProvenanceSuffix("roles", role), provenanceColor(uiProvenance("roles", role))));
 		}
 		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 		if (limit) {
@@ -5081,7 +5185,7 @@ export class ModelHubComponent implements Component {
 		}
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
-			const models = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
+			const models = this.#scopedModels.length > 0 ? [] : this.#catalogModels;
 			const items: NativeNode[] = [];
 			for (const model of models) {
 				if (model.provider !== entry.providerId) continue;
@@ -5120,8 +5224,15 @@ export class ModelHubComponent implements Component {
 					? this.#rolesSearch.value
 					: this.#browser.query,
 		)?.error;
-		const props: TspPickerProps = {
-			title: this.#sessionOnly ? "Session model" : this.#settings.editingScope ? `Models · ${this.#settings.editingScope}` : "Models",
+		const props: TspProps<"picker"> = {
+			tone: this.#taskMode ? "error" : undefined,
+			title: this.#sessionOnly
+				? this.#taskMode
+					? "Task model"
+					: "Session model"
+				: this.#settings.editingScope
+					? `Models · ${this.#settings.editingScope}`
+					: "Models",
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5209,7 +5320,8 @@ export class ModelHubComponent implements Component {
 			);
 		}
 		const catalogue = this.#browser.pickerItems(this.#availableItems);
-		const current = this.#currentSelector ? [this.#currentSelector] : undefined;
+		const currentSelector = this.#taskMode ? this.#taskSelector : this.#currentSelector;
+		const current = currentSelector ? [currentSelector] : undefined;
 		if (lockedView) {
 			return picker(
 				{
@@ -5230,9 +5342,7 @@ export class ModelHubComponent implements Component {
 			providers: entry.kind === "all" && query.length === 0,
 			rest: entry.kind === "provider" ? entry.label : query ? "Matches" : "All models",
 		});
-		const refreshing =
-			this.#catalogRefreshing ||
-			(entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? ""));
+		const refreshing = entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? "");
 		const state =
 			view.count > 0 || query
 				? "ready"
@@ -5246,22 +5356,26 @@ export class ModelHubComponent implements Component {
 				...props,
 				tabs: this.#pickerKindTabs(),
 				tab: this.#modelKindTab,
-				...this.#browser.pickerRows(catalogue, view, this.#currentSelector),
+				...this.#browser.pickerRows(catalogue, view, currentSelector),
 				state,
 				...(state === "error" && this.#configError ? { message: this.#configError } : {}),
 				empty:
 					this.#emptyStateMessage()?.trim() ??
 					(entry.kind === "provider" ? `No models from ${entry.label} yet` : "No models available in this scope"),
 			},
-			this.#browser.pickerPreview("full", this.#currentSelector),
+			this.#browser.pickerPreview("full", currentSelector),
 		);
 	}
 
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
-		if (this.#sessionOnly) return "Current session only";
-		if (rolesView && this.#settings.editingScope) return `Editing ${this.#settings.editingScope} · session > project > global`;
+		if (this.#sessionOnly)
+			return this.#taskMode
+				? [span("Task subagent model · temporary session-only override", "error")]
+				: "Current session only";
+		if (rolesView && this.#settings.editingScope)
+			return `Editing ${this.#settings.editingScope} · session > project > global`;
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -5487,7 +5601,13 @@ export class ModelHubComponent implements Component {
 				? pickerAction("modelFacts", "Model facts", "f6")
 				: undefined;
 		const refresh =
-			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
+			this.#scopedModels.length > 0
+				? undefined
+				: entry.kind === "provider" && !entry.locked
+					? pickerAction("refresh", "Refresh provider", "f5")
+					: undefined;
+		const refreshAll =
+			this.#scopedModels.length > 0 ? undefined : pickerAction("refreshAll", "Refresh all", "ctrl+f5");
 		if (this.#assigning !== null) {
 			const label =
 				this.#assigning.kind === "fallback"
@@ -5497,7 +5617,7 @@ export class ModelHubComponent implements Component {
 						: this.#assigning.kind === "effortRule"
 							? "Pick rule model"
 							: "Assign";
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel]);
+			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, refreshAll, cancel]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -5575,11 +5695,17 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				this.#sessionOnly ? "Use for session" : "Assign role",
+				this.#sessionOnly ? (this.#taskMode ? "Use for Task subagents" : "Use for session") : "Assign role",
 				"enter",
 				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
+			this.#taskModeKey
+				? pickerAction("task", this.#taskMode ? "Session model" : "Task model", this.#taskModeKey, {
+						on: this.#taskMode,
+					})
+				: undefined,
 			refresh,
+			refreshAll,
 			facts,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
 			cancel,
@@ -5610,11 +5736,11 @@ export class ModelHubComponent implements Component {
 								? `${strip.selector} limit `
 								: strip.purpose === "roleBudget"
 									? `${strip.role} token budget `
-								: strip.purpose === "description"
-									? `${strip.role} description `
-									: strip.purpose === "preset"
-										? "Preset name "
-										: "New role name "
+									: strip.purpose === "description"
+										? `${strip.role} description `
+										: strip.purpose === "preset"
+											? "Preset name "
+											: "New role name "
 							: strip.target === "rule"
 								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
 								: strip.target === "role"
@@ -5751,7 +5877,12 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				detail: [info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "", this.#settings.getRoleScopeNote?.(row.role) ?? ""].filter(Boolean).join(" · "),
+				detail: [
+					info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "",
+					this.#settings.getRoleScopeNote?.(row.role) ?? "",
+				]
+					.filter(Boolean)
+					.join(" · "),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0
@@ -5900,7 +6031,7 @@ export class ModelHubComponent implements Component {
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0 && this.#scopedModels.length === 0) {
 			const ids: string[] = [];
-			for (const model of this.#registry.getAll("all")) {
+			for (const model of this.#catalogModels) {
 				if (model.provider === entry.providerId) ids.push(`- \`${model.id}\``);
 			}
 			children.push(node("section", { head: `${catalogCount} models in catalog` }, [md(ids.join("\n"))]));
@@ -5966,6 +6097,12 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		switch (act) {
+			case "refreshAll":
+				this.#refreshAllProviders();
+				return;
+			case "task":
+				this.#toggleTaskMode();
+				return;
 			case "effort:edit":
 			case "effort:remove":
 				if (entry.kind === "effort" && this.#assigning === null) {

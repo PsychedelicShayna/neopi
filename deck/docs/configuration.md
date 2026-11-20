@@ -32,7 +32,7 @@ The managed `.env` is `<data dir>/.env`. The same directory holds:
   Values are never logged.
 - `telegram-bridge.db` — chat→session map (only when the bridge runs).
 - `deck.db` and `uploads/` — kanban, routines, inbox, pasted images.
-- `config.yml` and `neopi/<sha>/` — backend trees and the active backend.
+- `config.toml` and `neopi/<sha>/` — backend trees and the active backend.
 - `run/` — launcher lock, generation and owned-process journals.
 
 ## Variable reference
@@ -136,19 +136,19 @@ column. The card modal exposes cancellation and the persisted run result.
 | `NPI_DECK_CARD_AGENT_DONE_STATE` | `s_done` | yes | Done/review column id entered on successful completion. |
 | `NPI_DECK_CARD_AGENT_FAILURE_STATE` | `s_blocked` | yes | Column id entered on failure or cancellation. |
 
-Card properties are leading YAML in the card body, not a separate metadata
-store. All card-creating API requests accept a `properties` mapping; it merges
-into existing front matter without replacing unrelated entries or comments.
-The UI quick-add and modal raw-body editor also accept YAML directly:
+Card properties are leading TOML between `+++` lines in the card body, not a
+separate metadata store. All card-creating API requests accept a `properties`
+mapping; it merges into existing front matter with the shared comment-preserving
+TOML codec. The UI quick-add and modal raw-body editor accept native TOML:
 
-```yaml
----
-read-only: true
-worktree: /absolute/path/to/an/existing/git-worktree
-role: researcher
-custom:
-  tags: [investigation, routing]
----
+```text
++++
+read-only = true
+worktree = "/absolute/path/to/an/existing/git-worktree"
+role = "researcher"
+[custom]
+tags = ["investigation", "routing"]
++++
 Research the linked source and report the result.
 ```
 
@@ -163,10 +163,31 @@ Without `worktree`, execution creates a fresh detached temporary worktree from
 the card's explicit project `cwd`, or the configured default working directory
 when the card is Unassigned. Cleanup removes only worktrees owned by that run,
 never a linked user worktree. Routing remains separate: a linked worktree or
-YAML property does not infer project filing; omitted API `cwd` means Unassigned.
-Inbox provenance stays after the leading YAML. Routines accept both `body`
-and typed `properties`; chat `/task add` accepts multiline YAML or a JSON
+TOML property does not infer project filing; omitted API `cwd` means Unassigned.
+Inbox provenance stays after the leading TOML. Routines accept both `body`
+and typed `properties`; chat `/task add` accepts multiline TOML or a JSON
 card-creation object.
+
+At database startup, existing YAML card bodies import once to canonical TOML.
+The exact original Markdown, including YAML comments, is retained in the
+immutable `card_legacy_originals` table before the body is changed; card deletion
+does not delete that backup. Legacy API input goes through the same transactional
+import seam. Subsequent reads and property edits use TOML only. Malformed legacy
+metadata is retained for repair and cannot execute as an unannotated card.
+
+Migration also carries genuine YAML comment text into a labelled TOML comment
+preamble. Original field associations cannot survive the format change; the
+exact legacy source remains available separately. Later native property edits
+preserve those comments and unrelated TOML source.
+
+KB notes use the same `+++` TOML frontmatter. On first indexing, a legacy
+`note.md` imports to a same-permission `note.toml.md` sibling without changing
+the YAML original. If both exist, the TOML sibling wins (including parse errors)
+and the warning identifies paths only. The tree, graph, search and wikilinks
+retain the logical `note.md` identity, indexing only the canonical content.
+Raw edits update the TOML sibling, never the original. Explicit null properties
+round-trip through the shared version-1 `__npi.null_paths` metadata.
+External `SKILL.md` skill documents retain their interoperable YAML frontmatter.
 
 Card workers use `kb_read` and `kb_write` through a run-scoped bearer capability.
 The server derives project identity and read-only policy from the active run;

@@ -927,7 +927,7 @@ describe("ModelHub", () => {
 			try {
 				const models = [makeModel("alpha", "m"), makeModel("beta", "m"), makeModel("gamma", "m")];
 				// A keyless discoverable local endpoint: starts visible (discovery
-				// "empty"), then its on-focus refresh finds it unreachable and it
+				// "empty"), then entering its catalog finds it unreachable and it
 				// flips to hidden (optional + "unavailable"), vanishing from the list.
 				let localStatus = "empty";
 				const { hub } = createHub({
@@ -951,9 +951,10 @@ describe("ModelHub", () => {
 				hub.handleInput(DOWN); // all → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
+				hub.handleInput("\r");
 				expect(normalize(hub.render(220))).toContain("delta-local ·");
 
-				// Fire the debounced on-focus refresh, then flush the async rebuild
+				// Fire the queued explicit-entry refresh, then flush the async rebuild
 				// (refreshProvider resolves on a microtask before #syncFromRegistryState).
 				vi.advanceTimersByTime(200);
 				await Promise.resolve();
@@ -2025,6 +2026,37 @@ describe("ModelHub", () => {
 			}
 		});
 
+		test("role fallback candidates honor the role's accepted model kinds", () => {
+			const chat = makeModel("test", "chat-model");
+			const image = makeModel("test", "image-model", 128_000, undefined, "image");
+			const { hub } = createHub({ models: [chat, image], scoped: true });
+
+			enterRolesView(hub);
+			hub.handleInput("f"); // add a fallback for the first role (default): model or pattern
+			hub.handleInput("\n"); // pick model
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("Adding fallback for");
+			expect(rendered).toContain("chat-model");
+			expect(rendered).not.toContain("image-model");
+		});
+
+		test("model-keyed fallback candidates are not filtered by a role", () => {
+			const chat = makeModel("test", "chat-model");
+			const image = makeModel("test", "image-model", 128_000, undefined, "image");
+			const { hub } = createHub({ models: [chat, image], scoped: true });
+
+			hub.handleInput("/");
+			for (const ch of "chat-model") hub.handleInput(ch);
+			hub.handleInput("\n"); // confirm the search
+			hub.handleInput("\n"); // open the strip for chat-model
+			hub.handleInput("G"); // retry-fallback
+			hub.handleInput(UP); // fallbacks:test/*
+			hub.handleInput("\n");
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("Adding fallback for test/*");
+			expect(rendered).toContain("image-model");
+		});
+
 		test("x removes a chain entry and Enter on an entry replaces it", () => {
 			const a = makeModel("test", "model-a");
 			const b = makeModel("test", "model-b");
@@ -2896,40 +2928,57 @@ describe("ModelHub", () => {
 	});
 
 	describe("provider refresh lifecycle", () => {
+		beforeEach(() => vi.useFakeTimers());
+		afterEach(() => vi.useRealTimers());
+
+		async function flushRefresh(): Promise<void> {
+			vi.advanceTimersByTime(1);
+			// Flush refreshProvider, the host callback, reconciliation and its finally.
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+			await Promise.resolve();
+		}
+
 		test("auto-refreshes a provider once per process; F5 forces a re-fetch", async () => {
 			const model = makeModel("prov-a", "model-a");
+			const refresh = vi.fn(async () => {});
 			const refreshProvider = vi.fn<ModelRegistry["refreshProvider"]>(async () => {});
 			const { hub } = createHub({
 				models: [model],
-				registry: { refreshProvider },
+				registry: { refresh, refreshProvider },
 			});
 			installTestTheme();
 
-			// Real waits: the hub debounces provider refreshes with a real
-			// 120ms setTimeout (no injection seam), and the fetch completion is
-			// a promise chain — fake timers cannot drive the mixed path.
+			await flushRefresh();
+			expect(refresh).not.toHaveBeenCalled();
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → prov-a, schedules the refresh
-			await Bun.sleep(140);
+			hub.handleInput(DOWN); // highlight prov-a without fetching
+			await flushRefresh();
+			expect(refreshProvider).not.toHaveBeenCalled();
+			hub.handleInput("\r"); // enter its catalog
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online");
 			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
 
+			hub.handleInput(LEFT);
 			hub.handleInput(UP); // back to All models
 			hub.handleInput(DOWN); // revisit prov-a
-			await Bun.sleep(140);
+			hub.handleInput("\r");
+			await flushRefresh();
 			// Lifetime guard: revisiting must not re-fetch.
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 
 			hub.handleInput("\x1b[15~"); // F5
-			await Bun.sleep(140);
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(2);
 			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online", { refreshCommandCredentials: true });
 		});
 
-		test("F5 during the hover debounce upgrades the pending catalog refresh", async () => {
+		test("F5 upgrades an explicit entry queued before the catalog fetch begins", async () => {
 			const model = makeModel("prov-a", "model-a");
 			const refreshProvider = vi.fn(async () => {});
 			const { hub } = createHub({
@@ -2941,12 +2990,13 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // schedules catalog-only refresh
-			hub.handleInput("\x1b[15~"); // F5 before the 120ms debounce fires
-			await Bun.sleep(40);
+			hub.handleInput(DOWN);
+			hub.handleInput("\r");
+			hub.handleInput("\x1b[15~");
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online", { refreshCommandCredentials: true });
-			await Bun.sleep(140);
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 		});
 
@@ -2964,7 +3014,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
-			await Bun.sleep(140);
+			hub.handleInput("\r");
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
 
@@ -2972,7 +3023,7 @@ describe("ModelHub", () => {
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 
 			gate.resolve();
-			await Bun.sleep(0);
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(2);
 			expect(refreshProvider).toHaveBeenLastCalledWith("prov-a", "online", { refreshCommandCredentials: true });
 		});
@@ -2992,16 +3043,18 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // All models → prov-a
-			await Bun.sleep(140);
+			hub.handleInput("\r");
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
 
 			hub.handleInput("\x1b[15~"); // queue credential refresh behind the in-flight catalog fetch
-			hub.handleInput(UP); // All models — must not drop the F5
+			hub.handleInput(LEFT);
+			hub.handleInput(UP); // leaving the provider must not drop the F5
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 
 			gate.resolve();
-			await Bun.sleep(0);
+			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(2);
 			expect(refreshProvider).toHaveBeenLastCalledWith("prov-a", "online", { refreshCommandCredentials: true });
 		});
@@ -3019,12 +3072,59 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
-			await Bun.sleep(140);
+			hub.handleInput("\r");
+			await flushRefresh();
 			expect(normalize(hub.render(220))).toContain("refreshing model list");
 
 			gate.resolve();
-			await Bun.sleep(0);
+			await flushRefresh();
 			expect(normalize(hub.render(220))).not.toContain("refreshing model list");
+		});
+
+		test("refresh all updates the cached list in place without interrupting model navigation", async () => {
+			const gate = Promise.withResolvers<void>();
+			let models = [makeModel("prov-a", "model-a"), makeModel("prov-b", "model-b")];
+			const { hub } = createHub({
+				models: () => models,
+				registry: {
+					refresh: async () => {
+						await gate.promise;
+						models = [...models, makeModel("prov-b", "model-c")];
+					},
+				},
+			});
+			hub.handleInput("\x1b[15;5~");
+			await flushRefresh();
+			hub.handleInput("\r");
+			hub.handleInput(DOWN);
+			expect(hub.navigationSnapshot()).toMatchObject({ focus: "list", browser: { selected: "prov-b/model-b" } });
+			gate.resolve();
+			await flushRefresh();
+			expect(hub.navigationSnapshot()).toMatchObject({ focus: "list", browser: { selected: "prov-b/model-b" } });
+			hub.handleInput(DOWN);
+			expect(hub.navigationSnapshot().browser.selected).toBe("prov-b/model-c");
+		});
+
+		test("refresh all can populate an initially locked-only catalog", async () => {
+			const locked = makeModel("anthropic", "locked-model");
+			let available: Model[] = [];
+			const { hub } = createHub({
+				models: () => [locked, ...available],
+				registry: {
+					getAvailable: () => available,
+					refresh: async () => {
+						available = [makeModel("local", "discovered-model")];
+					},
+				},
+			});
+			expect(hub.navigationSnapshot().browser.selected).toBeUndefined();
+			hub.handleInput("\x1b[15;5~");
+			await flushRefresh();
+			hub.handleInput("\r");
+			expect(hub.navigationSnapshot()).toMatchObject({
+				focus: "list",
+				browser: { selected: "local/discovered-model" },
+			});
 		});
 	});
 

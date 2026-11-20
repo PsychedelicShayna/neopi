@@ -48,7 +48,7 @@ import type {
 } from "@npi-deck/protocol";
 
 import type { RoutineFieldErrors } from "../routine-validation";
-import { removeStep, replaceStep, scaffoldStep } from "../spec-yaml";
+import { removeStep, replaceStep, scaffoldStep } from "../spec-toml";
 
 import { AddStepPalette } from "./AddStepPalette";
 import { SequentialEdge } from "./edges/SequentialEdge";
@@ -559,7 +559,7 @@ function rootNodes(nodes: ReadonlyArray<StepNodeType>, edges: ReadonlyArray<Sequ
 /**
  * Merge committed drag positions into the spec's `layout.nodes`, preserving
  * existing layout edges and per-node metadata (e.g. `collapsed`). Positions are
- * rounded to integers so YAML diffs stay clean.
+ * rounded to integers so TOML diffs stay clean.
  *
  * Steps that were dragged but not yet in `layout.nodes` get a fresh entry.
  * Orphan `layout.nodes` entries (no matching step id) are pruned so a save

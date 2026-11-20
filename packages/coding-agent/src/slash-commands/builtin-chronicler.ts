@@ -1,9 +1,11 @@
+import { dispatchSessionChronicleIndex } from "../chronicler/session-index";
 import type { AgentSession } from "../session/agent-session";
+import { ChronicleRecallTool } from "../tools/chronicle-recall";
 import { clearSubmittedText } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef } from "./types";
 
-const CHRON_USAGE = "Usage: /chron [status|pause|resume|blind|unblind|off [--confirm]|on]";
+const CHRON_USAGE = 'Usage: /chron [status|pause|resume|blind|unblind|off [--confirm]|on|index|recall "question"]';
 const CHRON_OFF_WARNING = "Turning off the Chronicler will wipe Luna's context window.";
 const CHRON_SUBCOMMANDS: SubcommandDef[] = [
 	{ name: "status", description: "Show enabled state, capture mode, and health" },
@@ -17,6 +19,8 @@ const CHRON_SUBCOMMANDS: SubcommandDef[] = [
 		usage: "[--confirm]",
 	},
 	{ name: "on", description: "Enable the Chronicler for this session" },
+	{ name: "index", description: "Index captured atoms from the current session" },
+	{ name: "recall", description: "Recall captured atoms across sessions", usage: '"question"' },
 ];
 
 type ChroniclerAction = "on" | "off" | "pause" | "resume" | "blind" | "unblind";
@@ -40,6 +44,28 @@ async function runChronCommand(
 ): Promise<{ text: string; failed?: boolean }> {
 	const { verb, rest } = parseSubcommand(args);
 	if ((!verb || verb === "status") && !rest) return { text: chroniclerStatus(session) };
+	if (verb === "index") {
+		if (rest) return { text: CHRON_USAGE, failed: true };
+		return { text: dispatchSessionChronicleIndex(session) };
+	}
+	if (verb === "recall") {
+		let question = rest;
+		const quote = question[0];
+		if (quote === '"' || quote === "'") {
+			if (question.length < 2 || !question.endsWith(quote)) return { text: CHRON_USAGE, failed: true };
+			question = question.slice(1, -1);
+		}
+		if (!question.trim()) return { text: CHRON_USAGE, failed: true };
+		// The recall setting gates the agent's tool grant, not explicit operator commands.
+		const tool = new ChronicleRecallTool(session.getAgentLauncherSession());
+		const result = await tool.execute("chron-recall", { query: question, scope: "all" });
+		return {
+			text: result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n"),
+		};
+	}
 	if (!isChroniclerAction(verb) || (rest && !(verb === "off" && rest === "--confirm"))) {
 		return { text: CHRON_USAGE, failed: true };
 	}
@@ -59,8 +85,8 @@ async function runChronCommand(
 export const CHRONICLER_SLASH_COMMAND: SlashCommandSpec = {
 	name: "chron",
 	icon: "action",
-	description: "Control Luna, the session Chronicler (status, pause, blind, on, off)",
-	acpInputHint: "[status|pause|resume|blind|unblind|off [--confirm]|on]",
+	description: "Control Luna, index this session, or recall captured atoms",
+	acpInputHint: '[status|pause|resume|blind|unblind|off [--confirm]|on|index|recall "question"]',
 	allowArgs: true,
 	subcommandOptional: true,
 	subcommands: CHRON_SUBCOMMANDS,

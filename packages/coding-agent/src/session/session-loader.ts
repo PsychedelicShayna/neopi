@@ -7,10 +7,8 @@ import {
 	isEisdir,
 	isEnoent,
 	isEnotdir,
-	jsonContainerEnd,
 	parseJsonlLenient,
 	peekFile,
-	tryParseJson,
 } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { Semaphore } from "../task/parallel";
@@ -25,10 +23,11 @@ import {
 } from "./blob-store";
 import { buildSessionContext, walkSessionBranch } from "./session-context";
 import type { FileEntry, RawFileEntry, SessionEntry, SessionHeader } from "./session-entries";
-import { migrateToCurrentVersion } from "./session-migrations";
+import { hasUnindexedSessionEntries, migrateToCurrentVersion } from "./session-migrations";
 import { isExternalizableImagePosition, isPersistenceTruncatedString } from "./session-persistence";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
 import { enotdir } from "./session-storage-errors";
+import { SESSION_HEADER_READ_LIMIT, sessionHeaderIdFromPrefix } from "./session-header-id";
 import {
 	parseTitleSlotFromContent,
 	parseTitleSlotLine,
@@ -182,8 +181,6 @@ export function parseSessionContent(content: string): SessionLoadResult {
 	};
 }
 
-/** Upper bound on the bytes read to find a header: real headers (and the title slot before them) are far smaller. */
-const SESSION_HEADER_READ_LIMIT = 1024 * 1024;
 /** First read; holds the title slot and any real header, so the full limit is read only for outliers. */
 const SESSION_HEADER_FIRST_READ = 16 * 1024;
 
@@ -199,48 +196,17 @@ const HEADER_INCOMPLETE = Symbol("header-incomplete");
 export async function readSessionHeaderId(filePath: string): Promise<string | undefined> {
 	try {
 		const id = await peekFile(filePath, SESSION_HEADER_FIRST_READ, prefix =>
-			sessionHeaderIdFromPrefix(prefix, prefix.length < SESSION_HEADER_FIRST_READ),
+			prefix.length < SESSION_HEADER_FIRST_READ
+				? sessionHeaderIdFromPrefix(prefix)
+				: (sessionHeaderIdFromPrefix(prefix) ?? HEADER_INCOMPLETE),
 		);
 		if (id !== HEADER_INCOMPLETE) return id;
-		const full = await peekFile(filePath, SESSION_HEADER_READ_LIMIT, prefix =>
-			sessionHeaderIdFromPrefix(prefix, true),
-		);
-		return full === HEADER_INCOMPLETE ? undefined : full;
+		const full = await peekFile(filePath, SESSION_HEADER_READ_LIMIT, prefix => sessionHeaderIdFromPrefix(prefix));
+		return full ?? undefined;
 	} catch (err) {
 		if (isEnoent(err) || isEnotdir(err) || isEisdir(err)) return undefined;
 		throw err;
 	}
-}
-
-/**
- * The header id from a file's leading bytes, past the optional title slot
- * line. Parses only the first record, which may span lines (a pretty-printed
- * header). {@link HEADER_INCOMPLETE} when that record runs past `prefix` and
- * `final` is false (more of the file can be read).
- */
-function sessionHeaderIdFromPrefix(prefix: Uint8Array, final: boolean): string | undefined | typeof HEADER_INCOMPLETE {
-	let records = prefix;
-	const newline = prefix.indexOf(0x0a);
-	if (newline !== -1) {
-		const firstLine = new TextDecoder().decode(prefix.subarray(0, newline)).trim();
-		if (firstLine && parseTitleSlotLine(firstLine)) records = prefix.subarray(newline + 1);
-	}
-	// Like the full parser, skip blank lines (and other JSON whitespace) before the first record.
-	let start = 0;
-	while (start < records.length) {
-		const byte = records[start];
-		if (byte !== 0x20 && byte !== 0x0a && byte !== 0x0d && byte !== 0x09) break;
-		start++;
-	}
-	records = records.subarray(start);
-	if (records.length === 0) return final ? undefined : HEADER_INCOMPLETE;
-	// A header is an object; anything else is not a session file.
-	if (records[0] !== 0x7b) return undefined;
-	const text = new TextDecoder().decode(records);
-	const end = jsonContainerEnd(text, 0);
-	if (end === -1) return final ? undefined : HEADER_INCOMPLETE;
-	const entry = tryParseJson<FileEntry>(text.slice(0, end)) ?? undefined;
-	return isValidSessionHeader(entry) ? entry.id : undefined;
 }
 
 /** Parse session JSONL and visit each entry without retaining prior entries. */
@@ -770,15 +736,15 @@ export function resolveBlobRefsInEntriesSync(entries: FileEntry[], blobStore: Bl
  * display transcript from one snapshot, without creating a writer/lease.
  * The final journal entry is the authoritative leaf, just as when
  * SessionManager rebuilds its entry index.
- * Pre-tree (v1) journals retain their legacy transcript, but return null native
- * entries because migration invents IDs that cannot serve as stable identities.
+ * Pre-tree or wholly unindexed journals retain their transcript, but return null
+ * native entries because migration invents IDs that cannot serve as stable identities.
  */
 export async function loadSessionBranchReadOnly(
 	filePath: string,
 ): Promise<{ entries: SessionEntry[] | null; leafId: string | null; messages: AgentMessage[] }> {
 	const entries = await loadEntriesFromFile(filePath);
 	const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-	if (header && (header.version ?? 1) < 2) {
+	if ((header && (header.version ?? 1) < 2) || hasUnindexedSessionEntries(entries)) {
 		migrateToCurrentVersion(entries);
 		return { entries: null, leafId: null, messages: await buildReadOnlySessionMessages(entries) };
 	}

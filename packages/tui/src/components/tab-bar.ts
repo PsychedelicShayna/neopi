@@ -204,7 +204,12 @@ export class TabBar implements Component {
 		parts.push(tabs);
 		if (this.showHint) {
 			parts.push(
-				node("text", { spans: styleSpans(`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`, this.#theme.hint) }),
+				node("text", {
+					spans: styleSpans(
+						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+						this.#theme.hint,
+					),
+				}),
 			);
 		}
 		const described = parts.length === 1 ? tabs : row(parts, { gap: "md", align: "center" });
@@ -273,7 +278,11 @@ export class TabBar implements Component {
 			// Navigation hint
 			if (this.showHint) {
 				chunks.push({ text: "  " });
-				chunks.push({ text: this.#theme.hint(`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`) });
+				chunks.push({
+					text: this.#theme.hint(
+						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+					),
+				});
 			}
 			return chunks;
 		};

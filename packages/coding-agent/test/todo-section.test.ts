@@ -6,9 +6,11 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { cfgSidebarEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import {
-	renderTodoLines,
+	renderTodoTree,
 	TODO_LINE_BUDGET,
 	TodoSection,
+	type TodoTree,
+	wrapTodoTree,
 } from "@oh-my-pi/pi-coding-agent/modes/side-panel/todo-section";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -33,27 +35,60 @@ const PLAN: TodoPhase[] = [
 	},
 ];
 
-describe("renderTodoLines", () => {
+describe("renderTodoTree", () => {
 	beforeAll(async () => {
 		await initTheme();
 	});
 
+	const lines = (tree: TodoTree | undefined): string[] => {
+		if (!tree) throw new Error("Expected a todo tree");
+		return wrapTodoTree(tree, 200);
+	};
+
 	it("lights the task a subagent is working on and applies the collapsed caps", () => {
-		const collapsed = renderTodoLines({
-			phases: PLAN,
-			expanded: false,
-			activeDescs: ["wire the lexer"],
-			budget: TODO_LINE_BUDGET,
-		});
+		const collapsed = lines(
+			renderTodoTree({
+				phases: PLAN,
+				expanded: false,
+				activeDescs: ["wire the lexer"],
+				budget: TODO_LINE_BUDGET,
+			}),
+		);
 		const matched = collapsed.find(line => line.includes("wire the lexer"));
 		expect(matched).toContain(theme.fg("accent", `${theme.checkbox.unchecked} wire the lexer`));
 		// The collapsed window caps open tasks with a summary row.
 		expect(plain(collapsed)).not.toContain("task 6");
 		expect(plain(collapsed)).toContain("3 more");
 
-		const expanded = renderTodoLines({ phases: PLAN, expanded: true, activeDescs: [], budget: TODO_LINE_BUDGET });
+		const expanded = lines(
+			renderTodoTree({ phases: PLAN, expanded: true, activeDescs: [], budget: TODO_LINE_BUDGET }),
+		);
 		for (const task of PLAN[0]!.tasks) expect(plain(expanded)).toContain(task.content);
-		expect(renderTodoLines({ phases: [], expanded: true, activeDescs: [], budget: TODO_LINE_BUDGET })).toEqual([]);
+		expect(renderTodoTree({ phases: [], expanded: true, activeDescs: [], budget: TODO_LINE_BUDGET })).toBeUndefined();
+	});
+
+	it("section wraps a long task beneath its own checkbox, not the panel edge", () => {
+		const section = new TodoSection();
+		section.update({
+			phases: [
+				{
+					name: "Ship",
+					tasks: [
+						{ content: "open the follow-up pull request and merge to nightly (blocked)", status: "pending" },
+					],
+				},
+			],
+			activeDescs: [],
+			hidden: false,
+		});
+		const rows = section.content(36).map(row => Bun.stripANSI(row));
+		const first = rows.findIndex(row => row.includes("open the"));
+		const column = rows[first]!.indexOf(theme.checkbox.unchecked);
+		const continuation = rows[first + 1]!;
+		// Only the stage spine sits left of the continuation, which starts under the checkbox.
+		expect(continuation.slice(0, column).trim()).toBe(theme.tree.vertical);
+		expect(continuation[column]).not.toBe(" ");
+		expect(rows.join(" ")).toContain("(blocked)");
 	});
 
 	it("section renders nothing while dismissed and the expanded list otherwise", () => {
@@ -91,7 +126,7 @@ describe("InteractiveMode todo HUD and side panel", () => {
 		term = new VirtualTerminal(120, 30);
 		composer = new Composer({ terminal: term, preferences: { ...COMPOSER_DEFAULTS, quiet: true } });
 		composer.start();
-		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 		composer.setRuntimeChildren([mode.chatContainer, mode.todoContainer]);
 	});
 

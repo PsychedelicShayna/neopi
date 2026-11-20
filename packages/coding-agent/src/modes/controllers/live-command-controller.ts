@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText, toError } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import {
 	type LivePhase,
@@ -58,14 +58,13 @@ const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-function errorFrom(cause: unknown): Error {
-	return cause instanceof Error ? cause : new Error(String(cause));
-}
 
 /** Runs extension observers without turning their failures into session failures. */
 function notifyRemote(callback: () => void): void {
-	try { callback(); } catch (cause) {
-		logger.warn("Live session observer threw", { error: errorFrom(cause).message });
+	try {
+		callback();
+	} catch (cause) {
+		logger.warn("Live session observer threw", { error: toError(cause).message });
 	}
 }
 
@@ -276,7 +275,7 @@ export class LiveCommandController {
 		try {
 			await session.stop();
 		} catch (cause) {
-			this.#finish(session, errorFrom(cause));
+			this.#finish(session, toError(cause));
 		} finally {
 			this.#finish(session);
 		}
@@ -288,14 +287,17 @@ export class LiveCommandController {
 		if (session) {
 			this.#finish(session);
 			void session.stop().catch(cause => {
-				logger.debug("Live session teardown failed", { error: errorFrom(cause).message });
+				logger.debug("Live session teardown failed", { error: toError(cause).message });
 			});
 		} else {
 			this.#release();
 		}
 	}
 
-	async #start(voice: string = cfgLiveVoice.get(this.#ctx.settings), remote?: ExtensionLiveStartOptions): Promise<LiveStartOutcome> {
+	async #start(
+		voice: string = cfgLiveVoice.get(this.#ctx.settings),
+		remote?: ExtensionLiveStartOptions,
+	): Promise<LiveStartOutcome> {
 		if (this.#session) throw new Error("A live session is already active");
 		this.#model = cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
@@ -331,9 +333,12 @@ export class LiveCommandController {
 				force: cfgLiveForceDelegateKeyword.get(this.#ctx.settings),
 				silenceMs: cfgLiveSubmitSilenceMs.get(this.#ctx.settings),
 			}),
-			composerText: expanded => this.#ctx.editor.chainLocked
-				? undefined
-				: expanded ? this.#ctx.editor.getExpandedText() : this.#ctx.editor.getText(),
+			composerText: expanded =>
+				this.#ctx.editor.chainLocked
+					? undefined
+					: expanded
+						? this.#ctx.editor.getExpandedText()
+						: this.#ctx.editor.getText(),
 			captureComposerExcludingTurns: turns => {
 				const ids = turns.flatMap(turn => {
 					const id = this.#committedSpeech.get(turn);
@@ -341,8 +346,10 @@ export class LiveCommandController {
 				});
 				const editor = this.#ctx.editor;
 				const mediaTokens = [...editor.getText().matchAll(COMPOSER_TOKEN_REGEX)]
-					.filter(match => match[1] === "Image" || match[1] === "Video" ||
-						(!match[1] && chipLabelKind(match[0]) !== "paste"))
+					.filter(
+						match =>
+							match[1] === "Image" || match[1] === "Video" || (!match[1] && chipLabelKind(match[0]) !== "paste"),
+					)
 					.map(match => match[0]);
 				const captured = editor.captureTextWithoutUtterances(ids, mediaTokens);
 				const voiceOnlyTurns = turns.filter(turn => {
@@ -350,8 +357,9 @@ export class LiveCommandController {
 					return id !== undefined && captured.excludedIds.includes(id);
 				});
 				const force = stripLiveKeyword(captured.text, cfgLiveForceDelegateKeyword.get(this.#ctx.settings), true);
-				const routingText = force.matched ? force.text :
-					stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
+				const routingText = force.matched
+					? force.text
+					: stripLiveKeyword(captured.text, cfgLiveSubmitKeyword.get(this.#ctx.settings), true).text;
 				return {
 					receipt: {
 						id: captured.receipt,
@@ -477,7 +485,7 @@ export class LiveCommandController {
 			if (this.#session === session) ingest.attach();
 			else return { error: new Error("Live session stopped during startup") };
 		} catch (cause) {
-			const error = errorFrom(cause);
+			const error = toError(cause);
 			if (this.#session === session) {
 				await session.stop();
 				this.#finish(session, error);
@@ -619,7 +627,7 @@ export class LiveCommandController {
 			this.#ctx.showError(error.message);
 		}
 		const settling = stopping.catch(cause => {
-			logger.debug("Live session cleanup failed", { error: errorFrom(cause).message });
+			logger.debug("Live session cleanup failed", { error: toError(cause).message });
 		});
 		this.#settling = settling;
 		void settling.finally(() => {

@@ -3,10 +3,9 @@
  *
  * Text comes from the argument or --file. Input is segmented into
  * sentence-sized chunks ({@link SpeakableStream}) and synthesized through the
- * streaming TTS worker, so arbitrarily long text plays gaplessly instead of
- * hitting Kokoro's single-call ~510-phoneme truncation. --out concatenates the
- * streamed segments into one WAV. The first run downloads the configured local
- * model into the worker's cache.
+ * streaming TTS worker, so arbitrarily long text starts playing after its first
+ * sentence and plays gaplessly. --out concatenates the streamed segments into
+ * one WAV. The first run downloads the configured local model into the cache.
  */
 
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -41,7 +40,7 @@ export default class Say extends Command {
 
 	static flags = {
 		voice: Flags.string({ description: "Voice id", options: TTS_LOCAL_VOICE_VALUES }),
-		speed: Flags.string({ description: "Speaking rate, 0.5–2.5 (1 = normal; default: tts.localSpeed)" }),
+		speed: Flags.string({ description: "Speaking rate, 0.8–1.3 (1 = normal; default: tts.localSpeed)" }),
 		model: Flags.string({ description: "Local TTS model key" }),
 		file: Flags.string({ char: "f", description: "Read the text to speak from this file" }),
 		out: Flags.string({ char: "o", description: "Write WAV to this path instead of playing" }),

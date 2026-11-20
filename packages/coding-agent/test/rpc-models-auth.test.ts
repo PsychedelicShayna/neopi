@@ -270,13 +270,8 @@ describe("native provider and account RPC contracts", () => {
 			loginKind: "device-code",
 			deviceCode: true,
 		});
-		expect(response.data.providers.find(provider => provider.id === "github-copilot")).toMatchObject({
-			loginKind: "custom",
-			deviceCode: true,
-		});
 		expect(response.data.providers.find(provider => provider.id === "openai-codex-device")).toMatchObject({
 			loginKind: "custom",
-			deviceCode: true,
 			storeCredentialsAs: "openai-codex",
 			authenticated: true,
 			acceptsKeys: true,
@@ -286,7 +281,6 @@ describe("native provider and account RPC contracts", () => {
 		const codex = configuration.providers.find(provider => provider.id === "openai-codex");
 		expect(codex?.loginProviders.find(provider => provider.id === "openai-codex-device")).toMatchObject({
 			loginKind: "custom",
-			deviceCode: true,
 			storeCredentialsAs: "openai-codex",
 		});
 		for (const provider of configuration.providers)

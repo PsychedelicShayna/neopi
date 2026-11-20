@@ -240,7 +240,7 @@ function SettingRow({ setting, cwd, onSaved }: { setting: NpiConfigSetting; cwd:
 function notes(setting: NpiConfigSetting, cwd: string): string[] {
 	const out: string[] = [];
 	if (setting.invalidGlobalValue) out.push("config.yml holds a value this setting rejects; NeoPi ignores it and uses the default. Save a valid value or reset.");
-	if (setting.provenance === "project" || setting.provenance === "overlay" || setting.provenance === "runtime")
+	if (setting.provenance === "project" || setting.provenance === "overlay" || setting.provenance === "runtime" || setting.provenance === "session")
 		out.push(`A ${setting.provenance} layer overrides the global value in ${cwd}.`);
 	if (setting.env?.active && setting.env.fallback)
 		out.push(setting.provenance === "env" ? `Using $${setting.env.name} until a config value is saved.` : `Config overrides $${setting.env.name}.`);

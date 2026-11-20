@@ -103,7 +103,7 @@ Images attached to the `/defer` submission travel with that scheduled input, not
 
 Durations accept numbers immediately followed by `ms`, `s`, `m`, `h`, `d`, `w`, `M`, or `Y`, including fractions (`.5h`). Units are case-sensitive: `M` means 30 days and `Y` means 365 days, not calendar arithmetic. Zero or negative delays submit immediately.
 
-Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
+Scheduling reports an ID. `/defer cancel <id>` cancels that submission, including delivery still waiting on an input hook or command; `/defer cancel all` cancels every pending submission. Enter and Ctrl+Enter can cancel while an earlier extension input hook is waiting; later ordinary submissions still keep their original input-hook order. Deferred input stays bound to the scheduling conversation even if you focus a subagent before it fires. A session change or shutdown cancels both waiting timers and in-flight delivery, so resumed hooks cannot send old input into a new conversation or restore its attachments there. Timers are local to the running conversation and are not persisted across restarts.
 
 ## Iris live voice
 
@@ -111,7 +111,7 @@ Landed from 22–26 Aug 2026.
 
 The voice model is Iris, separate from the coding agent. Relays stay silent unless addressed. Live handoffs steer without cancelling active work by default; spoken responses may continue while background jobs keep the session awake. Crew IRC and provisional reasoning use a speakable channel, live personas resolve transport instructions, and speakable chunks truncate on Unicode code points.
 
-Use `/live model` to show the configured realtime model slug, or `/live model <slug>` to save a new one for the next call. Settings > Providers > Services > Live Model edits the same `live.model` setting. The default remains `gpt-live-1-codex`; selecting a different model does not interrupt an active call. RPC live calls use the same setting.
+Use `/live model` to show the requested realtime model slug, or `/live model <slug>` to save a new one for the next call. Settings > Providers > Services > Live Model edits the same `live.model` setting and offers GPT Live 1.1 (`gpt-live-1.1-codex`, the default) and GPT Live 1 (`gpt-live-1-codex`). The slug is a request: in testing the service accepted an unknown slug, and its session events did not name the model that answered. Selecting a different model does not interrupt an active call. RPC live calls use the same setting.
 
 Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`, `21b0e7cf7e`, `6983ee1a60`, `990964437a`, `4eb5e2594f`, `a991cf58d0`.
 

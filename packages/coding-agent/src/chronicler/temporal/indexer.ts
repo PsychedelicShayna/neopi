@@ -8,7 +8,7 @@
  * on disk now. Only stale nodes are regenerated, children before parents.
  * Canonical atoms are only read.
  */
-import { getSessionsDir } from "@oh-my-pi/pi-utils";
+import { acquireFileLock, getSessionsDir } from "@oh-my-pi/pi-utils";
 import { spanWithin, type TimeBound } from "./calendar";
 import { type CorpusDiagnostic, hashText, loadChronicleCorpus } from "./corpus";
 import { type ChronicleSummarizer, SUMMARY_PROMPT_VERSION, type SummaryChildInput } from "./summarize";
@@ -20,6 +20,7 @@ import {
 	type IdentityParts,
 	readViewManifest,
 	readViewNode,
+	realPathOf,
 	removeNodeDir,
 	routeLinePrefix,
 	routingText,
@@ -59,6 +60,8 @@ export interface IndexReport {
 	sessions: number;
 	projects: number;
 	summaryModel?: string;
+	/** Present for a session-scoped pass; all other corpus counts remain global. */
+	sessionAtoms?: number;
 	nodes: {
 		total: number;
 		fresh: number;
@@ -83,6 +86,8 @@ export interface IndexOptions {
 	agentDir: string;
 	root: string;
 	config: IndexConfig;
+	/** Exact session id. Plan the full shared view, but only regenerate nodes containing this session. */
+	sessionId?: string;
 	/** Omit to plan without a model: interior nodes that need generation are reported failed. */
 	summarizer?: ChronicleSummarizer;
 	rebuild?: boolean;
@@ -171,7 +176,27 @@ class Limiter {
 }
 
 export async function indexChronicle(options: IndexOptions): Promise<IndexReport> {
+	options.signal?.throwIfAborted();
+	const sessionsDir = options.sessionsDir ?? getSessionsDir(options.agentDir);
+	await assertOwnedViewRoot(options.root, options.agentDir, sessionsDir);
+	if (options.dryRun) return indexChronicleUnlocked(options);
+	// Keep the lock outside the view: an otherwise empty root must not become
+	// unowned just because an indexer acquired its publication lease.
+	const root = await realPathOf(options.root);
+	const lease = await acquireFileLock(`${root}.index`, {
+		retries: 1,
+		signal: options.signal,
+	});
+	try {
+		return await indexChronicleUnlocked({ ...options, root });
+	} finally {
+		lease.release();
+	}
+}
+
+async function indexChronicleUnlocked(options: IndexOptions): Promise<IndexReport> {
 	const { root, config } = options;
+	options.signal?.throwIfAborted();
 	const dryRun = options.dryRun === true;
 	const progress = options.onProgress ?? (() => {});
 	const sessionsDir = options.sessionsDir ?? getSessionsDir(options.agentDir);
@@ -180,6 +205,7 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 	const corpus = await loadChronicleCorpus(sessionsDir, {
 		checkTranscripts: true,
 	});
+	options.signal?.throwIfAborted();
 	const plan = buildPlan(corpus.atoms, config);
 	const modelIdentity = options.summarizer?.identity ?? "unresolved";
 	const report: IndexReport = {
@@ -189,6 +215,10 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 		stores: corpus.stores,
 		sessions: new Set(corpus.atoms.map(atom => atom.sessionId)).size,
 		projects: new Set(corpus.atoms.map(atom => atom.project)).size,
+		sessionAtoms:
+			options.sessionId === undefined
+				? undefined
+				: corpus.atoms.reduce((count, atom) => count + Number(atom.sessionId === options.sessionId), 0),
 		summaryModel: options.summarizer?.identity,
 		nodes: {
 			total: 0,
@@ -235,7 +265,14 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 
 	const process = async (planNode: PlanNode): Promise<Processed> => {
 		options.signal?.throwIfAborted();
-		const children = await Promise.all(planNode.children.map(child => process(child)));
+		// A failed/aborted child must not let the writer lease go while sibling
+		// work is still publishing. Drain every launched subtree before rethrowing.
+		const settledChildren = await Promise.allSettled(planNode.children.map(child => process(child)));
+		const children = settledChildren.map(child => {
+			if (child.status === "rejected") throw child.reason;
+			return child.value;
+		});
+		options.signal?.throwIfAborted();
 		const isLeaf = planNode.children.length === 0;
 		const parts: IdentityParts = isLeaf
 			? {
@@ -322,6 +359,12 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 			return { plan: planNode, outcome, identity };
 		};
 
+		// Fresh unrelated nodes remain usable, but never fill in stale unrelated
+		// children to make a shared ancestor generatable. With no current-session
+		// atoms this deliberately regenerates nothing, rather than running globally.
+		if (options.sessionId !== undefined && !planNode.sessions.includes(options.sessionId)) {
+			return record("stale", "outside session scope");
+		}
 		if (dryRun) return record("stale");
 		const blockedBy = children.find(child => !child.node);
 		if (blockedBy) return record("blocked", `child ${blockedBy.plan.key} is ${blockedBy.outcome}`);
@@ -364,6 +407,7 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 			if (options.signal?.aborted) throw error;
 			return record("failed", error instanceof Error ? error.message : String(error));
 		}
+		options.signal?.throwIfAborted();
 		await beginMutation();
 		for (const key of await writeViewNode(root, built, new Set(planNode.children.map(child => child.segment)))) {
 			report.derived.push({ key, detail: "pruned: no atoms map here any more" });
@@ -378,6 +422,8 @@ export async function indexChronicle(options: IndexOptions): Promise<IndexReport
 	let rootOutcome: Processed | undefined;
 	if (plan) rootOutcome = await process(plan);
 
+	// The wanted set always comes from the full canonical corpus, even in a
+	// scoped pass. Pruning can therefore never erase another session's live nodes.
 	const wanted = new Set<string>(plan ? [...walkPlan(plan)].map(node => node.key) : []);
 	const orphans = await findOrphanDirs(root, wanted);
 	for (const key of orphans) {
@@ -488,8 +534,9 @@ async function generateInterior(
 		projects: child.projects,
 		text: routingText(child),
 	}));
-	const output = await limiter.run(() =>
-		summarizer.summarize(
+	const output = await limiter.run(() => {
+		options.signal?.throwIfAborted();
+		return summarizer.summarize(
 			{
 				key: base.key,
 				label: base.label,
@@ -509,8 +556,8 @@ async function generateInterior(
 				childCeilingTokens: childBudget,
 			},
 			options.signal,
-		),
-	);
+		);
+	});
 	const node: ViewNode = {
 		...base,
 		contentHash: "",

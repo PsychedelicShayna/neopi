@@ -15,13 +15,10 @@ import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { classifyRelaySettle } from "../src/live/controller";
-
-type AgentEndEvent = Extract<AgentSessionEvent, { type: "agent_end" }>;
 
 describe("live relay settle classification", () => {
 	it("relays and closes on a terminal settle", () => {
@@ -81,9 +78,11 @@ describe("AgentSession agent_end final-response tagging", () => {
 			asyncJobManager: manager,
 		});
 
-		const settles: AgentEndEvent[] = [];
+		const settles: { isTerminal: boolean; hasFinalResponse?: boolean }[] = [];
 		session.subscribe(event => {
-			if (event.type === "agent_end") settles.push(event);
+			if (event.type === "agent_pause")
+				settles.push({ isTerminal: false, hasFinalResponse: event.hasFinalResponse });
+			else if (event.type === "agent_end") settles.push({ isTerminal: true, hasFinalResponse: true });
 		});
 
 		const gate = Promise.withResolvers<string>();

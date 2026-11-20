@@ -50,12 +50,13 @@ describe("ModelRegistry lazy bundled composition", () => {
 		expect(JSON.parse(stdout)).toEqual({ buildCalls: 0 });
 	});
 
-	test("loads the default LiteLLM namespaced cache", async () => {
+	test("hydrates only the current LiteLLM credential's cached roster", async () => {
 		const tempDir = TempDir.createSync("@model-registry-lazy-litellm-cache-");
 		tempDirs.push(tempDir);
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorages.push(authStorage);
-		const cacheProviderId = litellmModelManagerOptions().cacheProviderId;
+		authStorage.keys.setRuntime("litellm", "sk-team-a");
+		const cacheProviderId = litellmModelManagerOptions({ apiKey: "sk-team-a" }).cacheProviderId;
 		if (!cacheProviderId) throw new Error("LiteLLM must define a cache namespace");
 		writeModelCache(
 			cacheProviderId,
@@ -80,6 +81,8 @@ describe("ModelRegistry lazy bundled composition", () => {
 		);
 
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		expect(registry.find("litellm", "cached-fixture")).toBeUndefined();
+		await registry.hydrateCredentialScopedModelCaches();
 		expect(registry.find("litellm", "cached-fixture")?.name).toBe("Cached Fixture");
 	});
 
@@ -161,6 +164,48 @@ describe("ModelRegistry lazy bundled composition", () => {
 		expect(after.contextWindow).toBe(16384);
 		expect(after).not.toBe(before);
 		expect(registry.find("refresh-fixture", "fixture")).toBe(after);
+	});
+
+	test("missing config stays current while creation, deletion and policy changes invalidate catalogs", async () => {
+		const tempDir = TempDir.createSync("@model-registry-missing-config-");
+		tempDirs.push(tempDir);
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const configPath = path.join(tempDir.path(), "models.yml");
+		const localSettings = Settings.isolated();
+		const registry = new ModelRegistry(authStorage, configPath, { settings: localSettings });
+		const providers = new Set(["anthropic"]);
+		const initial = registry.getAvailableForProviders(providers)[0];
+		if (!initial) throw new Error("Expected the authenticated bundled Anthropic fixture");
+		expect(await registry.refreshIfStale()).toBe(false);
+
+		cfgDisabledProviders.override(localSettings, ["anthropic"]);
+		await registry.reapplyModelPolicies();
+		expect(registry.getAvailableForProviders(providers)).toEqual([]);
+		cfgDisabledProviders.override(localSettings, []);
+		await registry.reapplyModelPolicies();
+		expect(registry.getAvailableForProviders(providers).some(model => model.id === initial.id)).toBe(true);
+
+		await Bun.write(
+			configPath,
+			JSON.stringify({
+				providers: {
+					"created-fixture": {
+						api: "openai-completions",
+						apiKey: "test-key",
+						baseUrl: "https://example.invalid/v1",
+						models: [{ id: "created-model", name: "Created", contextWindow: 8192, maxTokens: 1024 }],
+					},
+				},
+			}),
+		);
+		expect(await registry.refreshIfStale()).toBe(true);
+		expect(registry.find("created-fixture", "created-model")?.name).toBe("Created");
+		await Bun.file(configPath).delete();
+		expect(await registry.refreshIfStale()).toBe(true);
+		expect(registry.find("created-fixture", "created-model")).toBeUndefined();
+		expect(await registry.refreshIfStale()).toBe(false);
 	});
 
 	test("query order preserves ordering, snapshots, and model identity", async () => {

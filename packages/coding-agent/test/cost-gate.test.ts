@@ -376,7 +376,7 @@ describe("cost gate in a running session", () => {
 		const api = "test-cost-gate-child";
 		const provider = scriptedProvider(api, [response(1.2)]);
 		const parent = await createSession(api, { "session.maxCost": 1 });
-		const child = await createSession(api, {}, { costGate: parent.costGate });
+		const child = await createSession(api, {}, { agentId: "CostChild", costGate: parent.costGate });
 
 		await child.prompt("child work");
 		await child.waitForIdle();
@@ -406,6 +406,24 @@ describe("cost gate in a running session", () => {
 		expect(session.costCapRefusal?.spent).toBe(2);
 		expect(dropped).toEqual([{ text: "continue", reason: session.costCapRefusal?.message }]);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "message")).toHaveLength(2);
+	});
+
+	it("rejects an extension-style idle user message with the cost-cap reason", async () => {
+		const api = "test-cost-gate-extension-send";
+		const provider = scriptedProvider(api, [response(0.1)]);
+		const session = await createSession(api, { "session.maxCost": 1 });
+		session.costGate.record(1.2);
+
+		const error = await rejectionOf(session.sendUserMessage("unsent extension work"));
+
+		expect(error).toMatchObject({
+			name: "PromptDroppedError",
+			message: session.costCapRefusal?.message,
+		});
+		if (!(error instanceof Error)) throw error;
+		expect(error.message).toContain("Cost cap reached");
+		expect(provider.calls()).toBe(0);
+		expect(session.sessionManager.getEntries().filter(entry => entry.type === "message")).toEqual([]);
 	});
 
 	it("applies a cap set while the session is open", async () => {

@@ -1,3 +1,4 @@
+import { entryProvenance } from "../config/entry-provenance";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -92,6 +93,7 @@ export const createWorkContractsExtension =
 		});
 		api.registerCommand("contract", {
 			description: "Manage durable session work clauses and opt in to agent edits",
+			provenance: entryProvenance("commands", "contract"),
 			async handler(args, ctx) {
 				let request: ContractRequest;
 				if (args.trimStart().startsWith("{")) {

@@ -1,9 +1,8 @@
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { Settings } from "../config/settings";
 import { IrcBus, ircRelayRoot } from "./bus";
-import type { AgentRegistry } from "../registry/agent-registry";
+import type { AgentRegistryApi } from "../registry/agent-registry";
 import { ensurePersistedRoster } from "../registry/persisted-agents";
 import { canSpawnAtDepth } from "../task/types";
 
@@ -20,32 +19,10 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 	return canSpawnAtDepth(maxDepth, taskDepth);
 }
 
-export function formatIncoming(msg: IrcMessage): string {
-	const replyTag = msg.replyTo ? ` (reply to ${msg.replyTo})` : "";
-	const progressTag = msg.progress ? " (progress; reply follows)" : "";
-	return `[${msg.id}] ${msg.from}${replyTag}${progressTag}: ${msg.body}`;
-}
-
-/** Session-buffered inbox drain used before parking a bus waiter. */
-export function drainPendingInbox(registry: AgentRegistry, senderId: string, from?: string): IrcMessage | undefined {
-	const session = registry.get(senderId)?.session;
-	return typeof session?.drainPendingIrcInboxMessages === "function"
-		? session.drainPendingIrcInboxMessages(senderId, { from, limit: 1 })[0]
-		: undefined;
-}
-
-/** `wait` result carrying a consumed message. */
-export function messageResult(senderId: string, waited: IrcMessage): AgentToolResult<CoordinationDetails> {
-	return {
-		content: [{ type: "text", text: formatIncoming(waited) }],
-		details: { op: "wait", from: senderId, waited },
-	};
-}
-
-/** Send a direct message or broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
+/** Send a direct message or, from a top-level agent only, a broadcast, optionally as a reply to message `replyTo`; delivery never waits for a reply. */
 export async function executeSend(
-	deps: { registry: AgentRegistry; senderId: string; sessionFileHint?: string | null },
-	params: { to: string; message: string; replyTo?: string; progress?: boolean },
+	deps: { registry: AgentRegistryApi; senderId: string; sessionFileHint?: string | null },
+	params: { to: string; message: string; replyTo?: string; progress?: boolean; remote?: boolean },
 ): Promise<AgentToolResult<CoordinationDetails>> {
 	const { registry, senderId, sessionFileHint } = deps;
 	const to = params.to.trim();
@@ -57,7 +34,7 @@ export async function executeSend(
 		return coordinationErrorResult("Cannot send a message to yourself.", { op: "send", from: senderId, to });
 	const isBroadcast = to === "all";
 	// Restore parked recipients only when needed; never delay delivery to a live peer.
-	if (!isBroadcast && sessionFileHint) {
+	if (!isBroadcast && sessionFileHint && !params.remote) {
 		const recipient = registry.get(to);
 		if (!recipient || recipient.status === "parked") await ensurePersistedRoster(registry, sessionFileHint);
 	}
@@ -76,6 +53,7 @@ export async function executeSend(
 					to: target,
 					body: message,
 					replyTo: params.replyTo,
+					localOnly: !params.remote,
 					...(isBroadcast ? { broadcast: true } : {}),
 					...(params.progress ? { progress: true } : {}),
 				},

@@ -53,17 +53,18 @@ import {
 } from "@oh-my-pi/pi-tui/prompt/word-completion";
 import { requestTextPrediction, textPredictionBackend } from "../../predict/client";
 import { type AgentSession, type NavigateTreeResult, SessionBusyError } from "../../session/agent-session";
+import type { AgentSessionHandle } from "../../session/agent-session-handle";
 import type { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession, findRecentSessionContinuation } from "../../session/session-listing";
+import { probeSessionLeases } from "../../session/session-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand, lookupTuiOnlyBuiltin } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { cfgSttEnabled } from "../../stt/settings";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
-import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../tools/todo";
 import type { EventBus } from "../../utils/event-bus";
 import { selectRpcEntries } from "./rpc-compat";
 import {
@@ -493,7 +494,7 @@ export function answerRpcProtocolNegotiation(
 
 /**
  * Commands that skip the serial queue entirely; see {@link dispatchRpcInputFrame}.
- * (`prompt` and `steer_subagent` are also backgrounded there, but start through
+ * (`prompt`, `steer_subagent`, and `handoff` also run in the background, but start through
  * the serial tail.) `btw_cancel` is synchronous and must overtake a `btw` still
  * starting or a long serial command; `abort_branch_summary` likewise overtakes
  * the `navigate_tree` whose summary it stops.
@@ -513,7 +514,7 @@ const BACKGROUND_COMMANDS: ReadonlySet<string> = new Set<RpcCommand["type"]>([
 /**
  * Dispatch a single parsed frame from the RPC input stream.
  *
- * `bash`, `predict_word`, `prompt` and `steer_subagent` are dispatched in the
+ * `bash`, `predict_word`, `prompt`, `steer_subagent`, and `handoff` are dispatched in the
  * background so the caller can keep reading subsequent frames while one is
  * still settling: a `bash` command can run for a long time, and a `prompt`
  * command's response is held until the message is admitted, which can span
@@ -561,7 +562,8 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 		command.type === "dictation_start" ||
 		command.type === "follow_up" ||
 		command.type === "navigate_tree" ||
-		command.type === "steer_subagent"
+		command.type === "steer_subagent" ||
+		command.type === "handoff"
 	) {
 		const task = (async () => {
 			try {
@@ -650,7 +652,7 @@ export class RpcUserInputGate {
 	}
 }
 
-/** Starts prompts, steers, follow-ups and `steer_subagent` after earlier ordinary commands, without
+/** Starts prompts, steers, follow-ups, `steer_subagent` and `handoff` after earlier ordinary commands, without
  * awaiting admission. Control frames, `bash` and `predict_word` dispatch immediately (see
  * dispatchRpcInputFrame). `acceptInput` runs synchronously in {@link dispatch}, before the
  * handler is queued, so an abort can invalidate a frame that has not started yet. */
@@ -947,7 +949,7 @@ export async function handleRpcSteerSubagent(
 	const notRunning = `Subagent not running: ${subagentId}`;
 	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
 	if (!owned) return notRunning;
-	let session: AgentSession;
+	let session: AgentSessionHandle;
 	try {
 		session = await AgentLifecycleManager.global().ensureLive(subagentId);
 	} catch {
@@ -980,11 +982,11 @@ export async function handleRpcSteerSubagent(
 }
 
 /** Change only the owned running subagent; AgentSession persists the next-request selection. */
-export function handleRpcSetSubagentThinkingLevel(
+export async function handleRpcSetSubagentThinkingLevel(
 	subagentRegistry: Pick<RpcSubagentRegistry, "getSubagents">,
 	subagentId: string,
 	level: ThinkingLevel,
-): string | undefined {
+): Promise<string | undefined> {
 	const owned = resolveOwnedLiveSubagent(subagentRegistry, subagentId);
 	if (!owned) return `Subagent not running: ${subagentId}`;
 	return setSubagentThinkingLevel(owned.session, level);
@@ -1172,6 +1174,10 @@ export function requestRpcSelect(
 			title,
 			options: labels,
 			...(optionDetails ? { optionDetails } : {}),
+			initialIndex: dialogOptions?.initialIndex,
+			selectionMarker: dialogOptions?.selectionMarker,
+			checkedIndices: dialogOptions?.checkedIndices ? [...dialogOptions.checkedIndices] : undefined,
+			markableCount: dialogOptions?.markableCount,
 			timeout: dialogOptions?.timeout,
 		},
 		response => parseValueDialogResponse(response, dialogOptions),
@@ -1926,7 +1932,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 					inputGate.commitSessionChange(command);
 					// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
 					if (command.type !== "branch" && command.type !== "fork") promptResults.abortOpen();
-					// The detached run publishes no terminal agent_end to settle on.
+					// The detached run publishes no agent_end to settle on.
 					void settleWatcher.check();
 					await emitAvailableCommandsUpdate();
 					// A session change ends set_mode's plan mode; answer once its restore landed.
@@ -2137,8 +2143,17 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				session.abortBranchSummary();
 				return success(id, "abort_branch_summary");
 
+			case "set_label": {
+				if (typeof command.entryId !== "string" || !command.entryId)
+					return error(id, "set_label", "entryId must be a non-empty string");
+				if (command.label !== undefined && typeof command.label !== "string")
+					return error(id, "set_label", "label must be a string");
+				session.sessionManager.appendLabelChange(command.entryId, command.label);
+				return success(id, "set_label");
+			}
+
 			case "set_todos": {
-				session.setTodoPhases(command.phases);
+				session.commitTodoPhases(command.phases);
 				return success(id, "set_todos", { todoPhases: session.getTodoPhases() });
 			}
 
@@ -2327,7 +2342,11 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
 					return error(id, command.type, "`subagentId` must be a non-empty string.");
 				}
-				const failure = handleRpcSetSubagentThinkingLevel(subagentRegistry, command.subagentId, command.level);
+				const failure = await handleRpcSetSubagentThinkingLevel(
+					subagentRegistry,
+					command.subagentId,
+					command.level,
+				);
 				return failure ? error(id, command.type, failure) : success(id, command.type);
 			}
 
@@ -2343,7 +2362,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 				const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
 				if (!owned) return error(id, command.type, `Subagent not running: ${command.subagentId}`);
-				if (!setSubagentFast(owned.session, command.enabled)) {
+				if (!(await setSubagentFast(owned.session, command.enabled))) {
 					return error(id, command.type, "Fast mode is unavailable for the subagent's current model.");
 				}
 				return success(id, command.type, {
@@ -2649,8 +2668,13 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			// =================================================================
 
 			case "bash": {
+				if (command.excludeFromContext !== undefined && typeof command.excludeFromContext !== "boolean") {
+					return error(id, "bash", "excludeFromContext must be a boolean");
+				}
 				try {
-					const result = await session.executeBash(command.command);
+					const result = await session.executeBash(command.command, undefined, {
+						excludeFromContext: command.excludeFromContext,
+					});
 					return success(id, "bash", result);
 				} catch (err) {
 					if (!(err instanceof TreeNavigationError)) throw err;
@@ -2670,6 +2694,14 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			case "get_session_stats": {
 				const stats = session.getSessionStats();
 				return success(id, "get_session_stats", stats);
+			}
+
+			case "get_session_lease": {
+				const { sessionIds } = command;
+				if (!Array.isArray(sessionIds) || !sessionIds.every(sessionId => typeof sessionId === "string")) {
+					return error(id, "get_session_lease", "sessionIds must be an array of strings");
+				}
+				return success(id, "get_session_lease", probeSessionLeases(sessionIds));
 			}
 
 			case "get_usage": {
@@ -2716,15 +2748,10 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 			}
 
 			case "handoff": {
-				// Resetting the agent mid-stream lets the live turn keep emitting into a
-				// session that handoff has already torn down. Refuse while a prompt is in
-				// flight (mirrors the TUI /handoff guard).
-				if (session.isStreaming) {
-					return error(id, "handoff", "Cannot hand off while a response is in progress");
-				}
-				const result = await session.handoff(command.customInstructions);
+				// Handoff is a compaction mode: steering and `abort` stay free while it prepares.
+				await session.compact(command.customInstructions, { mode: "handoff" });
 				await planMode.settled();
-				return success(id, "handoff", result ? { savedPath: result.savedPath } : null);
+				return success(id, "handoff", {});
 			}
 
 			// =================================================================
@@ -2863,6 +2890,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		maxFrameBytes: MAX_RPC_FRAME_BYTES,
 		maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 		capabilities: stdioCapabilities(),
+		supportsBashExcludeFromContext: true,
 	};
 	outputWriter.write(frameEncoder.encodeFrames(readyFrame));
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -3007,6 +3035,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		}
 
 		rerenderMessage(): void {
+			// No transcript is drawn in RPC mode
+		}
+
+		refreshTranscript(): void {
 			// No transcript is drawn in RPC mode
 		}
 
@@ -3478,6 +3510,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// A backgrounded builtin (e.g. a /mcp reauth browser wait) must not park
 	// the drain: tear it down now that the client is gone.
 	abortBuiltinCommands("RPC client disconnected");
+	if (session.isBackgroundCompacting) session.abortCompaction("RPC client disconnected");
 	await shutdownCoordinator.drain();
 	subagentRegistry?.dispose();
 	// Dispose the main session before exiting so the browser reaper and other
