@@ -2,10 +2,12 @@ import { RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { formatInteger } from "../data/formatters";
 import { useLiveStatus } from "../data/live";
+import { useTranslation } from "../i18n";
 import { Dot } from "../ui";
 
 /** Topbar ingest status; click to sync now. */
 export function LiveChip() {
+	const tr = useTranslation();
 	const { sync, indexingHours, connected, requestSync } = useLiveStatus();
 	const now = useNow(sync.phase === "idle" ? 15_000 : null);
 
@@ -15,15 +17,15 @@ export function LiveChip() {
 		body = (
 			<>
 				<Dot tone="warn" />
-				<span>Reconnecting</span>
+				<span>{tr("live.reconnecting", "Reconnecting")}</span>
 			</>
 		);
-		title = "Lost the live connection to the stats server; retrying";
+		title = tr("live.disconnected", "Lost the live connection to the stats server; retrying");
 	} else if (sync.phase === "syncing") {
 		body = (
 			<>
 				<RefreshCw size={13} className="spin" />
-				<span>Syncing</span>
+				<span>{tr("live.syncing", "Syncing")}</span>
 				{sync.total > 0 && (
 					<span className="live-chip-count">
 						{formatInteger(sync.current)}/{formatInteger(sync.total)}
@@ -36,16 +38,21 @@ export function LiveChip() {
 		body = (
 			<>
 				<Dot tone="bad" />
-				<span>Sync failed</span>
+				<span>{tr("live.sync_failed", "Sync failed")}</span>
 			</>
 		);
-		title = `${sync.error ?? "Sync failed"} — click to retry`;
+		title = tr("live.retry", "{error} — click to retry").replace(
+			"{error}",
+			sync.error ?? tr("live.sync_failed", "Sync failed"),
+		);
 	} else if (indexingHours > INDEXING_VISIBLE_HOURS) {
 		body = (
 			<>
 				<RefreshCw size={13} className="spin" />
-				<span>Indexing</span>
-				<span className="live-chip-count">{formatInteger(indexingHours)}h left</span>
+				<span>{tr("live.indexing", "Indexing")}</span>
+				<span className="live-chip-count">
+					{tr("live.hours_left", "{hours}h left").replace("{hours}", formatInteger(indexingHours))}
+				</span>
 			</>
 		);
 		title = "Building hourly rollups; older ranges fill in as it goes";
@@ -53,8 +60,8 @@ export function LiveChip() {
 		body = (
 			<>
 				<Dot tone="live" pulse />
-				<span>Live</span>
-				{sync.lastSyncedAt !== null && <span className="live-chip-count">{ago(now - sync.lastSyncedAt)}</span>}
+				<span>{tr("live.live", "Live")}</span>
+				{sync.lastSyncedAt !== null && <span className="live-chip-count">{ago(now - sync.lastSyncedAt, tr)}</span>}
 			</>
 		);
 		title = "Click to sync session files now";
@@ -87,11 +94,13 @@ function useNow(intervalMs: number | null): number {
 	return now;
 }
 
-function ago(ms: number): string {
+function ago(ms: number, tr: (key: string, english: string) => string): string {
 	const s = Math.max(0, Math.round(ms / 1000));
-	if (s < 45) return "just now";
+	if (s < 45) return tr("live.just_now", "just now");
 	const m = Math.round(s / 60);
-	if (m < 60) return `${m}m ago`;
+	if (m < 60) return tr("live.minutes_ago", "{count}m ago").replace("{count}", String(m));
 	const h = Math.round(m / 60);
-	return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+	return h < 24
+		? tr("live.hours_ago", "{count}h ago").replace("{count}", String(h))
+		: tr("live.days_ago", "{count}d ago").replace("{count}", String(Math.round(h / 24)));
 }

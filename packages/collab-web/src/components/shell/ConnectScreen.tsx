@@ -1,6 +1,8 @@
 import { ArrowRight, Lock } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 import { useState } from "react";
+import { useTranslation } from "../../lib/i18n";
+import { LanguagePicker } from "./LanguagePicker";
 import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -11,22 +13,23 @@ export interface ConnectScreenProps {
 }
 
 export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenProps): ReactNode {
+	const tr = useTranslation();
 	const [link, setLink] = useState("");
 	const [name, setName] = useState(defaultName);
-	const [localError, setLocalError] = useState<string | null>(null);
+	const [missingLink, setMissingLink] = useState(false);
 
 	const submit = (e: FormEvent<HTMLFormElement>): void => {
 		e.preventDefault();
 		const trimmed = link.trim();
 		if (!trimmed) {
-			setLocalError("Paste a join link first.");
+			setMissingLink(true);
 			return;
 		}
-		setLocalError(null);
+		setMissingLink(false);
 		onConnect(trimmed, name.trim() || "guest");
 	};
 
-	const shown = localError ?? error;
+	const shown = missingLink ? tr("connect.missing_link", "Paste a join link first.") : error;
 
 	return (
 		<div className="sh-connect">
@@ -38,7 +41,10 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 					<span className="sh-brand-slash">/</span>
 					<span className="sh-brand-app">collab</span>
 				</div>
-				<ThemeToggle />
+				<div className="sh-header-right">
+					<LanguagePicker />
+					<ThemeToggle />
+				</div>
 			</div>
 			<form className="sh-connect-card" onSubmit={submit}>
 				<div className="sh-connect-head">
@@ -49,7 +55,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 					</p>
 				</div>
 				<label className="sh-field">
-					<span className="sh-field-label">Join link</span>
+					<span className="sh-field-label">{tr("connect.link", "Join link")}</span>
 					<input
 						className="sh-input sh-input-mono"
 						type="text"
@@ -65,7 +71,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 					</span>
 				</label>
 				<label className="sh-field">
-					<span className="sh-field-label">Display name</span>
+					<span className="sh-field-label">{tr("connect.name", "Display name")}</span>
 					<input
 						className="sh-input"
 						type="text"
@@ -79,7 +85,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 				</label>
 				{shown && <div className="sh-connect-error">{shown}</div>}
 				<button className="sh-btn sh-btn-primary sh-connect-submit" type="submit">
-					Connect <ArrowRight size={14} />
+					{tr("connect.action", "Connect")} <ArrowRight size={14} />
 				</button>
 				<div className="sh-connect-foot">
 					<Lock size={12} />

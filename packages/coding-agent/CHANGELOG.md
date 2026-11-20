@@ -12,6 +12,9 @@
 
 ### Added
 
+- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
+
 - Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).
 - Choose session-start Chronicler consent with `chronicler.enabled: ask`, set recording limits by addressing Luna as `@chronicler`, see her blue-bordered notes, and read her optional editorial notes in atom front matter.
 - Control socket: `reload_settings` accepts the `session` scope, re-reading only the addressed session's settings file, and `settings_set`/`settings_unset` can write the `global`, `project` or `session` file of the addressed session (`persist` remains the global alias); member edits change only that scope's own map.

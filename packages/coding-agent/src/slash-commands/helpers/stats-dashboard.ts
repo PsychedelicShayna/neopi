@@ -1,4 +1,5 @@
 import * as stats from "@oh-my-pi/omp-stats";
+import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import { openTernPage } from "../../tools/browser/tern/user-page";
 import * as openUtils from "../../utils/open";
 
@@ -91,7 +92,7 @@ export async function launchStatsDashboard(
 		if (judge) await stats.startServer(activeStatsServer.port, activeStatsServer.hostname, { judge });
 	}
 
-	const url = stats.formatStatsDashboardUrl(activeStatsServer.hostname, activeStatsServer.port);
+	const url = stats.formatStatsDashboardUrl(activeStatsServer.hostname, activeStatsServer.port, getLocale());
 	const page = await openTernPage(url, "beside");
 	if (page) page.disconnect();
 	else openUtils.openPath(url);

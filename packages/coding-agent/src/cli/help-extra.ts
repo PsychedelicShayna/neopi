@@ -2,7 +2,27 @@ import "@oh-my-pi/pi-utils/env";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { logger } from "@oh-my-pi/pi-utils";
+import { setLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { Settings } from "../config/settings";
 import { BUILTIN_TOOL_HELP, type BuiltinToolHelp } from "../tools/builtin-names";
+import { cfgLanguage } from "../modes/settings";
+
+/** Load the configured language without initializing the interactive session or writing settings. */
+export async function initializeCliLanguage(): Promise<void> {
+	try {
+		const settings = await Settings.loadReadOnly();
+		setLocale(cfgLanguage.get(settings));
+	} catch (error) {
+		logger.warn("Could not load language for CLI; using English", { error: String(error) });
+		setLocale("en");
+	}
+}
+
+export function translateHelpHeading(key: string, fallback: string): string {
+	const translated = t(key);
+	return translated === key ? fallback : translated;
+}
 
 function renderBuiltinToolSummary(help: BuiltinToolHelp): string {
 	return help.defaultState === "detected" ? `${help.summary} (when ${help.detectedWhen})` : help.summary;

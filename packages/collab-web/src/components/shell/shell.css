@@ -164,6 +164,18 @@
 	background: var(--selected);
 }
 
+.sh-language {
+	height: 30px;
+	max-width: 94px;
+	padding: 0 4px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	color: var(--fg);
+	font: inherit;
+	cursor: pointer;
+}
+
 /* ---- theme toggle (system / light / dark) ---- */
 .sh-theme-toggle {
 	display: inline-flex;

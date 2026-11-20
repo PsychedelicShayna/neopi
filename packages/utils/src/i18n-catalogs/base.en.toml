@@ -1,0 +1,13 @@
+"interactive.editor.unconfigured" = "No editor configured. Set $VISUAL or $EDITOR environment variable."
+"interactive.copy.empty" = "Nothing to copy"
+"interactive.copy.line" = "Copied line: {preview}"
+"interactive.copy.preview" = "Copied: {preview}"
+"interactive.copy.failed" = "Failed to copy to clipboard"
+"interactive.copy.success" = "Copied to clipboard"
+"interactive.copy.error" = "Copy failed: {error}"
+
+[composer]
+placeholder = "Write a message…"
+
+[settings.language]
+description = "Language used for translated interface text"

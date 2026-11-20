@@ -1,0 +1,426 @@
+# Review draft only; not connected to runtime localization.
+# Keys identify UI context. Source expressions inside ${...} are preserved verbatim;
+# they are not a proposed interpolation API. Terminology marked REVIEW needs discussion.
+# Coverage is partial: interactive-mode and controller inventories contain further
+# conditional, dynamically assembled, and command-related messages; controller
+# scans were capped per file. Component/chrome/status-line scans can miss lowercase,
+# generated, native accessibility and callback-provided copy. No exhaustiveness claim.
+# Embedded English plural expressions in translated values require runtime-aware review.
+
+# packages/tui/src/components/form.ts
+[components.form]
+preview = "Preview:"
+select = "Select"
+
+# packages/tui/src/components/loader.ts
+[components.loader]
+cancel = "Cancel"
+stop = "Stop"
+loading = "Loading..."
+
+# packages/tui/src/components/menu-hints.ts
+[components.vim_help]
+title = "Vim navigation"
+rows = "j / k: next / previous row (also arrow keys)"
+horizontal = "h / l: left / right (pane, branch or value)"
+boundaries = "gg / G: first / last item (also Home / End)"
+half_page = "Ctrl-u / Ctrl-d: half page up / down"
+scroll = "Ctrl-e / Ctrl-y: scroll view down / up"
+page = "PgUp / PgDn: full page up / down"
+return = "? / Enter / Esc: return to menu"
+
+# packages/tui/src/components/menu-navigation.ts, select-list.ts, settings-list.ts
+[components.search]
+placeholder = "/ search"
+prefix = "Search: "
+invalid_regex = 'Invalid regex: ${error}'
+no_matching_items = "No matching items"
+no_items = "No items"
+no_settings = "No settings available"
+no_matching_settings = "No matching settings"
+other = "Other"
+
+# packages/tui/src/chrome/context-view-model.ts; REVIEW: prompt, skills, thinking, tool call/output.
+[chrome.context]
+system_prompt = "System Prompt"
+system_prompt_excluding_skills = "System Prompt (excluding Skills)"
+skills = "Skills"
+builtin_tools = "Built-in Tools"
+custom_tools = "Custom Tools"
+user_developer_messages = "User / Developer Messages"
+assistant_messages = "Assistant Messages"
+assistant_thinking = "Assistant Thinking"
+tool_calls = "Tool Calls"
+tool_output = "Tool Output"
+
+# packages/tui/src/chrome/error-block.ts, transcript-notice.ts, side-panel-fullscreen.ts
+[chrome.notices]
+unknown_error = "Unknown error"
+warning = "Warning"
+error = "Error"
+side_panel = "Side panel"
+
+# packages/tui/src/status-line/component.ts; REVIEW: context, tokens, compaction.
+[status.context]
+unknown = "Context usage unknown"
+used = 'Context ${Math.round(pct)}% used'
+tokens = '${formatNumber(ctx.contextTokens)} of ${formatNumber(window)} tokens'
+no_window = "No context window"
+auto_compact = 'Auto-compact at ${Math.round(boundaries.thresholdPercent)}%'
+summary_running = "Compaction summary in progress"
+summary_ready = "Compaction summary ready"
+summary_starts = 'Compaction summary starts at ${Math.round(speculationAt * 100)}%'
+session_cost = 'Session cost ${cost}'
+
+# packages/tui/src/status-line/context-usage.ts; REVIEW: prompt, tools, context, skills.
+[status.categories]
+system_prompt = "System prompt"
+system_tools = "System tools"
+system_context = "System context"
+skills = "Skills"
+messages = "Messages"
+
+# packages/tui/src/status-line/segments.ts; REVIEW: names of modes and Vim labels.
+[status.modes]
+plan = "Plan"
+plan_paused = "Plan (paused)"
+prewalk = "Prewalk"
+loop_waiting = "next prompt repeats"
+vim_insert = "INSERT"
+vim_normal = "NORMAL"
+vim_visual = "VISUAL"
+vim_visual_line = "V-LINE"
+vim_replace = "REPLACE"
+
+# packages/coding-agent/src/modes/interactive-mode.ts
+[interactive.notices]
+agent_gone = "That agent is gone — open the hub for live agents"
+history_not_saved = "Prompt history could not be saved; this prompt may be unavailable after restart."
+copied = "Copied to clipboard"
+no_extension_links = "No extension links on screen"
+too_many_extension_links = "Too many extension links on one row to tag; widen the terminal"
+no_editor = 'No editor configured. Set $VISUAL or $EDITOR environment variable.'
+closing = "Closing session…"
+still_closing = "Still closing… (flushing memory backend / network)"
+no_async_jobs = "Async background jobs are unavailable in this session."
+control_recording = "A control client is recording with the microphone"
+dictation_latched = "Dictation latched: release Space, then tap Space or Backspace to stop"
+finish_xai_recording = "Finish the xAI recording before using configured dictation."
+stt_disabled = "Speech-to-text is disabled. Enable it in settings: stt.enabled"
+
+# REVIEW: plan, goal, vibe and prompt terminology; names are not command translations.
+[interactive.modes]
+exit_goal = "Exit goal mode first."
+exit_vibe = "Exit vibe mode first."
+exit_plan = "Exit plan mode first."
+plan_paused = "Plan mode paused."
+plan_disabled = "Plan mode disabled."
+plan_not_active = "Plan mode is not active."
+plan_setting_disabled = "Plan mode is disabled. Enable it in settings (plan.enabled)."
+plan_copied = "Copied plan to clipboard"
+plan_updated = "Plan updated in external editor."
+plan_refine = "Refine plan: enter a follow-up prompt."
+goal_resumed = "Goal mode resumed."
+goal_enabled = "Goal mode enabled."
+goal_completed = "Goal mode completed."
+goal_dropped = "Goal dropped."
+goal_paused = "Goal mode paused."
+goal_disabled = "Goal mode disabled."
+no_active_goal = "No active goal."
+goal_already_complete = "Goal is already complete."
+goal_budget_invalid = 'Goal budget must be a positive integer or `off`.'
+goal_budget_cleared = "Goal budget cleared."
+goal_setting_disabled = "Goal mode is disabled. Enable it in settings (goal.enabled)."
+goal_resume_or_drop = "Resume the current goal first, or drop it before setting a new objective."
+goal_resume_for_budget = "Resume the goal before adjusting the budget."
+no_goal_set = "No goal set."
+no_goal_to_pause = "No active goal to pause."
+no_goal_to_resume = "No paused goal to resume."
+no_goal_to_drop = "No goal to drop."
+
+# packages/tui/src/components/settings-list.ts, tab-bar.ts, menu-navigation.ts
+[components.navigation]
+edit_search = '${editKey} to edit search · ${cancelKey} to cancel'
+tabs_hint = '(h/l tabs · ${formatKeyHint("tab")} cycle)'
+search_hint = " · / search · ? help"
+
+# packages/tui/src/status-line/segments.ts; REVIEW: mode names.
+[status.extra]
+vibe = "Vibe"
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts
+# REVIEW: shake, handoff, snapcompact, compaction and fallback vocabulary.
+[interactive.events]
+auto_shake_completed = "Auto-shake completed"
+auto_handoff_completed = "Auto-handoff completed"
+snapcompact_failed = "Auto-snapcompact maintenance failed; continuing without maintenance"
+server_compaction_failed = "Auto server compaction failed; continuing without maintenance"
+context_full_failed = "Auto context-full maintenance failed; continuing without maintenance"
+retry_failed = 'Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}'
+fallback = 'Fallback: ${event.from} -> ${event.to}${reason}'
+fallback_succeeded = 'Fallback succeeded on ${event.model}'
+
+# packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+# REVIEW: branch and collab vocabulary.
+[interactive.extensions]
+reloaded = "Reloaded session"
+branched = "Branched to new session"
+navigated = "Navigated to selected point"
+host_only_turns = "Extension-initiated turns are host-only during a collab session"
+send_message_failed = 'Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}'
+send_user_message_failed = 'Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}'
+backed_off = '⌁ ${actor.label}#${actor.connectionId} backed off (you were interacting)'
+
+# packages/coding-agent/src/modes/controllers/input-controller.ts
+# REVIEW: subagent, hub, composer, chain, collab and prompt vocabulary.
+[interactive.input]
+side_panel = 'Side panel (${prefix}): t todo · a agents · i IRC · esc cancel'
+subagent_gone = "That subagent is gone — open the hub for live agents"
+composer_locked = "The composer is locked while a chain runs"
+local_execution_host_only = "Local execution is host-only during a collab session"
+collab_read_only = "This collab link is read-only — prompting is disabled"
+bash_running = "A bash command is already running. Press Esc to cancel it first."
+kernel_busy = 'The ${target} kernel is busy. Press Esc to cancel it first.'
+submit_text_saved = "Text typed during submit saved to history (Up)"
+chain_skipping = 'Chain ${chainName}: skipping "${currentStep}"…'
+chain_skipped = 'Chain ${chain.name}: skipped "${step.name}"'
+chain_aborted = "Chain aborted; draft restored"
+chain_failed = 'Chain ${chain.name} failed at step "${currentStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}'
+suspend_failed = 'Failed to suspend: ${reason}'
+no_queued_messages = "No queued messages to restore"
+
+# packages/coding-agent/src/modes/controllers/command-controller.ts
+# REVIEW: advisor, trace, transcript.
+[interactive.session]
+exported = 'Session exported to: ${filePath}'
+no_session_file = "No session file yet — send a message first."
+no_messages = "No messages to dump yet."
+advisor_inactive = "Advisor is not active for this session."
+advisor_no_history = "Advisor has no history yet."
+advisor_copied = "Advisor history copied to clipboard"
+share_cancelled = "Share cancelled"
+shared = "Session shared"
+share_url = 'Share URL: ${result}'
+
+# packages/coding-agent/src/modes/controllers/todo-command-controller.ts
+# REVIEW: todo vocabulary.
+[interactive.todos]
+no_copy = "No todos to copy."
+copied = "Copied todos as Markdown to clipboard."
+no_export = "No todos to export."
+cleared = "Cleared all todos."
+wrote = 'Wrote todos to ${target}'
+
+# packages/tui/src/components/form.ts
+[components.validation]
+required = "A value is required."
+
+# packages/tui/src/chrome/side-panel.ts, side-panel-fullscreen.ts and collab-qrcode.ts.
+# These are independently rendered pieces, including conditional alternatives.
+[chrome.panel]
+empty = "nothing to show"
+views = ' · ${prefix} t/a/i view'
+footer = 'esc close${views} · right-click cycle · ↑↓ scroll'
+
+[chrome.collab_qr]
+join = "Join"
+terminal_width = 'terminal width ${width}; need ${this.#minWidth}'
+viewport_height = 'viewport height ${this.#allocatedRows}; need ${this.#lines.length}'
+transcript_pressure = "transcript pressure"
+hidden = 'QR code hidden: ${reason}.'
+
+# packages/coding-agent/src/modes/interactive-mode.ts. REVIEW: transcript, hub, prompt, LSP.
+[interactive.errors]
+readonly_transcript = '${id} is a read-only transcript; showing the Agent Hub'
+copy_failed = 'Copy failed: ${error instanceof Error ? error.message : String(error)}'
+persistence_failed = 'Session persistence failed: ${detail}. Unsaved entries remain in memory; persistence will retry on the next entry.'
+cwd_failed = 'Cannot change working directory to ${newCwd}: ${error instanceof Error ? error.message : String(error)}'
+model_after_stream_failed = 'Failed to switch model after streaming: ${error instanceof Error ? error.message : String(error)}'
+plan_model_failed = 'Failed to switch to plan model for plan mode: ${error instanceof Error ? error.message : String(error)}'
+plan_file_missing = 'Plan file not found at ${planFilePath}'
+plan_save_failed = 'Failed to save plan: ${error instanceof Error ? error.message : String(error)}'
+plan_review_failed = 'Plan review failed: ${message}'
+plan_review_open_failed = 'Failed to open plan review: ${message}'
+plan_refine_failed = 'Failed to refine plan: ${error instanceof Error ? error.message : String(error)}'
+shutdown_failed = 'Shutdown failed: ${error instanceof Error ? error.message : String(error)}'
+recording_failed = 'Could not start recording: ${error instanceof Error ? error.message : String(error)}'
+lsp_failed = 'LSP startup failed: ${event.error}. It will retry lazily on write.'
+lsp_failed_many = 'LSP startup failed for ${failedNames}. It will retry lazily on write.'
+
+# packages/coding-agent/src/modes/controllers/live-command-controller.ts,
+# selector-controller.ts, session-focus-controller.ts and modes/local-file-editor.ts.
+# REVIEW: composer, chain, prompt, agent and advisor.
+[interactive.controller_notices]
+voice_not_received = "The voice agent did not receive your message; it is back in the composer"
+speech_ignored = "Speech ignored while a chain rewrites the draft"
+close_view = "Close this view first (Esc)"
+finish_prompt = "Finish or cancel the prompt first"
+no_backing_file = "This built-in configuration has no backing file."
+editor_exit = 'External editor exited with code ${code}. Saved changes were reloaded.'
+no_personality = "Personality setting is unavailable."
+no_usage_data = "No usage data available."
+main_session = "Returned to main session"
+agent_returned = 'Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session'
+no_local_files = "No local:// files in this session yet."
+list_local_failed = 'Failed to list local:// files: ${showErrorMessage(error)}'
+
+# packages/coding-agent/src/modes/controllers/mcp-command-controller.ts.
+[interactive.mcp]
+add_cancelled = 'Add cancelled for "${parsed.initialName}"'
+add_failed = 'Failed to add server: ${errorMsg}${helpText}'
+list_failed = 'Failed to list servers: ${error instanceof Error ? error.message : String(error)}'
+remove_failed = 'Failed to remove server: ${error instanceof Error ? error.message : String(error)}'
+test_finished = 'MCP test for "${name}" already finished'
+test_cancelled = 'Cancelled MCP test for "${name}"'
+connect_failed = 'Failed to connect to "${name}": ${errorMsg}${helpText}'
+server_not_found = 'Server "${name}" not found.'
+auth_clear_failed = 'Failed to clear auth: ${error instanceof Error ? error.message : String(error)}'
+
+# packages/coding-agent/src/modes/controllers/selector-controller.ts.
+# REVIEW: model, role, fallback, compaction, branch and rewind.
+[interactive.selector]
+advisor_saved = 'Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.'
+advisor_applied = 'Applied WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.'
+chain_saved = 'Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C sends through the active chain.'
+agent_model = 'Agent ${focusedAgentId} model: ${selector}'
+effort_rules = 'Implicit effort rules: ${rules.length}'
+context_rules = 'Context rules: ${rules.length}'
+default_model = 'Default model: ${fallbackModel.provider}/${fallbackModel.id}'
+cycle_cleared = "Quick-switch cycle cleared"
+model_facts_saved = "Model facts saved"
+uninstalling = 'Uninstalling ${pluginId}...'
+uninstalled = 'Uninstalled ${pluginId}'
+uninstall_failed = 'Uninstall failed: ${err}'
+installing = 'Installing ${name} from ${marketplace}...'
+installed = 'Installed ${name} from ${marketplace}'
+install_failed = 'Install failed: ${err}'
+no_branch_messages = "No messages to branch from"
+already_at_point = "Already at this point"
+navigation_cancelled = "Navigation cancelled"
+rewound = "Rewound to selected point"
+nothing_to_copy = "Nothing to copy yet."
+nothing_in_item = "Nothing to copy in that item"
+copied_item = 'Copied ${label} to clipboard'
+opening = 'Opening ${label}: ${href}'
+no_session_entries = "No entries in session"
+reanswer_cancelled = "Re-answer cancelled"
+branch_summary_cancelled = "Branch summarization cancelled"
+ask_not_ready = "Ask tool UI is not ready"
+login_failed = 'Login failed: ${error instanceof Error ? error.message : String(error)}'
+logout_failed = 'Logout failed: ${error instanceof Error ? error.message : String(error)}'
+account_pin_streaming = "Cannot pin an account while the session is streaming."
+loading_accounts = "Loading provider accounts…"
+select_model_for_pin = "Select a model before pinning a provider account."
+checking_resets = "Checking saved rate-limit resets…"
+no_saved_resets = "No saved rate-limit resets available to spend right now."
+irc_viewer_disabled = "The IRC viewer is disabled (irc.operator.viewerEnabled)."
+
+# packages/tui/src/components/settings-list.ts:864-865; this hint is also
+# emitted by the native description (settings-list.ts:769-781).
+[components.accessible_hints]
+settings = '${editorKey("tui.select.confirm")} edit · ${formatKeyHint("space")} cycle · Tab sections · / search · ${editorKey("tui.select.cancel")} close · ? help'
+
+# packages/tui/src/chrome/error-block.ts:58. REVIEW: plural interpolation.
+[chrome.error_details]
+hidden_lines = '${CONTINUATION_INDENT}… +${hidden} more line${hidden === 1 ? "" : "s"} (${expandKeyHint()} to expand)'
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts:2752-2762.
+[interactive.maintenance_cancelled]
+handoff = "Auto-handoff cancelled"
+server = "Auto server compaction cancelled"
+shake = "Auto-shake cancelled"
+snapcompact = "Auto-snapcompact cancelled"
+context_full = "Auto context-full maintenance cancelled"
+
+# packages/coding-agent/src/modes/controllers/input-controller.ts.
+# REVIEW: queue, compaction, yield, thinking, chip.
+[interactive.input_more]
+bash_running_bound = 'A bash command is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.'
+kernel_busy_bound = 'The ${evalCommand.language} kernel is busy. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.'
+chain_step = 'Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (Esc Esc skip · Esc Esc Esc abort · Ctrl+C abort)'
+suspend_unsupported = 'Suspend (${appKey(this.ctx.keybindings, "app.suspend")}) is not supported on this platform'
+queue_restored = "Restored last queued message to editor"
+nothing_to_retry = "Nothing to retry"
+queued_compaction_one = "Queued message for after compaction"
+queued_compaction_many = 'Queued ${messages.length} messages for after compaction'
+sent_one = "Sent queued message"
+sent_first = 'Sent first message; queued ${queuedCount - 1} for later yields'
+queued_yield_one = "Queued message for when the agent yields"
+queued_yield_many = 'Queued ${queuedCount} messages for when the agent yields'
+image_unsupported = "Image paste is not supported in this prompt"
+video_unsupported = "Video paste is not supported in this prompt"
+image_path_unsupported = "Pasted path is not a supported image"
+image_missing = 'Image not found at ${displayPath}'
+image_path_failed = "Failed to read pasted image path"
+clipboard_empty = "Clipboard is empty"
+clipboard_read_failed = "Failed to read clipboard"
+clipboard_no_text = "No text in clipboard to paste raw"
+clipboard_paste_failed = "Failed to paste raw text from clipboard"
+paste_saved = 'Saved ${lineCount} pasted lines to local://${name}'
+paste_save_failed = "Failed to save paste to a file — attached as a text chip instead"
+nothing_to_copy = "Nothing to copy"
+copy_failed = "Failed to copy to clipboard"
+copied_line = 'Copied line: ${preview}'
+copied = 'Copied: ${preview}'
+thinking_unsupported = "Current model does not support thinking"
+one_role_model = "Only one role model available"
+thinking_off = "Thinking is off — enable thinking to show blocks"
+editor_context_removed = "External editor context marker was removed; draft unchanged."
+
+# packages/coding-agent/src/modes/local-file-editor.ts, skill-command.ts.
+# REVIEW: skill vocabulary.
+[interactive.local_editor]
+closed = 'Closed ${sanitizeText(chosen.url)} in editor.'
+editor_exit = 'Editor exited with code ${exitCode}; ${sanitizeText(chosen.url)} keeps whatever it saved.'
+skill_load_failed = 'Failed to load skill: ${err instanceof Error ? err.message : String(err)}'
+
+# packages/tui/src/components/select-list.ts:817-840; status shared with native UI.
+[components.select_status]
+query = '  Search: ${query}${this.#search.focused ? " · Enter confirm · Esc clear" : " · / edit · Esc clear"}'
+type_to_narrow = "  Search: type to narrow · Enter confirm · Esc clear"
+search = "  / search"
+
+# packages/coding-agent/src/modes/controllers/event-controller.ts:186-191,2695-2712,3013-3038.
+# REVIEW: contextual assembly may need reordered grammar.
+[interactive.working]
+background = "Waiting for background work"
+background_one = 'Waiting for background job ${jobIds[0]}'
+background_many = 'Waiting for ${jobIds.length} background jobs: ${listed}${more}'
+overflow = "Context overflow detected, "
+incomplete = "Response incomplete, "
+idle = "Idle "
+server_compaction = "Auto server compaction"
+handoff = "Auto-handoff"
+shake = "Auto-shake"
+snapcompact = "Auto-snapcompact"
+context_full = "Auto context-full maintenance"
+stopped_error = "Stopped with error"
+complete = "Complete"
+
+# packages/coding-agent/src/modes/controllers/command-controller.ts.
+# REVIEW: context, memory, backend, system prompt, compaction and handoff.
+[interactive.session_operations]
+usage_unconfigured = "Usage reporting is not configured for this session."
+usage_failed = 'Failed to fetch usage data: ${error instanceof Error ? error.message : String(error)}'
+context_no_model = "Context usage is unavailable: no model is selected for this session."
+context_unknown_window = "Context usage is unavailable: the model's context window is unknown or invalid."
+memory_empty = "Memory payload is empty (memory backend off, disabled, or no memory available)."
+memory_cleared = "Memory data cleared and system prompt refreshed."
+memory_queued = "Memory consolidation enqueued."
+memory_ran = "Memory consolidation ran."
+memory_queue_unavailable = 'Memory queue is not available for the ${backend.id} backend.'
+wait_refresh = "Wait for the current response to finish or abort it before refreshing provider state."
+wait_reset = "Wait for the current response to finish or abort it before resetting the context."
+name_empty = "Session name cannot be empty."
+renamed = 'Session renamed to "${name}".'
+wait_worktree = "Wait for the current response to finish or abort it before creating a worktree."
+wait_directory = "Wait for the current response to finish or abort it before changing directories."
+nothing_compact = "Nothing to compact (no messages yet)"
+compaction_cancelled = "Compaction cancelled"
+compaction_failed = 'Compaction failed: ${message}'
+wait_handoff_response = "Wait for the current response to finish or abort it before handing off."
+wait_handoff_compaction = "Wait for context compaction to finish or cancel it before handing off."
+nothing_handoff = "Nothing to hand off (no messages yet)"
+handoff_cancelled = "Handoff cancelled"
+handoff_saved = 'Handoff document saved to: ${result.savedPath}'
+handoff_failed = 'Handoff failed: ${message}'

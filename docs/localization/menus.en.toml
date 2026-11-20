@@ -1,0 +1,1340 @@
+# Review draft only; extracted from current TUI source. No runtime wiring implied.
+# Keys identify source component/context. Dynamic prompt/body content stays untranslated.
+
+[[message]]
+key = "tui.model_picker.action.apply_role"
+english = "Apply role"
+
+[[message]]
+key = "tui.model_picker.action.use_task_subagents"
+english = "Use for Task subagents"
+
+[[message]]
+key = "tui.model_picker.action.select_model"
+english = "Select model"
+
+[[message]]
+key = "tui.model_picker.action.use_session"
+english = "Use for session"
+
+[[message]]
+key = "tui.model_picker.action.task_model"
+english = "Task model"
+
+[[message]]
+key = "tui.model_picker.action.clear_search"
+english = "Clear search"
+
+[[message]]
+key = "tui.model_picker.action.close"
+english = "Close"
+
+[[message]]
+key = "tui.model_picker.hint.apply_role_model"
+english = "apply role model"
+
+[[message]]
+key = "tui.model_picker.hint.use_task_subagents"
+english = "use for Task subagents"
+
+[[message]]
+key = "tui.model_picker.hint.select_model"
+english = "select model"
+
+[[message]]
+key = "tui.model_picker.hint.use_session"
+english = "use for this session"
+
+[[message]]
+key = "tui.model_picker.hint.search_roles"
+english = "search (@ for quick roles)"
+
+[[message]]
+key = "tui.model_picker.hint.close"
+english = "close"
+
+[[message]]
+key = "tui.model_picker.hint.session_task_target"
+english = "session/Task target"
+
+[[message]]
+key = "tui.model_picker.hint.session_model"
+english = "session model"
+
+[[message]]
+key = "tui.model_picker.hint.task_model"
+english = "task model"
+
+[[message]]
+key = "tui.model_picker.title.switch_task_model"
+english = "Switch Task Model"
+
+[[message]]
+key = "tui.model_picker.title.select_model"
+english = "Select Model"
+
+[[message]]
+key = "tui.model_picker.title.switch_model"
+english = "Switch Model"
+
+[[message]]
+key = "tui.approval.remember_across_sessions"
+english = "Remember across sessions"
+
+[[message]]
+key = "tui.approval.approve_once"
+english = "Approve Once"
+
+[[message]]
+key = "tui.approval.approve"
+english = "Approve"
+
+[[message]]
+key = "tui.approval.deny"
+english = "Deny"
+
+[[message]]
+key = "tui.approval.deny_and_send_message"
+english = "Deny and send message"
+
+[[message]]
+key = "tui.approval.action.deny_this_call"
+english = "Deny this call"
+
+[[message]]
+key = "tui.approval.action.approve_this_call"
+english = "Approve this call"
+
+[[message]]
+key = "tui.approval.action.less"
+english = "Less"
+
+[[message]]
+key = "tui.approval.action.details"
+english = "Details"
+
+[[message]]
+key = "tui.approval.action.summarize"
+english = "Summarize"
+
+[[message]]
+key = "tui.approval.action.show_every_detail_of"
+english = "Show every detail of"
+
+[[message]]
+key = "tui.approval.footer.approve"
+english = "approve"
+
+[[message]]
+key = "tui.approval.footer.deny"
+english = "deny"
+
+[[message]]
+key = "tui.approval.footer.choose"
+english = "choose"
+
+[[message]]
+key = "tui.approval.footer.select"
+english = "select"
+
+[[message]]
+key = "tui.approval.footer.scroll"
+english = "scroll"
+
+[[message]]
+key = "tui.approval.footer.details"
+english = "details"
+
+[[message]]
+key = "tui.approval.footer.less"
+english = "less"
+
+[[message]]
+key = "tui.approval.footer.deny_and_send"
+english = "deny and send"
+
+[[message]]
+key = "tui.approval.footer.type_to_deny_and_steer"
+english = "type to deny and steer"
+
+[[message]]
+key = "tui.agent_hub.tab.agents"
+english = "Agents"
+
+[[message]]
+key = "tui.agent_hub.tab.activity"
+english = "Activity"
+
+[[message]]
+key = "tui.agent_hub.view.flat"
+english = "Flat"
+
+[[message]]
+key = "tui.agent_hub.view.by_parent"
+english = "By parent"
+
+[[message]]
+key = "tui.agent_hub.column.cost"
+english = "Cost"
+
+[[message]]
+key = "tui.agent_hub.column.time"
+english = "Time"
+
+[[message]]
+key = "tui.agent_hub.column.requests"
+english = "Req"
+
+[[message]]
+key = "tui.agent_hub.column.tools"
+english = "Tools"
+
+[[message]]
+key = "tui.agent_hub.column.tokens"
+english = "Tok"
+
+[[message]]
+key = "tui.agent_hub.column.context"
+english = "Ctx"
+
+[[message]]
+key = "tui.agent_hub.activity_filter.all"
+english = "All"
+
+[[message]]
+key = "tui.agent_hub.activity_filter.errors"
+english = "Errors"
+
+[[message]]
+key = "tui.agent_hub.activity_filter.responses"
+english = "Responses"
+
+[[message]]
+key = "tui.agent_hub.activity_filter.tools"
+english = "Tools"
+
+[[message]]
+key = "tui.agent_hub.hint.select"
+english = "select"
+
+[[message]]
+key = "tui.agent_hub.hint.transcript"
+english = "transcript"
+
+[[message]]
+key = "tui.agent_hub.hint.follow"
+english = "follow"
+
+[[message]]
+key = "tui.agent_hub.hint.filter"
+english = "filter"
+
+[[message]]
+key = "tui.agent_hub.hint.scope"
+english = "scope"
+
+[[message]]
+key = "tui.agent_hub.hint.search"
+english = "search"
+
+[[message]]
+key = "tui.agent_hub.hint.close"
+english = "close"
+
+[[message]]
+key = "tui.agent_hub.hint.open"
+english = "open"
+
+[[message]]
+key = "tui.agent_hub.hint.revive"
+english = "revive"
+
+[[message]]
+key = "tui.agent_hub.hint.kill"
+english = "kill"
+[[message]]
+key = "tui.model_hub.selector.hint_pattern_kind"
+english = "glob, or re: for regex"
+
+[[message]]
+key = "tui.model_hub.selector.error_missing_regex"
+english = "Enter a regular expression after re:"
+
+[[message]]
+key = "tui.model_hub.selector.error_invalid_regex"
+english = "Invalid regular expression"
+note = "Dynamic engine-provided diagnostic may follow; do not translate that variable text."
+
+[[message]]
+key = "tui.model_hub.selector.error_expected_provider_model"
+english = "Enter a provider/model selector, provider/* glob, or re: regex"
+
+[[message]]
+key = "tui.model_hub.selector.error_chain_key_patterns"
+english = "Chain keys support provider/* or provider/prefix/* only; use re: for other patterns"
+
+[[message]]
+key = "tui.model_hub.selector.error_invalid_model_glob"
+english = "Invalid model glob"
+
+[[message]]
+key = "tui.model_hub.selector.error_fallback_exists"
+english = "Fallback chain already exists: {selector}"
+
+[[message]]
+key = "tui.model_hub.selector.error_rename_unavailable"
+english = "Renaming fallback chains is unavailable"
+
+[[message]]
+key = "tui.model_hub.selector.error_incompatible_model"
+english = "Pattern does not resolve to a compatible model"
+
+[[message]]
+key = "tui.model_hub.effort.error_select_level"
+english = "Select at least one effort level before saving"
+
+[[message]]
+key = "tui.model_hub.role.error_token_budget"
+english = "Role token budget must be a positive integer; empty inherits."
+note = "Role terminology is glossary-dependent."
+
+[[message]]
+key = "tui.model_hub.empty.recent_models"
+english = "No recently used models yet"
+
+[[message]]
+key = "tui.model_hub.empty.provider_models"
+english = "No models from {provider} yet"
+
+[[message]]
+key = "tui.model_hub.empty.scope_models"
+english = "No models available in this scope"
+
+[[message]]
+key = "tui.model_hub.status.applying"
+english = "Applying model…"
+
+[[message]]
+key = "tui.model_hub.status.current_session_only"
+english = "Current session only"
+
+[[message]]
+key = "tui.model_hub.error.model_config_unavailable"
+english = "Model config editing is unavailable."
+[[message]]
+key = "tui.session_selector.group.pinned"
+english = "Pinned"
+
+[[message]]
+key = "tui.session_selector.group.today"
+english = "Today"
+
+[[message]]
+key = "tui.session_selector.group.yesterday"
+english = "Yesterday"
+
+[[message]]
+key = "tui.session_selector.group.this_week"
+english = "This week"
+
+[[message]]
+key = "tui.session_selector.group.earlier"
+english = "Earlier"
+
+[[message]]
+key = "tui.session_selector.detail.folder"
+english = "Folder"
+
+[[message]]
+key = "tui.session_selector.detail.created"
+english = "Created"
+
+[[message]]
+key = "tui.session_selector.detail.modified"
+english = "Modified"
+
+[[message]]
+key = "tui.session_selector.detail.size"
+english = "Size"
+
+[[message]]
+key = "tui.session_selector.detail.status"
+english = "Status"
+
+[[message]]
+key = "tui.session_selector.detail.forked_from"
+english = "Forked from"
+
+[[message]]
+key = "tui.session_selector.scope.current_folder"
+english = "Current folder"
+
+[[message]]
+key = "tui.session_selector.scope.all_projects"
+english = "All projects"
+
+[[message]]
+key = "tui.session_selector.empty.no_sessions"
+english = "No sessions found"
+
+[[message]]
+key = "tui.session_selector.empty.current_folder"
+english = "No sessions in current folder. Press "
+note = "Key label and continuation are separate dynamic segments in source."
+
+[[message]]
+key = "tui.session_selector.empty.current_folder_suffix"
+english = " to view all."
+
+[[message]]
+key = "tui.session_selector.title.resume"
+english = "Resume Session"
+
+[[message]]
+key = "tui.session_selector.action.resume"
+english = "Resume"
+
+[[message]]
+key = "tui.session_selector.loading.all_projects"
+english = "Loading all projects…"
+
+[[message]]
+key = "tui.session_selector.confirm.delete_title"
+english = "Delete session?"
+
+[[message]]
+key = "tui.session_selector.confirm.yes"
+english = "Yes"
+
+[[message]]
+key = "tui.session_selector.confirm.no"
+english = "No"
+
+[[message]]
+key = "tui.session_selector.dialog.rename_title"
+english = "Rename Session"
+
+[[message]]
+key = "tui.session_selector.dialog.rename_label"
+english = "Rename session"
+
+[[message]]
+key = "tui.session_selector.error.rename_failed"
+english = "Failed to rename session."
+
+[[message]]
+key = "tui.session_selector.action.delete"
+english = "Delete"
+
+[[message]]
+key = "tui.session_selector.action.rename"
+english = "Rename"
+
+[[message]]
+key = "tui.session_selector.action.pin"
+english = "Pin"
+
+[[message]]
+key = "tui.session_selector.action.unpin"
+english = "Unpin"
+
+[[message]]
+key = "tui.session_selector.action.this_folder"
+english = "This folder"
+
+[[message]]
+key = "tui.session_selector.action.back_to_list"
+english = "Back to list"
+
+[[message]]
+key = "tui.session_selector.action.close"
+english = "Close"
+
+[[message]]
+key = "tui.session_selector.search.all"
+english = "Search all sessions…"
+
+[[message]]
+key = "tui.session_selector.search.sessions"
+english = "Search sessions…"
+
+[[message]]
+key = "tui.session_selector.empty.no_sessions_yet"
+english = "No sessions yet"
+
+[[message]]
+key = "tui.session_selector.empty.no_sessions_in_folder_yet"
+english = "No sessions in this folder yet"
+
+[[message]]
+key = "tui.session_selector.confirm.delete_file"
+english = "This removes the session file."
+
+[[message]]
+key = "tui.oauth_selector.title.login"
+english = "Select provider to login"
+
+[[message]]
+key = "tui.oauth_selector.title.logout"
+english = "Select provider to logout"
+
+[[message]]
+key = "tui.oauth_selector.empty.no_oauth_providers"
+english = "No OAuth providers available"
+
+[[message]]
+key = "tui.oauth_selector.empty.no_stored_credentials"
+english = "No stored provider credentials to log out"
+
+[[message]]
+key = "tui.oauth_selector.empty.no_matching_providers"
+english = "No matching providers"
+
+[[message]]
+key = "tui.oauth_selector.error.provider_unavailable"
+english = "Provider unavailable in this environment."
+
+[[message]]
+key = "tui.oauth_selector.detail.not_configured"
+english = "Not configured"
+
+[[message]]
+key = "tui.oauth_selector.detail.signed_in"
+english = "Signed in"
+
+[[message]]
+key = "tui.oauth_selector.detail.api_key"
+english = "API key"
+
+[[message]]
+key = "tui.oauth_selector.title.sign_in"
+english = "Sign in"
+
+[[message]]
+key = "tui.oauth_selector.title.sign_out"
+english = "Sign out"
+
+[[message]]
+key = "tui.oauth_selector.subtitle.pick_provider"
+english = "Pick a provider"
+
+[[message]]
+key = "tui.oauth_selector.subtitle.remove_credentials"
+english = "Remove stored credentials"
+
+[[message]]
+key = "tui.oauth_selector.search.placeholder"
+english = "Search providers…"
+
+[[message]]
+key = "tui.oauth_selector.search.type_to_search"
+english = "Type to search"
+
+[[message]]
+key = "tui.login.retry.unreadable_code"
+english = "Couldn't read a code from that. Paste the authorization code or the full redirect URL."
+
+[[message]]
+key = "tui.login.status.waiting_browser"
+english = "Waiting for you to finish in the browser…"
+
+[[message]]
+key = "tui.login.action.cancel"
+english = "Cancel"
+
+[[message]]
+key = "tui.login.action.continue"
+english = "Continue"
+
+[[message]]
+key = "tui.login.lead.device_code"
+english = "Enter this code on the sign-in page to connect your account."
+
+[[message]]
+key = "tui.login.lead.browser"
+english = "Continue in your browser. If it didn't open, open or copy the link below."
+
+[[message]]
+key = "tui.login.action.copy_code"
+english = "Copy code"
+
+[[message]]
+key = "tui.login.action.copy_sign_in_link"
+english = "Copy the sign-in link"
+
+[[message]]
+key = "tui.login.action.copy"
+english = "Copy"
+
+[[message]]
+key = "tui.login.action.open_sign_in_page"
+english = "Open sign-in page"
+
+[[message]]
+key = "tui.ask.option.other_type_own"
+english = "Other (type your own)"
+
+[[message]]
+key = "tui.ask.action.submit"
+english = "Submit"
+
+[[message]]
+key = "tui.ask.option.other"
+english = "Other…"
+
+[[message]]
+key = "tui.ask.tab.review"
+english = "Review"
+
+[[message]]
+key = "tui.ask.status.unanswered"
+english = "Unanswered"
+
+[[message]]
+key = "tui.ask.title"
+english = "Ask"
+
+[[message]]
+key = "tui.ask.action.chat_about_this"
+english = "Chat about this"
+
+[[message]]
+key = "tui.ask.action.next"
+english = "Next →"
+
+[[message]]
+key = "tui.ask.hint.question_navigation"
+english = "Next question  l · tab · Ctrl+N · Previous  h · shift+tab · Ctrl+P"
+
+[[message]]
+key = "tui.ask.hint.timer"
+english = "Answers the recommended option when the time runs out"
+
+[[message]]
+key = "tui.ask.label.question"
+english = "Question"
+
+[[message]]
+key = "tui.ask.action.show"
+english = "Show"
+
+[[message]]
+key = "tui.ask.action.skip"
+english = "Skip"
+
+[[message]]
+key = "tui.ask.label.type_own_answer"
+english = "Type your own answer"
+
+[[message]]
+key = "tui.ask.label.recommended"
+english = "Recommended"
+
+[[message]]
+key = "tui.ask.notice.all_answered_submit"
+english = "All answered · Submit sends them"
+
+[[message]]
+key = "tui.ask.action.hide"
+english = "Hide"
+
+[[message]]
+key = "tui.ask.action.next_question"
+english = "Next"
+
+[[message]]
+key = "tui.ask.action.note"
+english = "Note"
+
+[[message]]
+key = "tui.ask.action.option_note"
+english = "Option note"
+
+[[message]]
+key = "tui.ask.title.review_answers"
+english = "Review answers"
+
+[[message]]
+key = "tui.tree_filter.default"
+english = "Default"
+
+[[message]]
+key = "tui.tree_filter.no_tools"
+english = "No tools"
+
+[[message]]
+key = "tui.tree_filter.user_only"
+english = "User only"
+
+[[message]]
+key = "tui.tree_filter.labeled"
+english = "Labeled"
+
+[[message]]
+key = "tui.tree_filter.all"
+english = "All"
+
+[[message]]
+key = "tui.tree_selector.empty.no_entries"
+english = "No entries found"
+
+[[message]]
+key = "tui.tree_selector.empty.no_entries_match"
+english = "No entries match search \"{query}\". Edit the search to change results."
+
+[[message]]
+key = "tui.tree_selector.label_prompt"
+english = "Label (empty to remove):"
+
+[[message]]
+key = "tui.tree_selector.title.session_tree"
+english = "Session Tree"
+
+[[message]]
+key = "tui.tree_selector.search.placeholder"
+english = "Search entries…"
+
+[[message]]
+key = "tui.tree_selector.action.save_label"
+english = "Save label"
+
+[[message]]
+key = "tui.tree_selector.action.back_keep_draft"
+english = "Back (keep draft)"
+
+[[message]]
+key = "tui.rewind.target.rewind_to_here"
+english = "Rewind to here"
+
+[[message]]
+key = "tui.rewind.target.continue_from_here"
+english = "Continue from here"
+
+[[message]]
+key = "tui.rewind.detail.prompt_returns_to_editor"
+english = "the prompt returns to the editor"
+
+[[message]]
+key = "tui.rewind.title"
+english = "Rewind"
+
+[[message]]
+key = "tui.rewind.action.rewind_here"
+english = "Rewind here"
+
+[[message]]
+key = "tui.rewind.action.cancel"
+english = "Cancel"
+
+[[message]]
+key = "tui.rewind.action.show_all"
+english = "Show all"
+
+[[message]]
+key = "tui.rewind.hint.pick_point"
+english = "pick the point to continue from"
+
+[[message]]
+key = "tui.hook_selector.empty.no_matching_options"
+english = "No matching options"
+
+[[message]]
+key = "tui.hook_selector.action.select"
+english = "Select"
+
+[[message]]
+key = "tui.hook_selector.search.label"
+english = "Search: "
+
+[[message]]
+key = "tui.mcp_wizard.phase.name"
+english = "Name"
+
+[[message]]
+key = "tui.mcp_wizard.phase.transport"
+english = "Transport"
+
+[[message]]
+key = "tui.mcp_wizard.phase.connection"
+english = "Connection"
+
+[[message]]
+key = "tui.mcp_wizard.phase.auth"
+english = "Auth"
+
+[[message]]
+key = "tui.mcp_wizard.phase.scope"
+english = "Scope"
+
+[[message]]
+key = "tui.mcp_wizard.phase.review"
+english = "Review"
+
+[[message]]
+key = "tui.mcp_wizard.transport.local_command"
+english = "Local command"
+
+[[message]]
+key = "tui.mcp_wizard.transport.remote_server"
+english = "Remote server"
+
+[[message]]
+key = "tui.mcp_wizard.transport.server_sent_events"
+english = "Server-sent events"
+
+[[message]]
+key = "tui.mcp_wizard.scope.every_project"
+english = "Every project"
+
+[[message]]
+key = "tui.mcp_wizard.scope.this_project"
+english = "This project"
+
+[[message]]
+key = "tui.mcp_wizard.title.add_server"
+english = "Add MCP Server"
+
+[[message]]
+key = "tui.mcp_wizard.action.back"
+english = "Back"
+
+[[message]]
+key = "tui.mcp_wizard.action.continue"
+english = "Continue"
+
+[[message]]
+key = "tui.mcp_wizard.label.optional"
+english = "Optional"
+
+[[message]]
+key = "tui.mcp_wizard.action.cancel"
+english = "Cancel"
+
+[[message]]
+key = "tui.mcp_wizard.title.name_server"
+english = "Name the server"
+
+[[message]]
+key = "tui.mcp_wizard.note.name_characters"
+english = "Letters, numbers, dash, underscore, dot and colon"
+
+[[message]]
+key = "tui.mcp_wizard.title.transport_question"
+english = "How does omp reach it?"
+
+[[message]]
+key = "tui.mcp_wizard.title.command"
+english = "Command"
+
+[[message]]
+key = "tui.mcp_wizard.title.arguments"
+english = "Arguments"
+
+[[message]]
+key = "tui.mcp_wizard.title.server_url"
+english = "Server URL"
+
+[[message]]
+key = "tui.mcp_wizard.note.url_scheme"
+english = "Starts with http:// or https://"
+
+[[message]]
+key = "tui.mcp_wizard.title.key_destination"
+english = "Where does the key go?"
+
+[[message]]
+key = "tui.mcp_wizard.auth.environment_variable"
+english = "Environment variable"
+
+[[message]]
+key = "tui.mcp_wizard.auth.http_header"
+english = "HTTP header"
+
+[[message]]
+key = "tui.mcp_wizard.title.save_scope"
+english = "Where should it live?"
+
+[[message]]
+key = "tui.mcp_wizard.summary.save_question"
+english = "Save this configuration?"
+
+[[message]]
+key = "tui.mcp_wizard.title.review_save"
+english = "Review and save"
+
+[[message]]
+key = "tui.mcp_wizard.action.save_server"
+english = "Save server"
+
+[[message]]
+key = "tui.mcp_wizard.validation.url_required"
+english = "URL is required"
+
+[[message]]
+key = "tui.mcp_wizard.validation.invalid_url"
+english = "Invalid URL format (must start with http:// or https://)"
+
+[[message]]
+key = "tui.mcp_wizard.validation.url_scheme"
+english = "URL must use http:// or https:// scheme"
+
+[[message]]
+key = "tui.mcp_wizard.title.auth_method"
+english = "How does it authenticate?"
+
+[[message]]
+key = "tui.mcp_wizard.auth.sign_in_oauth"
+english = "Sign in with OAuth"
+
+[[message]]
+key = "tui.mcp_wizard.auth.api_key_token"
+english = "API key or token"
+
+[[message]]
+key = "tui.mcp_wizard.title.authorization_url"
+english = "Authorization URL"
+
+[[message]]
+key = "tui.mcp_wizard.title.token_url"
+english = "Token URL"
+
+[[message]]
+key = "tui.mcp_wizard.title.client_id"
+english = "Client ID"
+
+[[message]]
+key = "tui.mcp_wizard.title.client_secret"
+english = "Client secret"
+
+[[message]]
+key = "tui.mcp_wizard.title.scopes"
+english = "Scopes"
+
+[[message]]
+key = "tui.mcp_wizard.failure.sign_in_cancelled"
+english = "Sign-in cancelled"
+
+[[message]]
+key = "tui.mcp_wizard.failure.sign_in_failed"
+english = "Sign-in failed"
+
+[[message]]
+key = "tui.mcp_wizard.failure.try_again"
+english = "Try again"
+
+[[message]]
+key = "tui.mcp_wizard.failure.edit_oauth"
+english = "Edit OAuth settings"
+
+[[message]]
+key = "tui.mcp_wizard.title.api_key"
+english = "API key"
+
+[[message]]
+key = "tui.mcp_wizard.status.trying_connection"
+english = "Trying the connection"
+
+[[message]]
+key = "tui.mcp_wizard.status.connected"
+english = "Connected"
+
+[[message]]
+key = "tui.mcp_wizard.status.no_auth_required"
+english = "No authentication required"
+
+[[message]]
+key = "tui.mcp_wizard.status.couldnt_connect"
+english = "Couldn't connect"
+
+[[message]]
+key = "tui.mcp_wizard.status.adding_anyway"
+english = "Adding server anyway..."
+
+[[message]]
+key = "tui.mcp_wizard.error.oauth_unavailable"
+english = "OAuth login cannot start without a host OAuth handler."
+
+[[message]]
+key = "tui.mcp_wizard.error.oauth_settings_incomplete"
+english = "Authorization and Token URLs are required."
+
+[[message]]
+key = "tui.mcp_wizard.status.launching_oauth"
+english = "Launching OAuth flow..."
+
+[[message]]
+key = "tui.mcp_wizard.status.browser_opens"
+english = "Browser will open automatically."
+
+[[message]]
+key = "tui.mcp_wizard.status.copy_chat_url"
+english = "If browser doesn't open, copy the URL from chat."
+
+[[message]]
+key = "tui.mcp_wizard.title.sign_in_continue"
+english = "Sign in to continue"
+
+[[message]]
+key = "tui.mcp_wizard.status.sign_in_browser"
+english = "Approve access in your browser. If it didn't open, copy the link from the chat."
+
+[[message]]
+key = "tui.mcp_wizard.action.stop_waiting"
+english = "Stop waiting"
+
+[[message]]
+key = "tui.mcp_wizard.status.connection_health_check"
+english = "Running connection health check..."
+
+[[message]]
+key = "tui.mcp_wizard.status.checking_server"
+english = "Checking server connection..."
+
+[[message]]
+key = "tui.mcp_wizard.status.health_check_passed"
+english = "Health check passed"
+
+[[message]]
+key = "tui.mcp_wizard.status.health_check_failed"
+english = "Health check failed (will still save config)"
+
+[[message]]
+key = "tui.mcp_wizard.status.server_answers"
+english = "The server answers"
+
+[[message]]
+key = "tui.mcp_wizard.status.server_no_answer"
+english = "The server didn't answer; omp saves it anyway"
+[[message]]
+key = "tui.plugin_selector.title"
+english = "Plugins"
+
+[[message]]
+key = "tui.plugin_selector.badge.installed"
+english = "installed"
+
+[[message]]
+key = "tui.plugin_selector.empty.no_plugins"
+english = "No plugins available"
+
+[[message]]
+key = "tui.plugin_selector.empty.marketplaces_have_no_plugins"
+english = "Configured marketplaces have no plugins"
+
+[[message]]
+key = "tui.plugin_selector.action.install"
+english = "Install"
+
+[[message]]
+key = "tui.plugin_selector.action.uninstall"
+english = "Uninstall"
+
+[[message]]
+key = "tui.theme_selector.title"
+english = "Theme"
+
+[[message]]
+key = "tui.theme_selector.action.apply"
+english = "Apply"
+
+[[message]]
+key = "tui.thinking_selector.title"
+english = "Thinking Level"
+
+[[message]]
+key = "tui.thinking_selector.title_picker"
+english = "Thinking level"
+
+[[message]]
+key = "tui.copy_selector.earlier_turns"
+english = "Earlier turns…"
+
+[[message]]
+key = "tui.copy_selector.label.thinking"
+english = "thinking"
+
+[[message]]
+key = "tui.copy_selector.label.compaction_summary"
+english = "Compaction summary"
+
+[[message]]
+key = "tui.copy_selector.label.branch_summary"
+english = "Branch summary"
+
+[[message]]
+key = "tui.copy_selector.label.empty"
+english = "(empty)"
+
+[[message]]
+key = "tui.copy_selector.preview.no_text"
+english = "(no text)"
+
+[[message]]
+key = "tui.copy_selector.label.code"
+english = "code"
+
+[[message]]
+key = "tui.copy_selector.label.quote"
+english = "quote"
+
+[[message]]
+key = "tui.copy_selector.label.link"
+english = "link"
+
+[[message]]
+key = "tui.copy_selector.label.bash_command"
+english = "bash command"
+
+[[message]]
+key = "tui.copy_selector.label.eval_code"
+english = "eval code"
+
+[[message]]
+key = "tui.copy_selector.label.command"
+english = "command"
+
+[[message]]
+key = "tui.copy_selector.label.output"
+english = "output"
+
+[[message]]
+key = "tui.copy_selector.label.user_message"
+english = "user message"
+
+[[message]]
+key = "tui.copy_selector.label.assistant_message"
+english = "assistant message"
+
+[[message]]
+key = "tui.copy_selector.label.bash_execution"
+english = "bash execution"
+
+[[message]]
+key = "tui.copy_selector.label.eval_execution"
+english = "eval execution"
+
+[[message]]
+key = "tui.logout_account.title"
+english = "Select {provider} account to log out"
+
+[[message]]
+key = "tui.logout_account.badge.active"
+english = "(active)"
+
+[[message]]
+key = "tui.logout_account.empty"
+english = "No stored accounts to log out"
+
+[[message]]
+key = "tui.logout_account.action.logout"
+english = "log out account"
+
+[[message]]
+key = "tui.session_account.title"
+english = "Select a {provider} account for this session"
+
+[[message]]
+key = "tui.session_account.detail.active"
+english = "active for this session"
+
+[[message]]
+key = "tui.session_account.subtitle.pin"
+english = "Pin the account this session sends its requests with"
+
+[[message]]
+key = "tui.session_account.action.pin"
+english = "Pin"
+
+[[message]]
+key = "tui.reset_usage.title"
+english = "Spend a saved rate-limit reset"
+
+[[message]]
+key = "tui.reset_usage.value.unavailable"
+english = "unavailable"
+
+[[message]]
+key = "tui.reset_usage.value.usable"
+english = "usable"
+
+[[message]]
+key = "tui.reset_usage.value.expired"
+english = "expired"
+
+[[message]]
+key = "tui.reset_usage.empty"
+english = "No provider accounts with saved resets"
+
+[[message]]
+key = "tui.reset_usage.hint.spend"
+english = "spend a reset"
+
+[[message]]
+key = "tui.reset_usage.confirm.optional_early_use"
+english = "Optional early use: this can be spent before the covered limit is reached."
+
+[[message]]
+key = "tui.reset_usage.confirm.prompt"
+english = "Press {key} again to spend {subject} for {account} ({provider})."
+
+[[message]]
+key = "tui.reset_usage.confirm.cancel"
+english = "cancels."
+
+[[message]]
+key = "tui.reset_usage.error.unavailable"
+english = "That account's saved resets are unavailable: {reason}"
+
+[[message]]
+key = "tui.reset_usage.error.none_usable"
+english = "That account has no saved resets usable right now."
+
+[[message]]
+key = "tui.reset_usage.subtitle"
+english = "Spend a saved reset to refresh an account's rate limit now"
+
+[[message]]
+key = "tui.reset_usage.action.spend"
+english = "Spend"
+
+[[message]]
+key = "tui.reset_usage.title_picker"
+english = "Rate-limit resets"
+
+[[message]]
+key = "tui.history_search.empty.no_matching_history"
+english = "No matching history"
+
+[[message]]
+key = "tui.history_search.empty.no_history_yet"
+english = "No history yet"
+
+[[message]]
+key = "tui.history_search.title"
+english = "History"
+
+[[message]]
+key = "tui.history_search.hint.select"
+english = "select"
+
+[[message]]
+key = "tui.history_search.hint.search"
+english = "search"
+
+[[message]]
+key = "tui.history_search.hint.navigate"
+english = "navigate"
+
+[[message]]
+key = "tui.history_search.hint.back_to_list"
+english = "back to list"
+
+[[message]]
+key = "tui.history_search.hint.close"
+english = "close"
+
+[[message]]
+key = "tui.history_search.search.placeholder"
+english = "Search prompts…"
+
+[[message]]
+key = "tui.history_search.action.insert"
+english = "Insert"
+[[message]]
+key = "coding_agent.selector.error.builtin_config_no_file"
+english = "This built-in configuration has no backing file."
+
+[[message]]
+key = "coding_agent.selector.status.close_view_first"
+english = "Close this view first (Esc)"
+
+[[message]]
+key = "coding_agent.selector.status.finish_or_cancel_prompt"
+english = "Finish or cancel the prompt first"
+
+[[message]]
+key = "coding_agent.selector.status.no_messages_to_branch"
+english = "No messages to branch from"
+
+[[message]]
+key = "coding_agent.selector.status.already_at_point"
+english = "Already at this point"
+
+[[message]]
+key = "coding_agent.selector.status.navigation_cancelled"
+english = "Navigation cancelled"
+
+[[message]]
+key = "coding_agent.selector.status.rewound"
+english = "Rewound to selected point"
+
+[[message]]
+key = "coding_agent.selector.error.invalid_transcript_entry"
+english = "no transcript entry {entryId}"
+
+[[message]]
+key = "coding_agent.selector.status.nothing_to_copy"
+english = "Nothing to copy yet."
+
+[[message]]
+key = "coding_agent.selector.status.nothing_to_copy_item"
+english = "Nothing to copy in that item"
+
+[[message]]
+key = "coding_agent.selector.status.no_entries_in_session"
+english = "No entries in session"
+[[message]]
+key = "tui.queue_mode.title"
+english = "Queue Mode"
+
+[[message]]
+key = "tui.queue_mode.title_picker"
+english = "Queue mode"
+
+[[message]]
+key = "tui.queue_mode.subtitle"
+english = "How messages you send while omp works are delivered"
+
+[[message]]
+key = "tui.queue_mode.label.one_at_a_time"
+english = "One at a time"
+
+[[message]]
+key = "tui.queue_mode.detail.one_at_a_time"
+english = "Each queued message gets its own turn"
+
+[[message]]
+key = "tui.queue_mode.badge.recommended"
+english = "recommended"
+
+[[message]]
+key = "tui.queue_mode.label.all_at_once"
+english = "All at once"
+
+[[message]]
+key = "tui.queue_mode.detail.all_at_once"
+english = "Queued messages are sent together in one turn"
+
+[[message]]
+key = "tui.show_images.title"
+english = "Show Images"
+
+[[message]]
+key = "tui.show_images.title_picker"
+english = "Show images"
+
+[[message]]
+key = "tui.show_images.option.yes"
+english = "Yes"
+
+[[message]]
+key = "tui.show_images.description.yes"
+english = "Show images inline in terminal"
+
+[[message]]
+key = "tui.show_images.option.no"
+english = "No"
+
+[[message]]
+key = "tui.show_images.description.no"
+english = "Show text placeholder instead"

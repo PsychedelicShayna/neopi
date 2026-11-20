@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "../i18n";
 
 export interface JsonBlockProps {
 	data: unknown;
@@ -9,6 +10,7 @@ export interface JsonBlockProps {
 
 /** Collapsible, copyable pretty-printed JSON. */
 export function JsonBlock({ data, title = "JSON", initialCollapsed = false }: JsonBlockProps) {
+	const tr = useTranslation();
 	const [collapsed, setCollapsed] = useState(initialCollapsed);
 	const [copied, setCopied] = useState(false);
 	const copyResetRef = useRef<number>(0);
@@ -44,7 +46,7 @@ export function JsonBlock({ data, title = "JSON", initialCollapsed = false }: Js
 				</button>
 				<button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={copy}>
 					{copied ? <Check size={13} /> : <Copy size={13} />}
-					{copied ? "Copied" : "Copy"}
+					{copied ? tr("common.copied", "Copied") : tr("common.copy", "Copy")}
 				</button>
 			</div>
 			{!collapsed && (

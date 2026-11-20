@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import { EmptyState } from "./States";
 
 export interface Column<T> {
@@ -48,6 +49,7 @@ export function Table<T>({
 	empty,
 	expanded,
 }: TableProps<T>) {
+	const tr = useTranslation();
 	const [sort, setSort] = useState(initialSort ?? null);
 	const [shown, setShown] = useState(limit ?? Number.POSITIVE_INFINITY);
 
@@ -155,7 +157,9 @@ export function Table<T>({
 			{limit !== undefined && sorted.length > limit && (
 				<div className="table-more">
 					<span className="micro">
-						{formatInteger(visible.length)} of {formatInteger(sorted.length)}
+						{tr("table.count", "{visible} of {total}")
+							.replace("{visible}", formatInteger(visible.length))
+							.replace("{total}", formatInteger(sorted.length))}
 					</span>
 					{sorted.length > shown && (
 						<button
@@ -165,7 +169,7 @@ export function Table<T>({
 							data-variant="ghost"
 							onClick={() => setShown(n => n + limit * 4)}
 						>
-							Show more
+							{tr("table.more", "Show more")}
 						</button>
 					)}
 					{shown > limit && (
@@ -176,7 +180,7 @@ export function Table<T>({
 							data-variant="ghost"
 							onClick={() => setShown(limit)}
 						>
-							Show fewer
+							{tr("table.fewer", "Show fewer")}
 						</button>
 					)}
 				</div>

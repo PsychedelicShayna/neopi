@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The Browser Relay settings page can be displayed in English or Spanish.
+
 ## [18.22.1] - 2026-11-17
 
 ### Fixed

@@ -1,5 +1,6 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { DescribeContext, NativeNode } from "../src/native/node";
@@ -85,6 +86,24 @@ describe("short-list native picker search", () => {
 		);
 		return { selector, log };
 	}
+
+	it("updates native picker actions when the language changes", () => {
+		const previous = getLocale();
+		try {
+			setLocale("en");
+			const { selector } = make();
+			expect(sheet(selector.describe(pickerCx)).props.actions?.map(a => a.label)).toEqual(["Select", "Close"]);
+			setLocale("es");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.map(a => a.label)).toEqual(["Seleccionar", "Cerrar"]);
+			selector.getSelectList().handleInput("/");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Volver a la lista");
+			selector.getSelectList().handleInput("h");
+			selector.getSelectList().handleInput("\r");
+			expect(sheet(selector.describe(pickerCx)).props.actions?.at(-1)?.label).toBe("Borrar búsqueda");
+		} finally {
+			setLocale(previous);
+		}
+	});
 
 	it.each([false, true])("leaves a short-list filter before native Close cancels (Vim %s)", vim => {
 		setMenuSearchVimMode(vim);
@@ -286,6 +305,14 @@ describe("oauth selector picker", () => {
 		expect(row?.dot).toBe("success");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
+		selector.handleInput("/");
+		selector.handleInput(providers[1]!.name.slice(0, 3));
+		const live = sheet(selector.describe(pickerCx)).props;
+		expect(live.order).toContain(providers[1]!.id);
+		expect(live.order?.length).toBeLessThan(providers.length);
+		selector.handleInput("\r");
+		expect(sheet(selector.describe(pickerCx)).props.order).toEqual(live.order);
+		selector.handleInput("\x1b");
 		selector.handleInput("/");
 		selector.handleInput(providers[1]!.name);
 		const preview = sheet(selector.describe(pickerCx)).props;

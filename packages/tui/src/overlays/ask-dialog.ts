@@ -1,4 +1,5 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Ellipsis,
@@ -107,11 +108,9 @@ import { getKeybindings } from "../keybindings";
 import { plainText } from "../native/spans";
 
 const OTHER_OPTION = "Other (type your own)";
-const SUBMIT_OPTION = "Submit";
 const RECOMMENDED_SUFFIX = " (Recommended)";
-/** Native labels: the free-text row and the answers-review tab. */
+/** Native label for the free-text row. */
 const OTHER_LABEL = "Other…";
-const REVIEW_TAB = "Review";
 
 // Action rows appended by the guest race participant. An option sanitizing
 // to one of these must disambiguate identically on both sides, or the same
@@ -398,11 +397,11 @@ function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: Questi
 	if (question.multi) {
 		const answers = [...selected];
 		if (state.customInput !== undefined) answers.push(`Other: “${normalizedInlineInput(state.customInput)}”`);
-		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", "unanswered");
+		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", t("tui.ask.unanswered"));
 	}
 	if (state.customInput !== undefined) return `“${normalizedInlineInput(state.customInput)}”`;
-	if (selected.length === 0) return theme.fg("warning", "unanswered");
-	return selected[0] ?? theme.fg("warning", "unanswered");
+	if (selected.length === 0) return theme.fg("warning", t("tui.ask.unanswered"));
+	return selected[0] ?? theme.fg("warning", t("tui.ask.unanswered"));
 }
 
 /** Inline markdown code (`` `x` ``) as mono `code` spans, the rest plain, as the ANSI rows render it. */
@@ -653,6 +652,7 @@ export class AskDialogComponent implements Component {
 	#hidden = false;
 	/** Memoized native description; dropped whenever dialog state may have changed. */
 	#native: NativeNode | undefined;
+	#nativeLocale: Locale = "en";
 	/** Input-guard blocked state {@link #native} was described with (the guard flips outside this dialog). */
 	#nativeBlocked = false;
 	/** Set once the user explicitly takes the dialog (up/down, or a pointer action) while a draft held input. */
@@ -963,7 +963,8 @@ export class AskDialogComponent implements Component {
 		this.options.inputGuard?.syncPresentation?.(blocked);
 		const ring = this.#countdown !== undefined && cx.supports("meter");
 		if (ring) this.#startRingTick();
-		if (this.#native && this.#nativeBlocked === blocked) return this.#native;
+		if (this.#native && this.#nativeBlocked === blocked && this.#nativeLocale === getLocale()) return this.#native;
+		this.#nativeLocale = getLocale();
 		if (this.#hidden) {
 			this.#native = this.#describeHidden(ring);
 			this.#nativeBlocked = blocked;
@@ -991,7 +992,7 @@ export class AskDialogComponent implements Component {
 				label: state && isAnswered(state) ? [span("✓ ", "success"), span(name)] : [span(name)],
 			};
 		});
-		items.push({ id: "submit", label: [span(REVIEW_TAB)] });
+		items.push({ id: "submit", label: [span(t("tui.ask.review"))] });
 		const active = this.#isSubmitTab() ? "submit" : String(this.#activeTabIndex);
 		return node(
 			"row",
@@ -1026,7 +1027,7 @@ export class AskDialogComponent implements Component {
 				style: "ring",
 				size: "sm",
 				label: `${Math.ceil(left / 1000)}s`,
-				title: "Answers the recommended option when the time runs out",
+				title: t("tui.ask.timer_recommended"),
 			},
 			undefined,
 			"timer",
@@ -1036,24 +1037,24 @@ export class AskDialogComponent implements Component {
 	/** Hidden: one row in the composer's place — the countdown, the question clipped to a line, Skip and Show. */
 	#describeHidden(ring: boolean): NativeNode {
 		const question = this.#questions[this.#currentQuestionIndex()];
-		const more = this.#questions.length > 1 ? `  +${this.#questions.length - 1} more` : "";
+		const more = this.#questions.length > 1 ? `  ${t("tui.ask.more", { count: this.#questions.length - 1 })}` : "";
 		const summary = text(
 			[
-				span("Question  ", "muted"),
+				span(`${t("tui.ask.question")}  `, "muted"),
 				span(normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""))),
 				...(more ? [span(more, "muted")] : []),
 			],
 			{ truncate: "end", role: "omp.ask.summary" },
 		);
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const show = actionButton("Show", "show", {
+		const show = actionButton(t("tui.ask.show"), "show", {
 			tone: "accent",
 			...(hideKey ? { keys: hideKey } : {}),
-			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+			title: `${t("tui.ask.show_question")}${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
 		// Hidden, the composer holds the keys and Esc is its own: the ask's cancel key skips.
 		const cancelKey = getKeybindings().getKeys("app.ask.cancel")[0];
-		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
+		const skip = actionButton(t("tui.ask.skip"), "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
 		// The summary grows (`omp.ask.summary`), end-aligning Skip and Show.
@@ -1087,7 +1088,7 @@ export class AskDialogComponent implements Component {
 			const recommended = rowItem.kind === "option" && question.recommended === rowItem.optionIndex;
 			const detail =
 				describeRowDetail(rowItem, question, state) ??
-				(rowItem.kind === "other" ? [span("Type your own answer")] : undefined);
+				(rowItem.kind === "other" ? [span(t("tui.ask.type_answer"))] : undefined);
 			const role =
 				rowItem.kind === "other"
 					? question.multi
@@ -1106,7 +1107,7 @@ export class AskDialogComponent implements Component {
 							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
 					role,
 					...(detail ? { detail } : {}),
-					...(recommended ? { value: [span("Recommended")] } : {}),
+					...(recommended ? { value: [span(t("tui.ask.recommended"))] } : {}),
 					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
 					// Notes this row without picking it, wherever the cursor is.
 					actions: { menu: ["note"] },
@@ -1141,10 +1142,10 @@ export class AskDialogComponent implements Component {
 		const notice =
 			unanswered > 0
 				? [
-						span(`${unanswered} unanswered`, "warning"),
-						span(` · Submit still sends ${unanswered === this.#questions.length ? "the questions" : "the rest"}`),
+						span(t("tui.ask.unanswered_count", { count: unanswered }), "warning"),
+						span(t(unanswered === this.#questions.length ? "tui.ask.submit_questions" : "tui.ask.submit_rest")),
 					]
-				: [span("All answered · Submit sends them")];
+				: [span(t("tui.ask.all_answered"))];
 		children.push(node("text", { spans: notice, role: "omp.ask.notice" }, undefined, "notice"));
 		const answers: { k: string; v: readonly TspSpan[] }[] = [];
 		for (let index = 0; index < this.#questions.length; index++) {
@@ -1169,14 +1170,14 @@ export class AskDialogComponent implements Component {
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
 		// While a draft owns typing, Esc is the composer's: the ask's cancel key skips.
 		const cancelKey = getKeybindings().getKeys(blocked ? "app.ask.cancel" : "tui.select.cancel")[0];
-		const skip = actionButton("Skip", "cancel", {
+		const skip = actionButton(t("tui.ask.skip"), "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
-			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
+			title: `${t("tui.ask.skip_unanswered")}${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const hide = actionButton("Hide", "hide", {
+		const hide = actionButton(t("tui.ask.hide"), "hide", {
 			...(hideKey ? { keys: hideKey } : {}),
-			title: `Hide until you are ready to answer${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+			title: `${t("tui.ask.hide_until_ready")}${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
 		const lead: NativeNode[] = this.#countdown ? [this.#describeTimer(this.#countdown, ring), hide] : [hide];
 		const inputGuard = this.options.inputGuard;
@@ -1188,16 +1189,16 @@ export class AskDialogComponent implements Component {
 			]);
 		}
 		if (this.#isSubmitTab()) {
-			const submit = actionButton("Submit", "submit", {
+			const submit = actionButton(t("tui.ask.submit"), "submit", {
 				keys: "enter",
 				tone: "accent",
-				title: "Submit answers  enter",
+				title: `${t("tui.ask.submit_answers")}  enter`,
 			});
 			return actionBar([...lead, null, skip, submit]);
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		const last = this.#questions.length === 1;
-		const enterLabel = last ? "Submit" : "Next";
+		const enterLabel = t(last ? "tui.ask.submit" : "tui.ask.next");
 		// A multi-select toggles on Space; Enter moves on.
 		const submit = actionButton(enterLabel, "submit", {
 			keys: "enter",
@@ -1450,7 +1451,7 @@ export class AskDialogComponent implements Component {
 	}
 
 	#guardHint(inputGuard: AskDialogInputGuard): string {
-		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
+		return `${editorKeys("tui.select.up", "tui.select.down")} ${t("tui.ask.hint.answer")} · ${inputGuard.hint}`;
 	}
 
 	/**
@@ -1460,11 +1461,17 @@ export class AskDialogComponent implements Component {
 	#renderHidden(width: number): readonly string[] {
 		const showKey = editorKey("app.ask.hide");
 		const cancelKey = editorKey("app.ask.cancel");
-		const hints = [showKey && `${showKey} show`, cancelKey && `${cancelKey} cancel`].filter(Boolean);
+		const hints = [
+			showKey && `${showKey} ${t("tui.ask.hint.show")}`,
+			cancelKey && `${cancelKey} ${t("tui.ask.hint.cancel")}`,
+		].filter(Boolean);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
-		const label = theme.fg("accent", `${this.#titleText()} hidden:`);
+		const label = theme.fg("accent", `${this.#titleText()} ${t("tui.ask.hidden")}`);
 		const question = this.#questions[this.#currentQuestionIndex()];
-		const more = this.#questions.length > 1 ? theme.fg("dim", ` (+${this.#questions.length - 1} more)`) : "";
+		const more =
+			this.#questions.length > 1
+				? theme.fg("dim", ` (${t("tui.ask.more", { count: this.#questions.length - 1 })})`)
+				: "";
 		const summary = normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""));
 		const summaryWidth = Math.max(1, width - visibleWidth(label) - visibleWidth(more) - visibleWidth(hint) - 1);
 		const clipped = truncateToWidth(summary, summaryWidth, Ellipsis.Unicode);
@@ -1502,14 +1509,14 @@ export class AskDialogComponent implements Component {
 					id: String(index),
 					label: questionTabLabel(question, index),
 				})),
-				{ id: "submit", label: "Submit" },
+				{ id: "submit", label: t("tui.ask.submit") },
 			];
 			this.#tabBar = new TabBar("", tabs, getTabBarTheme(), this.#activeTabIndex);
 			this.#tabBar.showHint = false;
 			lines.push(...this.#tabBar.render(width));
 		}
 		if (this.#isSubmitTab()) {
-			lines.push(theme.bold(theme.fg("accent", "Review answers")));
+			lines.push(theme.bold(theme.fg("accent", t("tui.ask.review_answers"))));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
@@ -1527,7 +1534,7 @@ export class AskDialogComponent implements Component {
 				!questionDescriptionsOverflow(question, this.#contentWidth))
 		)
 			return "";
-		return ` · ${expandKeyHint()} ${this.#expanded ? "collapse" : "expand"}`;
+		return ` · ${expandKeyHint()} ${t(this.#expanded ? "tui.ask.hint.collapse" : "tui.ask.hint.expand")}`;
 	}
 
 	#footerHintText(
@@ -1537,30 +1544,32 @@ export class AskDialogComponent implements Component {
 	): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
-		const cancel = `${editorKey("tui.select.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
+		const cancel = `${editorKey("tui.select.cancel")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
 		// While the draft owns typing, Esc is the composer's: the ask's own cancel key cancels.
 		if (inputGuard && this.#guardBlocks())
-			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${editorKey("app.ask.cancel")} cancel${hideKey ? ` · ${hideKey} hide` : ""}`;
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${editorKey("app.ask.cancel")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
 		if (submit) {
-			const scroll = indicator ? ` ${indicator} scroll ·` : "";
-			return `${enter} submit · ${cancel} · ${upDown} scroll ·${scroll} PgUp/Dn page · ? help`;
+			const scroll = indicator ? ` ${indicator} ${t("tui.ask.hint.scroll")} ·` : "";
+			return `${enter} ${t("tui.ask.hint.submit")} · ${cancel} · ${upDown} ${t("tui.ask.hint.scroll")} ·${scroll} PgUp/Dn ${t("tui.ask.hint.page")} · ? ${t("tui.ask.hint.help")}`;
 		}
 		// Enter advances in multi-question dialogs and submits single-question ones.
-		const enterAction = this.#questions.length > 1 ? "next" : "submit";
+		const enterAction = t(this.#questions.length > 1 ? "tui.ask.hint.next" : "tui.ask.hint.submit");
 		const action = question?.multi
-			? `${formatKeyHint("space")} toggle · ${enter} ${enterAction}`
-			: `${enter} select · ${formatKeyHint("n")} note`;
-		const tabs = this.#hasSubmitTab() ? ` · ${formatKeyHints(["tab", "left", "right"])} question` : "";
+			? `${formatKeyHint("space")} ${t("tui.ask.hint.toggle")} · ${enter} ${enterAction}`
+			: `${enter} ${t("tui.ask.hint.select")} · ${formatKeyHint("n")} ${t("tui.ask.hint.note")}`;
+		const tabs = this.#hasSubmitTab()
+			? ` · ${formatKeyHints(["tab", "left", "right"])} ${t("tui.ask.hint.question")}`
+			: "";
 		const expand = this.#expandHint(question);
 		if (this.#questionCanPage && indicator) {
 			const pageKeys = editorKeys("tui.select.pageUp", "tui.select.pageDown");
-			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? help`;
+			return `${action} · ${upDown}${tabs} · ${cancel}${expand} · ${pageKeys} ${indicator} · ? ${t("tui.ask.hint.help")}`;
 		}
-		const scroll = indicator ? ` ${indicator} scroll ·` : "";
-		return `${action} · ${upDown} move${tabs} ·${scroll} ${cancel}${expand} · ? help`;
+		const scroll = indicator ? ` ${indicator} ${t("tui.ask.hint.scroll")} ·` : "";
+		return `${action} · ${upDown} ${t("tui.ask.hint.move")}${tabs} ·${scroll} ${cancel}${expand} · ? ${t("tui.ask.hint.help")}`;
 	}
 
 	#questionRows(question: ExtensionAskDialogQuestion): QuestionRow[] {
@@ -1795,7 +1804,10 @@ export class AskDialogComponent implements Component {
 				(state.customInput === undefined
 					? undefined
 					: { text: state.customInput, images: state.customInputImages });
-			const result = await this.#openPrompt({ title: "Custom answer", question: question.question }, prefill);
+			const result = await this.#openPrompt(
+				{ title: t("tui.ask.custom_answer"), question: question.question },
+				prefill,
+			);
 			if (this.#closed) return;
 			const input = promptOutcome(result);
 			if (!input.submitted) {
@@ -1844,7 +1856,7 @@ export class AskDialogComponent implements Component {
 			const prefill =
 				isReedit && state.note !== undefined ? { text: state.note, images: state.noteImages } : undefined;
 			const result = await this.#openPrompt(
-				{ title: `Note for ${rowItem.label}`, question: question.question },
+				{ title: t("tui.ask.note_for", { option: rowItem.label }), question: question.question },
 				prefill,
 			);
 			if (this.#closed) return;
@@ -1982,7 +1994,10 @@ export class AskDialogComponent implements Component {
 			allLines.push(
 				theme.fg(
 					"warning",
-					`${unanswered} unanswered question${unanswered === 1 ? "" : "s"}; ${formatKeyHint("enter")} still submits.`,
+					t(unanswered === 1 ? "tui.ask.unanswered_one" : "tui.ask.unanswered_many", {
+						count: unanswered,
+						enter: formatKeyHint("enter"),
+					}),
 				),
 			);
 			allLines.push("");
@@ -1998,7 +2013,10 @@ export class AskDialogComponent implements Component {
 			if (submittedNote?.trim()) {
 				const note = normalizedInlineInput(submittedNote);
 				allLines.push(
-					theme.fg("muted", `   Note: ${truncateToWidth(note, Math.max(1, width - 9), Ellipsis.Unicode)}`),
+					theme.fg(
+						"muted",
+						`   ${t("tui.ask.review_note")} ${truncateToWidth(note, Math.max(1, width - 9), Ellipsis.Unicode)}`,
+					),
 				);
 			}
 			for (const entry of state.optionNotes) {
@@ -2007,7 +2025,7 @@ export class AskDialogComponent implements Component {
 			}
 		}
 		allLines.push("");
-		allLines.push(theme.fg("accent", `${theme.nav.cursor} ${SUBMIT_OPTION}`));
+		allLines.push(theme.fg("accent", `${theme.nav.cursor} ${t("tui.ask.submit")}`));
 		let scrollView = this.#submitView;
 		if (!scrollView) {
 			scrollView = new ScrollView(allLines, {

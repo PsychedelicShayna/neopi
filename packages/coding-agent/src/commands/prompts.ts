@@ -1,5 +1,5 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
-import { Args, CliUsageError, Command, Flags, renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
+import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { promptsHelp } from "../cli/command-help";
 import { PROMPT_ACTIONS, runPromptsCommand } from "../cli/prompts-cli";
 
@@ -61,7 +61,7 @@ export default class Prompts extends Command {
 		try {
 			const { args, flags } = await this.parse(Prompts);
 			if (!args.action) {
-				renderCommandHelp(APP_NAME, "prompts", Prompts);
+				await this.showHelp("prompts", Prompts);
 				return;
 			}
 			process.exitCode = await runPromptsCommand({ action: args.action, targets: args.targets, flags });

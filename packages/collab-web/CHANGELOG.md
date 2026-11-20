@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Collaboration guests can choose English or Spanish independently, with selected connection, session-end, composer, notification, and theme controls translated.
+
 ## [19.0.0] - 2026-11-18
 
 ### Fixed

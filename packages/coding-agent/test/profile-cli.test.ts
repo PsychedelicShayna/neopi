@@ -160,6 +160,40 @@ describe("global --profile flag", () => {
 		expect(outSpy).not.toHaveBeenCalled();
 	});
 
+	it("uses the configured language for root help without translating flag names", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "npi-help-language-"));
+		try {
+			const agentDir = path.join(root, "agent");
+			await Bun.write(path.join(agentDir, "config.yml"), "language: es\n");
+			const childEnv: Record<string, string | undefined> = {
+				...process.env,
+				PI_CODING_AGENT_DIR: agentDir,
+				NPI_TEST_ALLOWED_STORAGE_ROOT: root,
+				NO_COLOR: "1",
+			};
+			delete childEnv.OMP_PROFILE;
+			delete childEnv.PI_PROFILE;
+			const proc = Bun.spawn([process.execPath, cliEntry, "--help"], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: childEnv,
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				readStream(proc.stdout as ReadableStream<Uint8Array>),
+				readStream(proc.stderr as ReadableStream<Uint8Array>),
+				proc.exited,
+			]);
+			expect(exitCode, stderr).toBe(0);
+			expect(stdout).toContain("\nUSO\n");
+			expect(stdout).toMatch(/--no-title\s+Desactivar la generación automática del título/);
+			expect(stdout).toMatch(/--mode=<value>\s+Modo de salida: text \(predeterminado\), json, rpc o rpc-ui/);
+			expect(stdout).toContain("--cwd=<value>");
+		} finally {
+			await removeWithRetries(root);
+		}
+	}, 30_000);
+
 	it("loads profile agent .env before command modules import pi-utils env", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-cli-env-"));
 		try {

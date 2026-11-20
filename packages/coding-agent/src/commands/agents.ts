@@ -3,7 +3,7 @@
  */
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
-import { Args, Command, Flags, renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
+import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { type AgentsAction, type AgentsCommandArgs, runAgentsCommand } from "../cli/agents-cli";
 import { agentsHelp as commandHelp } from "../cli/command-help";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -38,7 +38,7 @@ export default class Agents extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Agents);
 		if (!args.action) {
-			renderCommandHelp(APP_NAME, "agents", Agents);
+			await this.showHelp("agents", Agents);
 			return;
 		}
 

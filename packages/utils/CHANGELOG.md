@@ -4,6 +4,7 @@
 
 ### Added
 
+- CLI hosts can localize explicit and implicit command help without changing command or flag syntax.
 - Added source-located template parsing, registered-helper inspection, and profile-aware built-in prompt override resolution for prompt tooling ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Shared main-settings TOML reading, top-level overlays and explicit-clear decoding across config consumers ([#34](https://github.com/PsychedelicShayna/neopi/issues/34)).
 - Added launch/user-only environment lookup that honors case-insensitive Windows keys, skips blank values, and ignores project dotenv values and directory redirects, including `BUN_ENV` mode files; without pre-dotenv launch provenance, project-defined names fail closed even for inherited overrides ([#326](https://github.com/PsychedelicShayna/neopi/issues/326)).

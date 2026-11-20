@@ -1,0 +1,650 @@
+# Explicit review draft; extracted from CLI/runtime output. Not wired into runtime.
+# Literal command and flag spellings are intentionally preserved.
+
+[cli.help.summary]
+source = "packages/coding-agent/src/cli/args.ts:575"
+value = "AI coding assistant"
+
+[cli.help.full_details]
+source = "packages/coding-agent/src/cli/args.ts:576"
+value = "Run {APP_NAME} --help for full command and option details."
+
+[cli.help.command_details]
+source = "packages/coding-agent/src/cli/args.ts:577"
+value = "Run {APP_NAME} <command> --help for command-specific help."
+
+[cli.error.unknown_flag]
+source = "packages/coding-agent/src/cli/args.ts:543"
+value = "Error: unknown flag{plural}: {flags}"
+
+[cli.error.available_flags_help]
+source = "packages/coding-agent/src/cli/args.ts:544"
+value = "Run `{APP_NAME} --help` for available flags."
+
+[cli.error.unknown_tool]
+source = "packages/coding-agent/src/cli/args.ts:515"
+value = "Unknown tool{plural} in --tools: {tools}."
+review_needed = true
+review_note = "Confirm domain vocabulary for tool and --tools wording in Spanish."
+
+[cli.error.builtin_tools]
+source = "packages/coding-agent/src/cli/args.ts:518"
+value = "Built-in tools: {tools}."
+review_needed = true
+review_note = "Confirm domain vocabulary for built-in tools."
+
+[cli.error.other_registered_tools]
+source = "packages/coding-agent/src/cli/args.ts:519"
+value = "Other registered tools: {tools}."
+review_needed = true
+review_note = "Confirm domain vocabulary for registered tools."
+
+[cli.error.builtin_tools_unavailable]
+source = "packages/coding-agent/src/cli/args.ts:524"
+value = "Built-in tool{plural} unavailable in this session: {tools}."
+review_needed = true
+review_note = "Confirm domain vocabulary for built-in tools and session availability."
+
+[cli.error.file_not_found]
+source = "packages/coding-agent/src/cli/file-processor.ts:49"
+value = "Error: File not found: {absolutePath}"
+
+[cli.error.file_read_failed]
+source = "packages/coding-agent/src/cli/file-processor.ts:155"
+value = "Error: Could not read file {absolutePath}: {message}"
+
+[builtins.ls.invalid_line_width]
+source = "crates/pi-builtins/src/ls.rs:3878"
+value = "invalid line width: '{0}'"
+
+[builtins.ls.dired_zero_incompatible]
+source = "crates/pi-builtins/src/ls.rs:3906"
+value = "--dired and --zero are incompatible"
+
+[builtins.rm.missing_operand]
+source = "crates/pi-builtins/src/rm.rs:632"
+value = "missing operand\nTry 'rm --help' for more information."
+
+[builtins.rm.cannot_remove_missing]
+source = "crates/pi-builtins/src/rm.rs:634"
+value = "cannot remove {path}: No such file or directory"
+
+[builtins.rm.cannot_remove_permission_denied]
+source = "crates/pi-builtins/src/rm.rs:636"
+value = "cannot remove {path}: Permission denied"
+
+[builtins.rm.cannot_remove_directory]
+source = "crates/pi-builtins/src/rm.rs:638"
+value = "cannot remove {path}: Is a directory"
+
+[builtins.rm.dangerous_recursive_root]
+source = "crates/pi-builtins/src/rm.rs:640"
+value = "it is dangerous to operate recursively on '/'"
+
+[builtins.rm.preserve_root_override]
+source = "crates/pi-builtins/src/rm.rs:642"
+value = "use --no-preserve-root to override this failsafe"
+
+[builtins.rm.refuse_dot_directory]
+source = "crates/pi-builtins/src/rm.rs:644"
+value = "refusing to remove '.' or '..' directory: skipping {path}"
+
+[builtins.rm.no_abbreviate_preserve_root]
+source = "crates/pi-builtins/src/rm.rs:646"
+value = "you may not abbreviate the --no-preserve-root option"
+[cli.error.goal_interactive_only]
+source = "packages/coding-agent/src/cli/args.ts:154"
+value = "--goal requires an interactive terminal (not --print or --mode)."
+
+[cli.error.restore_interactive_only]
+source = "packages/coding-agent/src/cli/args.ts:169"
+value = "--restore requires an interactive terminal (not --print or --mode)."
+
+[cli.error.restore_prompt_forbidden]
+source = "packages/coding-agent/src/cli/args.ts:185"
+value = "--restore takes no prompt: the session goes on with its interrupted turn."
+
+[cli.error.goal_conflicting_input]
+source = "packages/coding-agent/src/cli/args.ts:202"
+value = "--goal cannot be combined with a positional message, @file, or stdin prompt."
+
+[cli.error.trusted_extension_value]
+source = "packages/coding-agent/src/cli/args.ts:459"
+value = "--trusted-extension requires a non-empty, non-flag value"
+
+[cli.error.trusted_extension_conflict]
+source = "packages/coding-agent/src/cli/args.ts:462"
+value = "--trusted-extension cannot be combined with --extension, -e, or --hook"
+
+[cli.error.trusted_extension_absolute_path]
+source = "packages/coding-agent/src/cli/args.ts:469"
+value = "--trusted-extension requires an absolute path: {trustedPath}"
+
+[cli.error.prompt_flag_conflict]
+source = "packages/coding-agent/src/cli/args.ts:474"
+value = "--system-prompt and --system-prompt-template cannot be combined"
+
+[cli.anonymize.not_session_file]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:32"
+value = "{sourcePath} is not a session file"
+
+[cli.anonymize.invalid_session_file]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:36"
+value = "{sourcePath} is not a valid session file"
+
+[cli.anonymize.output_not_directory]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:56"
+value = "--out {outDir} is not a directory"
+
+[cli.anonymize.output_mixes_transcripts]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:65"
+value = "--out {outDir} would mix the export with raw session transcripts; choose another directory"
+
+[cli.anonymize.output_not_empty]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:70"
+value = "--out {outDir} is not empty; choose a new or empty directory"
+
+[cli.anonymize.completed]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:75"
+value = "Anonymized {count} transcript{plural} → {outDir}"
+
+[cli.anonymize.subagents_unavailable]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:76"
+value = "Subagent transcripts unavailable: {error}"
+
+[cli.anonymize.skipped_malformed]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:78"
+value = "Skipped {count} malformed record{plural} in {member}"
+
+[cli.anonymize.not_exported]
+source = "packages/coding-agent/src/cli/anonymize-cli.ts:81"
+value = "Not exported (no readable session header): {member}"
+
+[cli.config.usage_get]
+source = "packages/coding-agent/src/cli/config-cli.ts:338"
+value = "Usage: {APP_NAME} config get <key>"
+
+[cli.config.unknown_setting]
+source = "packages/coding-agent/src/cli/config-cli.ts:345"
+value = "Unknown setting: {key}"
+
+[cli.config.list_hint]
+source = "packages/coding-agent/src/cli/config-cli.ts:339"
+value = "Run '{APP_NAME} config list' to see available keys"
+
+[cli.auth.no_credentials]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:280"
+value = "No credentials stored."
+
+[cli.auth.credentials_saved]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:232"
+value = "Credentials saved to {path}"
+
+[cli.auth.logged_out]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:291"
+value = "Logged out of {provider}"
+
+[cli.auth.available_providers]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:303"
+value = "Available providers:"
+
+[cli.xdg.unsupported_platform]
+source = "packages/coding-agent/src/cli/commands/init-xdg.ts:9"
+value = "XDG directory setup is only supported on Linux and macOS."
+
+[cli.xdg.created_directory]
+source = "packages/coding-agent/src/cli/commands/init-xdg.ts:25"
+value = "Created {directory}"
+
+[cli.xdg.initialized]
+source = "packages/coding-agent/src/cli/commands/init-xdg.ts:28"
+value = "XDG directories initialized."
+
+[cli.xdg.profile_hint_line_1]
+source = "packages/coding-agent/src/cli/commands/init-xdg.ts:29"
+value = "Ensure XDG_DATA_HOME, XDG_STATE_HOME, and XDG_CACHE_HOME"
+
+[cli.xdg.profile_hint_line_2]
+source = "packages/coding-agent/src/cli/commands/init-xdg.ts:30"
+value = "are set in your shell profile for {APP_NAME} to use them."
+[cli.auth.unknown_oauth_provider]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:208"
+value = "Unknown OAuth provider '{provider}'. Known: {providers}"
+
+[cli.auth.no_callback_port]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:242"
+value = "No known OAuth callback port for '{provider}'. Use device-code flow on the broker host directly."
+
+[cli.auth.ssh_not_found]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:259"
+value = "ssh binary not found in PATH"
+
+[cli.auth.import_source_invalid]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:371"
+value = "Import source is neither file nor directory: {target}"
+
+[cli.auth.import_usage]
+source = "packages/coding-agent/src/cli/auth-broker-cli.ts:455"
+value = "Usage: {APP_NAME} auth-broker import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]"
+
+[cli.auth_gateway.requires_broker_config]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:433"
+value = "`{APP_NAME} auth-gateway serve` requires OMP_AUTH_BROKER_URL (or `auth.broker.url`/`auth.broker.token` in config.yml). The gateway is itself a broker client."
+
+[cli.auth_gateway.clients_requires_auth]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:437"
+value = "`--clients` needs bearer auth; drop `--no-auth`."
+
+[cli.auth_gateway.listening]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:521"
+value = "auth-gateway listening on {url}"
+
+[cli.auth_gateway.bearer_token_path]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:537"
+value = "bearer token: {path} (chmod 0600)"
+
+[cli.auth_gateway.connection_link]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:538"
+value = "connection link: run `{APP_NAME} auth-gateway link`"
+
+[cli.auth_gateway.auth_disabled]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:540"
+value = "auth: disabled (--no-auth) — any client can call this gateway"
+
+[cli.auth_gateway.client_tokens]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:544"
+value = "client tokens: {count} from {path} (re-read every {seconds}s)"
+
+[cli.auth_gateway.upstream_broker]
+source = "packages/coding-agent/src/cli/auth-gateway-cli.ts:547"
+value = "upstream broker: {url}"
+[cli.web_search.query_required]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:66"
+value = "Error: Query is required"
+
+[cli.web_search.limit_number_required]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:77"
+value = "Error: --limit must be a number"
+
+[cli.web_search.help_title]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:107"
+value = "Test web search models"
+
+[cli.browser_relay.install_success]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:41"
+value = "Installed the {PRODUCT_NAME} Browser Relay extension to {directory}"
+
+[cli.browser_relay.setup_heading]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:43"
+value = "Finish setup in Chrome:"
+
+[cli.browser_relay.setup_enable_dev_mode]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:44"
+value = "1. Open chrome://extensions and enable Developer mode."
+
+[cli.browser_relay.setup_load_unpacked]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:45"
+value = "2. Click \"Load unpacked\" and select: {directory}"
+
+[cli.browser_relay.setup_enable]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:46"
+value = "3. Enable the mode: {APP_NAME} config set browser.relay true"
+
+[cli.browser_relay.automatic_start]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:48"
+value = "{APP_NAME} starts the relay automatically when the browser prelude needs it;"
+
+[cli.browser_relay.manual_start]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:49"
+value = "run `{APP_NAME} browser-relay` yourself only for --token or --no-group."
+
+[cli.browser_relay.badge_connected]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:50"
+value = "The extension badge shows 'on' once it reaches a relay."
+
+[cli.browser_relay.already_running]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:72"
+value = "{PRODUCT_NAME} browser relay already running on {url}; nothing to do."
+
+[cli.browser_relay.port_conflict]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:76"
+value = "Port {port} is in use by something that is not a {PRODUCT_NAME} browser relay."
+
+[cli.browser_relay.listening]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:82"
+value = "{PRODUCT_NAME} browser relay listening on {url}"
+
+[cli.browser_relay.waiting_extension]
+source = "packages/coding-agent/src/cli/browser-relay-cli.ts:92"
+value = "Waiting for the {PRODUCT_NAME} Browser Relay extension to connect ({APP_NAME} browser-relay install)..."
+
+[cli.setup.usage]
+source = "packages/coding-agent/src/cli/setup-cli.ts:48"
+value = "Usage: {APP_NAME} setup <component>"
+
+[cli.setup.valid_components]
+source = "packages/coding-agent/src/cli/setup-cli.ts:49"
+value = "Valid components: {components}"
+
+[cli.setup.python_not_found]
+source = "packages/coding-agent/src/cli/setup-cli.ts:137"
+value = "Python not found"
+
+[cli.setup.python_install_hint]
+source = "packages/coding-agent/src/cli/setup-cli.ts:138"
+value = "Install Python 3.8+ or set python.interpreter to its executable path"
+
+[cli.setup.python_execution_ready]
+source = "packages/coding-agent/src/cli/setup-cli.ts:148"
+value = "Python execution is ready"
+
+[cli.setup.python_execution_failed]
+source = "packages/coding-agent/src/cli/setup-cli.ts:152"
+value = "Python interpreter reported failure"
+
+[cli.setup.speech_dependencies]
+source = "packages/coding-agent/src/cli/setup-cli.ts:265"
+value = "Speech dependencies:"
+
+[cli.setup.component_ready]
+source = "packages/coding-agent/src/cli/setup-cli.ts:283"
+value = "{component} ready"
+
+[cli.setup.preparing_component]
+source = "packages/coding-agent/src/cli/setup-cli.ts:286"
+value = "Preparing {component}..."
+
+[cli.setup.missing_marker]
+source = "packages/coding-agent/src/cli/setup-cli.ts:271"
+value = "[missing]"
+
+[cli.skill.secrets_found]
+source = "packages/coding-agent/src/cli/skill-cli.ts:250"
+value = "possible secrets found:"
+
+[cli.skill.refuse_publish_secrets]
+source = "packages/coding-agent/src/cli/skill-cli.ts:256"
+value = "refusing to publish: remove them, list the files in .skillignore, or pass --allow-secrets"
+
+[cli.skill.dry_run]
+source = "packages/coding-agent/src/cli/skill-cli.ts:263"
+value = "dry run: nothing published"
+
+[cli.skill.latest_tag_immutable]
+source = "packages/coding-agent/src/cli/skill-cli.ts:307"
+value = "the latest tag cannot be removed; point it elsewhere instead"
+[cli.ssh.no_hosts]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:148"
+value = "No SSH hosts configured"
+
+[cli.ssh.add_host_hint]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:149"
+value = "Add one with: {APP_NAME} ssh add <name> --host <address>"
+
+[cli.ssh.project_hosts]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:154"
+value = "Project SSH Hosts ({path}):"
+
+[cli.ssh.user_hosts]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:163"
+value = "User SSH Hosts ({path}):"
+[builtins.ls.io_not_directory]
+source = "crates/pi-builtins/src/ls.rs:3885"
+value = "cannot access {path}: Not a directory"
+
+[builtins.ls.io_not_found]
+source = "crates/pi-builtins/src/ls.rs:3886"
+value = "cannot access {path}: No such file or directory"
+
+[builtins.ls.io_not_permitted]
+source = "crates/pi-builtins/src/ls.rs:3888"
+value = "cannot access {path}: Operation not permitted"
+
+[builtins.ls.io_directory_permission_denied]
+source = "crates/pi-builtins/src/ls.rs:3890"
+value = "cannot open directory {path}: Permission denied"
+
+[builtins.ls.io_file_permission_denied]
+source = "crates/pi-builtins/src/ls.rs:3892"
+value = "cannot open file {path}: Permission denied"
+
+[builtins.ls.io_directory_bad_descriptor]
+source = "crates/pi-builtins/src/ls.rs:3896"
+value = "cannot open directory {path}: Bad file descriptor"
+
+[builtins.ls.io_unknown]
+source = "crates/pi-builtins/src/ls.rs:3898"
+value = "unknown io error: {path}, '{error}'"
+
+[builtins.ls.invalid_block_size]
+source = "crates/pi-builtins/src/ls.rs:3903"
+value = "invalid --block-size argument '{value}'"
+
+[builtins.ls.already_listed_directory]
+source = "crates/pi-builtins/src/ls.rs:3909"
+value = "{path}: not listing already-listed directory"
+
+[builtins.ls.invalid_time_style]
+source = "crates/pi-builtins/src/ls.rs:3912"
+value = "invalid --time-style argument {value}\nPossible values are:\n  - [posix-]full-iso\n  - [posix-]long-iso\n  - [posix-]iso\n  - [posix-]locale\n  - +FORMAT (e.g., +%H:%M) for a 'date'-style format\n\nFor more information try --help"
+[cli.update.updated_to]
+source = "packages/coding-agent/src/cli/update-cli.ts:1169"
+value = "Updated to {expectedVersion}{location}"
+
+[cli.update.reinstall_hint]
+source = "packages/coding-agent/src/cli/update-cli.ts:1188"
+value = "You may need to reinstall: {installer}"
+
+[cli.update.renamed_package_migrating]
+source = "packages/coding-agent/src/cli/update-cli.ts:1573"
+value = "npm package renamed to {package}; migrating this install."
+
+[cli.update.old_package_remove_warning]
+source = "packages/coding-agent/src/cli/update-cli.ts:1583"
+value = "Warning: could not remove the old {package} package; remove it manually later."
+
+[cli.update.updating_bun]
+source = "packages/coding-agent/src/cli/update-cli.ts:1627"
+value = "Updating via bun..."
+
+[cli.update.pruned_cache_entries]
+source = "packages/coding-agent/src/cli/update-cli.ts:1645"
+value = "Pruned {count} stale Bun cache entries"
+
+[cli.update.updating_npm]
+source = "packages/coding-agent/src/cli/update-cli.ts:1654"
+value = "Updating via npm..."
+
+[cli.update.updating_homebrew_formulae]
+source = "packages/coding-agent/src/cli/update-cli.ts:1776"
+value = "Updating Homebrew formulae..."
+
+[cli.update.updating_homebrew]
+source = "packages/coding-agent/src/cli/update-cli.ts:1782"
+value = "Updating via Homebrew..."
+
+[cli.update.updating_mise]
+source = "packages/coding-agent/src/cli/update-cli.ts:1793"
+value = "Updating via mise..."
+
+[cli.update.installing]
+source = "packages/coding-agent/src/cli/update-cli.ts:1952"
+value = "Installing update..."
+
+[cli.update.restart]
+source = "packages/coding-agent/src/cli/update-cli.ts:1975"
+value = "Restart {APP_NAME} to use the new version"
+
+[cli.update.already_current]
+source = "packages/coding-agent/src/cli/update-cli.ts:2148"
+value = "Already up to date"
+
+[cli.update.new_version_available]
+source = "packages/coding-agent/src/cli/update-cli.ts:2158"
+value = "New version available: {version}"
+
+[cli.update.forcing_reinstall]
+source = "packages/coding-agent/src/cli/update-cli.ts:2160"
+value = "Forcing reinstall of {version}"
+
+[cli.update.build_source]
+source = "packages/coding-agent/src/cli/update-cli.ts:2175"
+value = "Build source: {url}"
+
+[cli.update.check_failed]
+source = "packages/coding-agent/src/cli/update-cli.ts:2181"
+value = "Failed to check for updates: {error}"
+
+[cli.update.update_failed]
+source = "packages/coding-agent/src/cli/update-cli.ts:2191"
+value = "Update failed: {error}"
+
+[cli.update.canary_support]
+source = "packages/coding-agent/src/cli/update-cli.ts:2269"
+value = "Canary updates are only supported for bun, npm, or binary installs."
+
+[cli.update.nix_managed]
+source = "packages/coding-agent/src/cli/update-cli.ts:2273"
+value = "This installation is managed by Nix and cannot update itself."
+
+[cli.update.nix_rebuild_hint]
+source = "packages/coding-agent/src/cli/update-cli.ts:2274"
+value = "Update the flake input or profile that provides omp, then rebuild."
+
+[cli.update.current_version]
+source = "packages/coding-agent/src/cli/update-cli.ts:2316"
+value = "Current version: {version}"
+
+[cli.update.current_canary_channel]
+source = "packages/coding-agent/src/cli/update-cli.ts:2319"
+value = "Current channel: canary"
+
+[cli.update.help.title]
+source = "packages/coding-agent/src/cli/update-cli.ts:2348"
+value = "Check for and install updates"
+[cli.web_search.help.usage_heading]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:109"
+value = "Usage:"
+
+[cli.web_search.help.usage_query]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:110-111"
+value = "{APP_NAME} q [options] <query>\n{APP_NAME} web-search [options] <query>"
+
+[cli.web_search.help.arguments_heading]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:113"
+value = "Arguments:"
+
+[cli.web_search.help.query_description]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:114"
+value = "Search query text"
+
+[cli.web_search.help.options_heading]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:116"
+value = "Options:"
+
+[cli.web_search.help.model_description]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:117"
+value = "Catalog model selector (for example, web/duckduckgo)"
+
+[cli.web_search.help.recency_description]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:118"
+value = "Recency filter (when supported): {RECENCY_OPTIONS}"
+
+[cli.web_search.help.max_results]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:119"
+value = "Max results to return"
+
+[cli.web_search.help.compact]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:120"
+value = "Render condensed output"
+
+[cli.web_search.help.show_help]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:121"
+value = "Show this help"
+
+[cli.web_search.help.directives_heading]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:123"
+value = "Query directives:"
+
+[cli.web_search.help.directives_syntax]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:124-125"
+value = "site:/-site:  after:/before: (YYYY-MM-DD)  inurl:  intitle:  filetype:\n\"exact phrase\"  -term  OR"
+
+[cli.web_search.help.directives_explanation]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:126-127"
+value = "Mapped to native provider filters where available, otherwise applied as a lenient post-filter (a constraint matching nothing is relaxed, not fatal)."
+
+[cli.web_search.help.examples_heading]
+source = "packages/coding-agent/src/cli/web-search-cli.ts:129"
+value = "Examples:"
+
+[cli.update.help.usage_heading]
+source = "packages/coding-agent/src/cli/update-cli.ts:2350"
+value = "Usage:"
+[cli.sessions.all_session_dir_conflict]
+source = "packages/coding-agent/src/cli/sessions-cli.ts:133"
+value = "--all and --session-dir are mutually exclusive"
+
+[cli.sessions.max_messages_invalid]
+source = "packages/coding-agent/src/cli/sessions-cli.ts:196"
+value = "--max-messages must be a nonnegative integer"
+
+[cli.sessions.not_readable]
+source = "packages/coding-agent/src/cli/sessions-cli.ts:203"
+value = "Not a readable session file: {resolved}"
+
+[cli.setup.unknown_component]
+source = "packages/coding-agent/src/cli/setup-cli.ts:55"
+value = "Unknown component: {component}"
+
+[cli.setup.python_model_missing]
+source = "packages/coding-agent/src/cli/setup-cli.ts:173"
+value = "No local model is available for the {role} role."
+
+[cli.setup.tts_model_download_failed]
+source = "packages/coding-agent/src/cli/setup-cli.ts:233"
+value = "Failed to download the local text-to-speech model."
+
+[cli.skill.publish_usage]
+source = "packages/coding-agent/src/cli/skill-cli.ts:295"
+value = "usage: {APP_NAME} skill version <patch|minor|major|x.y.z> [dir]"
+
+[cli.skill.version_exact_required]
+source = "packages/coding-agent/src/cli/skill-cli.ts:113"
+value = "an exact version is required (@scope/name@x.y.z); {usage}"
+
+[cli.skill.scope_required]
+source = "packages/coding-agent/src/cli/skill-cli.ts:150"
+value = "--scope is required when publishing with {SKILLS_TOKEN_ENV}"
+
+[cli.skill.username_scope_failed]
+source = "packages/coding-agent/src/cli/skill-cli.ts:167"
+value = "cannot determine your Stencil username from the credential; pass --scope"
+
+[cli.ssh.unknown_action]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:48"
+value = "Unknown action: {action}"
+
+[cli.ssh.valid_actions]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:49"
+value = "Valid actions: add, remove, list"
+
+[cli.ssh.host_required]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:61"
+value = "Error: Host name required"
+
+[cli.ssh.host_flag_required]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:73"
+value = "Error: --host is required"
+
+[cli.ssh.port_range]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:83"
+value = "Error: Port must be an integer between 1 and 65535"
+
+[cli.ssh.host_added]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:101"
+value = "Added SSH host \"{name}\" to {scope} config"
+
+[cli.ssh.host_removed]
+source = "packages/coding-agent/src/cli/ssh-cli.ts:122"
+value = "Removed SSH host \"{name}\" from {scope} config"

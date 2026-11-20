@@ -1,5 +1,6 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { setKeybindings, type Component, type TerminalFrameProvider, type TUI } from "@oh-my-pi/pi-tui";
 import { stripVTControlCharacters } from "node:util";
@@ -267,6 +268,24 @@ describe("dialogs under a native surface", () => {
 		draft = "";
 		dialog.handleInput("\x1bh");
 		expect(dialog.render(200).length).toBeGreaterThan(1);
+	});
+
+	it("approval: Spanish hints keep the supplied prompt and denial action intact", () => {
+		const previous = getLocale();
+		try {
+			setLocale("es");
+			const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+			const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /sample", callbacks);
+			const text = stripVTControlCharacters(dialog.render(160).join("\n"));
+			expect(text).toContain("Allow tool: write");
+			expect(text).toContain("aprobar");
+			expect(text).toContain("rechazar");
+			dialog.handleNativeEvent({ type: "action", key: "actions/deny", act: "deny", mods: [] });
+			expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+		} finally {
+			setLocale(previous);
+		}
 	});
 
 	it("approval: Enter and the follow-up chord are ignored until armed; then Enter takes the highlighted choice", () => {

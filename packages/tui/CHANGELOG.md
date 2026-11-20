@@ -11,6 +11,8 @@
 
 ### Added
 
+- Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
+
 - The agent definition editor uses a field list with a live preview pane and dedicated screens per field, in the terminal and as native pickers ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 - `/advisor configure` edits role advisor activation sets in User, Project .omp, and Session scopes, with stable-ID checkboxes, inherited-set clearing, and editable override/missing-reference diagnostics ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
 
@@ -56,6 +58,10 @@
 - `/statusline` keeps enabled and disabled widgets in one stable list and navigates with `j`/`k`, `h`/`l` to move, Ctrl+D/U, `gg`/`G`, Ctrl+E/Y scrolling, `/` filtering, and `<`/`>` composer cycling that keeps the selection ([#341](https://github.com/PsychedelicShayna/neopi/issues/341)).
 
 ### Fixed
+
+- Untranslated settings retain their current host-provided labels and descriptions in Spanish mode.
+- Leaving settings search restores the confirmed filter instead of retaining an unconfirmed preview.
+- Ask dialogs keep a stable, bounded height when footer hints wrap or questions expand.
 
 - Editing a record in project or session settings preserves inheritance for entries you don't override.
 - Hidden command aliases such as `/models` reveal with their descriptions after visible name prefixes run out, even when fuzzy candidates remain.

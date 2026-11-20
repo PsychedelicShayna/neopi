@@ -1,5 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
-import { Args, Command, type CommandEntry, Flags, run } from "../src/cli";
+import { Args, Command, type CommandEntry, Flags, renderCommandHelp, run } from "../src/cli";
 
 class GoodCommand extends Command {
 	static description = "prints good things";
@@ -51,6 +51,49 @@ describe("run() per-command help", () => {
 		expect(brokenLoads).toBe(0);
 		expect(writes.join("")).toContain("prints good things");
 		expect(writes.join("")).toContain("--verbose");
+	});
+
+	it("uses command-scoped translations for explicit and implicit help", async () => {
+		class HelpCommand extends Command {
+			static description = "original description";
+			static flags = { verbose: Flags.boolean({ description: "original flag" }) };
+			async run(): Promise<void> {
+				await this.showHelp("good", HelpCommand);
+			}
+		}
+		const commands: CommandEntry[] = [{ name: "good", load: async () => HelpCommand }];
+		const translations: Record<string, string> = {
+			"cli.command.good.description": "descripción",
+			"cli.command.good.flag.verbose.description": "detalle de la opción",
+			"cli.flag.verbose.description": "wrong global description",
+			"cli.help.usage": "USO",
+		};
+		const writes: string[] = [];
+		const stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(String(chunk));
+			return true;
+		});
+		try {
+			for (const argv of [["good", "--help"], ["good"]]) {
+				writes.length = 0;
+				await run({
+					bin: "omp",
+					version: "0.0.0",
+					argv,
+					commands,
+					commandHelp: (bin, id, command) =>
+						renderCommandHelp(bin, id, command, (key, fallback) => translations[key] ?? fallback),
+				});
+				const output = writes.join("");
+				expect(output).toContain("descripción");
+				expect(output).toContain("USO");
+				expect(output).toContain("--verbose");
+				expect(output).toContain("detalle de la opción");
+				expect(output).not.toContain("wrong global description");
+			}
+		} finally {
+			stdoutSpy.mockRestore();
+		}
 	});
 });
 
