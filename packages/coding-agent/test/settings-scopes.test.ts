@@ -39,7 +39,7 @@ describe("settings scopes", () => {
 		expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({ value: true, source: "session" });
 	});
 
-	it("keeps an external edit when saving a dirty session with an unset setting", async () => {
+	it("rechecks and saves an external edit to a dirty session with an unset setting", async () => {
 		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
 		await Bun.write(sidecar, "autoResume: true\ncolorBlindMode: false\n");
 		const settings = await sessionSettings();
@@ -47,15 +47,22 @@ describe("settings scopes", () => {
 		await Bun.write(sidecar, "autoResume: true\ncolorBlindMode: true\n");
 
 		const warnings = spyOn(logger, "warn");
+		const changes: boolean[] = [];
+		const stop = settings.onEffectiveChange([cfgColorBlindMode], () => changes.push(cfgColorBlindMode.get(settings)));
 		try {
 			await settings.recheckSettingsFiles();
 			await settings.recheckSettingsFiles();
-			expect(warnings.mock.calls.filter(([message]) => message.includes("session file changed"))).toHaveLength(1);
+			expect(warnings.mock.calls.filter(([message]) => message.includes("session file changed"))).toHaveLength(0);
 			expect(settings.hasUnsavedSessionSettings).toBe(true);
 			expect(settings.readScopeValue(cfgAutoResume, "session")).toBeUndefined();
-			expect(settings.readScopeValue(cfgColorBlindMode, "session")).toBe(false);
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+			expect(changes).toEqual([true]);
 			expect(await Bun.file(sidecar).text()).toBe("autoResume: true\ncolorBlindMode: true\n");
 		} finally {
+			stop();
 			warnings.mockRestore();
 		}
 		await settings.saveSessionSettings();
@@ -76,6 +83,42 @@ describe("settings scopes", () => {
 		await expect(settings.saveSessionSettings()).rejects.toThrow("changed both on disk and in memory");
 		expect(settings.hasUnsavedSessionSettings).toBe(true);
 		expect(settings.readScopeValue(cfgSettingsDefaultScope, "session")).toBe("session");
+		expect(await Bun.file(sidecar).text()).toBe(external);
+
+		const warnings = spyOn(logger, "warn");
+		try {
+			await settings.recheckSettingsFiles();
+			await settings.recheckSettingsFiles();
+			const updated = `${external}colorBlindMode: true\n`;
+			await Bun.write(sidecar, updated);
+			await settings.recheckSettingsFiles();
+
+			expect(warnings.mock.calls.filter(([message]) => message.includes("session file changed"))).toHaveLength(1);
+			expect(settings.readScopeValue(cfgSettingsDefaultScope, "session")).toBe("session");
+			expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({
+				value: true,
+				source: "session",
+			});
+			await expect(settings.saveSessionSettings()).rejects.toThrow("changed both on disk and in memory");
+			expect(settings.hasUnsavedSessionSettings).toBe(true);
+			expect(await Bun.file(sidecar).text()).toBe(updated);
+		} finally {
+			warnings.mockRestore();
+		}
+	});
+
+	it("clears the dirty state when an external edit matches the pending session edit", async () => {
+		const sidecar = path.join(root, "sessions", "conversation", "settings.yml");
+		await Bun.write(sidecar, "colorBlindMode: false\n");
+		const settings = await sessionSettings();
+		settings.writeScopeValue(cfgColorBlindMode, true, "session");
+		const external = "# changed externally\ncolorBlindMode: true\n";
+		await Bun.write(sidecar, external);
+
+		await settings.recheckSettingsFiles();
+		expect(settings.hasUnsavedSessionSettings).toBe(false);
+		expect(settings.resolveFileScopeValue(cfgColorBlindMode, "session")).toEqual({ value: true, source: "session" });
+		await settings.saveSessionSettings();
 		expect(await Bun.file(sidecar).text()).toBe(external);
 	});
 

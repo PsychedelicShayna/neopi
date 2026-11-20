@@ -986,7 +986,8 @@ export class Settings {
 	#sessionSettingsPath: string | undefined;
 	#sessionFileStamp: SettingsFileStamp = null;
 	#sessionFileBase: RawSettings = {};
-	#warnedSessionFileConflict = false;
+	/** Unresolved same-key edits remain conflicts even after the file baseline advances. */
+	#sessionFileConflicts: ReadonlySet<string> | undefined;
 	#sessionDirty = false;
 	/** Session-local role selection. Role defaults never write the global settings layer. */
 	#activeRole: string | null | undefined;
@@ -1674,19 +1675,12 @@ export class Settings {
 		try {
 			const baseline = this.#sessionFileStamp;
 			const file = await checkSettingsFile(filePath);
-			if (filePath !== this.#sessionSettingsPath || baseline !== this.#sessionFileStamp) return;
-			if (file.stamp === baseline) {
-				this.#warnedSessionFileConflict = false;
-			} else if (this.#sessionDirty) {
-				if (!this.#warnedSessionFileConflict) {
-					logger.warn("Settings: session file changed with unsaved edits; keeping the in-memory layer", {
-						path: filePath,
-					});
-				}
-				this.#warnedSessionFileConflict = true;
-			} else {
-				this.#replaceSessionLayer(filePath, this.#readSessionSettings(filePath, file.content), file.stamp);
+			if (filePath !== this.#sessionSettingsPath || baseline !== this.#sessionFileStamp || file.stamp === baseline) {
+				return;
 			}
+			const external = this.#readSessionSettings(filePath, file.content);
+			if (this.#sessionDirty) this.#reconcileSessionSettings(filePath, external, file.stamp, "recheck");
+			else this.#replaceSessionLayer(filePath, external, file.stamp);
 		} catch (error) {
 			logger.warn("Settings: keeping last good session config; on-disk change failed to load", {
 				path: filePath,
@@ -1707,16 +1701,58 @@ export class Settings {
 		return parsed;
 	}
 
-	#replaceSessionLayer(filePath: string | undefined, loaded: RawSettings, stamp: SettingsFileStamp): void {
+	#replaceSessionLayer(
+		filePath: string | undefined,
+		loaded: RawSettings,
+		stamp: SettingsFileStamp,
+		merged = loaded,
+		conflicts?: ReadonlySet<string>,
+	): void {
 		const previous = this.#snapshot();
 		this.#sessionSettingsPath = filePath;
-		this.#session = loaded;
+		this.#session = merged;
 		this.#sessionFileStamp = stamp;
 		this.#sessionFileBase = loaded;
-		this.#warnedSessionFileConflict = false;
-		this.#sessionDirty = false;
+		this.#sessionFileConflicts = conflicts;
+		this.#sessionDirty = merged !== loaded;
 		this.#rebuildMerged();
 		this.#fireChangesSince(previous);
+	}
+
+	#reconcileSessionSettings(
+		filePath: string,
+		external: RawSettings,
+		stamp: SettingsFileStamp,
+		mode: "recheck" | "save",
+	): void {
+		let merged = external;
+		let conflicts: Set<string> | undefined;
+		for (const { id, segments } of allSettings()) {
+			const old = getByPath(this.#sessionFileBase, segments);
+			const local = getByPath(this.#session, segments);
+			if (settingValuesEqual(old, local)) continue;
+			const remote = getByPath(external, segments);
+			if (settingValuesEqual(local, remote)) continue;
+			if (this.#sessionFileConflicts?.has(id) || !settingValuesEqual(old, remote)) {
+				if (mode === "save") {
+					throw new Error(`Cannot save session settings: ${id} changed both on disk and in memory (${filePath}).`);
+				}
+				(conflicts ??= new Set()).add(id);
+			}
+			if (merged === external) merged = structuredClone(external);
+			if (local === undefined) deleteByPath(merged, segments);
+			else setByPath(merged, segments, local);
+		}
+		if (conflicts && !this.#sessionFileConflicts) {
+			logger.warn(
+				"Settings: session file changed with conflicting unsaved edits; keeping the local values for those settings",
+				{
+					path: filePath,
+					settings: [...conflicts],
+				},
+			);
+		}
+		this.#replaceSessionLayer(filePath, external, stamp, merged, conflicts);
 	}
 
 	async saveSessionSettings(): Promise<void> {
@@ -1731,26 +1767,11 @@ export class Settings {
 		const baseline = this.#sessionFileStamp;
 		const file = await checkSettingsFile(filePath);
 		if (filePath !== this.#sessionSettingsPath || !this.#sessionDirty) return;
-		if (file.stamp !== baseline) {
-			const external = this.#readSessionSettings(filePath, file.content);
-			const merged = structuredClone(external);
-			for (const { id, segments } of allSettings()) {
-				const old = getByPath(this.#sessionFileBase, segments);
-				const local = getByPath(this.#session, segments);
-				if (settingValuesEqual(old, local)) continue;
-				const remote = getByPath(external, segments);
-				if (!settingValuesEqual(old, remote) && !settingValuesEqual(local, remote)) {
-					throw new Error(`Cannot save session settings: ${id} changed both on disk and in memory (${filePath}).`);
-				}
-				if (local === undefined) deleteByPath(merged, segments);
-				else setByPath(merged, segments, local);
-			}
-			const previous = this.#snapshot();
-			this.#session = merged;
-			this.#sessionFileBase = external;
-			this.#sessionFileStamp = file.stamp;
-			this.#rebuildMerged();
-			this.#fireChangesSince(previous);
+		if (file.stamp !== baseline || this.#sessionFileConflicts) {
+			const external =
+				file.stamp === baseline ? this.#sessionFileBase : this.#readSessionSettings(filePath, file.content);
+			this.#reconcileSessionSettings(filePath, external, file.stamp, "save");
+			if (!this.#sessionDirty) return;
 		}
 		const snapshot = this.#session;
 		const content = stringifyYamlConfig(snapshot);
@@ -1758,7 +1779,7 @@ export class Settings {
 		if (filePath !== this.#sessionSettingsPath) return;
 		this.#sessionFileBase = snapshot;
 		this.#sessionFileStamp = Bun.hash.xxHash64(content);
-		this.#warnedSessionFileConflict = false;
+		this.#sessionFileConflicts = undefined;
 		if (snapshot === this.#session) {
 			this.#sessionDirty = false;
 			this.#rebuildMerged();
@@ -2448,6 +2469,7 @@ export class Settings {
 		cloned.#sessionSettingsPath = this.#sessionSettingsPath;
 		cloned.#sessionFileStamp = this.#sessionFileStamp;
 		cloned.#sessionFileBase = this.#sessionFileBase;
+		cloned.#sessionFileConflicts = this.#sessionFileConflicts;
 		cloned.#sessionDirty = this.#sessionDirty;
 		// A soft-pinned default yields to a value the clone's own scope configures.
 		cloned.#softPins = new Set(this.#softPins);
