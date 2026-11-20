@@ -48,7 +48,7 @@ export const cfgSettingsDefaultScope = register({
 	id: "settings.defaultScope",
 	type: "enum",
 	values: ["global", "project", "session"] as const,
-	default: "global",
+	default: "session",
 	ui: {
 		tab: "interaction",
 		group: "Settings",

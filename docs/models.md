@@ -8,7 +8,7 @@ Use `/roles session`, `/roles project`, or `/roles global` to edit role
 assignments in that scope. Session values override project values, which override
 global defaults. Role rows show the scope being edited and identify a higher
 scope when it shadows the saved assignment. Plain `/roles` uses
-`models.defaultScope` (Global by default); that preference itself follows the
+`models.defaultScope` (session by default); that preference itself follows the
 same scope precedence.
 
 In **Roles**, select a role and press `b` or choose **Token budget** to edit its

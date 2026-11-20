@@ -41,6 +41,12 @@ function createRuntime() {
 }
 
 describe.each(["roles", "models"])("/%s slash command", name => {
+	it("opens session scope when no default is configured", async () => {
+		const harness = createRuntime();
+		await executeBuiltinSlashCommand(`/${name}`, harness.runtime);
+		expect(harness.showModelSelector).toHaveBeenCalledWith({ scope: "session" });
+	});
+
 	it.each(["session", "project", "global"] as const)("opens %s in the requested scope", async scope => {
 		const harness = createRuntime();
 		await executeBuiltinSlashCommand(`/${name} ${scope}`, harness.runtime);
