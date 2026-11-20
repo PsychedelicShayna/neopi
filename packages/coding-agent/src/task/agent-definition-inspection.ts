@@ -115,10 +115,17 @@ export function inspectAgentDefinition(
 	if (draft.harness === "codex") warn("The codex harness parses but cannot be spawned.", "harness");
 
 	if (draft.tools === undefined) facts.push({ k: "Tools", v: "default selection" });
-	else if (draft.tools.length === 0) facts.push({ k: "Tools", v: "none (structured agents still get yield)" });
 	else {
-		const readOnly = draft.tools.every(tool => READ_ONLY_TOOL_NAMES.has(tool));
-		facts.push({ k: "Tools", v: `${draft.tools.join(", ")}${readOnly ? " · classified read-only" : ""}` });
+		if (draft.tools.length === 0) {
+			const task = draft.spawns === undefined ? "" : "; task is added below the spawn depth cap";
+			facts.push({
+				k: "Tools",
+				v: `No built-ins explicitly selected (yield is added for structured agents${task})`,
+			});
+		} else {
+			const readOnly = draft.tools.every(tool => READ_ONLY_TOOL_NAMES.has(tool));
+			facts.push({ k: "Tools", v: `${draft.tools.join(", ")}${readOnly ? " · classified read-only" : ""}` });
+		}
 		info(
 			"A tools list is not a sandbox: MCP and custom tools stay available unless the caller restricts them.",
 			"tools",

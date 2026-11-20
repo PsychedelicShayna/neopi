@@ -75,7 +75,7 @@ const FIELD_HELP: Record<AgentDefinitionField, string> = {
 		"Subagents run without an advisor unless their definition opts in. Advisor role uses the advisor role and catalog; a selector changes the advisor's model; a named advisor binds one WATCHDOG entry; a private advisor is defined here for this type only. Role activation sets are separate settings.",
 	spawns:
 		"Exact-name allowlist of agent types this agent may start; the first listed is its default. * allows any type. Omitted means none, except that a tools list containing task silently grants *. Chains (A spawns B, B spawns C) are enforced and bounded by task.maxRecursionDepth.",
-	tools: "Omitted selects the default built-ins; an empty list grants none (structured agents still receive yield). A tools list is not a sandbox: MCP and custom tools stay available unless the caller restricts them.",
+	tools: "Omitted uses the default built-ins; [] selects none explicitly. Structured runs still get yield, and spawns adds task below the depth cap. This is not a sandbox: MCP and custom tools stay available unless the caller restricts them.",
 	output:
 		"A JSON Schema or JTD object the agent's yield {data} is validated against; a caller's outputSchema overrides it. Omit it for free-text results. true and null are rejected before dispatch.",
 	structured:
@@ -200,6 +200,7 @@ export class AgentDefinitionEditor implements Component {
 	#rebuild: ((selected: string | undefined) => void) | undefined;
 	#revision = 0;
 	#pages: FormPage[] = [];
+	#formBack: (() => void) | undefined;
 	#keys = new MenuKeyReader();
 	#busy = false;
 	#controller: AbortController | undefined;
@@ -837,7 +838,12 @@ export class AgentDefinitionEditor implements Component {
 							},
 						]
 					: []),
-				{ value: "__none", label: "No tools", description: "tools: [] (yield is still granted).", apply: () => [] },
+				{
+					value: "__none",
+					label: "No tools",
+					description: "Select no built-ins explicitly; automatic, MCP, and custom tools can still be available.",
+					apply: () => [],
+				},
 			],
 			custom: "+ Add tool name (MCP or extension)…",
 			apply: selected => this.#set("tools", selected),
@@ -1173,7 +1179,7 @@ export class AgentDefinitionEditor implements Component {
 						"advisor",
 					);
 				else if (value === "named") void this.#namedAdvisors(back);
-				else if (value === "inline") this.#inlineAdvisor();
+				else if (value === "inline") this.#inlineAdvisor(() => this.#advisor());
 			},
 			back,
 		});
@@ -1224,6 +1230,7 @@ export class AgentDefinitionEditor implements Component {
 	#pop(): void {
 		this.#pages.pop();
 		if (this.#pages.length) this.#showForm(this.#pages.at(-1)!.selected);
+		else if (this.#formBack) this.#formBack();
 		else this.#showDetail(this.#helpField);
 	}
 	#showForm(selected?: string): void {
@@ -1272,13 +1279,15 @@ export class AgentDefinitionEditor implements Component {
 			field,
 		);
 	}
-	#enterForm(field: AgentDefinitionField, title: string, rows: () => FormRow[]): void {
+	/** `back` is where Esc on the form's first page returns; omitted, it returns to the field list. */
+	#enterForm(field: AgentDefinitionField, title: string, rows: () => FormRow[], back?: () => void): void {
 		this.#pages = [];
 		this.#helpField = field;
+		this.#formBack = back;
 		this.#push(title, rows);
 	}
 
-	#inlineAdvisor(): void {
+	#inlineAdvisor(back: () => void): void {
 		if (typeof this.#draft.advisor !== "object" || !("inline" in this.#draft.advisor))
 			this.#draft.advisor = { inline: { name: `${this.#draft.name || "agent"} advisor` } };
 		const get = (): InlineAgentAdvisor => (this.#draft.advisor as { inline: InlineAgentAdvisor }).inline;
@@ -1300,102 +1309,108 @@ export class AgentDefinitionEditor implements Component {
 			{ key: "syncBacklog", label: "Sync backlog", kind: "text", choices: ["off", "1", "3", "5", "strict"] },
 			{ key: "scope", label: "Attach to session kinds", kind: "text", choices: ["main", "subagent", "all"] },
 		];
-		this.#enterForm("advisor", "Private advisor — saved in this definition only", () => [
-			...fields.map(field => ({
-				id: field.key,
-				label: field.label,
-				value: displayValue(get()[field.key]),
-				field: "advisor" as const,
-				activate: () => {
-					const set = (value: unknown): void => {
-						if (value === undefined) delete get()[field.key];
-						else Object.assign(get(), { [field.key]: value });
-					};
-					if (field.kind === "boolean") {
-						set(get()[field.key] === undefined ? true : get()[field.key] === true ? false : undefined);
-						return;
-					}
-					if (field.choices) {
-						this.#push(field.label, () =>
-							[undefined, ...field.choices!].map(value => ({
+		this.#enterForm(
+			"advisor",
+			"Private advisor — saved in this definition only",
+			() => [
+				...fields.map(field => ({
+					id: field.key,
+					label: field.label,
+					value: displayValue(get()[field.key]),
+					field: "advisor" as const,
+					activate: () => {
+						const set = (value: unknown): void => {
+							if (value === undefined) delete get()[field.key];
+							else Object.assign(get(), { [field.key]: value });
+						};
+						if (field.kind === "boolean") {
+							set(get()[field.key] === undefined ? true : get()[field.key] === true ? false : undefined);
+							return;
+						}
+						if (field.choices) {
+							this.#push(field.label, () =>
+								[undefined, ...field.choices!].map(value => ({
+									id: value ?? "default",
+									label: value ?? "Default",
+									value: get()[field.key] === value ? "✓" : "",
+									field: "advisor",
+									activate: () => {
+										set(value);
+										this.#pop();
+									},
+								})),
+							);
+							return;
+						}
+						this.#prompt(field.label, get()[field.key] === undefined ? "" : String(get()[field.key]), value => {
+							if (field.kind === "number") {
+								if (!value.trim()) set(undefined);
+								else {
+									const number = Number(value);
+									if (!Number.isSafeInteger(number) || number < 1)
+										throw new Error("Enter a positive whole number");
+									set(number);
+								}
+							} else if (field.key === "name" && !value.trim())
+								throw new Error("A private advisor needs a name");
+							else set(value || undefined);
+						});
+					},
+				})),
+				...(["nit", "concern", "blocker"] as const).map(severity => ({
+					id: `delivery:${severity}`,
+					label: `${severity} delivery`,
+					value: get().delivery?.[severity] ?? "Default",
+					field: "advisor" as const,
+					activate: () =>
+						this.#push(`${severity} delivery`, () =>
+							[undefined, "on-yield", "next-tool-call"].map(value => ({
 								id: value ?? "default",
 								label: value ?? "Default",
-								value: get()[field.key] === value ? "✓" : "",
 								field: "advisor",
 								activate: () => {
-									set(value);
+									const delivery = { ...get().delivery };
+									if (value === undefined) delete delivery[severity];
+									else delivery[severity] = value as "on-yield" | "next-tool-call";
+									get().delivery = delivery;
 									this.#pop();
 								},
 							})),
-						);
-						return;
-					}
-					this.#prompt(field.label, get()[field.key] === undefined ? "" : String(get()[field.key]), value => {
-						if (field.kind === "number") {
-							if (!value.trim()) set(undefined);
-							else {
-								const number = Number(value);
-								if (!Number.isSafeInteger(number) || number < 1)
-									throw new Error("Enter a positive whole number");
-								set(number);
-							}
-						} else if (field.key === "name" && !value.trim()) throw new Error("A private advisor needs a name");
-						else set(value || undefined);
-					});
+						),
+				})),
+				{
+					id: "tools",
+					label: "Tools…",
+					value: displayValue(get().tools),
+					field: "advisor",
+					activate: () =>
+						this.#push("Private advisor tools", () => [
+							{
+								id: "default",
+								label: "Use default tools",
+								field: "advisor",
+								value: get().tools === undefined ? "[x]" : "[ ]",
+								activate: () => {
+									get().tools = get().tools === undefined ? [] : undefined;
+								},
+							},
+							...this.#deps.tools.map(tool => ({
+								id: tool.name,
+								label: tool.name,
+								field: "advisor" as const,
+								value: get().tools?.includes(tool.name) ? "[x]" : "[ ]",
+								activate: () => {
+									const selected = get().tools ?? [];
+									get().tools = selected.includes(tool.name)
+										? selected.filter(name => name !== tool.name)
+										: [...selected, tool.name];
+								},
+							})),
+						]),
 				},
-			})),
-			...(["nit", "concern", "blocker"] as const).map(severity => ({
-				id: `delivery:${severity}`,
-				label: `${severity} delivery`,
-				value: get().delivery?.[severity] ?? "Default",
-				field: "advisor" as const,
-				activate: () =>
-					this.#push(`${severity} delivery`, () =>
-						[undefined, "on-yield", "next-tool-call"].map(value => ({
-							id: value ?? "default",
-							label: value ?? "Default",
-							field: "advisor",
-							activate: () => {
-								const delivery = { ...get().delivery };
-								if (value === undefined) delete delivery[severity];
-								else delivery[severity] = value as "on-yield" | "next-tool-call";
-								get().delivery = delivery;
-								this.#pop();
-							},
-						})),
-					),
-			})),
-			{
-				id: "tools",
-				label: "Tools…",
-				value: displayValue(get().tools),
-				field: "advisor",
-				activate: () =>
-					this.#push("Private advisor tools", () => [
-						{
-							id: "default",
-							label: "Use default tools",
-							field: "advisor",
-							value: get().tools === undefined ? "[x]" : "[ ]",
-							activate: () => {
-								get().tools = get().tools === undefined ? [] : undefined;
-							},
-						},
-						...this.#deps.tools.map(tool => ({
-							id: tool.name,
-							label: tool.name,
-							field: "advisor" as const,
-							value: get().tools?.includes(tool.name) ? "[x]" : "[ ]",
-							activate: () => {
-								const selected = get().tools ?? [];
-								get().tools = selected.includes(tool.name)
-									? selected.filter(name => name !== tool.name)
-									: [...selected, tool.name];
-							},
-						})),
-					]),
-			},
-		]);
+			],
+			back,
+		);
 	}
 
 	#output(): void {

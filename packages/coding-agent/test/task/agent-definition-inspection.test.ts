@@ -54,6 +54,18 @@ describe("inspectAgentDefinition", () => {
 		expect(fact({ ...base, tools: ["read", "bash"] }, "Tools")).not.toContain("read-only");
 	});
 
+	test("an empty tools list is not a sandbox and only gains task when spawns are declared", () => {
+		const draft = { ...base, tools: [] };
+		expect(inspectAgentDefinition(draft, context).findings).toContainEqual({
+			level: "info",
+			field: "tools",
+			text: "A tools list is not a sandbox: MCP and custom tools stay available unless the caller restricts them.",
+		});
+		expect(fact(draft, "Tools")).toContain("yield");
+		expect(fact(draft, "Tools")).not.toContain("task");
+		expect(fact({ ...draft, spawns: ["scout"] }, "Tools")).toContain("task");
+	});
+
 	test("boolean or null output and invalid schemas are rejected before dispatch would reject them", () => {
 		expect(warnings({ ...base, output: true }).map(([field]) => field)).toEqual(["output"]);
 		expect(warnings({ ...base, output: null }).map(([field]) => field)).toEqual(["output"]);

@@ -392,6 +392,10 @@ describe("agent definition editor", () => {
 		await ui.fill("instructions", "Private instructions");
 		ui.activate("delivery:concern");
 		ui.activate("on-yield");
+		expect(ui.editor.definition.advisor).toMatchObject({
+			inline: { instructions: "Private instructions", delivery: { concern: "on-yield" } },
+		});
+		ui.back();
 		ui.back();
 		ui.activate("save");
 		await Bun.sleep(0);
@@ -436,6 +440,9 @@ describe("agent definition editor", () => {
 		ui.activate("keywords");
 		await ui.fill("add", "enum");
 		ui.activate("enum");
+		ui.activate("array");
+		ui.activate("add");
+		ui.activate("0");
 		ui.select("text");
 		ui.editor.handleInput("r");
 		await Bun.sleep(0);
@@ -471,6 +478,53 @@ describe("agent definition editor", () => {
 			baseDefinitions: [{ name: "base", systemPrompt: "Base instructions" }],
 		});
 		expect(ui.requests[0]?.comment).toBeUndefined();
+		ui.editor.dispose();
+	});
+
+	test("Esc backs out of field dialogs and nested pages, then prompts before closing a dirty draft", () => {
+		const ui = setup();
+		const rowIds = () => ui.rows().map(row => row.id);
+		const fields = rowIds();
+		const title = () => {
+			const node = ui.editor.describe(cx);
+			if (node.k !== "picker") throw new Error(`Expected a picker, got ${node.k}`);
+			return node.p?.title;
+		};
+
+		ui.activate("description");
+		expect(ui.screen()).toContain("Description · Enter save · Esc cancel");
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(rowIds()).toEqual(fields);
+
+		ui.activate("output");
+		ui.activate("enable");
+		ui.activate("items");
+		expect(title()).toBe("Array items");
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(title()).toBe("Structured output");
+		expect(rowIds()).toContain("enable");
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(rowIds()).toEqual(fields);
+
+		ui.activate("advisor");
+		expect(title()).toBe("Advisor");
+		ui.activate("inline");
+		expect(title()).toBe("Private advisor — saved in this definition only");
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(title()).toBe("Advisor");
+		expect(rowIds()).toContain("inline");
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(rowIds()).toEqual(fields);
+
+		ui.back();
+		expect(ui.closed()).toBe(false);
+		expect(title()).toBe("Unsaved changes");
+		expect(ui.rows().map(row => row.label)).toEqual(["Keep editing", "Save and close", "Discard changes"]);
 		ui.editor.dispose();
 	});
 
