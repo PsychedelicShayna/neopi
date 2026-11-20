@@ -11,6 +11,8 @@ import { sameItems, sameProps } from "../native/memo";
 import { plainLine, plainText } from "../native/spans";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import type { Component } from "../tui";
+import { activeThemeSymbol } from "../theme/active-symbols";
+import type { SymbolKey } from "../theme/symbols";
 import { Ellipsis, padding, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 import { ScrollView } from "./scroll-view";
 import { MenuHelp, menuHintLines } from "./menu-hints";
@@ -59,6 +61,10 @@ export interface SettingItem {
 	warning?: string;
 	/** Current value to display (right side) */
 	currentValue: string;
+	/** Inherited source marker, kept separate from the editable value. */
+	valueSymbol?: SymbolKey;
+	/** Use file presence for the value color, even while selected or outside the active section. */
+	scopedValue?: boolean;
 	/** If provided, Enter/Space cycles through these values */
 	values?: string[];
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
@@ -68,7 +74,7 @@ export interface SettingItem {
 	 * opens it ({@link SettingsList.openSubmenuFor}); Enter/Space still cycle.
 	 */
 	menu?: SettingEditor;
-	/** True when the displayed setting differs from its default value. */
+	/** Whether to highlight the row's value as configured. */
 	changed?: boolean;
 	/** The default, as a native settings page names it in the changed dot's title. */
 	defaultLabel?: string;
@@ -104,9 +110,10 @@ export function prefsSectionId(title: string): string {
 /** A setting as a native settings row, given its typed control; `undefined` for headings. */
 export function settingPrefsRow(item: SettingItem, control: TspPrefsControl): TspPrefsRow | undefined {
 	if (item.heading) return undefined;
+	const symbol = item.valueSymbol ? activeThemeSymbol(item.valueSymbol) : "";
 	const row: TspPrefsRow = {
 		id: item.id,
-		label: plainLine(item.label),
+		label: plainLine(symbol ? `${item.label} ${symbol}` : item.label),
 		hint: item.description ? plainLine(item.description) : undefined,
 		warning: item.warning ? plainLine(item.warning) : undefined,
 		changed: item.changed === true ? true : undefined,
@@ -542,6 +549,13 @@ export class SettingsList implements Component {
 		this.#hoveredItemId = id;
 	}
 
+	/** The visible row highlighted by the pointer, independent of keyboard selection. */
+	getHoveredItem(): SettingItem | undefined {
+		const id = this.#hoveredItemId;
+		if (id === null || !this.#hitRows.includes(id)) return undefined;
+		return this.#filteredItems.find(item => item.id === id);
+	}
+
 	/**
 	 * Resolve a pointer position against the last rendered frame. `line` is the
 	 * 0-based content-line index within this component's render output, `col`
@@ -828,7 +842,9 @@ export class SettingsList implements Component {
 	}
 
 	#describeItem(item: NativeDescribedSetting): NativeNode {
-		const value = plainLine(String(item.currentValue ?? ""));
+		const symbol = item.valueSymbol ? activeThemeSymbol(item.valueSymbol) : "";
+		const current = String(item.currentValue ?? "");
+		const value = plainLine(symbol && current ? `${current} ${symbol}` : symbol || current);
 		const changed = item.changed === true;
 		const signature = `${item.heading === true}\0${item.label}\0${value}\0${changed}\0${item.warning ?? ""}\0${item.description ?? ""}`;
 		const cached = item[kNativeItem];
@@ -901,20 +917,32 @@ export class SettingsList implements Component {
 		const labelPad = padding(Math.max(0, maxLabelWidth - visibleWidth(labelPlain)));
 		const separator = "  ";
 		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
-		const valuePlain = truncateToWidth(String(item.currentValue ?? ""), valueMaxWidth, Ellipsis.Omit);
+		const current = String(item.currentValue ?? "");
+		let valuePlain: string;
+		if (item.valueSymbol) {
+			const symbol = activeThemeSymbol(item.valueSymbol);
+			const suffix = symbol && current ? ` ${symbol}` : symbol;
+			const suffixWidth = visibleWidth(suffix);
+			valuePlain =
+				suffixWidth <= valueMaxWidth
+					? truncateToWidth(current, valueMaxWidth - suffixWidth, Ellipsis.Omit) + suffix
+					: truncateToWidth(current, valueMaxWidth, Ellipsis.Omit);
+		} else {
+			valuePlain = truncateToWidth(current, valueMaxWidth, Ellipsis.Omit);
+		}
 		const hovered = !isSelected && this.#theme.hovered !== undefined && item.id === this.#hoveredItemId;
-		// De-emphasized rows (outside the active section) render as plain text
-		// under one dim wash so inner label/value colors don't fight it.
+		const valueText = this.#theme.value(valuePlain, isSelected && !item.scopedValue, item.changed === true);
 		if (dimmed && !isSelected) {
-			const text = this.#theme.hint(
-				truncateToWidth(`  ${labelPlain}${labelPad}${separator}${valuePlain}`, Math.max(0, rowWidth)),
-			);
+			// Scoped values retain their presence color outside the active section.
+			const left = `  ${labelPlain}${labelPad}${separator}`;
+			const text = item.scopedValue
+				? truncateToWidth(this.#theme.hint(left) + valueText, Math.max(0, rowWidth))
+				: this.#theme.hint(truncateToWidth(left + valuePlain, Math.max(0, rowWidth)));
 			return hovered && this.#theme.hovered ? this.#theme.hovered(text) : text;
 		}
 		const warningStyle = this.#theme.warning ?? this.#theme.description;
 		const labelText =
 			this.#theme.label(item.label, isSelected, item.changed === true) + (mark ? warningStyle(mark) : "") + labelPad;
-		const valueText = this.#theme.value(valuePlain, isSelected, item.changed === true);
 		const text = truncateToWidth(prefix + labelText + separator + valueText, Math.max(0, rowWidth));
 		// Pointer hover paints a band behind the whole row, distinct from the
 		// keyboard selection (cursor glyph + accent) which stays where it is.

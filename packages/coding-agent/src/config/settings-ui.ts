@@ -1,7 +1,12 @@
 import { entryProvenance } from "./entry-provenance";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import {
+	SETTING_TABS,
+	SETTINGS_FILE_SCOPES,
+	type SettingsDisplayEntry,
+	type SettingsHost,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "./settings";
 import { orderedSettings } from "./all-settings";
 import { type AnySetting, lookup } from "./registry";
@@ -54,8 +59,8 @@ function envNote(setting: AnySetting): string {
 }
 
 /**
- * Adapt the application schema and settings store to the terminal overlay. The panel shows and
- * edits the value of the settings layers, never an environment-supplied one (so an env credential
+ * Adapt the application schema and settings store to the terminal overlay. The panel shows
+ * the value across files through the selected scope, never an environment-supplied one (so an env credential
  * is never pre-filled or written to config); descriptions note an active environment variable.
  */
 export function createSettingsHost(scope: Settings = settings, initialScope: SettingsScope = "global"): SettingsHost {
@@ -78,11 +83,12 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			});
 		}
 	}
-	const resolve = (path: string): AnySetting => {
+	const requireSetting = (path: string): AnySetting => {
 		const setting = lookup(path);
 		if (!setting) throw new Error(`Unknown setting: ${path}`);
 		return setting;
 	};
+	const resolve = (path: string) => scope.resolveFileScopeValue(requireSetting(path), editingScope);
 	return {
 		entries,
 		onReload: listener => scope.onPersistedLayersChange(listener),
@@ -90,15 +96,14 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			return editingScope;
 		},
 		cycleScope: () => {
-			const scopes: SettingsScope[] = ["global", "project", "session"];
+			const scopes = SETTINGS_FILE_SCOPES;
 			editingScope = scopes[(scopes.indexOf(editingScope) + 1) % scopes.length];
 		},
-		get: path => {
-			const setting = resolve(path);
-			return scope.readScopeValue(setting, editingScope) ?? setting.default;
-		},
+		get: path => resolve(path).value,
+		resolve,
+		own: path => scope.readScopeValue(requireSetting(path), editingScope),
 		details: path => {
-			const setting = resolve(path);
+			const setting = requireSetting(path);
 			const details = scope.getScopeDetails(setting, editingScope);
 			const format = (value: unknown) =>
 				setting.isCredential
@@ -111,8 +116,8 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 				description: `${details.shadowed ? `󰈉 Shadowed by ${details.winner}: ${format(details.effective)}. ` : ""}Global: ${format(details.global)} · Project: ${format(details.project)} · Session: ${format(details.session)} · Effective: ${format(details.effective)} (${details.winner})`,
 			};
 		},
-		set: (path, value) => scope.writeScopeValue(resolve(path), value, editingScope),
-		unset: path => scope.writeScopeValue(resolve(path), undefined, editingScope),
+		set: (path, value) => scope.writeScopeValue(requireSetting(path), value, editingScope),
+		unset: path => scope.writeScopeValue(requireSetting(path), undefined, editingScope),
 		normalizeProviderLimits: normalizeProviderMaxInFlightRequests,
 		validateProviderLimits: validateProviderMaxInFlightRequests,
 	};

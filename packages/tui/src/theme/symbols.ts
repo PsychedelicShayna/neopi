@@ -23,6 +23,10 @@ export type SymbolKey =
 	| "status.done"
 	| "provenance.moon"
 	| "provenance.star"
+	// Settings file scopes
+	| "scope.global"
+	| "scope.project"
+	| "scope.session"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -418,6 +422,10 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.done": "✔",
 	"provenance.moon": "☾",
 	"provenance.star": "✦",
+	// Settings file scopes
+	"scope.global": "🌐",
+	"scope.project": "📁",
+	"scope.session": "🆔",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -744,6 +752,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.done": "\uf00c",
 	"provenance.moon": "\uf186",
 	"provenance.star": "\uf005",
+	// Settings file scopes
+	"scope.global": "\uf0ac",
+	"scope.project": "\uf115",
+	"scope.session": "\u{f0051}",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -1228,6 +1240,10 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.done": "[+]",
 	"provenance.moon": "[neopi]",
 	"provenance.star": "*",
+	// Settings file scopes
+	"scope.global": "[global]",
+	"scope.project": "[project]",
+	"scope.session": "[session]",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",

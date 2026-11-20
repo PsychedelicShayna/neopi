@@ -153,19 +153,38 @@ export interface SettingsDisplayEntry {
 	condition?: () => boolean;
 }
 
+/** Settings file layers the panel can edit, broadest first. A future scope is inserted here. */
+export const SETTINGS_FILE_SCOPES = ["global", "project", "session"] as const;
+/** A settings file layer the panel can edit. */
+export type SettingsFileScope = (typeof SETTINGS_FILE_SCOPES)[number];
+
+/** What a row shows at the selected scope, resolved over setting files only. */
+export interface SettingsResolution {
+	/**
+	 * The value that applies at the selected scope from the selected file and every broader one
+	 * (session ← project ← global), merged the way settings layers merge; the schema default when
+	 * none sets it. Never an environment variable, CLI overlay or runtime override.
+	 */
+	value: unknown;
+	/** The narrowest file at or above the selected scope that sets the key; undefined when none does. */
+	source?: SettingsFileScope;
+}
+
 export interface SettingsHost {
 	entries: readonly SettingsDisplayEntry[];
-	readonly scope?: "global" | "project" | "session";
+	readonly scope?: SettingsFileScope;
 	cycleScope?(): void;
 	details?(path: string): { shadowed: boolean; description: string };
 	/** Adopted durable layers changed, including values hidden by a higher scope. */
 	onReload?(listener: () => void): () => void;
+	/** The resolved value at the selected scope: `resolve(path).value` for scoped hosts. */
 	get(path: string): unknown;
+	/** Value and source at the selected scope. Hosts without scopes omit it. */
+	resolve?(path: string): SettingsResolution;
+	/** The value stored in the selected scope's own file; undefined when absent. Seed partial writes from this. */
+	own?(path: string): unknown;
 	set(path: string, value: unknown): void;
-	/**
-	 * Removes the value from the global config: a project or other layer, or an environment
-	 * variable, that configures the setting still applies; otherwise the default does.
-	 */
+	/** Removes the key from the selected scope's file so the setting inherits again. */
 	unset(path: string): void;
 	normalizeProviderLimits(value: unknown): Record<string, number>;
 	validateProviderLimits(value: unknown): Record<string, number>;

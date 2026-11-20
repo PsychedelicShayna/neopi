@@ -658,7 +658,11 @@ export class SelectorController {
 					models: this.ctx.session.modelRegistry,
 				});
 				if (!filePath) {
-					this.ctx.showWarning("This built-in configuration has no backing file.");
+					this.ctx.showWarning(
+						target.kind === "settings" && target.scope === "session"
+							? "This session has no saved settings file."
+							: "This built-in configuration has no backing file.",
+					);
 					return;
 				}
 				await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
@@ -706,7 +710,6 @@ export class SelectorController {
 						composerPreviewStatus: this.ctx.statusLine,
 					},
 					{
-						currentPersonality: () => currentPersonalityName(this.ctx.settings),
 						personalityOptions: () => [
 							...BUILTIN_PERSONALITIES.map(name => ({ value: name, label: name, description: "Built-in" })),
 							...listCustomPersonalities(this.ctx.settings).map(entry => ({
@@ -731,8 +734,13 @@ export class SelectorController {
 							const result = await broadcastSettingsReload(selectedScope, this.ctx.sessionManager.getCwd());
 							return `Applied to ${result.notified} sessions${result.unsupported ? `; ${result.unsupported} need restart/upgrade` : ""}${result.failed ? `; ${result.failed} failed` : ""}`;
 						},
-						onOpenConfigFile: () =>
-							this.#openConfigFile({ kind: "settings" }, () => this.ctx.settings.reloadFromDisk()),
+						onOpenConfigFile: () => {
+							const selectedScope = settingsHost.scope ?? scope;
+							return this.#openConfigFile(
+								{ kind: "settings", scope: selectedScope },
+								selectedScope === "session" ? undefined : () => this.ctx.settings.reloadFromDisk(),
+							);
+						},
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {

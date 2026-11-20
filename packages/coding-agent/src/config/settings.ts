@@ -31,6 +31,11 @@ import {
 	procmgr,
 } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import {
+	SETTINGS_FILE_SCOPES,
+	type SettingsFileScope,
+	type SettingsResolution,
+} from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
@@ -125,7 +130,7 @@ function validateRuntimeModelOverrides(overrides: RuntimeModelOverrides): Runtim
 /** Settings layer that supplies an effective value; see {@link Settings.getProvenance}. */
 export type SettingProvenance = "env" | "runtime" | "session" | "role" | "overlay" | "project" | "global" | "default";
 
-export type SettingsScope = "global" | "project" | "session";
+export type SettingsScope = SettingsFileScope;
 export interface SettingsScopeDetails {
 	global: unknown;
 	project: unknown;
@@ -432,6 +437,12 @@ interface OwnLayers {
 	configOverlay: RawSettings;
 	overrides: RawSettings;
 	session: RawSettings;
+}
+
+interface FileScopeView {
+	readonly parent: FileScopeView | undefined;
+	readonly layers: OwnLayers;
+	readonly merged: RawSettings;
 }
 
 /** The layers an {@link Settings.overlay} child writes locally; see {@link Settings.overlayLayers}. */
@@ -971,6 +982,8 @@ export class Settings {
 	#syncedParentRevision = -1;
 	/** Project-free view returned by {@link grantAuthority}, valid while {@link revision} is unchanged. */
 	#grantView: { revision: number; view: Settings } | undefined;
+	/** File-only views are built lazily for scopes the settings editor visits. */
+	#fileScopeViews?: Map<SettingsFileScope, FileScopeView>;
 
 	/**
 	 * Global-layer paths written during this session (for partial save), keyed by
@@ -1463,8 +1476,50 @@ export class Settings {
 
 	/** Raw value owned by one scope, without copying a higher scope into the editor. */
 	readScopeValue(setting: AnySetting, scope: SettingsScope): unknown {
-		const layer = scope === "session" ? this.#session : scope === "project" ? this.#project : this.#global;
-		return structuredClone(getByPath(layer, setting.segments) ?? this.#parent?.readScopeValue(setting, scope));
+		return structuredClone(
+			getByPath(this.#fileScopeLayer(scope), setting.segments) ?? this.#parent?.readScopeValue(setting, scope),
+		);
+	}
+
+	/** Resolve a setting at a file scope without using the non-file layers. */
+	resolveFileScopeValue(setting: AnySetting, scope: SettingsFileScope): SettingsResolution {
+		const { layers, merged } = this.#fileScopeView(scope);
+
+		let source: SettingsFileScope | undefined;
+		for (const fileScope of SETTINGS_FILE_SCOPES) {
+			if (getByPath(layers[fileScope], setting.segments) !== undefined) source = fileScope;
+			if (fileScope === scope) break;
+		}
+		const value = configuredValue(merged, setting, this.#cwd);
+		return { value: value === undefined ? setting.default : structuredClone(value), source };
+	}
+
+	#fileScopeLayer(scope: SettingsFileScope): RawSettings {
+		switch (scope) {
+			case "global":
+				return this.#global;
+			case "project":
+				return this.#project;
+			case "session":
+				return this.#session;
+		}
+	}
+
+	#fileScopeView(scope: SettingsFileScope): FileScopeView {
+		const parent = this.#parent ? this.#parent.#fileScopeView(scope) : undefined;
+		const views = (this.#fileScopeViews ??= new Map());
+		const cached = views.get(scope);
+		if (cached && cached.parent === parent) return cached;
+
+		const layers: OwnLayers = { global: {}, project: {}, session: {}, configOverlay: {}, overrides: {} };
+		for (const fileScope of SETTINGS_FILE_SCOPES) {
+			const own = this.#fileScopeLayer(fileScope);
+			layers[fileScope] = parent ? this.#deepMerge(parent.layers[fileScope], own) : own;
+			if (fileScope === scope) break;
+		}
+		const view = { parent, layers, merged: this.#mergeOwnLayers(layers) };
+		views.set(scope, view);
+		return view;
 	}
 
 	getScopeDetails(setting: AnySetting, scope: SettingsScope): SettingsScopeDetails {
@@ -5826,6 +5881,7 @@ export class Settings {
 	/** Rebuilds the merged view from the own layers over the parent's current view. */
 	#remerge(): void {
 		this.#revision++;
+		this.#fileScopeViews?.clear();
 		if (this.#parent) this.#syncedParentRevision = this.#parent.revision;
 		this.#merged = this.#mergeOverParent(this.#mergeOwnLayers(this.#ownLayers()));
 	}
