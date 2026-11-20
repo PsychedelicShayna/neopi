@@ -6,13 +6,12 @@
  * by the host before this adapter commits.
  */
 import { lookup, type AnySetting } from "../config/registry";
-import type { Settings } from "../config/settings";
+import type { Settings, SettingsScope } from "../config/settings";
 
-export interface SettingsWrite {
-	path: string;
+interface SettingsWrite {
+	scope: SettingsScope | "runtime";
 	member?: string;
-	value?: unknown;
-	runtime?: boolean;
+	value: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -27,39 +26,51 @@ export function readSetting(settings: Settings, path: string, member?: string): 
 	return isRecord(value) ? value[member] : undefined;
 }
 
-export function writeSetting(settings: Settings, write: SettingsWrite): { path: string; value: unknown } {
-	const setting = lookup(write.path);
-	if (!setting) throw new Error(`unknown setting ${write.path}`);
-	if (write.member) {
-		writeMember(settings, setting, write.member, write.value, write.runtime === true);
-	} else if (write.runtime) {
-		setting.override(settings, write.value as never);
-	} else if (write.value === undefined) {
-		setting.unset(settings);
-	} else {
-		setting.set(settings, write.value as never);
+/**
+ * Applies one socket write to the addressed host. `conflict` means a global or project file edit was
+ * refused because the file changed underneath it; nothing was written.
+ */
+export async function writeSetting(
+	settings: Settings,
+	setting: AnySetting,
+	write: SettingsWrite,
+): Promise<"applied" | "conflict"> {
+	const { member, scope, value } = write;
+	if (scope === "global" && member) {
+		// Per-entry persistence: only this entry is merged into the re-read file, so a concurrent
+		// edit to a sibling entry is kept. A model role's runtime override follows only once the
+		// write was applied, so a refused write leaves the running model alone.
+		if (setting.id === "modelRoles") {
+			const receipt = await settings.persistModelRoleWithReceipt(
+				member,
+				value === undefined ? undefined : String(value),
+			);
+			return receipt.status;
+		}
+		const receipt = await settings.persistWithReceipt(() => setting.setEntry(settings, member, value as never));
+		return receipt.status;
 	}
-	return { path: write.path, value: readSetting(settings, write.path, write.member) };
-}
-
-function writeMember(settings: Settings, setting: AnySetting, member: string, value: unknown, runtime: boolean): void {
-	if (setting.id === "modelRoles" && "setModelRole" in settings) {
-		(settings as Settings).setModelRole(member, value === undefined ? undefined : String(value));
-		return;
+	let next = value;
+	if (member) {
+		const current =
+			scope === "runtime" ? settings.readRuntimeOverrideValue(setting) : settings.readScopeValue(setting, scope);
+		const record = isRecord(current) ? current : {};
+		if (value === undefined) {
+			delete record[member];
+			next = Object.keys(record).length === 0 ? undefined : record;
+		} else {
+			next = { ...record, [member]: value };
+		}
 	}
-	const current = setting.get(settings);
-	const record = isRecord(current) ? { ...current } : {};
-	if (value === undefined) delete record[member];
-	else record[member] = value;
-	if (runtime) setting.override(settings, record as never);
-	else setting.set(settings, record as never);
-}
-
-export function unsetSetting(settings: Settings, path: string, member?: string): void {
-	if (member) writeSetting(settings, { path, member, value: undefined });
-	else {
-		const setting = lookup(path);
-		if (!setting) throw new Error(`unknown setting ${path}`);
-		setting.unset(settings);
+	if (scope === "runtime") {
+		setting.override(settings, next);
+		return "applied";
 	}
+	if (scope === "session") {
+		settings.writeScopeValue(setting, next, scope);
+		await settings.saveSessionSettings();
+		return "applied";
+	}
+	const receipt = await settings.persistWithReceipt(() => settings.writeScopeValue(setting, next, scope));
+	return receipt.status;
 }

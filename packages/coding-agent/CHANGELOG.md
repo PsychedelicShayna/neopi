@@ -12,6 +12,7 @@
 
 ### Added
 
+- Control socket: `reload_settings` accepts the `session` scope, re-reading only the addressed session's settings file, and `settings_set`/`settings_unset` can write the `global`, `project` or `session` file of the addressed session (`persist` remains the global alias); member edits change only that scope's own map.
 - `/settings` shows the value that applies at the selected scope with an icon for the scope it comes from, colours a row yellow when a file at or above that scope sets it, removes the key with Backspace so it inherits again, and opens the selected scope's file, including the session file, with Ctrl+G ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
 - The `/agents` definition editor is rebuilt on the `/advisor configure` pattern: every manifest field gets its own picker (ordered model fallbacks with the model browser and effort step, tool and spawn checklists, prewalk and advisor choices, the output-schema editor), beside a live preview of what the harness will do with the definition, the problems it would hit, and the file as saved; definitions can also be saved as a copy or deleted, and a missing spawn target can be created next ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 - The agent author now sees the existing agent types, installed skills, model roles, read-only tool classification and spawn depth cap, so generated definitions reference real spawn targets, skills and roles.
@@ -167,6 +168,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- A control-socket `settings_unset` with scope `runtime` now removes only the runtime override instead of deleting the key from the global settings file; a malformed `member` or a `settings_set` without a value is refused instead of erasing a saved map, and credential values are no longer echoed in write replies when secret input is disabled.
 - The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.
 - Model refreshes retain warm catalog snapshots when `models.yml` is unchanged or absent, still re-mint explicitly requested command credentials, and cooperatively normalize large discovered rosters before atomically publishing them ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - A named advisor's `@file` instructions are expanded once when an agent definition spawns it; nested references are no longer re-resolved against the wrong directory ([#655](https://github.com/PsychedelicShayna/neopi/issues/655)).
