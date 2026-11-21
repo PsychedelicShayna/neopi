@@ -126,11 +126,8 @@ export function currentControlCaller(): ControlCallerIdentity | null {
 		if (!token) continue;
 		if (host.hasTurnInput()) activeHost = host;
 		const actor = host.dialogActor();
-		if (!actor) continue;
-		for (const connection of host.connections()) {
-			if (connection.id === actor.connectionId) {
-				return { instanceId: host.instanceId, token, controlChain: connection.propagatedChain };
-			}
+		if (actor?.hostInstanceId === host.instanceId) {
+			return { instanceId: host.instanceId, token, controlChain: actor.controlChain?.slice() ?? [] };
 		}
 	}
 	if (activeHost?.publication) {
@@ -510,6 +507,9 @@ export class ControlHost {
 			{
 				connectionId: connection.id,
 				label: connection.label || "ctl",
+				hostInstanceId: this.instanceId,
+				controlChain:
+					connection.callerInstanceId || connection.controlChain.length > 0 ? connection.propagatedChain : undefined,
 				...(type === "prompt" || type === "steer" || type === "follow_up" || type === "abort_and_prompt"
 					? { origin: connection.origin }
 					: {}),
@@ -1225,10 +1225,6 @@ export class ControlHost {
 				? { success: true, data: { actionId, keys } }
 				: { success: false, error: "keybindings file is not writable", code: "invalid_value" },
 		);
-	}
-
-	connections(): Iterable<ControlConnection> {
-		return this.#connections;
 	}
 
 	/** True while the pane's approval selector is open and control may not press it. */

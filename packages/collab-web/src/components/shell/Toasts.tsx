@@ -55,7 +55,12 @@ export function Toasts({ notices }: { notices: readonly Notice[] }): ReactNode {
 				<div key={n.id} className={`sh-toast sh-toast-${n.level}`} role="status">
 					<span className="sh-toast-msg">{n.message}</span>
 					{n.level === "error" && (
-						<button type="button" className="sh-toast-close" onClick={() => close(n.id)} title={tr("common.dismiss", "dismiss")}>
+						<button
+							type="button"
+							className="sh-toast-close"
+							onClick={() => close(n.id)}
+							title={tr("common.dismiss", "dismiss")}
+						>
 							<X size={12} />
 						</button>
 					)}

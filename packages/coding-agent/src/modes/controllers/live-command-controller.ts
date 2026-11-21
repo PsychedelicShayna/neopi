@@ -132,7 +132,7 @@ export class LiveCommandController {
 	}
 
 	/** Start live mode, or stop the currently active session. */
-	async handleCommand(): Promise<void> {
+	async handleCommand(mode?: "transcript"): Promise<void> {
 		if (this.#session) {
 			await this.stop();
 			return;
@@ -141,7 +141,7 @@ export class LiveCommandController {
 		// Another start may have claimed the slot while the previous session finished closing.
 		if (this.#session) return;
 		// A connect failure was already shown; anything else (factory, mounting) propagates.
-		await this.#start(resolveLiveVoice(this.#ctx.settings));
+		await this.#start(resolveLiveVoice(this.#ctx.settings), undefined, mode);
 	}
 
 	/**
@@ -297,6 +297,7 @@ export class LiveCommandController {
 	async #start(
 		voice: string = cfgLiveVoice.get(this.#ctx.settings),
 		remote?: ExtensionLiveStartOptions,
+		mode?: "transcript",
 	): Promise<LiveStartOutcome> {
 		if (this.#session) throw new Error("A live session is already active");
 		this.#model = cfgLiveModel.get(this.#ctx.settings);
@@ -314,6 +315,7 @@ export class LiveCommandController {
 		const ingestRef: { current?: LiveIngest } = {};
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
+			transcriptHandoffs: mode === "transcript",
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
 			ircRelayTransform: (message, body) => ingestRef.current?.ircRelayTransform(message, body) ?? body,
 			ircRelayAllowed: message => {
@@ -373,8 +375,8 @@ export class LiveCommandController {
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {
-					reasoning: settings.relayReasoning,
-					progress: settings.relayProgress,
+					reasoning: mode !== "transcript" && settings.relayReasoning,
+					progress: mode !== "transcript" && settings.relayProgress,
 					finalAnswers: settings.relayFinalAnswers,
 				};
 			},
@@ -388,7 +390,11 @@ export class LiveCommandController {
 					if (this.#session !== session) return;
 					this.#showPhase(phase);
 				},
-				onLevels: () => {},
+				onLevels: (input, output) => {
+					if (this.#session === session && this.#ctx.statusLine.setLiveLevels(input, output)) {
+						this.#ctx.ui.requestRender();
+					}
+				},
 				onTranscript: transcript => {
 					if (transcript) notifyRemote(() => remote?.onTranscript?.(transcript));
 					if (this.#session !== session || !transcript || transcript.role === "user") return;

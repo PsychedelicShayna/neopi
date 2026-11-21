@@ -352,6 +352,14 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Status line separator color"
 				},
+				"liveMeterMic": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Live microphone meter color"
+				},
+				"liveMeterOutput": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Live playback meter color"
+				},
 				"statusLineModel": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Status line model segment"

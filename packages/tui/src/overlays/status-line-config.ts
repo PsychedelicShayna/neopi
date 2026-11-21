@@ -20,7 +20,9 @@ import {
 	type StatusLineSegmentId,
 } from "../status-line/schema";
 import {
+	DEFAULT_LIVE_METER_TEMPLATE,
 	DEFAULT_USAGE_BAR_TEMPLATE,
+	LIVE_METER_TEMPLATE_TOKENS,
 	limitUsageBarTemplate,
 	USAGE_BAR_TEMPLATE_TOKENS,
 	usageBarLabel,
@@ -93,6 +95,7 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 	status: "Statuses supplied by extensions, ordered by their registered keys.",
 	model: "Active model and its thinking level.",
 	live: "Live voice microphone phase, mute state, and composer destination.",
+	live_meter: "Live microphone and assistant audio levels.",
 	mode: "Active planning, loop, goal, and other conversation modes.",
 	path: "Working directory, abbreviated according to the path segment options.",
 	git: "Git branch and configured working-tree change indicators.",
@@ -137,6 +140,7 @@ type ListLine =
 	| { kind: "reset"; key: string };
 
 function segmentLabel(id: StatusLineSegmentId): string {
+	if (id === "live_meter") return "Live audio meter";
 	const bar = parseUsageBarSegmentId(id);
 	if (bar) return usageBarLabel(bar);
 	if (id === "pi") return "Brand";
@@ -171,14 +175,23 @@ export function sameStatusLineLayout(a: StatusLineLayout, b: StatusLineLayout): 
 	);
 }
 
-/** Keep only templates for usage bars that differ from the default text. */
+function defaultWidgetTemplate(id: string): string | undefined {
+	return id === "live_meter"
+		? DEFAULT_LIVE_METER_TEMPLATE
+		: parseUsageBarSegmentId(id)
+			? DEFAULT_USAGE_BAR_TEMPLATE
+			: undefined;
+}
+
+/** Keep only templates that differ from the widget default. */
 function normalizeTemplates(value: unknown): Record<string, string> {
 	const templates: Record<string, string> = {};
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return templates;
 	for (const [id, template] of Object.entries(value)) {
-		if (!parseUsageBarSegmentId(id) || typeof template !== "string") continue;
+		const defaultTemplate = defaultWidgetTemplate(id);
+		if (!defaultTemplate || typeof template !== "string") continue;
 		const text = limitUsageBarTemplate(template);
-		if (text.trim() && text !== DEFAULT_USAGE_BAR_TEMPLATE) templates[id] = text;
+		if (text.trim() && text !== defaultTemplate) templates[id] = text;
 	}
 	return templates;
 }
@@ -365,7 +378,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#search.setValue(draft?.query ?? "");
 		this.#template.prompt = "";
 		if (!this.#keys().includes(this.#selected)) this.#selected = COMPOSER_ROW;
-		if (this.#focus === "template" && !parseUsageBarSegmentId(this.#selected)) this.#focus = "list";
+		if (this.#focus === "template" && !defaultWidgetTemplate(this.#selected)) this.#focus = "list";
 		this.#syncTemplateField();
 		this.#syncFocusFlags();
 		if (draft && holdsEdits && this.#pending) {
@@ -605,14 +618,14 @@ export class StatusLineConfigOverlayComponent implements Component {
 
 	#setTemplate(id: string, value: string): void {
 		const text = limitUsageBarTemplate(value);
-		if (!text.trim() || text === DEFAULT_USAGE_BAR_TEMPLATE) delete this.#templates[id];
+		if (!text.trim() || text === defaultWidgetTemplate(id)) delete this.#templates[id];
 		else this.#templates[id] = text;
 		this.#edited();
 	}
 
 	#syncTemplateField(): void {
-		if (!parseUsageBarSegmentId(this.#selected)) return;
-		const value = this.#templates[this.#selected] ?? DEFAULT_USAGE_BAR_TEMPLATE;
+		if (!defaultWidgetTemplate(this.#selected)) return;
+		const value = this.#templates[this.#selected] ?? defaultWidgetTemplate(this.#selected) ?? "";
 		if (this.#template.getValue() !== value) this.#template.setValue(value);
 	}
 
@@ -788,10 +801,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 				this.#toggle();
 				return;
 			case "context":
-				if (parseUsageBarSegmentId(this.#selected)) {
+				if (defaultWidgetTemplate(this.#selected)) {
 					this.#syncTemplateField();
 					this.#setFocus("template");
-				} else this.#notify("Tab edits the text template of a usage widget; select one first.");
+				} else this.#notify("Tab edits the text template of a usage bar or live audio meter.");
 				return;
 			case "search":
 				this.#setFocus("search");
@@ -948,10 +961,14 @@ export class StatusLineConfigOverlayComponent implements Component {
 						: "The draft matches the active layout; there is nothing to reset.",
 				),
 			);
-		} else if (parseUsageBarSegmentId(id)) {
+		} else if (defaultWidgetTemplate(id)) {
+			const meter = id === "live_meter";
+			const tokens = meter ? LIVE_METER_TEMPLATE_TOKENS : USAGE_BAR_TEMPLATE_TOKENS;
 			lines.push(
 				...wrap(
-					"Provider quota window: percentage used and age of the latest cached report, independent of the selected model. Editing never fetches usage.",
+					meter
+						? "Two audio-level bars, visible during live calls."
+						: "Provider quota window: percentage used and age of the latest cached report, independent of the selected model. Editing never fetches usage.",
 				),
 				"",
 				theme.fg(this.#focus === "template" ? "accent" : "muted", "Template"),
@@ -959,7 +976,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				...wrap(
 					theme.fg(
 						"dim",
-						`${USAGE_BAR_TEMPLATE_TOKENS.map(token => `{${token}}`).join(" ")} · {{ and }} for braces · empty restores ${DEFAULT_USAGE_BAR_TEMPLATE}`,
+						`${tokens.map(token => `{${token}}`).join(" ")} · {{ and }} for braces · empty restores ${defaultWidgetTemplate(id)}`,
 					),
 				),
 			);

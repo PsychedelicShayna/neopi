@@ -10,6 +10,8 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { ControlClient } from "../../src/control/client";
 import { ControlHost, currentControlCaller } from "../../src/control/host";
+import { callerConnectionToken } from "../../src/control/registry";
+import { authenticateHello } from "../../src/control/server";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
 import type {
@@ -56,6 +58,7 @@ test.each([
 	["before_agent_start after pane input", "follow_up", "opted out", "pane"],
 	["before_agent_start before pane input", "follow_up", "opted in", "back off"],
 	["delivered caller ancestry", "follow_up", "opted in", "author"],
+	["delivered caller ancestry", "follow_up", "disconnected", "pane"],
 	["historical error recovery", "prompt", "opted in", "pane"],
 	["direct prompt preparation", "prompt", "opted in", "author"],
 	["direct prompt compaction", "prompt", "opted in", "author"],
@@ -88,6 +91,7 @@ test.each([
 	const historical = boundary === "historical error recovery";
 	const directCompaction = boundary === "direct prompt compaction";
 	const unscoped = boundary === "unscoped input hook";
+	const checkAncestry = boundary === "delivered caller ancestry";
 	const direct = type === "prompt";
 	const command = "/ask-test";
 	const primary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -128,6 +132,7 @@ test.each([
 		result.resolve(await answer);
 	}
 	let callerChain: string[] | undefined;
+	let ancestorRejection: string | undefined;
 	const extension = await loadExtensionFromFactory(
 		pi => {
 			if (
@@ -322,10 +327,29 @@ test.each([
 				if (includesQueuedPrompt(context.messages)) await ask(questions => ui.showAskDialog(questions));
 			});
 		}
-		if (boundary === "delivered caller ancestry") {
+		if (checkAncestry) {
 			agent.setBeforeModelCall(async context => {
 				if (!includesQueuedPrompt(context.messages)) return;
-				callerChain = currentControlCaller()?.controlChain;
+				const caller = currentControlCaller();
+				callerChain = caller?.controlChain;
+				if (caller && opt === "disconnected") {
+					const failure = await authenticateHello(
+						{
+							token: "test-ancestor-token",
+							client: {
+								label: "nested ctl",
+								kind: "tool",
+								callerInstanceId: caller.instanceId,
+								callerConnectionToken: callerConnectionToken(caller.token, "author-ancestor", caller.instanceId),
+								controlChain: caller.controlChain,
+							},
+							override: { allowNested: true },
+						},
+						{ instanceId: "author-ancestor", token: "test-ancestor-token", registryDir: dir.path() },
+						{ pid: process.pid, uid: process.getuid!(), gid: process.getgid!() },
+					);
+					ancestorRejection = failure?.code;
+				}
 				await ask(questions => ui.showAskDialog(questions));
 			});
 		}
@@ -355,7 +379,9 @@ test.each([
 			return seen;
 		});
 		expect((await a.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
-		if (opt !== "opted out") expect((await b.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+		if (opt !== "opted out" && !(checkAncestry && opt === "disconnected")) {
+			expect((await b.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+		}
 		if (preContinue) {
 			await session.prompt(`Seed an earlier turn.${" historical".repeat(24_000)}`);
 			expect(model.calls).toHaveLength(1);
@@ -396,7 +422,10 @@ test.each([
 		const active = opt === "disconnected" ? [a] : clients;
 		await Promise.all(active.map(client => client.request({ type: "state" })));
 		expect(frames.map(seen => seen.length)).toEqual([0, opensForAuthor ? 1 : 0]);
-		if (boundary === "delivered caller ancestry") expect(callerChain).toEqual(["author-ancestor"]);
+		if (checkAncestry) {
+			if (opt === "disconnected") expect(ancestorRejection).toBe("cycle");
+			expect(callerChain).toEqual(["author-ancestor"]);
+		}
 		if (target === "back off") {
 			expect(await withTimeout(result.promise, 1_000, "A stale dialog did not back off")).toBeUndefined();
 			expect(askContainer.children).toHaveLength(0);

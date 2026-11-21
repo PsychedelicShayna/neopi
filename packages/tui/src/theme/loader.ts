@@ -191,6 +191,8 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 	}
 	const vars = themeJson.vars ?? {};
 	const ansiPalette = themeJson.terminal?.ansi?.map(color => resolveVarRefs(color, vars));
+	resolvedColors.liveMeterMic ??= "#18b7c8";
+	resolvedColors.liveMeterOutput ??= "#e98039";
 	// A theme without `mdExtensionLink` gets a muted link tint, so links an
 	// extension handles in place stay distinct from links that open a URL.
 	if (resolvedColors.mdExtensionLink === undefined) {

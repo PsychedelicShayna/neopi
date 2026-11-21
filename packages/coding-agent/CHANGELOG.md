@@ -15,6 +15,7 @@
 
 ### Added
 
+- Start or stop `/live-transcript` to keep the live conversation together when Iris hands work to the main agent, without spoken reasoning or progress updates ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
@@ -188,6 +189,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 - Answering an extension form from an attachment no longer sends the pane's unfinished draft to the extension ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
@@ -202,6 +204,7 @@
 - Chronicler now captures the user's `/skill:` arguments in live sessions and backfill, without capturing the expanded skill instructions ([#827](https://github.com/PsychedelicShayna/neopi/issues/827)).
 - Restored **Refresh provider** in the model hub when a model scope is active ([#731](https://github.com/PsychedelicShayna/neopi/pull/731)).
 - Edit judge recall's per-level branch floors directly in **Settings > Chronicler** ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
+- Nested `ctl` calls still enforce ancestor checks after the attachment that queued the current input disconnects ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 
 - A control-socket `settings_unset` with scope `runtime` now removes only the runtime override instead of deleting the key from the global settings file; a malformed `member` or a `settings_set` without a value is refused instead of erasing a saved map, and credential values are no longer echoed in write replies when secret input is disabled.
 - The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.

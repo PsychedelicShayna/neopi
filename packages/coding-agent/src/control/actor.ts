@@ -10,6 +10,9 @@ export interface ControlActor {
 	connectionId: string;
 	label: string;
 	origin?: MessageOrigin;
+	/** Host and ancestry authenticated at admission, retained with the delivered input. */
+	hostInstanceId?: string;
+	controlChain?: readonly string[];
 	/** `human` revision when the request was admitted. */
 	humanAtAdmission: number;
 	/** Current human revision. A mount refuses when this moved. */

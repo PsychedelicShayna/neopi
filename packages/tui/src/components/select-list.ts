@@ -838,7 +838,11 @@ export class SelectList implements Component, MouseRoutable {
 								query,
 							})
 						: this.#canEditSearch()
-							? t(this.#search.focused ? "tui.components.search.list_empty_focused" : "tui.components.search.list_empty_idle")
+							? t(
+									this.#search.focused
+										? "tui.components.search.list_empty_focused"
+										: "tui.components.search.list_empty_idle",
+								)
 							: ""));
 	}
 

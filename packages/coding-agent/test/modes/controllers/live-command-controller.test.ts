@@ -103,6 +103,7 @@ function createHarness(factory?: (options: LiveSessionControllerOptions) => Live
 			}
 		}),
 		statusLine: {
+			setLiveLevels: vi.fn(() => false),
 			setLiveStatus: vi.fn((status: unknown) => {
 				liveStatus = status;
 			}),

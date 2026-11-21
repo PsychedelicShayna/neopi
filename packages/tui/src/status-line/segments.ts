@@ -324,6 +324,44 @@ const liveSegment: StatusLineSegment = {
 	},
 };
 
+export const LIVE_METER_TEMPLATE_TOKENS = ["mic", "output"] as const;
+export const DEFAULT_LIVE_METER_TEMPLATE = "Mic {mic}  Out {output}";
+
+function liveMeterPieces(ctx: SegmentContext): { text: string; color?: ThemeColor }[] | null {
+	if (!ctx.live || ctx.live.phase === "disconnected") return null;
+	const configured = ctx.options.liveMeter?.template;
+	const template = typeof configured === "string" && configured.trim() ? configured : DEFAULT_LIVE_METER_TEMPLATE;
+	const pieces: { text: string; color?: ThemeColor }[] = [];
+	for (const part of parseBarTemplate(template, LIVE_METER_TEMPLATE_TOKENS)) {
+		if ("text" in part) {
+			pieces.push(part);
+			continue;
+		}
+		const isMic = part.token === "mic";
+		const active = isMic && ctx.live.phase === "muted" ? 0 : (ctx.liveLevels?.[part.token] ?? 0);
+		const ascii = theme.getSymbolPreset() === "ascii";
+		if (active) {
+			pieces.push({ text: (ascii ? "#" : "▮").repeat(active), color: isMic ? "liveMeterMic" : "liveMeterOutput" });
+		}
+		if (active < 6) pieces.push({ text: (ascii ? "." : "▯").repeat(6 - active), color: "dim" });
+	}
+	return pieces;
+}
+
+const liveMeterSegment: StatusLineSegment = {
+	id: "live_meter",
+	render(ctx) {
+		const pieces = liveMeterPieces(ctx);
+		if (!pieces) return { content: "", visible: false };
+		const content = pieces.map(({ text, color }) => (color ? theme.fg(color, text) : text)).join("");
+		return { content, visible: content.length > 0 };
+	},
+	describe(ctx) {
+		const pieces = liveMeterPieces(ctx);
+		return pieces?.length ? segView(pieces.map(({ text, color }) => span(text, color))) : null;
+	},
+};
+
 /** Display name of the active model (`Claude ` prefix dropped). */
 function modelDisplayName(ctx: SegmentContext): string {
 	const state = ctx.session.state;
@@ -1300,10 +1338,6 @@ export type UsageBarTemplatePart = { readonly text: string } | { readonly token:
 const usageBarTemplateCache = new Map<string, readonly UsageBarTemplatePart[]>();
 const USAGE_BAR_TEMPLATE_CACHE_LIMIT = 64;
 
-function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
-	return USAGE_BAR_TEMPLATE_TOKENS.some(token => token === name);
-}
-
 /**
  * Split a usage-bar template into literal text and `{label}`/`{percent}`/`{age}`
  * placeholders. `{{` and `}}` produce literal braces; unknown or unclosed
@@ -1311,11 +1345,9 @@ function isUsageBarTemplateToken(name: string): name is UsageBarTemplateToken {
  * sequences are stripped before width limiting, so a cut cannot expose part
  * of one; literal spacing inside the template is kept.
  */
-export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
-	const cached = usageBarTemplateCache.get(template);
-	if (cached) return cached;
+function parseBarTemplate<Token extends string>(template: string, tokens: readonly Token[]) {
 	const source = limitUsageBarTemplate(template);
-	const parts: UsageBarTemplatePart[] = [];
+	const parts: ({ text: string } | { token: Token })[] = [];
 	let text = "";
 	for (let index = 0; index < source.length; index++) {
 		const char = source[index]!;
@@ -1327,10 +1359,11 @@ export function parseUsageBarTemplate(template: string): readonly UsageBarTempla
 		if (char === "{") {
 			const end = source.indexOf("}", index + 1);
 			const name = end > index ? source.slice(index + 1, end) : "";
-			if (isUsageBarTemplateToken(name)) {
+			const token = tokens.find(candidate => candidate === name);
+			if (token !== undefined) {
 				if (text) parts.push({ text });
 				text = "";
-				parts.push({ token: name });
+				parts.push({ token });
 				index = end;
 				continue;
 			}
@@ -1341,6 +1374,13 @@ export function parseUsageBarTemplate(template: string): readonly UsageBarTempla
 		text += char;
 	}
 	if (text) parts.push({ text });
+	return parts;
+}
+
+export function parseUsageBarTemplate(template: string): readonly UsageBarTemplatePart[] {
+	const cached = usageBarTemplateCache.get(template);
+	if (cached) return cached;
+	const parts = parseBarTemplate(template, USAGE_BAR_TEMPLATE_TOKENS);
 	// Editing must not retain every historical template for the session's lifetime.
 	if (usageBarTemplateCache.size >= USAGE_BAR_TEMPLATE_CACHE_LIMIT) usageBarTemplateCache.clear();
 	usageBarTemplateCache.set(template, parts);
@@ -1563,6 +1603,7 @@ export const SEGMENTS: Record<BuiltinStatusLineSegmentId, StatusLineSegment> = {
 	status: statusSegment,
 	model: modelSegment,
 	live: liveSegment,
+	live_meter: liveMeterSegment,
 	mode: modeSegment,
 	path: pathSegment,
 	git: gitSegment,
