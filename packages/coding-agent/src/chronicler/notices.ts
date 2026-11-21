@@ -1,11 +1,23 @@
+import { isRecord } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import type { Settings } from "../config/settings";
 import statusNoticeTemplate from "../prompts/chronicler/status-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { cfgChroniclerNotices } from "./settings";
 
+const CHRONICLER_STATUS_TYPE = "chronicler-status";
+
 export type ChroniclerTransition = "enabled" | "disabled" | "paused" | "resumed" | "blinded" | "unblinded";
 export type ChroniclerControl = "on" | "off" | "pause" | "resume" | "blind" | "unblind";
+
+/** Startup and explicit enable notices contain the same consent explanation. */
+export function isChroniclerEnabledNotice(message: { customType: string; details?: unknown }): boolean {
+	return (
+		message.customType === CHRONICLER_STATUS_TYPE &&
+		isRecord(message.details) &&
+		message.details.transition === "enabled"
+	);
+}
 
 export interface ChroniclerNoticeOptions {
 	/** Additional enabled explanation supplied only by builds that implement it. */
@@ -38,7 +50,7 @@ export async function injectChroniclerNotice(
 	if (!cfgChroniclerNotices.get(host.settings)) return;
 	await host.sendCustomMessage(
 		{
-			customType: "chronicler-status",
+			customType: CHRONICLER_STATUS_TYPE,
 			content: formatChroniclerNotice(transition, options),
 			display: true,
 			attribution: "agent",
