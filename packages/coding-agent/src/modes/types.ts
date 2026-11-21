@@ -66,6 +66,7 @@ import type { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-mark
 import type { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import type { ControlActor } from "../control/actor";
 import type { EventController } from "./controllers/event-controller";
 import type { LiveSubmitRoute } from "./controllers/live-command-controller";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
@@ -97,6 +98,8 @@ export type SubmittedUserInput = {
 	text: string;
 	images?: ImageContent[];
 	imageLinks?: (string | undefined)[];
+	/** Terminal attachment to attribute a command to if this input dispatches one. */
+	commandActor?: ControlActor;
 	customType?: string;
 	/** Route through `session.prompt(text, { synthetic: true })` as a hidden
 	 *  developer message. Used by continue shortcuts and operator notices. */

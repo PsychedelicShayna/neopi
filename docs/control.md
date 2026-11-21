@@ -157,6 +157,13 @@ pauses owner-frame consumption until the consumer drains. A blocked control sock
 pauses stdin consumption, including frames already buffered in the current chunk,
 until the socket drains.
 
+Before opting in to rich Ask or Form on an attachment, check that the terminal
+owner's `ready.capabilities` includes `rich_dialog_provenance_v1`. This confirms
+that the presenter is attached and that preparation and slash commands have
+bounded dialog routing. If the flag is absent, leave both opt-ins disabled.
+An attachment receives its capabilities at authentication; reconnect to
+read them again.
+
 With `session_journal_events`, attachment also relays native journal commits,
 leaf changes, session identity changes and durable message-ID associations.
 Subscribe before fetching initial native pages and buffer those events while
