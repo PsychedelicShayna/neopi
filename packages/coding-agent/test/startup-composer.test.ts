@@ -13,6 +13,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
+import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { Composer, type ComposerPreferences } from "@oh-my-pi/pi-tui/prompt/composer";
 import * as composerCache from "@oh-my-pi/pi-tui/prompt/composer-cache";
@@ -423,6 +424,62 @@ describe("Composer prepaint", () => {
 
 		composer.ui.stop();
 		expect(terminal.stops).toBe(1);
+	});
+
+	it("returns composer focus to a pending ask with Tab or a Vim Normal upward motion", async () => {
+		const terminal = new CountingTerminal();
+		const composer = new Composer({ preferences: config, terminal });
+		const testSession = await createTestSession();
+		let extensionUi: ExtensionUIContext | undefined;
+		const mode = new InteractiveMode(
+			testSession.session,
+			"test",
+			ui => {
+				extensionUi = ui;
+			},
+			undefined,
+			undefined,
+			undefined,
+			composer,
+		);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		composer.start();
+		try {
+			await mode.init({ suppressWelcomeIntro: true });
+			if (!extensionUi?.askDialog) throw new Error("Ask dialog unavailable");
+			const pending = extensionUi.askDialog([
+				{ id: "confirm", question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] },
+			]);
+			const ask = mode.ui.getFocused();
+			expect(ask).not.toBe(mode.editor);
+
+			mode.editor.setVimMode(false);
+			terminal.sendInput("\x1b");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			terminal.sendInput("\t");
+			expect(mode.ui.getFocused()).toBe(ask);
+
+			mode.editor.setVimMode(true);
+			terminal.sendInput("\x1b");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			terminal.sendInput("\x1b");
+			expect(mode.editor.vimMode).toBe("normal");
+			terminal.sendInput("k");
+			expect(mode.ui.getFocused()).toBe(ask);
+
+			terminal.sendInput("\x1b");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			terminal.sendInput("\x1b[A");
+			expect(mode.ui.getFocused()).toBe(ask);
+			expect(mode.cancelAsk()).toBe(true);
+			expect(await pending).toBeUndefined();
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+		} finally {
+			mode.cancelAsk();
+			mode.stop();
+			await testSession.cleanup();
+			vi.restoreAllMocks();
+		}
 	});
 
 	it("adopts the live draft with final theme, keybindings, and submit behavior", async () => {

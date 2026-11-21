@@ -107,6 +107,61 @@ describe("Editor vim mode", () => {
 	});
 
 	describe("motions", () => {
+		it.each([UP, "k"])("hands standalone %j to an ask only on the first visual row", key => {
+			const editor = vimEditor("abcdefghij ".repeat(8), { cursorToStart: false });
+			let handoffs = 0;
+			editor.onUpFromTop = () => {
+				handoffs++;
+				return true;
+			};
+			editor.render(30);
+			editor.handleInput(ESC);
+			expect(cursor(editor).line).toBe(0);
+			editor.handleInput(key);
+			expect(handoffs).toBe(0);
+
+			editor.handleInput("0");
+			editor.handleInput(key);
+			expect(handoffs).toBe(1);
+		});
+
+		it("keeps counts and operators in Vim rather than handing Up to an ask", () => {
+			const editor = vimEditor("first\nsecond");
+			let handoffs = 0;
+			editor.onUpFromTop = () => {
+				handoffs++;
+				return true;
+			};
+
+			for (const key of ["2", "k", "2", UP, "dk", "d", UP, "y", "k"]) editor.handleInput(key);
+			expect(handoffs).toBe(0);
+			editor.handleInput("k");
+			expect(handoffs).toBe(1);
+		});
+
+		it("keeps normal Vim motion when no ask takes focus and while browsing history", () => {
+			const editor = vimEditor("first\nsecond", { cursorToStart: false });
+			editor.handleInput(ESC);
+			editor.onUpFromTop = () => false;
+			editor.handleInput("k");
+			expect(cursor(editor).line).toBe(0);
+
+			editor.setText("");
+			editor.addToHistory("earlier prompt");
+			editor.handleInput("i");
+			editor.handleInput(UP);
+			expect(editor.getText()).toBe("earlier prompt");
+			editor.handleInput(ESC);
+			let handoffs = 0;
+			editor.onUpFromTop = () => {
+				handoffs++;
+				return true;
+			};
+			editor.handleInput(UP);
+			editor.handleInput("k");
+			expect(handoffs).toBe(0);
+		});
+
 		it("moves with h/j/k/l without editing the buffer", () => {
 			const editor = vimEditor("alfa\nbeta");
 			for (const key of "lljhk") editor.handleInput(key);
