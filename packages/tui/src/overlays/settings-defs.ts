@@ -74,6 +74,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Prewalk", "Vision", "Mixture of Agents"],
 	interaction: [
 		"Input",
+		"Language",
 		"Approvals",
 		"Notifications",
 		"Speech",
