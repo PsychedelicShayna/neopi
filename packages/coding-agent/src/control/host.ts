@@ -25,12 +25,23 @@ import {
 import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
+import type {
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+	ExtensionUIDialogOptions,
+} from "../extensibility/extensions";
 import type { AgentSession } from "../session/agent-session";
 import { inspectSessionFileLease } from "../session/session-lease";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
-import { currentControlActor, runAsControlActor } from "./actor";
+import {
+	type ControlActor,
+	controlOperationActor,
+	currentControlActor,
+	runAsControlActor,
+	runAsControlCommand,
+} from "./actor";
 import { HostBudget, MAX_KEYS_BYTES, workClass } from "./budget";
 import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
@@ -107,17 +118,18 @@ export interface ControlCallerIdentity {
 
 /** Publication of the in-process host, so the ctl tool can bind its caller. */
 export function currentControlCaller(): ControlCallerIdentity | null {
-	const actor = currentControlActor();
+	let activeHost: ControlHost | undefined;
 	for (const host of liveHosts) {
 		const token = host.publication?.token;
 		if (!token) continue;
-		if (actor) {
-			for (const connection of host.connections()) {
-				if (connection.id === actor.connectionId) {
-					return { instanceId: host.instanceId, token, controlChain: connection.propagatedChain };
-				}
-			}
+		if (host.hasTurnInput()) activeHost = host;
+		const actor = host.dialogActor();
+		if (actor?.hostInstanceId === host.instanceId) {
+			return { instanceId: host.instanceId, token, controlChain: actor.controlChain?.slice() ?? [] };
 		}
+	}
+	if (activeHost?.publication) {
+		return { instanceId: activeHost.instanceId, token: activeHost.publication.token, controlChain: [] };
 	}
 	for (const host of liveHosts) {
 		const token = host.publication?.token;
@@ -127,12 +139,18 @@ export function currentControlCaller(): ControlCallerIdentity | null {
 	return null;
 }
 
+type GuestAskDialog = (
+	questions: ExtensionAskDialogQuestion[],
+	options: ExtensionUIDialogOptions,
+) => Promise<ExtensionAskDialogResult | "unavailable" | undefined>;
+
 interface ConnectionBridges {
 	forwarder: RpcSessionEventForwarder;
 	hostTools: RpcHostToolBridge;
 	hostUris: RpcHostUriBridge;
 	approvals: RpcToolApprovalBridge;
 	pending: RpcPendingExtensionRequests;
+	askDialog?: GuestAskDialog;
 }
 
 type ConnectionRpcHandler = (command: RpcCommand) => Promise<RpcResponse>;
@@ -476,10 +494,17 @@ export class ControlHost {
 	}
 
 	async #dispatch(connection: ControlConnection, frame: Record<string, unknown>): Promise<void> {
+		const type = frame.type;
 		return runAsControlActor(
 			{
 				connectionId: connection.id,
 				label: connection.label || "ctl",
+				hostInstanceId: this.instanceId,
+				controlChain:
+					connection.callerInstanceId || connection.controlChain.length > 0 ? connection.propagatedChain : undefined,
+				...(type === "prompt" || type === "steer" || type === "follow_up" || type === "abort_and_prompt"
+					? { origin: connection.origin }
+					: {}),
 				humanAtAdmission: this.#revisions.human,
 				humanNow: () => this.#revisions.human,
 			},
@@ -572,11 +597,34 @@ export class ControlHost {
 		return initialization;
 	}
 
+	/** Only the attachment whose delivered input produced the Ask may answer it. */
+	guestAskDialog(): GuestAskDialog | undefined {
+		return this.#guestDialogBridges()?.askDialog;
+	}
+
+	hasTurnInput(): boolean {
+		return this.#options.session.agent.turnInput !== undefined;
+	}
+
+	dialogActor(): ControlActor | undefined {
+		return controlOperationActor(this.#options.session.agent.turnInput);
+	}
+
+	#guestDialogBridges(): ConnectionBridges | undefined {
+		const actor = this.dialogActor();
+		if (!actor || actor.humanNow() !== actor.humanAtAdmission) return undefined;
+		for (const connection of this.#connections) {
+			if (connection.id === actor.connectionId) return this.#bridges.get(connection);
+		}
+		return undefined;
+	}
+
 	async #createHandlerFor(
 		connection: ControlConnection,
 		subscription?: Record<string, unknown>,
 	): Promise<ConnectionRpcHandler> {
-		const { RpcPendingExtensionRequests, createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
+		const { RpcPendingExtensionRequests, createRpcCommandHandler, requestRpcAskDialog } =
+			await import("../modes/rpc/rpc-mode");
 		if (!this.#connections.has(connection)) throw new Error("control connection closed");
 		const session = this.#options.session;
 		const output = (frame: object) => {
@@ -652,7 +700,7 @@ export class ControlHost {
 				const space = message.indexOf(" ");
 				const name = message.slice(1, space < 0 ? undefined : space);
 				if (!session.customCommands.some(loaded => loaded.command.name === name)) return null;
-				return session.executeCustomCommand(message);
+				return runAsControlCommand(currentControlActor(), () => session.executeCustomCommand(message));
 			},
 			emitAvailableCommandsUpdate: async () => {
 				const { buildAvailableSlashCommands } = await import("../slash-commands/available-commands");
@@ -678,7 +726,20 @@ export class ControlHost {
 			createUiContext: () => {
 				throw new Error("control login uses the pane dialog");
 			},
-			origin: connection.origin,
+			setAskDialogEnabled:
+				this.#options.role === "tui"
+					? enabled => {
+							bridges.askDialog = enabled
+								? (questions, options) =>
+										requestRpcAskDialog(pending, output, questions, options).catch(
+											() => "unavailable" as const,
+										)
+								: undefined;
+						}
+					: undefined,
+			get origin() {
+				return currentControlActor()?.origin;
+			},
 		});
 		this.#handlers.set(connection, handler);
 		return handler;
@@ -771,7 +832,8 @@ export class ControlHost {
 				const text = String(frame.text ?? "");
 				const images =
 					type === "input" && Array.isArray(frame.images) ? (frame.images as ImageContent[]) : undefined;
-				const result = await presenter!.submit(text, images);
+				const submit = () => presenter!.submit(text, images);
+				const result = type === "slash" ? await runAsControlCommand(currentControlActor(), submit) : await submit();
 				this.#notify(connection, type === "slash" ? text : "input");
 				this.#reply(connection, frame, { success: true, data: result });
 				return;
@@ -1144,10 +1206,6 @@ export class ControlHost {
 		);
 	}
 
-	connections(): Iterable<ControlConnection> {
-		return this.#connections;
-	}
-
 	/** True while the pane's approval selector is open and control may not press it. */
 	setApprovalUiOpen(open: boolean): void {
 		this.#approvalUiOpen = open;
@@ -1456,8 +1514,9 @@ export class ControlHost {
 			return;
 		}
 		// With a pane, go through /switch so the status line and title refresh as if typed.
-		if (this.presenter) await this.presenter.submit(`/switch ${selector}`);
-		else await session.setModelTemporary(resolved.model, resolved.thinkingLevel);
+		if (this.presenter) {
+			await runAsControlCommand(currentControlActor(), () => this.presenter!.submit(`/switch ${selector}`));
+		} else await session.setModelTemporary(resolved.model, resolved.thinkingLevel);
 		const model = session.model;
 		const applied =
 			model && model.provider === resolved.model.provider && model.id === resolved.model.id

@@ -4,8 +4,9 @@ import { Container, getKeybindings, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import { currentControlActor } from "../../control/actor";
+import { once } from "@oh-my-pi/pi-utils/abortable";
 import { dialogRegistry, type OpenDialog } from "../../control/dialogs";
+import { controlHostFor } from "../../control/host";
 import type {
 	CompactOptions,
 	ExtensionActions,
@@ -884,10 +885,14 @@ export class ExtensionUiController {
 		// strings/arrays here instead of throwing inside `sanitizeCarriageReturns`
 		// on the guest path or taking down the local render.
 		const normalized = normalizeDialogQuestions(questions);
+		const controlAsk = controlHostFor(this.ctx.session)?.guestAskDialog();
+		const collab = this.ctx.collabHost;
 		return this.#raceGuestDialog(
 			dialogOptions,
 			options => this.#showLocalAskDialog(normalized, options),
-			(host, signal) => this.#runGuestAskDialog(host, normalized, signal),
+			controlAsk
+				? options => controlAsk(normalized, options)
+				: collab && (options => this.#runGuestAskDialog(collab, normalized, options.signal)),
 		);
 	}
 
@@ -901,10 +906,11 @@ export class ExtensionUiController {
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const form = parseHtmlForm(html);
+		const collab = this.ctx.collabHost;
 		return this.#raceGuestDialog(
 			dialogOptions,
 			options => this.#showLocalFormDialog(form, options),
-			(host, signal) => this.#runGuestForm(host, form, signal),
+			collab && (options => this.#runGuestForm(collab, form, options.signal)),
 		);
 	}
 
@@ -916,21 +922,22 @@ export class ExtensionUiController {
 	async #raceGuestDialog<T>(
 		dialogOptions: ExtensionUIDialogOptions | undefined,
 		local: (dialogOptions: ExtensionUIDialogOptions | undefined) => Promise<T | undefined>,
-		remote: (host: CollabHost, signal: AbortSignal) => Promise<T | "unavailable" | undefined>,
+		remote:
+			| ((options: ExtensionUIDialogOptions & { signal: AbortSignal }) => Promise<T | "unavailable" | undefined>)
+			| undefined,
 	): Promise<T | undefined> {
-		const host = this.ctx.collabHost;
-		if (!host) return local(dialogOptions);
+		if (!remote) return local(dialogOptions);
 		const localAbort = new AbortController();
 		const remoteAbort = new AbortController();
 		const parentSignal = dialogOptions?.signal;
 		const localSignal = parentSignal ? AbortSignal.any([parentSignal, localAbort.signal]) : localAbort.signal;
 		const remoteSignal = parentSignal ? AbortSignal.any([parentSignal, remoteAbort.signal]) : remoteAbort.signal;
-		const localWinner = local({ ...dialogOptions, signal: localSignal }).then((value): CollabWinner<T> => ({
-			source: "local",
-			value,
-		}));
-		const remoteWinner: Promise<CollabWinner<T>> = remote(host, remoteSignal).then(result =>
-			result === "unavailable" ? localWinner : { source: "remote", value: result },
+		const onTimeout = dialogOptions?.onTimeout ? once(dialogOptions.onTimeout) : undefined;
+		const localWinner = local({ ...dialogOptions, signal: localSignal, onTimeout }).then(
+			(value): CollabWinner<T> => ({ source: "local", value }),
+		);
+		const remoteWinner: Promise<CollabWinner<T>> = remote({ ...dialogOptions, signal: remoteSignal, onTimeout }).then(
+			result => (result === "unavailable" ? localWinner : { source: "remote", value: result }),
 		);
 		const winner = await Promise.race([localWinner, remoteWinner]);
 		if (winner.source === "remote") localAbort.abort();
@@ -2115,6 +2122,8 @@ export class ExtensionUiController {
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		const described = meta ?? this.#nextDialog;
+		// A queued presentation can start on the previous dialog's async stack.
+		const actor = controlHostFor(this.ctx.session)?.dialogActor();
 		this.#nextDialog = undefined;
 		let settled = false;
 		let started = false;
@@ -2161,10 +2170,10 @@ export class ExtensionUiController {
 				this.#advanceDialogQueue();
 				return;
 			}
-			const actor = currentControlActor();
 			if (actor && actor.humanNow() !== actor.humanAtAdmission) {
 				this.ctx.showStatus(`⌁ ${actor.label}#${actor.connectionId} backed off (you were interacting)`);
 				settle(undefined);
+				this.#advanceDialogQueue();
 				return;
 			}
 			started = true;

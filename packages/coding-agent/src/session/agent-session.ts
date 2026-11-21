@@ -180,6 +180,7 @@ import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-temp
 import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
 import { Settings, withActiveSettings } from "../config/settings";
+import { controlActorForOrigin, runAsControlCommand } from "../control/actor";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { getEditStore } from "../edit/store";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
@@ -6711,7 +6712,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 							observation = this.#startTurnObservation(options.turnRecords ?? []);
 						}
 					: undefined;
-				const promise = this.#runAgentContinue(signal, request, coalescedSources, onStart);
+				const promise = this.agent.runWithUnattributedTurn(() =>
+					this.#runAgentContinue(signal, request, coalescedSources, onStart),
+				);
 				const attempt: ActiveAgentContinue = {
 					schedulerToken: request.schedulerToken,
 					turnEnded: false,
@@ -7106,7 +7109,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#runCheckScheduled = true;
 		queueMicrotask(() => {
 			this.#runCheckScheduled = false;
-			this.#checkRun();
+			this.agent.runWithUnattributedTurn(() => this.#checkRun());
 		});
 	}
 
@@ -10517,7 +10520,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
-				const command = await this.#tryExecuteExtensionCommand(text, options?.onPromptAdmitted);
+				const command = await runAsControlCommand(controlActorForOrigin(options?.origin), () =>
+					this.#tryExecuteExtensionCommand(text, options?.onPromptAdmitted),
+				);
 				if (!isDeferredSubmissionActive()) return false;
 				if (command) {
 					// Queued only now, so whatever the command sent runs before them. A failed
@@ -10528,7 +10533,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				}
 
 				// Try custom commands (TypeScript slash commands)
-				const customResult = options?.customCommandResult ?? (await this.executeCustomCommand(text));
+				const customResult =
+					options?.customCommandResult ??
+					(await runAsControlCommand(controlActorForOrigin(options?.origin), () =>
+						this.executeCustomCommand(text),
+					));
 				if (!isDeferredSubmissionActive()) return false;
 				if (customResult !== null) {
 					if (customResult === "") {
@@ -11320,7 +11329,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				!options?.skipCompactionCheck &&
 				(lastAssistant.stopReason === "error" || lastAssistant.stopReason === "length")
 			) {
-				await this.#maintenance.checkCompaction(lastAssistant, false, false);
+				await this.agent.runWithUnattributedTurn(() =>
+					this.#maintenance.checkCompaction(lastAssistant, false, false),
+				);
 			}
 
 			await this.#prewalk.armPlanYoloIfNeeded();
@@ -11392,15 +11403,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				}
 			}
 
-			const preparation = await logger.time("prompt:prepareAgentStart", () =>
-				this.#prepareAgentStart(
-					message,
-					expandedText,
-					options?.images,
-					generation,
-					setupAbort.signal,
-					"direct",
-					options?.solutionSpace,
+			const activePromptInput = () =>
+				setupAbort.signal.aborted || this.#promptGeneration !== generation ? [] : messages;
+			const preparation = await this.agent.runWithTurnInput(activePromptInput, () =>
+				logger.time("prompt:prepareAgentStart", () =>
+					this.#prepareAgentStart(
+						message,
+						expandedText,
+						options?.images,
+						generation,
+						setupAbort.signal,
+						"direct",
+						options?.solutionSpace,
+					),
 				),
 			);
 			const preparedMessages = preparation.commit();
@@ -11438,8 +11453,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (maintenanceMessages !== messages && previewXdevMountNotice?.notice) {
 				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
 			}
-			await logger.time("prompt:prePromptCompaction", () =>
-				this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages),
+			await this.agent.runWithTurnInput(activePromptInput, () =>
+				logger.time("prompt:prePromptCompaction", () =>
+					this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages),
+				),
 			);
 			if (this.#promptGeneration !== generation || !isDeferredSubmissionActive()) {
 				return false;

@@ -1321,12 +1321,26 @@ The corresponding `get_state` result reports the same computed state:
 
 ### `set_ask_dialog` payload
 
-`set_ask_dialog` opts the host in to the `ask` extension UI request (see
-[Extension UI Sub-Protocol](#extension-ui-sub-protocol)). It is off by default
-for every process; until a host enables it, the `ask` tool keeps prompting with
-one `select` (plus `editor` for free text) per choice. Builds without the
-command answer with a failed `response`, so hosts should keep the `select`
-fallback when enabling fails.
+`set_ask_dialog` opts a peer in to the `ask` extension UI request (see
+[Extension UI Sub-Protocol](#extension-ui-sub-protocol)). On stdio it is off by
+default; until enabled, the `ask` tool uses one `select` (plus `editor` for free
+text) per choice. Builds or transports without support return a failed
+`response`; leave the existing dialog flow in place in that case.
+
+On a terminal-owned control socket it is off by default for each connection.
+Only the opted-in attachment whose delivered input or directly dispatched
+command produced the Ask receives the typed request. That includes extension
+requests preparing the attachment's input, including a claimed `steer` or
+`follow_up`. A batch with mixed or missing origins, a disconnected author, or
+work without input or command provenance stays in the pane. Examples include
+historical error recovery, detached lifecycle notifications and retries without
+new input.
+Opting in does not mirror questions opened by the terminal owner or another
+attachment. The pane keeps its own Ask open and the first answer or
+dismissal wins. If the pane settles first, or the request is aborted or times
+out on the server, the guest gets a `cancel` with the original `targetId`.
+`enabled: false` returns the attachment to the existing pane dialog flow for
+future questions.
 
 ```json
 { "id": "req_ask", "type": "set_ask_dialog", "enabled": true }
@@ -2257,7 +2271,8 @@ option, else its first.
 `answers` must list one entry per question in request order, with each `id` equal to that question's `id`.
 `selectedOptions` holds exact option labels without duplicates; a multi-select may be empty. A single-select
 (`multi` absent or false) takes at most one option and not both an option and `customInput`. `customInput`
-is trimmed and ignored when empty. Any other shape fails the `ask` tool call instead of guessing.
+is trimmed and ignored when empty. An invalid reply fails the `ask` tool call on
+stdio; on a terminal control socket it leaves the pane's Ask open for the owner.
 
 ```json
 {

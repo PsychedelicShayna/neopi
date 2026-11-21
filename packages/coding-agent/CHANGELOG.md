@@ -189,6 +189,7 @@
 ### Fixed
 
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
+- Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 - In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
 - Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
 - Chronicler attributes control-socket messages to their senders instead of the session owner ([#828](https://github.com/PsychedelicShayna/neopi/issues/828)).
@@ -201,6 +202,7 @@
 - Chronicler now captures the user's `/skill:` arguments in live sessions and backfill, without capturing the expanded skill instructions ([#827](https://github.com/PsychedelicShayna/neopi/issues/827)).
 - Restored **Refresh provider** in the model hub when a model scope is active ([#731](https://github.com/PsychedelicShayna/neopi/pull/731)).
 - Edit judge recall's per-level branch floors directly in **Settings > Chronicler** ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
+- Nested `ctl` calls still enforce ancestor checks after the attachment that queued the current input disconnects ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 
 - A control-socket `settings_unset` with scope `runtime` now removes only the runtime override instead of deleting the key from the global settings file; a malformed `member` or a `settings_set` without a value is refused instead of erasing a saved map, and credential values are no longer echoed in write replies when secret input is disabled.
 - The agent author no longer produces `output: true` or `null`, which dispatch rejects; such results are refused with an error instead of being written into a definition.

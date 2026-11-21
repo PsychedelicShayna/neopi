@@ -21,6 +21,7 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $env, getAgentDir, isRecord, logger, postmortem, Snowflake, toError } from "@oh-my-pi/pi-utils";
 import { EXIT_WITH_PARENT_EXIT_CODE, EXIT_WITH_PARENT_TEARDOWN_MS, tearDownExitTarget } from "../../exit-with-parent";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { controlActorForOrigin, runAsControlCommand } from "../../control/actor";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -1414,17 +1415,17 @@ export function requestRpcDialog<T>(
 			targetId: id,
 		} as RpcExtensionUIRequest);
 	const onAbort = () => {
-		cancelHostDialog();
 		cleanup();
+		cancelHostDialog();
 		resolve(defaultValue);
 	};
 	opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 	if (opts?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
-			opts.onTimeout?.();
-			cancelHostDialog();
 			cleanup();
+			cancelHostDialog();
+			opts.onTimeout?.();
 			resolve(defaultValue);
 		}, opts.timeout);
 	}
@@ -1438,7 +1439,10 @@ export function requestRpcDialog<T>(
 				reject(err);
 			}
 		},
-		reject,
+		reject: error => {
+			cleanup();
+			reject(error);
+		},
 	});
 	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 	return promise;
@@ -1555,7 +1559,7 @@ export interface RpcCommandHandlerContext {
 	toolApprovalBridge: RpcToolApprovalBridge;
 	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
 	createUiContext: (pending: Map<string, PendingExtensionRequest>, output: RpcOutput) => ExtensionUIContext;
-	/** RPC stdio ask-dialog negotiation; native pane UI has no protocol fallback to toggle. */
+	/** Enables typed Ask for this RPC peer, without changing other UI peers. */
 	setAskDialogEnabled?: (enabled: boolean) => void;
 	inputGate?: RpcUserInputGate;
 	isShutdownRequested?: () => boolean;
@@ -1591,7 +1595,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		reloadPluginState,
 		getAvailableCommands,
 		onPromptError,
-		origin,
 		extensionUserMessageTracker,
 		trackBackground,
 		subagentRegistry,
@@ -1649,6 +1652,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 	): Promise<OrderedInputOutcome> =>
 		inputGate.enqueue(async () => {
 			const sessionId = session.sessionId;
+			const origin = ctx.origin;
 			const isCurrent = () =>
 				inputGate.isCurrent(command) && !ctx.isShutdownRequested?.() && session.sessionId === sessionId;
 			if (!isCurrent()) return { kind: "cancelled" };
@@ -1696,35 +1700,37 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				const builtinAbort = new AbortController();
 				builtinCommandAborts.add(builtinAbort);
 				let backgroundedBuiltin = false;
-				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
-					session,
-					sessionManager: session.sessionManager,
-					settings: session.settings,
-					cwd: session.sessionManager.getCwd(),
-					output: text => output({ type: "command_output", text }),
-					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: reloadPluginState,
-					mcpManager: ctx.mcpManager,
-					reconnectMcpServer: ctx.mcpManager
-						? async (name, selected) => {
-								const manager = ctx.mcpManager!;
-								const state = await reconnectMcpManagerServer(manager, name, selected);
-								if (state) await session.refreshMCPTools(manager.getTools());
-								return state;
-							}
-						: undefined,
-					signal: builtinAbort.signal,
-					runCommandInBackground: task => {
-						backgroundedBuiltin = true;
-						trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
-					},
-					notifyTitleChanged: async () => {
-						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
-					},
-					notifyConfigChanged: async () => {
-						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-					},
-				});
+				const builtinResult = await runAsControlCommand(controlActorForOrigin(origin), () =>
+					executeAcpBuiltinSlashCommand(text, {
+						session,
+						sessionManager: session.sessionManager,
+						settings: session.settings,
+						cwd: session.sessionManager.getCwd(),
+						output: text => output({ type: "command_output", text }),
+						refreshCommands: emitAvailableCommandsUpdate,
+						reloadPlugins: reloadPluginState,
+						mcpManager: ctx.mcpManager,
+						reconnectMcpServer: ctx.mcpManager
+							? async (name, selected) => {
+									const manager = ctx.mcpManager!;
+									const state = await reconnectMcpManagerServer(manager, name, selected);
+									if (state) await session.refreshMCPTools(manager.getTools());
+									return state;
+								}
+							: undefined,
+						signal: builtinAbort.signal,
+						runCommandInBackground: task => {
+							backgroundedBuiltin = true;
+							trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
+						},
+						notifyTitleChanged: async () => {
+							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+						},
+						notifyConfigChanged: async () => {
+							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+						},
+					}),
+				);
 				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
 				if (!isCurrent()) return { kind: "cancelled" };
 				if (builtinResult !== false) {
