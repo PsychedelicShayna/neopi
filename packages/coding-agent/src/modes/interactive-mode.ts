@@ -130,6 +130,7 @@ import type {
 	SessionModeResult,
 	SessionModeState,
 } from "../extensibility/extensions/types";
+import { buildFileSlashArgumentCompletions } from "../extensibility/file-command-completions";
 import type { Skill } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
@@ -3674,7 +3675,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			provenance: cmd.provenance,
 			icon: getSlashCommandTypeIcon("extension"),
 			iconName: "extension",
-			getArgumentCompletions: cmd.getArgumentCompletions,
+			getArgumentCompletions:
+				cmd.getArgumentCompletions && (prefix => cmd.getArgumentCompletions!(prefix, this.sessionManager)),
 		}));
 
 		// Convert custom commands (TypeScript) to SlashCommand format
@@ -3685,7 +3687,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				description: `${loaded.command.description} (${loaded.source})`,
 				icon: getSlashCommandTypeIcon(loaded.path.startsWith("mcp:") ? "mcp" : "prompt"),
 				iconName: loaded.path.startsWith("mcp:") ? "mcp" : "prompt",
-				getArgumentCompletions: complete && (prefix => complete(prefix, this.sessionManager.getCwd())),
+				getArgumentCompletions:
+					complete &&
+					(prefix => {
+						const sessionManager = this.sessionManager;
+						return complete(prefix, sessionManager.getCwd(), { sessionManager });
+					}),
 			};
 		});
 
@@ -3770,6 +3777,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				icon: promptIcon,
 				iconName: "prompt",
 				argumentHint,
+				getArgumentCompletions: buildFileSlashArgumentCompletions(cmd),
 				getInlineHint: argumentHint ? buildStaticInlineHint(argumentHint) : undefined,
 			};
 		});

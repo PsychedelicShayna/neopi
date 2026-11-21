@@ -1,17 +1,22 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { type PauseWorkStatus, runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
+import { LIVE_MODEL_OPTIONS } from "../live/protocol";
 import { cfgLiveModel } from "../live/settings";
 import { eventAudioCommand } from "../event-audio/observer";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionHandle } from "../session/agent-session-handle";
 import { clearApprovalGrants } from "../tools/approval-cache";
+import { argumentValues, completeArguments } from "./builtin-completions";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
 import { configureAgentMonitor } from "../monitor/configure";
 import { agentMonitorFor, startAgentMonitor, stopAgentMonitor } from "../monitor/controller";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
+import { activeToolValues } from "./session-argument-values";
 import type { SlashCommandSpec } from "./types";
+
+const liveModelValues = argumentValues(...LIVE_MODEL_OPTIONS.map(option => option.value));
 
 /** Advisors with review work they can still run (not parked, yielded, or quota-paused). */
 function advisorUnsettledCount(session: AgentSessionHandle): number {
@@ -73,6 +78,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["force:"],
 		inlineHint: "<tool-name> [prompt]",
 		allowArgs: true,
+		getTuiArgumentCompletions: (prefix, runtime) => completeArguments(prefix, runtime, activeToolValues, null),
 		getTuiAutocompleteDescription: runtime => {
 			const count = runtime.ctx.session.getActiveToolNames().length;
 			return count === 0 ? "Force: no active tools" : `Force: ${count} active tools`;
@@ -123,7 +129,14 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		inlineHint: "[model [slug]]",
 		subcommands: [
-			{ name: "model", description: "Show or set the model requested for the next live call", usage: "[slug]" },
+			{
+				name: "model",
+				description: "Show or set the model requested for the next live call",
+				usage: "[slug]",
+				arguments: [
+					prefix => liveModelValues(prefix)?.map(item => ({ ...item, preserveInputOnSubmit: true })) ?? null,
+				],
+			},
 		],
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);

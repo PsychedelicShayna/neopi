@@ -4,6 +4,7 @@ import {
 	type AutocompleteProvider,
 	CombinedAutocompleteProvider,
 	findLeadingSlashCommandStart,
+	findSlashArguments,
 	getKeybindings,
 	type ModelMentionCompletion,
 	type SlashCommand,
@@ -211,15 +212,8 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		if (leadingSlashStart === null || lines.slice(0, cursorLine).some(line => (line || "").trim() !== "")) {
 			return false;
 		}
-		const commandText = textBeforeCursor.slice(leadingSlashStart);
-		const spaceIndex = commandText.indexOf(" ");
-		if (spaceIndex === -1) return false;
-		const commandName = commandText.slice(1, spaceIndex);
-		const command = this.#commands.find(
-			cmd =>
-				cmd.name === commandName || cmd.aliases?.includes(commandName) || cmd.hiddenAliases?.includes(commandName),
-		);
-		return command !== undefined && (!("allowArgs" in command) || command.allowArgs !== false);
+		const args = findSlashArguments(this.#commands, textBeforeCursor.slice(leadingSlashStart));
+		return args !== null && (!("allowArgs" in args.command) || args.command.allowArgs !== false);
 	}
 
 	#outranksModelMention(lines: string[], cursorLine: number, textBeforeCursor: string): boolean {
@@ -286,6 +280,11 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		return this.#baseProvider.trySyncSlashCompletion?.(textBeforeCursor) ?? null;
 	}
+
+	hasSlashArgumentCompletions(textBeforeCursor: string): boolean {
+		return this.#baseProvider.hasSlashArgumentCompletions(textBeforeCursor);
+	}
+
 	/**
 	 * `^` mention rows for the token at the cursor. While a discovery retry runs, the current
 	 * rows go out as a partial and the result is recomputed once it settles; aborts when the
