@@ -3655,7 +3655,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** The `tui.editor.deleteCharForward` operation, callable by hosts that resolve the chord
-	 *  themselves rather than redispatching the raw key (see CustomEditor's exit-chord overlap).
+	 *  themselves rather than redispatching the raw key (see CustomEditor's Agent Menu chord).
 	 *  Mirrors the transient state the key dispatch tears down before this action so the two
 	 *  cannot diverge: a pending character jump is cancelled by any other key, and an open
 	 *  spelling-assist popup is dismissed by anything that is not one of its accept keys (its

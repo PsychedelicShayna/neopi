@@ -77,7 +77,9 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
 		expect(markdown).toContain("| `Ctrl+C` | Cancel active work without clearing the draft or quitting |");
 		expect(markdown).toContain("| `Esc` | Leave the current view / dismiss autocomplete ");
-		expect(markdown).toContain("| `Ctrl+D` | Open the Agent Menu / force exit during teardown ");
+		expect(markdown).toContain(
+			"| `Ctrl+D` | Open the Agent Menu (Ctrl+D: empty composer only) / force exit during teardown ",
+		);
 		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
 		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
 		for (const line of lines) {

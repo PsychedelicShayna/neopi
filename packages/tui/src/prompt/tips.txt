@@ -5,7 +5,7 @@ Start your prompt with `!` to run it as bash — `!!` runs it without adding the
 Start your prompt with `$ ` to run Python — `$$ ` runs it without adding the output to context
 You can /btw to ask a side question
 Use /tan to fork the current conversation into a background agent
-{key:ctrl+c} cancels whatever is running and never quits; {key:ctrl+d} opens the agent menu (shut down, restart, force) — see /hotkeys
+{key:ctrl+c} cancels whatever is running and never quits; {key:ctrl+d} opens the agent menu from an empty composer or deletes forward in a draft — see /hotkeys
 Find out which model you emotionally abuse the most with `npi stats`
 Try task isolation to create CoW worktrees
 Need a cheap nested model call? Use `completion(x...)`. Have a big batch of tasks? Ask clanker to use it!

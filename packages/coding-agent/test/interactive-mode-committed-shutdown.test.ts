@@ -46,7 +46,7 @@ it.skipIf(process.platform === "win32")(
 		});
 		try {
 			await Promise.race([ready.promise, prematureExit]);
-			terminal.write("keep me\x04");
+			terminal.write("\x04");
 			await Promise.race([menu.promise, prematureExit]);
 			terminal.write("\r");
 			await Promise.race([cleaningUp.promise, prematureExit]);
