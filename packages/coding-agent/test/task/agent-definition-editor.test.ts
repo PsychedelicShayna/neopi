@@ -528,13 +528,13 @@ describe("agent definition editor", () => {
 		ui.editor.dispose();
 	});
 
-	test("Esc cancels generation without applying its late result", async () => {
+	test("Ctrl+C cancels generation without applying its late result", async () => {
 		const pending = Promise.withResolvers<{ fields: Partial<AgentDefinitionDraft> }>();
 		const ui = setup(undefined, { generate: () => pending.promise });
 		ui.select("name");
 		ui.editor.handleInput("r");
 		expect(ui.editor.busy).toBe(true);
-		ui.back();
+		ui.editor.handleInput("\x03");
 		expect(ui.editor.busy).toBe(false);
 		pending.resolve({ fields: { name: "late-write" } });
 		await Bun.sleep(0);

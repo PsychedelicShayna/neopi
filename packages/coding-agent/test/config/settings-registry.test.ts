@@ -363,13 +363,12 @@ describe("settings registry", () => {
 			const cwd = tempDir.join("project");
 			fs.mkdirSync(agentDir, { recursive: true });
 			fs.mkdirSync(cwd, { recursive: true });
-			await Bun.write(
-				path.join(agentDir, "config.yml"),
-				YAML.stringify({ temperature: "hot", statusLine: { leftSegments: ["modle"] } }),
-			);
+			const configPath = path.join(agentDir, "config.yml");
+			await Bun.write(configPath, YAML.stringify({ temperature: "hot", statusLine: { leftSegments: ["modle"] } }));
 			const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 			const warnings = (prefix: string) => warn.mock.calls.filter(([message]) => String(message).startsWith(prefix));
-			const invalid = () => warnings("Settings: ignoring invalid value");
+			const invalidWarning = `Settings: ${configPath}: temperature: expected a number; using the default`;
+			const invalid = () => warn.mock.calls.filter(([message]) => message === invalidWarning);
 			const unknownItems = () => warnings("Settings: unknown status line segment");
 
 			const settings = await Settings.loadReadOnly({ cwd, agentDir });
@@ -388,11 +387,16 @@ describe("settings registry", () => {
 			expect(invalid()).toHaveLength(1);
 			expect(unknownItems()).toHaveLength(1);
 
-			// Fixing the value in the same instance re-arms it.
+			// Changing the effective value does not re-emit a startup warning.
 			cfgTemperature.override(settings, 0.5);
 			cfgTemperature.get(settings);
 			cfgTemperature.clearOverride(settings);
 			cfgTemperature.get(settings);
+			expect(invalid()).toHaveLength(1);
+
+			// Loading another instance reports its own startup warning.
+			const other = await Settings.loadReadOnly({ cwd, agentDir });
+			expect(cfgTemperature.get(other)).toBe(cfgTemperature.default);
 			expect(invalid()).toHaveLength(2);
 		} finally {
 			vi.restoreAllMocks();

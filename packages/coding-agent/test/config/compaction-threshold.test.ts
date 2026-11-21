@@ -71,14 +71,24 @@ describe("task.agentCompactionThresholdOverrides", () => {
 		}
 	});
 
-	it("rejects malformed values while loading settings", async () => {
+	it("warns and uses the default for malformed values while loading settings", async () => {
 		await withConfigDirs(async ({ agentDir, cwd }) => {
 			const configPath = path.join(agentDir, "config.yml");
-			for (const value of [[], { scout: { thresholdPercent: 80 } }, { scout: "80" }]) {
+			const malformed = [
+				[[], "task.agentCompactionThresholdOverrides: expected a map"],
+				[
+					{ scout: { thresholdPercent: 80 } },
+					"task.agentCompactionThresholdOverrides.scout: expected a positive integer",
+				],
+				[{ scout: "80" }, "task.agentCompactionThresholdOverrides.scout: expected a positive integer"],
+			] as const;
+			for (const [value, reason] of malformed) {
 				await Bun.write(configPath, overridesYaml(value));
-				await expect(Settings.loadReadOnly({ agentDir, cwd })).rejects.toThrow(
-					"task.agentCompactionThresholdOverrides",
+				const settings = await Settings.loadReadOnly({ agentDir, cwd });
+				expect(cfgTaskAgentCompactionThresholdOverrides.get(settings)).toEqual(
+					cfgTaskAgentCompactionThresholdOverrides.default,
 				);
+				expect(settings.startupWarnings).toContainEqual(expect.stringContaining(reason));
 			}
 		});
 	});
