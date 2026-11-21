@@ -193,7 +193,7 @@ describe("dialogs under a native surface", () => {
 		]);
 	});
 
-	it("ask: Skip cancels like Esc; the recommended option loses its suffix for the badge", () => {
+	it("ask: Skip cancels like Ctrl+C; the recommended option loses its suffix for the badge", () => {
 		const onCancel = vi.fn();
 		const dialog = ask(vi.fn(), onCancel);
 		const recommended = find(dialog.describe(CX), node => node.k === "item" && node.key === "option:1");
@@ -260,7 +260,7 @@ describe("dialogs under a native surface", () => {
 		// A Submit delivered after Hide is stale: it must not hand input to the question.
 		dialog.handleNativeEvent({ type: "action", key: "x", act: "submit", mods: [] });
 		expect(line()).toContain("Alt+H show");
-		expect(line()).toContain("Alt+X cancel");
+		expect(line()).toContain("Ctrl+C cancel");
 		dialog.handleInput(ENTER);
 		expect(routed).toEqual([ENTER]);
 		expect(dialog.render(200)).toHaveLength(1);
@@ -324,7 +324,7 @@ describe("dialogs under a native surface", () => {
 			expect(defaulted.onApprove).toHaveBeenCalledTimes(1);
 			// Denying and clicking Approve are deliberate, so neither waits to arm.
 			const denied = { onApprove: vi.fn(), onDeny: vi.fn() };
-			new ApprovalDialogComponent(prompt, denied).handleInput("\x1b");
+			new ApprovalDialogComponent(prompt, denied).handleInput("\x03");
 			expect(denied.onDeny).toHaveBeenCalledTimes(1);
 			const pointed = { onApprove: vi.fn(), onDeny: vi.fn() };
 			const clicked = new ApprovalDialogComponent(prompt, pointed);
@@ -464,14 +464,11 @@ describe("dialogs under a native surface", () => {
 		dialog.handleInput("o");
 		dialog.handleInput(UP);
 		dialog.handleInput(ENTER);
-		// Ctrl+C is both a cancel key and the composer's clear key: with a draft it clears, never denies.
-		dialog.handleInput("\x03");
-		expect(routed).toEqual(["n", "o", UP, ENTER, "\x03"]);
-		expect(callbacks.onDeny).not.toHaveBeenCalled();
-		// Esc stays the dialog's: it denies without touching the draft.
 		dialog.handleInput("\x1b");
+		expect(callbacks.onDeny).not.toHaveBeenCalled();
+		dialog.handleInput("\x03");
 		expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
-		expect(routed).toHaveLength(5);
+		expect(routed).toEqual(["n", "o", UP, ENTER, "\x1b"]);
 		expect(callbacks.onApprove).not.toHaveBeenCalled();
 	});
 
@@ -943,7 +940,7 @@ describe("dialogs under a native surface", () => {
 		expect(onPick).toHaveBeenCalledWith("compact");
 	});
 
-	it("login: Cancel runs Esc's path and Continue submits the pasted code", async () => {
+	it("login: Cancel runs Ctrl+C's path and Continue submits the pasted code", async () => {
 		const tui = { requestRender() {}, setFocus() {} } as unknown as TUI;
 		const onComplete = vi.fn();
 		const dialog = new LoginDialogComponent(tui, "openai-codex", onComplete, () => {});
@@ -973,6 +970,18 @@ describe("dialogs under a native surface", () => {
 		dialog.handleNativeEvent({ type: "action", key: "x", act: "cancel", mods: [] });
 		await expect(cancelled).rejects.toThrow("Login cancelled");
 		expect(onComplete).toHaveBeenCalledWith(false, "Login cancelled");
+	});
+
+	it("login: Escape leaves authorization pending, while Ctrl+C cancels it", async () => {
+		const tui = { requestRender() {}, setFocus() {} } as unknown as TUI;
+		const completed = vi.fn();
+		const dialog = new LoginDialogComponent(tui, "openai-codex", completed, () => {});
+		const pending = dialog.showManualInput("Paste the authorization code:");
+		dialog.handleInput("\x1b");
+		expect(completed).not.toHaveBeenCalled();
+		dialog.handleInput("\x03");
+		await expect(pending).rejects.toThrow("Login cancelled");
+		expect(completed).toHaveBeenCalledWith(false, "Login cancelled");
 	});
 });
 

@@ -2,7 +2,7 @@
  * Signal-safe session teardown: persists the in-progress editor draft, then
  * disposes the session (which emits `session_shutdown`, cancels the session's
  * background async jobs, and closes the session manager). Shared by the TUI
- * Ctrl+C/Ctrl+D/`/exit` keypress path in `InteractiveMode.shutdown()` and by
+ * Agent Menu and `/exit` path in `InteractiveMode.shutdown()` and by
  * the postmortem `SIGINT`/`SIGTERM`/`SIGHUP`/`uncaughtException` handlers so a
  * real kernel signal executes the exact same teardown as a keypress exit.
  *

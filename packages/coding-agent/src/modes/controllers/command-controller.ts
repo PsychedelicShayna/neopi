@@ -266,7 +266,7 @@ export class CommandController {
 		let fullScreen = false;
 		const report = new ReportPanel({
 			...options,
-			closeKey: appKey(this.ctx.keybindings, "app.interrupt"),
+			closeKey: appKey(this.ctx.keybindings, "app.navigation.dismiss"),
 			onClose: () => this.#closeReportSheet(),
 			maxRows: () => (fullScreen ? terminal.rows : this.ctx.commandReportRows()),
 		});
@@ -2014,7 +2014,13 @@ export class CommandController {
 		return this.ctx.ui.addInputListener(
 			data => {
 				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
-				if (this.ctx.keybindings.matches(data, "app.interrupt") || parseSgrMouse(data)) return undefined;
+				if (
+					this.ctx.keybindings.matches(data, "app.interrupt") ||
+					this.ctx.keybindings.matches(data, "app.navigation.dismiss") ||
+					this.ctx.keybindings.matches(data, "app.agent.menu") ||
+					parseSgrMouse(data)
+				)
+					return undefined;
 				const bytes = component.encodePtyInput(data);
 				if (bytes) write(bytes);
 				return { consume: true };

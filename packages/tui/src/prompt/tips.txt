@@ -5,7 +5,7 @@ Start your prompt with `!` to run it as bash — `!!` runs it without adding the
 Start your prompt with `$ ` to run Python — `$$ ` runs it without adding the output to context
 You can /btw to ask a side question
 Use /tan to fork the current conversation into a background agent
-With default keybindings, {key:ctrl+d} deletes the character under the cursor instead of quitting your draft — see /hotkeys for your exit key
+{key:ctrl+c} cancels whatever is running and never quits; {key:ctrl+d} opens the agent menu (shut down, restart, force) — see /hotkeys
 Find out which model you emotionally abuse the most with `npi stats`
 Try task isolation to create CoW worktrees
 Need a cheap nested model call? Use `completion(x...)`. Have a big batch of tasks? Ask clanker to use it!
@@ -31,4 +31,4 @@ Turn on `/advisor` to attach a second model that reviews every turn and quietly 
 Try starting your prompt with a ->, and writing a list (1. Do X, 2. Do Y)
 Press {key:shift+tab} to cycle through reasoning effort levels
 omp can reconfigure and extend itself — ask any questions you have!
-Lint/type errors piling up? `npi cleanse` (or /cleanse right here) hunts project diagnostics and fixes them with parallel subagents — {key:escape} cancels
+Lint/type errors piling up? `npi cleanse` (or /cleanse right here) hunts project diagnostics and fixes them with parallel subagents — {action:app.interrupt} cancels

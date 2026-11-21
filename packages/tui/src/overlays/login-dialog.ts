@@ -7,7 +7,8 @@ import { formTheme } from "../chrome/form-theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { TextFormField } from "../components/form";
 import { formatKeyHint, keyHintPlatform } from "../app-keybindings";
-import { editorKey } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey, interruptKey } from "../chrome/keybinding-hints";
+import { matchesAppDismiss, matchesAppInterrupt } from "../keybinding-matchers";
 import { extractPrintableText, matchesKey } from "../keys";
 import { col, keyed, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -250,9 +251,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("dim", prompt), 0, 0));
 			this.#contentContainer.addChild(this.#input);
-			this.#contentContainer.addChild(
-				new Text(theme.fg("dim", `(${editorKey("tui.select.cancel")} to cancel)`), 0, 0),
-			);
+			this.#contentContainer.addChild(new Text(theme.fg("dim", `(${interruptKey()} to cancel)`), 0, 0));
 		}
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -300,14 +299,7 @@ export class LoginDialogComponent extends OverlayPanel {
 		}
 		this.#contentContainer.addChild(this.#input);
 		this.#contentContainer.addChild(
-			new Text(
-				theme.fg(
-					"dim",
-					`(${editorKey("tui.select.cancel")} to cancel, ${editorKey("tui.input.submit")} to submit)`,
-				),
-				0,
-				0,
-			),
+			new Text(theme.fg("dim", `(${interruptKey()} to cancel, ${editorKey("tui.input.submit")} to submit)`), 0, 0),
 		);
 		this.#nativeSteps.push({ kind: "input", message: plainText(prompt.message), field: this.#input });
 		this.#nativeRoot = undefined;
@@ -335,7 +327,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	showWaiting(message: string): void {
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
-		this.#contentContainer.addChild(new Text(theme.fg("dim", `(${editorKey("tui.select.cancel")} to cancel)`), 0, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("dim", `(${interruptKey()} to cancel)`), 0, 0));
 		this.#nativeSteps.push({ kind: "progress", message: plainText(message) });
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -439,7 +431,7 @@ export class LoginDialogComponent extends OverlayPanel {
 		if (auth && live === -1 && !field) status.push(this.#describeLive(BROWSER_WAIT, "browser"));
 		if (status.length > 0) body.push(node("col", { role: "omp.login.status", gap: "xs" }, status, "status"));
 
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		const cancelKey = boundKeys("app.interrupt", ["ctrl+c"])[0];
 		const cancel = actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {});
 		const open = auth ? this.#describeOpen(auth.url, !field) : null;
 		let buttons: (NativeNode | null)[];
@@ -550,7 +542,7 @@ export class LoginDialogComponent extends OverlayPanel {
 		return undefined;
 	}
 
-	/** Cancel and Continue run what Esc and Enter run. */
+	/** Cancel and Continue run the same actions as the keyboard. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type !== "action") return;
 		if (event.act === "cancel") this.#cancel();
@@ -572,10 +564,13 @@ export class LoginDialogComponent extends OverlayPanel {
 			return;
 		}
 
-		if (matchesKey(data, "escape") || getKeybindings().matches(data, "tui.select.cancel")) {
+		if (matchesAppInterrupt(data)) {
 			this.#cancel();
 			return;
 		}
+		// Do not let navigation keys reach the field's generic cancel action.
+		if (matchesAppDismiss(data) || matchesKey(data, "escape") || getKeybindings().matches(data, "tui.select.cancel"))
+			return;
 
 		if (matchesKey(data, "enter") || data === "\n") this.#input.submit();
 		else this.#input.handleInput(data);

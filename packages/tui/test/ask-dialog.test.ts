@@ -18,7 +18,6 @@ const UP = "\x1b[A";
 const PAGE_DOWN = "\x1b[6~";
 const PAGE_UP = "\x1b[5~";
 const ENTER = "\n";
-const CANCEL = "\x07";
 const SPACE = " ";
 const TAB = "\t";
 const SHIFT_TAB = "\x1b[Z";
@@ -484,8 +483,9 @@ describe("AskDialogComponent", () => {
 		}
 	});
 
-	it("Esc/cancel fires onCancel", () => {
+	it("Escape releases focus without cancelling; Ctrl+C fires onCancel", () => {
 		const onCancel = vi.fn();
+		const releaseKeys = vi.fn();
 		const questions: ExtensionAskDialogQuestion[] = [
 			{
 				id: "q1",
@@ -494,13 +494,18 @@ describe("AskDialogComponent", () => {
 			},
 		];
 
-		const component = new AskDialogComponent(questions, {
-			onSubmit: vi.fn(),
-			onCancel,
-			onPrompt: vi.fn(),
-		});
+		const component = new AskDialogComponent(
+			questions,
+			{ onSubmit: vi.fn(), onCancel, onPrompt: vi.fn() },
+			{
+				releaseKeys,
+			},
+		);
 
-		component.handleInput(CANCEL);
+		component.handleInput("\x1b");
+		expect(releaseKeys).toHaveBeenCalledTimes(1);
+		expect(onCancel).not.toHaveBeenCalled();
+		component.handleInput("\x03");
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 

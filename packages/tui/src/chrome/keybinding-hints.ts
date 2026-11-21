@@ -35,9 +35,14 @@ export function boundKeys(action: Keybinding, fallback: readonly KeyId[]): reado
 	return keys.length > 0 ? keys : fallback;
 }
 
-/** Primary interrupt key (`app.interrupt`, raw Escape when unbound, as `matchesAppInterrupt`). */
+/** Primary binding for cancelling active work. */
 export function interruptKey(): string {
-	return formatKeyHint(boundKeys("app.interrupt", ["escape"])[0] ?? "escape");
+	return formatKeyHint(boundKeys("app.interrupt", ["ctrl+c"])[0] ?? "ctrl+c");
+}
+
+/** Primary binding for leaving a menu or other transient view. */
+export function dismissKey(): string {
+	return formatKeyHint(boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape");
 }
 
 /** Primary key bound to an app action (see {@link editorKey}); all keys: `getDisplayString`. */

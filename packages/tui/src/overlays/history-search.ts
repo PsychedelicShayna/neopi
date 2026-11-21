@@ -493,7 +493,7 @@ export class HistorySearchComponent extends OverlayPanel {
 				pickerAction(
 					"close",
 					this.#search.focused ? "Back to list" : "Close",
-					boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+					boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
 					{ end: true },
 				),
 			],

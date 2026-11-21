@@ -13,9 +13,9 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import * as atomicFile from "@oh-my-pi/pi-coding-agent/utils/atomic-file";
-import { Container, Input, type KeyId, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, type KeyId, type TUI } from "@oh-my-pi/pi-tui";
 import type { DictationTarget } from "@oh-my-pi/pi-coding-agent/stt/push-to-talk";
-import { SPACE_HOLD_MECHANICAL_RUN, type SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
+import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
 
 interface TurnArgs {
 	promptText: string;
@@ -427,7 +427,7 @@ describe("BTW follow-up lifecycle", () => {
 		}
 	});
 
-	it("cancels the selected running history entry on Escape and closes only on the next Escape", async () => {
+	it("cancels the selected running history entry on Ctrl+C and leaves Escape for closing", async () => {
 		const h = await harness();
 		const overlay = vi.spyOn(h.ctx.ui, "showOverlay");
 		await h.controller.start("Cancelable question");
@@ -442,7 +442,7 @@ describe("BTW follow-up lifecycle", () => {
 
 		panel.handleInput("x");
 		expect(running.args.signal?.aborted).toBe(false);
-		panel.handleInput("\x1b");
+		panel.handleInput("\x03");
 		expect(running.args.signal?.aborted).toBe(true);
 		expect(hide).not.toHaveBeenCalled();
 		expect(Bun.stripANSI(panel.render(100).join("\n"))).toContain("Retained partial answer");
@@ -478,7 +478,7 @@ describe("BTW follow-up lifecycle", () => {
 		expect(running.args.signal?.aborted).toBe(false);
 		expect(h.controller.hasActiveRequest()).toBe(true);
 		expect(Bun.stripANSI(h.ctx.btwContainer.render(100).join("\n"))).toContain("Visible partial follow-up");
-		expect(h.controller.handleEscape()).toBe(true);
+		expect(h.controller.handleCancel()).toBe(true);
 		expect(running.args.signal?.aborted).toBe(true);
 		expect(h.controller.hasActiveRequest()).toBe(true);
 		running.resolve(answer("Ignored late answer"));

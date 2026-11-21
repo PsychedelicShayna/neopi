@@ -77,7 +77,7 @@ describe("LoginDialogComponent manual code input", () => {
 		const previous = getKeybindings();
 		setKeybindings(
 			KeybindingsManager.inMemory({
-				"tui.select.cancel": "j",
+				"app.interrupt": "j",
 				"tui.input.submit": "s",
 			}),
 		);
@@ -97,9 +97,9 @@ describe("LoginDialogComponent manual code input", () => {
 		}
 	});
 
-	it("retains explicit Escape when the configured cancel binding is printable", async () => {
+	it("ignores Escape and keeps Ctrl+C with a printable alternative cancel binding", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+		setKeybindings(KeybindingsManager.inMemory({ "app.interrupt": ["j", "ctrl+c"] }));
 		try {
 			const dialog = makeDialog();
 			// Capture the settlement: `expect(pending).rejects` spins Bun's loop while the promise is pending.
@@ -107,6 +107,8 @@ describe("LoginDialogComponent manual code input", () => {
 			dialog.handleInput("j");
 			expect(dialog.signal.aborted).toBe(false);
 			dialog.handleInput("\x1b");
+			expect(dialog.signal.aborted).toBe(false);
+			dialog.handleInput("\x03");
 			expect(await outcome).toBeInstanceOf(Error);
 			expect(((await outcome) as Error).message).toContain("Login cancelled");
 			expect(dialog.signal.aborted).toBe(true);
@@ -134,7 +136,7 @@ describe("LoginDialogComponent manual code input", () => {
 		const previous = getKeybindings();
 		setKeybindings(
 			KeybindingsManager.inMemory({
-				"tui.select.cancel": "j",
+				"app.interrupt": "j",
 				"tui.input.submit": "s",
 				"tui.editor.undo": "ctrl+z",
 			}),
@@ -164,7 +166,7 @@ describe("LoginDialogComponent manual code input", () => {
 		const previous = getKeybindings();
 		setKeybindings(
 			KeybindingsManager.inMemory({
-				"tui.select.cancel": "alt+q",
+				"app.interrupt": "alt+q",
 				"tui.input.submit": "alt+s",
 			}),
 		);
@@ -187,7 +189,7 @@ describe("LoginDialogComponent manual code input", () => {
 
 	it("lets the provider callback abort a pending prompt after literal remapped input", async () => {
 		const previous = getKeybindings();
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "j" }));
+		setKeybindings(KeybindingsManager.inMemory({ "app.interrupt": "j" }));
 		try {
 			const dialog = makeDialog();
 			const settled = new AbortController();

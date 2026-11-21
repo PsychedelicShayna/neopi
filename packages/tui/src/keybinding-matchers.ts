@@ -5,17 +5,20 @@ import { matchesKey } from "./keys";
 /**
  * Match the coding-agent interrupt key.
  *
- * Interactive mode installs a keybinding manager that exposes `app.interrupt`
- * globally, but some isolated component tests still run with only TUI
- * keybindings registered. In that case, fall back to raw Escape matching.
+ * Isolated components may run without the app binding table installed.
  */
 export function matchesAppInterrupt(data: string): boolean {
 	const keybindings = getKeybindings();
-	const interruptKeys = keybindings.getKeys("app.interrupt");
-	if (interruptKeys.length > 0) {
-		return keybindings.matches(data, "app.interrupt");
-	}
-	return matchesKey(data, "escape") || matchesKey(data, "esc");
+	return keybindings.getDefinition("app.interrupt") !== undefined
+		? keybindings.matches(data, "app.interrupt")
+		: matchesKey(data, "ctrl+c");
+}
+
+export function matchesAppDismiss(data: string): boolean {
+	const keybindings = getKeybindings();
+	return keybindings.getDefinition("app.navigation.dismiss") !== undefined
+		? keybindings.matches(data, "app.navigation.dismiss")
+		: matchesKey(data, "escape");
 }
 
 /** Match `app.tools.expand`, falling back to Alt+E when the action is unbound. */

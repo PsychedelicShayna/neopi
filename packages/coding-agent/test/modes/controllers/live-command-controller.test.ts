@@ -547,7 +547,7 @@ describe("LiveCommandController", () => {
 		await h.controller.handleCommand();
 		const retire = vi.spyOn(LiveSessionController.prototype, "retireComposerSpeech");
 		h.editor.setText("draft");
-		h.editor.setChainLock({ onEscape: vi.fn(), onClear: vi.fn() });
+		h.editor.setChainLock({ onSkip: vi.fn(), onCancel: vi.fn() });
 		speak(h, 1, "fix the parser", true);
 		expect(h.editor.getText()).toBe("draft");
 		expect(retire).toHaveBeenCalled();

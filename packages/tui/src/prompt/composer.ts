@@ -1,5 +1,4 @@
 import { getComposerStyle } from "../components/composer/registry";
-import type { EditorTopBorder } from "../components/composer/types";
 import { getInlineImagePresentation, setInlineImagePresentation } from "../components/image";
 import type { HeightConstrainedComponent, LayoutRect, LayoutRenderer } from "../components/layout/geometry";
 import { SplitPane, type SplitPaneSize } from "../components/layout/split-pane";
@@ -28,13 +27,13 @@ import { truncateToWidth, wrapLiteralLine } from "../utils";
 import type { DescribeContext, NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
 import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
+import { AgentMenuComponent } from "../overlays/agent-menu";
 import { CustomEditor } from "./custom-editor";
 import type { WordCompletionMethod } from "./word-completion";
 import { type AnimationFrame, TranscriptContainer } from "../chrome/transcript-container";
 import { type StartupBranding, type VersionUpdate, WelcomeComponent } from "./welcome";
 import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 
-const DOUBLE_INTERRUPT_MS = 500;
 // How long idle chrome must hold its height after a turn before it is treated as permanent.
 const IDLE_CHROME_SETTLE_MS = 250;
 
@@ -101,7 +100,6 @@ export interface ComposerOptions {
 	readonly welcome?: ComposerWelcomeUpdate;
 	readonly status?: ComposerStatusCache;
 	readonly exit?: (code: number) => void;
-	readonly now?: () => number;
 }
 
 /** A native dock root described only on terminals whose `hello` advertises `feature`. */
@@ -290,7 +288,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	readonly #bootstrapInputGap = new Spacer(1);
 	readonly #statusHost = new StatusHost();
 	readonly #exit: (code: number) => void;
-	readonly #now: () => number;
 	#preferences: ComposerPreferences;
 	#welcome: WelcomeComponent | undefined;
 	#version = "";
@@ -399,7 +396,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#idleChromeTimer: RenderTimer | undefined;
 	/** Rows the chrome below each below-transcript root took in the last frame (see {@link rowsBelow}). */
 	#rowsBelow = new Map<Component, number>();
-	#lastInterruptAt = 0;
 	/** Last described surface; its arrays are reused while their children are unchanged. */
 	#nativeSurface: NativeSurface = { main: [], dock: [] };
 	#started = false;
@@ -473,7 +469,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// an open extension-load guard window exits cleanly instead of throwing
 		// ExtensionExitError through the guarded process.exit (#11789).
 		this.#exit = options.exit ?? (code => postmortem.exitProcess(code));
-		this.#now = options.now ?? Date.now;
 		this.#preferences = { ...COMPOSER_DEFAULTS, ...options.preferences };
 		this.#applyWelcomeUpdate(options.welcome ?? {});
 
@@ -510,16 +505,15 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const state = startupComposerState(statusLine);
 			this.editor.composerState = () => state;
 		}
-		// Emergency controls stay active until InteractiveMode installs configured bindings.
-		// They deliberately mirror the interactive editor's contract so a stalled startup
-		// never behaves differently from a healthy one: Ctrl+C clears the draft and a second
-		// press exits 130 — the unconditional abort, draft or not; Ctrl+D exits 0 on an
-		// empty draft and otherwise forward-deletes (see CustomEditor's app.exit handling),
-		// so typing while the session loads cannot be lost to a mistyped delete.
-		this.editor.setActionKeys("app.clear", ["ctrl+c"]);
-		this.editor.setActionKeys("app.exit", ["ctrl+d"]);
-		this.editor.onClear = () => this.#handleInterrupt();
-		this.editor.onExit = () => this.#requestExit(0);
+		// Until handoff there is no running agent to interrupt or restart.
+		this.editor.onAgentMenu = () => {
+			const menu = new AgentMenuComponent({
+				shutdown: () => this.#requestExit(0),
+				forceShutdown: () => this.#requestExit(130),
+				close: () => handle.hide(),
+			});
+			const handle = this.ui.showOverlay(menu, { anchor: "center", width: 42 });
+		};
 		this.editor.setShimmerRepaintHandler(() => this.ui.requestComponentRender(this.editor));
 
 		if (!this.#preferences.quiet) this.#ensureWelcome();
@@ -1600,16 +1594,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			this.#header.addChild(new Spacer(1));
 		}
 		for (const component of this.#headerAfter) this.#header.addChild(component);
-	}
-
-	#handleInterrupt(): void {
-		const now = this.#now();
-		if (now - this.#lastInterruptAt < DOUBLE_INTERRUPT_MS) {
-			this.#requestExit(130);
-			return;
-		}
-		this.editor.setText("");
-		this.#lastInterruptAt = now;
 	}
 
 	#requestExit(code: number): void {

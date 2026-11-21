@@ -35,29 +35,32 @@ function createSession(id: string, title: string): SessionInfo {
 }
 
 describe("component escape bindings", () => {
-	it("uses app.interrupt for session selector cancel without changing Ctrl+C exit", () => {
+	it("remaps picker dismissal and opens the agent menu without exiting on Ctrl+C", () => {
 		const keybindings = KeybindingsManager.inMemory({
-			"app.interrupt": "alt+x",
+			"app.navigation.dismiss": "alt+x",
 		});
 		setKeybindings(keybindings);
 
 		const onCancel = vi.fn();
-		const onExit = vi.fn();
+		const onAgentMenu = vi.fn();
 		const selector = new SessionSelectorComponent(
 			[createSession("session-a", "Alpha"), createSession("session-b", "Beta")],
 			() => {},
 			onCancel,
-			onExit,
+			onAgentMenu,
+			{ standalone: true },
 		);
 
 		selector.handleInput("\x1b");
 		expect(onCancel).not.toHaveBeenCalled();
 
+		selector.handleInput("\x03");
+		expect(onAgentMenu).not.toHaveBeenCalled();
+		selector.handleInput("\x04");
+		expect(onAgentMenu).toHaveBeenCalledTimes(1);
+
 		selector.handleInput("\x1bx");
 		expect(onCancel).toHaveBeenCalledTimes(1);
-
-		selector.handleInput("\x03");
-		expect(onExit).toHaveBeenCalledTimes(1);
 	});
 
 	it("uses tui.select.cancel for model selector cancellation", () => {

@@ -3,7 +3,7 @@ import { replaceTabs } from "../render/render-utils";
 import { getMarkdownTheme, theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { StreamingPanelContent } from "../chrome/streaming-panel";
-import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, interruptKey } from "../chrome/keybinding-hints";
 import type { NativeNode } from "../native/node";
 import { col, md, node, span, text } from "../native/describe";
 import { hintsRow, type NativeHint, statusHintsRow } from "../native/overlay";
@@ -156,13 +156,13 @@ export class OmfgPanelComponent extends OverlayPanel {
 	}
 
 	#describeFooter(): NativeNode {
-		const esc: NativeHint = { keys: boundKeys("app.interrupt", ["escape"]).slice(0, 1), label: "dismiss" };
+		const esc: NativeHint = { keys: boundKeys("app.navigation.dismiss", ["escape"]).slice(0, 1), label: "dismiss" };
 		switch (this.#state) {
 			case "generating":
 			case "validating":
 			case "confirming":
 			case "saving":
-				return hintsRow([{ ...esc, label: "cancel /omfg" }]);
+				return hintsRow([{ keys: boundKeys("app.interrupt", ["ctrl+c"]).slice(0, 1), label: "cancel /omfg" }]);
 			case "saved":
 				return statusHintsRow(
 					[
@@ -188,14 +188,13 @@ export class OmfgPanelComponent extends OverlayPanel {
 	}
 
 	#footerLine(): string {
-		// The composer's `app.interrupt` handler routes Esc to this panel.
-		const esc = interruptKey();
+		const esc = dismissKey();
 		switch (this.#state) {
 			case "generating":
 			case "validating":
 			case "confirming":
 			case "saving":
-				return theme.fg("muted", `${esc} cancel /omfg`);
+				return theme.fg("muted", `${interruptKey()} cancel /omfg`);
 			case "saved":
 				return theme.fg(
 					"success",

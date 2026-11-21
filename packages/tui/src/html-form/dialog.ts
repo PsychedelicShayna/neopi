@@ -54,6 +54,8 @@ import { Input } from "../components/input";
 import { ScrollView } from "../components/scroll-view";
 import { renderTableRowLines, type TableColumn } from "../components/table";
 import {
+	matchesAppDismiss,
+	matchesAppInterrupt,
 	matchesSelectCancel,
 	matchesSelectDown,
 	matchesSelectPageDown,
@@ -661,7 +663,7 @@ export class HtmlFormDialog implements Component, Focusable {
 	handleInput(data: string): void {
 		this.#resetCountdown();
 		this.#changed();
-		if (getKeybindings().matches(data, "app.ask.cancel")) {
+		if (matchesAppInterrupt(data) || getKeybindings().matches(data, "app.ask.cancel")) {
 			this.#cancel();
 			return;
 		}
@@ -678,7 +680,7 @@ export class HtmlFormDialog implements Component, Focusable {
 			return;
 		}
 		// Esc hands the keys to the composer, where it keeps the composer's meaning.
-		if (matchesSelectCancel(data)) {
+		if (matchesAppDismiss(data)) {
 			this.#options.releaseKeys?.();
 			return;
 		}
@@ -1611,7 +1613,7 @@ export class HtmlFormDialog implements Component, Focusable {
 	 */
 	#renderHidden(width: number): readonly string[] {
 		const showKey = editorKey("app.ask.hide");
-		const cancelKey = editorKey("app.ask.cancel");
+		const cancelKey = editorKey("app.interrupt");
 		const hints = [showKey && `${showKey} show`, cancelKey && `${cancelKey} cancel`].filter(Boolean);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
 		const label = theme.fg("accent", `${this.#titleText()} hidden:`);

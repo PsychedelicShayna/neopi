@@ -14,10 +14,8 @@ import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 // Regression coverage for #12238: when the session store keeps failing, the
 // close-time write fails and dispose() rejects. shutdown() used to swallow the
 // error, reset its own latch, and return without ever exiting — so the process
-// stayed alive and every further Ctrl+C repeated the identical failure. The
-// escape hatch is a second Ctrl+C that exits without writing the session log,
-// and it must be reachable with a SINGLE press after the error message (the
-// double-tap gate would otherwise demand two rapid presses).
+// stayed alive and every retry repeated the identical failure. Explicit close
+// actions in the agent menu can exit without writing the session log.
 //
 // The failure comes from the REAL persistence path, not a mocked error: a
 // file-backed SessionManager materializes a genuine session file, then its
@@ -131,7 +129,7 @@ describe("InteractiveMode shutdown when the session store keeps failing (#12238)
 		expect(message).toContain((disposeError as Error).message);
 		// Must not force-exit yet: the user gets one chance to see the error.
 		expect(quitSpy).not.toHaveBeenCalled();
-		// The latch is cleared so a second Ctrl+C can re-enter shutdown().
+		// The latch is cleared so an explicit close can re-enter shutdown().
 		expect(mode.isShuttingDown).toBe(false);
 		expect(mode.teardownFailed).toBe(true);
 		expect(await Bun.file(sessionDir).text()).toBe(BLOCKER);
@@ -141,8 +139,7 @@ describe("InteractiveMode shutdown when the session store keeps failing (#12238)
 		await mode.shutdown();
 		await mode.shutdown();
 
-		// The second Ctrl+C is the escape hatch: it quits rather than re-running
-		// the teardown that already failed once (dispose stays memoized at 1 call).
+		// The second close quits rather than re-running the doomed teardown.
 		expect(quitSpy).toHaveBeenCalledTimes(1);
 		expect(exitSpy).not.toHaveBeenCalled();
 		expect(disposeSpy).toHaveBeenCalledTimes(1);
@@ -150,15 +147,48 @@ describe("InteractiveMode shutdown when the session store keeps failing (#12238)
 		expect(await Bun.file(sessionDir).text()).toBe(BLOCKER);
 	});
 
-	it("a single Ctrl+C keypress after the failure reaches the escape hatch", async () => {
+	it("only forces Ctrl+D after a reversible close confirmation commits", async () => {
+		const confirmation = Promise.withResolvers<boolean>();
+		const disposing = Promise.withResolvers<void>();
+		const disposeEntered = Promise.withResolvers<void>();
+		vi.spyOn(session, "confirmClose").mockReturnValue(confirmation.promise);
+		disposeSpy.mockImplementationOnce(() => {
+			disposeEntered.resolve();
+			return disposing.promise;
+		});
+
+		const shutdown = mode.shutdown();
+		expect(mode.isShuttingDown).toBe(true);
+		mode.handleCtrlD();
+		expect(mode.ui.hasOverlay()).toBe(true);
+		expect(exitSpy).not.toHaveBeenCalled();
+		mode.ui.getFocused()?.handleInput?.("q");
+		expect(mode.ui.hasOverlay()).toBe(false);
+
+		confirmation.resolve(true);
+		await disposeEntered.promise;
+		expect(mode.isTeardownCommitted).toBe(true);
+		mode.handleCtrlC();
+		expect(exitSpy).not.toHaveBeenCalled();
+		mode.handleCtrlD();
+		expect(mode.ui.hasOverlay()).toBe(false);
+		expect(exitSpy).toHaveBeenCalledWith(130);
+
+		disposing.reject(new Error("release suspended dispose"));
+		await shutdown;
+	});
+
+	it("Force Shutdown reaches the escape hatch after a failed shutdown; Ctrl+C does not", async () => {
 		await mode.shutdown(); // arms the escape hatch and shows the message
 		quitSpy.mockClear();
 
-		// The user-facing path: one Ctrl+C, long after the original gesture, so the
-		// 500ms double-tap gate would normally just clear the editor. With a failed
-		// teardown armed it must route straight into shutdown()'s force-quit.
-		mode.lastSigintTime = 0; // a single, non-double-tapped press
 		mode.handleCtrlC();
+		expect(quitSpy).not.toHaveBeenCalled();
+		mode.handleCtrlD();
+		const menu = mode.ui.getFocused();
+		menu?.handleInput?.("\x1b[B");
+		menu?.handleInput?.("\x1b[B");
+		menu?.handleInput?.("\r");
 		await quitCalled.promise;
 
 		expect(quitSpy).toHaveBeenCalledTimes(1);
@@ -167,12 +197,17 @@ describe("InteractiveMode shutdown when the session store keeps failing (#12238)
 		expect(await Bun.file(sessionDir).text()).toBe(BLOCKER);
 	});
 
-	it("a failed restart arms the same single-Ctrl+C escape hatch", async () => {
+	it("a failed restart arms the same Force Shutdown escape hatch", async () => {
 		await mode.restart();
 		quitSpy.mockClear();
 
-		mode.lastSigintTime = 0;
 		mode.handleCtrlC();
+		expect(quitSpy).not.toHaveBeenCalled();
+		mode.handleCtrlD();
+		const menu = mode.ui.getFocused();
+		menu?.handleInput?.("\x1b[B");
+		menu?.handleInput?.("\x1b[B");
+		menu?.handleInput?.("\r");
 		await quitCalled.promise;
 
 		expect(quitSpy).toHaveBeenCalledTimes(1);

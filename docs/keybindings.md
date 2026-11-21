@@ -28,6 +28,11 @@ app.history.search: []
 
 | Action ID                    | Default                                                               | Meaning                                                                                                                                                                              |
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `app.interrupt` | `Ctrl+C` | Cancel active work, including a pending ask, without quitting or clearing the draft |
+| `app.navigation.dismiss` | `Esc` | Leave the current view or Vim mode; does not cancel active work |
+| `app.agent.menu` | `Ctrl+D` | Open the Agent Menu, or force exit once teardown is committed |
+| `tui.editor.deleteCharForward` | `Delete` | Delete the character forward |
+| `tui.editor.redo` | `Alt+U` | Redo an undone edit in Vim Normal mode |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
 | `app.model.selectTemporary`  | `Alt+P`                                                               | Open the session-only model picker (`/model`): Big Pickle by default, or Small picker via `models.sessionPicker` |
@@ -39,13 +44,14 @@ app.history.search: []
 | `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
 | `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
 | `app.ask.hide`               | `Alt+H`                                                               | Hide a pending `ask` question to one line and hand the keys to the composer (the Hide button in Tern); the same key shows it again from the ask or the composer, as does `Enter` on the hidden row |
-| `app.ask.cancel`             | `Alt+X`                                                               | Cancel a pending `ask` question from the ask or the composer. `Esc` cancels only while the keys are inside the ask; in the composer it keeps the composer's meaning (Vim Normal mode) and never cancels the question |
+| `app.ask.cancel` | `Alt+X` | Dedicated alternative to `Ctrl+C` to cancel a pending ask. `Esc` returns focus to the composer without cancelling. |
 | `app.ask.note` | `N`, `Alt+N` | Add or edit a note on the highlighted `ask` option; dropdowns use the first key that does not type text, since letters jump to options. |
 | `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
 | `app.thinking.cycle`         | `Shift+Tab`                                                           | Cycle thinking level                                                                                                                                                                 |
 | `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
 | `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | Queue a follow-up message                                                                                                                                                            |
 | `app.message.chain`          | `Alt+C`                                                               | Send the composer text through the active post-processing chain (see `/chain`); asks which chain when none is active                                                               |
+| `app.chain.skipStep` | `Alt+S` | While a chain runs, skip its current step: that step's input passes on to the next step unchanged. Each press skips one step and never aborts. `Ctrl+C` aborts the chain without sending. |
 | `app.repl.toggle`            | `Alt+Shift+R`                                                         | Toggle REPL mode between the agent and the last kernel (see `/repl`)                                                                                                                 |
 | `app.repl.execute`           | `Ctrl+Q`, `Ctrl+Enter`                                                | In REPL mode, run the composer in the selected kernel; outside REPL mode these chords stay follow-up                                                                                 |
 | `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |
@@ -69,7 +75,7 @@ app.history.search: []
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 | `app.links.hint` | Unbound | Tag visible extension links to pick them; press the binding again or `Page Up` to browse all. Assign a binding in keybindings; NeoPi retains `Alt+O` for menu history forward. |
-| `app.approval.approve` | `Ctrl+Enter`, `Ctrl+Q` | Approve a pending tool call; Esc denies. |
+| `app.approval.approve` | `Ctrl+Enter`, `Ctrl+Q` | Approve a pending tool call; `Ctrl+C` denies. |
 | `app.local.open` | `Alt+G` | Pick a session local file for the external editor. |
 | `app.session.pin` | `Alt+K` | Pin the selected resume-picker session. |
 | `app.session.unpin` | `Alt+Shift+K` | Unpin the selected resume-picker session. |
@@ -79,6 +85,12 @@ app.history.search: []
 Inside either session-model picker, press the configured `app.model.selectTemporary` shortcut again (normally `Alt+P`) to switch between the session model and a temporary Task-subagent override. The Task target has a red frame and a session-only cue; it does not change saved role assignments.
 
 Model hubs show cached catalogs immediately; moving the sidebar highlight does not start discovery. Entering a provider's model list refreshes it at most once per process. When provider discovery is available, `F5` forces a refresh of the current provider (including command-backed credentials), and `Ctrl+F5` refreshes all catalogs. Cached rows remain available during discovery, and the refreshed catalog replaces them in the same open menu.
+
+### Agent Menu
+
+`Ctrl+D` opens the Agent Menu even with a draft. **Detach from Agent** and **Reattach to Agent** are disabled pending NeoCore. **Shutdown Agent** is selected by default and runs the same graceful close as `/exit`. **Restart Agent** runs `/restart`. **Force Shutdown** restores the terminal and exits immediately without waiting for normal teardown. Use Up/Down (`j`/`k` with Vim mode), Enter to choose, and Esc or `q` to return without taking action.
+
+While `/exit` still waits for confirmation, `Ctrl+D` opens the menu normally. Once teardown is committed, `Ctrl+D` restores the terminal and exits with status 130 without opening the menu, even during final process cleanup. `Ctrl+C` never exits. If you customized `app.exit`, move that binding to `app.agent.menu`; `app.clear` has been removed. Move an old Escape remap from `app.interrupt` to `app.navigation.dismiss` if you want it to stay a navigation key.
 
 ## Menu navigation
 
@@ -90,7 +102,7 @@ Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focu
 | --- | --- |
 | `j` / `k` | Next / previous row |
 | `h` / `l` | Surface-dependent: switch pane, collapse/expand, reorder, or adjust a value (the hint line names it) |
-| `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up; PageDown / PageUp move a full page |
+| `Ctrl+D` / `Ctrl+U` (`tui.select.halfPageDown` / `halfPageUp`) | Half page down / up where the surface owns those keys; PageDown / PageUp move a full page. The interactive agent menu binding defaults to `Ctrl+D`. |
 | `gg` / `G` (also `tui.select.first` / `last`: Home / End) | First / last row |
 | `Ctrl+E` / `Ctrl+Y` (`tui.select.scrollDown` / `scrollUp`) | Scroll the view one line; the selection stays put until the next motion |
 | `Space` (`tui.select.toggle`) | Toggle a checkbox or existing radio control, or confirm a nondestructive single-choice row; destructive and credential actions require Enter |
@@ -248,11 +260,13 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 
 ### Escape
 
-`Escape` is shared with the app-level interrupt, so Vim mode takes it only when it has something to do:
+`Escape` navigates without cancelling active work:
 
 - **Insert mode** → switch to Normal mode (an open autocomplete popup gets the first Escape to dismiss it).
 - **Visual mode**, or a half-typed count or operator → cancel back to a quiet Normal mode.
 - **Replace mode** (`R`) → switch to Normal mode, stepping back onto the last overwritten character.
-- **Normal mode with nothing pending** → falls through to app behavior: dismiss autocomplete, abort active work, or run the configured double-Escape action with an empty editor. An idle main-session draft is preserved; bash/python and focused-agent views have their own Escape behavior.
+- **Normal mode with nothing pending** → dismiss autocomplete or a view, or run the configured double-Escape navigation with an empty editor. The draft is preserved.
+
+`Ctrl+C` cancels active work in either mode without clearing the draft. `u` undoes an edit and `Alt+U` redoes it in Normal mode.
 
 Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Such a key also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.

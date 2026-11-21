@@ -59,8 +59,8 @@ import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 
 /** Callbacks a locked composer forwards to while a post-processing chain rewrites it. */
 export interface ChainLock {
-	onEscape: () => void;
-	onClear: () => void;
+	onCancel: () => void;
+	onSkip: () => void;
 }
 
 /** A mode draft's sigil (`!`, `!!`, `$`, `$$`, `?`) with its surrounding blanks; the mode chip stands in for it natively. */
@@ -146,8 +146,9 @@ export interface SpellingFeatures extends MacOSSpellingFeatures {
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
 	| "app.interrupt"
-	| "app.clear"
-	| "app.exit"
+	| "app.navigation.dismiss"
+	| "app.agent.menu"
+	| "app.chain.skipStep"
 	| "app.suspend"
 	| "app.display.reset"
 	| "app.thinking.cycle"
@@ -163,9 +164,10 @@ type ConfigurableEditorAction = Extract<
 >;
 
 const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
-	"app.interrupt": ["escape"],
-	"app.clear": ["ctrl+c"],
-	"app.exit": ["ctrl+d"],
+	"app.interrupt": ["ctrl+c"],
+	"app.navigation.dismiss": ["escape"],
+	"app.agent.menu": ["ctrl+d"],
+	"app.chain.skipStep": ["alt+s"],
 	"app.suspend": ["ctrl+z"],
 	"app.display.reset": ["alt+l"],
 	"app.thinking.cycle": ["shift+tab"],
@@ -1207,8 +1209,7 @@ export class CustomEditor extends Editor {
 		}
 	}
 
-	/** Lock the composer while a chain rewrites it: every line shimmers and all input is dropped except
-	 *  Escape (→ `onEscape`) and the app.clear key, Ctrl+C by default (→ `onClear`). `undefined` unlocks. */
+	/** Lock the composer while a chain rewrites it; only cancellation and the agent menu stay active. */
 	// While a chain holds the composer it owns the draft and overwrites it when done, so writes
 	// that bypass handleInput (an in-flight dictation finishing, its submit trigger) are dropped.
 	override insertText(text: string): void {
@@ -1333,7 +1334,7 @@ export class CustomEditor extends Editor {
 		const facts = this.composerFacts?.describeComposerFacts();
 		const thinkingKey = this.#actionKeys.get("app.thinking.cycle")?.[0];
 		const modelKey = this.#actionKeys.get("app.model.selectTemporary")?.[0];
-		const interruptKey = this.#actionKeys.get("app.interrupt")?.[0] ?? "escape";
+		const interruptKey = this.#actionKeys.get("app.interrupt")?.[0] ?? "ctrl+c";
 		// The keys away at an ask above: the composer folds until a click or a key brings them back.
 		const folded = state.ask !== undefined && !this.focused;
 		const key = [
@@ -1716,7 +1717,7 @@ export class CustomEditor extends Editor {
 				if (this.nativeSendable) this.submit();
 				return;
 			case "interrupt":
-				this.onEscape?.();
+				this.onCancel?.();
 				return;
 			default:
 				if (event.act.startsWith(FOCUS_ACTION)) this.onFocusAgent?.(event.act.slice(FOCUS_ACTION.length));
@@ -1725,8 +1726,8 @@ export class CustomEditor extends Editor {
 	}
 
 	onEscape?: () => void;
-	onClear?: () => void;
-	onExit?: () => void;
+	onCancel?: () => void;
+	onAgentMenu?: () => void;
 	onDisplayReset?: () => void;
 	onCycleThinkingLevel?: () => void;
 	/** A thinking level (`off`, `auto`, `minimal`…`max`) was picked by pointer. */
@@ -1928,13 +1929,13 @@ export class CustomEditor extends Editor {
 	override handleInput(data: string): void {
 		if (this.handleSpeechShortcut(data)) return;
 		if (this.#chainLock) {
-			if (matchesKey(data, "escape")) {
-				this.#chainLock.onEscape();
-				return;
-			}
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
-			if (canonical !== undefined && this.#matchesAction(canonical, "app.clear")) this.#chainLock.onClear();
+			if (canonical !== undefined) {
+				if (this.#matchesAction(canonical, "app.agent.menu")) this.onAgentMenu?.();
+				else if (this.#matchesAction(canonical, "app.interrupt")) this.#chainLock.onCancel();
+				else if (this.#matchesAction(canonical, "app.chain.skipStep")) this.#chainLock.onSkip();
+			}
 			return;
 		}
 		// Serialize behind any in-flight async paste so a trailing Enter / follow-up key can't
@@ -2042,18 +2043,9 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			// Intercept configured interrupt shortcut.
-			// When the autocomplete popup is visible, ESC's first job is to dismiss
-			// the popup — let super.handleInput() route it to #cancelAutocomplete().
-			// The user can press ESC again afterward to fire the global interrupt
-			// handler. This matches the standard TUI/IDE pattern and prevents a
-			// single ESC from both closing an @ completion and aborting an active
-			// agent run (#1655).
-			// Vim mode claims Escape ahead of the interrupt: it has to mean "leave Insert mode" and
-			// "cancel a half-typed operator" first. Only a quiet Normal mode gives it back here, so
-			// the familiar single-ESC-to-abort still works once the user is out of Insert mode.
+			// Autocomplete and Vim's mode/pending state own Escape before app navigation.
 			if (
-				this.#matchesAction(canonical, "app.interrupt") &&
+				this.#matchesAction(canonical, "app.navigation.dismiss") &&
 				this.onEscape &&
 				!this.isShowingAutocomplete() &&
 				!this.vimConsumesEscape()
@@ -2062,41 +2054,13 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			// Intercept configured clear shortcut
-			if (this.#matchesAction(canonical, "app.clear") && this.onClear) {
-				this.onClear();
+			if (this.#matchesAction(canonical, "app.interrupt")) {
+				this.onCancel?.();
 				return;
 			}
 
-			// Intercept configured exit shortcut. When the key doubles as
-			// forward-delete (readline ^D: the default app.exit binding overlaps
-			// tui.editor.deleteCharForward) and the buffer is non-empty, perform
-			// the delete here instead of quitting. Invoking the operation directly
-			// — not falling through, not redispatching the raw key — keeps the
-			// exit chord's precedence slot on both sides: a later app action or
-			// extension handler bound to the same chord cannot steal it, and
-			// neither can an earlier base-editor action (e.g. a user-bound
-			// tui.input.submit, which Editor.handleInput checks before
-			// deleteCharForward). Only an empty buffer exits; firing onExit is
-			// the controller's chance to snapshot the current text as a draft
-			// before shutting down. Exit keys with no forward-delete role always
-			// exit. Draft presence is read off the buffer alone: attachments live
-			// as inline chip tokens, while `pendingImages` / `pendingTexts`
-			// intentionally retain deleted records so numbering isn't recycled
-			// (see composerChips) — trusting them would make Ctrl+D a permanent
-			// no-op after the last chip is deleted.
-			if (this.#matchesAction(canonical, "app.exit")) {
-				const doublesAsForwardDelete =
-					canonical !== undefined && getKeybindings().matchesCanonical(canonical, "tui.editor.deleteCharForward");
-				if (doublesAsForwardDelete && !this.textEquals("")) {
-					this.deleteCharForward();
-					// Same post-edit normalization the parent dispatch runs below: an edit that
-					// leaves a bare "->"/"=>" turns it into a reserved queue header, or later
-					// typing lands on the Queueing label instead of the queue body.
-					this.#normalizeQueuePrefix(hadBareQueuePrefix);
-					return;
-				}
-				this.onExit?.();
+			if (this.#matchesAction(canonical, "app.agent.menu")) {
+				this.onAgentMenu?.();
 				return;
 			}
 
@@ -2229,9 +2193,8 @@ export class CustomEditor extends Editor {
 		// standalone editor with no callback clears its own text.
 		const parsed = parseKey(data);
 		const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
-		if (canonical !== undefined && this.#matchesAction(canonical, "app.clear")) {
-			if (this.onClear) this.onClear();
-			else this.setText("");
+		if (canonical !== undefined && this.#matchesAction(canonical, "app.interrupt")) {
+			this.onCancel?.();
 			return;
 		}
 		if (canonical !== undefined && this.#matchesAction(canonical, "app.clipboard.pasteImage") && this.onPasteImage) {

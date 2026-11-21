@@ -5,7 +5,7 @@ import { replaceTabs } from "../render/render-utils";
 import { theme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { StreamingPanelContent, type StreamingPanelPresentation } from "../chrome/streaming-panel";
-import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, interruptKey } from "../chrome/keybinding-hints";
 import type { TspTone } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeNode } from "../native/node";
 import { col, node, span, text } from "../native/describe";
@@ -216,10 +216,10 @@ export class CleansePanelComponent extends OverlayPanel {
 	}
 
 	#describeFooter(): NativeNode {
-		const esc: NativeHint = { keys: boundKeys("app.interrupt", ["escape"]).slice(0, 1), label: "dismiss" };
+		const esc: NativeHint = { keys: boundKeys("app.navigation.dismiss", ["escape"]).slice(0, 1), label: "dismiss" };
 		switch (this.#outcome) {
 			case undefined:
-				return hintsRow([{ ...esc, label: "cancel /cleanse" }]);
+				return hintsRow([{ keys: boundKeys("app.interrupt", ["ctrl+c"]).slice(0, 1), label: "cancel /cleanse" }]);
 			case "clean":
 				return statusHintsRow([span(`${theme.status.success} Clean`, "success")], [esc]);
 			case "unresolved":
@@ -240,11 +240,10 @@ export class CleansePanelComponent extends OverlayPanel {
 	}
 
 	#footerLine(): string {
-		// The main editor routes `app.interrupt` (Escape by default) to the panel.
-		const esc = interruptKey();
+		const esc = dismissKey();
 		switch (this.#outcome) {
 			case undefined:
-				return theme.fg("muted", `${esc} cancel /cleanse`);
+				return theme.fg("muted", `${interruptKey()} cancel /cleanse`);
 			case "clean":
 				return theme.fg("success", `${theme.status.success} Clean · ${esc} dismiss`);
 			case "unresolved":

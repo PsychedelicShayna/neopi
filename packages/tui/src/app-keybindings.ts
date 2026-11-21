@@ -26,8 +26,8 @@ import {
  */
 interface AppKeybindings {
 	"app.interrupt": true;
-	"app.clear": true;
-	"app.exit": true;
+	"app.navigation.dismiss": true;
+	"app.agent.menu": true;
 	"app.suspend": true;
 	"app.display.reset": true;
 	"app.thinking.cycle": true;
@@ -39,6 +39,7 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
+	"app.chain.skipStep": true;
 	"app.ask.cancel": true;
 	"app.ask.note": true;
 	"app.approval.approve": true;
@@ -108,16 +109,16 @@ export function getDefaultPasteImageKeys(platform: NodeJS.Platform = process.pla
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
 	"app.interrupt": {
-		defaultKeys: "escape",
-		description: "Interrupt current operation",
-	},
-	"app.clear": {
 		defaultKeys: "ctrl+c",
-		description: "Clear screen or cancel",
+		description: "Cancel active work",
 	},
-	"app.exit": {
+	"app.navigation.dismiss": {
+		defaultKeys: "escape",
+		description: "Leave the current view",
+	},
+	"app.agent.menu": {
 		defaultKeys: "ctrl+d",
-		description: "Exit application",
+		description: "Open the agent menu (force exit during teardown)",
 	},
 	"app.suspend": {
 		defaultKeys: "ctrl+z",
@@ -165,9 +166,12 @@ export const KEYBINDINGS = {
 		description: "Hide or show a pending ask dialog",
 	},
 	"app.ask.cancel": {
-		// Esc cancels only while the keys are inside the ask; from the composer it keeps its own meaning.
 		defaultKeys: "alt+x",
 		description: "Cancel a pending ask dialog",
+	},
+	"app.chain.skipStep": {
+		defaultKeys: "alt+s",
+		description: "Skip the current preprocessing step",
 	},
 	"app.ask.note": {
 		// Dropdowns keep printable keys for type-ahead, so they take the first non-printable key.
@@ -421,8 +425,6 @@ function enforceReservedKeys(config: KeybindingsConfig): KeybindingsConfig {
 const KEYBINDING_NAME_MIGRATIONS = {
 	// App-specific (old names)
 	interrupt: "app.interrupt",
-	clear: "app.clear",
-	exit: "app.exit",
 	suspend: "app.suspend",
 	displayReset: "app.display.reset",
 	cycleThinkingLevel: "app.thinking.cycle",

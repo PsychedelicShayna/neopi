@@ -803,7 +803,7 @@ export class ControlHost {
 					});
 					return;
 				}
-				if (actionId === "app.exit") {
+				if (actionId === "app.agent.menu") {
 					this.#reply(connection, frame, {
 						success: false,
 						error: "exiting this pane closes the control connection; exit from the pane itself",

@@ -32,7 +32,7 @@ import { plainText } from "../native/spans";
 import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
-import { matchesAppInterrupt } from "../keybinding-matchers";
+import { matchesAppDismiss } from "../keybinding-matchers";
 import {
 	applyMenuMotion,
 	MenuKeyReader,
@@ -78,7 +78,7 @@ import { bottomBorder, OverlayPanel, row, topBorder } from "../chrome/overlay-bo
 import { TextFormField } from "../components/form";
 import { MenuSelection } from "../components/menu-selection";
 import { formatKeyHint } from "../app-keybindings";
-import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 
 /**
@@ -582,7 +582,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	#restoredSelected: string | undefined;
 	onSelect?: (session: T) => void;
 	onCancel?: () => void;
-	onExit: () => void = () => {};
+	onAgentMenu?: () => void;
 	onToggleScope?: () => void;
 	// Snapshot of the live terminal-row getter; the visible window is derived
 	// from it per render so the picker fits the viewport (and adapts to resize).
@@ -1547,18 +1547,18 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
-		if (matchesKey(data, "ctrl+c")) {
-			this.onExit();
+		if (this.onAgentMenu && keybindings.matches(data, "app.agent.menu")) {
+			this.onAgentMenu();
 			return;
 		}
-		if (matchesAppInterrupt(data)) return this.escape();
+		if (matchesAppDismiss(data)) return this.escape();
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "search") {
 			this.#search.focused = true;
 			return;
 		}
-		// Session cancellation follows app.interrupt, including explicit remaps.
+		// Leaving the session list follows the app navigation binding.
 		if (action.kind === "cancel") return;
 		if (action.kind === "context") {
 			this.#search.focused = false;
@@ -1742,7 +1742,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		sessions: T[],
 		onSelect: (session: T) => void,
 		onCancel: () => void,
-		onExit: () => void,
+		onAgentMenu: () => void,
 		options: SessionSelectorOptions<T> = {},
 	) {
 		super(options.title ?? "Resume Session");
@@ -1789,11 +1789,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			this.#sessionList.dispose();
 			onCancel();
 		};
-		this.#sessionList.onExit = () => {
-			this.#closed = true;
-			this.#sessionList.dispose();
-			onExit();
-		};
+		if (this.#standalone) this.#sessionList.onAgentMenu = onAgentMenu;
 		this.#sessionList.onRequestRender = () => this.#onRequestRender?.();
 		if (this.#onDelete) {
 			this.#sessionList.onDeleteRequest = (session: T) => {
@@ -2242,7 +2238,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#footerLines(width: number): string[] {
 		const scopeHint = this.#scope === "all" ? "current folder" : "all projects";
 		// Backspace only edits the filter; Delete requests session deletion.
-		const cancel = interruptKey();
+		const cancel = dismissKey();
 		const pin = this.#pinAction();
 		const pinKey = pin && getKeybindings().getKeys(pin.binding)[0];
 		const hint = `/ search · ${this.#onDelete ? `${formatKeyHint("delete")} delete (list) · ` : ""}${this.#onRename ? `${formatKeyHint("f2")} rename · ` : ""}${pinKey ? `${formatKeyHint(pinKey)} ${pin.label} · ` : ""}Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close · ? help`;
@@ -2319,7 +2315,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "current folder" : "all projects" });
 		}
 		hints.push({
-			keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"],
+			keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"],
 			label: this.filterFocused ? "back to list" : "close",
 		});
 		const result = overlayCard("omp.overlay.sessions", tabs ? this.#title : this.title, [
@@ -2380,7 +2376,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			pickerAction(
 				"close",
 				list.filterFocused ? "Back to list" : "Close",
-				boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+				boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
 				{ end: true },
 			),
 		);

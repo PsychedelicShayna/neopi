@@ -14,7 +14,6 @@ import { MAGIC_KEYWORDS } from "./magic-keywords";
 export interface PrepaintComposerOptions {
 	readonly terminal?: Terminal;
 	readonly exit?: (code: number) => void;
-	readonly now?: () => number;
 	readonly version?: string;
 	readonly cwd?: string;
 	readonly preferences?: Partial<ComposerPreferences>;
@@ -77,7 +76,6 @@ export function beginStartupComposer(options: PrepaintComposerOptions = {}): voi
 	const composer = new Composer({
 		terminal: options.terminal,
 		exit: options.exit,
-		now: options.now,
 		preferences,
 		welcome,
 		status: cached.status,

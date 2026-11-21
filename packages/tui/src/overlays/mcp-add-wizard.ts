@@ -10,9 +10,9 @@ import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "../render/render-utils";
 import { getSelectListTheme, theme } from "../theme/theme";
 import type { TspText } from "@oh-my-pi/pi-wire";
-import { matchesAppInterrupt } from "../keybinding-matchers";
+import { matchesAppDismiss, matchesAppInterrupt } from "../keybinding-matchers";
 import { formatKeyHint } from "../app-keybindings";
-import { boundKeys, editorKey, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, editorKey, interruptKey } from "../chrome/keybinding-hints";
 import type { KeyName } from "../key-hint-format";
 import { getKeybindings } from "../keybindings";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -188,7 +188,7 @@ function inputHint(escapeAction: string): string {
 
 /** Choice rows own their viewport; submit and back remain explicit wizard actions. */
 function choiceHint(escapeAction: string): string {
-	return `${formatKeyHint("enter")} select · ${interruptKey()} ${escapeAction} · ? help`;
+	return `${formatKeyHint("enter")} select · ${dismissKey()} ${escapeAction} · ? help`;
 }
 
 /** The wizard's phases, the native progress strip's segments in order. */
@@ -566,7 +566,7 @@ export class MCPAddWizard extends OverlayPanel {
 				choices: options.choices,
 				actions: {
 					back: this.#currentStep === "name" ? undefined : "Back",
-					backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+					backKey: boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
 					next: "Continue",
 					nextKey: "enter",
 				},
@@ -603,7 +603,12 @@ export class MCPAddWizard extends OverlayPanel {
 				title: options.title,
 				lead: options.lead,
 				body: options.native,
-				actions: { back: options.back ?? "Back", backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape" },
+				actions: {
+					back: options.back ?? "Back",
+					backKey: this.#oauthAbort
+						? boundKeys("app.interrupt", ["ctrl+c"])[0]
+						: (boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"),
+				},
 			},
 		);
 	}
@@ -987,7 +992,7 @@ export class MCPAddWizard extends OverlayPanel {
 				heading: ansiHeading("Review", "accent", PHASE_REVIEW),
 				content: summary,
 				footer: new Text(
-					theme.fg("muted", `[${formatKeyHint("enter")} to save, ${interruptKey()} to go back]`),
+					theme.fg("muted", `[${formatKeyHint("enter")} to save, ${dismissKey()} to go back]`),
 					0,
 					0,
 				),
@@ -1006,7 +1011,7 @@ export class MCPAddWizard extends OverlayPanel {
 				],
 				actions: {
 					back: "Back",
-					backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
+					backKey: boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
 					next: "Save server",
 					nextKey: "enter",
 				},
@@ -1024,18 +1029,14 @@ export class MCPAddWizard extends OverlayPanel {
 	}
 
 	handleInput(keyData: string): void {
-		// While an OAuth callback is being awaited, Esc/Ctrl+C aborts the flow
-		// rather than stepping back through the form: the wizard advertises
-		// "(Press Esc to cancel)" during the wait, and stepping back would
-		// leave the OAuth login orphaned.
-		if (this.#oauthAbort && (keyData === "\x03" || matchesAppInterrupt(keyData))) {
+		// While authorizing, only the interrupt binding may cancel the OAuth wait.
+		if (this.#oauthAbort && matchesAppInterrupt(keyData)) {
 			this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
 			return;
 		}
 
-		// Handle Ctrl+C to cancel wizard immediately
-		if (keyData === "\x03") {
-			// Ctrl+C pressed - cancel wizard
+		// Outside OAuth, Cancel closes the wizard.
+		if (!this.#oauthAbort && matchesAppInterrupt(keyData)) {
 			this.#onCancelCallback();
 			return;
 		}
@@ -1052,10 +1053,9 @@ export class MCPAddWizard extends OverlayPanel {
 
 		// Async steps ignore selection/submit keys. Escape still follows the
 		// controller's existing back path when no in-flight OAuth abort owns it.
-		if (this.#stepKind === "async" && !matchesAppInterrupt(keyData)) return;
+		if (this.#stepKind === "async" && (this.#oauthAbort || !matchesAppDismiss(keyData))) return;
 
-		// Handle Escape (always handled by wizard)
-		if (matchesAppInterrupt(keyData)) {
+		if (matchesAppDismiss(keyData)) {
 			if (this.#currentStep === "name") {
 				// Cancel wizard
 				this.#onCancelCallback();
@@ -1698,7 +1698,7 @@ export class MCPAddWizard extends OverlayPanel {
 				tone: "error",
 				ansi: new Text("Authorization and Token URLs are required.", 0, 0),
 				native: [statusRow("error", "Authorization and token URLs are required.")],
-				footer: new Text(theme.fg("muted", `[Press ${interruptKey()} to go back]`), 0, 0),
+				footer: new Text(theme.fg("muted", `[Press ${dismissKey()} to go back]`), 0, 0),
 			});
 			this.#requestRender();
 			return;

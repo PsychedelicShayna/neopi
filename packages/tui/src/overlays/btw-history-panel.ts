@@ -29,11 +29,11 @@ import { OrderedPastes } from "../prompt/ordered-pastes";
 import { BracketedPasteHandler } from "../bracketed-paste";
 import { routeSgrMouseInput, type SgrMouseEvent } from "../mouse";
 import { getMarkdownTheme, type ThemeColor, theme } from "../theme/theme";
-import { appBtwInjectKey, matchesAppBtwInject } from "../keybinding-matchers";
+import { appBtwInjectKey, matchesAppBtwInject, matchesAppInterrupt } from "../keybinding-matchers";
 import type { SpaceHoldHandler } from "../space-hold";
 import { sanitizeErrorLine } from "../chrome/error-block";
 import { sanitizeDisplayLine, sanitizeDisplayText } from "./extensions/display-text";
-import { editorKey, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey, keyHint, rawKeyHint } from "../chrome/keybinding-hints";
 import { formatKeyHint } from "../app-keybindings";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { padToWidth } from "../render/utils";
@@ -91,11 +91,9 @@ interface BtwHistoryPanelOptions {
 	requestRender: () => void;
 	getHeight: () => number;
 	/**
-	 * When true, Esc puts the sheet away (the running answer keeps
-	 * streaming in the background) and `x` cancels it, instead of Esc cancelling
-	 * first. For a host with no inline panel to fall back to (Tern).
+	 * Keep `x` as an additional way to cancel a running answer in hosts without an inline panel.
 	 */
-	escapeHides?: boolean;
+	cancelWithX?: boolean;
 	/** `btw.inject` hooks, given only while it is on for this view. */
 	inject?: BtwHistoryInject;
 }
@@ -712,8 +710,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		const record = this.#selected();
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running" ? record : undefined;
-		const hides = this.#options.escapeHides === true;
-		if (hides && matchesKey(data, "x")) {
+		if (matchesAppInterrupt(data) || (this.#options.cancelWithX && matchesKey(data, "x"))) {
 			if (running) this.#options.onCancel(running);
 			return;
 		}
@@ -742,8 +739,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "cancel") {
-			if (running && !hides) this.#options.onCancel(running);
-			else this.#options.onClose();
+			this.#options.onClose();
 			return;
 		}
 		if (action.kind === "search") {
@@ -1115,9 +1111,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 			]);
 		}
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running";
-		const hides = this.#options.escapeHides === true;
 		const buttons: (NativeNode | null)[] = [];
-		if (running) buttons.push(actionButton("Stop answer", "stop", { keys: hides ? "x" : "escape" }));
+		if (running)
+			buttons.push(actionButton("Stop answer", "stop", { keys: boundKeys("app.interrupt", ["ctrl+c"])[0] }));
 		if (canInject) buttons.push(actionButton("Inject into main", "inject", { keys: appBtwInjectKey() }));
 		if (canBranch) buttons.push(actionButton("Branch to chat", "branch", { keys: "b" }));
 		if (record && getBtwCopyText(record) !== undefined) {
@@ -1125,8 +1121,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			if (copied) buttons.push(text([span("✓ Copied", "success")], { role: "omp.btw.copied" }));
 		}
 		buttons.push(null);
-		// Clicking Close always dismisses the sheet; its tooltip names Esc only where Esc does too.
-		buttons.push(actionButton("Close", "close", running && !hides ? undefined : { keys: "escape" }));
+		buttons.push(actionButton("Close", "close", { keys: boundKeys("app.navigation.dismiss", ["escape"])[0] }));
 		if (canFollowUp) buttons.push(actionButton("Follow up", "follow-up", { keys: "f", tone: "accent" }));
 		return actionBar(buttons);
 	}
@@ -1339,8 +1334,9 @@ export class BtwHistoryPanel implements Component, Focusable {
 					keyHint("tui.select.cancel", this.#followUpPending ? "cancel send (keep draft)" : "back (keep draft)"),
 				]
 			: [
-					keyHint("tui.select.cancel", running && !this.#options.escapeHides ? "cancel answer" : "close"),
-					...(running && this.#options.escapeHides ? [rawKeyHint("x", "cancel")] : []),
+					keyHint("app.navigation.dismiss", "close"),
+					...(running ? [keyHint("app.interrupt", "cancel answer")] : []),
+					...(running && this.#options.cancelWithX ? [rawKeyHint("x", "cancel")] : []),
 					...(this.#records.length > 1 ? [rawKeyHint(["tab", "ctrl+/"], "switch pane")] : []),
 				];
 		if (!composer) {

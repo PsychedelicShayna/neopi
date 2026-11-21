@@ -27,7 +27,7 @@ import {
 	appToolsExpandKey,
 	matchesAppApprove,
 	matchesAppToolsExpand,
-	matchesSelectCancel,
+	matchesAppInterrupt,
 	matchesSelectDown,
 	matchesSelectPageDown,
 	matchesSelectPageUp,
@@ -235,7 +235,9 @@ export class ApprovalDialogComponent implements Component {
 		const grants = this.options.grants ?? [];
 		const glyph = this.#rememberAlways ? theme.checkbox.checked : theme.checkbox.unchecked;
 		return [
-			...(grants.length > 0 ? [{ label: `${glyph} ${t("tui.approval.remember")}`, answer: "remember" as const }] : []),
+			...(grants.length > 0
+				? [{ label: `${glyph} ${t("tui.approval.remember")}`, answer: "remember" as const }]
+				: []),
 			...grants.map((grant, index) => ({
 				label: this.#rememberAlways ? grant.alwaysLabel : grant.label,
 				answer: `grant${index}` as const,
@@ -281,12 +283,7 @@ export class ApprovalDialogComponent implements Component {
 			return;
 		}
 		const draft = this.options.draft;
-		// The composer's clear key (Ctrl+C, also a cancel key) clears a draft before it denies.
-		if (draft?.hasDraft() && getKeybindings().matches(keyData, "app.clear")) {
-			this.#editDraft(draft, keyData);
-			return;
-		}
-		if (matchesSelectCancel(keyData)) {
+		if (matchesAppInterrupt(keyData)) {
 			this.#finish("deny");
 			return;
 		}
@@ -397,18 +394,22 @@ export class ApprovalDialogComponent implements Component {
 	describe(): NativeNode {
 		const drafting = this.options.draft?.hasDraft() ?? false;
 		if (this.#native && this.#nativeDrafting === drafting) return this.#native;
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
+		const cancelKey = getKeybindings().getKeys("app.interrupt")[0] ?? "ctrl+c";
 		const approveKey = appApproveKeys()[0];
 		const deny = actionButton(t("tui.approval.deny"), "deny", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			tone: "error",
 			title: `${t("tui.approval.deny_call")}${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
-		const approve = actionButton(t(this.options.grants?.length ? "tui.approval.approve_once" : "tui.approval.approve"), "approve", {
-			...(approveKey ? { keys: approveKey } : {}),
-			tone: "accent",
-			title: `${t("tui.approval.approve_call")}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
-		});
+		const approve = actionButton(
+			t(this.options.grants?.length ? "tui.approval.approve_once" : "tui.approval.approve"),
+			"approve",
+			{
+				...(approveKey ? { keys: approveKey } : {}),
+				tone: "accent",
+				title: `${t("tui.approval.approve_call")}${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
+			},
+		);
 		const expandKey = appToolsExpandKey();
 		const expand = this.#full
 			? [
@@ -500,7 +501,7 @@ export class ApprovalDialogComponent implements Component {
 		const expand = this.#full
 			? ` · ${formatKeyHints([appToolsExpandKey()])} ${t(this.#expanded ? "tui.approval.hint.less" : "tui.approval.hint.details")}`
 			: "";
-		const keys = `${approve} ${t("tui.approval.hint.approve")} · ${editorKey("tui.select.cancel")} ${t("tui.approval.hint.deny")}${expand}`;
+		const keys = `${approve} ${t("tui.approval.hint.approve")} · ${editorKey("app.interrupt")} ${t("tui.approval.hint.deny")}${expand}`;
 		if (drafting) return `${editorKey("tui.input.submit")} ${t("tui.approval.hint.deny_send")} · ${keys}`;
 		const choose = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${editorKey("tui.select.confirm")} select`;
 		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";

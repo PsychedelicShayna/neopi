@@ -421,18 +421,19 @@ export interface InteractiveModeContext {
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined;
 	locallySubmittedUserSignatures: Set<string>;
-	lastSigintTime: number;
 	lastEscapeTime: number;
-	/** Owns Esc for every `/mcp test` that is active or whose cancellation hint may still be visible. */
+	/** Owns cancellation for every `/mcp test` whose cancellation hint may still be visible. */
 	mcpTestEscapeHandlers: Set<() => void>;
 	lastLeftTapTime: number;
 	shutdownRequested: boolean;
 	/** True once `shutdown()` has started. Read-only from the context;
 	 *  controllers use this to skip work that races with teardown. */
 	readonly isShuttingDown: boolean;
-	/** True once a graceful `shutdown()` teardown failed at the dispose stage,
-	 *  so the next single Ctrl+C must escape (force-quit) rather than re-run the
-	 *  doomed teardown or merely clear the editor (#12238). */
+	/** True after close prompts have settled and teardown can no longer be cancelled. */
+	readonly isTeardownCommitted: boolean;
+	/** Refuse a close attempt that is still awaiting confirmation. */
+	cancelPendingClose(): boolean;
+	/** Memoized disposal failed. A subsequent explicit close must skip disposal. */
 	readonly teardownFailed: boolean;
 	hookSelector: HookSelectorComponent | undefined;
 	hookInput: HookInputComponent | undefined;
@@ -745,6 +746,7 @@ export interface InteractiveModeContext {
 	showProviderSetup(): Promise<void>;
 	showHookConfirm(title: string, message: string, dialogOptions?: InteractiveSelectorDialogOptions): Promise<boolean>;
 	showDebugSelector(): Promise<void>;
+	showAgentMenu(shutdown: () => void, restart: () => void, forceShutdown: () => void): void;
 	showAgentHub(options?: AgentHubOpenOptions): void;
 	showIrcViewer(): void;
 	resetObserverRegistry(): void;
@@ -775,14 +777,13 @@ export interface InteractiveModeContext {
 	handleIssueCommand(prose: string): Promise<void>;
 	hasActiveBtw(): boolean;
 	handleBtwEscape(): boolean;
+	handleBtwCancel(): boolean;
 	/** Gives the keys to the ask waiting above the composer, showing it; false when none waits. */
 	focusAsk(): boolean;
 	/** `app.ask.hide` from the composer: hides the ask waiting above it, or shows it with the keys; false when none waits. */
 	toggleAskHidden(): boolean;
 	/** `app.ask.cancel` from the composer: closes the ask waiting above it unanswered; false when none waits. */
 	cancelAsk(): boolean;
-	/** Whether the agent waits on the ask above the composer; Esc in the composer then never interrupts the turn. */
-	askBlocksRun(): boolean;
 	/** The composer talks to a `/btw` note (Tern): plain drafts go to its topic as follow-ups. */
 	readonly isBtwFocused: boolean;
 	/** Sends a draft to the focused `/btw` note's topic; false when no follow-up started. */
@@ -805,10 +806,12 @@ export interface InteractiveModeContext {
 	): Promise<void>;
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;
-	handleOmfgEscape(): boolean;
+	handleOmfgCancel(): boolean;
+	handleOmfgDismiss(): boolean;
 	handleCleanseCommand(args: string): Promise<void>;
 	hasActiveCleanse(): boolean;
 	handleCleanseEscape(): boolean;
+	handleCleanseCancel(): boolean;
 	/**
 	 * Show a read-only command report outside the transcript: above the editor
 	 * like `/btw` (a full-screen page when taller) in text mode, a `/usage`-style

@@ -111,7 +111,8 @@ describe("extension shortcuts", () => {
 		expect(second!.getShortcutConflict("alt+h")).toEqual({ kind: "keybinding", keybindings: ["app.ask.hide"] });
 		// An editing key: a shortcut on it would take yank-pop away from the editor.
 		expect(second!.getShortcutConflict("alt+y")).toEqual({ kind: "keybinding", keybindings: ["tui.editor.yankPop"] });
-		expect(second!.getShortcutConflict("alt+u")).toBeUndefined();
+		expect(second!.getShortcutConflict("alt+u")).toEqual({ kind: "keybinding", keybindings: ["tui.editor.redo"] });
+		expect(second!.getShortcutConflict("alt+shift+u")).toBeUndefined();
 		// The reserved chord is dropped from binding whatever its spelling; the rest bind as registered.
 		expect([...runner.getShortcuts().keys()]).toEqual(["alt+ctrl+x", "alt+h"]);
 	});
@@ -158,7 +159,7 @@ describe("extension shortcuts", () => {
 
 	it("answers from its own session's keymap, never another session's remap", async () => {
 		// An interactive session loads the user's remap, which also becomes the process-global keymap.
-		const remapped = KeybindingsManager.inMemory({ "app.ask.hide": "alt+u" });
+		const remapped = KeybindingsManager.inMemory({ "app.ask.hide": "alt+shift+u" });
 		setKeybindings(remapped);
 		const interactive = (await loadRunner(remapped, pi => pi.registerShortcut("alt+h", { handler: noop }), noop))
 			.apis[1]!;
@@ -166,10 +167,13 @@ describe("extension shortcuts", () => {
 		const headless = (await loadRunner(undefined, pi => pi.registerShortcut("alt+h", { handler: noop }), noop))
 			.apis[1]!;
 
-		expect(interactive.getShortcutConflict("alt+u")).toEqual({ kind: "keybinding", keybindings: ["app.ask.hide"] });
+		expect(interactive.getShortcutConflict("alt+shift+u")).toEqual({
+			kind: "keybinding",
+			keybindings: ["app.ask.hide"],
+		});
 		expect(interactive.getShortcutConflict("alt+h")).toEqual({ kind: "extension", extensionPath: "ext-0" });
 		expect(headless.getShortcutConflict("alt+h")).toEqual({ kind: "keybinding", keybindings: ["app.ask.hide"] });
-		expect(headless.getShortcutConflict("alt+u")).toBeUndefined();
+		expect(headless.getShortcutConflict("alt+shift+u")).toBeUndefined();
 	});
 
 	it("drops a fallback chord from its default action once a remap claims it", async () => {

@@ -339,7 +339,7 @@ describe("advisor file scopes", () => {
 		expect(f.writes).toEqual([f.files[0].path]);
 	});
 
-	it("generates from selected advisors and Esc cancels without accepting a late result", async () => {
+	it("uses Ctrl+C to cancel generation and ignores a late result", async () => {
 		const result = Promise.withResolvers<AdvisorConfig>();
 		let received: { bases: readonly AdvisorConfig[]; comment: string; signal: AbortSignal } | undefined;
 		const f = fixture(undefined, async (bases, comment, signal) => {
@@ -361,6 +361,8 @@ describe("advisor file scopes", () => {
 		expect(received?.comment).toBe("Combine their strengths");
 		expect(strip(f.overlay)).toContain("Generating advisor");
 		f.overlay.handleInput("\x1b");
+		expect(received?.signal.aborted).toBe(false);
+		f.overlay.handleInput("\x03");
 		expect(received?.signal.aborted).toBe(true);
 		result.resolve({ name: "Late result" });
 		await settle();

@@ -1763,7 +1763,9 @@ export class TUI extends Container {
 		backgroundRgb = TERMINAL.imageProtocol === ImageProtocol.Sixel ? getTerminalBackgroundColor() : undefined;
 		if (this.#stopped) return;
 		this.#cancelPostmortemRestore?.();
-		this.#cancelPostmortemRestore = postmortem.register("tui-restore", () => this.stop());
+		this.#cancelPostmortemRestore = postmortem.register("tui-restore", reason => {
+			if (reason !== postmortem.Reason.MANUAL || !this.terminal.hasExitInputCapture) this.stop();
+		});
 		for (const listener of this.#startListeners) this.#runStartListener(listener);
 		this.#started = !this.#stopped;
 		this.terminal.hideCursor();

@@ -34,7 +34,8 @@ import { getSelectListTheme, theme } from "../theme";
 import { sanitizeDisplayWarnings, shortenPath } from "../render/render-utils";
 import { sanitizeDisplayLine } from "./extensions/display-text";
 import { formatKeyHint } from "../app-keybindings";
-import { editorKey, editorKeys } from "../chrome/keybinding-hints";
+import { editorKey, editorKeys, interruptKey } from "../chrome/keybinding-hints";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import { HookEditorComponent } from "./hook-editor";
 import {
 	buildBrowserItems,
@@ -420,8 +421,9 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 		case "delete-confirm":
 		case "copy-target":
 		case "generate-bases":
-		case "generating":
 			return [actionHint("tui.select.confirm", "choose"), actionHint("tui.select.cancel", "cancel")];
+		case "generating":
+			return [actionHint("app.interrupt", "cancel generation")];
 		case "name":
 			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
 		case "model":
@@ -1274,6 +1276,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		const active = this.#active;
+		if (this.#screen === "generating" && active instanceof SelectList) {
+			if (matchesAppInterrupt(data)) active.onCancel?.();
+			else if (matchesKey(data, "enter")) active.handleInput(data);
+			return;
+		}
 		const textFocused =
 			active instanceof Input ||
 			active instanceof HookEditorComponent ||
@@ -2108,16 +2115,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#generationAbort?.abort();
 		const abort = new AbortController();
 		this.#generationAbort = abort;
-		const cancel = new SelectList(
-			[{ value: "cancel", label: "Generating advisor… Esc cancels" }],
-			1,
-			getSelectListTheme(),
-		);
+		const cancel = new SelectList([{ value: "cancel", label: "Generating advisor…" }], 1, getSelectListTheme());
 		cancel.onCancel = cancel.onSelect = () => {
 			abort.abort();
 			this.#showList("generate");
 		};
-		this.#setScreen("generating", cancel, "Esc cancel");
+		this.#setScreen("generating", cancel, `${interruptKey()} cancel`);
 		void this.#cb.generateAdvisor?.(bases, comment, abort.signal).then(
 			advisor => {
 				if (abort.signal.aborted) return;

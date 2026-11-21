@@ -155,7 +155,7 @@ Flow:
 - Up/Down and Page Up/Page Down navigation (clamped, not wrapped)
 - Enter to select
 - `app.session.delete` (Backspace or Delete by default; Backspace edits a typed search first) to delete after confirmation
-- Esc to cancel; Ctrl+C to exit
+- Esc to leave the picker; Ctrl+D opens the Agent Menu
 - Tab to toggle current-folder / all-projects scope
 - mouse wheel/click in the fullscreen picker
 - multi-token search across id/title/cwd/first message/prefix message text/path: literal matches lead by recency, then sufficiently strong fuzzy matches; prompt-history matches from `history.db` may be promoted after typing pauses

@@ -641,6 +641,7 @@ const cfgLiveUiSettings = combine({
 type LiveUiSettings = SettingValueOf<typeof cfgLiveUiSettings>;
 
 const STILL_CLOSING_DELAY_MS = 3_000;
+const CLOSE_CANCELLED = Symbol("operator cancelled close");
 const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 /** Startup emits several status-bar changes within a second; persist only the settled one. */
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
@@ -1756,10 +1757,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const rate = this.tokenRate.rate();
 		return rate === null ? undefined : Math.round(rate * 10) / 10;
 	}
-	/** The key that interrupts (the working row's stop control), or undefined when Esc would not cancel. */
+	/** The working row's stop key, absent when focused maintenance cannot be cancelled. */
 	maintenanceInterruptKey(): KeyId | undefined {
 		if (this.focusedAgentId) return undefined;
-		return this.keybindings.getKeys("app.interrupt")[0] ?? "escape";
+		return this.keybindings.getKeys("app.interrupt")[0];
 	}
 	/** The running turn's working row (§8.1): its elapsed time, the intent and the stop control. */
 	#workingRowSpec(): WorkingRowSpec {
@@ -1768,12 +1769,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			label: typeof this.#workingMessage === "function" ? this.#workingMessage() : this.#workingMessage,
 			startedAt: this.#workingStartedAt,
 			palette: accent ? NATIVE_ACCENT_SHIMMER : undefined,
-			interruptKey: this.keybindings.getKeys("app.interrupt")[0] ?? "escape",
+			interruptKey: this.keybindings.getKeys("app.interrupt")[0] ?? "ctrl+c",
 		};
 	}
 	/** The stop control's click: the same handler as the interrupt key. */
 	interruptFromPointer(): void {
-		this.editor.onEscape?.();
+		this.editor.onCancel?.();
 	}
 	/**
 	 * The native HUD pills row: one running-work counter (`omp.hud.pill`) with
@@ -1955,9 +1956,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** True while an optimistically-rendered `/skill:` row awaits its canonical
 	 *  `message_start`. Read by the event controller to reconcile the row. */
 	optimisticSkillMessagePending = false;
-	lastSigintTime = 0;
 	lastEscapeTime = 0;
-	/** Owns Esc for every `/mcp test` that is active or whose cancellation hint may still be visible. */
+	/** Owns cancellation for every `/mcp test` whose cancellation hint may still be visible. */
 	mcpTestEscapeHandlers = new Set<() => void>();
 	lastLeftTapTime = 0;
 	shutdownRequested = false;
@@ -1978,20 +1978,30 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * escape hatch: exit without writing the session log.
 	 */
 	#teardownFailed = false;
-	/** True once a graceful `shutdown()` teardown failed at the memoized
-	 *  dispose stage. Surfaced to the input controller so the next single
-	 *  Ctrl+C skips the double-tap gate and runs `shutdown()` — which
-	 *  force-quits — instead of merely clearing the editor (#12238). */
+	/** Whether a previous close failed after starting memoized disposal (#12238). */
 	get teardownFailed(): boolean {
 		return this.#teardownFailed;
 	}
 	/** Worktrees this launch created (auto-start or `/wt`), considered on exit per `worktree.onExit`. */
 	#ownedWorktrees: SessionWorktree[] = [];
-	/** True once `shutdown()` has begun teardown. Surfaced to the input
-	 *  controller so a Ctrl+C arriving while teardown is in flight can hard-
-	 *  abort the remaining work instead of stacking another no-op call. */
+	#isTeardownCommitted = false;
+	#releaseExitInput?: () => void;
+	#closeCanCancel = false;
+	get isTeardownCommitted(): boolean {
+		return this.#isTeardownCommitted;
+	}
+
+	/** Includes reversible prompts, before teardown is committed. */
 	get isShuttingDown(): boolean {
 		return this.#isShuttingDown;
+	}
+
+	cancelPendingClose(): boolean {
+		const attempt = this.#closeAttempt;
+		if (!attempt || this.#isTeardownCommitted || !this.#closeCanCancel) return false;
+		if (attempt.signal.aborted) return attempt.signal.reason === CLOSE_CANCELLED;
+		attempt.abort(CLOSE_CANCELLED);
+		return true;
 	}
 	hookSelector: HookSelectorComponent | undefined = undefined;
 	hookInput: HookInputComponent | undefined = undefined;
@@ -2916,7 +2926,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// draft, skip the `session_shutdown` contract from `shared-events.ts`,
 		// and orphan background bash/task processes (issue #4080). The registered
 		// callback and `shutdown()` share one promise-memoized teardown, so a
-		// signal arriving mid-Ctrl+C no-ops instead of racing a second dispose.
+		// signal arriving mid-shutdown no-ops instead of racing a second dispose.
 		this.#signalTeardown = createSessionTeardown({
 			getDraftText: () => this.#inputController.getDraftText(),
 			beginDispose: () => {
@@ -8782,6 +8792,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
 		}
+		this.#releaseExitInput?.();
+		this.#releaseExitInput = undefined;
 		// Undock only after the stop flush: the un-retired tail must reach
 		// scrollback at the docked chat width it was painted at, and the undock
 		// itself refreshes no history, so a quit leaves scrollback as painted.
@@ -8818,9 +8830,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 	}
 
-	async #quitHostOwned(code: number): Promise<void> {
+	async #quitHostOwned(code: number, options?: postmortem.QuitOptions): Promise<void> {
 		try {
-			await postmortem.quit(code);
+			await postmortem.quit(code, options);
 		} catch {
 			// Extension loading guards process.exit; cleanup already ran before
 			// the guarded exit throws, so host shutdown can use the native exit.
@@ -8845,15 +8857,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		// and the process can never close (#12238: a corrupted session file makes
 		// the close-time rewrite refuse to clobber it). This second attempt is the
 		// escape hatch: quit without writing the session log. 130 = 128 + SIGINT,
-		// matching the Ctrl+C hard-abort exit code in input-controller.
+		// matching the agent menu's force-abort exit code.
 		if (this.#teardownFailed) {
 			await this.#quitHostOwned(130);
 			return;
 		}
-		const signal = this.#beginClose();
+		const cancellable = options?.cancellable !== false;
+		const signal = this.#beginClose(cancellable);
 		// Reversible decisions first: nothing has been stopped yet, so a refusal
 		// leaves the session exactly as it was.
-		if (options?.cancellable !== false && !(await this.session.confirmClose(signal))) {
+		if (cancellable && (!(await this.session.confirmClose(signal)) || signal.reason === CLOSE_CANCELLED)) {
 			this.#abandonClose();
 			this.showStatus("Session close cancelled");
 			// The refusal covers only this quit, not a pending `ctx.shutdown()`.
@@ -8867,16 +8880,19 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.settings,
 				async choices => {
 					const choice =
-						options?.cancellable === false || signal.aborted
+						!cancellable || signal.aborted
 							? undefined
 							: await this.#extensionUiController.showCollabAwareSelector(
-									"Session settings changed — Esc keeps them in the session directory and quits",
+									"Session settings changed",
 									[...choices],
 									{ signal },
 								);
 					// An abandoned UI must not materialize or settle session settings.
 					if (this.session.isDisposed || this.#dialogLifetime.signal.aborted)
 						return SESSION_SETTINGS_QUIT_CHOICES[3];
+					if (signal.reason === CLOSE_CANCELLED || (choice === undefined && !signal.aborted && cancellable)) {
+						return SESSION_SETTINGS_QUIT_CHOICES[3];
+					}
 					return choice;
 				},
 				() => this.sessionManager.ensureOnDisk(),
@@ -8893,26 +8909,35 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning(`Could not save session settings: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		const worktreePlan = await this.#planOwnedWorktreeExit(signal);
+		if (signal.reason === CLOSE_CANCELLED) {
+			this.#abandonClose();
+			this.showStatus("Session close cancelled");
+			if (this.shutdownRequested) void this.checkShutdownRequested();
+			return;
+		}
 		try {
 			await this.#teardown();
 		} catch (error) {
 			this.#handleTeardownError("close", error);
 			return;
 		}
-		for (const message of await removeExitWorktrees(worktreePlan)) {
-			process.stderr.write(`${chalk.yellow(message)}\n`);
-		}
-
-		// Print resumption hint only if the session was actually materialized to
-		// durable storage — `--resume <id>` fails on a never-written file (see
-		// #resumableSessionId).
-		const sessionId = this.#resumableSessionId();
-		if (sessionId) {
-			// Command on its own line so triple-click selects just the command (#11001).
-			process.stderr.write(`\n${chalk.dim("Resume this session with")}\n${chalk.dim(resumeCommand(sessionId))}\n`);
-		}
-
-		await this.#quitHostOwned(0);
+		const worktreeWarnings = await removeExitWorktrees(worktreePlan);
+		await this.#quitHostOwned(0, {
+			beforeExit: async () => {
+				await this.#finishTeardown();
+				for (const message of worktreeWarnings) {
+					process.stderr.write(`${chalk.yellow(message)}\n`);
+				}
+				// Only print a hint for a session materialized on disk (#8860).
+				const sessionId = this.#resumableSessionId();
+				if (sessionId) {
+					// Put the command on its own line for triple-click selection (#11001).
+					process.stderr.write(
+						`\n${chalk.dim("Resume this session with")}\n${chalk.dim(resumeCommand(sessionId))}\n`,
+					);
+				}
+			},
+		});
 	}
 
 	#handleTeardownError(action: "close" | "restart", error: unknown): void {
@@ -8925,7 +8950,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#teardownFailed = this.session.isDisposed;
 		this.showError(
 			this.#teardownFailed
-				? `Could not ${action} session: ${detail}\nPress ${appKey(this.keybindings, "app.clear")} again to exit without saving the session log.`
+				? `Could not ${action} session: ${detail}\nOpen the agent menu (${appKey(this.keybindings, "app.agent.menu")}) and choose Force Shutdown to exit without saving the session log.`
 				: `Could not ${action} session: ${detail}`,
 		);
 	}
@@ -8988,8 +9013,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			),
 		];
 		if (activeProfile) cmd.push("--profile", activeProfile);
-		await postmortem.cleanup();
-		await postmortem.drainStdout();
+		await postmortem.cleanup(async () => {
+			try {
+				await postmortem.drainStdout();
+			} finally {
+				await this.#finishTeardown();
+			}
+		});
 		if (process.platform !== "win32") {
 			try {
 				const env: Record<string, string> = {};
@@ -9033,8 +9063,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * any await: worktree exit planning, live commands, and BTW history writes can
 	 * all stall, and the user must see a reason for the pause.
 	 */
-	#beginClose(): AbortSignal {
+	#beginClose(cancellable = false): AbortSignal {
 		this.#isShuttingDown = true;
+		this.#closeCanCancel = cancellable;
 		this.#closeAttempt = new AbortController();
 		this.showStatus("Closing session…");
 		return this.#closeAttempt.signal;
@@ -9043,11 +9074,16 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Return to a usable session after a close attempt was refused or failed. */
 	#abandonClose(): void {
 		this.#isShuttingDown = false;
+		this.#isTeardownCommitted = false;
+		this.#releaseExitInput?.();
+		this.#releaseExitInput = undefined;
 		this.#closeAttempt = undefined;
 	}
 
-	/** Shared `shutdown()`/`restart()` teardown: dispose the session and hand the terminal back. */
+	/** Shared `shutdown()`/`restart()` teardown, after all reversible prompts. */
 	async #teardown(): Promise<void> {
+		this.#isTeardownCommitted = true;
+		this.#releaseExitInput = this.#inputController.captureExitInput();
 		// An in-flight loop condition (or a deferred auto-submit timer) must not
 		// outlive session disposal: an unaborted `sleep 30`-style condition can
 		// resolve mid-teardown and drive `#passesLoopCondition` into invoking the
@@ -9091,7 +9127,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		} finally {
 			clearTimeout(stillClosingTimer);
 		}
+	}
 
+	/** Restore the terminal only when the last asynchronous cleanup is done. */
+	async #finishTeardown(): Promise<void> {
 		// Do not force a final render during teardown: disposed session/UI state can
 		// collapse to an empty frame, clearing the viewport and leaving the parent
 		// shell prompt at row 0. Stop from the last committed frame so the terminal
@@ -10311,6 +10350,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#selectorController.showDebugSelector();
 	}
 
+	showAgentMenu(shutdown: () => void, restart: () => void, forceShutdown: () => void): void {
+		this.#selectorController.showAgentMenu(shutdown, restart, forceShutdown);
+	}
+
 	showAgentHub(options?: AgentHubOpenOptions): void {
 		// The agents-hub key on a tray host: into the tray while it shows cards, else nothing, as
 		// the tray has no hub to fall back to. With its agents turned off, the key opens the hub.
@@ -10598,6 +10641,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleEscape();
 	}
 
+	handleBtwCancel(): boolean {
+		return this.#btwController.hasActiveRequest() && this.#btwController.handleCancel();
+	}
+
 	focusAsk(): boolean {
 		return this.#extensionUiController.focusAsk();
 	}
@@ -10608,10 +10655,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	cancelAsk(): boolean {
 		return this.#extensionUiController.cancelAsk();
-	}
-
-	askBlocksRun(): boolean {
-		return this.#extensionUiController.askBlocksRun();
 	}
 
 	get isBtwFocused(): boolean {
@@ -10693,8 +10736,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#omfgController.hasActiveRequest();
 	}
 
-	handleOmfgEscape(): boolean {
-		return this.#omfgController.handleEscape();
+	handleOmfgCancel(): boolean {
+		return this.#omfgController.handleCancel();
+	}
+
+	handleOmfgDismiss(): boolean {
+		return this.#omfgController.handleDismiss();
 	}
 
 	handleCleanseCommand(args: string): Promise<void> {
@@ -10707,6 +10754,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleCleanseEscape(): boolean {
 		return this.#cleanseController.handleEscape();
+	}
+
+	handleCleanseCancel(): boolean {
+		return this.#cleanseController.handleCancel();
 	}
 
 	showCommandReport(options: { title: string; head?: TspText; body: Component }): void {

@@ -149,8 +149,8 @@ describe("xAI main-composer destination ownership", () => {
 			expect(mode.editor.getText()).toBe("Original draft");
 			if (outcome === "abort") mode.editor.handleInput("\x03");
 			if (outcome === "skip") {
-				mode.editor.handleInput("\x1b");
-				mode.editor.handleInput("\x1b");
+				mode.editor.handleInput("\x1bs");
+				mode.editor.handleInput("\x1bs");
 			}
 			finish.resolve();
 			await completed.promise;

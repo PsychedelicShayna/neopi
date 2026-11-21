@@ -48,7 +48,7 @@ function restoreEnvValue(name: string, value: string | undefined): void {
 	process.env[name] = value;
 }
 /**
- * Resolve when the controller installs its `editor.onEscape` hook.
+ * Resolve when the controller installs its `editor.onCancel` hook.
  *
  * The hook is installed part-way through an async flow, so a test that needs
  * it has to wait. Polling to a wall-clock deadline would make that wait a
@@ -58,11 +58,11 @@ function restoreEnvValue(name: string, value: string | undefined): void {
  * assignment bounds the wait by the event it is actually waiting for, leaving
  * `bun test --timeout` as the only backstop for a genuine hang.
  */
-function whenEscapeInstalled(editor: { onEscape?: (() => void) | undefined }): Promise<void> {
+function whenCancelInstalled(editor: { onCancel?: (() => void) | undefined }): Promise<void> {
 	const installed = Promise.withResolvers<void>();
-	let current = editor.onEscape;
+	let current = editor.onCancel;
 	if (typeof current === "function") installed.resolve();
-	Object.defineProperty(editor, "onEscape", {
+	Object.defineProperty(editor, "onCancel", {
 		configurable: true,
 		enumerable: true,
 		get: () => current,
@@ -938,7 +938,7 @@ describe("/mcp auth commands", () => {
 		});
 	});
 
-	test("Esc aborts the OAuth flow during /mcp reauth", async () => {
+	test("Ctrl+C aborts the OAuth flow during /mcp reauth", async () => {
 		const authStorage = freshAuthStorage();
 		await authStorage.credentials.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
@@ -956,14 +956,13 @@ describe("/mcp auth commands", () => {
 
 		const { controller, showError, showStatus, editor } = createController(authStorage);
 
-		// Gate on #handleOAuthFlow installing its editor.onEscape hook.
-		const escapeInstalled = whenEscapeInstalled(editor);
+		const cancelInstalled = whenCancelInstalled(editor);
 		const reauthPromise = controller.handle("/mcp reauth envserver");
-		await escapeInstalled;
-		expect(typeof editor.onEscape).toBe("function");
+		await cancelInstalled;
+		expect(typeof editor.onCancel).toBe("function");
 
-		const installedEscape = editor.onEscape;
-		editor.onEscape?.();
+		const installedCancel = editor.onCancel;
+		editor.onCancel?.();
 
 		// Cancellation must resolve the reauth promise (well under the 5-minute
 		// production timeout). Awaited directly rather than raced against a 2s
@@ -974,9 +973,9 @@ describe("/mcp auth commands", () => {
 
 		expect(showError).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
-		// onEscape must be restored to its previous value so subsequent user
+		// onCancel must be restored to its previous value so subsequent user
 		// input does not keep aborting the (now-finished) flow.
-		expect(editor.onEscape).not.toBe(installedEscape);
+		expect(editor.onCancel).not.toBe(installedCancel);
 	});
 
 	test("reauth supersedes an unfinished MCP OAuth flow", async () => {
@@ -1008,7 +1007,7 @@ describe("/mcp auth commands", () => {
 		});
 
 		const { controller, ctx, showError, showStatus, editor, oauthManualInput } = createController(authStorage);
-		const defaultOnEscape = editor.onEscape;
+		const defaultOnCancel = editor.onCancel;
 		// Event-gate the claim instead of polling to a wall-clock deadline: on a
 		// loaded runner the old 1s budget could expire before the flow claimed the
 		// manual-input slot, and the assertion below then read `undefined` from a
@@ -1027,7 +1026,7 @@ describe("/mcp auth commands", () => {
 
 		const replacementReauth = new MCPCommandController(ctx).handle("/mcp reauth envserver");
 		await replacementReauth;
-		if (oauthManualInput.hasPending()) editor.onEscape?.();
+		if (oauthManualInput.hasPending()) editor.onCancel?.();
 		await firstReauth;
 
 		expect(loginAttempt).toBe(2);
@@ -1040,10 +1039,10 @@ describe("/mcp auth commands", () => {
 		// The replacement flow restored the session's default Esc handler, not
 		// the superseded flow's dead one: after both flows unwind the editor
 		// keeps interrupt/cancel-compaction semantics for the session.
-		expect(editor.onEscape).toBe(defaultOnEscape);
+		expect(editor.onCancel).toBe(defaultOnCancel);
 	});
 
-	test("Esc cancels even when OAuth login has not registered its signal listener yet", async () => {
+	test("Ctrl+C cancels even when OAuth login has not registered its signal listener yet", async () => {
 		const authStorage = freshAuthStorage();
 		await authStorage.credentials.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
@@ -1056,11 +1055,11 @@ describe("/mcp auth commands", () => {
 		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockReturnValue(Promise.withResolvers<never>().promise);
 		const { controller, showError, showStatus, editor } = createController(authStorage);
 
-		const escapeInstalled = whenEscapeInstalled(editor);
+		const cancelInstalled = whenCancelInstalled(editor);
 		const reauthPromise = controller.handle("/mcp reauth envserver");
-		await escapeInstalled;
-		expect(typeof editor.onEscape).toBe("function");
-		editor.onEscape?.();
+		await cancelInstalled;
+		expect(typeof editor.onCancel).toBe("function");
+		editor.onCancel?.();
 
 		await reauthPromise;
 

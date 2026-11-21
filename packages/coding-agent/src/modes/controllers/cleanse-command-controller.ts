@@ -1,7 +1,6 @@
 /**
  * Owns the `/cleanse` overlay lifecycle: mounts the {@link CleansePanelComponent}
- * above the editor, drives the shared cleanse core against it, and maps Esc to
- * cancel-then-dismiss (mirroring the `/omfg` panel).
+ * above the editor and drives the shared cleanse core against it.
  */
 import { runCleanse } from "../../cleanse";
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
@@ -38,15 +37,18 @@ export class CleanseCommandController {
 		return this.#active !== undefined;
 	}
 
-	/** Esc while running cancels the run; Esc on a settled panel dismisses it. */
+	/** Esc dismisses a settled panel without cancelling live work. */
 	handleEscape(): boolean {
 		const run = this.#active;
-		if (!run) return false;
-		if (!run.settled && !run.abortController.signal.aborted) {
-			run.abortController.abort(new Error("Cleanse interrupted"));
-			return true;
-		}
+		if (!run?.settled) return false;
 		this.#close(run);
+		return true;
+	}
+
+	handleCancel(): boolean {
+		const run = this.#active;
+		if (!run || run.settled) return false;
+		run.abortController.abort(new Error("Cleanse interrupted"));
 		return true;
 	}
 

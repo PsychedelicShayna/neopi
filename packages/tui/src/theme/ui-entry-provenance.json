@@ -31,10 +31,7 @@
 				"tui.select.search",
 				"tui.select.toggle"
 			],
-			"statusSegments": [
-				"context_bar",
-				"live"
-			],
+			"statusSegments": ["context_bar", "live"],
 			"roles": [
 				"agent-author",
 				"chronicler",
@@ -52,13 +49,11 @@
 			"features": []
 		},
 		"nightly": {
-			"keybindings": [],
+			"keybindings": ["app.agent.menu", "app.chain.skipStep", "app.navigation.dismiss", "tui.editor.redo"],
 			"statusSegments": [],
 			"roles": [],
 			"composerShapes": [],
-			"features": [
-				"agent-definition-editor"
-			]
+			"features": ["agent-menu", "agent-definition-editor"]
 		}
 	},
 	"upstream": [
@@ -83,9 +78,7 @@
 					"app.session.unpin"
 				],
 				"statusSegments": [],
-				"roles": [
-					"widget"
-				],
+				"roles": ["widget"],
 				"composerShapes": [],
 				"features": []
 			}

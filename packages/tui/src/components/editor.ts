@@ -1001,6 +1001,7 @@ export class Editor implements Component, Focusable {
 
 	// Undo stack for editor state changes
 	#undoStack: EditorState[] = [];
+	#redoStack: EditorState[] = [];
 	#suspendUndo = false;
 	/** Snapshots evicted from the front of {@link #undoStack}, so {@link UndoMark}s stay aligned. */
 	#undoShifts = 0;
@@ -1235,8 +1236,7 @@ export class Editor implements Component, Focusable {
 	/**
 	 * Whether Escape belongs to the editor right now rather than to the app.
 	 *
-	 * Hosts bind Escape to interrupt/clear; in Vim mode it first has to mean "leave Insert mode" and
-	 * "cancel a half-typed operator". Only a quiet Normal mode gives Escape back to the app.
+	 * Escape leaves Insert mode or cancels a half-typed operator before app navigation.
 	 */
 	vimConsumesEscape(): boolean {
 		const vim = this.#vim;
@@ -1413,6 +1413,7 @@ export class Editor implements Component, Focusable {
 	#setTextInternal(text: string, cursorAnchor: HistoryCursorAnchor = "end"): void {
 		this.#endVimSession();
 		this.#undoStack.length = 0;
+		this.#redoStack.length = 0;
 		const lines = sanitizeLoadedText(text).split("\n");
 		this.#state.lines = lines.length === 0 ? [""] : lines;
 		// A single-row entry's top and bottom are the same row, so the directional
@@ -2255,6 +2256,12 @@ export class Editor implements Component, Focusable {
 		// Undo
 		if (kb.matchesCanonical(canonical, "tui.editor.undo")) {
 			this.#applyUndo();
+			return;
+		}
+
+		if (this.#vim?.mode === "normal" && kb.matchesCanonical(canonical, "tui.editor.redo")) {
+			this.#vim.handleKey("escape", this.#state);
+			this.#applyRedo();
 			return;
 		}
 
@@ -4862,14 +4869,9 @@ export class Editor implements Component, Focusable {
 
 	#recordUndoState(): void {
 		if (this.#suspendUndo) return;
-		// EditorState holds only primitives plus an array of immutable strings:
-		// a shallow array copy is a complete snapshot. structuredClone pays for
-		// general-case dispatch per element on every edit keystroke.
-		this.#undoStack.push({
-			lines: this.#state.lines.slice(),
-			cursorLine: this.#state.cursorLine,
-			cursorCol: this.#state.cursorCol,
-		});
+		this.#redoStack.length = 0;
+		// Snapshot only the array of immutable lines and the cursor coordinates.
+		this.#undoStack.push(this.#copyEditState());
 		if (this.#undoStack.length <= MAX_UNDO_STACK) return;
 		const pin = this.#pinnedUndo;
 		const anchorIndex = pin === null ? -1 : pin.depth - (this.#undoShifts - pin.shifts);
@@ -4887,10 +4889,31 @@ export class Editor implements Component, Focusable {
 		const snapshot = this.#undoStack.pop();
 		if (!snapshot) return;
 
+		this.#redoStack.push(this.#copyEditState());
+		this.#restoreEditState(snapshot);
+	}
+
+	#applyRedo(): void {
+		const snapshot = this.#redoStack.pop();
+		if (!snapshot) return;
+		this.#undoStack.push(this.#copyEditState());
+		this.#restoreEditState(snapshot);
+	}
+
+	#copyEditState(): EditorState {
+		return {
+			lines: this.#state.lines.slice(),
+			cursorLine: this.#state.cursorLine,
+			cursorCol: this.#state.cursorCol,
+		};
+	}
+
+	#restoreEditState(snapshot: EditorState): void {
 		this.#historyIndex = -1;
 		this.#resetKillSequence();
 		this.#preferredVisualCol = null;
 		Object.assign(this.#state, snapshot);
+		this.#clampVimCursor();
 
 		this.#notifyChange();
 

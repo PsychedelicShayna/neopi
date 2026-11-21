@@ -16,9 +16,9 @@ import { type Component, matchesKey, type OverlayFocusOwner, type OverlayHandle,
 import { formatCoarseDuration } from "../chrome/format";
 import { centerLine, visibleWidth } from "../utils";
 import { theme } from "../theme/theme";
-import { matchesAppInterrupt } from "../keybinding-matchers";
+import { matchesAppDismiss } from "../keybinding-matchers";
 import { formatKeyHint, formatTooltipKey } from "../app-keybindings";
-import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey } from "../chrome/keybinding-hints";
 import type { NativeNode, NativeUiEvent } from "../native/node";
 import { col, keyed, node, row, span, text } from "../native/describe";
 import { actionBar, actionButton } from "../native/overlay";
@@ -108,8 +108,8 @@ export function renderPauseScreen(
 		`Unfinished jobs: ${workStatus.unfinishedJobs}`,
 	];
 	const content: string[] = [];
-	// Resume keys mirror PauseScreenComponent#handleInput: `app.interrupt` (raw Escape when unbound), Enter, Space.
-	const esc = interruptKey();
+	// Resume keys mirror handleInput: dismiss the pause screen, Enter or Space.
+	const esc = dismissKey();
 
 	if (compact) {
 		const sessionLine = sessionName
@@ -244,7 +244,7 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 		// double as "abort agents" while the whole point of the screen is that
 		// nothing gets lost.
 		if (
-			matchesAppInterrupt(data) ||
+			matchesAppDismiss(data) ||
 			matchesKey(data, "enter") ||
 			matchesKey(data, "return") ||
 			matchesKey(data, "space") ||
@@ -322,7 +322,7 @@ export class PauseScreenComponent implements Component, OverlayFocusOwner {
 			],
 			{ role: "omp.pause.settlement-status", gap: "sm" },
 		);
-		const resumeKey = boundKeys("app.interrupt", ["escape"])[0] ?? "escape";
+		const resumeKey = boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape";
 		const hero = row(
 			[
 				node("icon", { name: "pause", role: "omp.pause.glyph" }, undefined, "glyph"),

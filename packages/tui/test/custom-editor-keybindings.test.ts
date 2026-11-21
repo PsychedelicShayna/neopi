@@ -63,29 +63,32 @@ describe("CustomEditor keybindings", () => {
 		expect(onDisplayReset).toHaveBeenCalledTimes(1);
 		expect(onLiveToggle).toHaveBeenCalledTimes(1);
 	});
-	it("exits on ctrl+d with an empty draft", () => {
+	it("opens the agent menu on ctrl+d with an empty draft", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const onExit = vi.fn();
-		editor.onExit = onExit;
+		const menu = vi.fn();
+		editor.onAgentMenu = menu;
 		editor.handleInput("\x04"); // Ctrl+D
-		expect(onExit).toHaveBeenCalledTimes(1);
+		expect(menu).toHaveBeenCalledTimes(1);
 	});
 
-	it("forward-deletes instead of exiting on ctrl+d with draft text", () => {
+	it("forward-deletes with Delete and opens the menu without editing on ctrl+d", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const onExit = vi.fn();
-		editor.onExit = onExit;
+		const menu = vi.fn();
+		editor.onAgentMenu = menu;
 		editor.setText("ab");
 		editor.moveToLineStart();
-		editor.handleInput("\x04"); // Ctrl+D
-		expect(onExit).not.toHaveBeenCalled();
+		editor.handleInput("\x04");
+		expect(menu).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("\x1b[3~"); // Delete
+		expect(menu).toHaveBeenCalledTimes(1);
 		expect(editor.getText()).toBe("b");
 	});
 
-	it("exits on ctrl+d after the last attachment chip is deleted", () => {
+	it("opens the menu on ctrl+d after the last attachment chip is deleted", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const onExit = vi.fn();
-		editor.onExit = onExit;
+		const menu = vi.fn();
+		editor.onAgentMenu = menu;
 		editor.insertTextAttachment("a long pasted blob");
 		expect(editor.composerChips()).toHaveLength(1);
 		// Deleting the chip token empties the buffer; `pendingTexts` keeps the
@@ -93,61 +96,55 @@ describe("CustomEditor keybindings", () => {
 		editor.setText("");
 		expect(editor.composerChips()).toHaveLength(0);
 		editor.handleInput("\x04"); // Ctrl+D
-		expect(onExit).toHaveBeenCalledTimes(1);
+		expect(menu).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps the exit chord's precedence when forward-deleting: later handlers on the same chord do not fire", () => {
+	it("gives the agent menu precedence over later handlers bound to the same chord", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const onExit = vi.fn();
+		const menu = vi.fn();
 		const onDequeue = vi.fn();
 		const customHandler = vi.fn();
-		editor.onExit = onExit;
+		editor.onAgentMenu = menu;
 		editor.onDequeue = onDequeue;
 		// A later app action and an extension handler both user-bound to Ctrl+D while
-		// the default exit binding stays; KeybindingsManager only flags clashes between
-		// explicit user claims, so this configuration is reachable.
+		// the default menu binding stays; only explicit user claims are checked for conflicts.
 		editor.setActionKeys("app.message.dequeue", ["ctrl+d"]);
 		editor.setCustomKeyHandler("ctrl+d", customHandler);
 		editor.setText("ab");
 		editor.moveToLineStart();
 		editor.handleInput("\x04"); // Ctrl+D
-		expect(editor.getText()).toBe("b");
-		expect(onExit).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("ab");
+		expect(menu).toHaveBeenCalledTimes(1);
 		expect(onDequeue).not.toHaveBeenCalled();
 		expect(customHandler).not.toHaveBeenCalled();
 	});
 
-	it("forward-deletes even when an earlier base-editor action is user-bound to the same chord", () => {
-		// Editor.handleInput checks tui.input.submit before tui.editor.deleteCharForward, so
-		// redispatching the raw key would submit the draft; the operation must be invoked directly.
+	it("gives the agent menu precedence over an earlier base-editor submit binding", () => {
 		const previous = getKeybindings();
 		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["enter", "ctrl+d"] }));
 		try {
 			const editor = new CustomEditor(getEditorTheme());
-			const onExit = vi.fn();
+			const menu = vi.fn();
 			const onSubmit = vi.fn();
-			editor.onExit = onExit;
+			editor.onAgentMenu = menu;
 			editor.onSubmit = onSubmit;
 			editor.setText("ab");
 			editor.moveToLineStart();
 			editor.handleInput("\x04"); // Ctrl+D
-			expect(editor.getText()).toBe("b");
+			expect(editor.getText()).toBe("ab");
 			expect(onSubmit).not.toHaveBeenCalled();
-			expect(onExit).not.toHaveBeenCalled();
+			expect(menu).toHaveBeenCalledTimes(1);
 		} finally {
 			setKeybindings(previous);
 		}
 	});
 
-	it("leaves the cursor on a grapheme after ctrl+d in vim normal mode, like the Delete key", () => {
-		// Vim maps the Delete key to `x`, which clamps the Normal-mode cursor; Ctrl+D resolves in
-		// the exit slot and must land on the same state, or the next insert goes in at the wrong
-		// column (deleting the last grapheme of "ab" then `iX` produced "aX" instead of "Xa").
+	it("leaves the cursor on a grapheme after Delete in Vim normal mode", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setVimMode(true);
 		editor.setText("ab");
 		editor.handleInput("\x1b"); // Escape -> Normal, cursor rests on "b"
-		editor.handleInput("\x04"); // Ctrl+D
+		editor.handleInput("\x1b[3~");
 		expect(editor.getText()).toBe("a");
 		expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
 		editor.handleInput("i");
@@ -155,7 +152,7 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("Xa");
 	});
 
-	it("deletes the whole selection and leaves visual mode on ctrl+d, like the Delete key", () => {
+	it("deletes the whole selection and leaves visual mode on Delete", () => {
 		// Vim maps Delete to `x`; in Visual mode that takes the selection and returns to Normal.
 		// A direct grapheme delete would instead leave the editor in Visual with a stale anchor.
 		const editor = new CustomEditor(getEditorTheme());
@@ -165,27 +162,23 @@ describe("CustomEditor keybindings", () => {
 		editor.moveToLineStart();
 		editor.handleInput("v"); // Visual
 		editor.handleInput("l"); // extend over "ab"
-		editor.handleInput("\x04"); // Ctrl+D
+		editor.handleInput("\x1b[3~");
 		expect(editor.getText()).toBe("c");
 		expect(editor.vimMode).toBe("normal");
 		expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
 	});
 
-	it("cancels a pending character jump on ctrl+d so the next key still types", () => {
-		// Any control key cancels jump mode in the base input chunk; the exit slot never reaches
-		// it, so the operation clears the state itself — otherwise "z" is eaten as a jump target.
+	it("cancels a pending character jump on Delete so the next key still types", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setText("abc");
 		editor.moveToLineStart();
 		editor.handleInput("\x1d"); // Ctrl+] -> jump forward, awaiting a target character
-		editor.handleInput("\x04"); // Ctrl+D
+		editor.handleInput("\x1b[3~");
 		editor.handleInput("z");
 		expect(editor.getText()).toBe("zbc");
 	});
 
-	it("dismisses the spelling-assist popup on ctrl+d, like the Delete key", () => {
-		// The debounced autocomplete refresh skips assist mode, so a popup left open by the
-		// direct delete would stay on screen indefinitely.
+	it("dismisses the spelling-assist popup on Delete", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		const onAutocompleteUpdate = vi.fn();
 		editor.onAutocompleteUpdate = onAutocompleteUpdate;
@@ -197,13 +190,13 @@ describe("CustomEditor keybindings", () => {
 		editor.handleInput("\x1b[46;5u"); // Ctrl+. -> spelling replacements
 		expect(editor.isShowingAutocomplete()).toBe(true);
 		onAutocompleteUpdate.mockClear();
-		editor.handleInput("\x04"); // Ctrl+D
+		editor.handleInput("\x1b[3~");
 		expect(editor.isShowingAutocomplete()).toBe(false);
 		expect(onAutocompleteUpdate).toHaveBeenCalled();
 		expect(editor.getText()).toBe("eh cat");
 	});
 
-	it("opens the queue body when ctrl+d leaves a bare queue prefix, like the Delete key", () => {
+	it("opens the queue body when Delete leaves a bare queue prefix", () => {
 		// Deleting back to "->" promotes it to a reserved header line; skipping that leaves the
 		// cursor on the Queueing label, so the next characters type into the label instead.
 		const editor = new CustomEditor(getEditorTheme());
@@ -211,7 +204,7 @@ describe("CustomEditor keybindings", () => {
 		editor.moveToLineStart();
 		editor.handleInput("\x1b[C"); // Right
 		editor.handleInput("\x1b[C"); // Right, cursor now before "x"
-		editor.handleInput("\x04"); // Ctrl+D
+		editor.handleInput("\x1b[3~");
 		expect(editor.getText()).toBe("->\n");
 		expect(editor.getCursor()).toEqual({ line: 1, col: 0 });
 		editor.handleInput("h");
@@ -219,15 +212,53 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("->\nhi");
 	});
 
-	it("still exits on a remapped exit key with no forward-delete role, even with text", () => {
+	it("honors a remapped menu key with a draft", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		editor.setActionKeys("app.exit", ["ctrl+q"]);
-		const onExit = vi.fn();
-		editor.onExit = onExit;
+		editor.setActionKeys("app.agent.menu", ["ctrl+q"]);
+		const menu = vi.fn();
+		editor.onAgentMenu = menu;
 		editor.setText("ab");
 		editor.handleInput("\x11"); // Ctrl+Q
-		expect(onExit).toHaveBeenCalledTimes(1);
+		expect(menu).toHaveBeenCalledTimes(1);
 		expect(editor.getText()).toBe("ab");
+	});
+
+	it("keeps the draft and Vim mode when Ctrl+C is repeated", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const cancel = vi.fn();
+		const menu = vi.fn();
+		editor.onCancel = cancel;
+		editor.onAgentMenu = menu;
+		editor.setVimMode(true);
+		editor.setText("draft");
+		for (let i = 0; i < 3; i++) editor.handleInput("\x03");
+		expect(editor.vimMode).toBe("insert");
+		editor.handleInput("\x1b");
+		expect(editor.vimMode).toBe("normal");
+		expect(cancel).toHaveBeenCalledTimes(3);
+		for (let i = 0; i < 3; i++) editor.handleInput("\x03");
+		expect(cancel).toHaveBeenCalledTimes(6);
+		expect(menu).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("draft");
+	});
+
+	it("redoes a Vim change with Alt+U, but not after a different edit", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setVimMode(true);
+		editor.setText("abc");
+		editor.handleInput("\x1b");
+		editor.handleInput("x");
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("u");
+		expect(editor.getText()).toBe("abc");
+		editor.handleInput("\x1bu");
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("u");
+		editor.handleInput("i");
+		editor.handleInput("X");
+		editor.handleInput("\x1b");
+		editor.handleInput("\x1bu");
+		expect(editor.getText()).toBe("abXc");
 	});
 });
 

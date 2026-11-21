@@ -188,7 +188,7 @@ export class HookInputComponent extends OverlayPanel {
 	#describeActions(): NativeNode {
 		if (this.#nativeActions) return this.#nativeActions;
 		const submitKey = getKeybindings().getKeys("tui.input.submit")[0];
-		const cancelKey = boundKeys("app.interrupt", ["escape"])[0];
+		const cancelKey = boundKeys("app.interrupt", ["ctrl+c"])[0];
 		this.#nativeActions = actionBar([
 			null,
 			actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {}),

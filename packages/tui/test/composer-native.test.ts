@@ -94,7 +94,7 @@ describe("native composer", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.composerState = () => ({ running, thinking: "high" });
 		editor.onCycleThinkingLevel = vi.fn();
-		editor.onEscape = vi.fn();
+		editor.onCancel = vi.fn();
 		const idle = editor.describe(cx);
 		expect(idle.p).not.toHaveProperty("tone");
 		expect(byRole(idle, "omp.composer.send")?.p).toMatchObject({ keys: ["enter"], actions: { click: "submit" } });
@@ -108,12 +108,16 @@ describe("native composer", () => {
 		const busy = editor.describe(cx);
 		expect(busy.p).toMatchObject({ tone: "pending" });
 		expect(byRole(busy, "omp.composer.send")).toBeUndefined();
-		expect(byRole(busy, "omp.composer.stop")?.p).toMatchObject({ actions: { click: "interrupt" }, tone: "error" });
+		expect(byRole(busy, "omp.composer.stop")?.p).toMatchObject({
+			actions: { click: "interrupt" },
+			tone: "error",
+			title: "Stop  Ctrl+C",
+		});
 
 		editor.handleNativeEvent({ type: "action", key: "bar/effort", act: "thinking.cycle", mods: [] });
 		editor.handleNativeEvent({ type: "action", key: "bar/stop", act: "interrupt", mods: [] });
 		expect(editor.onCycleThinkingLevel).toHaveBeenCalledTimes(1);
-		expect(editor.onEscape).toHaveBeenCalledTimes(1);
+		expect(editor.onCancel).toHaveBeenCalledTimes(1);
 	});
 
 	it("folds while an ask above holds the keys, and marks a draft that would skip it", () => {

@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Ctrl+C cancels active work without clearing drafts or quitting (including pending asks, [#303](https://github.com/PsychedelicShayna/neopi/issues/303)); Esc navigates, Ctrl+D opens the Agent Menu or force-exits during committed teardown (including final process cleanup), Delete forward-deletes, and Alt+U redoes in Vim Normal mode ([#629](https://github.com/PsychedelicShayna/neopi/issues/629)).
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
 - Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
