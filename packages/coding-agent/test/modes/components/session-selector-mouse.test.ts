@@ -37,16 +37,10 @@ function makeSelector(
 	onSelect: (s: SessionInfo) => void,
 	rows = 40,
 ): SessionSelectorComponent<SessionInfo> {
-	return new SessionSelectorComponent(
-		sessions,
-		onSelect,
-		() => {},
-		() => {},
-		{
-			getTerminalRows: () => rows,
-			fillHeight: true,
-		},
-	);
+	return new SessionSelectorComponent(sessions, onSelect, () => {}, {
+		getTerminalRows: () => rows,
+		fillHeight: true,
+	});
 }
 
 describe("SessionSelectorComponent mouse", () => {
@@ -102,7 +96,6 @@ describe("SessionSelectorComponent mouse", () => {
 			() => {
 				cancellations += 1;
 			},
-			() => {},
 		);
 
 		selector.lockInput();

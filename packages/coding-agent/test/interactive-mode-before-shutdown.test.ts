@@ -137,7 +137,7 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		expect(postmortem.quit).toHaveBeenCalledTimes(1);
 	});
 
-	it("Ctrl+D opens the menu over a pending close prompt; Delete still edits the prompt", async () => {
+	it("Ctrl+D and Delete edit the focused pending-close prompt without opening the Agent Menu", async () => {
 		new InputController(mode).setupKeyHandlers();
 		const entered = Promise.withResolvers<void>();
 		let answer: string | undefined;
@@ -148,11 +148,12 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		};
 		const quitting = mode.shutdown();
 		await entered.promise;
-		for (const key of ["a", "b", "\x1b[D", "\x1b[3~", "\x04"]) mode.ui.injectDebugInput(key);
-		expect(mode.ui.hasOverlay()).toBe(true);
+		const prompt = mode.hookInput;
+		if (!prompt) throw new Error("metadata input was not presented");
+		expect(mode.ui.getFocused()).toBe(prompt);
+		for (const key of ["a", "b", "\x1b[D", "\x1b[3~", "c", "\x1b[D", "\x04"]) mode.ui.injectDebugInput(key);
+		expect(mode.ui.getFocused()).toBe(prompt);
 		expect(postmortem.exitProcess).not.toHaveBeenCalled();
-		mode.ui.injectDebugInput("q");
-		expect(mode.ui.hasOverlay()).toBe(false);
 		expect(session.isDisposed).toBe(false);
 		mode.ui.injectDebugInput("\r");
 		await quitting;

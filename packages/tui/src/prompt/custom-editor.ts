@@ -1209,7 +1209,7 @@ export class CustomEditor extends Editor {
 		}
 	}
 
-	/** Lock the composer while a chain rewrites it; only cancellation and the agent menu stay active. */
+	/** Lock the composer while a chain rewrites it; only chain cancel/skip stay active. */
 	// While a chain holds the composer it owns the draft and overwrites it when done, so writes
 	// that bypass handleInput (an in-flight dictation finishing, its submit trigger) are dropped.
 	override insertText(text: string): void {
@@ -1727,7 +1727,8 @@ export class CustomEditor extends Editor {
 
 	onEscape?: () => void;
 	onCancel?: () => void;
-	onAgentMenu?: () => void;
+	/** Return false to let a forwarded key fall through when the composer does not own focus. */
+	onAgentMenu?: (data: string) => boolean | void;
 	onDisplayReset?: () => void;
 	onCycleThinkingLevel?: () => void;
 	/** A thinking level (`off`, `auto`, `minimal`…`max`) was picked by pointer. */
@@ -1932,8 +1933,7 @@ export class CustomEditor extends Editor {
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
 			if (canonical !== undefined) {
-				if (this.#matchesAction(canonical, "app.agent.menu")) this.onAgentMenu?.();
-				else if (this.#matchesAction(canonical, "app.interrupt")) this.#chainLock.onCancel();
+				if (this.#matchesAction(canonical, "app.interrupt")) this.#chainLock.onCancel();
 				else if (this.#matchesAction(canonical, "app.chain.skipStep")) this.#chainLock.onSkip();
 			}
 			return;
@@ -2059,10 +2059,8 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			if (this.#matchesAction(canonical, "app.agent.menu")) {
-				this.onAgentMenu?.();
+			if (this.onAgentMenu && this.#matchesAction(canonical, "app.agent.menu") && this.onAgentMenu(data) !== false)
 				return;
-			}
 
 			// Intercept configured dequeue shortcut (restore queued message to editor)
 			if (this.#matchesAction(canonical, "app.message.dequeue") && this.onDequeue) {

@@ -582,7 +582,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	#restoredSelected: string | undefined;
 	onSelect?: (session: T) => void;
 	onCancel?: () => void;
-	onAgentMenu?: () => void;
 	onToggleScope?: () => void;
 	// Snapshot of the live terminal-row getter; the visible window is derived
 	// from it per render so the picker fits the viewport (and adapts to resize).
@@ -1547,10 +1546,6 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
-		if (this.onAgentMenu && keybindings.matches(data, "app.agent.menu")) {
-			this.onAgentMenu();
-			return;
-		}
 		if (matchesAppDismiss(data)) return this.escape();
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
@@ -1742,7 +1737,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		sessions: T[],
 		onSelect: (session: T) => void,
 		onCancel: () => void,
-		onAgentMenu: () => void,
 		options: SessionSelectorOptions<T> = {},
 	) {
 		super(options.title ?? "Resume Session");
@@ -1789,7 +1783,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			this.#sessionList.dispose();
 			onCancel();
 		};
-		if (this.#standalone) this.#sessionList.onAgentMenu = onAgentMenu;
 		this.#sessionList.onRequestRender = () => this.#onRequestRender?.();
 		if (this.#onDelete) {
 			this.#sessionList.onDeleteRequest = (session: T) => {

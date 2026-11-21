@@ -39,7 +39,9 @@ describe("InteractiveMode long shutdown status", () => {
 		mode = new InteractiveMode(session, "test");
 		mode.ui.requestRender = vi.fn();
 		mode.ui.terminal.drainInput = async () => {};
-		vi.spyOn(postmortem, "quit").mockResolvedValue(undefined);
+		vi.spyOn(postmortem, "quit").mockImplementation(async (_code, options) => {
+			await options?.beforeExit?.();
+		});
 	});
 
 	afterEach(async () => {
@@ -96,6 +98,7 @@ describe("InteractiveMode long shutdown status", () => {
 		vi.useFakeTimers();
 		const showStatus = vi.spyOn(mode, "showStatus").mockImplementation(() => {});
 		vi.spyOn(session, "dispose").mockResolvedValue(undefined);
+		const stop = vi.spyOn(mode, "stop");
 		const draining = Promise.withResolvers<void>();
 		const drained = Promise.withResolvers<void>();
 		vi.spyOn(mode.ui.terminal, "drainInput").mockImplementation(() => {
@@ -108,10 +111,11 @@ describe("InteractiveMode long shutdown status", () => {
 		expect(showStatus).toHaveBeenCalledTimes(1);
 		vi.advanceTimersByTime(10_000);
 		expect(showStatus).toHaveBeenCalledTimes(1);
-		expect(postmortem.quit).not.toHaveBeenCalled();
+		expect(stop).not.toHaveBeenCalled();
 
 		drained.resolve();
 		await shutdown;
+		expect(stop).toHaveBeenCalledTimes(1);
 		expect(postmortem.quit).toHaveBeenCalledTimes(1);
 		vi.advanceTimersByTime(10_000);
 		expect(showStatus).toHaveBeenCalledTimes(1);

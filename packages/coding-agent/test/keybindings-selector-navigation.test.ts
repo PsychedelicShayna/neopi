@@ -141,7 +141,6 @@ describe("selector navigation keybindings", () => {
 			[createSession("session-a", "Alpha"), createSession("session-b", "Beta")],
 			session => selected.push(session.path),
 			() => {},
-			() => {},
 		);
 
 		selector.handleInput(CTRL_N);

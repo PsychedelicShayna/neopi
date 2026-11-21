@@ -48,7 +48,6 @@ describe("SessionSelectorComponent complete listing", () => {
 			[alpha, beta],
 			session => selected.push(session),
 			() => {},
-			() => {},
 			{ completeSessions: complete.promise },
 		);
 		selector.handleInput(DOWN);
@@ -74,7 +73,6 @@ describe("SessionSelectorComponent complete listing", () => {
 				createSession("alpha", "Alpha", "2024-01-03T00:00:00Z"),
 				createSession("beta", "Beta", "2024-01-02T00:00:00Z"),
 			],
-			() => {},
 			() => {},
 			() => {},
 			{ completeSessions: complete.promise, onDelete: async () => true },
@@ -105,7 +103,6 @@ describe("SessionSelectorComponent complete listing", () => {
 		const selector = new SessionSelectorComponent(
 			[alpha],
 			session => selected.push(session),
-			() => {},
 			() => {},
 			{ completeSessions: complete.promise, onRename: async () => "New title" },
 		);

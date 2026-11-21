@@ -35,19 +35,17 @@ function createSession(id: string, title: string): SessionInfo {
 }
 
 describe("component escape bindings", () => {
-	it("remaps picker dismissal and opens the agent menu without exiting on Ctrl+C", () => {
+	it("remaps standalone picker dismissal without closing on Ctrl+C or Ctrl+D", () => {
 		const keybindings = KeybindingsManager.inMemory({
 			"app.navigation.dismiss": "alt+x",
 		});
 		setKeybindings(keybindings);
 
 		const onCancel = vi.fn();
-		const onAgentMenu = vi.fn();
 		const selector = new SessionSelectorComponent(
 			[createSession("session-a", "Alpha"), createSession("session-b", "Beta")],
 			() => {},
 			onCancel,
-			onAgentMenu,
 			{ standalone: true },
 		);
 
@@ -55,9 +53,9 @@ describe("component escape bindings", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 
 		selector.handleInput("\x03");
-		expect(onAgentMenu).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
 		selector.handleInput("\x04");
-		expect(onAgentMenu).toHaveBeenCalledTimes(1);
+		expect(onCancel).not.toHaveBeenCalled();
 
 		selector.handleInput("\x1bx");
 		expect(onCancel).toHaveBeenCalledTimes(1);

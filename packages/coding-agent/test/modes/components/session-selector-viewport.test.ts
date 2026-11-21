@@ -29,7 +29,6 @@ function makeSelector(rows: number): SessionSelectorComponent<SessionInfo> {
 		makeTitledSessions(50),
 		() => {},
 		() => {},
-		() => {},
 		{ getTerminalRows: () => rows },
 	);
 }
@@ -60,7 +59,6 @@ describe("SessionSelectorComponent viewport fit", () => {
 	it("defaults to a viewport-safe window when no row getter is provided", () => {
 		const selector = new SessionSelectorComponent(
 			makeTitledSessions(50),
-			() => {},
 			() => {},
 			() => {},
 			{},
@@ -96,7 +94,6 @@ describe("SessionSelectorComponent viewport fit", () => {
 		const sessions = makeTitledSessions(50);
 		const selector = new SessionSelectorComponent(
 			sessions,
-			() => {},
 			() => {},
 			() => {},
 			{

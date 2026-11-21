@@ -34,7 +34,6 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			makeSessions(20),
 			() => {},
 			() => {},
-			() => {},
 			{
 				getTerminalRows: () => term.rows,
 				onDelete: async () => true,
@@ -81,7 +80,6 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const selector = new SessionSelectorComponent(
 			makeSessions(20),
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -151,7 +149,6 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		const TERMINAL_ROWS = 24;
 		const selector = new SessionSelectorComponent(
 			sessions,
-			() => {},
 			() => {},
 			() => {},
 			{ getTerminalRows: () => TERMINAL_ROWS, onDelete: async () => true },

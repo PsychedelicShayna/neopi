@@ -3235,7 +3235,6 @@ export class SelectorController {
 				}
 			},
 			done,
-			() => this.ctx.handleCtrlD(),
 			{
 				...selectorOptions,
 				getTerminalRows: () => this.ctx.ui.terminal.rows,

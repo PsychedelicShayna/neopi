@@ -29,7 +29,6 @@ function makeSelector(sessions: SessionInfo[], rows: number): SessionSelectorCom
 		sessions,
 		() => {},
 		() => {},
-		() => {},
 		{ getTerminalRows: () => rows },
 	);
 }

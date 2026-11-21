@@ -33,7 +33,6 @@ function renderPlain(sessions: SessionInfo[]): string {
 		sessions,
 		() => {},
 		() => {},
-		() => {},
 		// Tall viewport so every asserted row is inside the visible window; these
 		// tests cover status formatting, not the viewport-fit window sizing.
 		{ getTerminalRows: () => 100 },

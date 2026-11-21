@@ -42,7 +42,6 @@ function createSelector(onDelete: (session: SessionInfo) => Promise<boolean>): S
 		[createSession("session-a", "Alpha"), createSession("session-b", "Beta")],
 		() => {},
 		() => {},
-		() => {},
 		{ onDelete },
 	);
 }

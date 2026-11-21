@@ -507,6 +507,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 		// Until handoff there is no running agent to interrupt or restart.
 		this.editor.onAgentMenu = () => {
+			if (this.ui.getFocused() !== this.editor) return false;
 			const menu = new AgentMenuComponent({
 				shutdown: () => this.#requestExit(0),
 				forceShutdown: () => this.#requestExit(130),

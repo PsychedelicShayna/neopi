@@ -17,7 +17,7 @@ type FakeEditor = {
 	onEscape?: () => void;
 	onSubmit?: (text: string) => Promise<void>;
 	onCancel?: () => void;
-	onAgentMenu?: () => void;
+	onAgentMenu?: (data: string) => boolean | void;
 	onSuspend?: () => void;
 	onCycleThinkingLevel?: () => void;
 	onCycleModelForward?: () => void;
@@ -1180,7 +1180,7 @@ describe("InputController Ctrl+C behavior", () => {
 		const showAgentMenu = vi.fn<InteractiveModeContext["showAgentMenu"]>();
 		ctx.showAgentMenu = showAgentMenu;
 		new InputController(ctx).setupKeyHandlers();
-		editor.onAgentMenu?.();
+		editor.onAgentMenu?.("\x04");
 		expect(showAgentMenu).toHaveBeenCalledTimes(1);
 		expect(spies.shutdown).not.toHaveBeenCalled();
 		expect(spies.flushSync).not.toHaveBeenCalled();

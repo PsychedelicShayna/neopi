@@ -39,7 +39,6 @@ function renderPlain(sessions: SessionInfo[], currentSessionPath?: string): stri
 		sessions,
 		() => {},
 		() => {},
-		() => {},
 		{
 			getTerminalRows: () => 100,
 			currentSessionPath,
@@ -90,7 +89,6 @@ describe("SessionSelectorComponent current session marker", () => {
 			[work, live, other],
 			() => {},
 			() => {},
-			() => {},
 			{
 				getTerminalRows: () => 100,
 				currentSessionPath: live.path,
@@ -110,7 +108,6 @@ describe("SessionSelectorComponent current session marker", () => {
 		const live = createSession("live", "Charlie live", "2024-01-01T00:00:00Z");
 		const selector = new SessionSelectorComponent(
 			[alpha, bravo, live],
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -136,7 +133,6 @@ describe("SessionSelectorComponent current session marker", () => {
 			[alpha, bravo, charlie, live],
 			() => {},
 			() => {},
-			() => {},
 			{
 				getTerminalRows: () => 100,
 				currentSessionPath: live.path,
@@ -156,7 +152,6 @@ describe("SessionSelectorComponent current session marker", () => {
 	it("restores live-session focus when the search query is cleared", () => {
 		const selector = new SessionSelectorComponent(
 			[newer, older],
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -180,7 +175,6 @@ describe("SessionSelectorComponent current session marker", () => {
 		let currentPath: string | undefined = live.path;
 		const selector = new SessionSelectorComponent(
 			[alpha, live],
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -224,7 +218,6 @@ describe("SessionSelectorComponent delete keys", () => {
 	function makeSelector() {
 		const selector = new SessionSelectorComponent(
 			[alpha, bravo],
-			() => {},
 			() => {},
 			() => {},
 			{ getTerminalRows: () => 100, onDelete: async () => true },

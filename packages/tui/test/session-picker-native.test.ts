@@ -73,7 +73,6 @@ describe("session selector picker", () => {
 			[today, todayToo, old],
 			s => opts.resumed?.push(s.id),
 			() => {},
-			() => {},
 			{
 				onDelete: async s => {
 					opts.deleted?.push(s.id);
@@ -195,7 +194,6 @@ describe("session selector rename", () => {
 		const entries = [session("a", "Alpha", 0), session("b", "Beta", 1), session("c", "Gamma", 40 * 24 * HOUR)];
 		const selector = new SessionSelectorComponent(
 			entries,
-			() => {},
 			() => {},
 			() => {},
 			{
