@@ -388,7 +388,11 @@ export class LiveCommandController {
 					if (this.#session !== session) return;
 					this.#showPhase(phase);
 				},
-				onLevels: () => {},
+				onLevels: (input, output) => {
+					if (this.#session === session && this.#ctx.statusLine.setLiveLevels(input, output)) {
+						this.#ctx.ui.requestRender();
+					}
+				},
 				onTranscript: transcript => {
 					if (transcript) notifyRemote(() => remote?.onTranscript?.(transcript));
 					if (this.#session !== session || !transcript || transcript.role === "user") return;

@@ -38,6 +38,8 @@ export type AnsiColor = keyof typeof ANSI_COLOR_INDEX;
  * exception: `createTheme` derives it from `mdLink` and `text` when omitted.
  */
 export const OPTIONAL_THEME_COLOR_RECORD = {
+	liveMeterMic: true,
+	liveMeterOutput: true,
 	assistantMessageText: true,
 	mdExtensionLink: true,
 	subagent1: true,
@@ -148,6 +150,8 @@ export type ThemeColor =
 	| "pythonMode"
 	| "btwMode"
 	| "statusLineSep"
+	| "liveMeterMic"
+	| "liveMeterOutput"
 	| "statusLineModel"
 	| "statusLinePath"
 	| "statusLineGitClean"
@@ -224,6 +228,8 @@ const THEME_COLOR_RECORD = {
 	pythonMode: true,
 	btwMode: true,
 	statusLineSep: true,
+	liveMeterMic: true,
+	liveMeterOutput: true,
 	statusLineModel: true,
 	statusLinePath: true,
 	statusLineGitClean: true,

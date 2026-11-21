@@ -43,13 +43,18 @@ export function statusLineDraftPath(agentDir: string): string {
 	return nodePath.join(agentDir, STATUS_LINE_DRAFT_FILE);
 }
 
-/** `options` with its usage-bar templates replaced; no templates removes the key rather than leaving `{}`. */
+/** Apply the template editor’s shared draft map to the corresponding segment settings. */
 export function withUsageTemplates(
 	options: StatusLineSegmentOptions | undefined,
 	templates: Record<string, string>,
 ): StatusLineSegmentOptions {
-	const { usageBars, ...rest } = options ?? {};
+	const { usageBars, liveMeter: _meter, ...rest } = options ?? {};
+	const { live_meter: meterTemplate, ...usageTemplates } = templates;
 	const { templates: _previous, ...barRest } = usageBars ?? {};
-	const bars = Object.keys(templates).length > 0 ? { ...barRest, templates: { ...templates } } : barRest;
-	return Object.keys(bars).length > 0 ? { ...rest, usageBars: bars } : rest;
+	const bars = Object.keys(usageTemplates).length > 0 ? { ...barRest, templates: usageTemplates } : barRest;
+	return {
+		...rest,
+		...(Object.keys(bars).length ? { usageBars: bars } : {}),
+		...(meterTemplate ? { liveMeter: { template: meterTemplate } } : {}),
+	};
 }
