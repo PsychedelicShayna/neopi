@@ -1550,7 +1550,8 @@ export const cfgUpdateChannel = register({
 		tab: "interaction",
 		group: "Startup & Updates",
 		label: "Update Channel",
-		description: "Follow stable NeoPi releases or nightly prereleases; changing channel releases rollback hold",
+		description:
+			"Only a persisted Global change to a different channel or a successful `npi update stable|nightly` releases the rollback hold. Project, Session and process overrides do not.",
 		options: [
 			{ value: "stable", label: "Stable", description: "Latest stable NeoPi release" },
 			{ value: "nightly", label: "Nightly", description: "Latest NeoPi prerelease" },
