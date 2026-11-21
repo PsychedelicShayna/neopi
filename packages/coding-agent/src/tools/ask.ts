@@ -1,5 +1,5 @@
 import { PRODUCT_NAME } from "@oh-my-pi/pi-utils/dirs";
-import type { AskOptionNote, AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+import type { AskItemNote, AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 /**
  * Ask Tool - Interactive user prompting during execution
  *
@@ -186,7 +186,6 @@ function stripRecommendedSuffix(label: string): string {
 interface SelectionResult {
 	selectedOptions: string[];
 	customInput?: string;
-	note?: string;
 	timedOut: boolean;
 	navigation?: "back" | "forward";
 	cancelled?: boolean;
@@ -201,7 +200,7 @@ interface AskSingleQuestionOptions {
 	recommended?: number;
 	timeout?: number;
 	signal?: AbortSignal;
-	initialSelection?: Pick<SelectionResult, "selectedOptions" | "customInput" | "note">;
+	initialSelection?: Pick<SelectionResult, "selectedOptions" | "customInput">;
 	navigation?: NavigationControls;
 }
 
@@ -245,7 +244,6 @@ async function askSingleQuestion(
 	const doneLabel = getDoneOptionLabel();
 	let selectedOptions = [...(initialSelection?.selectedOptions ?? [])];
 	let customInput = initialSelection?.customInput;
-	const note = initialSelection?.note;
 	let timedOut = false;
 
 	const selectOption = async (
@@ -369,14 +367,14 @@ async function askSingleQuestion(
 			});
 
 			if (arrowNavigation) {
-				return { selectedOptions: Array.from(selected), customInput, note, timedOut, navigation: arrowNavigation };
+				return { selectedOptions: Array.from(selected), customInput, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
 				if (selectTimedOut) {
 					timedOut = true;
 					break;
 				}
-				return { selectedOptions: Array.from(selected), customInput, note, timedOut, cancelled: true };
+				return { selectedOptions: Array.from(selected), customInput, timedOut, cancelled: true };
 			}
 			if (choice === doneLabel) break;
 
@@ -446,11 +444,11 @@ async function askSingleQuestion(
 			timedOut = selectTimedOut;
 
 			if (arrowNavigation) {
-				return { selectedOptions, customInput, note, timedOut, navigation: arrowNavigation };
+				return { selectedOptions, customInput, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
 				if (!timedOut) {
-					return { selectedOptions, customInput, note, timedOut, cancelled: true };
+					return { selectedOptions, customInput, timedOut, cancelled: true };
 				}
 				break;
 			}
@@ -479,7 +477,7 @@ async function askSingleQuestion(
 			selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 		}
 		if (navigation?.allowForward) {
-			return { selectedOptions, customInput, note, timedOut, navigation: "forward" };
+			return { selectedOptions, customInput, timedOut, navigation: "forward" };
 		}
 	}
 
@@ -487,27 +485,28 @@ async function askSingleQuestion(
 		selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 	}
 
-	return { selectedOptions, customInput, note, timedOut };
+	return { selectedOptions, customInput, timedOut };
 }
 
-function formatOptionNotes(result: { selectedOptions: string[]; optionNotes?: AskOptionNote[] }): string {
-	return (result.optionNotes ?? [])
+function formatItemNotes(result: { selectedOptions: string[]; customInput?: string; notes?: AskItemNote[] }): string {
+	return (result.notes ?? [])
 		.map(entry => {
-			const selected = result.selectedOptions.includes(entry.option) ? "selected" : "not selected";
+			const target = entry.option === undefined ? "Other" : `option ${JSON.stringify(entry.option)}`;
+			const selected =
+				entry.option === undefined
+					? result.customInput !== undefined
+					: result.selectedOptions.includes(entry.option);
 			const note = entry.note
 				.split("\n")
 				.map(line => `  ${line}`)
 				.join("\n");
-			return `Note on option ${JSON.stringify(entry.option)} (${selected}):\n${note}`;
+			return `Note on ${target} (${selected ? "selected" : "not selected"}):\n${note}`;
 		})
 		.join("\n");
 }
 
 function formatQuestionResult(result: QuestionResult): string {
-	const noteOn = result.noteOption === undefined ? "" : ` on ${result.noteOption}`;
-	const noteSuffix =
-		(result.note ? ` (note${noteOn}: ${result.note})` : "") +
-		(result.optionNotes?.length ? `\n${formatOptionNotes(result)}` : "");
+	const noteSuffix = result.notes?.length ? `\n${formatItemNotes(result)}` : "";
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
 	if (result.selectedOptions.length === 0) {
 		if (custom !== undefined) return `${result.id}: ${custom}${noteSuffix}`;
@@ -522,9 +521,7 @@ function formatQuestionResult(result: QuestionResult): string {
 function formatSingleQuestionResponse(result: {
 	selectedOptions: string[];
 	customInput?: string;
-	note?: string;
-	optionNotes?: AskOptionNote[];
-	noteOption?: string;
+	notes?: AskItemNote[];
 	timedOut?: boolean;
 	multi: boolean;
 }): string {
@@ -545,18 +542,7 @@ function formatSingleQuestionResponse(result: {
 				: `User provided custom input: ${result.customInput}`,
 		);
 	}
-	if (result.note) {
-		const label = `User added note${result.noteOption === undefined ? "" : ` on ${result.noteOption}`}:`;
-		responseParts.push(
-			result.note.includes("\n")
-				? `${label}\n${result.note
-						.split("\n")
-						.map(line => `  ${line}`)
-						.join("\n")}`
-				: `${label} ${result.note}`,
-		);
-	}
-	if (result.optionNotes?.length) responseParts.push(formatOptionNotes(result));
+	if (result.notes?.length) responseParts.push(formatItemNotes(result));
 	if (responseParts.length > 0) return responseParts.join("\n");
 	return result.multi ? "User did not select any options" : "User cancelled the selection";
 }
@@ -939,16 +925,15 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					}
 					const customOffset = answerImages.length;
 					if (result.customInputImages) answerImages.push(...result.customInputImages);
-					const noteOffset = answerImages.length;
-					if (result.noteImages) answerImages.push(...result.noteImages);
-					const optionNotes = result.optionNotes?.map(entry => {
-						if (!question.options.some(option => option.label === entry.option)) {
+					const notes = result.notes?.map(entry => {
+						const option = entry.option;
+						if (option !== undefined && !question.options.some(candidate => candidate.label === option)) {
 							throw new Error("Ask dialog returned a note for an unknown option");
 						}
 						const offset = answerImages.length;
 						if (entry.images) answerImages.push(...entry.images);
 						return {
-							option: entry.option,
+							...(option === undefined ? {} : { option }),
 							note: shiftImageMarkers(entry.note, offset, entry.images?.length ?? 0),
 						};
 					});
@@ -962,12 +947,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.customInput === undefined
 								? undefined
 								: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
-						note:
-							result.note === undefined
-								? undefined
-								: shiftImageMarkers(result.note, noteOffset, result.noteImages?.length ?? 0),
-						...(optionNotes?.length ? { optionNotes } : {}),
-						noteOption: result.noteOption,
+						...(notes?.length ? { notes } : {}),
 						timedOut: result.timedOut,
 					});
 				}
@@ -991,9 +971,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						multi: result.multi,
 						selectedOptions: result.selectedOptions,
 						customInput: result.customInput,
-						note: result.note,
-						...(result.optionNotes?.length ? { optionNotes: result.optionNotes } : {}),
-						noteOption: result.noteOption,
+						...(result.notes?.length ? { notes: result.notes } : {}),
 						timedOut: result.timedOut,
 					};
 					const responseText = formatSingleQuestionResponse(result);
@@ -1022,7 +1000,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			}));
 			const optionLabels = questionOptions.map(getAskOptionLabel);
 			try {
-				const { selectedOptions, customInput, note, navigation, cancelled, timedOut } = await askSingleQuestion(
+				const { selectedOptions, customInput, navigation, cancelled, timedOut } = await askSingleQuestion(
 					ui,
 					q.question,
 					questionOptions,
@@ -1035,7 +1013,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						navigation: options?.navigation,
 					},
 				);
-				return { optionLabels, selectedOptions, customInput, note, navigation, cancelled, timedOut };
+				return { optionLabels, selectedOptions, customInput, navigation, cancelled, timedOut };
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") {
 					throw new ToolAbortError("Ask input was cancelled");
@@ -1046,7 +1024,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		if (params.questions.length === 1) {
 			const [q] = params.questions;
-			const { optionLabels, selectedOptions, customInput, note, cancelled, timedOut } = await askQuestion(q);
+			const { optionLabels, selectedOptions, customInput, cancelled, timedOut } = await askQuestion(q);
 
 			if (!timedOut && (cancelled || (selectedOptions.length === 0 && customInput === undefined))) {
 				cancelAsk();
@@ -1057,14 +1035,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				multi: q.multi ?? false,
 				selectedOptions,
 				customInput,
-				note,
 				timedOut: timedOut || undefined,
 			};
 
 			const responseText = formatSingleQuestionResponse({
 				selectedOptions,
 				customInput,
-				note,
 				timedOut: timedOut || undefined,
 				multi: q.multi ?? false,
 			});
@@ -1087,7 +1063,6 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				optionLabels,
 				selectedOptions,
 				customInput,
-				note,
 				navigation: navAction,
 				cancelled,
 				timedOut,
@@ -1104,7 +1079,6 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				multi: q.multi ?? false,
 				selectedOptions,
 				customInput,
-				note,
 				timedOut: timedOut || undefined,
 			};
 

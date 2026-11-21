@@ -42,7 +42,9 @@ afterEach(async () => {
 
 const flowPath = (...parts: string[]) => path.join(root, ".omp/ratchet", FLOW, ...parts);
 
-async function setup(options: { hold?: string[]; models?: unknown[] } = {}): Promise<Harness> {
+async function setup(
+	options: { hold?: string[]; models?: unknown[]; reviseWithNote?: boolean } = {},
+): Promise<Harness> {
 	const session = {
 		cwd: root,
 		hasUI: true,
@@ -64,7 +66,14 @@ async function setup(options: { hold?: string[]; models?: unknown[] } = {}): Pro
 					options: ["Approve", "Revise", "Abort"],
 					multi: false,
 					selectedOptions: answer === "timeout" ? ["Approve"] : [answer],
-					customInput: answer === "Revise" ? "drop case_3" : undefined,
+					customInput: answer === "Revise" && !options.reviseWithNote ? "drop case_3" : undefined,
+					notes:
+						answer === "Revise" && options.reviseWithNote
+							? [
+									{ option: "Approve", note: "Not feedback for Revise" },
+									{ option: "Revise", note: "drop case_3" },
+								]
+							: undefined,
 					timedOut: answer === "timeout",
 				},
 			],
@@ -267,6 +276,15 @@ describe("ratchet approvals", () => {
 			feedback: "drop case_3",
 		});
 		expect((await harness.call<Status>({ action: "status" })).approval_status.inputs).toBe("missing");
+	});
+
+	it("uses the note bound to Revise, not a note on another item, for feedback", async () => {
+		const harness = await setup({ reviseWithNote: true });
+		expect(await harness.approve("inputs", "Revise")).toEqual({
+			approved: false,
+			aborted: false,
+			feedback: "drop case_3",
+		});
 	});
 
 	it("rejects approval without an interactive UI", async () => {

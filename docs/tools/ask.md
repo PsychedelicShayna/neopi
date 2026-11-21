@@ -32,15 +32,16 @@
 
 - Single-shot result.
 - `content[0].text` is plain text:
-   - single question: selected/custom answer plus an optional `User added note: ...`
-   - multiple questions: `User answers:` followed by one line per `id`
+   - single question: selected/custom answer plus a `Note on ...` block for each annotated item
+   - multiple questions: `User answers:` followed by each `id` and its answer, with item-note blocks under that answer
    - rich-dialog chat redirect: `User chose to chat about this instead of answering...`
 - Images pasted into rich-dialog custom answers and notes follow the text block, each with the source-path notice a main-editor attachment gets. `[Image #N]` markers are numbered across the whole result, in text order within each answer, and `attachment://N` resolves to them until a newer message attaches images; image data stays out of `details`.
 - For a text-only active model with `images.describeForTextModels` on (the default), each answer image is followed by the vision-model description a pasted prompt image gets.
 - `details`:
-   - single question: `{ question, options, multi, selectedOptions, customInput?, note?, timedOut? }`
-   - multiple questions: `{ results: QuestionResult[] }`; each item includes `id`, `question`, `options`, `multi`, `selectedOptions`, and optional `customInput`, `note`, and `timedOut`
+   - single question: `{ question, options, multi, selectedOptions, customInput?, notes?, timedOut? }`
+   - multiple questions: `{ results: QuestionResult[] }`; each item includes `id`, `question`, `options`, `multi`, `selectedOptions`, and optional `customInput`, `notes`, and `timedOut`
    - chat redirect: `{ chatRedirect: true, questions: string[] }`
+   - each `notes` entry is `{ option?: string, note: string }`; `option` is the original offered label, or absent for Other. An item need not be selected to carry a note.
 - Cancellation and headless cases throw instead of returning a structured success result. The tool does not stream updates.
 
 ## Flow
@@ -65,6 +66,7 @@
 - Single-select: one option or custom input.
 - Multi-select: toggled choices and/or custom input. The rich dialog permits an empty multi-select answer (`User did not select any options` for one question, `id: []` for multiple questions). In the fallback, `Done selecting` appears only when forward navigation is not active and at least one choice is selected.
 - Rich ask dialog: supports per-question headers, option previews, answer notes, pasted images in custom answers and notes, and a `Chat about this` redirect. Submitting a nonempty custom answer advances to the next question, or to review for a single multi-select question; existing checkbox selections are preserved. A single-select question still submits immediately when it is the only question.
+- Highlight any item and press `n` to add or edit its note. Saving it empty removes it. Escape first leaves Vim Insert mode, then saves the note and returns to the list; Ctrl+C cancels the edit.
 - Composer alongside the question: in the TUI the composer stays mounted under the rich dialog. Speech input (`app.stt.toggle`, `app.dictation.toggle`) starts, stops and fills the composer while the question is up. A non-empty composer takes typing until it is sent or cleared. Hiding the question with `Alt+H` hands typing to the composer, and `Enter` on an empty composer shows the question again. A message sent this way is queued like any message sent mid-turn: the agent receives it after the question is answered, and the question is not cancelled.
 - Pasted images: the custom-answer and note prompts take images the same ways the main editor does and mark them `[Image #N, WxH]`; deleting a marker drops its image. Extensions calling `ui.askDialog` get this only with `acceptImages: true`; collab guests, RPC, and ACP stay text-only.
 - Custom editor: paste followed by Enter submits the pasted text, including when they arrive together. Submission waits for an in-flight clipboard read; cancellation discards pending clipboard delivery.

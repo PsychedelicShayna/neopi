@@ -41,12 +41,10 @@ export interface RpcResumeTreeResult {
 	resumed: true;
 }
 
-const optionNote = { option: "string", note: "string" } as const;
+const itemNote = { "option?": "string", note: "string" } as const;
 const answerMetadata = {
 	"customInput?": "string",
-	"note?": "string",
-	"optionNotes?": [optionNote, "[]"],
-	"noteOption?": "string",
+	"notes?": [itemNote, "[]"],
 	"timedOut?": "boolean",
 } as const;
 const reanswerSchema = type({

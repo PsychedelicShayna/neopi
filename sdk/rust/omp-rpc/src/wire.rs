@@ -4355,9 +4355,10 @@ pub struct SessionTree {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TreeAskOptionNote {
-	pub option: String,
+pub struct TreeAskItemNote {
 	pub note: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub option: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4371,11 +4372,7 @@ pub struct TreeAskQuestionResult {
 	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
 	pub custom_input: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub note: Option<String>,
-	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
-	pub option_notes: Option<Vec<TreeAskOptionNote>>,
-	#[serde(rename = "noteOption", default, skip_serializing_if = "Option::is_none")]
-	pub note_option: Option<String>,
+	pub notes: Option<Vec<TreeAskItemNote>>,
 	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
 	pub timed_out: Option<bool>,
 }
@@ -4393,11 +4390,7 @@ pub struct TreeAskDetails {
 	#[serde(rename = "customInput", default, skip_serializing_if = "Option::is_none")]
 	pub custom_input: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub note: Option<String>,
-	#[serde(rename = "optionNotes", default, skip_serializing_if = "Option::is_none")]
-	pub option_notes: Option<Vec<TreeAskOptionNote>>,
-	#[serde(rename = "noteOption", default, skip_serializing_if = "Option::is_none")]
-	pub note_option: Option<String>,
+	pub notes: Option<Vec<TreeAskItemNote>>,
 	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
 	pub timed_out: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

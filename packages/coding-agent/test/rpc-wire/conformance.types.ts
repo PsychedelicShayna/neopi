@@ -20,7 +20,7 @@ import type { RpcGoalResult } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal
 import type { RpcJobLifecycleFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-jobs";
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type { RpcNavigateTreeResult, RpcTreeAskReanswer } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tree";
-import type { AskToolDetails, AskOptionNote, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+import type { AskToolDetails, AskItemNote, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAgentSessionEventFrame,
@@ -172,7 +172,7 @@ export type TreeNavigationResult = Assert<Outbound<RpcNavigateTreeResult, Wire.N
 export type TreeReanswerInput = Assert<Inbound<Wire.TreeAskReanswer, RpcTreeAskReanswer>>;
 export type TreeAskDetailsInput = Assert<Inbound<Wire.TreeAskDetails, AskToolDetails>>;
 export type TreeAskQuestionInput = Assert<Inbound<Wire.TreeAskQuestionResult, QuestionResult>>;
-export type TreeAskOptionNoteInput = Assert<Inbound<Wire.TreeAskOptionNote, AskOptionNote>>;
+export type TreeAskItemNoteInput = Assert<Inbound<Wire.TreeAskItemNote, AskItemNote>>;
 /** A nullable result is exactly a server result that can be `null`. */
 export type CommandNullability = Assert<
 	AllTrue<{

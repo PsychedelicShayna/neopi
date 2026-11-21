@@ -1375,9 +1375,9 @@ class SessionTree:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
-class TreeAskOptionNote:
-    option: str
+class TreeAskItemNote:
     note: str
+    option: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1388,9 +1388,7 @@ class TreeAskQuestionResult:
     multi: bool
     selected_options: tuple[str, ...]
     custom_input: str | None = None
-    note: str | None = None
-    option_notes: tuple[TreeAskOptionNote, ...] | None = None
-    note_option: str | None = None
+    notes: tuple[TreeAskItemNote, ...] | None = None
     timed_out: bool | None = None
 
 
@@ -1401,9 +1399,7 @@ class TreeAskDetails:
     multi: bool | None = None
     selected_options: tuple[str, ...] | None = None
     custom_input: str | None = None
-    note: str | None = None
-    option_notes: tuple[TreeAskOptionNote, ...] | None = None
-    note_option: str | None = None
+    notes: tuple[TreeAskItemNote, ...] | None = None
     timed_out: bool | None = None
     results: tuple[TreeAskQuestionResult, ...] | None = None
     chat_redirect: bool | None = None
@@ -3839,11 +3835,11 @@ def parse_session_tree(value: object, path: str = "SessionTree") -> SessionTree:
     )
 
 
-def parse_tree_ask_option_note(value: object, path: str = "TreeAskOptionNote") -> TreeAskOptionNote:
+def parse_tree_ask_item_note(value: object, path: str = "TreeAskItemNote") -> TreeAskItemNote:
     payload = expect_object(value, path)
-    return TreeAskOptionNote(
-        option=required(payload, "option", decode_str, path),
+    return TreeAskItemNote(
         note=required(payload, "note", decode_str, path),
+        option=optional(payload, "option", decode_str, path),
     )
 
 
@@ -3856,9 +3852,7 @@ def parse_tree_ask_question_result(value: object, path: str = "TreeAskQuestionRe
         multi=required(payload, "multi", decode_bool, path),
         selected_options=required(payload, "selectedOptions", array(decode_str), path),
         custom_input=optional(payload, "customInput", decode_str, path),
-        note=optional(payload, "note", decode_str, path),
-        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
-        note_option=optional(payload, "noteOption", decode_str, path),
+        notes=optional(payload, "notes", array(parse_tree_ask_item_note), path),
         timed_out=optional(payload, "timedOut", decode_bool, path),
     )
 
@@ -3871,9 +3865,7 @@ def parse_tree_ask_details(value: object, path: str = "TreeAskDetails") -> TreeA
         multi=optional(payload, "multi", decode_bool, path),
         selected_options=optional(payload, "selectedOptions", array(decode_str), path),
         custom_input=optional(payload, "customInput", decode_str, path),
-        note=optional(payload, "note", decode_str, path),
-        option_notes=optional(payload, "optionNotes", array(parse_tree_ask_option_note), path),
-        note_option=optional(payload, "noteOption", decode_str, path),
+        notes=optional(payload, "notes", array(parse_tree_ask_item_note), path),
         timed_out=optional(payload, "timedOut", decode_bool, path),
         results=optional(payload, "results", array(parse_tree_ask_question_result), path),
         chat_redirect=optional(payload, "chatRedirect", decode_bool, path),
@@ -6897,7 +6889,7 @@ __all__ = [
     "ToolResultMessage",
     "ToolStreamUpdateEvent",
     "TreeAskDetails",
-    "TreeAskOptionNote",
+    "TreeAskItemNote",
     "TreeAskQuestionResult",
     "TreeAskReanswer",
     "TreeAskReopen",
@@ -7166,7 +7158,7 @@ __all__ = [
     "parse_tool_result_message",
     "parse_tool_stream_update_event",
     "parse_tree_ask_details",
-    "parse_tree_ask_option_note",
+    "parse_tree_ask_item_note",
     "parse_tree_ask_question_result",
     "parse_tree_ask_reanswer",
     "parse_tree_ask_reopen",

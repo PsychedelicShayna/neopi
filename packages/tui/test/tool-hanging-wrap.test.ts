@@ -180,7 +180,7 @@ describe("prefixed tool rows", () => {
 									options: ["First", "Second"],
 									multi: false,
 									selectedOptions: ["First"],
-									optionNotes: [{ option: "Second", note: "Team standard" }],
+									notes: [{ option: "Second", note: "Team standard" }],
 								},
 							],
 						},

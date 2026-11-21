@@ -257,12 +257,11 @@ describe("AskTool interruption and headless behavior", () => {
 	});
 });
 
-describe("AskTool option notes", () => {
+describe("AskTool item notes", () => {
 	for (const multi of [false, true]) {
-		it(`delivers repeated and unselected option notes with the answer (${multi ? "multi" : "single"})`, async () => {
+		it(`delivers one note per item, including unselected items (${multi ? "multi" : "single"})`, async () => {
 			const tool = new AskTool(createSession());
-			const optionNotes = [
-				{ option: "A", note: "First caveat" },
+			const notes = [
 				{ option: "A", note: "Second caveat" },
 				{ option: "B", note: "Why not B" },
 				{ option: "C", note: "Why not C" },
@@ -275,8 +274,7 @@ describe("AskTool option notes", () => {
 						.mockResolvedValueOnce("First caveat")
 						.mockResolvedValueOnce("Second caveat")
 						.mockResolvedValueOnce("Why not B")
-						.mockResolvedValueOnce("Why not C")
-						.mockResolvedValueOnce("Question context");
+						.mockResolvedValueOnce("Why not C");
 					const dialog = new AskDialogComponent(questions, {
 						onSubmit: result => {
 							submitted = result;
@@ -292,15 +290,14 @@ describe("AskTool option notes", () => {
 						await Promise.resolve();
 						await Promise.resolve();
 					};
-					await key("a");
-					await key("a");
-					await key("\x1b[B");
-					await key("a");
-					await key("\x1b[B");
-					await key("a");
-					await key("\x1b[A");
-					await key("\x1b[A");
 					await key("n");
+					await key("n");
+					await key("\x1b[B");
+					await key("n");
+					await key("\x1b[B");
+					await key("n");
+					await key("\x1b[A");
+					await key("\x1b[A");
 					if (multi) await key(" ");
 					await key("\n");
 					expect(submitted?.kind).toBe("submit");
@@ -324,14 +321,14 @@ describe("AskTool option notes", () => {
 				undefined,
 				context,
 			);
-			expect(result.details).toMatchObject({ selectedOptions: ["A"], note: "Question context", optionNotes });
+			expect(result.details).toMatchObject({ selectedOptions: ["A"], notes });
 			const content = result.content[0];
 			expect(content?.type).toBe("text");
 			if (content?.type !== "text") throw new Error("Expected text");
-			expect(content.text).toContain('Note on option "A" (selected):\n  First caveat');
+			expect(content.text).not.toContain("First caveat");
 			expect(content.text).toContain('Note on option "B" (not selected):\n  Why not B');
 			expect(content.text).toContain('Note on option "C" (not selected):\n  Why not C');
-			expect(content.text).toContain("Second caveat");
+			expect(content.text).toContain('Note on option "A" (selected):\n  Second caveat');
 			const rendered = stripAnsi(
 				askToolRenderer
 					.renderResult(result, { expanded: true, isPartial: false }, darkTheme)
@@ -371,9 +368,10 @@ describe("AskTool option notes", () => {
 							options: ["A", "B"],
 							multi: false,
 							selectedOptions: ["A"],
-							note: "Context [Image #1]",
-							noteImages: [image],
-							optionNotes: [{ option: "B", note: "Avoid [Image #1]", images: [image] }],
+							notes: [
+								{ option: "A", note: "Context [Image #1]", images: [image] },
+								{ option: "B", note: "Avoid [Image #1]", images: [image] },
+							],
 						},
 						{
 							id: "two",
@@ -381,15 +379,20 @@ describe("AskTool option notes", () => {
 							options: ["C"],
 							multi: false,
 							selectedOptions: ["C"],
-							optionNotes: [{ option: "C", note: "Prefer [Image #1]", images: [image] }],
+							notes: [{ option: "C", note: "Prefer [Image #1]", images: [image] }],
 						},
 					],
 				}),
 			}),
 		);
 		expect(result.details?.results).toMatchObject([
-			{ note: "Context [Image #1]", optionNotes: [{ option: "B", note: "Avoid [Image #2]" }] },
-			{ optionNotes: [{ option: "C", note: "Prefer [Image #3]" }] },
+			{
+				notes: [
+					{ option: "A", note: "Context [Image #1]" },
+					{ option: "B", note: "Avoid [Image #2]" },
+				],
+			},
+			{ notes: [{ option: "C", note: "Prefer [Image #3]" }] },
 		]);
 		expect(result.content.filter(block => block.type === "image")).toHaveLength(3);
 		expect(JSON.stringify(result.details)).not.toContain(TINY_PNG_BASE64);
@@ -1765,9 +1768,9 @@ describe("AskTool rich ask dialog", () => {
 		const askDialog = vi.fn().mockResolvedValue({
 			kind: "submit",
 			results: [
-				{ id: "s", selectedOptions: ["Two"], note: "picked for speed", noteOption: "Two" },
-				{ id: "m", selectedOptions: ["X", "Y"], note: "Y only on weekends", noteOption: "Y" },
-				{ id: "c", selectedOptions: [], customInput: "my own", note: "about my answer" },
+				{ id: "s", selectedOptions: ["Two"], notes: [{ option: "Two", note: "picked for speed" }] },
+				{ id: "m", selectedOptions: ["X", "Y"], notes: [{ option: "Y", note: "Y only on weekends" }] },
+				{ id: "c", selectedOptions: [], customInput: "my own", notes: [{ note: "about my answer" }] },
 			],
 		});
 		const questions = [
@@ -1779,12 +1782,12 @@ describe("AskTool rich ask dialog", () => {
 		const multi = await tool.execute("call-multi", { questions }, undefined, undefined, createContext({ askDialog }));
 		expect(multi.content[0]).toEqual({
 			type: "text",
-			text: 'User answers:\ns: Two (note on Two: picked for speed)\nm: [X, Y] (note on Y: Y only on weekends)\nc: "my own" (note: about my answer)',
+			text: 'User answers:\ns: Two\nNote on option "Two" (selected):\n  picked for speed\nm: [X, Y]\nNote on option "Y" (selected):\n  Y only on weekends\nc: "my own"\nNote on Other (selected):\n  about my answer',
 		});
 
 		askDialog.mockResolvedValue({
 			kind: "submit",
-			results: [{ id: "m", selectedOptions: ["X", "Y"], note: "Y only on weekends", noteOption: "Y" }],
+			results: [{ id: "m", selectedOptions: ["X", "Y"], notes: [{ option: "Y", note: "Y only on weekends" }] }],
 		});
 		const single = await tool.execute(
 			"call-single",
@@ -1795,9 +1798,9 @@ describe("AskTool rich ask dialog", () => {
 		);
 		expect(single.content[0]).toEqual({
 			type: "text",
-			text: "User selected: X, Y\nUser added note on Y: Y only on weekends",
+			text: 'User selected: X, Y\nNote on option "Y" (selected):\n  Y only on weekends',
 		});
-		expect(single.details?.noteOption).toBe("Y");
+		expect(single.details?.notes).toEqual([{ option: "Y", note: "Y only on weekends" }]);
 	});
 
 	it("returns custom-answer and note images after text, numbering markers across answers in text and details", async () => {
@@ -1818,14 +1821,12 @@ describe("AskTool rich ask dialog", () => {
 					selectedOptions: [],
 					customInput: "Like [Image #1]",
 					customInputImages: [customImage],
-					note: "Evidence [Image #1]",
-					noteImages: [firstImage],
+					notes: [{ note: "Evidence [Image #1]", images: [firstImage] }],
 				},
 				{
 					id: "q2",
 					selectedOptions: ["B"],
-					note: "Evidence [Image #1]",
-					noteImages: [secondImage],
+					notes: [{ option: "B", note: "Evidence [Image #1]", images: [secondImage] }],
 				},
 			],
 		});
@@ -1846,7 +1847,7 @@ describe("AskTool rich ask dialog", () => {
 		expect(result.content).toEqual([
 			{
 				type: "text",
-				text: 'User answers:\nq1: "Like [Image #1]" (note: Evidence [Image #2])\nq2: B (note: Evidence [Image #3])',
+				text: 'User answers:\nq1: "Like [Image #1]"\nNote on Other (selected):\n  Evidence [Image #2]\nq2: B\nNote on option "B" (selected):\n  Evidence [Image #3]',
 			},
 			{ type: "text", text: expect.stringContaining("local://pasted-image-abc.webp") },
 			// The source tag stays on the block so `attachment://1` resolves to the pasted file.
@@ -1855,7 +1856,10 @@ describe("AskTool rich ask dialog", () => {
 			{ type: "image", data: "second-image", mimeType: "image/jpeg" },
 		]);
 		expect(result.details).toMatchObject({
-			results: [{ customInput: "Like [Image #1]", note: "Evidence [Image #2]" }, { note: "Evidence [Image #3]" }],
+			results: [
+				{ customInput: "Like [Image #1]", notes: [{ note: "Evidence [Image #2]" }] },
+				{ notes: [{ option: "B", note: "Evidence [Image #3]" }] },
+			],
 		});
 		for (const data of ["custom-image", "first-image", "second-image"]) {
 			expect(JSON.stringify(result.details)).not.toContain(data);
@@ -1872,8 +1876,7 @@ describe("AskTool rich ask dialog", () => {
 					id: "q2",
 					selectedOptions: [],
 					customInput: "Match the mock in [Image #1]",
-					note: "[Image #1] beside [Image #5]",
-					noteImages: [image],
+					notes: [{ note: "[Image #1] beside [Image #5]", images: [image] }],
 				},
 			],
 		});
@@ -1893,7 +1896,7 @@ describe("AskTool rich ask dialog", () => {
 		expect(result.details).toMatchObject({
 			results: [
 				{ customInput: "Like [Image #1]" },
-				{ customInput: "Match the mock in [Image #1]", note: "[Image #2] beside [Image #5]" },
+				{ customInput: "Match the mock in [Image #1]", notes: [{ note: "[Image #2] beside [Image #5]" }] },
 			],
 		});
 	});
@@ -1913,7 +1916,10 @@ describe("AskTool rich ask dialog", () => {
 		});
 		const textModel: Model<Api> = { ...visionModel, id: "gpt-4.1-mini", input: ["text"] };
 		const image = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
-		const answerText = { type: "text" as const, text: "User selected: A\nUser added note: see [Image #1]" };
+		const answerText = {
+			type: "text" as const,
+			text: 'User selected: A\nNote on option "A" (selected):\n  see [Image #1]',
+		};
 		let tempDir: TempDir;
 		let describeCalls: unknown[][];
 
@@ -1962,8 +1968,7 @@ describe("AskTool rich ask dialog", () => {
 					{
 						id: "q1",
 						selectedOptions: options.selectedOptions ?? ["A"],
-						note: "see [Image #1]",
-						noteImages: [image],
+						notes: [{ option: "A", note: "see [Image #1]", images: [image] }],
 					},
 				],
 			});
@@ -2376,7 +2381,7 @@ describe("AskTool carriage-return sanitization", () => {
 					options: ["Alpha"],
 					multi: false,
 					selectedOptions: ["Alpha"],
-					note: "a\r\rnote",
+					notes: [{ option: "Alpha", note: "a\r\rnote" }],
 				},
 			},
 			{ expanded: true, isPartial: false },

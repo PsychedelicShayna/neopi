@@ -107,6 +107,8 @@ export interface HookEditorOptions {
 	menuHistory?: boolean;
 	/** Label Escape as Back when this editor is nested in another menu. */
 	escapeBack?: boolean;
+	/** Save on Escape in a prompt, after Vim has had a chance to consume it. */
+	saveOnEscape?: boolean;
 	/** Keep the editor open when submission is empty or whitespace-only. */
 	requireText?: boolean;
 }
@@ -133,6 +135,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 	#disposed = false;
 	readonly #menuHistory: boolean;
 	readonly #escapeBack: boolean;
+	readonly #saveOnEscape: boolean;
 	readonly #requireText: boolean;
 	#editingExternal = false;
 	/** Head, field and action bar; every part but the editor (which describes itself) is fixed, so it is built once. */
@@ -166,6 +169,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		this.#externalEditor = options?.externalEditor;
 		this.#menuHistory = options?.menuHistory === true;
 		this.#escapeBack = options?.escapeBack === true;
+		this.#saveOnEscape = this.#promptStyle && options?.saveOnEscape === true;
 		this.#requireText = options?.requireText === true;
 		this.#onPasteImage = options?.onPasteImage;
 		this.#onPasteImagePath = options?.onPasteImagePath;
@@ -193,7 +197,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		const [primaryFollowUpKey = "ctrl+q"] = followUpKeys;
 		const externalEditorKey = editorKey("app.editor.external") || formatKeyHint("ctrl+g");
 		const hint = this.#promptStyle
-			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${formatKeyHint("escape")} cancel  ${externalEditorKey} external editor`
+			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${formatKeyHint("escape")} ${this.#saveOnEscape ? `save  ${interruptKey()} cancel` : "cancel"}  ${externalEditorKey} external editor`
 			: `${formatKeyHints(followUpKeys)} submit  ${this.#escapeBack ? `${formatKeyHint("escape")} back` : `${interruptKey()} cancel`}  ${externalEditorKey} external editor`;
 		this.#field = new FormField(this.#editor, {
 			theme: formTheme,
@@ -258,7 +262,9 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		const submitKey: KeyName = this.#promptStyle ? "enter" : primaryFollowUpKey;
 		const newlineKey: KeyName = this.#promptStyle ? "shift+enter" : "enter";
 		const cancelKey =
-			this.#promptStyle || this.#escapeBack ? "escape" : (boundKeys("app.interrupt", ["ctrl+c"])[0] ?? "ctrl+c");
+			(this.#promptStyle && !this.#saveOnEscape) || this.#escapeBack
+				? "escape"
+				: (boundKeys("app.interrupt", ["ctrl+c"])[0] ?? "ctrl+c");
 		const buttons: (NativeNode | null)[] = [];
 		if (this.#externalEditor) {
 			const [externalKey] = boundKeys("app.editor.external", ["ctrl+g"]);
@@ -340,11 +346,12 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			return;
 		}
 		const text = extractPrintableText(keyData);
-		if (text === undefined && matchesAppInterrupt(keyData)) {
+		const escape = matchesKey(keyData, "escape");
+		if (text === undefined && !(escape && this.#saveOnEscape) && matchesAppInterrupt(keyData)) {
 			this.#cancel();
 			return;
 		}
-		if (this.#editor.isJumpPending || (matchesKey(keyData, "escape") && this.#editor.vimConsumesEscape())) {
+		if (this.#editor.isJumpPending || (escape && this.#editor.vimConsumesEscape())) {
 			this.#editor.handleInput(keyData);
 			return;
 		}
@@ -440,7 +447,8 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		}
 
 		if (matchesKey(keyData, "escape")) {
-			this.#cancel();
+			if (this.#saveOnEscape) this.#submitCurrentText();
+			else this.#cancel();
 			return;
 		}
 

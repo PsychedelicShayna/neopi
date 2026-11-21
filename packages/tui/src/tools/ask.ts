@@ -27,9 +27,10 @@ import { wrapPrefixedLine } from "../render/hanging-wrap";
 
 import { formatErrorMessage, formatTitle, sanitizeCarriageReturns } from "../render/render-utils";
 
-/** An annotation on an offered option, selected or not. Repeated options carry separate notes. */
-export interface AskOptionNote {
-	option: string;
+/** An annotation on a single answer row, selected or not. */
+export interface AskItemNote {
+	/** Offered option label; unset for the Other row. */
+	option?: string;
 	note: string;
 }
 
@@ -41,11 +42,7 @@ export interface QuestionResult {
 	multi: boolean;
 	selectedOptions: string[];
 	customInput?: string;
-	/** Optional note attached to the selected answer in the rich ask dialog. */
-	note?: string;
-	optionNotes?: AskOptionNote[];
-	/** Label of the option the note is on; unset when it is on the custom answer. */
-	noteOption?: string;
+	notes?: AskItemNote[];
 	/** True when the answer was auto-selected because the dialog timed out. */
 	timedOut?: boolean;
 }
@@ -57,11 +54,7 @@ export interface AskToolDetails {
 	multi?: boolean;
 	selectedOptions?: string[];
 	customInput?: string;
-	/** Optional note attached to the selected answer in the rich ask dialog. */
-	note?: string;
-	optionNotes?: AskOptionNote[];
-	/** Label of the option the note is on; unset when it is on the custom answer. */
-	noteOption?: string;
+	notes?: AskItemNote[];
 	/** True when the answer was auto-selected because the dialog timed out. */
 	timedOut?: boolean;
 	/** Multi-part question mode */
@@ -123,9 +116,9 @@ function normalizeRenderOptions(raw: unknown): AskRenderOption[] | undefined {
  * so transcripts completed before params sanitization still render as prose.
  * Display-only — the persisted payload is untouched.
  */
-function sanitizeOptionNotes(notes: AskOptionNote[] | undefined): AskOptionNote[] | undefined {
+function sanitizeNotes(notes: AskItemNote[] | undefined): AskItemNote[] | undefined {
 	return notes?.map(entry => ({
-		option: sanitizeCarriageReturns(entry.option),
+		...(entry.option === undefined ? {} : { option: sanitizeCarriageReturns(entry.option) }),
 		note: sanitizeCarriageReturns(entry.note),
 	}));
 }
@@ -139,8 +132,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 			? { selectedOptions: details.selectedOptions.map(sanitizeCarriageReturns) }
 			: {}),
 		...(details.customInput !== undefined ? { customInput: sanitizeCarriageReturns(details.customInput) } : {}),
-		...(details.note !== undefined ? { note: sanitizeCarriageReturns(details.note) } : {}),
-		optionNotes: sanitizeOptionNotes(details.optionNotes),
+		notes: sanitizeNotes(details.notes),
 		...(details.questions !== undefined ? { questions: details.questions.map(sanitizeCarriageReturns) } : {}),
 		...(details.results !== undefined
 			? {
@@ -153,8 +145,7 @@ function sanitizeAskResultDetails(details: AskToolDetails): AskToolDetails {
 						...(entry.customInput !== undefined
 							? { customInput: sanitizeCarriageReturns(entry.customInput) }
 							: {}),
-						...(entry.note !== undefined ? { note: sanitizeCarriageReturns(entry.note) } : {}),
-						optionNotes: sanitizeOptionNotes(entry.optionNotes),
+						notes: sanitizeNotes(entry.notes),
 					})),
 				}
 			: {}),
@@ -287,11 +278,10 @@ function renderAnswerOptionLines(
 	selectedOptions: string[] | undefined,
 	multi: boolean | undefined,
 	customInput: string | undefined,
-	note: string | undefined,
 	width: number,
 	contentWidth: number,
 	selectedIndices?: ReadonlySet<number>,
-	optionNotes?: AskOptionNote[],
+	notes?: AskItemNote[],
 ): string[] {
 	const selected = new Set(selectedOptions ?? []);
 	// Prefer the full recorded option set; fall back to the selected labels when
@@ -299,7 +289,7 @@ function renderAnswerOptionLines(
 	const list = options && options.length > 0 ? options : (selectedOptions ?? []);
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
-	if (selected.size === 0 && customInput === undefined && note === undefined && !optionNotes?.length) {
+	if (selected.size === 0 && customInput === undefined && !notes?.length) {
 		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
 	}
 
@@ -312,12 +302,15 @@ function renderAnswerOptionLines(
 			isSelected ? uiTheme.fg("toolOutput", t) : uiTheme.fg("muted", t),
 		);
 		out.push(...wrapOptionLabel(markerStyled, labelStyled, contentWidth));
-		for (const entry of optionNotes ?? []) {
-			if (entry.option === label) out.push(...renderNoteLines(uiTheme, entry.note, width));
-		}
+		const note = notes?.find(entry => entry.option === label);
+		if (note) out.push(...renderNoteLines(uiTheme, note.note, width));
 	}
 	if (customInput !== undefined) out.push(...renderCustomInputLines(uiTheme, customInput));
-	if (note !== undefined) out.push(...renderNoteLines(uiTheme, note, width));
+	const otherNote = notes?.find(entry => entry.option === undefined);
+	if (otherNote) {
+		if (customInput === undefined) out.push(` ${uiTheme.fg("muted", "Other")}`);
+		out.push(...renderNoteLines(uiTheme, otherNote.note, width));
+	}
 	return out;
 }
 
@@ -341,18 +334,17 @@ function answerRow(key: string, label: TspSpan[], chosen: boolean): NativeNode {
 
 /**
  * Answered option list: every offered option marked chosen or not, plus any
- * quoted custom answer and a muted note. A lone "Cancelled" line when nothing was chosen.
+ * quoted custom answer and item notes. A lone "Cancelled" line when there is no response.
  */
 function describeAnswers(
 	options: string[] | undefined,
 	selectedOptions: string[] | undefined,
 	customInput: string | undefined,
-	note: string | undefined,
 	selectedIndices: ReadonlySet<number> | undefined,
-	optionNotes?: AskOptionNote[],
+	notes?: AskItemNote[],
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
-	if (selected.size === 0 && customInput === undefined && note === undefined && !optionNotes?.length) {
+	if (selected.size === 0 && customInput === undefined && !notes?.length) {
 		return [text([span("Cancelled", "warning")], { tone: "warning" })];
 	}
 	const labels = options && options.length > 0 ? options : (selectedOptions ?? []);
@@ -363,18 +355,15 @@ function describeAnswers(
 	if (customInput !== undefined) {
 		rows.push(answerRow("custom", [span(`\u201c${plainText(customInput)}\u201d`, "toolOutput")], true));
 	}
-	return compact([
+	return [
 		...rows,
-		...(optionNotes ?? []).map(entry =>
-			text([span(`${plainText(entry.option)}: `, "dim"), span(plainText(entry.note), "muted")], {
+		...(notes ?? []).map(entry =>
+			text([span(`${plainText(entry.option ?? "Other")}: `, "dim"), span(plainText(entry.note), "muted")], {
 				wrap: "word",
 				role: "omp.tool.context",
 			}),
 		),
-		note !== undefined
-			? text([span(plainText(note), "muted")], { wrap: "word", role: "omp.tool.context" })
-			: undefined,
-	]);
+	];
 }
 
 /** Pending ask: an inline head naming the question; the ask dialog owns the form. */
@@ -412,8 +401,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 		const results = details.results;
 		const rawResults = rawDetails.results ?? [];
 		const answered = results.some(
-			r =>
-				r.customInput !== undefined || r.note !== undefined || (r.selectedOptions && r.selectedOptions.length > 0),
+			r => r.customInput !== undefined || (r.notes?.length ?? 0) > 0 || r.selectedOptions.length > 0,
 		);
 		return {
 			tool: askHead(results[0]?.question, results.length > 1 ? `${results.length} questions` : undefined),
@@ -427,9 +415,8 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 						r.options,
 						r.selectedOptions,
 						r.customInput,
-						r.note,
 						selectedIndicesFor(rawResults[index]?.options, rawResults[index]?.selectedOptions),
-						r.optionNotes,
+						r.notes,
 					),
 				),
 			),
@@ -442,8 +429,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 
 	const answered =
 		details.customInput !== undefined ||
-		details.note !== undefined ||
-		(details.optionNotes?.length ?? 0) > 0 ||
+		(details.notes?.length ?? 0) > 0 ||
 		(details.selectedOptions && details.selectedOptions.length > 0);
 	return {
 		tool: askHead(details.question),
@@ -454,9 +440,8 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				details.options,
 				details.selectedOptions,
 				details.customInput,
-				details.note,
 				selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
-				details.optionNotes,
+				details.notes,
 			),
 			details.timedOut
 				? text([span("auto-selected after timeout — not a user choice", "muted")], {
@@ -583,10 +568,7 @@ export const askToolRenderer = {
 		if (details.results && details.results.length > 0) {
 			const results = details.results;
 			const hasAnySelection = results.some(
-				r =>
-					r.customInput !== undefined ||
-					r.note !== undefined ||
-					(r.selectedOptions && r.selectedOptions.length > 0),
+				r => r.customInput !== undefined || (r.notes?.length ?? 0) > 0 || r.selectedOptions.length > 0,
 			);
 			const header = renderStatusLine(
 				{
@@ -611,11 +593,10 @@ export const askToolRenderer = {
 							r.selectedOptions,
 							r.multi,
 							r.customInput,
-							r.note,
 							width,
 							contentWidth,
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
-							r.optionNotes,
+							r.notes,
 						),
 					];
 					return { label: uiTheme.fg("dim", `[${r.id}]`), content: lines };
@@ -639,7 +620,7 @@ export const askToolRenderer = {
 		const question = details.question;
 		const hasSelection =
 			details.customInput !== undefined ||
-			details.note !== undefined ||
+			(details.notes?.length ?? 0) > 0 ||
 			(details.selectedOptions && details.selectedOptions.length > 0);
 		const header = renderStatusLine(
 			hasSelection
@@ -651,7 +632,6 @@ export const askToolRenderer = {
 		const dSelected = details.selectedOptions;
 		const dMulti = details.multi;
 		const dCustom = details.customInput;
-		const dNote = details.note;
 		const dTimedOut = details.timedOut;
 		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
 			// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
@@ -664,11 +644,10 @@ export const askToolRenderer = {
 					dSelected,
 					dMulti,
 					dCustom,
-					dNote,
 					width,
 					contentWidth,
 					selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
-					details.optionNotes,
+					details.notes,
 				),
 			];
 			if (dTimedOut) {

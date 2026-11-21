@@ -130,7 +130,7 @@ describe("AskDialogComponent", () => {
 					multi: false,
 					selectedOptions: ["Option A"],
 					customInput: undefined,
-					note: undefined,
+					notes: undefined,
 					timedOut: undefined,
 				},
 			],
@@ -230,7 +230,7 @@ describe("AskDialogComponent", () => {
 				multi: false,
 				selectedOptions: ["A1"],
 				customInput: undefined,
-				note: undefined,
+				notes: undefined,
 				timedOut: undefined,
 			},
 			{
@@ -240,7 +240,7 @@ describe("AskDialogComponent", () => {
 				multi: false,
 				selectedOptions: ["B2"],
 				customInput: undefined,
-				note: undefined,
+				notes: undefined,
 				timedOut: undefined,
 			},
 		]);
@@ -509,7 +509,7 @@ describe("AskDialogComponent", () => {
 		expect(onCancel).toHaveBeenCalledTimes(1);
 	});
 
-	it("edits or removes the latest option note without replacing earlier notes", async () => {
+	it("uses n to edit the highlighted item and removes its note when saved empty", async () => {
 		const onSubmit = vi.fn();
 		const onPrompt = vi
 			.fn()
@@ -522,22 +522,28 @@ describe("AskDialogComponent", () => {
 			[{ id: "q", question: "Choose?", options: [{ label: "A" }, { label: "B" }] }],
 			{ onSubmit, onCancel: vi.fn(), onPrompt },
 		);
-		for (const key of ["a", "a", "A", "A", "a"]) {
+		component.handleInput("a");
+		component.handleInput("A");
+		expect(onPrompt).not.toHaveBeenCalled();
+		expect(render(component)).not.toContain("add option note");
+		for (const key of ["n", DOWN, "n", "n", "n", "n"]) {
 			component.handleInput(key);
 			await Promise.resolve();
 			await Promise.resolve();
 		}
 		expect(onPrompt.mock.calls[2][1]).toBe("Draft");
 		expect(onPrompt.mock.calls[3][1]).toBe("Revised");
-		component.handleInput(DOWN);
+		expect(onPrompt.mock.calls[4][1]).toBeUndefined();
+		expect(render(component).match(/✎ note/g)).toHaveLength(1);
+		// B is still highlighted, and its note is gone.
 		component.handleInput(ENTER);
 		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
 			selectedOptions: ["B"],
-			optionNotes: [{ option: "A", note: "Keep" }],
+			notes: [{ option: "A", note: "Keep" }],
 		});
 	});
 
-	it("canceled option-note drafts neither replace an existing note nor add a new one", async () => {
+	it("canceled item-note drafts neither replace an existing note nor add a new one", async () => {
 		const image: ImageContent = { type: "image", data: "kept-image", mimeType: "image/png" };
 		const canceledImage: ImageContent = { type: "image", data: "canceled-image", mimeType: "image/png" };
 		const onSubmit = vi.fn();
@@ -550,16 +556,15 @@ describe("AskDialogComponent", () => {
 			[{ id: "q", question: "Choose?", options: [{ label: "A" }, { label: "B" }] }],
 			{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn(), onImagePrompt },
 		);
-		for (const key of ["a", "A", "a"]) {
+		for (const key of ["n", "n", DOWN, "n"]) {
 			component.handleInput(key);
 			await Promise.resolve();
 			await Promise.resolve();
 		}
-		component.handleInput(DOWN);
 		component.handleInput(ENTER);
 		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
 			selectedOptions: ["B"],
-			optionNotes: [{ option: "A", note: "Keep", images: [image] }],
+			notes: [{ option: "A", note: "Keep", images: [image] }],
 		});
 	});
 
@@ -588,16 +593,20 @@ describe("AskDialogComponent", () => {
 		await Promise.resolve();
 
 		expect(onPrompt).toHaveBeenCalledTimes(1);
-		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Option A", question: "Choose one?" });
+		expect(onPrompt.mock.calls[0][0]).toEqual({
+			title: "Note for Option A",
+			question: "Choose one?",
+			saveOnEscape: true,
+		});
 
 		// Verify note is saved by submitting
 		component.handleInput(ENTER);
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
-		expect(onSubmit.mock.calls[0][0].results[0].note).toBe("My Custom Note");
+		expect(onSubmit.mock.calls[0][0].results[0].notes).toEqual([{ option: "Option A", note: "My Custom Note" }]);
 	});
 
-	it("drops note images together with the note when that option is deselected", async () => {
+	it("keeps note images with the item when that option is deselected", async () => {
 		const image: ImageContent = { type: "image", data: "image-data", mimeType: "image/png" };
 		const onSubmit = vi.fn();
 		const component = new AskDialogComponent(
@@ -620,13 +629,12 @@ describe("AskDialogComponent", () => {
 
 		const submitted = onSubmit.mock.calls[0][0].results[0];
 		expect(submitted).toMatchObject({
-			note: undefined,
+			notes: [{ option: "Option A", note: "[Image #1]", images: [image] }],
 			selectedOptions: [],
 		});
-		expect(submitted.noteImages).toBeUndefined();
 	});
 
-	it("drops note images with a note on Other when no custom answer was given", async () => {
+	it("keeps an Other note and its images even when no custom answer was given", async () => {
 		const image: ImageContent = { type: "image", data: "image-data", mimeType: "image/png" };
 		const onSubmit = vi.fn();
 		const component = new AskDialogComponent(
@@ -647,8 +655,10 @@ describe("AskDialogComponent", () => {
 		component.handleInput(ENTER);
 
 		const submitted = onSubmit.mock.calls[0][0].results[0];
-		expect(submitted.note).toBeUndefined();
-		expect(submitted.noteImages).toBeUndefined();
+		expect(submitted).toMatchObject({
+			customInput: undefined,
+			notes: [{ note: "[Image #1]", images: [image] }],
+		});
 	});
 
 	it("returns note images and supplies them again when re-editing the same row", async () => {
@@ -675,8 +685,7 @@ describe("AskDialogComponent", () => {
 
 		expect(onImagePrompt.mock.calls[1][1]).toEqual({ text: "[Image #1]", images: [image] });
 		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
-			note: "Updated [Image #1]",
-			noteImages: [image],
+			notes: [{ option: "Option A", note: "Updated [Image #1]", images: [image] }],
 		});
 	});
 
@@ -695,8 +704,8 @@ describe("AskDialogComponent", () => {
 		const rowMenuNote = (component: AskDialogComponent, question: number, row: string): void =>
 			component.handleNativeEvent({ type: "action", key: `q${question}/${row}`, act: "note", mods: [] });
 
-		it("TUI: Enter then `n` annotates the answer just picked before any further navigation", async () => {
-			const onPrompt = vi.fn().mockResolvedValue("why Beta");
+		it("TUI: Enter then `n` annotates the highlighted item on the new question", async () => {
+			const onPrompt = vi.fn().mockResolvedValue("why Gamma");
 			const onSubmit = vi.fn();
 			const component = new AskDialogComponent(questions, { onSubmit, onCancel: vi.fn(), onPrompt });
 
@@ -704,17 +713,17 @@ describe("AskDialogComponent", () => {
 			component.handleInput(ENTER); // Beta, on to Q2
 			component.handleInput("n");
 			await flush();
-			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Beta", question: "Q1?" });
+			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Gamma", question: "Q2?", saveOnEscape: true });
 
 			component.handleInput(ENTER); // Gamma, on to Q3
 			component.handleInput(ENTER); // Epsilon, on to Review
 			component.handleInput(ENTER); // submit
 			const [first, second] = onSubmit.mock.calls[0][0].results;
-			expect(first).toMatchObject({ selectedOptions: ["Beta"], note: "why Beta", noteOption: "Beta" });
-			expect(second).toMatchObject({ selectedOptions: ["Gamma"], note: undefined, noteOption: undefined });
+			expect(first).toMatchObject({ selectedOptions: ["Beta"], notes: undefined });
+			expect(second).toMatchObject({ selectedOptions: ["Gamma"], notes: [{ option: "Gamma", note: "why Gamma" }] });
 		});
 
-		it("TUI: after canceling a just-picked note, navigating back targets the displayed answer", async () => {
+		it("TUI: after canceling a note, navigating back targets the displayed answer", async () => {
 			const onPrompt = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce("why Gamma");
 			const onSubmit = vi.fn();
 			const component = new AskDialogComponent(questions, { onSubmit, onCancel: vi.fn(), onPrompt });
@@ -727,20 +736,20 @@ describe("AskDialogComponent", () => {
 			component.handleInput("n");
 			await flush();
 
-			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Gamma", question: "Q2?" });
-			expect(onPrompt.mock.calls[1][0]).toEqual({ title: "Note for Gamma", question: "Q2?" });
+			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Epsilon", question: "Q3?", saveOnEscape: true });
+			expect(onPrompt.mock.calls[1][0]).toEqual({ title: "Note for Gamma", question: "Q2?", saveOnEscape: true });
 
 			component.handleInput(TAB); // Q3
 			component.handleInput(ENTER); // Epsilon, on to Review
 			component.handleInput(ENTER); // submit
 			const [first, second, third] = onSubmit.mock.calls[0][0].results;
-			expect(first.note).toBeUndefined();
-			expect(second).toMatchObject({ selectedOptions: ["Gamma"], note: "why Gamma", noteOption: "Gamma" });
-			expect(third).toMatchObject({ selectedOptions: ["Epsilon"], note: undefined });
+			expect(first.notes).toBeUndefined();
+			expect(second).toMatchObject({ selectedOptions: ["Gamma"], notes: [{ option: "Gamma", note: "why Gamma" }] });
+			expect(third).toMatchObject({ selectedOptions: ["Epsilon"], notes: undefined });
 		});
 
-		it("Tern: the Note button after a click annotates the answer just picked", async () => {
-			const onPrompt = vi.fn().mockResolvedValue("why Beta");
+		it("Tern: the Note button after a click annotates the highlighted item on the new question", async () => {
+			const onPrompt = vi.fn().mockResolvedValue("why Gamma");
 			const onSubmit = vi.fn();
 			const component = new AskDialogComponent(questions, { onSubmit, onCancel: vi.fn(), onPrompt });
 
@@ -751,11 +760,11 @@ describe("AskDialogComponent", () => {
 			click(component, 2, 0);
 			component.handleNativeEvent(action("submit"));
 			const [first, second] = onSubmit.mock.calls[0][0].results;
-			expect(first).toMatchObject({ selectedOptions: ["Beta"], note: "why Beta", noteOption: "Beta" });
-			expect(second).toMatchObject({ selectedOptions: ["Gamma"], note: undefined });
+			expect(first).toMatchObject({ selectedOptions: ["Beta"], notes: undefined });
+			expect(second).toMatchObject({ selectedOptions: ["Gamma"], notes: [{ option: "Gamma", note: "why Gamma" }] });
 		});
 
-		it("Tern: a row's menu Note overrides the just-picked target without picking the new row", async () => {
+		it("Tern: a row's menu Note targets that row without picking it", async () => {
 			const onPrompt = vi.fn().mockResolvedValue("why Delta");
 			const onSubmit = vi.fn();
 			const component = new AskDialogComponent(questions, { onSubmit, onCancel: vi.fn(), onPrompt });
@@ -768,8 +777,8 @@ describe("AskDialogComponent", () => {
 			component.handleNativeEvent(action("submit"));
 
 			const [first, second] = onSubmit.mock.calls[0][0].results;
-			expect(first).toMatchObject({ selectedOptions: ["Beta"], note: undefined });
-			expect(second).toMatchObject({ selectedOptions: ["Delta"], note: "why Delta", noteOption: "Delta" });
+			expect(first).toMatchObject({ selectedOptions: ["Beta"], notes: undefined });
+			expect(second).toMatchObject({ selectedOptions: ["Delta"], notes: [{ option: "Delta", note: "why Delta" }] });
 		});
 
 		it("Tern: a menu Note from a list the dialog has moved past does nothing", async () => {
@@ -805,8 +814,7 @@ describe("AskDialogComponent", () => {
 				dialog.handleNativeEvent(action("submit"));
 				expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
 					selectedOptions: ["Beta"],
-					note: "why Beta",
-					noteOption: "Beta",
+					notes: [{ option: "Beta", note: "why Beta" }],
 				});
 				expect(harness.errors).toEqual([]);
 			} finally {
@@ -839,7 +847,11 @@ describe("AskDialogComponent", () => {
 		await Promise.resolve();
 
 		expect(onPrompt).toHaveBeenCalledTimes(1);
-		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Option A", question: "Choose one?" });
+		expect(onPrompt.mock.calls[0][0]).toEqual({
+			title: "Note for Option A",
+			question: "Choose one?",
+			saveOnEscape: true,
+		});
 		// No prior note → prefill is undefined.
 		expect(onPrompt.mock.calls[0][1]).toBeUndefined();
 
@@ -862,8 +874,15 @@ describe("AskDialogComponent", () => {
 		await Promise.resolve();
 
 		expect(onPrompt).toHaveBeenCalledTimes(3);
-		// Note now belongs to Option B, so re-editing Option A starts empty.
-		expect(onPrompt.mock.calls[2][1]).toBeUndefined();
+		expect(onPrompt.mock.calls[2][1]).toBe("Note for A");
+		component.handleInput(ENTER);
+		expect(onSubmit.mock.calls[0][0].results[0]).toMatchObject({
+			selectedOptions: ["Option A"],
+			notes: [
+				{ option: "Option A", note: "Updated note" },
+				{ option: "Option B", note: "Note for B" },
+			],
+		});
 	});
 
 	it("note prefill reuses the existing note when re-editing the same row", async () => {
@@ -899,7 +918,7 @@ describe("AskDialogComponent", () => {
 		expect(onPrompt.mock.calls[1][1]).toBe("My note");
 	});
 
-	it("omits a note when a single-select answer changes to a different option", async () => {
+	it("keeps an item note when a single-select answer changes to a different option", async () => {
 		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("Note for A"));
 		const onSubmit = vi.fn();
 		const questions: ExtensionAskDialogQuestion[] = [
@@ -925,10 +944,10 @@ describe("AskDialogComponent", () => {
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option B"]);
-		expect(onSubmit.mock.calls[0][0].results[0].note).toBeUndefined();
+		expect(onSubmit.mock.calls[0][0].results[0].notes).toEqual([{ option: "Option A", note: "Note for A" }]);
 	});
 
-	it("clears the note when a noted multi-select option is toggled off", async () => {
+	it("keeps the note when a noted multi-select option is toggled off", async () => {
 		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("Note for A"));
 		const onSubmit = vi.fn();
 		const questions: ExtensionAskDialogQuestion[] = [
@@ -952,10 +971,9 @@ describe("AskDialogComponent", () => {
 
 		component.handleInput(SPACE);
 		component.handleInput(SPACE);
-		expect(render(component)).not.toContain("✎ note");
+		expect(render(component)).toContain("✎ note");
 
-		// Select Option B and confirm from the Submit tab; the cleared note
-		// must not resurface.
+		// Select Option B and confirm from the Submit tab; A's note is still submitted.
 		component.handleInput(DOWN);
 		component.handleInput(SPACE);
 		component.handleInput(TAB);
@@ -963,7 +981,7 @@ describe("AskDialogComponent", () => {
 
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option B"]);
-		expect(onSubmit.mock.calls[0][0].results[0].note).toBeUndefined();
+		expect(onSubmit.mock.calls[0][0].results[0].notes).toEqual([{ option: "Option A", note: "Note for A" }]);
 	});
 
 	it("saves multi-select choices and custom input, then advances exactly one question", async () => {
@@ -1096,7 +1114,7 @@ describe("AskDialogComponent", () => {
 				multi: true,
 				selectedOptions: ["Option A"],
 				customInput: undefined,
-				note: undefined,
+				notes: undefined,
 				timedOut: undefined,
 			},
 			{
@@ -1106,7 +1124,7 @@ describe("AskDialogComponent", () => {
 				multi: false,
 				selectedOptions: ["Option D"],
 				customInput: undefined,
-				note: undefined,
+				notes: undefined,
 				timedOut: undefined,
 			},
 		]);
@@ -1206,7 +1224,7 @@ describe("AskDialogComponent", () => {
 		expect(result.timedOut).toBeUndefined();
 	});
 
-	it("uses a noted non-recommended option as the timeout fallback", async () => {
+	it("keeps a note on a non-recommended option without changing the timeout fallback", async () => {
 		vi.useFakeTimers();
 		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("why B"));
 		const onSubmit = vi.fn();
@@ -1236,8 +1254,8 @@ describe("AskDialogComponent", () => {
 		expect(onTimeout).toHaveBeenCalledTimes(1);
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		const result = onSubmit.mock.calls[0][0].results[0];
-		expect(result.selectedOptions).toEqual(["Option B"]);
-		expect(result.note).toBe("why B");
+		expect(result.selectedOptions).toEqual(["Option A"]);
+		expect(result.notes).toEqual([{ option: "Option B", note: "why B" }]);
 		expect(result.timedOut).toBe(true);
 	});
 
@@ -1277,8 +1295,8 @@ describe("AskDialogComponent", () => {
 		expect(onTimeout).toHaveBeenCalledTimes(1);
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		const result = onSubmit.mock.calls[0][0].results[0];
-		expect(result.selectedOptions).toEqual(["Option B"]);
-		expect(result.note).toBe("why B");
+		expect(result.selectedOptions).toEqual(["Option A"]);
+		expect(result.notes).toEqual([{ option: "Option B", note: "why B" }]);
 		expect(result.timedOut).toBe(true);
 	});
 

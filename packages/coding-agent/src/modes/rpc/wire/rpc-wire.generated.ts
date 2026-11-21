@@ -1094,9 +1094,9 @@ export interface SessionTree {
 	leafId: string | null;
 }
 
-export interface TreeAskOptionNote {
-	option: string;
+export interface TreeAskItemNote {
 	note: string;
+	option?: string;
 }
 
 export interface TreeAskQuestionResult {
@@ -1106,9 +1106,7 @@ export interface TreeAskQuestionResult {
 	multi: boolean;
 	selectedOptions: string[];
 	customInput?: string;
-	note?: string;
-	optionNotes?: TreeAskOptionNote[];
-	noteOption?: string;
+	notes?: TreeAskItemNote[];
 	timedOut?: boolean;
 }
 
@@ -1118,9 +1116,7 @@ export interface TreeAskDetails {
 	multi?: boolean;
 	selectedOptions?: string[];
 	customInput?: string;
-	note?: string;
-	optionNotes?: TreeAskOptionNote[];
-	noteOption?: string;
+	notes?: TreeAskItemNote[];
 	timedOut?: boolean;
 	results?: TreeAskQuestionResult[];
 	chatRedirect?: boolean;
