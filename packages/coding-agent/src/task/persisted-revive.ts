@@ -143,6 +143,7 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 		name: displayName,
 		description: "",
 		systemPrompt: init.systemPrompt.join("\n\n"),
+		inherit: init.inherit,
 		source: "user",
 	};
 }
@@ -463,7 +464,11 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 			outputSchemaMode: init.outputSchemaMode,
 			restrictToolNames: restrictToolNames || undefined,
 			requireYieldTool: usesYield(init.outputSchema),
+			// Preserve the provider-facing blocks (signed reasoning binds to them). The
+			// inheritance policy still controls discovery for the revived session and its advisors.
 			systemPrompt: () => [...init.systemPrompt],
+			agentInheritance: init.inherit,
+			noContextFiles: init.noContextFiles,
 			// Inherit current owner policy, never extension authority from a transcript.
 			extensionRoots: () => spec.root.effectiveExtensionRoots,
 			preloadedPreparedExtensions: spec.preparedExtensions,

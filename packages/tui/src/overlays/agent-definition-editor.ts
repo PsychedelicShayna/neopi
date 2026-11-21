@@ -69,6 +69,8 @@ const FIELD_HELP: Record<AgentDefinitionField, string> = {
 		"The Markdown body, handed to the child as its Role. The harness appends its own context, coordination and completion (yield) instructions after it, so the body need not explain them.",
 	harness:
 		"omp runs natively (default). claude runs through the Claude adapter with the subset of tools it can represent. codex parses but cannot be spawned.",
+	inherit:
+		"all keeps context files and the harness prompt (default); context keeps only files; system keeps only the harness prompt; none keeps neither. Agent instructions always apply.",
 	model: "Ordered fallbacks: @role aliases or provider/model selectors, each with an optional :effort suffix. The first available one is used; an empty list inherits the parent's model. A per-call model and the task.agentModelOverrides setting win over this list.",
 	thinkingLevel:
 		"Reasoning effort when the chosen model selector carries no :effort suffix; a per-call effort wins over both. inherit follows the parent, auto lets the harness choose.",
@@ -349,6 +351,8 @@ export class AgentDefinitionEditor implements Component {
 			}
 			case "harness":
 				return draft.harness ?? "omp (default)";
+			case "inherit":
+				return draft.inherit ?? "all (default)";
 			case "model":
 				return draft.model?.length ? draft.model.join(" → ") : "inherit the parent's model";
 			case "thinkingLevel":

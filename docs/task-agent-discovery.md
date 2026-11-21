@@ -65,7 +65,7 @@ starts a session-local advisor; `/advisor configure` still manages saved advisor
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `harness`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `harness`, `inherit`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -86,6 +86,19 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `prewalk: true` enables the configured [planning and execution crews](./prewalk.md#configure-the-crews) at the first edit/write. An empty planner preserves normal task model routing; execution defaults to `@smol`. A string such as `prewalk: "@smol"` or `prewalk: "openai/gpt-5-mini"` overrides the execution primary selector. `task.agentPrewalk` entries take precedence over frontmatter. Ordered crew fallbacks skip unavailable or unauthenticated candidates. If a configured crew is unavailable, the spawn keeps normal task routing without prewalk. A target is skipped only when both model identity and effective thinking match; effort-only handoffs still arm.
 - `task.agentPrewalkAuto` is a settings-only record (agent name → `"on"` / `"off"` / pattern; no frontmatter field) that judges per assignment instead of arming unconditionally. For an agent whose frontmatter, `task.prewalk` and `task.agentPrewalk` resolve to nothing, an entry of `"on"` or a pattern sends the assignment text once to the same native judge used by auto-prewalk, at spawn; `"on"` hands off to `prewalk.autoTarget` and any other value is the target model pattern or role. An unconditional prewalk wins and is never judged. See [Subagent prewalk](./prewalk.md#subagent-prewalk).
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
+
+### Prompt inheritance
+
+Set `inherit` in a native NeoPi agent definition's YAML frontmatter:
+
+| Value | Context files | Harness system prompt |
+| --- | --- | --- |
+| `all` (default) | Yes | Yes |
+| `context` | Yes | No |
+| `system` | No | Yes |
+| `none` | No | No |
+
+Context files include applicable user, ancestor and repository instructions such as `AGENTS.md` and `CLAUDE.md`, loaded at the child's working directory unless explicitly pinned by the host. The harness prompt is the generated NeoPi base, including any custom system template or append text. Disabling either does not remove the definition's Markdown body, the assignment, or the subagent's coordination and completion instructions. Each definition selects its own mode; reviving a persisted session retains its saved prompt and mode. This setting controls prompt composition, not filesystem or tool permissions. External harnesses keep their own defaults and do not accept non-default values.
 
 ### Rich definition editing
 
