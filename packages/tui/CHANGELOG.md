@@ -9,6 +9,7 @@
 - NeoPi provenance uses the same crescent in purple for nightly-only additions and the original green for published stable additions; gold, silver and bronze stars identify upstream additions only, with every older sync cohort retained as bronze.
 - Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.
 - Ask uses `n` to add or edit one note per highlighted item, selected or not. Save an empty note to remove it; Escape saves after Vim leaves Insert, and Ctrl+C discards the edit. The result carries one `notes` list instead of separate note fields ([#838](https://github.com/PsychedelicShayna/neopi/issues/838)).
+- `/agents` opens directly into a roster and editable properties, opens editable backing files with Ctrl+G (and explains how to copy bundled definitions), and can generate from agents, advisors, personalities, personas, prompt files, skills, and other harness definitions ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 
 ### Added
 
