@@ -59,6 +59,7 @@
 
 ### Fixed
 
+- The Interaction settings tab shows Language immediately after Input.
 - Untranslated settings retain their current host-provided labels and descriptions in Spanish mode.
 - Leaving settings search restores the confirmed filter instead of retaining an unconfirmed preview.
 - Ask dialogs keep a stable, bounded height when footer hints wrap or questions expand.
