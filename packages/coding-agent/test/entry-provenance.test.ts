@@ -15,7 +15,13 @@ test("amethyst Nerd Settings and builtin completions retain upstream stars and d
 	setThemeInstance(amethyst);
 	try {
 		// Omitted optional tokens must inherit real, distinct hues, not default foreground.
-		const palette = ["provenanceGold", "provenanceSilver", "success", "provenancePurple"] as const;
+		const palette = [
+			"provenanceGold",
+			"provenanceSilver",
+			"provenanceBronze",
+			"success",
+			"provenancePurple",
+		] as const;
 		for (const [index, color] of palette.entries()) {
 			expect(amethyst.getColorHex(color)).toMatch(/^#[\da-f]{6}$/i);
 			for (const other of palette.slice(index + 1)) {
@@ -24,10 +30,12 @@ test("amethyst Nerd Settings and builtin completions retain upstream stars and d
 		}
 		const host = createSettingsHost(Settings.isolated());
 		for (const [path, color, glyph] of [
-			["tui.motion", "provenanceGold", "provenance.star"],
-			["computer.backgroundFallback", "provenanceSilver", "provenance.star"],
+			["tui.renderEmbeds", "provenanceGold", "provenance.star"],
+			["tui.motion", "provenanceSilver", "provenance.star"],
+			["computer.backgroundFallback", "provenanceBronze", "provenance.star"],
 			["symbolBrandGlyph", "success", "provenance.moon"],
 			["settings.defaultScope", "provenancePurple", "provenance.moon"],
+			["language", "provenancePurple", "provenance.moon"],
 		] as const) {
 			const entry = host.entries.find(item => item.path === path)!;
 			const label = entry.ui!.label;
@@ -51,8 +59,9 @@ test("amethyst Nerd Settings and builtin completions retain upstream stars and d
 
 		const provider = new CombinedAutocompleteProvider([...BUILTIN_SLASH_COMMAND_DEFS], process.cwd());
 		for (const [name, color, glyph] of [
-			["unpin", "provenanceGold", "provenance.star"],
-			["local", "provenanceSilver", "provenance.star"],
+			["commit", "provenanceGold", "provenance.star"],
+			["unpin", "provenanceSilver", "provenance.star"],
+			["local", "provenanceBronze", "provenance.star"],
 			["persona", "success", "provenance.moon"],
 			["personality", "provenancePurple", "provenance.moon"],
 		] as const) {
@@ -65,4 +74,12 @@ test("amethyst Nerd Settings and builtin completions retain upstream stars and d
 	} finally {
 		setThemeInstance(previousTheme);
 	}
+});
+
+test("Session Update Channel help distinguishes local overrides from rollback hold release", () => {
+	const host = createSettingsHost(Settings.isolated(), "session");
+	const updateChannel = host.entries.find(entry => entry.path === "update.channel")!;
+	expect(updateChannel.ui!.description).toContain("persisted Global change to a different channel");
+	expect(updateChannel.ui!.description).toContain("successful `npi update stable|nightly`");
+	expect(updateChannel.ui!.description).toContain("Project, Session and process overrides do not");
 });

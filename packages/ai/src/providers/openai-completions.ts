@@ -121,6 +121,7 @@ import {
 	resolveOpenAIRequestSetup,
 	shouldDropAutoToolChoiceForReasoning,
 	shouldRetryWithoutStrictTools,
+	stripUnsupportedOpenAISamplingParams,
 } from "./openai-shared";
 import { completionsSendsOwnThinking, transformMessages } from "./transform-messages";
 import {
@@ -951,6 +952,7 @@ const streamOpenAICompletionsOnce = (
 				activeReasoningEffortFallbackKey = reasoningEffortFallbackKey;
 				const replacedParams = await options?.onPayload?.(params, model);
 				if (replacedParams !== undefined) params = replacedParams as typeof params;
+				if (options?.onPayload) stripUnsupportedOpenAISamplingParams(params, policy.compat);
 				activeRequestParams = params;
 				rawRequestDump = {
 					provider: model.provider,
@@ -2276,6 +2278,7 @@ function buildParams(
 	applyOpenAIExtraBody(params, compat.extraBody, {
 		dropThinkingWhenReasoningEffort: compat.dropThinkingWhenReasoningEffort,
 	});
+	stripUnsupportedOpenAISamplingParams(params, initialCompat);
 	applyOpenAIChatCompletionsPromptCachePolicy(params, model, options);
 
 	return {

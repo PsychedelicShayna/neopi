@@ -15,8 +15,29 @@ const UNITS: Record<string, number> = {
 	Y: 31_536_000_000,
 };
 
+const DURATION_AMOUNT = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/;
+const DURATION_UNITS = Object.keys(UNITS);
+const DEFERRED_INPUT = new RegExp(`^(${DURATION_AMOUNT.source})(${DURATION_UNITS.join("|")})\\s([\\s\\S]+)$`);
+const DURATION_PREFIX = new RegExp(`^(${DURATION_AMOUNT.source})([a-zA-Z]*)$`);
+
+/** Complete the units of an amount the operator has already entered. */
+export function completeDeferredDuration(prefix: string): string[] {
+	const match = DURATION_PREFIX.exec(prefix);
+	if (!match) return [];
+	const [, amount, unitPrefix] = match;
+	const value = Number(amount);
+	const matches: string[] = [];
+	for (const unit of DURATION_UNITS) {
+		if (!unit.startsWith(unitPrefix) || !Number.isFinite(value * UNITS[unit])) continue;
+		// Keep an exact `m` ahead of the longer `ms` match.
+		if (unit === unitPrefix) matches.unshift(prefix);
+		else matches.push(amount + unit);
+	}
+	return matches;
+}
+
 export function parseDeferredInput(args: string): { delayMs: number; input: string } | undefined {
-	const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(ms|s|m|h|d|w|M|Y)\s([\s\S]+)$/.exec(args);
+	const match = DEFERRED_INPUT.exec(args);
 	if (!match || !match[3].trim()) return undefined;
 	const delayMs = Number(match[1]) * UNITS[match[2]];
 	if (!Number.isFinite(delayMs)) return undefined;
@@ -102,6 +123,10 @@ export class DeferredSubmissions {
 		return id;
 	}
 
+	pendingIds(): number[] {
+		return [...this.#timers.keys()];
+	}
+
 	cancel(id?: number): number {
 		if (id !== undefined) {
 			const controller = this.#timers.get(id);
@@ -126,4 +151,9 @@ export function deferredSubmissionsFor(session: AgentSession): DeferredSubmissio
 		schedules.set(session, schedulesForSession);
 	}
 	return schedulesForSession;
+}
+
+/** Inspect outstanding submissions without creating a schedule or registering lifecycle callbacks. */
+export function pendingDeferredSubmissionIds(session: AgentSession): number[] {
+	return schedules.get(session)?.pendingIds() ?? [];
 }

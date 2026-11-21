@@ -874,11 +874,120 @@ function withResolvedModelHeaders<TApi extends Api>(
 	return outer;
 }
 
+const VARIANT_SAMPLING_KEYS = ["temperature", "topP", "topK", "minP", "presencePenalty", "repetitionPenalty"] as const;
+
+type VariantRequestOptions = Pick<
+	StreamOptions,
+	(typeof VARIANT_SAMPLING_KEYS)[number] | "cacheRetention" | "forceReasoningOff" | "onPayload" | "onResponse"
+> &
+	Pick<
+		SimpleStreamOptions,
+		"disableReasoning" | "hideThinkingSummary" | "textVerbosity" | "serviceTier" | "thinkingBudgets"
+	> & { reasoning?: string };
+
+/** Resolve model-local request policy over the caller's ambient request settings. */
+export function applyModelVariantRequest<T extends VariantRequestOptions>(model: Model, options: T): T {
+	const request = model.variant?.request;
+	if (!request) return options;
+	const resolved = { ...options };
+	for (const key of VARIANT_SAMPLING_KEYS) {
+		const value = request[key];
+		if (value !== undefined) resolved[key] = value < 0 ? undefined : value;
+	}
+	if (request.hideThinkingSummary !== undefined) resolved.hideThinkingSummary = request.hideThinkingSummary;
+	if (request.textVerbosity !== undefined) resolved.textVerbosity = request.textVerbosity;
+	if (request.cacheRetention !== undefined) {
+		resolved.cacheRetention = request.cacheRetention === "auto" ? undefined : request.cacheRetention;
+	}
+	if (request.serviceTier !== undefined) {
+		resolved.serviceTier = request.serviceTier === "none" ? undefined : request.serviceTier;
+	}
+	if (request.thinkingBudgets !== undefined) {
+		resolved.thinkingBudgets = { ...options.thinkingBudgets, ...request.thinkingBudgets };
+	}
+	// A selector suffix or live effort selection already resolved by the caller
+	// wins. "auto" requires session context; bare AI callers use the model default.
+	if (options.reasoning === undefined && !options.disableReasoning && !options.forceReasoningOff) {
+		const level = request.thinkingLevel;
+		if (level === "off") resolved.disableReasoning = true;
+		else if (level === "auto") resolved.reasoning = defaultSupportedEffort(model);
+		else if (level !== undefined) resolved.reasoning = level;
+	}
+	return resolved;
+}
+
+/** Project a selected variant onto a provider transport model without changing its limits or wire routing. */
+export function modelForVariantRequest<TApi extends Api>(model: Model<TApi>): Model<TApi> {
+	const variant = model.variant;
+	if (!variant) return model;
+	const pinnedProfile = variant.request.serviceTier !== undefined ? model.codexVariant : undefined;
+	return {
+		...model,
+		// The native gateway resolves a catalog selector of its own, so it must
+		// not re-select a Codex profile whose fixed tier this variant replaces.
+		id: pinnedProfile?.baseModelId ?? variant.baseModelId,
+		codexVariant: pinnedProfile ? undefined : model.codexVariant,
+		variant: undefined,
+	};
+}
+
+/** Run the transport with the original catalog row identity, without exposing
+ * the synthetic selector to its payload builders or the auth gateway. */
+function streamModelVariant<TApi extends Api, TOptions extends VariantRequestOptions>(
+	model: Model<TApi>,
+	context: Context,
+	options: TOptions,
+	run: (base: Model<TApi>, context: Context, options: TOptions) => AssistantMessageEventStream,
+): AssistantMessageEventStream {
+	const base = modelForVariantRequest(model);
+	const resolved = applyModelVariantRequest(model, options);
+	const onPayload = resolved.onPayload;
+	const onResponse = resolved.onResponse;
+	if (onPayload) resolved.onPayload = (payload, _base, signal) => onPayload(payload, model, signal);
+	if (onResponse) resolved.onResponse = (response, _base, signal) => onResponse(response, model, signal);
+
+	// Provider-native replay compares assistant history to the transport's id.
+	// Rewrite only this variant's own turns, without changing persisted history.
+	const isVariantTurn = (message: Context["messages"][number]): message is AssistantMessage =>
+		message.role === "assistant" && message.model === model.id && message.provider === model.provider;
+	const messages = context.messages.some(isVariantTurn)
+		? context.messages.map(message => (isVariantTurn(message) ? { ...message, model: base.id } : message))
+		: undefined;
+	const inner = run(base, messages ? { ...context, messages } : context, resolved);
+	const outer = new AssistantMessageEventStream();
+	outer.forwardLocalWorkFrom(inner);
+	const restoreModel = (message: AssistantMessage): AssistantMessage => {
+		// A provider-reported server fallback may be a different model entirely.
+		return message.provider === base.provider && message.model === base.id
+			? { ...message, model: model.id }
+			: message;
+	};
+	void (async () => {
+		try {
+			for await (const event of inner) {
+				if ("partial" in event) outer.push({ ...event, partial: restoreModel(event.partial) });
+				else if (event.type === "done") outer.push({ ...event, message: restoreModel(event.message) });
+				else outer.push({ ...event, error: restoreModel(event.error) });
+				if (outer.done) return;
+			}
+			outer.end(restoreModel(await inner.result()));
+		} catch (error) {
+			outer.fail(error);
+		} finally {
+			outer.forwardLocalWorkFrom(undefined);
+		}
+	})();
+	return outer;
+}
+
 export function stream<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
+	if (model.variant) {
+		return streamModelVariant<TApi, OptionsForApi<TApi>>(model, context, options ?? {}, stream);
+	}
 	if (model.resolveHeaders) {
 		return withResolvedModelHeaders(model, options?.signal, resolvedModel => stream(resolvedModel, context, options));
 	}
@@ -1238,6 +1347,7 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	if (model.variant) return streamModelVariant(model, context, options ?? {}, streamSimple);
 	const sessionOptions = withInferenceSessionId(options);
 	// Requests without an effort keep unknown thinking controls off the wire.
 	const effortRequested =
@@ -2479,7 +2589,7 @@ export function getSimpleStreamMaxTokens<TApi extends Api>(
 	model: Model<TApi>,
 	options: SimpleStreamOptions,
 ): number | undefined {
-	return mapOptionsForApi(model, options).maxTokens;
+	return mapOptionsForApi(modelForVariantRequest(model), applyModelVariantRequest(model, options)).maxTokens;
 }
 
 function getGoogleBudget(

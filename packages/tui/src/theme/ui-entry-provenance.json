@@ -53,10 +53,20 @@
 			"statusSegments": [],
 			"roles": [],
 			"composerShapes": [],
-			"features": ["agent-menu", "agent-definition-editor", "spawn-screen"]
+			"features": ["agent-menu", "agent-definition-editor", "model-variants", "spawn-screen"]
 		}
 	},
 	"upstream": [
+		{
+			"version": "19.0.0",
+			"entries": {
+				"keybindings": [],
+				"statusSegments": [],
+				"roles": [],
+				"composerShapes": [],
+				"features": []
+			}
+		},
 		{
 			"version": "18.18.8",
 			"entries": {

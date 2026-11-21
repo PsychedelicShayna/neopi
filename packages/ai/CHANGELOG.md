@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Model requests omit individual unsupported sampling options instead of letting one incompatible setting fail the request ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Credential-pinned gateway requests retain their approved origin and private CA policy before sending to a provider.
 - Preserve terminal credential-scope refusals through transport, provider and turn error classification so rejected origins, redirects and replacement certificates do not enter retry loops ([#649](https://github.com/PsychedelicShayna/neopi/issues/649), [#651](https://github.com/PsychedelicShayna/neopi/issues/651)).
 - Recover from a broker access token rejected immediately after refresh, coalescing concurrent retries without rotating sibling accounts ([#625](https://github.com/PsychedelicShayna/neopi/issues/625)).

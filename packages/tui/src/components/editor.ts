@@ -956,9 +956,11 @@ export class Editor implements Component, Focusable {
 		  }
 		| undefined;
 	#autocompletePrefix: string = "";
+	/** Empty argument prefixes match every suffix; retain their whole input to reject stale rows. */
+	#autocompleteEmptyArgumentAnchor: string | undefined;
 	/** The line a prediction insert (Tab, Right, or the alternatives list) left in the buffer; any later edit clears it. */
 	#insertedPrediction: string | undefined;
-	/** False while the popup's untouched top row is a description-only slash hit ({@link AutocompleteItem.descriptionMatch}): Enter then submits the typed text. */
+	/** False when untouched rows opt out of Enter acceptance; Enter submits the typed text. */
 	#enterAcceptsSelection = true;
 	#autocompleteRequestId: number = 0;
 	#autocompletePendingRequest: AutocompleteRequest | undefined;
@@ -4377,7 +4379,7 @@ export class Editor implements Component, Focusable {
 				this.#tryTriggerAutocomplete();
 			}
 			// Argument providers may expose candidates only after a separator.
-			else if (char === " " && this.#isInSubmittedSlashCommandContext()) {
+			else if ((char === " " || char === ":") && this.#isInSubmittedSlashCommandContext()) {
 				this.#tryTriggerAutocomplete();
 			}
 			// Also auto-trigger when typing letters/path chars in a completable context
@@ -5549,6 +5551,9 @@ export class Editor implements Component, Focusable {
 	 * - Everything else is stale — accepting it would corrupt the buffer (issue #4295).
 	 */
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
+		if (this.#autocompleteEmptyArgumentAnchor !== undefined) {
+			return this.#autocompleteEmptyArgumentAnchor === currentTextBeforeCursor;
+		}
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
 
 		if (
@@ -5689,8 +5694,11 @@ export class Editor implements Component, Focusable {
 	/** Apply `selected` the way Tab does: complete it in place and chain into directories/commands. */
 	#acceptAutocompleteSelection(selected: SelectItem): void {
 		if (!this.#autocompleteProvider) return;
+		const slashArgument = this.#isInSubmittedSlashCommandContext() && !this.#autocompletePrefix.startsWith("@");
 		const shouldChainAutocomplete =
-			this.#isSlashCommandNameAutocompleteSelection() || isDirectoryCompletionValue(selected.value);
+			this.#isSlashCommandNameAutocompleteSelection() ||
+			isDirectoryCompletionValue(selected.value) ||
+			(slashArgument && (selected as AutocompleteItem).submitsCommand === false && selected.value.endsWith(" "));
 		const result = this.#autocompleteProvider.applyCompletion(
 			this.#state.lines,
 			this.#state.cursorLine,
@@ -5749,8 +5757,18 @@ export class Editor implements Component, Focusable {
 		if (!this.#autocompleteProvider) return;
 		const onNoMatch = handoff && hasToken ? () => this.focused && this.#vim === null && handoff() : undefined;
 
-		if (this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) {
-			void this.#tryTriggerAutocomplete(false, onNoMatch);
+		if (this.#isInSubmittedSlashCommandContext()) {
+			if (!beforeCursor.trimStart().includes(" ")) {
+				void this.#tryTriggerAutocomplete(false, onNoMatch);
+			} else if (this.#autocompleteProvider.hasSlashArgumentCompletions?.(beforeCursor) !== false) {
+				// A pasted argument or an Esc-dismissed popup has no active list.
+				// Ask the slash command before trying the generic file fallback.
+				void this.#tryTriggerAutocomplete(false, () => {
+					void this.#forceFileAutocomplete(onNoMatch);
+				});
+			} else {
+				void this.#forceFileAutocomplete(onNoMatch);
+			}
 		} else if (this.#isInMidPromptSkillSlashContext()) {
 			void this.#tryTriggerAutocomplete(false, () => {
 				void this.#forceFileAutocomplete(onNoMatch);
@@ -5900,6 +5918,7 @@ export class Editor implements Component, Focusable {
 		this.#autocompleteList = undefined;
 		this.#textAssistReplacement = undefined;
 		this.#autocompletePrefix = "";
+		this.#autocompleteEmptyArgumentAnchor = undefined;
 		if (notifyCancel && wasAutocompleting) {
 			this.onAutocompleteCancel?.();
 		}
@@ -6023,6 +6042,10 @@ export class Editor implements Component, Focusable {
 		state: "regular" | "force",
 	): void {
 		this.#autocompletePrefix = suggestions.prefix;
+		this.#autocompleteEmptyArgumentAnchor =
+			state === "regular" && suggestions.prefix === "" && this.#isInSubmittedSlashCommandContext()
+				? (this.#state.lines[this.#state.cursorLine] ?? "").slice(0, this.#state.cursorCol)
+				: undefined;
 		this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 		this.#enterAcceptsSelection =
 			!suggestions.items[0]?.descriptionMatch && !suggestions.items[0]?.preserveInputOnSubmit;

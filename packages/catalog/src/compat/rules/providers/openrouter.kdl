@@ -160,6 +160,13 @@ provider "openrouter" {
 
 	// Replaces the OpenRouter provider wire-model-id dispatch branch.
 	wire-model-id-mode "openrouter"
+	// Native `openrouter` rows can dispatch Chat Completions too, so keep
+	// their dual-adapter capabilities. Explicit Responses rows support top_k
+	// and penalties, unlike the base Responses contract.
+	// https://openrouter.ai/docs/api/api-reference/responses/create-a-response
+	on-api "openai-responses" {
+		unsupported-sampling-params "minP" "repetitionPenalty"
+	}
 	// Replaces the strict-mode provider whitelist entry.
 	supports-strict-mode #true
 	thinking-format "openrouter"

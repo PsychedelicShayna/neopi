@@ -1874,7 +1874,11 @@ export interface RegisteredCommand {
 	description?: string;
 	/** Display-only origin marker; bundled commands use the shared provenance registry. */
 	provenance?: EntryProvenance;
-	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null;
+	/** Read-only live session state for argument providers. */
+	getArgumentCompletions?: (
+		argumentPrefix: string,
+		sessionManager?: ReadonlySessionManager,
+	) => AutocompleteItem[] | null;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
 

@@ -42,9 +42,20 @@ const appliedContextRules = new WeakMap<CompactionSettings, WeakMap<object, Comp
 /** Resolve session/role/agent overrides, then per-model limits, context rules, and the global policy. */
 export function resolveModelCompactionSettings(
 	scope: ScopeLike,
-	model: { provider: string; id: string } | null | undefined,
+	model: Pick<Model, "provider" | "id" | "variant"> | null | undefined,
 ): CompactionSettings {
 	const configured = cfgCompaction.get(scope);
+	if (model?.variant && !thresholdOverrideSource(scope)) {
+		const tokens = model.variant.settings[cfgCompactionThresholdTokens.id] as number | undefined;
+		const percent = model.variant.settings[cfgCompactionThresholdPercent.id] as number | undefined;
+		if (tokens !== undefined || percent !== undefined) {
+			return {
+				...configured,
+				thresholdTokens: tokens ?? configured.thresholdTokens,
+				thresholdPercent: percent ?? configured.thresholdPercent,
+			};
+		}
+	}
 	// Session/role/agent overrides win, then N limits, then context rules.
 	const enabled = !thresholdOverrideSource(scope) && cfgCompactionModelThresholdsEnabled.get(scope);
 	const thresholds = enabled ? cfgCompactionModelThresholds.get(scope) : undefined;
@@ -89,6 +100,10 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 		basis: trigger && formatBasis(trigger),
 		source:
 			overrideSource ??
+			(model.variant?.settings[cfgCompactionThresholdTokens.id] !== undefined ||
+			model.variant?.settings[cfgCompactionThresholdPercent.id] !== undefined
+				? "Model Variant"
+				: undefined) ??
 			match?.key ??
 			(rule ? `context rule ${rule.selector}` : undefined) ??
 			(configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),

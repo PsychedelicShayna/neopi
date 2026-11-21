@@ -276,6 +276,91 @@ describe("ModelHub", () => {
 		}
 	});
 
+	test("model folders cross the fullscreen and Roles pickers and survive settings reload", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-model-folders-"));
+		const options = { cwd: root, agentDir: path.join(root, "agent") };
+		const models = [makeModel("alpha", "review-model"), makeModel("beta", "other-model")];
+		const create = "\x1b[110;7u"; // Ctrl+Alt+N
+		const add = "\x1b[97;7u"; // Ctrl+Alt+A
+		const rename = "\x1b[114;7u"; // Ctrl+Alt+R
+		const clear = "\x1b[120;7u"; // Ctrl+Alt+X
+		const del = "\x1b[3~";
+		try {
+			const settings = await Settings.loadIsolated(options);
+			const { hub: session } = createHub({
+				models,
+				settings,
+				hub: { sessionOnly: true, initialProviderId: "alpha" },
+			});
+			expect(normalize(session.render(220))).toContain("Folders");
+			for (const key of [create, ..."Code review", "\n", "\n", add, "\n"]) session.handleInput(key);
+			session.handleInput(LEFT);
+			session.handleInput(UP); // alpha → Code review
+			expect(session.navigationSnapshot().entry).toBe("folder:Code review");
+			expect(normalize(session.render(220))).toContain("alpha/review-model");
+			expect(normalize(session.render(220))).not.toContain("other-model");
+			await settings.flush();
+
+			const reloaded = await Settings.loadIsolated(options);
+			const { hub: roles, onAssign } = createHub({ models, settings: reloaded, scoped: true, scope: "session" });
+			for (const key of [UP, "\n", "\n", "\n", LEFT]) roles.handleInput(key);
+			for (let i = 0; i < 8 && roles.navigationSnapshot().entry !== "folder:Code review"; i++)
+				roles.handleInput(DOWN);
+			expect(roles.navigationSnapshot().entry).toBe("folder:Code review");
+			expect(normalize(roles.render(220))).toContain("alpha/review-model");
+			roles.handleInput("\n"); // Sidebar → list.
+			roles.handleInput("\n"); // Assign saved member to the role.
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			expect(onAssign.mock.calls[0]?.[1]).toBe("default");
+			expect(onAssign.mock.calls[0]?.[3]).toBe("alpha/review-model");
+
+			const { hub: edit } = createHub({
+				models,
+				settings: reloaded,
+				hub: { sessionOnly: true, initialProviderId: "alpha" },
+			});
+			for (const key of [UP, rename, "\x01", "\x0b", ..."Review", "\n"]) edit.handleInput(key);
+			expect(edit.navigationSnapshot().entry).toBe("folder:Review");
+			expect(normalize(edit.render(220))).toContain("alpha/review-model");
+			for (const key of ["\n", "\x7f"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("This folder is empty");
+
+			for (const key of [LEFT, DOWN, "\n", add, "\n", LEFT, UP]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("alpha/review-model");
+			for (const key of [clear, ..."Review", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("This folder is empty");
+
+			for (const key of [del, ..."Wrong", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("Type the exact folder name to confirm");
+			expect(edit.navigationSnapshot().entry).toBe("folder:Review");
+			for (const key of ["\x01", "\x0b", ..."Review", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).not.toContain("Review");
+			await reloaded.flush();
+			const last = await Settings.loadReadOnly(options);
+			expect(last.getGlobalSettings()).toHaveProperty("modelFolders", []);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("the project folder list is shared with the session picker without altering the global list", () => {
+		const settings = Settings.isolated();
+		const models = [makeModel("alpha", "review-model")];
+		const { hub: global } = createHub({ models, settings, scoped: true, scope: "global" });
+		const { hub: project } = createHub({ models, settings, scoped: true, scope: "project" });
+		for (const key of ["\x1b[110;7u", ..."Personal", "\n"]) global.handleInput(key);
+		for (const key of ["\x1b[110;7u", ..."Team", "\n"]) project.handleInput(key);
+		const { hub: session } = createHub({ models, settings, scoped: true, hub: { sessionOnly: true } });
+		expect(normalize(global.render(220))).toContain("Personal");
+		expect(normalize(global.render(220))).not.toContain("Team");
+		expect(normalize(session.render(220))).toContain("Team");
+		expect(settings.getGlobalSettings()).toHaveProperty("modelFolders", [{ name: "Personal", models: [] }]);
+		expect(settings.getProjectSettings()).toHaveProperty("modelFolders", [
+			{ name: "Personal", models: [] },
+			{ name: "Team", models: [] },
+		]);
+	});
+
 	test.each(["session", "project", "global"] as const)(
 		"Models %s edits its own assignment and shows higher-scope shadowing",
 		scope => {

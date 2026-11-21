@@ -6,10 +6,12 @@
 import { all, type AnySetting, Setting } from "./registry";
 import * as modesSettings from "../modes/settings";
 import * as sessionSettings from "../session/settings";
+import * as wakeSettings from "../session/wake-settings";
 import * as chatSettings from "../chat/settings";
 import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
 import * as effortPolicySettings from "./effort-policy";
+import * as modelVariantSettings from "./model-variant-settings";
 import * as modelFactSettings from "./model-facts";
 import * as roleSettings from "./role-settings";
 import * as routingPolicySettings from "./routing-policies";
@@ -63,11 +65,13 @@ import * as auxiliaryModelPolicy from "./auxiliary-model-policy";
 const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	configModelSettings,
 	effortPolicySettings,
+	modelVariantSettings,
 	modelFactSettings,
 	roleSettings,
 	routingPolicySettings,
 	modesSettings,
 	sessionSettings,
+	wakeSettings,
 	chatSettings,
 	telemetrySettings,
 	advisorSettings,

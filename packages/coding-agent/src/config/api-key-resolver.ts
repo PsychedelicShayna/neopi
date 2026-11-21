@@ -9,7 +9,14 @@ import type { AuthApiKeyOptions, AuthStorage } from "@oh-my-pi/pi-ai/auth-storag
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
 
 /** Model slice accepted by the model-form `resolver(model, sessionId)` overload. */
-export type ApiKeyResolverModel = Pick<Model<Api>, "provider" | "baseUrl" | "id">;
+export type ApiKeyResolverModel = Pick<Model<Api>, "provider" | "baseUrl" | "id" | "variant" | "codexVariant">;
+
+/** Account eligibility and rate limiting follow the deployed model, not the harness alias. */
+export function modelRequestCredentialId(model: ApiKeyResolverModel): string {
+	return model.variant?.request.serviceTier !== undefined && model.codexVariant
+		? model.codexVariant.baseModelId
+		: (model.variant?.baseModelId ?? model.id);
+}
 
 export interface ApiKeyResolverOptions {
 	/** Session id for credential stickiness; read at resolve time by the caller. */
