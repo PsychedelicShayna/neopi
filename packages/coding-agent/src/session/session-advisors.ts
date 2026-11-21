@@ -543,6 +543,7 @@ export interface SessionAdvisorsHost {
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	isDisposed(): boolean;
 	abortInProgress(): boolean;
+	canWakeForAdvisor(afterInterrupt: boolean): boolean;
 	planModeState(): PlanModeState | undefined;
 	clientBridge(): ClientBridge | undefined;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
@@ -645,6 +646,7 @@ export class SessionAdvisors {
 	/** Holds recorder writes behind the active resume-cost byte snapshot. */
 	#advisorCostSnapshotBarrier: Promise<void> | undefined;
 	#advisorAutoResumeSuppressed = false;
+	#advisorAdviceHeldForAbort = false;
 	#preserveAdvisorAdvice = false;
 	#preserveTerminalYieldAdvice = false;
 	/** Held across maintenance and advisor continuations until the definitive run settle. */
@@ -801,6 +803,13 @@ export class SessionAdvisors {
 			this.#advisorTerminalBoundaryOpen = false;
 			this.#flushAdvisorBoundaryNotes();
 		}
+	}
+
+	/** Advice admitted during a configured post-interrupt wake waits for abort cleanup. */
+	onPrimaryAbortSettled(): void {
+		if (!this.#advisorAdviceHeldForAbort) return;
+		this.#advisorAdviceHeldForAbort = false;
+		this.#flushAdvisorBoundaryNotes();
 	}
 
 	/** Live timing edits release eligible reservations without restarting reviewers. */
@@ -1196,6 +1205,7 @@ export class SessionAdvisors {
 		this.#advisorContinuation = undefined;
 		this.#advisorInterruptImmuneTurnStart = undefined;
 		this.#advisorAutoResumeSuppressed = false;
+		this.#advisorAdviceHeldForAbort = false;
 		this.#advisorBoundaryNotes = [];
 		this.#advisorBoundaryGuidanceLastTurn = undefined;
 		this.#host.yieldQueue.clear("advisor");
@@ -2023,9 +2033,9 @@ export class SessionAdvisors {
 	 * non-interrupting YieldQueue aside. After a terminal
 	 * text answer with no queued work, a note below `advisor.continueSeverity` is
 	 * preserved as a visible advisor card, while one at or above it wakes the
-	 * primary for one continuation. After a deliberate user interrupt auto-resume is
-	 * suppressed while idle/unwinding (the note becomes a preserved card re-entering
-	 * on resume); a live-streaming turn is steered in directly. Never re-runs
+	 * primary for one continuation if its wake setting allows it. While idle/unwinding,
+	 * suppressed advice becomes a preserved card re-entering on resume. A live turn
+	 * can still be steered directly. Never re-runs
 	 * admission — the note cleared the emission guard inside AdviseTool when it was
 	 * emitted, so a deferred flush replays the backlog without re-filtering.
 	 */
@@ -2042,7 +2052,11 @@ export class SessionAdvisors {
 		// once when the window closes: any note at `advisor.continueSeverity` steers
 		// one merged continuation, otherwise one preserved card re-enters context on
 		// the next user turn.
-		if (this.#advisorTerminalBoundaryOpen) {
+		const aborting = this.#host.abortInProgress();
+		if (aborting && this.#advisorAutoResumeSuppressed && this.#host.canWakeForAdvisor(true)) {
+			this.#advisorAdviceHeldForAbort = true;
+		}
+		if (this.#advisorTerminalBoundaryOpen || this.#advisorAdviceHeldForAbort) {
 			this.#advisorBoundaryNotes.push({
 				note,
 				severity,
@@ -2073,7 +2087,7 @@ export class SessionAdvisors {
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
-			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+			autoResumeSuppressed: !this.#host.canWakeForAdvisor(this.#advisorAutoResumeSuppressed),
 			preserveOnly: this.#preserveAdvisorAdvice,
 			// Key on the live agent-core loop, not session `isStreaming` (which also
 			// counts `#promptInFlightCount` during post-turn unwind). Only a running
@@ -2105,6 +2119,10 @@ export class SessionAdvisors {
 	 */
 	#flushAdvisorBoundaryNotes(): void {
 		if (this.#advisorBoundaryNotes.length === 0) return;
+		if (this.#host.abortInProgress() && this.#advisorAutoResumeSuppressed && this.#host.canWakeForAdvisor(true)) {
+			this.#advisorAdviceHeldForAbort = true;
+			return;
+		}
 		// Newest turn first, then severity: the latest notes describe the current
 		// state of the work; older ones may already be resolved by it.
 		const notes = [...this.#advisorBoundaryNotes].sort(compareAdvisorNotes);
@@ -2131,7 +2149,7 @@ export class SessionAdvisors {
 							resolveAdvisorDeliveryChannel({
 								severity: n.severity,
 								continueSeverity: cfgAdvisorContinueSeverity.get(this.#host.settings),
-								autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+								autoResumeSuppressed: !this.#host.canWakeForAdvisor(this.#advisorAutoResumeSuppressed),
 								preserveOnly: this.#preserveAdvisorAdvice,
 								streaming: this.#host.agent.state.isStreaming && !this.#preserveTerminalYieldAdvice,
 								aborting: this.#host.abortInProgress(),
@@ -2162,7 +2180,7 @@ export class SessionAdvisors {
 		const channel = resolveAdvisorDeliveryChannel({
 			severity,
 			continueSeverity,
-			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+			autoResumeSuppressed: !this.#host.canWakeForAdvisor(this.#advisorAutoResumeSuppressed),
 			preserveOnly: this.#preserveAdvisorAdvice,
 			streaming: false,
 			aborting: this.#host.abortInProgress(),

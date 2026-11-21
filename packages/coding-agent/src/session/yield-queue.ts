@@ -107,14 +107,14 @@ export class YieldQueue {
 	 * Unlike {@link has}, it skips entries the dispatcher reports stale, since
 	 * the drain drops those without a message.
 	 */
-	hasDeliverable(kind: string): boolean {
+	hasDeliverable<P = unknown>(kind: string, matches?: (entry: P) => boolean): boolean {
 		const entries = this.#entries.get(kind);
 		if (!entries || entries.length === 0) return false;
 		const isStale = this.#dispatchers.get(kind)?.isStale;
-		if (!isStale) return true;
+		if (!isStale && !matches) return true;
 		return entries.some(entry => {
 			try {
-				return !isStale(entry.value);
+				return (!matches || matches(entry.value as P)) && !isStale?.(entry.value);
 			} catch {
 				// The drain rejects an entry whose stale check throws.
 				return false;
