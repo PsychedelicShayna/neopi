@@ -15,7 +15,9 @@
 
 ### Added
 
+- Create named model folders in the fullscreen `/model` and `/roles` pickers to switch and assign models without scrolling through providers. Folders persist across sessions and can be edited per project.
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.
+- The composer keeps the active chain stage, elapsed time, and bound skip/cancel keys visible throughout preprocessing in ANSI and Tern, including when a stage is skipped ([#850](https://github.com/PsychedelicShayna/neopi/issues/850)).
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
@@ -181,6 +183,7 @@
 ### Fixed
 
 - Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
+- Enter and `npi ctl steer` remain available while the terminal shows that a yielded turn is waiting for a background Bash job ([#582](https://github.com/PsychedelicShayna/neopi/issues/582)).
 - An active checkpoint no longer demands a rewind or blocks yielding when the rewind tool is unavailable ([#645](https://github.com/PsychedelicShayna/neopi/issues/645)).
 - Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
 - Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
