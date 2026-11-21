@@ -40,6 +40,7 @@ import { Type } from "@sinclair/typebox";
 import { AdvisorTranscriptRecorder } from "../../src/advisor/transcript-recorder";
 import { createAgentSession } from "../../src/sdk";
 import { AgentSession } from "../../src/session/agent-session";
+import { executeAcpBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
 import { SecretObfuscator } from "../../src/secrets/obfuscator";
 import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import {
@@ -2330,6 +2331,71 @@ describe("SessionChronicler capture runtime", () => {
 		} finally {
 			await session.dispose();
 			notices.mockRestore();
+		}
+	});
+
+	it("shows startup consent once across reopen and inherited forks, without suppressing explicit /chron on", async () => {
+		const sessions: AgentSession[] = [];
+		const openSession = (manager: SessionManager) => {
+			const session = new AgentSession({
+				agent: new Agent({ initialState: { messages: manager.buildSessionContext().messages } }),
+				sessionManager: manager,
+				settings: newSettings(),
+				modelRegistry,
+				advisorTools: fixedAdvisorTools(),
+			});
+			sessions.push(session);
+			return session;
+		};
+		const consentNotices = (manager: SessionManager) =>
+			manager
+				.getBranch()
+				.filter(
+					entry =>
+						entry.type === "custom_message" &&
+						entry.display &&
+						typeof entry.content === "string" &&
+						entry.content.includes("addressing @chronicler directly"),
+				);
+		const original = await newSessionManager();
+		try {
+			const first = openSession(original);
+			await Promise.all([first.ensureChroniclerStartupNotice(), first.ensureChroniclerStartupNotice()]);
+			expect(consentNotices(original)).toHaveLength(1);
+			await first.dispose();
+			const file = original.getSessionFile()!;
+			const reopened = await SessionManager.open(file, sessionDir, undefined, {
+				suppressBreadcrumb: true,
+				throwIfMissing: true,
+			});
+			expect(consentNotices(reopened)).toHaveLength(1);
+			const resumed = openSession(reopened);
+			await resumed.ensureChroniclerStartupNotice();
+			expect(consentNotices(reopened)).toHaveLength(1);
+
+			const fork = await SessionManager.forkFrom(file, cwd, sessionDir, undefined, { suppressBreadcrumb: true });
+			await openSession(fork).ensureChroniclerStartupNotice();
+			expect(consentNotices(fork)).toHaveLength(1);
+
+			const fresh = newLazySessionManager();
+			await openSession(fresh).ensureChroniclerStartupNotice();
+			expect(consentNotices(fresh)).toHaveLength(1);
+
+			const command = (text: string) =>
+				executeAcpBuiltinSlashCommand(text, {
+					session: resumed,
+					sessionManager: reopened,
+					settings: resumed.settings,
+					cwd,
+					output: () => {},
+					refreshCommands: () => {},
+					reloadPlugins: async () => {},
+				});
+			expect(await command("/chron off --confirm")).toEqual({ consumed: true });
+			expect(await command("/chron on")).toEqual({ consumed: true });
+			expect(consentNotices(reopened)).toHaveLength(2);
+		} finally {
+			await Promise.all(sessions.map(session => session.dispose()));
 		}
 	});
 

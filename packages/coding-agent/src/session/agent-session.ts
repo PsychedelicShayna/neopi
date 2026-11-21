@@ -159,6 +159,7 @@ import {
 	type ChroniclerNoticeOptions,
 	type ChroniclerTransition,
 	injectChroniclerNotice,
+	isChroniclerEnabledNotice,
 } from "../chronicler/notices";
 import { clearSessionCompactionControls } from "./compaction-controls";
 import type { SessionAccountPoolScope } from "../config/account-pools";
@@ -548,7 +549,7 @@ import {
 	SessionAdvisors,
 	type SessionAdvisorsHost,
 } from "./session-advisors";
-import type { BuildSessionContextOptions, SessionContext, TranscriptSessionContextOptions } from "./session-context";
+import type { SessionContext, TranscriptSessionContextOptions } from "./session-context";
 import {
 	clearLiveMessageId,
 	getMessageEntryId,
@@ -1464,7 +1465,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Registry recording this agent blocked on the user while a {@link waitForUser} dialog is open. */
 	readonly #agentRegistry: AgentRegistryApi | undefined;
 	#agentKind: "main" | "sub" = "main";
-	readonly #chroniclerStartupNotices = new Set<string>();
+	readonly #chroniclerStartupNoticesInFlight = new Set<string>();
 	#scoutAllowedBySpawnPolicy = true;
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
@@ -10342,10 +10343,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			!this.chroniclerEnabled
 		)
 			return;
-		const sessionId = this.sessionId;
-		if (this.#chroniclerStartupNotices.has(sessionId)) return;
-		this.#chroniclerStartupNotices.add(sessionId);
-		await this.sendChroniclerNotice("enabled", { enabledExtra: chroniclerStartupConsent.trim() });
+		const sessionId = this.sessionManager.getSessionId();
+		if (
+			this.#chroniclerStartupNoticesInFlight.has(sessionId) ||
+			this.#pendingNextTurnMessages.some(isChroniclerEnabledNotice) ||
+			this.sessionManager
+				.getBranchView()
+				.some(entry => entry.type === "custom_message" && isChroniclerEnabledNotice(entry))
+		) {
+			return;
+		}
+		this.#chroniclerStartupNoticesInFlight.add(sessionId);
+		try {
+			await this.sendChroniclerNotice("enabled", { enabledExtra: chroniclerStartupConsent.trim() });
+		} finally {
+			this.#chroniclerStartupNoticesInFlight.delete(sessionId);
+		}
 	}
 
 	async #prompt(text: string, options?: PromptOptions): Promise<boolean> {
