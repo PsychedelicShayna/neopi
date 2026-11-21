@@ -18,6 +18,8 @@ import type { MessageOrigin, Model } from "@oh-my-pi/pi-ai";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { defaultFormData, type HtmlFormValue } from "@oh-my-pi/pi-tui/html-form/data";
+import { type HtmlForm, parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { $env, getAgentDir, isRecord, logger, postmortem, Snowflake, toError } from "@oh-my-pi/pi-utils";
 import { EXIT_WITH_PARENT_EXIT_CODE, EXIT_WITH_PARENT_TEARDOWN_MS, tearDownExitTarget } from "../../exit-with-parent";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -26,6 +28,7 @@ import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
 	type ExtensionAskDialogSubmitResult,
+	type ExtensionFormDialogResult,
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
@@ -1321,6 +1324,109 @@ export async function requestRpcAskDialog(
 	return timedOut ? timedOutAskDialogResult(questions) : result;
 }
 
+/** Sends one parsed form; hidden input values always come from the server's form. */
+export async function requestRpcFormDialog(
+	pendingRequests: Map<string, PendingExtensionRequest>,
+	output: RpcOutput,
+	form: HtmlForm,
+	dialogOptions?: ExtensionUIDialogOptions,
+): Promise<ExtensionFormDialogResult | undefined> {
+	if (dialogOptions?.signal?.aborted) return undefined;
+	const hidden = form.hidden.map(([name, value]) => ({ name, value }));
+	const hiddenData = Object.fromEntries(form.hidden);
+	let timedOut = false;
+	const onTimeout = () => {
+		timedOut = true;
+		dialogOptions?.onTimeout?.();
+	};
+	const request = {
+		method: "form",
+		sections: form.sections,
+		hidden,
+		timeout: dialogOptions?.timeout,
+		acceptImages: dialogOptions?.acceptImages,
+	} satisfies Omit<Extract<RpcExtensionUIRequest, { method: "form" }>, "type" | "id">;
+	const result = await requestRpcDialog<ExtensionFormDialogResult | undefined>(
+		pendingRequests,
+		output,
+		{ ...dialogOptions, onTimeout },
+		undefined,
+		request,
+		response => {
+			if ("cancelled" in response && response.cancelled) {
+				if (response.timedOut === true) onTimeout();
+				return undefined;
+			}
+			if (!("data" in response) || !isRecord(response.data) || Array.isArray(response.data)) {
+				throw new Error("Form dialog response must carry data keyed by field name");
+			}
+			for (const value of Object.values<unknown>(response.data)) {
+				if (!isFormValue(value))
+					throw new Error("Form dialog values must be strings, finite numbers, or string arrays");
+			}
+			const notes = parseFormNotes(response.notes, dialogOptions?.acceptImages === true);
+			if (response.timedOut === true) onTimeout();
+			return {
+				data: { ...response.data, ...hiddenData },
+				...(notes ? { notes } : {}),
+				...(response.timedOut === true ? { timedOut: true } : {}),
+			};
+		},
+	);
+	return result ?? (timedOut ? { data: { ...defaultFormData(form), ...hiddenData }, timedOut: true } : undefined);
+}
+
+function isFormValue(value: unknown): value is HtmlFormValue {
+	return (
+		typeof value === "string" ||
+		(typeof value === "number" && Number.isFinite(value)) ||
+		(Array.isArray(value) && value.every(item => typeof item === "string"))
+	);
+}
+
+function parseFormNotes(value: unknown, acceptImages: boolean): ExtensionFormDialogResult["notes"] {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) throw new Error("Form dialog notes must be an array");
+	const notes: NonNullable<ExtensionFormDialogResult["notes"]> = [];
+	for (const note of value as unknown[]) {
+		if (!isRecord(note)) throw new Error("Form dialog option notes must be objects");
+		const { name, question, option, value: selectedValue, text, images } = note;
+		if (
+			typeof name !== "string" ||
+			typeof question !== "string" ||
+			typeof option !== "string" ||
+			typeof selectedValue !== "string" ||
+			typeof text !== "string"
+		) {
+			throw new Error("Form dialog option note fields must be strings");
+		}
+		const parsedImages: ImageContent[] = [];
+		if (acceptImages && images !== undefined) {
+			if (!Array.isArray(images)) throw new Error("Form dialog note images must be an array");
+			for (const image of images as unknown[]) {
+				if (
+					!isRecord(image) ||
+					image.type !== "image" ||
+					typeof image.data !== "string" ||
+					typeof image.mimeType !== "string"
+				) {
+					throw new Error("Form dialog note images must carry inline image data and MIME type");
+				}
+				parsedImages.push({ type: "image", data: image.data, mimeType: image.mimeType });
+			}
+		}
+		notes.push({
+			name,
+			question,
+			option,
+			value: selectedValue,
+			text,
+			...(parsedImages.length ? { images: parsedImages } : {}),
+		});
+	}
+	return notes.length ? notes : undefined;
+}
+
 export function requestRpcEditor(
 	pendingRequests: Map<string, PendingExtensionRequest>,
 	output: RpcOutput,
@@ -1561,6 +1667,8 @@ export interface RpcCommandHandlerContext {
 	createUiContext: (pending: Map<string, PendingExtensionRequest>, output: RpcOutput) => ExtensionUIContext;
 	/** Enables typed Ask for this RPC peer, without changing other UI peers. */
 	setAskDialogEnabled?: (enabled: boolean) => void;
+	/** Enables typed Form for this RPC peer, independently of Ask. */
+	setFormDialogEnabled?: (enabled: boolean) => void;
 	inputGate?: RpcUserInputGate;
 	isShutdownRequested?: () => boolean;
 	/** Goal mode over RPC; absent on transports without goal support (control sockets). */
@@ -2034,6 +2142,15 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				const enabled = command.enabled === true;
 				ctx.setAskDialogEnabled(enabled);
 				return success(id, "set_ask_dialog", { enabled });
+			}
+
+			case "set_form_dialog": {
+				if (!ctx.setFormDialogEnabled) {
+					return error(id, "set_form_dialog", "Form-dialog negotiation is unavailable on this transport");
+				}
+				const enabled = command.enabled === true;
+				ctx.setFormDialogEnabled(enabled);
+				return success(id, "set_form_dialog", { enabled });
 			}
 
 			case "set_chat_mode": {
@@ -3003,6 +3120,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		readonly supportsEditor = true;
 		/** Set by `set_ask_dialog`; hosts that never opt in keep the select/editor ask fallback. */
 		askDialogEnabled = false;
+		formDialogEnabled = false;
 
 		constructor(
 			private pendingRequests: Map<string, PendingExtensionRequest>,
@@ -3013,6 +3131,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			if (!this.askDialogEnabled) return undefined;
 			return (questions, dialogOptions) =>
 				requestRpcAskDialog(this.pendingRequests, this.output, questions, dialogOptions);
+		}
+
+		get formDialog(): ExtensionUIContext["formDialog"] {
+			if (!this.formDialogEnabled) return undefined;
+			return (html, dialogOptions) =>
+				requestRpcFormDialog(this.pendingRequests, this.output, parseHtmlForm(html), dialogOptions);
 		}
 
 		select(
@@ -3195,6 +3319,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		rpcUiContext.askDialogEnabled = command.enabled === true;
 		return success(command.id, "set_ask_dialog", { enabled: rpcUiContext.askDialogEnabled });
 	};
+	const setFormDialog = (command: RpcCommand & { type: "set_form_dialog" }): RpcResponse => {
+		rpcUiContext.formDialogEnabled = command.enabled === true;
+		return success(command.id, "set_form_dialog", { enabled: rpcUiContext.formDialogEnabled });
+	};
 	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
 		output(error(id, command, promptError.message));
 
@@ -3235,6 +3363,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		parsed => {
 			if (isRecord(parsed) && parsed.type === "set_ask_dialog")
 				output(setAskDialog(parsed as RpcCommand & { type: "set_ask_dialog" }));
+			else if (isRecord(parsed) && parsed.type === "set_form_dialog")
+				output(setFormDialog(parsed as RpcCommand & { type: "set_form_dialog" }));
 			else inputDispatcher.dispatch(parsed);
 		},
 		message => output(error(undefined, "parse", message)),
@@ -3437,6 +3567,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		createUiContext: (pending, uiOutput) => new RpcExtensionUIContext(pending, uiOutput),
 		setAskDialogEnabled: enabled => {
 			rpcUiContext.askDialogEnabled = enabled;
+		},
+		setFormDialogEnabled: enabled => {
+			rpcUiContext.formDialogEnabled = enabled;
 		},
 		goalController,
 		goalTurnScheduled,

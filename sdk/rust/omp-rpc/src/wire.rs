@@ -6307,6 +6307,224 @@ pub struct AskUiRequest {
 	pub timeout: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormSpan {
+	pub text: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub style: Option<FormSpanStyle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormChoiceOption {
+	pub value: String,
+	pub label: Vec<FormSpan>,
+	pub checked: bool,
+	pub disabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormChoiceField {
+	pub kind: LitChoice,
+	pub name: String,
+	pub multi: bool,
+	pub select: bool,
+	pub other: bool,
+	pub label: Vec<FormSpan>,
+	pub options: Vec<FormChoiceOption>,
+	pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormTextField {
+	pub kind: LitText,
+	pub name: String,
+	pub r#type: String,
+	pub multiline: bool,
+	pub label: Vec<FormSpan>,
+	pub value: String,
+	pub placeholder: String,
+	pub required: bool,
+	pub rows: f64,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub min: Option<f64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub max: Option<f64>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub pattern: Option<String>,
+	#[serde(rename = "minLength", default, skip_serializing_if = "Option::is_none")]
+	pub min_length: Option<f64>,
+	#[serde(rename = "maxLength", default, skip_serializing_if = "Option::is_none")]
+	pub max_length: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormField {
+	FormChoiceField(FormChoiceField),
+	FormTextField(FormTextField),
+}
+
+impl FormField {
+	/// Decodes from JSON: the first member that decodes wins.
+	pub fn from_value(value: Value) -> Result<Self, serde_json::Error> {
+		if let Ok(member) = FormChoiceField::deserialize(&value) {
+			return Ok(Self::FormChoiceField(member));
+		}
+		if let Ok(member) = FormTextField::deserialize(&value) {
+			return Ok(Self::FormTextField(member));
+		}
+		Err(serde_json::Error::custom("no FormField variant matches"))
+	}
+}
+
+impl Serialize for FormField {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		match self {
+			Self::FormChoiceField(member) => member.serialize(serializer),
+			Self::FormTextField(member) => member.serialize(serializer),
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for FormField {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		Self::from_value(Value::deserialize(deserializer)?).map_err(D::Error::custom)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormTextBlock {
+	pub kind: LitText,
+	pub spans: Vec<FormSpan>,
+	pub heading: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormListBlock {
+	pub kind: LitList,
+	pub items: Vec<Vec<FormSpan>>,
+	pub ordered: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormPreBlock {
+	pub kind: LitPre,
+	pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormTableBlock {
+	pub kind: LitTable,
+	pub rows: Vec<Vec<Vec<FormSpan>>>,
+	#[serde(rename = "headerRows")]
+	pub header_rows: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormImageBlock {
+	pub kind: LitImage,
+	pub src: String,
+	pub alt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormSvgBlock {
+	pub kind: LitSvg,
+	pub markup: String,
+	pub alt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormFieldBlock {
+	pub kind: LitField,
+	pub field: FormField,
+	#[serde(rename = "optionsEnd", default, skip_serializing_if = "Option::is_none")]
+	pub options_end: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormBlock {
+	FormTextBlock(FormTextBlock),
+	FormListBlock(FormListBlock),
+	FormPreBlock(FormPreBlock),
+	FormTableBlock(FormTableBlock),
+	FormImageBlock(FormImageBlock),
+	FormSvgBlock(FormSvgBlock),
+	FormFieldBlock(FormFieldBlock),
+}
+
+impl FormBlock {
+	/// Decodes from JSON: the first member that decodes wins.
+	pub fn from_value(value: Value) -> Result<Self, serde_json::Error> {
+		if let Ok(member) = FormTextBlock::deserialize(&value) {
+			return Ok(Self::FormTextBlock(member));
+		}
+		if let Ok(member) = FormListBlock::deserialize(&value) {
+			return Ok(Self::FormListBlock(member));
+		}
+		if let Ok(member) = FormPreBlock::deserialize(&value) {
+			return Ok(Self::FormPreBlock(member));
+		}
+		if let Ok(member) = FormTableBlock::deserialize(&value) {
+			return Ok(Self::FormTableBlock(member));
+		}
+		if let Ok(member) = FormImageBlock::deserialize(&value) {
+			return Ok(Self::FormImageBlock(member));
+		}
+		if let Ok(member) = FormSvgBlock::deserialize(&value) {
+			return Ok(Self::FormSvgBlock(member));
+		}
+		if let Ok(member) = FormFieldBlock::deserialize(&value) {
+			return Ok(Self::FormFieldBlock(member));
+		}
+		Err(serde_json::Error::custom("no FormBlock variant matches"))
+	}
+}
+
+impl Serialize for FormBlock {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		match self {
+			Self::FormTextBlock(member) => member.serialize(serializer),
+			Self::FormListBlock(member) => member.serialize(serializer),
+			Self::FormPreBlock(member) => member.serialize(serializer),
+			Self::FormTableBlock(member) => member.serialize(serializer),
+			Self::FormImageBlock(member) => member.serialize(serializer),
+			Self::FormSvgBlock(member) => member.serialize(serializer),
+			Self::FormFieldBlock(member) => member.serialize(serializer),
+		}
+	}
+}
+
+impl<'de> Deserialize<'de> for FormBlock {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		Self::from_value(Value::deserialize(deserializer)?).map_err(D::Error::custom)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormSection {
+	pub title: Vec<FormSpan>,
+	pub blocks: Vec<FormBlock>,
+	pub fieldset: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormHiddenInput {
+	pub name: String,
+	pub value: String,
+}
+
+/// One parsed extension `ui.formDialog` call; sent only after `set_form_dialog` enables it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormUiRequest {
+	pub id: String,
+	pub sections: Vec<FormSection>,
+	pub hidden: Vec<FormHiddenInput>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub timeout: Option<i64>,
+	#[serde(rename = "acceptImages", default, skip_serializing_if = "Option::is_none")]
+	pub accept_images: Option<bool>,
+}
+
 /// Close the dialog opened by request `targetId`; a later answer to it is ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CancelUiRequest {
@@ -6384,6 +6602,8 @@ pub enum ExtensionUiRequest {
 	Editor(EditorUiRequest),
 	/// Every question of one extension `ui.askDialog` call; sent only after `set_ask_dialog` enables it.
 	Ask(AskUiRequest),
+	/// One parsed extension `ui.formDialog` call; sent only after `set_form_dialog` enables it.
+	Form(FormUiRequest),
 	/// Close the dialog opened by request `targetId`; a later answer to it is ignored.
 	Cancel(CancelUiRequest),
 	Notify(NotifyUiRequest),
@@ -6403,6 +6623,7 @@ impl ExtensionUiRequest {
 			Some("input") => |value| serde_json::from_value(value).map(Self::Input),
 			Some("editor") => |value| serde_json::from_value(value).map(Self::Editor),
 			Some("ask") => |value| serde_json::from_value(value).map(Self::Ask),
+			Some("form") => |value| serde_json::from_value(value).map(Self::Form),
 			Some("cancel") => |value| serde_json::from_value(value).map(Self::Cancel),
 			Some("notify") => |value| serde_json::from_value(value).map(Self::Notify),
 			Some("setStatus") => |value| serde_json::from_value(value).map(Self::SetStatus),
@@ -6426,6 +6647,7 @@ impl Serialize for ExtensionUiRequest {
 			Self::Input(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "input")], serializer),
 			Self::Editor(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "editor")], serializer),
 			Self::Ask(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "ask")], serializer),
+			Self::Form(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "form")], serializer),
 			Self::Cancel(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "cancel")], serializer),
 			Self::Notify(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "notify")], serializer),
 			Self::SetStatus(member) => serialize_tagged(member, &[("type", "extension_ui_request"), ("method", "setStatus")], serializer),
@@ -6483,6 +6705,45 @@ pub struct AnswersUiResponse {
 	pub answers: Vec<AskAnswer>,
 }
 
+/// Untagged union: the first variant that decodes wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FormValue {
+	String(String),
+	Number(f64),
+	StringList(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormNoteImage {
+	pub r#type: LitImage,
+	pub data: String,
+	#[serde(rename = "mimeType")]
+	pub mime_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormOptionNote {
+	pub name: String,
+	pub question: String,
+	pub option: String,
+	pub value: String,
+	pub text: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub images: Option<Vec<FormNoteImage>>,
+}
+
+/// Submits a form, keyed by field name. The server restores its own hidden input values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormUiResponse {
+	pub id: String,
+	pub data: BTreeMap<String, FormValue>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub notes: Option<Vec<FormOptionNote>>,
+	#[serde(rename = "timedOut", default, skip_serializing_if = "Option::is_none")]
+	pub timed_out: Option<bool>,
+}
+
 /// Host reply to an extension UI request; variants share `type` and differ by their payload key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExtensionUiResponse {
@@ -6494,6 +6755,8 @@ pub enum ExtensionUiResponse {
 	CancelUiResponse(CancelUiResponse),
 	/// Answers an `ask` request: one `AskAnswer` per question, in question order.
 	AnswersUiResponse(AnswersUiResponse),
+	/// Submits a form, keyed by field name. The server restores its own hidden input values.
+	FormUiResponse(FormUiResponse),
 }
 
 impl ExtensionUiResponse {
@@ -6511,6 +6774,9 @@ impl ExtensionUiResponse {
 		if let Ok(member) = AnswersUiResponse::deserialize(&value) {
 			return Ok(Self::AnswersUiResponse(member));
 		}
+		if let Ok(member) = FormUiResponse::deserialize(&value) {
+			return Ok(Self::FormUiResponse(member));
+		}
 		Err(serde_json::Error::custom("no ExtensionUiResponse variant matches"))
 	}
 }
@@ -6522,6 +6788,7 @@ impl Serialize for ExtensionUiResponse {
 			Self::ConfirmUiResponse(member) => serialize_tagged(member, &[("type", "extension_ui_response")], serializer),
 			Self::CancelUiResponse(member) => serialize_tagged(member, &[("type", "extension_ui_response")], serializer),
 			Self::AnswersUiResponse(member) => serialize_tagged(member, &[("type", "extension_ui_response")], serializer),
+			Self::FormUiResponse(member) => serialize_tagged(member, &[("type", "extension_ui_response")], serializer),
 		}
 	}
 }
@@ -7283,6 +7550,16 @@ pub struct SetAskDialogParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetAskDialogResult {
+	pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetFormDialogParams {
+	pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetFormDialogResult {
 	pub enabled: bool,
 }
 
@@ -8958,6 +9235,174 @@ impl SelectUiRequestSelectionMarker {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FormSpanStyle {
+	#[serde(rename = "code")]
+	Code,
+	#[serde(rename = "strong")]
+	Strong,
+	#[serde(rename = "em")]
+	Em,
+}
+
+impl FormSpanStyle {
+	/// Wire value.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Code => "code",
+			Self::Strong => "strong",
+			Self::Em => "em",
+		}
+	}
+}
+
+/// The constant `"choice"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitChoice;
+
+impl Serialize for LitChoice {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("choice")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitChoice {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("choice") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"choice\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"text"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitText;
+
+impl Serialize for LitText {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("text")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitText {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("text") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"text\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"list"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitList;
+
+impl Serialize for LitList {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("list")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitList {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("list") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"list\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"pre"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitPre;
+
+impl Serialize for LitPre {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("pre")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitPre {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("pre") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"pre\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"table"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitTable;
+
+impl Serialize for LitTable {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("table")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitTable {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("table") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"table\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"svg"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitSvg;
+
+impl Serialize for LitSvg {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("svg")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitSvg {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("svg") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"svg\", got {value}")))
+		}
+	}
+}
+
+/// The constant `"field"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct LitField;
+
+impl Serialize for LitField {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str("field")
+	}
+}
+
+impl<'de> Deserialize<'de> for LitField {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let value = Value::deserialize(deserializer)?;
+		if value.as_str() == Some("field") {
+			Ok(Self)
+		} else {
+			Err(D::Error::custom(format!("expected \"field\", got {value}")))
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HostUriResultContentType {
 	#[serde(rename = "text/markdown")]
 	TextMarkdown,
@@ -10061,6 +10506,22 @@ impl Command for SetAskDialogCommand {
 
 	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
 		serde_json::from_value::<SetAskDialogResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.enabled)
+	}
+}
+
+/// Opt in to `form` UI requests; returns the applied setting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetFormDialogCommand {
+	pub enabled: bool,
+}
+
+impl Command for SetFormDialogCommand {
+	const NAME: &'static str = "set_form_dialog";
+	const TIMEOUT_MS: Option<u64> = None;
+	type Output = bool;
+
+	fn decode(data: Option<Value>) -> Result<Self::Output, serde_json::Error> {
+		serde_json::from_value::<SetFormDialogResult>(data.unwrap_or_else(|| Value::Object(Map::new()))).map(|result| result.enabled)
 	}
 }
 

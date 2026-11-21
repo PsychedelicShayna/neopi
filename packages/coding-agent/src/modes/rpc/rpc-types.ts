@@ -17,11 +17,12 @@ import type {
 	ToolExample,
 } from "@oh-my-pi/pi-ai";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import type { FormSection } from "@oh-my-pi/pi-tui/html-form/parse";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ChatModeSetting, ChatModeState } from "../../chat/chat-mode";
 import type { ChroniclerHealth } from "../../chronicler/session-chronicler";
-import type { ContextUsage } from "../../extensibility/extensions/types";
+import type { ContextUsage, ExtensionFormDialogResult } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";
 import type { WireSessionEvent } from "../../session/loop-end-wire";
 import type { SessionLeaseReport } from "../../session/session-storage";
@@ -108,6 +109,7 @@ export type RpcCommand =
 			token_budget?: number;
 	  }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
+	| { id?: string; type: "set_form_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
 	| { id?: string; type: "get_command_completions"; command: string; prefix: string }
 	| { id?: string; type: "get_entries"; since?: string }
@@ -768,6 +770,7 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "set_slow_mode"; success: true; data: { enabled: boolean } }
 	| { id?: string; type: "response"; command: "goal"; success: true; data: RpcGoalResult }
 	| { id?: string; type: "response"; command: "set_ask_dialog"; success: true; data: { enabled: boolean } }
+	| { id?: string; type: "response"; command: "set_form_dialog"; success: true; data: { enabled: boolean } }
 	| {
 			id?: string;
 			type: "response";
@@ -1274,6 +1277,16 @@ export type RpcExtensionUIRequest =
 			questions: RpcAskDialogQuestion[];
 			timeout?: number;
 	  }
+	/** Emitted only after the host opts in with `set_form_dialog`. */
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "form";
+			sections: FormSection[];
+			hidden: { name: string; value: string }[];
+			timeout?: number;
+			acceptImages?: boolean;
+	  }
 	| { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string; loginId?: string }
 	| {
 			type: "extension_ui_request";
@@ -1480,7 +1493,8 @@ export type RpcExtensionUIResponse =
 			type: "extension_ui_response";
 			id: string;
 			answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }>;
-	  };
+	  }
+	| ({ type: "extension_ui_response"; id: string } & ExtensionFormDialogResult);
 
 // ============================================================================
 // Helper type for extracting command types

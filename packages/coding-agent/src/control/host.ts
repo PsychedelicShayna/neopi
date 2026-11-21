@@ -9,6 +9,7 @@ import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { HtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { logger } from "@oh-my-pi/pi-utils";
 import { BUILD_INFO } from "../build-info";
 import followUpWarning from "../prompts/control-follow-up-warning.md" with { type: "text" };
@@ -28,6 +29,7 @@ import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-
 import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
+	ExtensionFormDialogResult,
 	ExtensionUIDialogOptions,
 } from "../extensibility/extensions";
 import type { AgentSession } from "../session/agent-session";
@@ -147,6 +149,11 @@ type GuestAskDialog = (
 	options: ExtensionUIDialogOptions,
 ) => Promise<ExtensionAskDialogResult | "unavailable" | undefined>;
 
+type GuestFormDialog = (
+	form: HtmlForm,
+	options: ExtensionUIDialogOptions,
+) => Promise<ExtensionFormDialogResult | "unavailable" | undefined>;
+
 interface ConnectionBridges {
 	forwarder: RpcSessionEventForwarder;
 	hostTools: RpcHostToolBridge;
@@ -154,6 +161,7 @@ interface ConnectionBridges {
 	approvals: RpcToolApprovalBridge;
 	pending: RpcPendingExtensionRequests;
 	askDialog?: GuestAskDialog;
+	formDialog?: GuestFormDialog;
 }
 
 type ConnectionRpcHandler = (command: RpcCommand) => Promise<RpcResponse>;
@@ -610,6 +618,10 @@ export class ControlHost {
 		return controlOperationActor(this.#options.session.agent.turnInput);
 	}
 
+	guestFormDialog(): GuestFormDialog | undefined {
+		return this.#guestDialogBridges()?.formDialog;
+	}
+
 	#guestDialogBridges(): ConnectionBridges | undefined {
 		const actor = this.dialogActor();
 		if (!actor || actor.humanNow() !== actor.humanAtAdmission) return undefined;
@@ -623,7 +635,7 @@ export class ControlHost {
 		connection: ControlConnection,
 		subscription?: Record<string, unknown>,
 	): Promise<ConnectionRpcHandler> {
-		const { RpcPendingExtensionRequests, createRpcCommandHandler, requestRpcAskDialog } =
+		const { RpcPendingExtensionRequests, createRpcCommandHandler, requestRpcAskDialog, requestRpcFormDialog } =
 			await import("../modes/rpc/rpc-mode");
 		if (!this.#connections.has(connection)) throw new Error("control connection closed");
 		const session = this.#options.session;
@@ -740,6 +752,15 @@ export class ControlHost {
 			get origin() {
 				return currentControlActor()?.origin;
 			},
+			setFormDialogEnabled:
+				this.#options.role === "tui"
+					? enabled => {
+							bridges.formDialog = enabled
+								? (form, options) =>
+										requestRpcFormDialog(pending, output, form, options).catch(() => "unavailable" as const)
+								: undefined;
+						}
+					: undefined,
 		});
 		this.#handlers.set(connection, handler);
 		return handler;

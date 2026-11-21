@@ -18,6 +18,7 @@ export const RPC_COMMAND_TYPES = [
 	"get_state",
 	"set_fast_mode",
 	"set_ask_dialog",
+	"set_form_dialog",
 	"set_chat_mode",
 	"set_mode",
 	"get_available_commands",

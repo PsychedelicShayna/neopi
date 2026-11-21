@@ -31,7 +31,7 @@ Behavior notes:
 - A flagless RPC launch (`--mode rpc` or `--mode rpc-ui` with no session flags) always starts a new session in the default per-cwd session directory. Protocol modes (`rpc`, `rpc-ui`, `acp`) ignore the user's `autoResume` setting. `--new-session` makes that explicit (and applies it in every mode); it combines with `--session-dir <dir>` to create the session in `<dir>`, and is rejected at argument parsing together with `--continue`, `--resume`/`--session`, or `--fork`.
 - RPC/ACP pin neutral defaults for settings declaring the corresponding `protocolDefault`, including task isolation/execution, memory, advisor, and advisor tier settings. RPC additionally pins async-job and bash/eval auto-background defaults. Explicit project/global config, `--config`, and isolated settings remain authoritative; on-disk config changes are watched in long-lived CLI RPC processes. Todo settings are not host-defaulted.
 - The process claims stdin before extension discovery, then parses it one non-empty JSONL line at a time. Malformed JSON emits a recoverable `command: "parse"` failure and does not terminate the loop.
-- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `set_ask_dialog`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. `negotiate_protocol` is also answered on arrival during startup, since it needs no session, so a bounded host handshake completes while a startup dialog is open. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
+- At startup it writes a `ready` frame, then starts reading stdin while extensions initialize. Control frames (`extension_ui_response`, `set_ask_dialog`, `set_form_dialog`, `tool_approval_response`, `plan_proposal_response`, `host_tool_result`, `host_tool_update`, `host_uri_result`) are dispatched on arrival, so an extension that asks a dialog question during `session_start` receives the host's answer. `negotiate_protocol` is also answered on arrival during startup, since it needs no session, so a bounded host handshake completes while a startup dialog is open. Commands, `bash` included, are queued and processed in arrival order once initialization completes. Hosts that send no startup dialog answers observe no change in frame order.
 - When stdin closes, pending extension UI, tool approval, host-tool, and host-URI requests are rejected and a pending plan proposal resolves as `refine` (announced with `plan_proposal_cancel`, `reason: "shutdown"`); accepted commands are drained, the session is disposed, and pending stdout is delivered. Normal shutdown exits with code `0`. A session-persistence failure still latched at disposal exits with code `1` after delivering its `notice` frame.
 - With `--exit-with-parent` (capability `exit_with_parent`), a host-owned process dies with its host instead of draining. The parent-death watchdog is installed (host death aborts the session, tears down MCP servers, jobs, subagents, LSP servers and eval kernels, and exits with code `129` within about two seconds). On stdin EOF the process skips the drain: it stops reading, aborts the active turn and running tool, cancels owned jobs and subagents, disposes the session and exits within ten seconds even if teardown hangs (code `129` if the ceiling is hit). Without the flag nothing changes: accepted work is drained, which `echo prompt | npi --mode rpc` scripts rely on. A control-socket connection closing never stops the process.
 - Responses/events are written as one JSON object per line.
@@ -270,6 +270,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "set_slow_mode", enabled: boolean }`
 - `{ id?, type: "goal", op: "get" | "create" | "resume" | "pause" | "drop", objective?: string, token_budget?: number }`
 - `{ id?, type: "set_ask_dialog", enabled: boolean }`
+- `{ id?, type: "set_form_dialog", enabled: boolean }`
 - `{ id?, type: "get_available_commands" }`
 - `{ id?, type: "get_entries", since?: string }`
 - `{ id?, type: "snapshot_session_journal" }`
@@ -1356,6 +1357,25 @@ future questions.
 }
 ```
 
+### `set_form_dialog` payload
+
+`set_form_dialog` independently opts in to the [typed form](#form-dialog).
+Like `set_ask_dialog`, it is off by default and scoped to the stdio host or the
+terminal attachment whose delivered input produced the dialog. A host can
+disable it again for future dialogs. On stdio without opt-in, `ctx.ui.formDialog`
+remains absent so extensions can keep their field-by-field fallback via `select`,
+`input`, or `editor`. On a terminal control socket, the form remains actionable in
+the pane; the first answer or dismissal wins. If the pane settles first, the
+attachment gets a `cancel` with the original `targetId`.
+
+```json
+{ "id": "form-opt-in", "type": "set_form_dialog", "enabled": true }
+```
+
+```json
+{ "id": "form-opt-in", "type": "response", "command": "set_form_dialog", "success": true, "data": { "enabled": true } }
+```
+
 ### `set_todos` payload
 
 Replaces the todo state for the current session and returns `{ todoPhases }`. The list is recorded on the current session branch and restored when that branch is reloaded, compacted, or resumed, like an interactive `/todo` edit.
@@ -2200,7 +2220,7 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
 
 `RpcExtensionUIRequest` (`type: "extension_ui_request"`) methods:
 
-- `select`, `confirm`, `input`, `editor`, `ask`, `cancel`
+- `select`, `confirm`, `input`, `editor`, `ask`, `form`, `cancel`
    - `select` keeps labels in `options: string[]` and, when any option has a
      description, emits a positionally aligned
      `optionDetails: Array<{ description?: string }>` array. Hosts that do not
@@ -2226,6 +2246,7 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.
+   - `form` carries one parsed form after `set_form_dialog` enables it.
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
 - `open_url` (emitted by RPC login flows): includes `url`, optional `launchUrl`, and optional `instructions`. When present, `launchUrl` is a short loopback redirect and is the recommended copy target so terminal truncation cannot corrupt OAuth query parameters.
 
@@ -2257,6 +2278,7 @@ Example:
 - `{ type: "extension_ui_response", id: string, confirmed: boolean }`
 - `{ type: "extension_ui_response", id: string, cancelled: true, timedOut?: boolean }`
 - `{ type: "extension_ui_response", id: string, answers: Array<{ id: string, selectedOptions: string[], customInput?: string }> }` (answers an `ask` request)
+- `{ type: "extension_ui_response", id: string, data: Record<string, string | number | string[]>, notes?: FormOptionNote[], timedOut?: boolean }` (submits a `form` request)
 
 `select` and `input` resolve to `undefined`, and `confirm` to `false`, on
 cancellation, timeout, or signal abort. Signal abort emits a `cancel` request
@@ -2311,6 +2333,91 @@ Terminal-only UI features are unsupported: component factories, custom
 headers/footers/editors, raw terminal input, autocomplete composition, theme
 switching, and tool expansion. `getEditorText()` returns `""`;
 `pasteToEditor()` falls back to `set_editor_text`.
+
+### Form dialog
+
+`sections` and each section's `blocks` are in document order. `fieldset`
+distinguishes titled or untitled fieldsets from loose content. Text spans carry
+`text` and an optional `style` (`code`, `strong`, `em`). Block kinds are `text`,
+`list`, `pre`, `table`, `image`, `svg`, and `field`. `optionsEnd` on a field block,
+when present, is the block index just after the last interleaved option. Render
+only from these typed blocks; there is no HTML document to parse or execute.
+Treat SVG and image assets as untrusted images, not as active markup.
+
+Choice fields include `required`, defaults via `checked`, and `disabled` on
+each option. A choice with `other: true` also allows a free-text value. Text
+fields include `required`, the `value` and `placeholder`, and applicable
+length, pattern, and numeric bounds. An unchecked single choice is omitted;
+multi-selects and checkbox groups with multiple options return arrays.
+`timeout`, when provided, is in milliseconds. `acceptImages: true` lets the host
+attach pasted images to option notes.
+
+```json
+{
+	"type": "extension_ui_request",
+	"id": "form-1",
+	"method": "form",
+	"sections": [
+		{
+			"title": [{ "text": "Database" }],
+			"fieldset": true,
+			"blocks": [
+				{ "kind": "text", "spans": [{ "text": "Choose storage" }], "heading": false },
+				{
+					"kind": "field",
+					"field": {
+						"kind": "choice",
+						"name": "engine",
+						"multi": false,
+						"select": true,
+						"other": false,
+						"label": [],
+						"options": [{ "value": "pg", "label": [{ "text": "Postgres" }], "checked": true, "disabled": false }],
+						"required": true
+					}
+				},
+				{
+					"kind": "field",
+					"field": {
+						"kind": "text",
+						"name": "replicas",
+						"type": "number",
+						"multiline": false,
+						"label": [{ "text": "Replicas" }],
+						"value": "2",
+						"placeholder": "",
+						"required": true,
+						"min": 1,
+						"rows": 1
+					}
+				}
+			]
+		}
+	],
+	"hidden": [{ "name": "context", "value": "provision" }],
+	"timeout": 30000
+}
+```
+
+```json
+{
+	"type": "extension_ui_response",
+	"id": "form-1",
+	"data": { "engine": "pg", "replicas": 3 },
+	"notes": [{ "name": "engine", "question": "Choose storage", "option": "Postgres", "value": "pg", "text": "Use the existing cluster." }]
+}
+```
+
+Submit with the request's `id`. The server restores the original `hidden`
+values even if the host omits or changes them. On dismissal, send
+`{ "type": "extension_ui_response", "id": "form-1", "cancelled": true }`; the
+extension gets `undefined`. A host that submits current answers at its own
+deadline can set `timedOut: true` on its submission. On a server-side timeout,
+the form returns its parsed defaults with `timedOut: true`; on server abort it
+returns `undefined`. Both send `method: "cancel"` with `targetId: "form-1"`
+and ignore any late reply. Partial draft values are not sent back on abort.
+An invalid reply is rejected on stdio; on a terminal control socket it leaves
+the pane's form actionable.
 
 ## Tool Approval Sub-Protocol
 

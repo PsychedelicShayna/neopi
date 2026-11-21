@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import type { ExtensionAskDialogQuestion } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import {
+	dispatchRpcControlFrame,
 	type PendingExtensionRequest,
+	type RpcInputFrameDeps,
 	type RpcExtensionUIResponse,
 	requestRpcAskDialog,
 	requestRpcDialog,
+	requestRpcFormDialog,
 	requestRpcInput,
 	requestRpcSelect,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
@@ -178,7 +182,7 @@ await runRpcMode(session, {
 	}, 30_000);
 
 	/** Spawns an RPC runtime whose extension awaits a `confirm` in `session_start` and has a `/probe` command. */
-	async function spawnStartupDialogRuntime(temp: TempDir) {
+	async function spawnStartupDialogRuntime(temp: TempDir, extraExtensionSetup = "") {
 		const fixturePath = temp.join("runtime.ts");
 		const sourceDir = path.resolve(import.meta.dir, "../src");
 		await Bun.write(
@@ -199,6 +203,7 @@ const { session } = await createAgentSession({
       // A command's context is built per call, so it sees whether set_ask_dialog took effect.
       handler: async (_args, ctx) => ctx.ui.notify("askDialog:" + typeof ctx.ui.askDialog),
     });
+    ${extraExtensionSetup}
     pi.on("session_start", async (_event, ctx) => {
       ctx.ui.notify(String(await ctx.ui.confirm("Trust?", "startup")));
     });
@@ -226,6 +231,108 @@ await runRpcMode(session);
 			timeout: 20_000,
 		});
 	}
+
+	it("negotiates extension Form independently and keeps legacy select and editor after opting out", async () => {
+		await using temp = await TempDir.create("@rpc-startup-form-");
+		const child = await spawnStartupDialogRuntime(
+			temp,
+			`
+    pi.registerCommand("form-probe", {
+      handler: async (_args, ctx) => {
+        const html = '<form><fieldset><legend>Database</legend><select name="db" required><option value="pg" selected>Postgres</option><option value="mysql" disabled>MySQL</option></select><input type="number" name="size" value="2" min="1" max="8"><input type="hidden" name="context" value="server"></fieldset></form>';
+        if (ctx.ui.formDialog) {
+          ctx.ui.notify(JSON.stringify(await ctx.ui.formDialog(html)));
+        } else if (await ctx.ui.select("Database", ["Postgres"]) === "Postgres") {
+          const size = await ctx.ui.editor("Size", "2");
+          ctx.ui.notify(JSON.stringify({ data: { db: "pg", size: Number(size), context: "server" } }));
+        }
+      },
+    });
+`,
+		);
+		const stderr = new Response(child.stderr).text();
+		const send = async (frame: object) => {
+			child.stdin.write(`${JSON.stringify(frame)}\n`);
+			await child.stdin.flush();
+		};
+		const methods: unknown[] = [];
+		const results: unknown[] = [];
+		const negotiation: unknown[] = [];
+		try {
+			for await (const frame of readJsonl<unknown>(child.stdout)) {
+				if (!isRecord(frame)) continue;
+				if (frame.type === "response" && frame.command === "set_form_dialog") {
+					negotiation.push(frame.data);
+					continue;
+				}
+				if (frame.type !== "extension_ui_request") continue;
+				switch (frame.method) {
+					case "confirm":
+						// Negotiate before the extension releases its startup prompt.
+						await send({ type: "set_form_dialog", id: "on", enabled: true });
+						await send({ type: "extension_ui_response", id: frame.id, confirmed: true });
+						await send({ type: "prompt", id: "rich", message: "/form-probe" });
+						break;
+					case "form":
+						methods.push(frame.method);
+						expect(frame).toMatchObject({
+							sections: [
+								{
+									title: [{ text: "Database" }],
+									blocks: [
+										{
+											kind: "field",
+											field: {
+												kind: "choice",
+												name: "db",
+												required: true,
+												options: [
+													{ value: "pg", checked: true },
+													{ value: "mysql", disabled: true },
+												],
+											},
+										},
+										{ kind: "field", field: { kind: "text", name: "size", min: 1, max: 8 } },
+									],
+								},
+							],
+							hidden: [{ name: "context", value: "server" }],
+						});
+						await send({ type: "extension_ui_response", id: frame.id, data: { db: "pg", size: 4 } });
+						break;
+					case "select":
+						methods.push(frame.method);
+						expect(frame).toMatchObject({ title: "Database", options: ["Postgres"] });
+						await send({ type: "extension_ui_response", id: frame.id, value: "Postgres" });
+						break;
+					case "editor":
+						methods.push(frame.method);
+						expect(frame).toMatchObject({ title: "Size", prefill: "2" });
+						await send({ type: "extension_ui_response", id: frame.id, value: "5" });
+						break;
+					case "notify":
+						if (typeof frame.message !== "string" || !frame.message.startsWith("{")) break;
+						results.push(JSON.parse(frame.message));
+						if (results.length === 1) {
+							await send({ type: "set_form_dialog", id: "off", enabled: false });
+							await send({ type: "prompt", id: "legacy", message: "/form-probe" });
+						} else {
+							child.stdin.end();
+						}
+						break;
+				}
+			}
+		} finally {
+			child.stdin.end();
+			await child.exited;
+		}
+		expect(negotiation, await stderr).toEqual([{ enabled: true }, { enabled: false }]);
+		expect(methods).toEqual(["form", "select", "editor"]);
+		expect(results).toEqual([
+			{ data: { db: "pg", size: 4, context: "server" } },
+			{ data: { db: "pg", size: 5, context: "server" } },
+		]);
+	}, 30_000);
 
 	it("answers a dialog session_start awaits, running commands sent meanwhile only after startup, in order", async () => {
 		await using temp = await TempDir.create("@rpc-startup-dialog-");
@@ -686,6 +793,137 @@ export default function(pi) {
 			error: "Login cancelled",
 		});
 	}, 30_000);
+});
+
+describe("RPC form dialog", () => {
+	const html = `<form><input type="hidden" name="context" value="server">
+		<fieldset><legend>Database</legend><p>Choose storage</p>
+			<select name="db" required><option selected value="pg">Postgres</option>
+			<option disabled value="mysql">MySQL</option></select>
+		</fieldset>
+		<fieldset><legend>Settings</legend>
+			<input name="size" type="number" value="2" min="1" max="8" required>
+			<textarea name="memo" maxlength="50">example</textarea>
+			<label><input name="features" type="checkbox" value="auth">Auth</label>
+			<label><input name="features" type="checkbox" value="search">Search</label>
+		</fieldset></form>`;
+	const form = parseHtmlForm(html);
+
+	it("sends one parsed form and preserves typed submissions, notes, and server-side hidden values", async () => {
+		const pending = new Map<string, PendingExtensionRequest>();
+		const output = vi.fn<(frame: object) => void>();
+		const onTimeout = vi.fn();
+		const result = requestRpcFormDialog(pending, output, form, { onTimeout, acceptImages: true });
+		const request = requireRequest(output.mock.calls[0]?.[0]);
+		const db = {
+			kind: "field",
+			field: {
+				kind: "choice",
+				name: "db",
+				required: true,
+				options: [
+					{ value: "pg", checked: true, disabled: false },
+					{ value: "mysql", checked: false, disabled: true },
+				],
+			},
+		};
+		expect(output).toHaveBeenCalledTimes(1);
+		expect(output.mock.calls[0]?.[0]).not.toHaveProperty("html");
+		expect(output.mock.calls[0]?.[0]).toMatchObject({
+			type: "extension_ui_request",
+			method: "form",
+			id: request.id,
+			acceptImages: true,
+			hidden: [{ name: "context", value: "server" }],
+			sections: [
+				{ title: [{ text: "Database" }], blocks: [{ kind: "text", spans: [{ text: "Choose storage" }] }, db] },
+				{
+					title: [{ text: "Settings" }],
+					blocks: [
+						{ kind: "field", field: { kind: "text", name: "size", value: "2", min: 1, max: 8, required: true } },
+						{ kind: "field", field: { kind: "text", name: "memo", multiline: true, maxLength: 50 } },
+						{ kind: "field", field: { kind: "choice", name: "features", multi: true } },
+					],
+				},
+			],
+		});
+
+		const notes = [
+			{
+				name: "db",
+				question: "Choose storage",
+				option: "Postgres",
+				value: "pg",
+				text: "Existing instance [Image #1, 1x1]",
+				images: [{ type: "image" as const, data: "AA==", mimeType: "image/png" }],
+			},
+		];
+		respond(pending, request.id, {
+			data: { db: "pg", size: 4, memo: "done", features: ["auth", "search"], context: "overwritten" },
+			notes,
+			timedOut: true,
+		});
+		expect(await result).toEqual({
+			data: { db: "pg", size: 4, memo: "done", features: ["auth", "search"], context: "server" },
+			notes,
+			timedOut: true,
+		});
+		expect(onTimeout).toHaveBeenCalledTimes(1);
+		expect(pending.size).toBe(0);
+	});
+
+	it.each(["dismiss", "abort", "expire"] as const)("settles only the matching form on %s", async outcome => {
+		const pending = new Map<string, PendingExtensionRequest>();
+		const frames: object[] = [];
+		const controller = new AbortController();
+		const onTimeout = vi.fn(() => controller.abort());
+		const output = (frame: object) => void frames.push(frame);
+		const frameDeps: RpcInputFrameDeps = {
+			pendingExtensionRequests: pending,
+			output,
+			handleCommand: vi.fn(),
+			errorResponse: vi.fn(),
+			onHostToolResult: vi.fn(),
+			onHostToolUpdate: vi.fn(),
+			onHostUriResult: vi.fn(),
+			onToolApprovalResponse: vi.fn(),
+			onPlanProposalResponse: vi.fn(),
+		};
+		const result = requestRpcFormDialog(pending, output, form, {
+			signal: controller.signal,
+			timeout: outcome === "expire" ? 5 : 1000,
+			onTimeout,
+		});
+		const { id } = requireRequest(frames[0]);
+		const next = requestRpcFormDialog(pending, output, parseHtmlForm(`<input name="other">`));
+		const nextId = requireRequest(frames[1]).id;
+		if (outcome === "dismiss") {
+			dispatchRpcControlFrame({ type: "extension_ui_response", id, cancelled: true }, frameDeps);
+		} else if (outcome === "abort") {
+			controller.abort();
+		}
+		expect(await result).toEqual(
+			outcome === "expire"
+				? { data: { db: "pg", memo: "example", size: 2, features: [], context: "server" }, timedOut: true }
+				: undefined,
+		);
+		controller.abort();
+		expect(onTimeout).toHaveBeenCalledTimes(outcome === "expire" ? 1 : 0);
+		expect(frames.slice(2)).toEqual(
+			outcome === "dismiss"
+				? []
+				: [expect.objectContaining({ type: "extension_ui_request", method: "cancel", targetId: id })],
+		);
+
+		// An answer to the closed request is ignored even while another form is waiting.
+		expect(dispatchRpcControlFrame({ type: "extension_ui_response", id, data: { other: "stale" } }, frameDeps)).toBe(
+			true,
+		);
+		expect(pending.size).toBe(1);
+		dispatchRpcControlFrame({ type: "extension_ui_response", id: nextId, data: { other: "new" } }, frameDeps);
+		expect(await next).toEqual({ data: { other: "new" } });
+		expect(pending.size).toBe(0);
+	});
 });
 
 describe("RPC ask dialog", () => {

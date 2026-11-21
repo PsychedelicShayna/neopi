@@ -215,8 +215,8 @@ export type { HtmlFormData, HtmlFormValue, OptionNote } from "@oh-my-pi/pi-tui/h
 export interface ExtensionFormDialogResult {
 	data: HtmlFormData;
 	/**
-	 * Notes on selected options, separate from `data`. Only the interactive form
-	 * dialog collects them; ACP elicitation and field-by-field hosts never do.
+	 * Notes on selected options, separate from `data`. Rich forms can collect
+	 * them; ACP elicitation and field-by-field hosts do not.
 	 */
 	notes?: OptionNote[];
 	timedOut?: boolean;

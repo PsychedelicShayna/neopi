@@ -15,6 +15,7 @@
 
 ### Added
 
+- RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
