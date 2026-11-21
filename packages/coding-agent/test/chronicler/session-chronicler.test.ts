@@ -571,6 +571,78 @@ describe("SessionChronicler capture runtime", () => {
 		});
 	});
 
+	it("captures only user skill arguments live and in backfill, with a rereadable source ID", async () => {
+		const manager = await newSessionManager();
+		const before = appendUser(manager, "Public material before the blind.");
+		const hidden = manager.appendCustomMessageEntry(
+			"skill-prompt",
+			"BLIND_SKILL_BODY",
+			true,
+			{ name: "private", args: "BLIND_SKILL_ARGS" },
+			"user",
+		);
+		manager.appendCustomMessageEntry(
+			"skill-prompt",
+			"AGENT_SKILL_BODY",
+			true,
+			{ name: "injected", args: "AGENT_SKILL_ARGS" },
+			"agent",
+		);
+		manager.appendCustomMessageEntry("collab-prompt", "COLLAB_CUSTOM_BODY", true, undefined, "user");
+		const bare = manager.appendCustomMessageEntry("skill-prompt", "BARE_SKILL_BODY", true, { name: "bare" }, "user");
+		const visible = manager.appendCustomMessageEntry(
+			"skill-prompt",
+			"EXPANDED_SKILL_BODY",
+			true,
+			{ name: "work", args: "Start. And stop asking me for permission" },
+			"user",
+		);
+		await manager.flush();
+		const root = chroniclerRoot(manager);
+		await writeChroniclerBlindMetadata(root, { version: 1, spans: [{ startAfter: before, endAt: hidden }] });
+
+		scripts.push([
+			() => ({ content: [{ type: "toolCall", name: "read_chronicle", arguments: { source: visible } }] }),
+			finishTurn(),
+			stopTurn,
+		]);
+		const live = startChronicler(manager, newSettings());
+		await live.chronicler.idle();
+		const request = "[skill:work] User: Start. And stop asking me for permission";
+		const excluded = /(?:EXPANDED|BARE)_SKILL_BODY|BLIND_SKILL_|AGENT_SKILL_|COLLAB_CUSTOM_BODY/;
+		const livePass = passes[0]!;
+		expect(passRequestText(livePass)).toContain(request);
+		expect(passRequestText(livePass)).not.toMatch(excluded);
+		expect(passSourceIds(livePass)).toEqual([before, bare, visible]);
+		const reread = livePass.mock.calls
+			.flatMap(call => call.context.messages)
+			.find(message => message.role === "toolResult" && message.toolName === "read_chronicle");
+		if (reread?.role !== "toolResult") throw new Error("Expected the source reread to return a tool result");
+		expect(reread.isError).toBe(false);
+		expect(JSON.stringify(reread.content)).toContain(request);
+		expect(JSON.stringify(reread.content)).not.toMatch(excluded);
+		await shutdown(live);
+
+		// Replay the same transcript as uncaptured, keeping its durable blind span.
+		await fs.rm(path.join(root, "beats"), { recursive: true });
+		scripts.push(ackPass());
+		const backfill = await runHeadlessBackfill({
+			sessionFile: manager.getSessionFile()!,
+			settings: newSettings(),
+			modelRegistry,
+			obfuscator: undefined,
+			timeoutMs: 5_000,
+			drainMs: 1_000,
+			pollMs: 10,
+		});
+		expect(backfill.outcome).toBe("complete");
+		expect(backfill.before.totalEntries).toBe(3);
+		expect(backfill.after.coveredEntries).toBe(3);
+		expect(passSourceIds(passes[1]!)).toEqual([before, bare, visible]);
+		expect(passRequestText(passes[1]!)).toContain(request);
+		expect(passRequestText(passes[1]!)).not.toMatch(excluded);
+	});
+
 	it("excludes durable blind spans from headless backfill and completion counts", async () => {
 		const manager = await newSessionManager();
 		const before = appendUser(manager, "Public backlog before blind.");

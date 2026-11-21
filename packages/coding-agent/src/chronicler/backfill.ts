@@ -20,6 +20,7 @@ import type { SessionHeader } from "../session/session-entries";
 import { visitEntriesFromFile } from "../session/session-loader";
 import { artifactsDirectoryFor, SessionManager } from "../session/session-manager";
 import { cfgChroniclerBackfillPollMs } from "./backfill-settings";
+import { isChroniclerSourceEntry } from "./render";
 import { type ChroniclerSessionView, SessionChronicler } from "./session-chronicler";
 import { cfgChroniclerEnabled } from "./settings";
 import { readCommittedChroniclerBatches } from "./store";
@@ -50,7 +51,7 @@ export interface StoredSessionCoverage extends BackfillCoverage {
 }
 
 export type BackfillOutcome =
-	/** Every message entry is covered by a committed batch. */
+	/** Every capturable transcript entry is covered by a committed batch. */
 	| "complete"
 	/** The timeout elapsed first; committed batches remain and a later run resumes. */
 	| "incomplete"
@@ -93,18 +94,18 @@ function chroniclerRootFor(sessionFile: string): string {
 	return path.join(artifactsDir, "chronicler");
 }
 
-async function committedCoverage(sessionFile: string, messageIds: ReadonlySet<string>): Promise<BackfillCoverage> {
+async function committedCoverage(sessionFile: string, sourceIds: ReadonlySet<string>): Promise<BackfillCoverage> {
 	const batches = await readCommittedChroniclerBatches(chroniclerRootFor(sessionFile));
 	let coveredEntries = 0;
 	let beats = 0;
 	for (const batch of batches) {
 		beats += batch.beats.length;
-		for (const entry of batch.checkpoint.entries) if (messageIds.has(entry.id)) coveredEntries++;
+		for (const entry of batch.checkpoint.entries) if (sourceIds.has(entry.id)) coveredEntries++;
 	}
-	return { totalEntries: messageIds.size, coveredEntries, beats };
+	return { totalEntries: sourceIds.size, coveredEntries, beats };
 }
 
-async function readMessageIds(sessionFile: string): Promise<{ header: SessionHeader; ids: Set<string> }> {
+async function readSourceIds(sessionFile: string): Promise<{ header: SessionHeader; ids: Set<string> }> {
 	let header: SessionHeader | undefined;
 	const ids = new Set<string>();
 	const orderedEntries: { id: string }[] = [];
@@ -112,7 +113,7 @@ async function readMessageIds(sessionFile: string): Promise<{ header: SessionHea
 		if (entry.type === "session") header ??= entry;
 		else if ("id" in entry && typeof entry.id === "string") {
 			orderedEntries.push({ id: entry.id });
-			if (entry.type === "message") ids.add(entry.id);
+			if (isChroniclerSourceEntry(entry)) ids.add(entry.id);
 		}
 	});
 	if (!header) throw new Error(`Session file has no valid header: ${sessionFile}`);
@@ -122,10 +123,10 @@ async function readMessageIds(sessionFile: string): Promise<{ header: SessionHea
 	return { header, ids };
 }
 
-/** Message-entry coverage of a stored session from its transcript and committed batches; reads only. */
+/** Capture coverage of a stored session from its transcript and committed batches; reads only. */
 export async function readStoredSessionCoverage(sessionFile: string): Promise<StoredSessionCoverage> {
 	const resolved = path.resolve(sessionFile);
-	const { header, ids } = await readMessageIds(resolved);
+	const { header, ids } = await readSourceIds(resolved);
 	const legacy = (header.version ?? 1) < 2;
 	const coverage = legacy
 		? { totalEntries: ids.size, coveredEntries: 0, beats: 0 }
@@ -171,7 +172,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 
 	const manager = await SessionManager.openReadOnly(sessionFile);
 	const artifactsDir = artifactsDirectoryFor(sessionFile);
-	const { ids: messageIds } = await readMessageIds(sessionFile);
+	const { ids: sourceIds } = await readSourceIds(sessionFile);
 	// The read-only manager never persists, so the transcript bytes cannot
 	// change; the view reports the real file so the store lands beside it.
 	const view: ChroniclerSessionView = {
@@ -212,7 +213,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 		// available when settling merely armed an autonomous recovery timer.
 		const done = await Promise.race([settled, Bun.sleep(Math.min(pollMs, remaining)).then(() => false)]);
 		try {
-			const now = await committedCoverage(sessionFile, messageIds);
+			const now = await committedCoverage(sessionFile, sourceIds);
 			if (now.coveredEntries !== reported) {
 				reported = now.coveredEntries;
 				options.onProgress?.(now);
@@ -249,7 +250,7 @@ export async function runHeadlessBackfill(options: HeadlessBackfillOptions): Pro
 		providerSessionState.clear();
 	}
 
-	const after = await committedCoverage(sessionFile, messageIds);
+	const after = await committedCoverage(sessionFile, sourceIds);
 	if (after.coveredEntries >= after.totalEntries) return { outcome: "complete", before, after };
 	const status = chronicler.status;
 	switch (status) {

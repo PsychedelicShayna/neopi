@@ -280,7 +280,7 @@ export interface FileMentionMessage {
 }
 
 /** True for a `/skill:<name>` prompt the user invoked directly (attribution `user`), as opposed to an agent/autoload injection. */
-export function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
+export function isUserInvokedSkillPrompt(message: Pick<CustomMessage, "customType" | "attribution">): boolean {
 	return message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user";
 }
 
