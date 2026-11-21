@@ -1607,7 +1607,7 @@ mod cancellation_tests {
 			.unwrap()
 			.check()
 			.unwrap();
-		let mut input = X11Input::new(conn.clone(), root).unwrap();
+		let mut input = X11Input::new(conn.clone(), root, Some(display.clone())).unwrap();
 		let target = Target::Window(window.to_string());
 		for text in ["/usage", "DRAFT_SHARED_ALPHA", "A🦀"] {
 			let source = CancellationSource::default();
