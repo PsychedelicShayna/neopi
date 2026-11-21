@@ -85,7 +85,7 @@ describe("usage notice settings through production initialization", () => {
 		});
 	}
 
-	it("still rejects an explicitly invalid threshold through the disk load path", async () => {
+	it("warns and defaults an explicitly invalid threshold through the disk load path", async () => {
 		const state = beginSettingsTest();
 		const temp = await TempDir.create("@usage-notices-invalid-");
 		try {
@@ -96,9 +96,11 @@ describe("usage notice settings through production initialization", () => {
 					usageNotices: { enabled: false, quotaPercent: 101 },
 				}),
 			);
-			await expect(Settings.init({ agentDir, cwd: temp.path() })).rejects.toThrow(
-				"Notice thresholds must be between 0 and 100 percent",
-			);
+			const settings = await Settings.init({ agentDir, cwd: temp.path() });
+			expect(cfgUsageNoticesQuotaPercent.get(settings)).toBe(80);
+			expect(settings.startupWarnings).toEqual([
+				expect.stringContaining("Notice thresholds must be between 0 and 100 percent"),
+			]);
 		} finally {
 			AgentStorage.close();
 			restoreSettingsTestState(state);

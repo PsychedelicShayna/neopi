@@ -179,6 +179,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
 - Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler’s startup consent notice is no longer repeated when reopening a session or forking from history that already contains it. Explicit `/chron on` and `/chron off` still show their status notices.
 - Chronicler now captures the user's `/skill:` arguments in live sessions and backfill, without capturing the expanded skill instructions ([#827](https://github.com/PsychedelicShayna/neopi/issues/827)).

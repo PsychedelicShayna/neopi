@@ -291,7 +291,7 @@ type ProjectSettingsReadResult = {
 /** A project-layer read before `disabledProviders` filtering; `#resolveProjectRead` merges it. */
 type ProjectSettingsDiscovery = {
 	cwd: string;
-	quarantineInvalid: boolean;
+	startup: boolean;
 	/** Project-level settings items in discovery order, disabled providers' items included. */
 	items: SettingsCapabilityItem[];
 	nativeModelRoles: unknown;
@@ -1013,6 +1013,14 @@ export class Settings {
 	readonly valueCache: (ValueCacheEntry | undefined)[] = [];
 	/** Registry-owned warn-once diagnostics of this instance; see `config/registry.ts`. */
 	readonly warnState: WarnState = { invalid: new Map(), items: new Map() };
+	/** Invalid disk values stay in the raw layers, so a subsequent explicit edit can repair them. */
+	#rejectedGlobalSettings = new Map<AnySetting, unknown>();
+	#rejectedProjectSettings = new Map<AnySetting, unknown>();
+	#startupWarnings: string[] = [];
+
+	get startupWarnings(): readonly string[] {
+		return this.#startupWarnings;
+	}
 	/** Change listeners bucketed by the `slot` of the setting they observe ({@link onEffectiveChange}). */
 	#changeListeners: (Set<SettingChangeListener> | undefined)[] = [];
 	#persistedLayerListeners = new Set<() => void>();
@@ -1375,8 +1383,8 @@ export class Settings {
 			cwd: this.#cwd,
 			agentDir: this.#agentDir,
 			configFiles: [...this.#configFiles],
-			global: structuredClone(this.#global),
-			project: structuredClone(this.#project),
+			global: structuredClone(this.#withStartupDefaults(this.#global, this.#rejectedGlobalSettings)),
+			project: structuredClone(this.#withStartupDefaults(this.#project, this.#rejectedProjectSettings)),
 			globalToml: structuredClone(this.#globalToml),
 			projectToml: structuredClone(this.#projectToml),
 			globalTomlPath: this.#globalTomlPath,
@@ -2439,6 +2447,7 @@ export class Settings {
 		if (this.#parent) {
 			cloned = (await this.#parent.cloneForCwd(cwd)).overlay({}, { derived: this.#derived });
 			cloned.#project = structuredClone(this.#project);
+			cloned.#rejectedProjectSettings = new Map(this.#rejectedProjectSettings);
 			cloned.#projectToml = structuredClone(this.#projectToml);
 			cloned.#projectTomlPath = this.#projectTomlPath;
 		} else {
@@ -2449,6 +2458,7 @@ export class Settings {
 			});
 			cloned.#storage = this.#storage;
 			cloned.#configPath = this.#configPath;
+			cloned.#rejectedGlobalSettings = new Map(this.#rejectedGlobalSettings);
 			cloned.#project = this.#persist
 				? cloned.#adoptProjectRead(await cloned.#readProjectSettings(true), {
 						global: this.#global,
@@ -2459,6 +2469,7 @@ export class Settings {
 					})
 				: structuredClone(this.#project);
 			if (!this.#persist) {
+				cloned.#rejectedProjectSettings = new Map(this.#rejectedProjectSettings);
 				cloned.#projectToml = structuredClone(this.#projectToml);
 				cloned.#projectTomlPath = this.#projectTomlPath;
 				cloned.#projectShellPathSource = this.#projectShellPathSource;
@@ -3967,13 +3978,13 @@ export class Settings {
 
 	async #loadYamlIfPresentForStartup(filePath: string): Promise<RawSettings | null> {
 		const result = await this.#loadYamlIfPresent(filePath);
-		if (result.kind !== "invalid" || !this.#persist) {
-			return this.#unwrapYamlLoadResult(filePath, result);
+		if (result.kind === "invalid") {
+			this.#warnAtStartup(`Settings: ${filePath}: ${String(result.error)}; ignoring this file`);
+			// A broken file still exists. Do not mistake it for a missing config
+			// and write legacy settings over it, or select a different YAML file.
+			return {};
 		}
-		return await this.#withYamlWriteLock(filePath, async writePath => {
-			const loaded = await this.#loadYamlIfPresentForWriteLocked(filePath, writePath, true);
-			return loaded.settings;
-		});
+		return this.#unwrapYamlLoadResult(filePath, result);
 	}
 
 	/**
@@ -3981,18 +3992,9 @@ export class Settings {
 	 * moved aside before reporting failure, so a later write can never truncate
 	 * the only copy of the user's configuration.
 	 */
-	async #loadYamlIfPresentForWriteLocked(
-		filePath: string,
-		writePath: string,
-		rejectMissing = false,
-	): Promise<LockedYamlLoadResult> {
+	async #loadYamlIfPresentForWriteLocked(filePath: string, writePath: string): Promise<LockedYamlLoadResult> {
 		let result = await this.#loadYamlIfPresent(writePath);
 		const generation = yamlGenerationFromLoadResult(result);
-		if (result.kind === "missing" && rejectMissing) {
-			throw new Error(
-				`Settings config was invalid before locking and is now missing: ${filePath}; another process may have moved it aside`,
-			);
-		}
 		if (result.kind === "invalid") {
 			result = await this.#quarantineInvalidYamlLocked(writePath, result);
 			this.#quarantinedYamlTargets.set(filePath, writePath);
@@ -4038,10 +4040,7 @@ export class Settings {
 		}
 	}
 
-	async #readExistingMainYaml(
-		quarantineInvalid: boolean,
-		previous = this.#globalSettingsFiles,
-	): Promise<MainYamlReadResult> {
+	async #readExistingMainYaml(startup: boolean, previous = this.#globalSettingsFiles): Promise<MainYamlReadResult> {
 		if (!this.#configPath) return { settings: null, configPath: null, files: new Map() };
 		const files = await checkSettingsFiles(
 			[...MAIN_CONFIG_FILENAMES, SETTINGS_TOML, CONFIG_TOML].map(name => path.join(this.#agentDir, name)),
@@ -4051,12 +4050,20 @@ export class Settings {
 		const toml = source ? parseSettingsToml(source.content, source.filePath) : {};
 		for (const filename of MAIN_CONFIG_FILENAMES) {
 			const configPath = path.join(this.#agentDir, filename);
-			const loaded = quarantineInvalid
+			const loaded = startup
 				? await this.#loadYamlIfPresentForStartup(configPath)
 				: this.#unwrapYamlLoadResult(configPath, await this.#loadYamlIfPresent(configPath, false));
-			if (loaded)
-				return { settings: overlaySettingsToml(loaded, toml), configPath, toml, tomlPath: source?.filePath, files };
+			if (loaded) {
+				const settings = overlaySettingsToml(loaded, toml);
+				if (startup) {
+					this.#checkStartupValues(settings, this.#rejectedGlobalSettings, setting =>
+						source && Object.hasOwn(toml, setting.segments[0]) ? source.filePath : configPath,
+					);
+				}
+				return { settings, configPath, toml, tomlPath: source?.filePath, files };
+			}
 		}
+		if (startup && source) this.#checkStartupValues(toml, this.#rejectedGlobalSettings, () => source.filePath);
 		return {
 			settings: source ? toml : null,
 			toml,
@@ -4084,7 +4091,7 @@ export class Settings {
 	 * included) only when it adopts the layer.
 	 */
 	async #readProjectSettings(
-		quarantineInvalid: boolean,
+		startup: boolean,
 		options: { rejectNewWarnings?: boolean; cwd?: string; files?: SettingsFileStamps } = {},
 	): Promise<ProjectSettingsDiscovery> {
 		const cwd = options.cwd ?? this.#cwd;
@@ -4145,7 +4152,7 @@ export class Settings {
 		}
 		// A native config this instance moved aside reads as missing until a save recreates it;
 		// keep its last good contents, as `#saveProjectNow` does.
-		const nativeProject = quarantineInvalid
+		const nativeProject = startup
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
 				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
@@ -4157,7 +4164,7 @@ export class Settings {
 		}
 		return {
 			cwd,
-			quarantineInvalid,
+			startup,
 			items: projectItems,
 			nativeModelRoles: getByPath(nativeProject, ["modelRoles"]),
 			fileSettings: structuredClone(overlaySettingsToml(nativeProject, toml)),
@@ -4202,7 +4209,7 @@ export class Settings {
 			project = filtered;
 		}
 		return {
-			settings: this.#migrateRawSettings(project.settings, read.quarantineInvalid),
+			settings: this.#migrateRawSettings(project.settings, read.startup),
 			fileSettings: read.fileSettings,
 			toml: read.toml,
 			tomlPath: read.tomlPath,
@@ -4250,6 +4257,19 @@ export class Settings {
 		layers: Omit<OwnLayers, "project"> = this.#ownLayers(),
 	): RawSettings {
 		const result = this.#resolveProjectRead(read, layers);
+		if (read.startup) {
+			const nativePath = path.join(getProjectAgentDir(read.cwd), "config.yml");
+			this.#checkStartupValues(
+				result.settings,
+				this.#rejectedProjectSettings,
+				setting => {
+					if (Object.hasOwn(read.toml, setting.segments[0])) return read.tomlPath;
+					const source = read.items.findLast(item => getByPath(item.data, setting.segments) !== undefined);
+					return source?.path === nativePath ? nativePath : undefined;
+				},
+				read.cwd,
+			);
+		}
 		this.#commitProjectRead(result);
 		return result.settings;
 	}
@@ -6158,9 +6178,9 @@ export class Settings {
 	/** `layers` (global, project, `--config` overlay, runtime) merged in precedence order. */
 	#mergeOwnLayers(layers: OwnLayers): RawSettings {
 		// TOML is folded into each mutable scope at read time, before setters run.
-		let merged = this.#deepMerge(this.#deepMerge({}, layers.global), projectLayerForMerge(layers.project), {
-			arrays: "layer",
-		});
+		const global = this.#withStartupDefaults(layers.global, this.#rejectedGlobalSettings);
+		const project = this.#withStartupDefaults(projectLayerForMerge(layers.project), this.#rejectedProjectSettings);
+		let merged = this.#deepMerge(global, project, { arrays: "layer" });
 		merged = this.#deepMerge(merged, layers.configOverlay, { arrays: "layer" });
 		return this.#deepMerge(this.#deepMerge(merged, layers.session), layers.overrides);
 	}
@@ -6168,6 +6188,52 @@ export class Settings {
 	/** `own` merged over an overlay parent's current view (itself for a root instance). */
 	#mergeOverParent(own: RawSettings): RawSettings {
 		return this.#parent ? this.#deepMerge(this.#parent.#mergedView(), own) : own;
+	}
+
+	#warnAtStartup(message: string): void {
+		this.#startupWarnings.push(message);
+		logger.warn(message);
+	}
+
+	#checkStartupValues(
+		layer: RawSettings,
+		rejected: Map<AnySetting, unknown>,
+		fileFor: (setting: AnySetting) => string | undefined,
+		cwd = this.#cwd,
+	): void {
+		for (const setting of allSettings()) {
+			const value = getByPath(layer, setting.segments);
+			if (value === undefined || value === null) continue;
+			const file = fileFor(setting);
+			if (!file) continue;
+			try {
+				const { validateConfigured, validate, type } = setting.definition;
+				(validateConfigured ?? validate)?.(configuredValue(layer, setting, cwd));
+				if (!setting.accepts(value)) {
+					const expected = setting.enumValues ? `one of ${setting.enumValues.join(", ")}` : `a ${type}`;
+					throw new Error(`${setting.id}: expected ${expected}`);
+				}
+			} catch (error) {
+				rejected.set(setting, value);
+				const reason = error instanceof Error ? error.message : String(error);
+				this.#warnAtStartup(
+					`Settings: ${file}: ${reason.includes(setting.id) ? reason : `${setting.id}: ${reason}`}; using the default`,
+				);
+			}
+		}
+	}
+
+	#withStartupDefaults(layer: RawSettings, rejected: ReadonlyMap<AnySetting, unknown>): RawSettings {
+		if (!rejected.size) return layer;
+		const defaults: RawSettings = {};
+		for (const [setting, invalidValue] of rejected) {
+			if (Bun.deepEquals(getByPath(layer, setting.segments), invalidValue)) {
+				// An explicit unset masks lower layers and lets the registry supply
+				// the default; deleting the key would expose a lower value instead.
+				setByPath(defaults, setting.segments, null);
+			}
+		}
+		return this.#deepMerge(layer, defaults);
 	}
 
 	/**
