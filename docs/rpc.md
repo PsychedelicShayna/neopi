@@ -36,6 +36,15 @@ Behavior notes:
 - With `--exit-with-parent` (capability `exit_with_parent`), a host-owned process dies with its host instead of draining. The parent-death watchdog is installed (host death aborts the session, tears down MCP servers, jobs, subagents, LSP servers and eval kernels, and exits with code `129` within about two seconds). On stdin EOF the process skips the drain: it stops reading, aborts the active turn and running tool, cancels owned jobs and subagents, disposes the session and exits within ten seconds even if teardown hangs (code `129` if the ceiling is hit). Without the flag nothing changes: accepted work is drained, which `echo prompt | npi --mode rpc` scripts rely on. A control-socket connection closing never stops the process.
 - Responses/events are written as one JSON object per line.
 
+To restrict the model's tools, launch `npi --mode rpc --tools read,grep,glob`
+(also supported in `rpc-ui`). Wait for `ready` and require the
+`restricted_tool_loadout` capability. Before sending a prompt, request
+`{"type":"get_state","includeDump":true}` and check `data.dumpTools[].name`
+against the allowlist. If the capability is missing or the tool names do not
+match, close the process instead of proceeding. Non-empty `set_host_tools`
+requests are refused in restricted sessions. This does not restrict commands
+issued directly by the RPC host, such as `bash`.
+
 ### Capabilities
 
 | String | Feature |
@@ -59,6 +68,7 @@ Behavior notes:
 | `session_journal` | `get_entries_page` reads complete native journal or active-branch entries over RPC/control; `npi sessions entries --json` reads the same persisted records without a writer lease. |
 | `abort_and_restore_queue` | `abort_and_restore_queue` withdraws queued user input and aborts atomically (the TUI Esc); served over stdio and control. See [`abort_and_restore_queue` payload](#abort_and_restore_queue-payload). Hosts without it fall back to `abort`. |
 | `exit_with_parent` | The `--exit-with-parent` launch flag: host death or stdin EOF aborts and exits within seconds (see the stdin-closed note under Protocol above). |
+| `restricted_tool_loadout` | The `--tools` launch flag enforces a built-in model tool allowlist in stdio RPC modes. Verify the active tool names with `get_state` (see [Startup](#startup)). |
 | `subagent_history` | `get_subagent_history` (the full persisted child roster) and persisted-child reads in `get_subagent_messages`. See [Subagent subscriptions](#subagent-subscriptions). |
 | `dictation` | Draft-only `dictation_start` / `dictation_stop`, their frames, and `get_state.dictationEnabled`. Stdio, and control sockets of terminal-owned sessions. See [Dictation Sub-Protocol](#dictation-sub-protocol). |
 | `status_facts` | `get_state.hostname`, `activeTimeMs` and `runningJobCount`, the TUI status line's facts. See [`get_roles` and `set_role` payloads](#get_roles-and-set_role-payloads). |

@@ -550,16 +550,15 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "developer": {
 				const text = contentToText(msg.content);
 				if (!text.trim()) break;
+				const origin = msg.role === "user" ? msg.origin : undefined;
+				const speaker =
+					origin?.kind === "control"
+						? `control sender ${origin.label || origin.callerInstanceId || origin.connectionId}`
+						: msg.role;
 				if (opts?.watchedRoles) {
-					const label = `**${msg.role}**:`;
-					if (lastWatchedLabel === label) {
-						lines.push(text, "");
-					} else {
-						lines.push(label, text, "");
-						lastWatchedLabel = label;
-					}
+					pushWatchedRole(`**${speaker}**:`, text);
 				} else {
-					lines.push(`## ${msg.role}`, "", text, "");
+					lines.push(`## ${speaker}`, "", text, "");
 				}
 				break;
 			}

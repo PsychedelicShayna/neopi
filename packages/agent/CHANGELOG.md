@@ -4,6 +4,7 @@
 
 ### Added
 
+- Model Variant settings follow the selected model into agent requests, including when a turn retries with a different model ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Run an operator-selected tool through the normal validation, hooks, cancellation, and result events with `Agent.executeTool()`, without calling a provider ([#14](https://github.com/PsychedelicShayna/neopi/issues/14)).
 - Compaction prompt templates can be inspected and overridden through the coding agent's `npi prompts` catalog without freezing their dynamic values ([#2](https://github.com/PsychedelicShayna/neopi/issues/2)).
 - Added per-message steering interruption modes so queued guidance can wait for running tools or interrupt immediately without changing the session preference.

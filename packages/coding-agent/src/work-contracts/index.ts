@@ -3,9 +3,11 @@ import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { sanitizeDisplayText } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { invalidate as invalidateCapabilityCache } from "../capability";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import type { ReadonlySessionManager } from "../session/session-manager";
 import {
 	CONTRACT_ENTRY,
 	applyContractEvent,
@@ -20,6 +22,57 @@ import bundledToolDescription from "./tool.md" with { type: "text" };
 
 const HELP =
 	"/contract list | show <id> | set <id> <text> | edit <id> [text] | enable <id> | disable <id> | remove <id> | promote <id> user|project | policy on|off. JSON requests use the contract tool schema.";
+
+const CONTRACT_ACTIONS: readonly ContractRequest["action"][] = [
+	"list",
+	"show",
+	"set",
+	"edit",
+	"enable",
+	"disable",
+	"remove",
+	"promote",
+	"policy",
+];
+const CONTRACT_ID_ACTIONS: readonly string[] = ["show", "set", "edit", "enable", "disable", "remove", "promote"];
+
+function completeContractArguments(prefix: string, sessionManager?: ReadonlySessionManager): AutocompleteItem[] | null {
+	if (prefix.trimStart().startsWith("{")) return null;
+	const [action, id, scope, ...rest] = prefix.trimStart().split(/\s+/);
+	let candidates: Iterable<string>;
+	let current: string;
+	let preceding: string;
+	let trailing = "";
+	if (id === undefined) {
+		candidates = CONTRACT_ACTIONS;
+		current = action ?? "";
+		preceding = "";
+	} else if (action === "policy" && scope === undefined) {
+		candidates = ["on", "off"];
+		current = id;
+		preceding = "policy ";
+	} else if (action === "promote" && id && scope !== undefined && rest.length === 0) {
+		candidates = ["user", "project"] satisfies ContractRequest["scope"][];
+		current = scope;
+		preceding = `promote ${id} `;
+	} else if (action && CONTRACT_ID_ACTIONS.includes(action) && scope === undefined && sessionManager) {
+		candidates = readContracts(sessionManager).clauses.keys();
+		current = id;
+		preceding = `${action} `;
+		if (action === "set" || action === "edit" || action === "promote") trailing = " ";
+	} else {
+		return null;
+	}
+	const normalized = current.toLowerCase();
+	const items = Array.from(candidates)
+		.filter(value => value.toLowerCase().startsWith(normalized))
+		.map(label => ({
+			label,
+			value: `${preceding}${label}${!preceding && label !== "list" ? " " : trailing}`,
+			...(prefix === "" ? { preserveInputOnSubmit: true } : {}),
+		}));
+	return items.length > 0 ? items : null;
+}
 
 export const createWorkContractsExtension =
 	(agentDir: string): ExtensionFactory =>
@@ -94,6 +147,7 @@ export const createWorkContractsExtension =
 		api.registerCommand("contract", {
 			description: "Manage durable session work clauses and opt in to agent edits",
 			provenance: entryProvenance("commands", "contract"),
+			getArgumentCompletions: completeContractArguments,
 			async handler(args, ctx) {
 				let request: ContractRequest;
 				if (args.trimStart().startsWith("{")) {

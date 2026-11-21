@@ -2350,9 +2350,24 @@ export class TurnRecovery {
 				: ({ mode: "fixed", level: selector.thinkingLevel } as const));
 		const inherited = selection.mode === "inherit";
 		const origin = inherited ? this.#host.thinkingOrigin() : "fallback";
+		const variantLevel =
+			inherited && (origin === "default" || origin === "inherited")
+				? candidate.variant?.request.thinkingLevel
+				: undefined;
 		const requested =
-			selection.mode === "fixed" ? selection.level : selection.mode === "auto" ? AUTO_THINKING : configured;
-		const autoSelection = inherited ? this.#host.autoSelection() : selection.mode === "auto" ? selection : undefined;
+			selection.mode === "fixed"
+				? selection.level
+				: selection.mode === "auto"
+					? AUTO_THINKING
+					: (variantLevel ?? configured);
+		const autoSelection =
+			variantLevel === AUTO_THINKING
+				? { mode: "auto" as const }
+				: inherited && variantLevel === undefined
+					? this.#host.autoSelection()
+					: selection.mode === "auto"
+						? selection
+						: undefined;
 		if (cfgEffortPolicyMode.get(this.#host.settings) !== "replacement") {
 			return { level: requested, origin, selection: autoSelection };
 		}

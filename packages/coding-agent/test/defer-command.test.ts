@@ -95,6 +95,26 @@ describe("/defer", () => {
 			expect(parseDeferredInput(input)).toBeUndefined();
 	});
 
+	it("completes exact-case duration units and only outstanding cancellation IDs", async () => {
+		const h = harness();
+		const provider = lookupBuiltinSlashCommand("defer")?.getTuiArgumentCompletions;
+		if (!provider) throw new Error("Missing /defer argument completion");
+		const complete = async (prefix: string) =>
+			(await provider(prefix, { ctx: h.ctx }))?.map(item => item.value.trimEnd()) ?? [];
+
+		expect(await complete("c")).toEqual(["cancel"]);
+		expect(await complete("1m")).toEqual(["1m", "1ms"]);
+		expect(await complete("1M")).toEqual(["1M"]);
+		expect(await complete("1h type anything")).toEqual([]);
+		expect(await complete("cancel ")).toEqual(["cancel all"]);
+
+		await h.submit("/defer 1h a deferred message");
+		expect(await complete("cancel ")).toEqual(["cancel all", "cancel 1"]);
+		expect(await complete("cancel 1")).toEqual(["cancel 1"]);
+		await h.submit("/defer cancel 1");
+		expect(await complete("cancel ")).toEqual(["cancel all"]);
+	});
+
 	it("delivers plain input through the normal composer path without consuming a newer draft or its images", async () => {
 		const h = harness();
 		await h.submit("/defer 5ms delayed prose");

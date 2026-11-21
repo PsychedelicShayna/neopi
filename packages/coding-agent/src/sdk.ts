@@ -41,6 +41,7 @@ import { prewarmModelConnection } from "@oh-my-pi/pi-ai/providers/connection-pre
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
+import { modelForVariantRequest } from "@oh-my-pi/pi-ai/stream";
 import { syncOpenAIResponsesHistoryTexts } from "@oh-my-pi/pi-ai/utils";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -108,6 +109,7 @@ import {
 	resolveSessionModelSelector,
 	sessionModelDiscoveryProviders,
 } from "./config/model-resolver";
+import { isModelVariantId, modelVariantSetting } from "./config/model-variant-settings";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { buildServiceTierByFamily } from "./config/service-tier";
@@ -313,7 +315,7 @@ import {
 	capCacheWarmingMode,
 	resolveBridgeCompactionThreshold,
 } from "./session/cache-warmer";
-import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
+import { createSettingsAwareStreamFn, resolveWebsocketPreference } from "./session/settings-stream-fn";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
 import { createSpeculativeToolExecutionConfig } from "./speculation/host";
@@ -2519,7 +2521,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			for (const pattern of patterns) {
 				const slash = pattern.indexOf("/");
 				const provider = slash > 0 ? pattern.slice(0, slash).trim() : "";
-				if (!provider || /[*?[\]{}]/.test(provider)) {
+				const selector = parseModelString(pattern);
+				// The stored provider can be stale after rebasing a named variant.
+				if (!provider || /[*?[\]{}]/.test(provider) || (selector && isModelVariantId(selector.id))) {
 					providers.clear();
 					break;
 				}
@@ -2622,7 +2626,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				: undefined;
 		return newSessionThinkingLevel(
 			selectedModel,
-			roleLevel,
+			roleLevel ?? parseConfiguredThinkingLevel(selectedModel?.variant?.request.thinkingLevel),
 			parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings)),
 		);
 	};
@@ -4603,6 +4607,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		let writeRegistration: Promise<boolean> | undefined;
 		const ensureWriteRegistered = (): Promise<boolean> => {
 			if (toolRegistry.has("write")) return Promise.resolve(builtInRegistryToolNames.has("write"));
+			if (restrictToolNames) return Promise.resolve(false);
 			writeRegistration ??= (async () => {
 				const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
 				if (!writeTool || toolRegistry.has("write")) return builtInRegistryToolNames.has("write");
@@ -5558,7 +5563,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
 			return settingsAwareStreamFn(streamModel, context, {
 				...streamOptions,
-				thinkingBudgets: streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings),
+				thinkingBudgets:
+					streamModel.variant && streamOptions?.thinkingBudgets
+						? { ...cfgThinkingBudgets.get(settings), ...streamOptions.thinkingBudgets }
+						: (streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings)),
 				kimiApiFormat: streamOptions?.kimiApiFormat ?? (kimiApiFormat === "auto" ? undefined : kimiApiFormat),
 			});
 		};
@@ -5683,7 +5691,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					return streamMixture(streamModel, context, streamOptions, sessionMixtureHost);
 				}
 				const externalThinking =
-					cfgExternalThinking.get(settings) &&
+					modelVariantSetting(streamModel, cfgExternalThinking, settings) &&
 					agent.state.tools.some(tool => tool.name === "think") &&
 					supportsExternalThinking(streamModel);
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
@@ -5773,7 +5781,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
-				? shouldEnableAppendOnlyContext(cfgProviderAppendOnlyContext.get(settings), model)
+				? shouldEnableAppendOnlyContext(modelVariantSetting(model, cfgProviderAppendOnlyContext, settings), model)
 					? new AppendOnlyContextManager()
 					: undefined
 				: undefined,
@@ -6200,9 +6208,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						);
 						return tools.filter((tool): tool is AgentTool => tool !== null);
 					},
-			createThinkTool: async () => (await HIDDEN_TOOLS.think(toolSession)) ?? null,
+			createThinkTool:
+				!restrictToolNames || explicitlyRequestedToolNames?.includes("think")
+					? async () => (await HIDDEN_TOOLS.think(toolSession)) ?? null
+					: undefined,
 			createVibeTools:
-				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
+				!restrictToolNames && (options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
 					? () => createVibeTools(toolSession)
 					: undefined,
 			builtInToolNames: builtInRegistryToolNames,
@@ -6856,25 +6867,30 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 
 		const prewarmModel = session.model;
-		if (prewarmModel?.api === "openai-codex-responses") {
+		if (prewarmModel?.api === "openai-codex-responses" && prewarmModel.transport !== "pi-native") {
 			// `.api` equality doesn't narrow the generic; the guard makes this cast sound.
 			const codexModel = prewarmModel as Model<"openai-codex-responses">;
-			if (isOpenAICodexWebSocketPreferred(codexModel, { preferWebsockets: session.preferWebsockets })) {
+			const transportModel = modelForVariantRequest(codexModel);
+			const preferWebsockets = resolveWebsocketPreference(settings, codexModel);
+			if (isOpenAICodexWebSocketPreferred(transportModel, { preferWebsockets })) {
 				void (async () => {
 					try {
+						const credentialModel = codexModel.variant
+							? { ...codexModel, id: codexModel.variant.baseModelId }
+							: codexModel;
 						const codexPrewarmApiKey = options.getApiKey
 							? // `getApiKey` returns a value-or-promise union; unwrap the promise,
 								// then resolve the result if it is itself an ApiKeyResolver.
-								await resolveApiKeyOnce(await options.getApiKey(codexModel))
+								await resolveApiKeyOnce(await options.getApiKey(credentialModel))
 							: await modelRegistry.getApiKey(codexModel, providerSessionId);
 						if (!codexPrewarmApiKey) return;
 						// Load the transport only for an actual Codex prewarm, not unrelated session setup.
 						const { prewarmOpenAICodexResponses } =
 							await import("@oh-my-pi/pi-ai/providers/openai-codex-responses");
-						await logger.time("prewarmOpenAICodexResponses", prewarmOpenAICodexResponses, codexModel, {
+						await logger.time("prewarmOpenAICodexResponses", prewarmOpenAICodexResponses, transportModel, {
 							apiKey: codexPrewarmApiKey,
 							sessionId: providerSessionId,
-							preferWebsockets: session.preferWebsockets,
+							preferWebsockets,
 							providerSessionState: session.providerSessionState,
 							serviceTier: session.effectiveServiceTier(codexModel),
 						});
@@ -7029,7 +7045,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					dialect: resolveDialect(cfgToolsFormat.get(settings), captureModel),
 					abortOnFabricatedToolResult: cfgToolsAbortOnFabricatedResult.get(settings),
 					appendOnlyContext: shouldEnableAppendOnlyContext(
-						cfgProviderAppendOnlyContext.get(settings),
+						modelVariantSetting(captureModel, cfgProviderAppendOnlyContext, settings),
 						captureModel,
 					)
 						? new AppendOnlyContextManager()

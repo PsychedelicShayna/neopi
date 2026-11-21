@@ -99,8 +99,7 @@ export const launchHelp = {
 			description: "Print/json modes: keep running after the parent process dies (for nohup/setsid use)",
 		}),
 		tools: Flags.string({
-			description:
-				"Comma-separated built-in or extension tool names to enable (default: tools enabled in settings; see Built-in Tools)",
+			description: "Restrict the session to these comma-separated built-in tools (no extension or MCP tools)",
 		}),
 		thinking: Flags.string({
 			description: `Set thinking level: ${CLI_THINKING_LEVELS.join(", ")}`,

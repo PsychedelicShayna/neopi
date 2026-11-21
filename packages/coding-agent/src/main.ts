@@ -1929,13 +1929,21 @@ export async function buildSessionOptions(
 		options.titleSystemPrompt = titleSystemPrompt;
 	}
 
-	// Tools. The registry follows these coding rules in chat mode too, so switching
-	// chat mode off restores the normal selection; a chat session activates only
-	// the `--tools` it was granted (see createAgentSession).
-	if (parsed.noTools) {
-		options.toolNames = parsed.tools && parsed.tools.length > 0 ? parsed.tools : [];
-	} else if (parsed.tools) {
+	// An explicit CLI loadout is a restriction, not just an initial selection.
+	if (parsed.tools !== undefined) {
 		options.toolNames = parsed.tools;
+		options.restrictToolNames = true;
+		options.disableExtensionDiscovery = true;
+		// The SDK pairs these tools for rollback safety; never silently widen a CLI allowlist.
+		if (parsed.tools.includes("checkpoint") !== parsed.tools.includes("rewind")) {
+			throw new CliUsageError("--tools must list checkpoint and rewind together.");
+		}
+		if (parsed.extensions?.length || parsed.hooks?.length || parsed.trustedExtensions?.length) {
+			throw new CliUsageError("--tools cannot be combined with explicit extensions or hooks.");
+		}
+		if (parsed.tools.includes("lsp") && !parsed.noLsp) options.enableLsp = true;
+	} else if (parsed.noTools) {
+		options.toolNames = [];
 	}
 
 	if (chatMode) {
@@ -2198,6 +2206,9 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		if (!isInteractive) {
+			for (const warning of settingsInstance.startupWarnings) writeStartupWarning(warning);
+		}
 		setMenuSearchVimMode(cfgTuiVimMode.get(settingsInstance));
 		if (parsedArgs.approvalMode) {
 			// Runtime override (not persisted): every `tools.approvalMode` read downstream
@@ -2739,18 +2750,19 @@ export async function runRootCommand(
 			const subagentEventBus = new EventBus();
 			// Interactive launches bind startup-safe extensions after the composer accepts
 			// input; the first request waits for them instead. Kept eager when argv may
-			// carry extension flags (they must parse now), `--tools` must validate
-			// extension tools, or a restored transcript needs extension renderers.
+			// carry extension flags (they must parse now) or a restored transcript needs
+			// extension renderers. Restricted CLI sessions load no extensions.
 			const deferStartupSafeExtensions =
 				isInteractive &&
 				parsedArgs.unrecognizedFlags.length === 0 &&
-				!parsedArgs.tools?.length &&
 				!(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork || parsedArgs.restore || foreignSource);
-			const extensionsResult = parsedArgs.trustedExtensions?.length
-				? { ...(await loadTrustedSessionExtensions(sessionOptions, cwd, eventBus)), deferredPaths: [] }
-				: await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus, {
-						deferStartupSafe: deferStartupSafeExtensions,
-					});
+			const extensionsResult = sessionOptions.restrictToolNames
+				? { ...(await loadExtensions([], cwd, eventBus)), deferredPaths: [] }
+				: parsedArgs.trustedExtensions?.length
+					? { ...(await loadTrustedSessionExtensions(sessionOptions, cwd, eventBus)), deferredPaths: [] }
+					: await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus, {
+							deferStartupSafe: deferStartupSafeExtensions,
+						});
 			const extensionFlagSink: ExtensionFlagSink = {
 				getFlags: () => ExtensionRunner.aggregateFlags(extensionsResult.extensions),
 				setFlagValue: (name, value) => {

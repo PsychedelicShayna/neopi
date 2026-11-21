@@ -16,11 +16,14 @@ import {
 import { getSupportedThinkingLevels } from "@oh-my-pi/pi-catalog/model-thinking";
 import { describeModelCompactionPoint, resolveEffectiveContextWindow } from "../session/model-compaction-threshold";
 import { cfgContextRules } from "../config/context-policy";
+import type { ModelRegistry } from "../config/model-registry";
+import { cfgModelVariants, MODEL_VARIANT_FIELDS, type ModelVariantDefinition } from "../config/model-variant-settings";
 import { cfgCompactionThresholdTokens } from "../session/context-settings";
 
 import {
 	cfgCycleOrder,
 	cfgDisabledProviders,
+	cfgModelFolders,
 	cfgModelProviderOrder,
 	cfgModelRoleStorage,
 } from "../config/model-settings";
@@ -43,11 +46,31 @@ export function createModelBrowserSource(
 	settings: Settings,
 	sessionServiceTier?: (model: Model) => ServiceTier | undefined,
 	initialEditingScope?: SettingsScope,
+	variantRegistry?: Pick<ModelRegistry, "find">,
 ): ModelHubSource {
 	let editingScope = initialEditingScope;
+	const readVariants = (scope: SettingsScope): ModelVariantDefinition[] =>
+		(settings.readScopeValue(cfgModelVariants, scope) as ModelVariantDefinition[] | undefined) ?? [];
+	const persistVariants = async (scope: SettingsScope, variants: ModelVariantDefinition[]) => {
+		const receipt = await settings.persistWithReceipt(() =>
+			settings.writeScopeValue(cfgModelVariants, variants.length > 0 ? variants : undefined, scope),
+		);
+		if (receipt.status === "conflict") throw new Error(`Model Variants changed concurrently in ${scope} settings`);
+	};
+	const resolveFolders = () =>
+		settings.resolveFileScopeValue(cfgModelFolders, editingScope === "global" ? "global" : "project");
 	return {
 		get editingScope() {
 			return editingScope;
+		},
+		modelFolders: {
+			get entries() {
+				return resolveFolders().value as typeof cfgModelFolders.default;
+			},
+			save(folders) {
+				const scope = editingScope === "project" || resolveFolders().source === "project" ? "project" : "global";
+				settings.writeScopeValue(cfgModelFolders, folders, scope);
+			},
 		},
 		cycleScope: initialEditingScope
 			? () => {
@@ -113,6 +136,56 @@ export function createModelBrowserSource(
 		get contextRules() {
 			return cfgContextRules.get(settings);
 		},
+		get modelVariants() {
+			return variantRegistry && editingScope ? readVariants(editingScope) : undefined;
+		},
+		modelVariantFields: variantRegistry ? MODEL_VARIANT_FIELDS : undefined,
+		onSaveModelVariant: variantRegistry
+			? async draft => {
+					const scope = editingScope;
+					if (!scope) throw new Error("Select a scope to save a Model Variant");
+					const name = draft.name.trim();
+					const baseSelector = draft.baseModel.trim();
+					const slash = baseSelector.indexOf("/");
+					const base =
+						slash > 0
+							? variantRegistry.find(baseSelector.slice(0, slash), baseSelector.slice(slash + 1))
+							: undefined;
+					if (!base || base.variant) throw new Error("Choose an ordinary base model for this Model Variant");
+					await settings.reloadFromDisk();
+					const scoped = readVariants(scope);
+					if (draft.id && !scoped.some(entry => entry.id === draft.id)) {
+						throw new Error(`The Model Variant no longer exists in ${scope} settings`);
+					}
+					if (
+						cfgModelVariants
+							.get(settings)
+							.some(entry => entry.id !== draft.id && entry.name.toLowerCase() === name.toLowerCase())
+					) {
+						throw new Error(`A Model Variant named ${name} already exists`);
+					}
+					const next: ModelVariantDefinition = {
+						id: draft.id ?? `variant--${crypto.randomUUID()}`,
+						name,
+						baseModel: `${base.provider}/${base.id}`,
+						overrides: draft.overrides,
+					};
+					await persistVariants(
+						scope,
+						draft.id ? scoped.map(entry => (entry.id === draft.id ? next : entry)) : [...scoped, next],
+					);
+				}
+			: undefined,
+		onDeleteModelVariant: variantRegistry
+			? async id => {
+					const scope = editingScope;
+					if (!scope) throw new Error("Select a scope to delete a Model Variant");
+					await settings.reloadFromDisk();
+					const scoped = readVariants(scope);
+					const next = scoped.filter(entry => entry.id !== id);
+					if (next.length !== scoped.length) await persistVariants(scope, next);
+				}
+			: undefined,
 		effectiveContextWindowFor: model => resolveEffectiveContextWindow(settings, model),
 		permittedEfforts: model => {
 			const rule =

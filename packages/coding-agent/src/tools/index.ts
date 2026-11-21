@@ -129,6 +129,7 @@ import { cfgEditMode } from "../edit/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
 import { cfgPythonInterpreter } from "../eval/settings";
 import { cfgExternalThinking } from "../session/settings";
+import { modelVariantSetting } from "../config/model-variant-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgLspEnabled } from "../lsp/settings";
 import { cfgMemoryBackend } from "../memory-backend/settings";
@@ -772,8 +773,9 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			: undefined;
 	const goalEnabled = cfgGoalEnabled.get(session.settings);
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
+	const activeModel = session.getActiveModel?.();
 	const externalThinkingActive =
-		cfgExternalThinking.get(session.settings) && supportsExternalThinking(session.getActiveModel?.());
+		modelVariantSetting(activeModel, cfgExternalThinking, session.settings) && supportsExternalThinking(activeModel);
 	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
 		requestedTools.push("goal");
 	}

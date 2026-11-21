@@ -8,6 +8,7 @@ import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import type { CodeReviewOverlayResult, TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-types";
 import {
+	getReviewArgumentCompletions,
 	liveCommandCwd,
 	resolvePrReviewTarget,
 	ReviewCommand,
@@ -135,6 +136,8 @@ function buildUnclosedLiteralCompletion(argumentPrefix: string, quote: '"' | "'"
 async function getAnnotateArgumentCompletions(
 	argumentPrefix: string,
 	fileProvider: CombinedAutocompleteProvider,
+	cwd: string,
+	context?: Pick<CustomCommandContext, "sessionManager">,
 ): Promise<AutocompleteItem[] | null> {
 	const trimmed = argumentPrefix.trim();
 	if (trimmed.length === 0) {
@@ -157,10 +160,13 @@ async function getAnnotateArgumentCompletions(
 		if (modes.length > 0) return modes;
 	}
 
-	if (/^(?:last|session|code-review)$/i.test(trimmed) && /\s$/.test(argumentPrefix)) return null;
-
-	// Code-review's remainder is free-form focus/PR text, not a file path.
-	if (/^code-review(?:\s|$)/i.test(trimmed)) return null;
+	const codeReview = /^code-review[ \t]+/.exec(argumentPrefix.trimStart())?.[0];
+	if (codeReview) {
+		const reviewPrefix = argumentPrefix.trimStart().slice(codeReview.length);
+		const items = await getReviewArgumentCompletions(reviewPrefix, cwd, context);
+		return items?.map(item => ({ ...item, value: `${codeReview}${item.value}` })) ?? null;
+	}
+	if (/^(?:last|session|code-review)$/i.test(trimmed)) return null;
 
 	// Quote the synthetic path only while querying the shared provider. This
 	// preserves spaces in the complete path token; returned values are unquoted
@@ -350,12 +356,16 @@ export class AnnotateCommand implements CustomCommand {
 
 	constructor(private readonly api: CustomCommandAPI) {}
 
-	getArgumentCompletions(argumentPrefix: string, cwd: string): Promise<AutocompleteItem[] | null> {
+	getArgumentCompletions(
+		argumentPrefix: string,
+		cwd: string,
+		context?: Pick<CustomCommandContext, "sessionManager">,
+	): Promise<AutocompleteItem[] | null> {
 		if (!this.#fileCompletionProvider || this.#fileCompletionCwd !== cwd) {
 			this.#fileCompletionProvider = new CombinedAutocompleteProvider([], cwd);
 			this.#fileCompletionCwd = cwd;
 		}
-		return getAnnotateArgumentCompletions(argumentPrefix, this.#fileCompletionProvider);
+		return getAnnotateArgumentCompletions(argumentPrefix, this.#fileCompletionProvider, cwd, context);
 	}
 
 	execute(args: string[], ctx: CustomCommandContext, rawArgs?: string): Promise<string | undefined> {

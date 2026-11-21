@@ -117,6 +117,7 @@ describe("xAI main-composer destination ownership", () => {
 			});
 			vi.spyOn(chainRunner, "runChain").mockImplementation(async (_chain, original, options) => {
 				const signal = options.control!.beginStep();
+				options.onStep?.(step, 0, 1);
 				started.resolve();
 				await finish.promise;
 				if (outcome === "abort" || outcome === "error") throw new Error("chain stopped");
@@ -140,6 +141,12 @@ describe("xAI main-composer destination ownership", () => {
 			mode.editor.setText("Original draft");
 			mode.editor.handleInput("\x1b\x03");
 			await started.promise;
+			expect(
+				mode.progressHudContainer
+					.render(100)
+					.map(line => Bun.stripANSI(line))
+					.join(" "),
+			).toContain('Chain rewrite · step 1/1 "rewrite"');
 			for (const words of ["FIRST", "SECOND"]) {
 				vi.spyOn(xai, "transcribeXaiAudio").mockResolvedValue(words);
 				await mode.handleSTTToggle();
@@ -155,6 +162,10 @@ describe("xAI main-composer destination ownership", () => {
 			finish.resolve();
 			await completed.promise;
 			expect(mode.editor.chainLocked).toBe(false);
+			expect(mode.progressHudContainer.render(100)).toHaveLength(0);
+			if (outcome === "error") {
+				expect(mode.showWarning).toHaveBeenCalledWith(expect.stringContaining('failed at step "rewrite"'));
+			}
 			expect(mode.editor.getText()).toBe("FIRSTSECOND");
 			if (outcome === "abort" || outcome === "error") {
 				expect(prompt).not.toHaveBeenCalled();

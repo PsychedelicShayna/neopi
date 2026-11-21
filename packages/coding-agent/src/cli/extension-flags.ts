@@ -29,9 +29,8 @@ export interface ExtensionFlagSink {
  * semantics and surfaces in `unknownFlags` — without consuming the following
  * message or overwriting the built-in field. No built-in name list to maintain.
  *
- * Returns `null` only when there is no sink. Once extensions have loaded, the
- * reparse always runs so `--tools` can be validated against their registered
- * tools even when no extension registered CLI flags.
+ * Returns `null` only when there is no sink. An empty extension flag set still
+ * yields a full parse, including built-in flags and positional arguments.
  */
 export function applyExtensionFlags(runner: ExtensionFlagSink | undefined, rawArgs: string[]): Args | null {
 	if (!runner) return null;

@@ -3,6 +3,7 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 import {
+	applyModelVariantRequest,
 	type AssistantMessage,
 	type AssistantMessageEvent,
 	type ApiKeyResolution,
@@ -2207,7 +2208,8 @@ async function streamAssistantResponse(
 			: providerAbortSignals.length === 1
 				? providerAbortSignals[0]!
 				: AbortSignal.any(providerAbortSignals);
-	const requestApiKey = (config.getApiKey ? await config.getApiKey(model) : undefined) ?? config.apiKey;
+	const credentialModel = config.getApiKey && model.variant ? { ...model, id: model.variant.baseModelId } : model;
+	const requestApiKey = (config.getApiKey ? await config.getApiKey(credentialModel) : undefined) ?? config.apiKey;
 	let resolvedCredential: ApiKeyResolution;
 	const resolvedApiKey = await resolveApiKeyOnce(requestApiKey, finalRequestSignal, resolved => {
 		resolvedCredential = resolved;
@@ -2219,12 +2221,21 @@ async function streamAssistantResponse(
 	// Re-resolve metadata after credential selection so the per-request value
 	// reflects the credential actually used, not the snapshot from AgentLoopConfig construction.
 	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata;
-	const effectiveTemperature =
+	const temperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	// Owned tool calling sends no native tools, so any tool_choice would error.
 	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
-	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
-	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
+	const requestOptions = applyModelVariantRequest(model, {
+		...config,
+		// The loop's initial selection is not a stream option. In particular
+		// the native gateway must not serialize it alongside its own modelId.
+		model: undefined,
+		reasoning: dynamicReasoning ?? config.reasoning,
+		disableReasoning: dynamicDisableReasoning ?? config.disableReasoning,
+		temperature,
+		serviceTier: effectiveServiceTier,
+	});
+	const { reasoning: effectiveReasoning, disableReasoning: effectiveDisableReasoning } = requestOptions;
 	// Capture after dynamic selectors are read, once per provider request. A
 	// later live effort switch must not re-label this request's delayed output.
 	const requestAttribution = {
@@ -2246,13 +2257,13 @@ async function streamAssistantResponse(
 		parent: invokeAgentSpan,
 		stepNumber: chatStepNumber,
 		request: {
-			maxTokens: config.maxTokens,
-			temperature: effectiveTemperature,
-			topP: config.topP,
-			topK: config.topK,
-			presencePenalty: config.presencePenalty,
-			serviceTier: effectiveServiceTier,
-			reasoningEffort: typeof effectiveReasoning === "string" ? effectiveReasoning : undefined,
+			maxTokens: requestOptions.maxTokens,
+			temperature: requestOptions.temperature,
+			topP: requestOptions.topP,
+			topK: requestOptions.topK,
+			presencePenalty: requestOptions.presencePenalty,
+			serviceTier: requestOptions.serviceTier,
+			reasoningEffort: effectiveReasoning,
 			toolChoice: effectiveToolChoice,
 			tools: llmContext.tools,
 			systemPrompt: llmContext.systemPrompt,
@@ -2317,8 +2328,8 @@ async function streamAssistantResponse(
 	const finishChat = async (message: AssistantMessage): Promise<void> => {
 		await finishChatSpan(telemetry, chatSpan, message, {
 			stepNumber: chatStepNumber,
-			modelId: model.id,
-			serviceTier: effectiveServiceTier,
+			modelId: model.variant?.baseModelId ?? model.id,
+			serviceTier: requestOptions.serviceTier,
 			responseHeaders: capturedHeaders,
 			baseUrl: model.baseUrl,
 		});
@@ -2328,14 +2339,10 @@ async function streamAssistantResponse(
 		return await runInActiveSpan(chatSpan, async () => {
 			onProviderStart?.();
 			let response = await streamFunction(model, llmContext, {
-				...config,
+				...requestOptions,
 				apiKey,
 				metadata: resolvedMetadata,
 				toolChoice: effectiveToolChoice,
-				reasoning: effectiveReasoning,
-				disableReasoning: effectiveDisableReasoning,
-				temperature: effectiveTemperature,
-				serviceTier: effectiveServiceTier,
 				cwd: effectiveCwd,
 				signal: finalRequestSignal,
 				onResponse: captureOnResponse,

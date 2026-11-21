@@ -62,6 +62,7 @@ import { compileSelectorRegex, isGlobSelectorPattern, isRegexSelectorPattern } f
 import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
+import { isModelVariantId } from "./model-variant-settings";
 import { cfgRetryFallbackChains } from "../session/settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
@@ -458,6 +459,7 @@ function getProviderWireRouteIndex(availableModels: readonly Model<Api>[]): Map<
 	if (cached) return cached;
 	const index = new Map<string, Model<Api> | null>();
 	for (const m of availableModels) {
+		if (m.variant) continue; // Upstream wire ids still select the ordinary base model.
 		const routing = m.thinking?.effortRouting;
 		if (routing === undefined) continue;
 		const providerKey = m.provider.toLowerCase();
@@ -501,6 +503,12 @@ export function resolveProviderModelReference(
 	}
 	if (exact !== undefined) {
 		return exact;
+	}
+
+	// A user variant's generated id never changes, even if its base moves to
+	// a new provider. Older qualified assignments continue to name that variant.
+	if (isModelVariantId(normalizedModelId)) {
+		return availableModels.find(model => model.variant && model.id.toLowerCase() === normalizedModelId);
 	}
 
 	// Retired effort-tier variant ids resolve to their collapsed logical
@@ -846,6 +854,8 @@ function matchModel(
 		}
 		return undefined;
 	}
+	const variants = availableModels.filter(model => model.variant && model.name.toLowerCase() === lowerPattern);
+	if (variants.length > 0) return pickPreferredModel(variants, context);
 
 	const bedrockInferenceProfile = resolveBedrockInferenceProfileModelId(modelPattern, availableModels);
 	if (bedrockInferenceProfile) {
@@ -2324,7 +2334,9 @@ function findExactCliModel(
 	// (isProviderLockedCrossMatch); it stays provider-locked and fails instead.
 	const lower = selector.toLowerCase();
 	const isFlatMatch = (model: Model<Api>) =>
-		model.id.toLowerCase() === lower || formatModelString(model).toLowerCase() === lower;
+		model.id.toLowerCase() === lower ||
+		formatModelString(model).toLowerCase() === lower ||
+		(model.variant !== undefined && model.name.toLowerCase() === lower);
 	const preferred = availableModels.filter(m => isFlatMatch(m) && !isProviderLockedCrossMatch(selector, m));
 	if (preferred.length > 0) return pickPreferredModel(preferred, buildPreferenceContext(availableModels, preferences));
 	// The unauthenticated catalog fallback is a weak match: a bare id like

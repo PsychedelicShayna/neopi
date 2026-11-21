@@ -9,12 +9,26 @@ import type { MCPServerConfig } from "../mcp/types";
 import type { AgentSession } from "../session/agent-session";
 import type { SessionManager } from "../session/session-manager";
 
+/** Complete the current argument; earlier arguments belong to `previous`, not to the inserted value. */
+export type ArgumentValueProvider = (
+	prefix: string,
+	runtime: TuiSlashCommandRuntime | undefined,
+	previous: readonly string[],
+) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
+
 /** Declarative subcommand definition for commands like /mcp. */
 export interface SubcommandDef {
 	name: string;
 	description: string;
 	/** Usage hint shown as dim ghost text, e.g. "<name> [--scope project|user]". */
 	usage?: string;
+	/** Positional completion sources in usage order; use `null` for an open-text slot. */
+	arguments?: readonly (ArgumentValueProvider | null)[];
+	/** For non-positional grammar (e.g. repeatable flags), complete the entire tail after this verb. */
+	getArgumentCompletions?: (
+		tail: string,
+		runtime?: TuiSlashCommandRuntime,
+	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 }
 
 /** Declarative builtin slash command metadata used by autocomplete and help UI. */
@@ -34,9 +48,8 @@ export interface BuiltinSlashCommand {
 	/** Subcommands for dropdown completion (e.g. /mcp add, /mcp list). */
 	subcommands?: SubcommandDef[];
 	/**
-	 * The bare command is a complete invocation (`/fork`). Subcommand completion
-	 * then waits for a typed prefix, so Enter on `/name ` submits the bare command
-	 * instead of accepting the first subcommand from the dropdown.
+	 * The bare command is complete (`/fork`). At an empty argument prefix,
+	 * show the verbs but leave Enter on the untouched list to submit the bare command.
 	 */
 	subcommandOptional?: boolean;
 	/** Static inline hint when command takes a simple argument (no subcommands). */

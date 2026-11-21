@@ -1,0 +1,8 @@
+// The base Responses request contract supports temperature and top_p, not
+// Chat Completions penalties or sampler extensions. This also matches Meta's
+// published schema shared by Meta Model API and Muse Code, and fixes the
+// unknown min_p fields on Muse Code and OpenCode Go Responses (#759).
+// https://dev.meta.ai/docs/api-reference/responses/schemas#create-response
+on-api "openai-responses" "azure-openai-responses" {
+	unsupported-sampling-params "topK" "minP" "presencePenalty" "repetitionPenalty" "frequencyPenalty"
+}

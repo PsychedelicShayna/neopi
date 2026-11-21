@@ -42,6 +42,24 @@ import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import { mcpServerArgumentValues } from "./builtin-completions";
+import {
+	completeGitRevision,
+	completeHubArguments,
+	completeIrcArguments,
+	completeLoginArguments,
+	completeLogoutArguments,
+	completeMcpAddArguments,
+	completeMcpRemoveArguments,
+	completeSessionPinArguments,
+	completeStatsArguments,
+	completeTodoPath,
+	completeToolArguments,
+	resetUsageValues,
+	runningJobValues,
+	todoPhaseValues,
+	todoTargetCompletions,
+} from "./session-argument-values";
 import { parseHumanToolArguments, parseHumanToolCommand } from "./tool-arguments";
 
 async function handleUsageResetCommand(
@@ -219,18 +237,50 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "copy", description: "Copy todos as Markdown to clipboard" },
 			{ name: "expand", description: "Show every phase and task in the HUD" },
 			{ name: "collapse", description: "Restore the bounded HUD preview" },
-			{ name: "export", description: "Write todos as Markdown to a file (default: TODO.md)", usage: "[<path>]" },
-			{ name: "import", description: "Replace todos from a Markdown file (default: TODO.md)", usage: "[<path>]" },
+			{
+				name: "export",
+				description: "Write todos as Markdown to a file (default: TODO.md)",
+				usage: "[<path>]",
+				getArgumentCompletions: completeTodoPath,
+			},
+			{
+				name: "import",
+				description: "Replace todos from a Markdown file (default: TODO.md)",
+				usage: "[<path>]",
+				getArgumentCompletions: completeTodoPath,
+			},
 			{
 				name: "append",
 				description: "Append a task; phase fuzzy-matched or auto-created",
 				usage: "[<phase>] <task...>",
+				arguments: [todoPhaseValues, null],
 			},
-			{ name: "start", description: "Mark task in_progress (fuzzy-matched)", usage: "<task>" },
-			{ name: "done", description: "Mark task/phase/all completed (fuzzy-matched)", usage: "[<task|phase>]" },
-			{ name: "drop", description: "Mark task/phase/all abandoned (fuzzy-matched)", usage: "[<task|phase>]" },
-			{ name: "rm", description: "Remove task/phase/all (fuzzy-matched)", usage: "[<task|phase>]" },
+			{
+				name: "start",
+				description: "Mark task in_progress (fuzzy-matched)",
+				usage: "<task>",
+				getArgumentCompletions: todoTargetCompletions(false),
+			},
+			{
+				name: "done",
+				description: "Mark task/phase/all completed (fuzzy-matched)",
+				usage: "[<task|phase>]",
+				getArgumentCompletions: todoTargetCompletions(true),
+			},
+			{
+				name: "drop",
+				description: "Mark task/phase/all abandoned (fuzzy-matched)",
+				usage: "[<task|phase>]",
+				getArgumentCompletions: todoTargetCompletions(true),
+			},
+			{
+				name: "rm",
+				description: "Remove task/phase/all (fuzzy-matched)",
+				usage: "[<task|phase>]",
+				getArgumentCompletions: todoTargetCompletions(true),
+			},
 		],
+		subcommandOptional: true,
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const tasks = runtime.ctx.todoPhases.flatMap(phase => phase.tasks);
@@ -259,8 +309,10 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				name: "pin",
 				description: "Pin a stored OAuth account to the current provider for this session",
 				usage: "[account]",
+				getArgumentCompletions: completeSessionPinArguments,
 			},
 		],
+		subcommandOptional: true,
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -341,8 +393,14 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[full|kill <id>|kill all]",
 		subcommands: [
 			{ name: "full", description: "Show full, untruncated command lines" },
-			{ name: "kill", description: "Cancel a running background job", usage: "<id>|all" },
+			{
+				name: "kill",
+				description: "Cancel a running background job",
+				usage: "<id>|all",
+				arguments: [runningJobValues],
+			},
 		],
+		subcommandOptional: true,
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const snapshot = runtime.ctx.session.getAsyncJobSnapshot({ recentLimit: 5 });
@@ -421,8 +479,10 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				name: "reset",
 				description: "Spend a saved provider rate-limit reset",
 				usage: "[provider/credential-id|provider/active]",
+				arguments: [resetUsageValues],
 			},
 		],
+		subcommandOptional: true,
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -462,6 +522,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Launch the local stats dashboard",
 		inlineHint: "[--port <port>] [--host <host>]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeStatsArguments,
 		handle: async (command, runtime) => {
 			const parsed = parseStatsDashboardArgs(command.args);
 			if ("error" in parsed) return usage(parsed.error, runtime);
@@ -537,6 +598,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "tools",
 		description: "Inspect enabled tools, or invoke with JSON or key=value arguments",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeToolArguments,
 		handle: async ({ args }, runtime) => {
 			const { name, argumentsText: rest } = parseHumanToolCommand(args);
 			if (!rest) {
@@ -641,6 +703,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open the git UI (split diff viewer, staging, commit composer)",
 		inlineHint: "[revision]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeGitRevision,
 		handleTui: (command, runtime) => {
 			runtime.ctx.showGitUi(command.args.trim() || undefined);
 			clearSubmittedText(runtime);
@@ -664,6 +727,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open the live Agent Hub or go straight to an agent's transcript",
 		inlineHint: "[agent]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeHubArguments,
 		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
 			const id = command.args.trim();
@@ -676,6 +740,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open the IRC viewer, message peers, or manage groups as yourself",
 		inlineHint: "[<peer>|#<group>|all <message> | group <operation>]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeIrcArguments,
 		handleTui: handleIrcCommand,
 	},
 	{
@@ -743,6 +808,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Login with OAuth provider",
 		inlineHint: "[provider|neoproxy <url>|redirect URL]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeLoginArguments,
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.oauthManualInput.hasPending()
 				? `Login: waiting for ${runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth"} callback`
@@ -806,6 +872,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Logout from OAuth provider",
 		inlineHint: "[provider]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeLogoutArguments,
 		handleTui: (command, runtime) => {
 			const providerId = command.args.trim();
 			if (providerId) {
@@ -833,16 +900,52 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{
 				name: "add",
 				description: "Add a new MCP server",
-				usage: "<name> [--scope project|user] [--url <url>] [-- <command...>]",
+				usage: "<name> [--scope project|user] [--url <url> --transport http|sse] [--token <token>] [-- <command...>]",
+				getArgumentCompletions: completeMcpAddArguments,
 			},
 			{ name: "list", description: "List all configured MCP servers" },
-			{ name: "remove", description: "Remove an MCP server", usage: "<name> [--scope project|user]" },
-			{ name: "test", description: "Test connection to a server", usage: "<name>" },
-			{ name: "reauth", description: "Reauthorize OAuth for a server", usage: "<name>" },
-			{ name: "unauth", description: "Remove OAuth auth from a server", usage: "<name>" },
-			{ name: "enable", description: "Enable an MCP server", usage: "<name>" },
-			{ name: "disable", description: "Disable an MCP server", usage: "<name>" },
-			{ name: "reconnect", description: "Reconnect to a specific MCP server", usage: "<name>" },
+			{
+				name: "remove",
+				description: "Remove an MCP server",
+				usage: "<name> [--scope project|user]",
+				getArgumentCompletions: completeMcpRemoveArguments,
+			},
+			{
+				name: "test",
+				description: "Test connection to a server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("test")],
+			},
+			{
+				name: "reauth",
+				description: "Reauthorize OAuth for a server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("reauth")],
+			},
+			{
+				name: "unauth",
+				description: "Remove OAuth auth from a server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("unauth")],
+			},
+			{
+				name: "enable",
+				description: "Enable an MCP server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("enable")],
+			},
+			{
+				name: "disable",
+				description: "Disable an MCP server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("disable")],
+			},
+			{
+				name: "reconnect",
+				description: "Reconnect to a specific MCP server",
+				usage: "<name>",
+				arguments: [mcpServerArgumentValues("reconnect")],
+			},
 			{ name: "reload", description: "Force reload MCP runtime tools" },
 			{ name: "resources", description: "List available resources from connected servers" },
 			{ name: "prompts", description: "List available prompts from connected servers" },

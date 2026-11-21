@@ -644,6 +644,75 @@ describe("SessionChronicler capture runtime", () => {
 		expect(passRequestText(passes[1]!)).not.toMatch(excluded);
 	});
 
+	it("captures complete, attributed advisor interventions in order and replays them by source ID", async () => {
+		const manager = await newSessionManager();
+		const user = appendUser(manager, "Fix the retry.");
+		const warning = `${"The reported successful retry didn't exercise the failing path. ".repeat(6)}\nAdd a negative-path test.`;
+		const hidden = manager.appendCustomMessageEntry("advisor", "HIDDEN_ADVISOR_ROW", false);
+		const advice = manager.appendCustomMessageEntry(
+			"advisor",
+			"Boundary boilerplate",
+			true,
+			{
+				notes: [
+					{ advisor: "Reviewer", severity: "blocker", note: warning },
+					{ note: "Report which path the test exercised." },
+				],
+			},
+			"agent",
+		);
+		const legacy = manager.appendCustomMessageEntry("advisor", "Legacy advice without structured notes.", true);
+		const response = appendAssistant(manager, "I followed Reviewer's advice and added the negative-path test.");
+		await manager.flush();
+
+		scripts.push([
+			() => ({ content: [{ type: "toolCall", name: "read_chronicle", arguments: { source: advice } }] }),
+			finishTurn(),
+			stopTurn,
+		]);
+		const live = startChronicler(manager, newSettings());
+		await waitForCoverage(live.root, [user, advice, legacy, response]);
+		await live.chronicler.idle();
+		const livePass = passes[0]!;
+		const assertTranscript = (pass: CapturePass) => {
+			expect(passSourceIds(pass)).toEqual([user, advice, legacy, response]);
+			const transcript = passRequestText(pass);
+			expect(transcript).toContain("**Advisor (Reviewer; blocker)**:");
+			expect(transcript).toContain("Add a negative-path test.");
+			expect(transcript).toContain("**Advisor (default)**:");
+			expect(transcript).toContain("Report which path the test exercised.");
+			expect(transcript).toContain("Legacy advice without structured notes.");
+			expect(transcript).toContain("I followed Reviewer's advice");
+			expect(transcript).not.toContain("HIDDEN_ADVISOR_ROW");
+			expect(transcript).not.toContain("Boundary boilerplate");
+			expect(passSourceIds(pass)).not.toContain(hidden);
+		};
+		assertTranscript(livePass);
+		const reread = livePass.mock.calls
+			.flatMap(call => call.context.messages)
+			.find(message => message.role === "toolResult" && message.toolName === "read_chronicle");
+		if (reread?.role !== "toolResult") throw new Error("Expected an advisor source reread result");
+		expect(reread.isError).toBe(false);
+		expect(JSON.stringify(reread.content)).toContain("**Advisor (Reviewer; blocker)**:");
+		expect(JSON.stringify(reread.content)).toContain("Add a negative-path test.");
+		await shutdown(live);
+
+		await fs.rm(path.join(live.root, "beats"), { recursive: true });
+		scripts.push(ackPass());
+		const backfill = await runHeadlessBackfill({
+			sessionFile: manager.getSessionFile()!,
+			settings: newSettings(),
+			modelRegistry,
+			obfuscator: undefined,
+			timeoutMs: 5_000,
+			drainMs: 1_000,
+			pollMs: 10,
+		});
+		expect(backfill.outcome).toBe("complete");
+		expect(backfill.after.coveredEntries).toBe(4);
+		assertTranscript(passes[1]!);
+	});
+
 	it("excludes durable blind spans from headless backfill and completion counts", async () => {
 		const manager = await newSessionManager();
 		const before = appendUser(manager, "Public backlog before blind.");

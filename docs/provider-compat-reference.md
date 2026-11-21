@@ -92,7 +92,7 @@ Types: `OpenAICompat` / `ResolvedOpenAISharedCompat` in `packages/catalog/src/ty
 | Flag | Default detection | Wire effect |
 | --- | --- | --- |
 | `supportsSamplingParams` | `false` for o1/o3/gpt-5+ class models | When `false`, omits `temperature`/`top_p`/penalties (they 400) |
-| `unsupportedSamplingParams` | First-party OpenAI Chat Completions rejects `topK`, `minP`, `repetitionPenalty`; Responses also rejects `presencePenalty`, `frequencyPenalty`. Other endpoints default to no extra restrictions. | Omits only the listed sampling options before the request is built; explicit compat overrides may supply another list, including `[]` |
+| `unsupportedSamplingParams` | OpenAI Chat Completions rejects `topK`, `minP`, and `repetitionPenalty`. Responses omits nonstandard extensions by default; OpenRouter Responses accepts `topK` and `presencePenalty`. OpenCode Go's DeepSeek V4.1 Chat Completions route rejects `minP`. | Omits each listed field independently; a compatibility override may supply a different list, including `[]`. |
 | `supportsPenaltyAndStopParams` | Chat: `false` for reasoning Grok. Responses: `false` on xAI hosts | Separately gates presence/frequency penalties and Chat Completions stop sequences |
 | `clampOutputToModelMax` | Local backends and selected provider/model rules | Uses the advertised model output ceiling instead of the conservative 64k OpenAI-compatible clamp |
 | `stripImageInput` | Selected text-only deployments of multimodal model families | Partitions out image inputs before wire encoding |

@@ -23,6 +23,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-cor
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -32,6 +33,7 @@ import { LIVE_INGEST_DEFAULTS, type LiveIngestSettingsSource } from "@oh-my-pi/p
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { cfgAgentWake } from "@oh-my-pi/pi-coding-agent/session/wake-settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 import { fixedAdvisorTools } from "./helpers/agent-session-setup";
@@ -102,7 +104,10 @@ describe("AgentSession advisor auto-resume suppression", () => {
 	 * `streamStarted` promise resolves from the mock handler, before the delay, so
 	 * tests await the real stream-begin signal rather than a timer.
 	 */
-	async function createParkedSession(tailResponses: MockResponse[] = []): Promise<ParkedHarness> {
+	async function createParkedSession(
+		tailResponses: MockResponse[] = [],
+		options?: { manager?: AsyncJobManager; advisorMock?: MockModel },
+	): Promise<ParkedHarness> {
 		const started = Promise.withResolvers<void>();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
@@ -121,11 +126,19 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		});
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({ "compaction.enabled": false });
+		if (options?.advisorMock) settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorages.push(authStorage);
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			...(options?.manager ? { agentId: "Main", ownedAsyncJobManager: options.manager } : {}),
+			advisorStreamFn: options?.advisorMock?.stream,
+		});
 		return { session, sessionManager, mock, streamStarted: started.promise };
 	}
 
@@ -1277,6 +1290,87 @@ describe("AgentSession advisor auto-resume suppression", () => {
 				.getEntries()
 				.filter(entry => entry.type === "custom_message" && entry.customType === BACKGROUND_TYPE),
 		).toHaveLength(1);
+	});
+
+	it.each([
+		{ choice: "afterInterrupt.asyncJobs", wakesFor: "bash", folds: "task" },
+		{ choice: "afterInterrupt.subagents", wakesFor: "task", folds: "bash" },
+	] as const)("wakes only the selected managed result after Ctrl+C ($choice)", async ({ choice, wakesFor, folds }) => {
+		const manager = new AsyncJobManager({});
+		const { session, sessionManager, mock, streamStarted } = await createParkedSession(
+			[{ content: ["reading the result"] }],
+			{ manager },
+		);
+		cfgAgentWake.override(session.settings, [choice]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		await session.prompt("hold my follow-up", { streamingBehavior: "followUp" });
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await running.catch(() => {});
+
+		manager.publishCompleted(folds, "fold this", { text: "not a wake" }, { ownerId: "Main" });
+		await session.settleAsyncWork();
+		expect(mock.calls).toHaveLength(1);
+
+		manager.publishCompleted(wakesFor, "wake for this", { text: "start a turn" }, { ownerId: "Main" });
+		await session.settleAsyncWork();
+		expect(mock.calls).toHaveLength(2);
+		expect(
+			sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "async-result"),
+		).toHaveLength(2);
+		expect(session.agent.peekFollowUpQueue()).toHaveLength(1);
+		expect(userMessageText(session.agent.state.messages)).not.toContain("hold my follow-up");
+	});
+
+	it.each([false, true])("honors the advisor's independent post-interrupt wake choice: %j", async enabled => {
+		const advisorMock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							name: "advise",
+							arguments: { note: "Address the reported failure", severity: "concern" },
+						},
+					],
+				},
+			],
+			handler: () => ({ content: [], stopReason: "stop" }),
+		});
+		const { session, mock, streamStarted } = await createParkedSession([{ content: ["addressing the advice"] }], {
+			advisorMock,
+		});
+		cfgAgentWake.override(session.settings, enabled ? ["afterInterrupt.advisors"] : []);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await running.catch(() => {});
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+		await advisor.prompt("inspect the interrupted work");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(enabled ? 2 : 1);
+		expect(session.agent.state.messages.filter(isAdvisorCard)).toHaveLength(1);
+	});
+
+	it("keeps IRC in context without waking when only its post-interrupt choice is disabled", async () => {
+		const { session, mock, streamStarted } = await createParkedSession();
+		cfgAgentWake.override(session.settings, ["irc"]);
+		const running = session.prompt("do the thing");
+		await streamStarted;
+		const message = { id: "m1", from: "peer", to: "me", body: "ping", ts: Date.now() };
+		await session.deliverIrcMessage(message);
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await running.catch(() => {});
+		expect(await session.deliverIrcMessage({ ...message, id: "m2", body: "second ping" })).toBe("injected");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(1);
+		expect(
+			session.agent.state.messages.filter(m => m.role === "custom" && m.customType === "irc:incoming"),
+		).toHaveLength(2);
 	});
 
 	it("wakes on a background completion when the user interrupt stopped nothing", async () => {

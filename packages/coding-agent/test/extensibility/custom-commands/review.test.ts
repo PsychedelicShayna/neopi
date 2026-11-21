@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings, withActiveSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AnnotateCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate";
 import { ReviewCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/review";
 import type { CustomCommandAPI } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@oh-my-pi/pi-coding-agent/extensibility/hooks/types";
@@ -166,6 +167,33 @@ describe("ReviewCommand", () => {
 			},
 		} as unknown as HookCommandContext;
 	}
+
+	it("completes active-branch review refs after an optional quoted checkout, not after focus text", async () => {
+		const dir = createTempDir();
+		await fs.mkdir(path.join(dir, "review checkout"));
+		const api = { cwd: dir } as unknown as CustomCommandAPI;
+		const command = new ReviewCommand(api);
+		const gitlab = "https://gitlab.com/group/proj/-/merge_requests/78";
+		const ctx = createContext({
+			sessionEntries: [makeUserEntry("stale", "owner/repo#77")],
+			branchEntries: [makeUserEntry("active", `Review owner/repo#79 and ${gitlab}`)],
+		});
+
+		expect((await command.getArgumentCompletions("./rev", dir, ctx))?.map(item => item.value)).toEqual([
+			'"./review checkout/"',
+		]);
+		expect(
+			(await command.getArgumentCompletions('"./review checkout/" #7', dir, ctx))?.map(item => item.value),
+		).toEqual(['"./review checkout/" owner/repo#79 ']);
+		expect((await command.getArgumentCompletions("owner/re", dir, ctx))?.map(item => item.value)).toEqual([
+			"owner/repo#79 ",
+		]);
+		expect(await command.getArgumentCompletions("focus on owner/re", dir, ctx)).toBeNull();
+		const annotate = new AnnotateCommand(api);
+		expect((await annotate.getArgumentCompletions("code-review !7", dir, ctx))?.map(item => item.value)).toEqual([
+			`code-review ${gitlab} `,
+		]);
+	});
 
 	it("uses prompt-style input for custom review instructions", async () => {
 		const dir = await createTempDir();
