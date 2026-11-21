@@ -12,4 +12,4 @@ The experiment retains NeoPi's audio transport, interruption policy, eligibility
 
 ## Status-line audio meter
 
-See [Live audio meter](../settings.md#live-audio-meter) for layout and template settings.
+The meter defaults to `Mic {mic}  Out {output}`. See [Live audio meter](../settings.md#live-audio-meter) for layout and template settings.

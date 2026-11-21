@@ -325,7 +325,7 @@ const liveSegment: StatusLineSegment = {
 };
 
 export const LIVE_METER_TEMPLATE_TOKENS = ["mic", "output"] as const;
-export const DEFAULT_LIVE_METER_TEMPLATE = "Mic {mic}  Codex {output}";
+export const DEFAULT_LIVE_METER_TEMPLATE = "Mic {mic}  Out {output}";
 
 function liveMeterPieces(ctx: SegmentContext): { text: string; color?: ThemeColor }[] | null {
 	if (!ctx.live || ctx.live.phase === "disconnected") return null;

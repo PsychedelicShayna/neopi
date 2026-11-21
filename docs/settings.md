@@ -1241,7 +1241,7 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 
 #### Live audio meter
 
-The `live_meter` segment shows microphone and playback levels during live calls. Built-in presets include it; for an explicit custom layout, add **Live audio meter** in `/statusline`. Press Tab on it to edit the template, stored at `statusLine.segmentOptions.liveMeter.template`. `{mic}` and `{output}` each expand to a six-cell bar. `{{` and `}}` produce literal braces. An empty template restores `Mic {mic}  Codex {output}`.
+The `live_meter` segment shows microphone and playback levels during live calls. Built-in presets include it; for an explicit custom layout, add **Live audio meter** in `/statusline`. Press Tab on it to edit the template, stored at `statusLine.segmentOptions.liveMeter.template`. `{mic}` and `{output}` each expand to a six-cell bar. `{{` and `}}` produce literal braces. An empty template restores `Mic {mic}  Out {output}`.
 
 ### Interaction
 
