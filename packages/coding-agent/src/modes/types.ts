@@ -677,7 +677,7 @@ export interface InteractiveModeContext {
 	readonly sttIdle: boolean;
 	readonly localVoiceActive: boolean;
 	handleLocalVoiceCommand(args?: string): Promise<void>;
-	/** Start or stop the Codex-backed realtime voice session. */
+	/** Start or stop the realtime voice session. */
 	handleLiveCommand(mode?: "transcript"): Promise<void>;
 	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
 	handleLiveMute(): Promise<void>;
