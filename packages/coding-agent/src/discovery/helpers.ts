@@ -34,7 +34,11 @@ import { resolveClaudePaths } from "../config/claude-paths";
 import type { MCPRequestIdFormat } from "../mcp/types";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { normalizeToolNames } from "../tools/builtin-names";
-import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import {
+	AGENT_INHERITANCE_VALUES,
+	type AgentAdvisor,
+	type AgentInheritance,
+} from "@oh-my-pi/pi-tui/overlays/agent-definition-fields";
 import { parseAgentAdvisor } from "../advisor/config";
 
 import { realpathIfExists, resolveContainedPath } from "./contained-path";
@@ -307,6 +311,7 @@ export interface ParsedAgentFields {
 	model?: string[];
 	/** Runtime harness selected for this agent; omitted frontmatter normalizes to `omp`. */
 	harness?: "omp" | "claude" | "codex";
+	inherit?: AgentInheritance;
 	output?: unknown;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	autoloadSkills?: string[];
@@ -349,6 +354,10 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	} else if (rawHarness !== undefined) {
 		return null;
 	}
+
+	const rawInheritance = frontmatter.inherit;
+	const inherit = AGENT_INHERITANCE_VALUES.find(value => value === rawInheritance);
+	if (rawInheritance !== undefined && inherit === undefined) return null;
 
 	// Only absent or null tools select defaults; malformed restrictions must not widen access.
 	const rawTools = frontmatter.tools;
@@ -411,6 +420,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 		tools,
 		spawns,
 		harness,
+		inherit,
 		model,
 		output,
 		thinkingLevel,

@@ -5206,6 +5206,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "target", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "definition", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "comment", type: "string", resolution: "session-dependent" },
+			{ path: "sources", type: "string", resolution: "session-dependent" },
 			{
 				path: "baseDefinitions",
 				type: "array",
@@ -5221,6 +5222,7 @@ export const promptAssets: readonly PromptAsset[] = [
 			definition: '{"name":"reviewer","systemPrompt":"Review changes"}',
 			comment: "Make it more specific",
 			baseDefinitions: [{ name: "base", definition: '{"name":"base","description":"Review code"}' }],
+			sources: '[{"kind":"skill","name":"tdd","content":"Write the failing test first."}]',
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/system/agent-fields-user.md",

@@ -407,7 +407,7 @@ export function dedupeContainedContextFiles(
 	);
 }
 
-/** Drop context files named `AGENTS.md` (any case). Task subagents never receive them. */
+/** Drop context files named `AGENTS.md` (any case) when explicitly requested. */
 export function withoutAgentsMd<T extends { path: string }>(files: T[]): T[] {
 	return files.filter(file => path.basename(file.path).toLowerCase() !== "agents.md");
 }
@@ -620,6 +620,8 @@ export interface BuildSystemPromptOptions {
 	noContextFiles?: boolean;
 	/** Drop every context file named `AGENTS.md`, including ones discovered for additional workspace roots. */
 	excludeAgentsMd?: boolean;
+	/** Render only the context-file section, without the harness's baseline or append text. */
+	contextOnly?: boolean;
 	/** Skills provided directly to system prompt construction. */
 	skills?: readonly Skill[];
 	/** Session-scoped description snapshot; background cache writes apply only to the next session. */
@@ -809,6 +811,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		contextFiles: providedContextFiles,
 		noContextFiles = false,
 		excludeAgentsMd = false,
+		contextOnly = false,
 		skills: providedSkills,
 		rules,
 		alwaysApplyRules,
@@ -857,7 +860,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	if (resolvedSystemPromptTemplate !== undefined && hasExplicitCustomPrompt) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
-	if (resolvedSystemPromptTemplate === undefined && !hasExplicitCustomPrompt) {
+	if (!contextOnly && resolvedSystemPromptTemplate === undefined && !hasExplicitCustomPrompt) {
 		const override = await discoverSystemPromptOverride(resolvedCwd);
 		if (override?.kind === "template" && override.content !== undefined) {
 			resolvedSystemPromptTemplate = override.content;
@@ -878,7 +881,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// A `systemPromptTemplates` file is discovered input like SYSTEM_TEMPLATE.md: it applies only when
 	// nothing above did, and a missing, empty, or invalid file falls back to the bundled prompt.
 	const modelTemplatePath =
-		resolvedSystemPromptTemplate === undefined && resolvedCustomPromptInput === undefined && !hasExplicitCustomPrompt
+		!contextOnly &&
+		resolvedSystemPromptTemplate === undefined &&
+		resolvedCustomPromptInput === undefined &&
+		!hasExplicitCustomPrompt
 			? matchModelPattern(options.modelSystemPromptTemplates ?? [], model)
 			: undefined;
 	if (modelTemplatePath !== undefined) {
@@ -953,20 +959,23 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// capability-path SYSTEM.md walk-up must not silently augment either.
 	const callerControlsCustomPrompt =
 		hasExplicitCustomPrompt || resolvedSystemPromptTemplate !== undefined || resolvedCustomPromptInput !== undefined;
-	const systemPromptCustomizationPromise: Promise<string | null> = callerControlsCustomPrompt
-		? Promise.resolve(null)
-		: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
+	const systemPromptCustomizationPromise: Promise<string | null> =
+		contextOnly || callerControlsCustomPrompt
+			? Promise.resolve(null)
+			: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
 	const contextFilesPromise = (async () => {
-		const primary = providedContextFiles
-			? providedContextFiles
-			: await logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
+		const primary =
+			providedContextFiles ??
+			(noContextFiles
+				? []
+				: await logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd }));
 		// Also discover context files (AGENTS.md, rules, etc.) for each additional workspace root.
 		const additionalRoots = additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd));
 		if (additionalRoots.length === 0 || noContextFiles) return excludeAgentsMd ? withoutAgentsMd(primary) : primary;
 		const extra = await Promise.all(
 			additionalRoots.map(root => loadProjectContextFiles({ cwd: root }).catch(() => [])),
 		);
-		const merged = dedupeContainedContextFiles([...primary, ...extra.flat()]);
+		const merged = [...primary, ...extra.flat()];
 		return excludeAgentsMd ? withoutAgentsMd(merged) : merged;
 	})();
 	const additionalRootsForTree = additionalWorkspaceRoots.filter(d => path.resolve(d) !== path.resolve(resolvedCwd));
@@ -993,19 +1002,23 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		);
 		return { ...primary, agentsMdFiles: [...primary.agentsMdFiles, ...extraTrees.flatMap(t => t.agentsMdFiles)] };
 	})();
-	const skillsPromise: Promise<readonly Skill[]> =
-		providedSkills !== undefined
+	const skillsPromise: Promise<readonly Skill[]> = contextOnly
+		? Promise.resolve([])
+		: providedSkills !== undefined
 			? Promise.resolve(providedSkills)
 			: skillsSettings?.enabled !== false
 				? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(result => result.skills)
 				: Promise.resolve([]);
-	const activeRepoContextPromise =
-		providedActiveRepoContext !== undefined
+	const activeRepoContextPromise = contextOnly
+		? Promise.resolve(null)
+		: providedActiveRepoContext !== undefined
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
 	// "none" (explicit off — and every subagent) omits the block and skips the file lookup.
 	const personalityPromise: Promise<string | null> =
-		personality === "none" ? Promise.resolve("") : logger.time("loadPersonalityOverride", loadPersonalityOverride);
+		contextOnly || personality === "none"
+			? Promise.resolve("")
+			: logger.time("loadPersonalityOverride", loadPersonalityOverride);
 
 	const [
 		resolvedCustomPrompt,
@@ -1019,16 +1032,20 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
-			resolvedCustomPromptInput !== undefined
-				? Promise.resolve(resolvedCustomPromptInput)
-				: resolvePromptInput(customPrompt, "system prompt"),
+			contextOnly
+				? Promise.resolve(undefined)
+				: resolvedCustomPromptInput !== undefined
+					? Promise.resolve(resolvedCustomPromptInput)
+					: resolvePromptInput(customPrompt, "system prompt"),
 			prepDefaults.resolvedCustomPrompt,
 		),
 		withDeadline(
 			"appendSystemPrompt",
-			providedResolvedAppendPrompt !== undefined
-				? Promise.resolve(providedResolvedAppendPrompt)
-				: resolvePromptInput(appendSystemPrompt, "append system prompt"),
+			contextOnly
+				? Promise.resolve(undefined)
+				: providedResolvedAppendPrompt !== undefined
+					? Promise.resolve(providedResolvedAppendPrompt)
+					: resolvePromptInput(appendSystemPrompt, "append system prompt"),
 			prepDefaults.resolvedAppendPrompt,
 		),
 		withDeadline("loadSystemPromptFiles", systemPromptCustomizationPromise, prepDefaults.systemPromptCustomization),
@@ -1041,8 +1058,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("loadPersonalityOverride", personalityPromise, null),
 	]);
 	clearTimeout(deadlineTimer);
-	const personalityBlock =
-		customPersonalityPrompt !== undefined
+	const personalityBlock = contextOnly
+		? ""
+		: customPersonalityPrompt !== undefined
 			? customPersonalityPrompt
 			: personality === "none"
 				? ""
@@ -1073,6 +1091,29 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 				error: String(error),
 			});
 		}
+	}
+
+	// A fence a file leaves open is closed at its end, so it never leaves the rest of the prompt unformatted.
+	const promptContextFiles = contextFiles.map(file => ({ ...file, content: prompt.closeCodeFence(file.content) }));
+	const contextIdentities = promptContextFiles.map((file, index) => ({
+		id: `instruction-${index}`,
+		kind: "instruction-files" as const,
+		label: file.path,
+	}));
+	if (contextOnly) {
+		if (promptContextFiles.length === 0 && agentsMdFiles.length === 0) return { systemPrompt: [] };
+		const rendered = trimTracked(
+			prompt.renderTracked(
+				projectPromptTemplate,
+				{ contextOnly, contextFiles: promptContextFiles, agentsMdSearch: { files: agentsMdFiles } },
+				promptContextFiles,
+			),
+		);
+		const systemPrompt = [rendered.text];
+		return {
+			systemPrompt,
+			sources: { blocks: systemPrompt, sources: trackedSources(rendered, 0, contextIdentities) },
+		};
 	}
 
 	const promptCwd = normalizePromptPath(resolvedCwd);
@@ -1160,15 +1201,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
-	// A fence a file leaves open is closed at its end, so it never leaves the rest of the prompt unformatted.
-	const promptContextFiles = contextFiles.map(file => ({ ...file, content: prompt.closeCodeFence(file.content) }));
 	const sourceItems = [...promptContextFiles, ...filteredSkills];
 	const sourceIdentities: SourceIdentity[] = [
-		...promptContextFiles.map((file, index) => ({
-			id: `instruction-${index}`,
-			kind: "instruction-files" as const,
-			label: file.path,
-		})),
+		...contextIdentities,
 		...filteredSkills.map((skill, index) => ({
 			id: `skill-${index}`,
 			kind: "skills" as const,

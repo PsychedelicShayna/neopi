@@ -1,4 +1,4 @@
-import type { AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import type { AgentAdvisor, AgentInheritance } from "@oh-my-pi/pi-tui/overlays/agent-definition-fields";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 export {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
@@ -311,6 +311,8 @@ export interface AgentDefinition {
 	systemPrompt: string;
 	/** Runtime harness selected for this agent; omitted frontmatter normalizes to `omp`. */
 	harness?: "omp" | "claude" | "codex";
+	/** Prompt inheritance for a spawned NeoPi session. Omitted means `all`. */
+	inherit?: AgentInheritance;
 	tools?: string[];
 	spawns?: string[] | "*";
 	model?: string[];

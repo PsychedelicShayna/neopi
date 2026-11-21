@@ -1,17 +1,15 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 /**
- * Contracts of the fullscreen /agents hub: frame geometry, scope sidebar
- * filtering, explicit search, the Space enable/disable toggle, and the
- * strip-driven configuration flows (property strips, pattern input, and the
- * model-browser pick) persisting one agent's entry at a time.
+ * Contracts of the fullscreen /agents configurator: roster and editable fields,
+ * scope filtering, external editing, and separate per-agent settings overrides.
  */
 import { beforeAll, describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { TspPickerProps, TspPrefsProps } from "@oh-my-pi/pi-wire";
+import * as timers from "node:timers/promises";
 import { AgentsHubComponent, type AgentsHubDeps, type HubAgent } from "../src/overlays/agents-hub";
 import { initTheme } from "../src/theme";
-import { uiProvenanceSuffix } from "../src/theme/provenance";
 import type { TUI } from "../src/index";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 
@@ -163,6 +161,9 @@ describe("AgentsHub layout", () => {
 		expect(rendered).toContain("dev");
 		expect(rendered).toContain("scout");
 		expect(rendered).toContain("+ New agent");
+		expect(rendered).toContain("Edit dev");
+		expect(rendered).toContain("Tools");
+		expect(rendered).toContain("Inherits");
 	});
 
 	test("sidebar scope filters the rows to one source", async () => {
@@ -219,11 +220,11 @@ describe("AgentsHub configuration strips", () => {
 		expect(settings.writes).toEqual(["task.disabledAgents[dev]", "task.disabledAgents[dev]"]);
 	});
 
-	test("Enter opens the property strip; advisor → on persists only that agent's entry", async () => {
+	test("the overrides shortcut opens the property strip; advisor → on persists only that agent's entry", async () => {
 		const settings = new TestSettings();
 		settings.records.set("task.agentAdvisor", { scout: "off" });
 		const { hub, strip } = await createHub(settings);
-		hub.handleInput("\r"); // agent strip for `dev`
+		hub.handleInput("o"); // agent overrides for dev
 		expect(strip()).toContain("dev →");
 		hub.handleInput("\x1b[B"); // model → prewalk
 		hub.handleInput("\x1b[B"); // prewalk → advisor
@@ -240,7 +241,7 @@ describe("AgentsHub configuration strips", () => {
 		const settings = new TestSettings();
 		settings.records.set("task.agentAdvisor", { dev: "on" });
 		const { hub, type } = await createHub(settings);
-		hub.handleInput("\r");
+		hub.handleInput("o");
 		hub.handleInput("\x1b[B");
 		hub.handleInput("\x1b[B");
 		hub.handleInput("\r"); // advisor strip
@@ -256,7 +257,7 @@ describe("AgentsHub configuration strips", () => {
 	test("pick model… dives into the model browser and persists the model override", async () => {
 		const settings = new TestSettings();
 		const { hub, strip } = await createHub(settings);
-		hub.handleInput("\r"); // agent strip (model chip preselected)
+		hub.handleInput("o"); // agent strip (model chip preselected)
 		hub.handleInput("\r"); // model value strip → [pick model…] first
 		expect(strip()).toContain("dev · model →");
 		hub.handleInput("\r"); // assign mode: model browser
@@ -271,7 +272,7 @@ describe("AgentsHub configuration strips", () => {
 	test("model pattern entry persists a selectable subagent override", async () => {
 		const settings = new TestSettings();
 		const { hub, type, strip } = await createHub(settings);
-		hub.handleInput("\r"); // agent properties
+		hub.handleInput("o"); // agent properties
 		hub.handleInput("\r"); // model choices
 		expect(strip()).toContain("pick model");
 		expect(strip()).toContain("pattern");
@@ -286,7 +287,7 @@ describe("AgentsHub configuration strips", () => {
 		const settings = new TestSettings();
 		settings.records.set("task.agentModelOverrides", { dev: "anthropic/claude-sonnet-4-5" });
 		const { hub, strip } = await createHub(settings);
-		hub.handleInput("\r"); // agent strip
+		hub.handleInput("o"); // agent strip
 		hub.handleInput("\r"); // model value strip
 		expect(strip()).toContain("clear override");
 		hub.handleInput("\x1b[B"); // pick model… → pattern…
@@ -298,7 +299,7 @@ describe("AgentsHub configuration strips", () => {
 	test("Esc steps back from a value strip to the agent strip before closing", async () => {
 		const settings = new TestSettings();
 		const { hub, strip, cancelled } = await createHub(settings);
-		hub.handleInput("\r"); // agent strip
+		hub.handleInput("o"); // agent strip
 		hub.handleInput("\r"); // model value strip
 		hub.handleInput("\x1b"); // back to agent strip
 		expect(strip()).toContain("dev →");
@@ -313,10 +314,11 @@ const cx: DescribeContext = {
 	cols: 120,
 	reduceMotion: false,
 	dark: true,
-	supports: kind => kind !== "picker",
+	supports: kind => kind !== "picker" && kind !== "prefs",
 	feature: () => true,
 };
-const pickerCx: DescribeContext = { ...cx, supports: () => true };
+const pickerCx: DescribeContext = { ...cx, supports: kind => kind !== "prefs" };
+const prefsCx: DescribeContext = { ...cx, supports: () => true };
 
 function pickerProps(hub: AgentsHubComponent): TspPickerProps {
 	const root = hub.describe(pickerCx);
@@ -324,21 +326,153 @@ function pickerProps(hub: AgentsHubComponent): TspPickerProps {
 	return root.p;
 }
 
-describe("AgentsHub definition editing", () => {
-	test("Ctrl-G opens the same rich editor for existing definitions and Esc returns to selection", async () => {
+function prefsProps(hub: AgentsHubComponent): TspPrefsProps {
+	const root = hub.describe(prefsCx);
+	if (root.k !== "prefs" || !root.p) throw new Error(`expected prefs, got ${root.k}`);
+	return root.p;
+}
+
+describe("AgentsHub configurator", () => {
+	test("lands on a native roster and allows selecting an agent and opening its fields immediately", async () => {
 		const { hub } = await createHub(new TestSettings());
+		expect(hub.nativeSheet(prefsCx)).toBe(true);
+		expect(prefsProps(hub).page).toBe("agent:project:dev");
+		expect(prefsProps(hub).pages.map(page => page.id)).toEqual([
+			"agent:project:dev",
+			"agent:bundled:scout",
+			"agent:bundled:task",
+			"new",
+		]);
+		const fields = prefsProps(hub).sections.flatMap(section => section.rows);
+		expect(fields.map(field => field.id)).toContain("tools");
+		expect(fields.find(field => field.id === "inherit")).toMatchObject({
+			label: "Inherits",
+			control: { k: "action", label: "all (default)", act: "edit" },
+		});
+		expect(fields.find(field => field.id === "inherit")?.disabled).toBeUndefined();
+		hub.handleNativeEvent({ type: "action", key: "", act: "page", value: "agent:bundled:scout", mods: [] });
+		expect(prefsProps(hub).page).toBe("agent:bundled:scout");
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "tools", mods: [] });
+		expect(hub.navigationSnapshot().create?.definition.name).toBe("scout");
+		expect(hub.describe(prefsCx).k).not.toBe("prefs");
+		hub.dispose();
+	});
+
+	test("opens the Inherits enum picker from native preferences and applies a choice to the draft", async () => {
+		const { hub } = await createHub(new TestSettings());
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "inherit", mods: [] });
+		const root = hub.describe(prefsCx);
+		if (root.k !== "picker") throw new Error(`Expected a picker, got ${root.k}`);
+		expect(root.p?.items?.map(item => item.id)).toEqual(["all", "context", "system", "none"]);
+		expect(root.p?.selected).toBe("all");
+		hub.handleNativeEvent({ type: "activate", key: "", item: "none" });
+		expect(hub.navigationSnapshot().create?.definition.inherit).toBe("none");
+		hub.dispose();
+	});
+
+	test("has no function-key bindings and F1 does not change the active screen or selection", async () => {
+		const { hub, strip, cancelled } = await createHub(new TestSettings());
+		hub.handleInput("\x1b[B");
+		const selected = pickerProps(hub).selected;
+		expect(pickerProps(hub).actions?.flatMap(action => action.keys ?? [])).not.toContain("f1");
+		expect(
+			pickerProps(hub)
+				.actions?.flatMap(action => action.keys ?? [])
+				.some(key => /^f\d+$/i.test(key)),
+		).toBe(false);
+		hub.handleInput("\x1bOP");
+		expect(pickerProps(hub).selected).toBe(selected);
+		expect(strip()).not.toContain("authoring legend");
+		expect(hub.render(58)).toHaveLength(30);
+		expect(cancelled()).toBe(false);
+	});
+});
+
+describe("AgentsHub definition editing", () => {
+	test("Ctrl+G explains how to edit a bundled definition instead of opening a file", async () => {
+		const message = "Save a copy to edit the file";
+		const paths: string[] = [];
+		const { hub, strip } = await createHub(new TestSettings(), {
+			openDefinitionFile: async path => {
+				paths.push(path);
+			},
+		});
+		hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
+		expect(strip()).toContain(message);
+		expect(strip()).not.toContain("Ctrl-G open file");
+		expect(pickerProps(hub).actions?.find(action => action.id === "edit-file")).toMatchObject({
+			disabled: message,
+		});
+		expect(pickerProps(hub).actions?.find(action => action.id === "edit-file")?.keys).toBeUndefined();
+		expect(prefsProps(hub).lead).not.toBe(message);
 		hub.handleInput("\x07");
-		expect(pickerProps(hub).title).toBe(`Edit dev${uiProvenanceSuffix("features", "agent-definition-editor")}`);
-		expect(pickerProps(hub).items?.map(item => item.id)).toContain("tools");
-		hub.handleInput("\x1b");
-		expect(pickerProps(hub).selected).toBe("agent:project:dev");
+		expect(prefsProps(hub).lead).toBe(message);
+		expect(paths).toEqual([]);
+		hub.dispose();
+	});
+
+	test("Ctrl+G opens the selected backing file and reloads it after the editor returns", async () => {
+		const filePath = "/project/.omp/agents/dev.md";
+		let name = "dev";
+		const opened = Promise.withResolvers<void>();
+		const paths: string[] = [];
+		const { hub, strip } = await createHub(new TestSettings(), {
+			loadAgents: async () => [
+				{ name, description: "Development", systemPrompt: "", source: "project", disabled: false, filePath },
+				{ name: "engineer", description: "Engineering", systemPrompt: "", source: "project", disabled: false },
+			],
+			openDefinitionFile: async path => {
+				paths.push(path);
+				name = "external-dev";
+				opened.resolve();
+			},
+		});
+		expect(strip()).toContain("Ctrl-G open file");
+		hub.handleInput("\x07");
+		await opened.promise;
+		await timers.setImmediate();
+		expect(paths).toEqual([filePath]);
+		expect(prefsProps(hub).page).toBe("agent:project:external-dev");
+		hub.dispose();
+	});
+
+	test("editing and saving a field persists and reselects the edited definition", async () => {
+		const filePath = "/project/.omp/agents/dev.md";
+		let agent: HubAgent = {
+			name: "dev",
+			description: "Development",
+			systemPrompt: "",
+			source: "project",
+			disabled: false,
+			filePath,
+		};
+		const saved = Promise.withResolvers<void>();
+		const { hub } = await createHub(new TestSettings(), {
+			loadAgents: async () => [{ ...agent }],
+			saveDefinition: async (scope, draft, original) => {
+				expect(scope).toBe("project");
+				expect(original?.filePath).toBe(filePath);
+				agent = { ...agent, ...draft };
+				saved.resolve();
+				return filePath;
+			},
+		});
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "name", mods: [] });
+		hub.handleInput("-updated");
+		hub.handleInput("\r");
+		expect(agent.name).toBe("dev");
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "save", mods: [] });
+		await saved.promise;
+		await timers.setImmediate();
+		expect(agent.name).toBe("dev-updated");
+		expect(prefsProps(hub).page).toBe("agent:project:dev-updated");
 		hub.dispose();
 	});
 
 	test("native Edit opens bundled definitions as editable drafts", async () => {
 		const { hub } = await createHub(new TestSettings());
 		hub.handleNativeEvent({ type: "select", key: "", item: "agent:bundled:scout" });
-		hub.handleNativeEvent({ type: "action", key: "", act: "edit-file", mods: [] });
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit-definition", mods: [] });
 		expect(hub.navigationSnapshot().create?.definition.name).toBe("scout");
 		hub.handleInput("\x1b");
 		expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
@@ -370,7 +504,7 @@ function mustFind(hub: AgentsHubComponent, key: string): { node: NativeNode; pat
 }
 
 describe("AgentsHub picker", () => {
-	test("select then Configure opens the agent strip; a strip chip persists like Enter on it", async () => {
+	test("select then Overrides opens the agent strip; a strip chip persists like Enter on it", async () => {
 		const settings = new TestSettings();
 		const { hub } = await createHub(settings);
 		expect(hub.nativeSheet(pickerCx)).toBe(true);
@@ -421,7 +555,7 @@ describe("AgentsHub picker", () => {
 });
 
 describe("AgentsHub native events", () => {
-	test("list select mirrors the selection; activate opens the agent strip whose chips persist", async () => {
+	test("list select mirrors the selection; targeting its overrides persists only that agent's setting", async () => {
 		const settings = new TestSettings();
 		const { hub } = await createHub(settings);
 		const agents = mustFind(hub, "agents");
@@ -432,7 +566,7 @@ describe("AgentsHub native events", () => {
 		expect(selected.k === "list" && selected.p?.selected).toBe("agent:bundled:scout");
 		expect(findKeyed(hub.describe(cx), "strip")).toBeUndefined();
 
-		hub.handleNativeEvent({ type: "activate", key: agents.path, item: "agent:bundled:scout" });
+		hub.handleInput("o");
 		const strip = mustFind(hub, "strip");
 		expect(strip.node.k === "tabs" && strip.node.p?.items.length).toBe(4);
 
@@ -460,7 +594,7 @@ describe("AgentsHub native events", () => {
 	test("the agent list ignores select while a strip is open", async () => {
 		const { hub } = await createHub(new TestSettings());
 		const agents = mustFind(hub, "agents");
-		hub.handleInput("\r"); // agent strip for dev
+		hub.handleInput("o"); // agent strip for dev
 		hub.handleNativeEvent({ type: "activate", key: agents.path, item: "agent:bundled:scout" });
 		hub.handleInput("\x1b"); // close the strip
 		const list = mustFind(hub, "agents").node;
@@ -516,13 +650,13 @@ describe("AgentsHub navigation history", () => {
 		const visits: string[] = [];
 		hub.onNavigationVisit = page => visits.push(page);
 		try {
-			hub.handleInput("\r");
+			hub.handleInput("o");
 			hub.handleInput("j");
 			expect(hub.navigationSnapshot().strip).toMatchObject({ kind: "chips", index: 2 });
 			hub.handleInput("h");
 			expect(hub.navigationSnapshot()).toMatchObject({ focus: "scope", strip: null });
 			hub.handleInput("l");
-			hub.handleInput("\r");
+			hub.handleInput("o");
 			hub.handleInput("G");
 			expect(hub.navigationSnapshot().strip).toMatchObject({ index: 3 });
 			hub.handleInput("g");
@@ -544,7 +678,7 @@ describe("AgentsHub navigation history", () => {
 		const visits: string[] = [];
 		restored.hub.onNavigationVisit = page => visits.push(page);
 		try {
-			hub.handleInput("\r");
+			hub.handleInput("o");
 			hub.handleInput("\r");
 			hub.handleInput("j");
 			hub.handleInput("\r");
@@ -572,7 +706,7 @@ describe("AgentsHub navigation history", () => {
 		hub.onNavigationVisit = page => visits.push(page);
 		restored.hub.onNavigationVisit = page => restoredVisits.push(page);
 		try {
-			hub.handleInput("\r");
+			hub.handleInput("o");
 			hub.handleInput("\r");
 			hub.handleInput("\r");
 			hub.handleInput("/");
@@ -602,7 +736,7 @@ describe("AgentsHub navigation history", () => {
 	test("rich draft restores without generation or persistence", async () => {
 		const { hub } = await createHub(new TestSettings());
 		const restored = await createHub(new TestSettings());
-		hub.handleInput("\x07");
+		hub.handleInput("\r");
 		const snapshot = hub.navigationSnapshot();
 		restored.hub.restoreNavigation(snapshot);
 		expect(restored.hub.navigationSnapshot().create?.definition).toEqual(snapshot.create?.definition);

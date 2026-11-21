@@ -969,8 +969,10 @@ export interface CreateAgentSessionOptions extends ModelContextCaps {
 	contextAncestorRoot?: string;
 	/** Discover no context files: not from cwd (on start or a cwd change), not for additional workspace roots, and no nested AGENTS.md list. Explicit `contextFiles` still load. Inherited by subagents. */
 	noContextFiles?: boolean;
-	/** Drop every context file named `AGENTS.md`: from `contextFiles`, cwd discovery, and additional workspace roots. Set for task subagents. */
+	/** Opt in to dropping context files named `AGENTS.md`, including those in additional roots. */
 	excludeAgentsMd?: boolean;
+	/** Spawned agent's choice of project context and generated harness prompt. */
+	agentInheritance?: AgentDefinition["inherit"];
 	/** Pre-built workspace tree (skips re-scanning; passed by parents to subagents). */
 	workspaceTree?: WorkspaceTree;
 	/** Prompt templates. Default: discovered from cwd/.omp/prompts/ + agentDir/prompts/ */
@@ -2313,14 +2315,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
 	// at their respective consumer sites. Their work can overlap with model resolution, secret loading,
 	// session-context build, tool creation, MCP discovery, and extension discovery.
-	const excludeAgentsMd = options.excludeAgentsMd === true;
+	const omitContextFiles = options.agentInheritance === "system" || options.agentInheritance === "none";
 	const contextFileFilter = <T extends { path: string }>(files: T[]): T[] =>
-		excludeAgentsMd ? withoutAgentsMd(files) : files;
-	const pinnedContextFiles = options.contextFiles
-		? contextFileFilter(options.contextFiles)
-		: options.noContextFiles
-			? []
-			: undefined;
+		options.excludeAgentsMd ? withoutAgentsMd(files) : files;
+	const pinnedContextFiles = omitContextFiles
+		? []
+		: (options.contextFiles ?? (options.noContextFiles ? [] : undefined));
 	// Chat mode keeps only the project context-file hierarchy (story lore);
 	// agent-dir/user-level files carry coding guidance. Raw mode loads none.
 	const chatMode = options.chatMode;
@@ -4990,6 +4990,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					systemPrompt: typeof options.systemPrompt === "string" ? [options.systemPrompt] : options.systemPrompt,
 				};
 			}
+			if (options.agentInheritance === "none") {
+				const body = options.systemPrompt?.([]);
+				return { systemPrompt: typeof body === "string" ? [body] : (body ?? []) };
+			}
 			if (liveChatMode) {
 				// Chat mode honors only explicit prompt flags, never discovered SYSTEM.md / APPEND_SYSTEM.md.
 				return {
@@ -5127,8 +5131,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd: promptCwd,
 				additionalWorkspaceRoots: sessionManager.getAdditionalDirectories(),
-				noContextFiles: options.noContextFiles,
-				excludeAgentsMd,
+				noContextFiles: omitContextFiles || options.noContextFiles,
+				excludeAgentsMd: options.excludeAgentsMd,
+				contextOnly: options.agentInheritance === "context",
 				xdevTools: xdev ? xdevEntries(xdev) : [],
 				xdevDocs: xdevPromptDocs ? renderXdevPromptDocs(xdevPromptDocs, routedCatalogNames) : "",
 				resolvedCustomPrompt: options.customSystemPrompt,

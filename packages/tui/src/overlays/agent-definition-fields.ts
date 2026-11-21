@@ -11,11 +11,15 @@ export type AgentAdvisor =
 	| string
 	| { ref: string; scope?: AdvisorConfigScope }
 	| { inline: InlineAgentAdvisor };
+export const AGENT_INHERITANCE_VALUES = ["all", "context", "system", "none"] as const;
+export type AgentInheritance = (typeof AGENT_INHERITANCE_VALUES)[number];
+
 export interface AgentDefinitionDraft {
 	name: string;
 	description: string;
 	systemPrompt: string;
 	harness?: "omp" | "claude" | "codex";
+	inherit?: AgentInheritance;
 	model?: string[];
 	thinkingLevel?: ConfiguredThinkingLevel;
 	prewalk?: boolean | string;
@@ -57,6 +61,14 @@ export const AGENT_DEFINITION_FIELDS: readonly DefinitionField[] = [
 		kind: "choice",
 		choices: ["omp", "claude", "codex"],
 		description: "Runtime harness used to execute this agent.",
+	},
+	{
+		key: "inherit",
+		label: "Inherits",
+		kind: "choice",
+		choices: AGENT_INHERITANCE_VALUES,
+		description:
+			"NeoPi prompt inheritance: all (default) keeps context files and the harness prompt, context keeps only files, system keeps only the harness prompt, none keeps neither. The agent's instructions always apply.",
 	},
 	{
 		key: "model",
@@ -251,7 +263,16 @@ export interface AgentDefinitionInspection {
 	findings: readonly AgentDefinitionFinding[];
 }
 
+export interface AgentGenerationSource {
+	kind: string;
+	name: string;
+	description?: string;
+	content: string;
+}
+
 export interface AgentEditorDeps {
+	/** Render the detail screen in a parent pane rather than as a standalone editor. */
+	embedded?: boolean;
 	tools: readonly { name: string; description?: string }[];
 	/** Built-in tools the harness classifies as read-only; drives the Read-only preset. */
 	readOnlyTools?: readonly string[];
@@ -260,6 +281,7 @@ export interface AgentEditorDeps {
 	browserSource?: ModelBrowserSource;
 	getAvailableModels?: () => Model[];
 	listAdvisors: () => Promise<readonly NamedAgentAdvisor[]>;
+	listGenerationSources?: () => Promise<readonly AgentGenerationSource[]>;
 	parse: (raw: string) => AgentDefinitionDraft;
 	serialize: (definition: AgentDefinitionDraft) => string;
 	generate: (request: {
@@ -267,6 +289,7 @@ export interface AgentEditorDeps {
 		target: AgentDefinitionField | "all";
 		comment?: string;
 		baseDefinitions?: readonly AgentDefinitionDraft[];
+		sources?: readonly AgentGenerationSource[];
 		conversationId?: string;
 		signal: AbortSignal;
 	}) => Promise<{ fields: Partial<AgentDefinitionDraft>; conversationId?: string }>;
@@ -280,6 +303,8 @@ export interface AgentEditorDeps {
 	/** Effective facts and findings for the live draft; recomputed on every change. */
 	inspect?: (definition: AgentDefinitionDraft) => AgentDefinitionInspection;
 	externalEditor?: (raw: string) => Promise<string | null>;
+	/** Opens the actual backing file, not the draft sent to externalEditor. */
+	openDefinitionFile?: () => Promise<void>;
 	outputSchemaDialect?: (schema: unknown) => "json-schema" | "jtd";
 	saveScopeEditable?: boolean;
 }

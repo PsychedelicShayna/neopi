@@ -5730,8 +5730,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					contextAncestorRoot:
 						options.contextAncestorRoot ?? (worktree === undefined ? undefined : options.worktreeRepoRoot),
 					noContextFiles: options.noContextFiles,
-					// Subagents never receive AGENTS.md, including from additional workspace roots they rediscover.
-					excludeAgentsMd: true,
+					agentInheritance: agent.inherit,
 					skills: options.skills,
 					promptTemplates: options.promptTemplates,
 					// The parent's tree (and its nested AGENTS.md list) is rooted at the parent's cwd; an
@@ -5967,6 +5966,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				tools: persistedSubagentTools,
 				mountedTools: session.getMountedXdevToolNames(),
 				agent: agent.name,
+				inherit: agent.inherit,
+				noContextFiles: options.noContextFiles,
 				modelRole: modelRole ?? resolveExplicitModelRole(modelOverride ?? agent.model, subagentSettings),
 				resolvedModel: progress.resolvedModel,
 				...(perCallModelGrants

@@ -107,7 +107,10 @@ export function describeModelCompactionPoint(scope: ScopeLike, model: Model): Mo
 			match?.key ??
 			(rule ? `context rule ${rule.selector}` : undefined) ??
 			(configured.thresholdTokens > 0 || configured.thresholdPercent > 0 ? "global" : "default"),
-		draft: match?.key === `${model.provider}/${model.id}` ? formatCompactionPointInput(match.threshold) : undefined,
+		draft:
+			configuredLimit?.key === `${model.provider}/${model.id}`
+				? formatCompactionPointInput(configuredLimit.threshold)
+				: undefined,
 		limit: configuredLimit ? formatCompactionPointInput(configuredLimit.threshold) : undefined,
 	};
 }

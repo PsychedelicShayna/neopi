@@ -118,11 +118,100 @@ function setup(
 }
 
 describe("agent definition editor", () => {
+	test("inline authoring help preserves the draft and exposes no function-key actions", () => {
+		const ui = setup({ name: "", description: "A draft", systemPrompt: "Be useful." });
+		ui.activate("name");
+		ui.type("unsaved-draft");
+		ui.select("description");
+		expect(ui.screen()).toContain("Shown to the delegating agent");
+		const before = ui.screen();
+		ui.editor.handleInput("\x1bOP");
+		expect(ui.screen()).toBe(before);
+		const root = ui.editor.describe(cx);
+		if (root.k !== "picker") throw new Error(`Expected a picker, got ${root.k}`);
+		expect(root.p?.actions?.flatMap(action => action.keys ?? [])).not.toEqual(
+			expect.arrayContaining([expect.stringMatching(/^f\d+$/i)]),
+		);
+		expect(root.p?.selected).toBe("description");
+		expect(ui.editor.definition.name).toBe("unsaved-draft");
+		expect(ui.closed()).toBe(false);
+	});
+
+	test("Ctrl+G opens the backing file on detail and edits the draft on text screens", async () => {
+		let opens = 0;
+		const ui = setup(undefined, {
+			openDefinitionFile: async () => {
+				opens++;
+			},
+			externalEditor: async raw => `${raw} External draft change.`,
+		});
+		expect(ui.screen()).toContain("Ctrl+G open file");
+		ui.editor.handleInput("\x07");
+		await Promise.resolve();
+		expect(opens).toBe(1);
+		ui.editor.handleNativeEvent({ type: "action", key: "", act: "open-file", mods: [] });
+		await Promise.resolve();
+		expect(opens).toBe(2);
+		ui.activate("systemPrompt");
+		ui.editor.handleInput("\x07");
+		await Promise.resolve();
+		ui.submit();
+		expect(ui.editor.definition.systemPrompt).toBe("Be useful. External draft change.");
+		expect(opens).toBe(2);
+		expect(ui.rows().find(row => row.id === "open-file")?.disabled).toBe(true);
+		ui.editor.handleInput("\x07");
+		expect(opens).toBe(2);
+		expect(ui.screen()).toContain("Save or discard draft changes before opening the backing file.");
+	});
+
+	test("embedded detail exposes live field sections and respects the parent height", () => {
+		const ui = setup(undefined, { embedded: true });
+		expect(ui.editor.rosterVisible).toBe(true);
+		expect(ui.editor.render(70, 9)).toHaveLength(9);
+		expect(ui.editor.render(70, 2)).toHaveLength(2);
+		const identity = ui.editor.detailSections().find(section => section.id === "identity");
+		expect(identity?.rows.find(row => row.id === "inherit")).toMatchObject({
+			label: "Inherits",
+			control: { k: "action", label: "all (default)", act: "edit" },
+		});
+		ui.select("description");
+		expect(ui.editor.selectedDetailItem).toBe("description");
+		ui.activate("description");
+		expect(ui.editor.rosterVisible).toBe(false);
+		expect(ui.editor.detailSections()).toEqual([]);
+		ui.back();
+		expect(ui.editor.rosterVisible).toBe(true);
+	});
+
+	test("Inherits opens from ANSI, defaults to all, and saves the selected mode", async () => {
+		const saved = Promise.withResolvers<AgentDefinitionDraft>();
+		const ui = setup(undefined, {
+			save: async draft => saved.resolve(parseAgentDefinitionDocument(serializeAgentDefinitionDocument(draft))),
+		});
+		expect(ui.screen()).toContain("Inherits");
+		expect(ui.rows().filter(row => row.id === "inherit")).toHaveLength(1);
+		ui.select("systemPrompt");
+		ui.editor.handleInput("\x1b[B");
+		expect(ui.editor.selectedDetailItem).toBe("inherit");
+		ui.editor.handleInput("\r");
+		const root = ui.editor.describe(cx);
+		if (root.k !== "picker") throw new Error(`Expected a picker, got ${root.k}`);
+		expect(root.p?.selected).toBe("all");
+		expect(ui.rows().map(row => row.id)).toEqual(["all", "context", "system", "none"]);
+		ui.editor.handleInput("\x1b[B");
+		ui.editor.handleInput("\r");
+		expect(ui.editor.definition.inherit).toBe("context");
+		ui.editor.handleInput("c");
+		ui.editor.handleInput("\r");
+		expect((await saved.promise).inherit).toBe("context");
+	});
+
 	test("lists every manifest field for new and existing definitions; a clean draft closes on Esc", () => {
 		const expected = [
 			"name",
 			"description",
 			"systemPrompt",
+			"inherit",
 			"harness",
 			"model",
 			"thinkingLevel",
@@ -182,6 +271,28 @@ describe("agent definition editor", () => {
 		ui.back();
 		expect(ui.editor.definition.tools).toBeUndefined();
 		ui.editor.dispose();
+	});
+
+	test("ordinary tool toggles grant and remove explicitly without silently replacing omitted defaults", () => {
+		const ui = setup();
+		ui.activate("tools");
+		ui.back();
+		expect(ui.editor.definition.tools).toBeUndefined();
+		expect(ui.editor.dirty).toBe(false);
+		ui.activate("tools");
+		ui.activate("item:read");
+		ui.activate("item:bash");
+		ui.activate("item:read");
+		ui.activate("__done");
+		expect(ui.editor.definition.tools).toEqual(["bash"]);
+		ui.activate("tools");
+		ui.activate("item:bash");
+		ui.back();
+		expect(ui.editor.definition.tools).toEqual([]);
+		ui.activate("tools");
+		ui.activate("__defaults");
+		ui.back();
+		expect(ui.editor.definition.tools).toBeUndefined();
 	});
 
 	test("spawns keep selection order, accept unknown names and offer to create a missing target", () => {
@@ -468,7 +579,7 @@ describe("agent definition editor", () => {
 	test("generate from existing sends selected definitions and preset fields", async () => {
 		const ui = setup({ name: "preset", description: "", systemPrompt: "", blocking: false, tools: [] });
 		ui.activate("from-existing");
-		ui.activate("0");
+		ui.activate("item:base:0");
 		ui.activate("generate");
 		ui.submit(); // no extra comment
 		await Bun.sleep(0);
@@ -479,6 +590,50 @@ describe("agent definition editor", () => {
 		});
 		expect(ui.requests[0]?.comment).toBeUndefined();
 		ui.editor.dispose();
+	});
+
+	test("generation can combine an existing agent, other sources, and free text without choosing a model", async () => {
+		const sources = [
+			{ kind: "advisor", name: "base", content: "Review correctness." },
+			{ kind: "prompt", name: "example", description: "An example", content: "Show your work." },
+			{ kind: "agent", name: "shadow", content: "Full scoped definition." },
+			{ kind: "skill", name: "unused", content: "Do not select." },
+		];
+		const ui = setup(undefined, {
+			listGenerationSources: async () => sources,
+			existing: [
+				{ name: "base", description: "A base", systemPrompt: "Base instructions" },
+				{ name: "shadow", description: "Duplicate", systemPrompt: "Fallback" },
+			],
+		});
+		ui.activate("from-existing");
+		await Promise.resolve();
+		expect(ui.rows().map(row => row.label)).toEqual(
+			expect.arrayContaining([
+				"[ ] agent: base",
+				"[ ] advisor: base",
+				"[ ] prompt: example",
+				"[ ] agent: shadow",
+				"[ ] skill: unused",
+			]),
+		);
+		expect(ui.rows().filter(row => row.label === "[ ] agent: shadow")).toHaveLength(1);
+		ui.activate("item:base:0");
+		ui.activate("item:source:0");
+		ui.activate("item:source:1");
+		ui.activate("item:source:2");
+		ui.activate("item:source:3");
+		ui.activate("item:source:3");
+		ui.activate("generate");
+		ui.editor.pasteText("Combine the agent and the examples.");
+		ui.submit();
+		expect(ui.requests).toHaveLength(1);
+		expect(ui.requests[0]).toMatchObject({
+			target: "all",
+			comment: "Combine the agent and the examples.",
+			baseDefinitions: [{ name: "base" }],
+			sources: sources.slice(0, 3),
+		});
 	});
 
 	test("Esc backs out of field dialogs and nested pages, then prompts before closing a dirty draft", () => {

@@ -1,24 +1,27 @@
 /**
  * Fullscreen /agents hub, shown on the alternate screen like /models.
  *
- * Layout mirrors the model hub: a sidebar of scopes (All agents, per-source
- * groups, "+ New agent"), a body listing agents with type-to-filter search,
- * and a footer that turns into a chip strip while configuring. Enter on an
- * agent opens its property strip (enabled / model / prewalk / advisor); a
- * property opens a value strip whose "pick model…" chip dives into the real
- * ModelBrowser and whose "pattern…" chip opens an inline pattern input, so
- * every per-agent knob is picked instead of memorized.
+ * The roster and scopes stay on the left; the selected agent's editable
+ * definition fills the right. Settings overrides retain their separate strip
+ * because changing them does not modify the definition file.
  */
 
 import type { Model } from "@oh-my-pi/pi-ai";
-import type { TspPickerAction, TspPickerColumn, TspPickerItem, TspPickerScope, TspSpan } from "@oh-my-pi/pi-wire";
+import type {
+	TspPickerAction,
+	TspPickerColumn,
+	TspPickerItem,
+	TspPickerScope,
+	TspPrefsProps,
+	TspPrefsRow,
+	TspSpan,
+} from "@oh-my-pi/pi-wire";
 import { compileMenuRegex } from "../menu-search";
 import {
 	type Component,
 	FuzzyQuery,
 	Input,
 	matchesKey,
-	replaceTabs,
 	routeSgrMouseInput,
 	type SgrMouseEvent,
 	type TUI,
@@ -87,6 +90,8 @@ const SOURCE_LABEL: Record<AgentSource, string> = {
 	user: "User",
 	bundled: "Bundled",
 };
+
+const BUNDLED_FILE_HINT = "Save a copy to edit the file";
 const SOURCE_ORDER: Record<AgentSource, number> = { project: 0, user: 1, bundled: 2 };
 const SOURCES = ["project", "user", "bundled"] as const satisfies readonly AgentSource[];
 /** Per-agent override columns of the config picker; lower priorities hide first. */
@@ -140,6 +145,8 @@ export interface AgentsHubDeps {
 	) => Promise<string>;
 	/** Delete the file backing a user or project definition. */
 	deleteDefinition?: (agent: HubAgent) => Promise<void>;
+	/** Edit the exact backing file in the configured external editor. */
+	openDefinitionFile?: (filePath: string) => Promise<void>;
 	/** Effective facts and findings for a draft; `original` is the definition being edited, if any. */
 	inspectDefinition?: (definition: AgentDefinitionDraft, original?: HubAgent) => AgentDefinitionInspection;
 	dispose?: () => void;
@@ -235,6 +242,8 @@ export class AgentsHubComponent implements Component {
 
 	#definitionEditor: AgentDefinitionEditor | null = null;
 	#editingOriginal: HubAgent | undefined;
+	#definitionFocused = false;
+	#scopeHeight = 0;
 
 	/** Bumped on every visible-state change; the described node is rebuilt when it moves. */
 	#nativeVersion = 0;
@@ -247,21 +256,24 @@ export class AgentsHubComponent implements Component {
 			this.#browser.setMaxVisible(rows - 1 - 5);
 			this.#browser.setFocused(true);
 			lines.push(...this.#browser.render(width));
+		} else if (this.#definitionEditor) {
+			lines.push(...this.#definitionEditor.render(width, rows - 1));
 		} else {
-			lines.push(...this.#renderList(width, rows - 1));
+			lines.push(theme.fg("dim", "Enter to create an agent"));
 		}
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
 	};
 	readonly #frame: HubFrame = new HubFrame(
 		"Agents",
-		{ min: 16, max: 24 },
+		{ min: 22, max: 32 },
 		(width, rows) => {
-			this.#sidebarRowsLast = Math.max(1, rows);
+			const scopeRows = Math.min(this.#entries.length, Math.max(1, Math.floor(rows / 2)));
+			this.#sidebarRowsLast = scopeRows;
 			const lines = this.#frame.renderSidebar(
 				this.#entries,
 				width,
-				rows,
+				scopeRows,
 				{ id: this.#activeEntryId, focused: this.#focus === "scope", follow: this.#sidebarFollow, clamp: true },
 				this.#sidebarStyle,
 			);
@@ -269,17 +281,18 @@ export class AgentsHubComponent implements Component {
 			this.#sidebarVisibleItems = 0;
 			for (
 				let index = this.#frame.sidebarScroll;
-				index < Math.min(this.#entries.length, this.#frame.sidebarScroll + rows);
+				index < Math.min(this.#entries.length, this.#frame.sidebarScroll + scopeRows);
 				index++
 			) {
 				if (this.#entries[index]?.kind !== "separator") this.#sidebarVisibleItems++;
 			}
 			this.#sidebarVisibleItems = Math.max(1, this.#sidebarVisibleItems);
-			return lines;
+			this.#scopeHeight = lines.length;
+			return [...lines, ...this.#renderList(width, rows - this.#scopeHeight)];
 		},
 		this.#renderBodyPane,
 	);
-	/** First agent-list row's offset in body-line coordinates (after the status row). */
+	/** First agent row after the roster's search box. */
 	#listRowStart = 2;
 
 	private constructor(tui: TUI, deps: AgentsHubDeps, callbacks: AgentsHubCallbacks) {
@@ -337,6 +350,9 @@ export class AgentsHubComponent implements Component {
 				let index = this.#rows.findIndex(
 					r => r.kind === "agent" && r.agent.name === selected.name && r.agent.source === selected.source,
 				);
+				if (index < 0 && selected.filePath) {
+					index = this.#rows.findIndex(r => r.kind === "agent" && r.agent.filePath === selected.filePath);
+				}
 				if (index < 0) index = this.#rows.findIndex(r => r.kind === "agent" && r.agent.name === selected.name);
 				if (index >= 0) this.#rowIndex = index;
 			}
@@ -350,9 +366,31 @@ export class AgentsHubComponent implements Component {
 		this.#requestRender();
 	}
 
-	#openConfigFile(): void {
-		const agent = this.#selectedAgent();
-		if (agent) this.#beginCreateFlow(agent);
+	#canOpenDefinitionFile(agent: HubAgent | undefined): agent is HubAgent & { filePath: string } {
+		return !!agent?.filePath && agent.source !== "bundled" && !!this.#deps.openDefinitionFile;
+	}
+
+	async #openConfigFile(agent = this.#selectedAgent()): Promise<void> {
+		if (agent?.source === "bundled") {
+			this.#notice = BUNDLED_FILE_HINT;
+			this.#requestRender();
+			return;
+		}
+		const open = this.#deps.openDefinitionFile;
+		if (!open || !this.#canOpenDefinitionFile(agent) || this.#pendingOperations || this.#definitionEditor?.dirty)
+			return;
+		const editor = this.#definitionEditor;
+		this.#pendingOperations++;
+		try {
+			await open(agent.filePath);
+			await this.#reload();
+			if (this.#definitionEditor === editor && this.#definitionEditor?.dirty !== true) this.#clearCreateFlow();
+		} catch (error) {
+			this.#notice = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#pendingOperations--;
+			this.#requestRender();
+		}
 	}
 
 	#buildSidebar(): void {
@@ -451,6 +489,7 @@ export class AgentsHubComponent implements Component {
 		}
 		this.#deps.setAgentOverride(property, agent.name, trimmed);
 		this.#notice = this.#describeProperty(agent, property);
+		if (!this.#createActive && this.#editingOriginal === agent) this.#clearCreateFlow(false);
 		this.#requestRender();
 	}
 
@@ -674,12 +713,31 @@ export class AgentsHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	get #createActive(): boolean {
-		return this.#definitionEditor !== null;
+		return this.#definitionFocused;
 	}
 
-	#beginCreateFlow(agent?: HubAgent, draft?: AgentDefinitionDraft): void {
-		const previous = this.#restoringNavigation ? undefined : this.navigationSnapshot();
-		this.#keys.reset();
+	get #fullEditor(): boolean {
+		return this.#definitionFocused && (!this.#editingOriginal || !this.#definitionEditor?.rosterVisible);
+	}
+
+	#syncDefinitionEditor(): void {
+		if (this.#createActive) return;
+		const agent = this.#selectedAgent();
+		if (agent && agent !== this.#editingOriginal) this.#beginCreateFlow(agent, undefined, false);
+		else if (!agent && this.#definitionEditor) this.#clearCreateFlow(false);
+	}
+
+	#beginCreateFlow(agent?: HubAgent, draft?: AgentDefinitionDraft, focus = true): void {
+		const previous = !focus || this.#restoringNavigation ? undefined : this.navigationSnapshot();
+		if (focus) {
+			this.#keys.reset();
+			this.#search.focused = false;
+		}
+		this.#definitionFocused = focus;
+		if (agent && agent === this.#editingOriginal && draft === undefined && this.#definitionEditor) {
+			if (!this.#restoringNavigation && previous) this.onNavigationVisit?.("definition", previous);
+			return;
+		}
 		this.#editingOriginal = agent;
 		this.#definitionEditor?.dispose();
 		this.#definitionEditor = new AgentDefinitionEditor(
@@ -688,12 +746,18 @@ export class AgentsHubComponent implements Component {
 				...this.#deps.editor,
 				browserSource: this.#deps.browserSource,
 				getAvailableModels: this.#deps.editor.getAvailableModels ?? this.#deps.getAvailableModels,
+				embedded: agent !== undefined,
+				openDefinitionFile: this.#canOpenDefinitionFile(agent) ? () => this.#openConfigFile(agent) : undefined,
 				existing: this.#allAgents,
 				saveScopeEditable: !agent?.filePath || agent.source === "bundled",
 				save: async (definition, scope, options) => {
 					const filePath = await this.#deps.saveDefinition(scope, definition, options?.asCopy ? undefined : agent);
 					this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
 					await this.#reload();
+					const index = this.#rows.findIndex(
+						rowDef => rowDef.kind === "agent" && rowDef.agent.filePath === filePath,
+					);
+					if (index >= 0) this.#moveRow(index);
 				},
 				remove:
 					agent?.filePath && agent.source !== "bundled" && this.#deps.deleteDefinition
@@ -715,14 +779,14 @@ export class AgentsHubComponent implements Component {
 			},
 			agent?.source === "user" ? "user" : "project",
 		);
-		if (!this.#restoringNavigation) this.onNavigationVisit?.("definition", previous);
-		this.#requestRender();
+		if (!this.#restoringNavigation && previous) this.onNavigationVisit?.("definition", previous);
 	}
 
 	#clearCreateFlow(visit = true): void {
 		const previous = visit && this.#createActive ? this.navigationSnapshot() : undefined;
 		this.#definitionEditor?.dispose();
 		this.#definitionEditor = null;
+		this.#definitionFocused = false;
 		this.#editingOriginal = undefined;
 		this.#keys.reset();
 		if (previous !== undefined && !this.#restoringNavigation) this.onNavigationVisit?.("", previous);
@@ -737,13 +801,17 @@ export class AgentsHubComponent implements Component {
 		const textFocused =
 			this.#strip?.kind === "pattern" ||
 			this.#createActive ||
-			(this.#assigning ? this.#browser.filterFocused : !this.#strip && !this.#createActive && this.#search.focused);
+			(this.#assigning ? this.#browser.filterFocused : !this.#strip && this.#search.focused);
 		if (!textFocused && this.#help.handleInput(data)) {
 			this.#keys.reset();
 			this.#requestRender();
 			return;
 		}
 		if (data.startsWith("\x1b[<")) {
+			if (this.#fullEditor) {
+				this.#definitionEditor?.handleInput(data);
+				return;
+			}
 			this.#keys.reset();
 			routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
 			this.#requestRender();
@@ -757,7 +825,11 @@ export class AgentsHubComponent implements Component {
 		}
 
 		if (this.#createActive) {
-			this.#handleCreateInput(data);
+			if (!this.#fullEditor && this.#editingOriginal?.source === "bundled" && matchesKey(data, "ctrl+g")) {
+				void this.#openConfigFile(this.#editingOriginal);
+				return;
+			}
+			this.#definitionEditor?.handleInput(data);
 			this.#requestRender();
 			return;
 		}
@@ -801,6 +873,11 @@ export class AgentsHubComponent implements Component {
 		}
 		if (!this.#search.focused && matchesKey(data, "ctrl+r")) void this.#reload();
 		if (!this.#search.focused && matchesKey(data, "ctrl+g")) void this.#openConfigFile();
+		if (!this.#search.focused && matchesKey(data, "o")) {
+			const agent = this.#selectedAgent();
+			if (agent) this.#openAgentStrip(agent);
+			this.#requestRender();
+		}
 	}
 
 	#handleMenuAction(action: MenuNavAction): void {
@@ -831,7 +908,9 @@ export class AgentsHubComponent implements Component {
 				this.#keys.reset();
 				return;
 			case "horizontal":
-				this.#focus = action.delta < 0 ? "scope" : "list";
+				if (action.delta < 0) this.#focus = "scope";
+				else if (this.#focus === "scope") this.#focus = "list";
+				else if (this.#selectedAgent()) this.#beginCreateFlow(this.#selectedAgent());
 				return;
 			case "context":
 				this.#focus = this.#focus === "scope" ? "list" : "scope";
@@ -870,7 +949,7 @@ export class AgentsHubComponent implements Component {
 			this.#beginCreateFlow();
 			return;
 		}
-		this.#openAgentStrip(rowDef.agent);
+		this.#beginCreateFlow(rowDef.agent);
 	}
 
 	#handleStripInput(data: string): void {
@@ -942,10 +1021,6 @@ export class AgentsHubComponent implements Component {
 		this.#closeStrip();
 	}
 
-	#handleCreateInput(data: string): void {
-		this.#definitionEditor?.handleInput(data);
-	}
-
 	#moveSidebar(delta: number, wrap = true): void {
 		const count = this.#scopeEntries.length;
 		if (count === 0) return;
@@ -975,7 +1050,7 @@ export class AgentsHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
-		const { footerColumn, bodyHeight, contentLine, overSidebar, overBody, bodyLine } = this.#frame.locate(
+		const { footerColumn, contentColumn, contentLine, overSidebar, overBody, bodyLine } = this.#frame.locate(
 			event.row,
 			event.col,
 		);
@@ -992,51 +1067,49 @@ export class AgentsHubComponent implements Component {
 			if (overBody) this.#browser.routeMouse(event, bodyLine);
 			return true;
 		}
-		if (this.#createActive || this.#strip) return true;
-
+		if (this.#strip) return true;
+		if (overBody && this.#definitionEditor && bodyLine >= 0) {
+			if (event.leftClick && !this.#createActive) this.#beginCreateFlow(this.#selectedAgent());
+			return this.#definitionEditor.routeMouse({ ...event, row: bodyLine, col: contentColumn });
+		}
+		if (!overSidebar) return false;
+		const rosterRow = contentLine - this.#scopeHeight - this.#listRowStart + this.#listScroll;
+		if (event.motion) {
+			this.#rowHover = rosterRow >= 0 && rosterRow < this.#rows.length ? rosterRow : null;
+			return true;
+		}
+		if (this.#createActive) {
+			if (this.#definitionEditor?.busy || !event.leftClick) return true;
+			if (this.#definitionEditor?.dirty) {
+				this.#definitionEditor.handleInput("\x1b");
+				return true;
+			}
+			this.#clearCreateFlow();
+		}
 		if (event.wheel !== null) {
-			if (overSidebar) {
+			if (contentLine < this.#scopeHeight) {
 				this.#sidebarFollow = false;
-				this.#frame.scrollSidebar(event.wheel, bodyHeight, this.#entries.length);
-			} else if (overBody) {
-				this.#rowIndex = Math.max(0, Math.min(this.#rows.length - 1, this.#rowIndex + event.wheel));
+				this.#frame.scrollSidebar(event.wheel, this.#sidebarRowsLast, this.#entries.length);
+			} else {
+				this.#moveRow(this.#rowIndex + event.wheel);
 				this.#viewport.reveal();
 			}
 			return true;
 		}
-
-		if (event.motion) {
-			// Hover is stored as an absolute row index so paint and click agree.
-			const hoverRow = bodyLine - this.#listRowStart + this.#listScroll;
-			this.#rowHover = overBody && hoverRow >= 0 && hoverRow < this.#rows.length ? hoverRow : null;
-			return true;
-		}
-
 		if (!event.leftClick) return true;
-
-		if (overSidebar) {
-			const index = this.#frame.sidebarScroll + contentLine;
-			const clicked = this.#entries[index];
-			if (clicked && clicked.kind !== "separator") {
-				if (clicked.kind === "new") {
-					this.#beginCreateFlow();
-				} else {
-					this.#selectSidebar(this.#scopeEntries.findIndex(entry => entry.id === clicked.id));
-					this.#focus = "scope";
-				}
+		if (contentLine < this.#scopeHeight) {
+			const clicked = this.#entries[this.#frame.sidebarScroll + contentLine];
+			if (clicked?.kind === "new") this.#beginCreateFlow();
+			else if (clicked && clicked.kind !== "separator") {
+				this.#selectSidebar(this.#scopeEntries.findIndex(entry => entry.id === clicked.id));
+				this.#focus = "scope";
 			}
-			return true;
-		}
-		if (overBody) {
+		} else if (rosterRow >= 0 && rosterRow < this.#rows.length) {
 			this.#focus = "list";
-			const listLine = bodyLine - this.#listRowStart + this.#listScroll;
-			if (listLine >= 0 && listLine < this.#rows.length) {
-				if (listLine === this.#rowIndex) {
-					this.#activateRow(this.#rows[listLine]);
-				} else {
-					this.#rowIndex = listLine;
-					this.#viewport.reveal();
-				}
+			if (rosterRow === this.#rowIndex) this.#activateRow(this.#rows[rosterRow]);
+			else {
+				this.#moveRow(rosterRow);
+				this.#viewport.reveal();
 			}
 		}
 		return true;
@@ -1071,9 +1144,6 @@ export class AgentsHubComponent implements Component {
 				width,
 			);
 		}
-		if (this.#createActive) {
-			return truncateToWidth(theme.fg("accent", " New agent — describe it and let the architect draft it"), width);
-		}
 		if (this.#notice) return truncateToWidth(theme.fg("success", ` ${this.#notice}`), width);
 		const entry = this.#activeEntry();
 		const scopeLabel = entry.kind === "source" ? `${entry.label} agents` : "All agents";
@@ -1087,17 +1157,11 @@ export class AgentsHubComponent implements Component {
 		lines.push("");
 		this.#listRowStart = lines.length;
 
-		const detailRows = 4;
-		const visibleRows = Math.max(3, rows - lines.length - detailRows);
+		const visibleRows = Math.max(1, rows - lines.length);
 		const window = this.#viewport.layout(this.#rowCounts, this.#rowIndex, visibleRows);
 		this.#listScroll = window.startIndex;
 
-		let nameWidth = 0;
-		for (const rowDef of this.#rows) {
-			if (rowDef.kind === "agent") nameWidth = Math.max(nameWidth, visibleWidth(rowDef.agent.name));
-		}
-
-		const listFocused = this.#focus === "list";
+		const listFocused = this.#focus === "list" && !this.#createActive;
 		for (let i = window.startIndex; i < window.endIndex; i++) {
 			const rowDef = this.#rows[i];
 			if (!rowDef) continue;
@@ -1114,26 +1178,14 @@ export class AgentsHubComponent implements Component {
 			const dot = agent.disabled
 				? theme.fg("dim", theme.status.disabled)
 				: theme.fg("success", theme.status.enabled);
-			const name = replaceTabs(agent.name).padEnd(nameWidth);
+			const name = sanitizeDisplaySingleLine(agent.name);
 			const nameStyled = agent.disabled
 				? theme.fg("dim", name)
 				: selected
 					? theme.bold(theme.fg("accent", name))
 					: name;
-			const badges: string[] = [];
-			if (agent.overrideModel) badges.push(theme.fg("warning", agent.overrideModel));
-			const prewalk = this.#deps.effectivePrewalkPattern(agent);
-			if (prewalk) badges.push(theme.fg("dim", `pre:${prewalk}`));
-			const advisor = this.#deps.effectiveAdvisorPattern(agent);
-			if (advisor) badges.push(theme.fg("dim", `adv:${advisor}`));
 			const sourceTag = theme.fg("dim", SOURCE_LABEL[agent.source].toLowerCase());
 			let line = ` ${cursor} ${dot} ${nameStyled}  ${sourceTag}`;
-			const right = badges.join("  ");
-			const rightWidth = visibleWidth(right);
-			const lineWidth = visibleWidth(line);
-			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
-				line = `${line}${" ".repeat(width - lineWidth - rightWidth - 1)}${right}`;
-			}
 			line = truncateToWidth(line, width);
 			if (hovered) {
 				const w = visibleWidth(line);
@@ -1143,31 +1195,6 @@ export class AgentsHubComponent implements Component {
 			lines.push(line);
 		}
 
-		// Selected-agent detail block pinned to the bottom of the body pane.
-		while (lines.length < rows - detailRows) lines.push("");
-		const agent = this.#selectedAgent();
-		lines.push(theme.fg("border", "─".repeat(Math.max(1, width))));
-		if (agent) {
-			lines.push(truncateToWidth(` ${theme.fg("dim", replaceTabs(agent.description))}`, width));
-			const patterns = this.#deps.effectiveModelPatterns(agent);
-			const resolved = this.#deps.resolvePatterns(patterns);
-			const modelLine = `${theme.fg("muted", "model:")} ${patterns.length > 0 ? replaceTabs(patterns.join(",")) : theme.fg("dim", "(session model)")}${resolved ? ` ${theme.fg("dim", "→")} ${theme.fg("success", resolved)}` : ""}`;
-			lines.push(truncateToWidth(` ${modelLine}`, width));
-			const prewalk = this.#deps.effectivePrewalkPattern(agent);
-			const advisor = this.#deps.effectiveAdvisorPattern(agent);
-			const flagLine = [
-				`${theme.fg("muted", "prewalk:")} ${prewalk ? theme.fg("success", prewalk) : theme.fg("dim", "off")}`,
-				`${theme.fg("muted", "advisor:")} ${advisor ? theme.fg("success", advisor) : theme.fg("dim", "off")}`,
-				agent.filePath ? theme.fg("dim", shortenPath(agent.filePath)) : "",
-			]
-				.filter(Boolean)
-				.join("   ");
-			lines.push(truncateToWidth(` ${flagLine}`, width));
-		} else {
-			lines.push(theme.fg("dim", " Select an agent to inspect"));
-			lines.push("");
-			lines.push("");
-		}
 		return lines.slice(0, rows);
 	}
 
@@ -1186,12 +1213,20 @@ export class AgentsHubComponent implements Component {
 		if (this.#assigning) {
 			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
-		if (this.#createActive) return "Enter edit · r generate field · R / Ctrl-R with comment · Esc back";
+		if (this.#createActive) {
+			const fileHint = this.#editingOriginal?.source === "bundled" ? ` · ${BUNDLED_FILE_HINT}` : "";
+			return `${enter} edit field${fileHint} · ${cancel} back to agents`;
+		}
 		if (this.#focus === "scope") {
 			return `Enter agents · / search · ${cancel} close`;
 		}
-		const edit = " · Ctrl-G edit definition";
-		return `${enter} configure · Space enable/disable · / search · Ctrl-R reload${edit} · ${cancel} close`;
+		const agent = this.#selectedAgent();
+		const fileHint = this.#canOpenDefinitionFile(agent)
+			? " · Ctrl-G open file"
+			: agent?.source === "bundled"
+				? ` · ${BUNDLED_FILE_HINT}`
+				: "";
+		return `${enter} edit fields · Space enable/disable · o overrides · / search${fileHint} · Ctrl-R reload · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string[] {
@@ -1201,7 +1236,7 @@ export class AgentsHubComponent implements Component {
 			this.#createActive ||
 			(this.#assigning ? this.#browser.filterFocused : this.#search.focused);
 		const lines = menuHintLines(
-			`${this.#footerHint()}${editing ? "" : " · ? help"}`,
+			editing ? this.#footerHint() : `${this.#footerHint()} · ? help`,
 			width,
 			editing ? "" : undefined,
 		).map(line => theme.fg("dim", line));
@@ -1247,19 +1282,25 @@ export class AgentsHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	/**
-	 * The agent list (and its chip strips) is a `picker` sheet. The pattern
-	 * input and model browser stay the generic overlay; the rich definition editor
-	 * chooses its sheet mode according to the currently focused form or text dialog.
+	 * Field sub-screens and override strips use picker sheets; the landing
+	 * page uses native preferences where supported.
 	 */
 	nativeSheet(cx: DescribeContext): boolean {
-		return this.#definitionEditor
-			? this.#definitionEditor.nativeSheet(cx)
-			: cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
+		if (this.#help.open) return false;
+		if (this.#fullEditor) return this.#definitionEditor?.nativeSheet(cx) ?? false;
+		if (cx.supports("prefs") && !this.#assigning && !this.#strip && !this.#search.focused) return cx.feature("aside");
+		if (this.#createActive) return this.#definitionEditor?.nativeSheet(cx) ?? false;
+		return cx.supports("picker") && !this.#assigning && this.#strip?.kind !== "pattern";
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		if (this.#definitionEditor) return this.#definitionEditor.describe(cx);
+		this.#syncDefinitionEditor();
+		if (this.#fullEditor && this.#definitionEditor) return this.#definitionEditor.describe(cx);
 		if (this.#help.open) return this.#help.describe();
+		if (cx.supports("prefs") && !this.#assigning && !this.#strip && !this.#search.focused)
+			return this.#describePrefs();
+		if (this.#createActive && this.#definitionEditor && cx.supports("picker"))
+			return this.#definitionEditor.describe(cx);
 		const sheet = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
 		if (cached?.version === this.#nativeVersion && cached.sheet === sheet) return cached.node;
@@ -1275,7 +1316,15 @@ export class AgentsHubComponent implements Component {
 		const described = describeHubFrame(
 			"omp.hub.agents",
 			"Agents",
-			describeHubSidebar(this.#entries, this.#activeEntryId, this.#sidebarStyle, "scopes"),
+			node(
+				"col",
+				{ basis: 0.28, min: { w: "18ch" }, max: { w: "32ch" } },
+				[
+					describeHubSidebar(this.#entries, this.#activeEntryId, this.#sidebarStyle, "scopes"),
+					...this.#describeList(),
+				],
+				"roster",
+			),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
 		);
@@ -1283,9 +1332,134 @@ export class AgentsHubComponent implements Component {
 		return described;
 	}
 
+	#describePrefs(): NativeNode {
+		const editor = this.#definitionEditor;
+		const agent = this.#selectedAgent();
+		const pages: TspPrefsProps["pages"] = this.#rows.map(rowDef =>
+			rowDef.kind === "agent"
+				? {
+						id: listRowId(rowDef),
+						label: sanitizeDisplaySingleLine(rowDef.agent.name),
+						icon: rowDef.agent.disabled ? "pause" : "agent",
+						group: SOURCE_LABEL[rowDef.agent.source],
+					}
+				: { id: "new", label: "New agent…", icon: "plus" },
+		);
+		const rows: TspPrefsRow[] = agent
+			? [
+					{ id: "enabled", label: "Enabled", control: { k: "switch", on: !agent.disabled } },
+					{
+						id: "overrides",
+						label: "Settings overrides",
+						hint: "Model, prewalk and advisor overrides do not change the definition file.",
+						disabled: editor?.dirty ? "Save or discard changes first" : undefined,
+						control: { k: "action", act: "edit", label: "Configure…" },
+					},
+				]
+			: [
+					{
+						id: "create-agent",
+						label: "Create an agent",
+						control: { k: "action", act: "edit", label: "Create…" },
+					},
+				];
+		if (this.#activeEntryId !== "all") {
+			rows.push({
+				id: "all-agents",
+				label: "Show all agents",
+				disabled: editor?.dirty ? "Save or discard changes first" : undefined,
+				control: { k: "action", act: "edit", label: "Show" },
+			});
+		}
+		return node("prefs", {
+			title: editor?.dirty ? "Agents · unsaved" : "Agents",
+			pages,
+			page: listRowId(this.#rows[this.#rowIndex] ?? { kind: "new" }),
+			lead:
+				this.#loadError ??
+				editor?.detailNotice ??
+				this.#notice ??
+				(agent ? sanitizeDisplaySingleLine(agent.description) : undefined),
+			sections: [...(editor?.detailSections() ?? []), { id: "roster", title: "Roster", rows }],
+			focus: this.#createActive ? editor?.selectedDetailItem : null,
+		});
+	}
+
+	#handlePrefsEvent(event: NativeUiEvent): boolean {
+		if (
+			this.#strip ||
+			this.#assigning ||
+			this.#search.focused ||
+			this.#help.open ||
+			(event.key !== "" && !event.key.endsWith("/definition-fields"))
+		)
+			return false;
+		const editor = this.#definitionEditor;
+		const agent = this.#selectedAgent();
+		if (editor?.busy) return true;
+		if (event.type === "action" && event.act === "page") {
+			const index = this.#rows.findIndex(rowDef => listRowId(rowDef) === event.value);
+			if (index < 0 || index === this.#rowIndex) return true;
+			if (editor?.dirty) {
+				editor.handleInput("\x1b");
+				return true;
+			}
+			if (this.#createActive) this.#clearCreateFlow(false);
+			this.#focus = "list";
+			this.#moveRow(index);
+			this.#viewport.reveal();
+			return true;
+		}
+		if (event.type === "change" && event.item === "enabled" && typeof event.value === "boolean") {
+			if (agent && event.value === agent.disabled) this.#toggleAgent(agent);
+			return true;
+		}
+		if (event.type === "action" && event.act === "close" && this.#createActive) {
+			editor?.handleNativeEvent(event);
+			return true;
+		}
+		const item =
+			event.type === "action" && event.act === "edit"
+				? event.value
+				: event.type === "activate" || event.type === "select"
+					? event.item
+					: undefined;
+		if (!item) return false;
+		if (item === "create-agent") {
+			if (event.type !== "select") this.#beginCreateFlow();
+			return true;
+		}
+		if (item === "overrides" || item === "all-agents") {
+			if (event.type !== "select" && !editor?.dirty) {
+				if (this.#createActive) this.#clearCreateFlow(false);
+				if (item === "overrides" && agent) this.#openAgentStrip(agent);
+				else if (item === "all-agents") this.#selectSidebar(0);
+			}
+			return true;
+		}
+		const field = editor
+			?.detailSections()
+			.flatMap(section => section.rows)
+			.find(rowDef => rowDef.id === item);
+		if (!editor || !field) return false;
+		if (field.disabled) return true;
+		if (!this.#createActive) this.#beginCreateFlow(agent);
+		editor.handleNativeEvent({ type: event.type === "select" ? "select" : "activate", key: "", item });
+		return true;
+	}
+
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#definitionEditor) {
-			this.#definitionEditor.handleNativeEvent(event);
+		this.#syncDefinitionEditor();
+		if (this.#fullEditor) {
+			this.#definitionEditor?.handleNativeEvent(event);
+			return;
+		}
+		if (this.#handlePrefsEvent(event)) {
+			this.#requestRender();
+			return;
+		}
+		if (this.#createActive) {
+			this.#definitionEditor?.handleNativeEvent(event);
 			return;
 		}
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
@@ -1374,6 +1548,9 @@ export class AgentsHubComponent implements Component {
 				return;
 			}
 			case "configure":
+				if (agent) this.#openAgentStrip(agent);
+				return;
+			case "edit-definition":
 				this.#activateRow(this.#rows[this.#rowIndex]);
 				return;
 			case "toggle":
@@ -1420,8 +1597,10 @@ export class AgentsHubComponent implements Component {
 			];
 		} else {
 			const noAgent = agent ? undefined : "Select an agent";
+			const canOpenFile = this.#canOpenDefinitionFile(agent);
 			actions = [
-				{ id: "configure", label: agent ? "Configure" : "Create", keys: ["enter"], primary: true },
+				{ id: "edit-definition", label: agent ? "Edit fields" : "Create", keys: ["enter"], primary: true },
+				{ id: "configure", label: "Overrides", keys: ["o"], disabled: noAgent },
 				{
 					id: "toggle",
 					label: "Toggle",
@@ -1431,7 +1610,12 @@ export class AgentsHubComponent implements Component {
 				},
 				{ id: "model", label: "Model", disabled: noAgent },
 				{ id: "new", label: "New agent" },
-				{ id: "edit-file", label: "Edit definition", keys: ["ctrl", "g"], disabled: noAgent },
+				{
+					id: "edit-file",
+					label: "Open file",
+					keys: canOpenFile ? ["ctrl", "g"] : undefined,
+					disabled: canOpenFile ? undefined : agent?.source === "bundled" ? BUNDLED_FILE_HINT : "No editable file",
+				},
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
 				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			];
@@ -1543,6 +1727,7 @@ export class AgentsHubComponent implements Component {
 			node("text", { text: agent.name, role: "omp.picker.title" }, undefined, "title"),
 			node("md", { text: agent.description }, undefined, "description"),
 			node("kv", { items: facts, layout: "grid" }, undefined, "facts"),
+			...this.#describeFieldSummary(),
 		];
 		if (agent.systemPrompt.trim()) {
 			out.push(
@@ -1565,7 +1750,31 @@ export class AgentsHubComponent implements Component {
 			this.#browser.setFocused(true);
 			children.push(this.#browser);
 		} else {
-			children.push(...this.#describeList());
+			const editor = this.#definitionEditor;
+			if (editor) {
+				children.push(
+					node(
+						"list",
+						{ selected: this.#createActive ? (editor.selectedDetailItem ?? null) : null, virtual: true, grow: 1 },
+						editor.detailSections().flatMap(section => [
+							node("text", { spans: [span(section.title, "muted")] }, undefined, section.id),
+							...section.rows.map(field =>
+								node(
+									"item",
+									{
+										label: field.label,
+										detail: field.control.k === "action" ? field.control.label : field.hint,
+										tone: field.disabled === undefined ? undefined : "muted",
+									},
+									undefined,
+									field.id,
+								),
+							),
+						]),
+						"definition-fields",
+					),
+				);
+			} else children.push(text([span("Enter to create an agent", "dim")]));
 		}
 		// Zero basis keeps the body within the space left of the sidebar.
 		return {
@@ -1580,7 +1789,6 @@ export class AgentsHubComponent implements Component {
 			const what = property === "model" ? "model override" : `${property} model`;
 			return [span(`Picking ${what} for `, "accent"), span(agent.name, "accent strong")];
 		}
-		if (this.#createActive) return [span("New agent — describe it and let the architect draft it", "accent")];
 		if (this.#notice) return [span(this.#notice, "success")];
 		const entry = this.#activeEntry();
 		const scopeLabel = entry.kind === "source" ? `${entry.label} agents` : "All agents";
@@ -1628,7 +1836,7 @@ export class AgentsHubComponent implements Component {
 			items,
 			"agents",
 		);
-		return [search, list, this.#describeDetail()];
+		return [search, list];
 	}
 
 	#describeAgentItem(agent: HubAgent): NativeNode {
@@ -1658,31 +1866,23 @@ export class AgentsHubComponent implements Component {
 		);
 	}
 
-	/** Selected-agent detail block under the list. */
-	#describeDetail(): NativeNode {
-		const agent = this.#selectedAgent();
-		if (!agent) {
-			return node("section", {}, [text([span("Select an agent to inspect", "dim")])], "detail");
-		}
-		const patterns = this.#deps.effectiveModelPatterns(agent);
-		const resolved = this.#deps.resolvePatterns(patterns);
-		const model: TspSpan[] = [patterns.length > 0 ? span(patterns.join(",")) : span("(session model)", "dim")];
-		if (resolved) model.push(span(" → ", "dim"), span(resolved, "success"));
-		const prewalk = this.#deps.effectivePrewalkPattern(agent);
-		const advisor = this.#deps.effectiveAdvisorPattern(agent);
-		const children: NativeChild[] = [
-			text([span(agent.description, "dim")], { wrap: "word", lines: 2 }),
-			node("kv", {
-				items: [
-					{ k: [span("model", "muted")], v: model },
-					{ k: [span("prewalk", "muted")], v: [prewalk ? span(prewalk, "success") : span("off", "dim")] },
-					{ k: [span("advisor", "muted")], v: [advisor ? span(advisor, "success") : span("off", "dim")] },
+	/** Field values for terminals that support picker sheets but not preferences. */
+	#describeFieldSummary(): NativeChild[] {
+		return (this.#definitionEditor?.detailSections() ?? []).map(section =>
+			node(
+				"section",
+				{ head: section.title },
+				[
+					node("kv", {
+						items: section.rows.map(field => ({
+							k: field.label,
+							v: field.control.k === "action" ? field.control.label : (field.hint ?? ""),
+						})),
+					}),
 				],
-				layout: "inline",
-			}),
-		];
-		if (agent.filePath) children.push(text([span(shortenPath(agent.filePath), "path dim")], { truncate: "middle" }));
-		return node("section", { head: [span(agent.name, "accent strong")] }, children, "detail");
+				section.id,
+			),
+		);
 	}
 
 	/** Styled spans of one footer chip, from its action rather than its ANSI label. */
@@ -1775,19 +1975,26 @@ export class AgentsHubComponent implements Component {
 			return [
 				{ keys: ["r"], label: "generate field" },
 				{ keys: ["shift+r"], label: "generate with comment" },
+				this.#editingOriginal?.source === "bundled" ? { keys: [], label: BUNDLED_FILE_HINT } : undefined,
 				cancel("back"),
 			];
 		if (this.#search.focused) return [cancel("back to list")];
 		if (this.#focus === "scope") {
 			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
 		}
+		const agent = this.#selectedAgent();
 		return [
-			{ keys: ["enter"], label: "configure" },
+			{ keys: ["enter"], label: "edit fields" },
+			{ keys: ["o"], label: "overrides" },
 			{ keys: ["space"], label: "enable/disable" },
 			upDown("rows"),
 			{ keys: ["/"], label: "search" },
 			{ keys: ["ctrl+r"], label: "reload" },
-			{ keys: ["ctrl+g"], label: "edit definition" },
+			this.#canOpenDefinitionFile(agent)
+				? { keys: ["ctrl+g"], label: "open file" }
+				: agent?.source === "bundled"
+					? { keys: [], label: BUNDLED_FILE_HINT }
+					: undefined,
 			cancel("close"),
 		];
 	}
@@ -1862,9 +2069,10 @@ export class AgentsHubComponent implements Component {
 						parent: this.#assignParent,
 					}
 				: undefined,
-			create: this.#definitionEditor
-				? { definition: this.#definitionEditor.definition, original: this.#editingOriginal }
-				: undefined,
+			create:
+				this.#createActive && this.#definitionEditor
+					? { definition: this.#definitionEditor.definition, original: this.#editingOriginal }
+					: undefined,
 		};
 	}
 
@@ -1907,7 +2115,8 @@ export class AgentsHubComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
-		if (this.#definitionEditor) return this.#definitionEditor.render(width);
+		this.#syncDefinitionEditor();
+		if (this.#fullEditor && this.#definitionEditor) return this.#definitionEditor.render(width);
 		return this.#help.render(
 			this.#frame.render(width, this.#terminalRows(), this.#entries, this.#renderFooter(width - 4)),
 			width,
