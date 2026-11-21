@@ -16,6 +16,7 @@
 
 ### Added
 
+- See microphone and playback levels during live voice calls, and customize the Live audio meter's text in `/statusline` ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - Edit Model Variants from the model hub, including their base model and request overrides, without editing YAML ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
 

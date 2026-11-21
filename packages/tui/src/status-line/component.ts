@@ -790,6 +790,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#recording = false;
 	#awaitingAnswer = false;
 	#liveStatus: SegmentContext["live"] = null;
+	#liveLevels: SegmentContext["liveLevels"];
 	#focusedAgentId: string | undefined;
 	#activeRepoCache: ActiveRepoCache | undefined;
 
@@ -1258,7 +1259,24 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	setLiveStatus(status: SegmentContext["live"]): void {
 		if (this.#liveStatus?.phase === status?.phase && this.#liveStatus?.destination === status?.destination) return;
 		this.#liveStatus = status;
+		if (!status || status.phase === "disconnected") this.#liveLevels = undefined;
 		this.#invalidateStatusLineRenderCache();
+	}
+
+	/** Update only when a visible meter cell changes. */
+	setLiveLevels(input: number, output: number): boolean {
+		if (!this.#liveStatus || this.#liveStatus.phase === "disconnected") return false;
+		// RMS is linear and ordinary microphone speech peaks well below 1.
+		const cells = (level: number) => {
+			if (!Number.isFinite(level) || level <= 0) return 0;
+			const normalized = (20 * Math.log10(level) + 48) / 42;
+			return Math.round(Math.max(0, Math.min(1, normalized)) * 6);
+		};
+		const next = { mic: cells(input), output: cells(output) };
+		if (next.mic === this.#liveLevels?.mic && next.output === this.#liveLevels?.output) return false;
+		this.#liveLevels = next;
+		this.#invalidateStatusLineRenderCache();
+		return true;
 	}
 
 	/** Mark one session pinned or unpinned; `session_name` shows the pin for the viewed session. */
@@ -2766,6 +2784,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			stream: this.#streamStatus,
 			recording: this.#recording,
 			live: this.#liveStatus,
+			liveLevels: this.#liveLevels,
 			usageStats,
 			contextPercent,
 			contextTokens,

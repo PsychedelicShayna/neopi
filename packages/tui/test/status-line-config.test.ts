@@ -217,9 +217,10 @@ describe("status-line editor list", () => {
 		const rows = h.overlay.render(200);
 		expect(rows.every(row => visibleWidth(row) <= 200)).toBe(true);
 		expect(h.text()).toContain("AN 5h");
-		expect(h.text()).toContain("Fable");
 		// The last widget row is the newest discovered window; the Reset row sits below it.
-		h.press("G", "k", " ");
+		h.press("G", "k");
+		expect(h.text()).toContain("Fable");
+		h.press(" ");
 		expect(h.previews.at(-1)?.rightSegments).toEqual(["usage:anthropic:7d:fable"]);
 	});
 
@@ -377,7 +378,7 @@ describe("status-line editor templates", () => {
 	it("explains instead of opening a template for widgets that have none", () => {
 		const h = setup();
 		h.press("j", "\t");
-		expect(h.notices.at(-1)).toContain("usage widget");
+		expect(h.notices.at(-1)).toContain("usage bar or live audio meter");
 	});
 
 	it("keeps printable bindings literal in search and template fields without applying", () => {

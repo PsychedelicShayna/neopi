@@ -160,6 +160,15 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "live-transcript",
+		icon: "voice",
+		description: "Start or stop experimental voice mode with transcript-aware handoffs",
+		handleTui: async (_command, runtime) => {
+			clearSubmittedText(runtime);
+			await runtime.ctx.handleLiveCommand("transcript");
+		},
+	},
+	{
 		name: "record",
 		icon: "export",
 		description: `Start or stop recording this screen to a replayable file (${APP_NAME} play)`,
