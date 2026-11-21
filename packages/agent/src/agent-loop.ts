@@ -1445,32 +1445,17 @@ async function runLoopBody(
 		while (true) {
 			let hasMoreToolCalls = true;
 
-			// Inner loop: process tool calls and steering messages
-			while (hasMoreToolCalls || pendingMessages.length > 0) {
-				if (isDeadlineExceeded(config.deadline)) {
-					emitInputMessages(stream, messagesToEmit);
-					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
-					return;
+			const runTurn = async (
+				turnMessages: AgentMessage[],
+				attribution: { input: () => readonly AgentMessage[] },
+			): Promise<"stop" | "retry" | undefined> => {
+				const nextInput = attribution.input();
+				for (const message of pendingMessages) {
+					currentContext.messages.push(message);
+					newMessages.push(message);
+					(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
 				}
-				// Park at the turn boundary while the process-wide pause gate is
-				// engaged (host /pause). An external abort releases the park so a
-				// cancelled run still unwinds while everything else stays frozen.
-				if (agentPauseGate.paused) await waitForProcessPause(config, signal);
-
-				// Build the provider-bound context before opening the turn. Queue
-				// messages are added now but their events remain deferred until
-				// provider preparation either succeeds or opens an error turn.
-				const turnMessages = messagesToEmit;
-				messagesToEmit = [];
-				if (pendingMessages.length > 0) {
-					for (const message of pendingMessages) {
-						currentContext.messages.push(message);
-						newMessages.push(message);
-						turnMessages.push(message);
-						(message as CommittableAsideMessage)[ASIDE_MESSAGE_COMMIT]?.();
-					}
-					pendingMessages = [];
-				}
+				pendingMessages = [];
 
 				let preparedProviderCall: PreparedProviderCall;
 				let gateResult: AgentPreModelCallResult;
@@ -1486,7 +1471,7 @@ async function runLoopBody(
 					if (config.syncContextBeforeModelCall) {
 						await config.syncContextBeforeModelCall(currentContext, signal);
 					}
-					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return;
+					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return "stop";
 
 					if (!directiveResolvedForTurn) {
 						const directive = signal?.aborted ? undefined : config.getToolChoice?.();
@@ -1515,11 +1500,11 @@ async function runLoopBody(
 					}
 
 					preparedProviderCall = await prepareProviderCall(currentContext, config, signal);
-					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return;
+					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return "stop";
 					preparedProviderCall.liveSteering = openLiveSteering(config, signal, preparedProviderCall);
 					gateResult = (await config.beforeModelCall?.(preparedProviderCall.context, signal)) || undefined;
 				} catch (error) {
-					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return;
+					if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return "stop";
 					if (!turnOpen) {
 						stream.push({ type: "turn_start" });
 						emitTurnInputs();
@@ -1527,7 +1512,7 @@ async function runLoopBody(
 					}
 					throw error;
 				}
-				if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return;
+				if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return "stop";
 				if (config.beforeModelCall && signal?.aborted) {
 					gateResult = { stop: true };
 				}
@@ -1566,7 +1551,7 @@ async function runLoopBody(
 					}
 					preserveSoftRequirementState = !signal?.aborted;
 					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
-					return;
+					return "stop";
 				}
 
 				if (!turnOpen) {
@@ -1580,62 +1565,55 @@ async function runLoopBody(
 				let inputsEmitted = false;
 				try {
 					if (agentPauseGate.paused) await waitForProcessPause(config, signal);
-					const nextInput = hasUserInput(turnMessages) ? turnMessages : deliveredInput;
 					const liveInput = preparedProviderCall.liveSteering?.accepted;
-					message = await withTurnInput(
-						() => (liveInput && hasUserInput(liveInput) ? liveInput : nextInput),
-						() =>
-							streamAssistantResponse(
-								currentContext,
-								config,
-								signal,
-								stream,
-								telemetry,
-								invokeAgentSpan,
-								stepCounter,
-								streamFn,
-								harmonyRetryAttempt,
-								hostToolChoice,
-								softRequirementState.forcedToolChoice,
-								preparedProviderCall,
-								() => {
-									if (config.isUndeliveredQueuedMessage) signal?.throwIfAborted();
-									deliveredInput = nextInput;
-									emitTurnInputs();
-									inputsEmitted = true;
-								},
-								message => {
-									const finalToolCalls = message.content.filter(
-										(
-											content,
-										): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
-											content.type === "toolCall" &&
-											(content as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
-									);
-									if (
-										finalToolCalls.length === 0 ||
-										(message.stopReason !== "toolUse" && message.stopReason !== "stop") ||
-										isDeadlineExceeded(config.deadline)
-									) {
-										return false;
-									}
-									const softGateActive =
-										softRequiredTool !== undefined &&
-										!hardToolChoiceBlocks(config.toolChoice, softRequiredTool);
-									return (
-										!softGateActive ||
-										finalToolCalls.every(
-											toolCall => softSatisfies?.(toolCall) ?? toolCall.name === softRequiredTool,
-										)
-									);
-								},
-							),
+					attribution.input = () => (liveInput && hasUserInput(liveInput) ? liveInput : nextInput);
+					message = await streamAssistantResponse(
+						currentContext,
+						config,
+						signal,
+						stream,
+						telemetry,
+						invokeAgentSpan,
+						stepCounter,
+						streamFn,
+						harmonyRetryAttempt,
+						hostToolChoice,
+						softRequirementState.forcedToolChoice,
+						preparedProviderCall,
+						() => {
+							if (config.isUndeliveredQueuedMessage) signal?.throwIfAborted();
+							deliveredInput = nextInput;
+							emitTurnInputs();
+							inputsEmitted = true;
+						},
+						message => {
+							const finalToolCalls = message.content.filter(
+								(content): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+									content.type === "toolCall" &&
+									(content as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+							);
+							if (
+								finalToolCalls.length === 0 ||
+								(message.stopReason !== "toolUse" && message.stopReason !== "stop") ||
+								isDeadlineExceeded(config.deadline)
+							) {
+								return false;
+							}
+							const softGateActive =
+								softRequiredTool !== undefined && !hardToolChoiceBlocks(config.toolChoice, softRequiredTool);
+							return (
+								!softGateActive ||
+								finalToolCalls.every(
+									toolCall => softSatisfies?.(toolCall) ?? toolCall.name === softRequiredTool,
+								)
+							);
+						},
 					);
 					harmonyRetryAttempt = 0;
 					harmonyTruncateResumeCount = 0;
 				} catch (err) {
 					if (!inputsEmitted) {
-						if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return;
+						if (signal?.aborted && (await endAbortedBeforeModel(turnMessages, turnOpen))) return "stop";
 						emitTurnInputs();
 					}
 					if (!(err instanceof HarmonyLeakInterruption)) throw err;
@@ -1663,7 +1641,7 @@ async function runLoopBody(
 						}
 						await emitHarmonyAudit(config, err, "abort_retry", harmonyRetryAttempt);
 						harmonyRetryAttempt++;
-						continue;
+						return "retry";
 					}
 				} finally {
 					const channel = preparedProviderCall.liveSteering;
@@ -1672,6 +1650,8 @@ async function runLoopBody(
 						liveDeferred.push(...channel.deferred);
 					}
 				}
+				const turnInput = hasUserInput(liveAccepted) ? liveAccepted : nextInput;
+				attribution.input = () => turnInput;
 				if (recovered) {
 					// Mint/repair ids before any snapshot: the recovered message skipped
 					// the streamed prepare (the leak interruption landed first), and the
@@ -1738,7 +1718,7 @@ async function runLoopBody(
 
 					stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 					stream.end(newMessages);
-					return;
+					return "stop";
 				}
 
 				// Run tools whenever the turn carries tool_use blocks AND was not truncated.
@@ -1819,14 +1799,15 @@ async function runLoopBody(
 					softRequirementState.escalations++;
 					hasMoreToolCalls = true;
 				} else if (hasMoreToolCalls) {
-					const input = hasUserInput(liveAccepted) ? liveAccepted : deliveredInput;
-					const executionResult = await withTurnInput(
-						() => input,
-						() =>
-							executeToolCalls(currentContext, message, signal, stream, config, telemetry, invokeAgentSpan, [
-								...liveAccepted,
-								...liveDeferred,
-							]),
+					const executionResult = await executeToolCalls(
+						currentContext,
+						message,
+						signal,
+						stream,
+						config,
+						telemetry,
+						invokeAgentSpan,
+						[...liveAccepted, ...liveDeferred],
 					);
 					toolResults.push(...executionResult.toolResults);
 
@@ -1926,7 +1907,7 @@ async function runLoopBody(
 
 				if (isDeadlineExceeded(config.deadline)) {
 					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
-					return;
+					return "stop";
 				}
 				// On external abort (user interrupt), leave the steering queue intact: the
 				// session aborts then continues, delivering the queue into a fresh run.
@@ -1965,6 +1946,32 @@ async function runLoopBody(
 						pendingMessages = steering;
 					}
 				}
+				return undefined;
+			};
+
+			// Inner loop: process tool calls and steering messages.
+			while (hasMoreToolCalls || pendingMessages.length > 0) {
+				if (isDeadlineExceeded(config.deadline)) {
+					emitInputMessages(stream, messagesToEmit);
+					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+					return;
+				}
+				// An external abort releases the process-wide pause gate.
+				if (agentPauseGate.paused) await waitForProcessPause(config, signal);
+
+				// Claim the combined provider-bound batch before running any preparation.
+				// Its events stay deferred until preparation succeeds or opens an error turn.
+				const turnMessages = messagesToEmit;
+				messagesToEmit = [];
+				for (const message of pendingMessages) turnMessages.push(message);
+				const input = hasUserInput(turnMessages) ? turnMessages : deliveredInput;
+				const attribution = { input: () => input };
+				const outcome = await withTurnInput(
+					() => (signal?.aborted ? [] : attribution.input()),
+					() => runTurn(turnMessages, attribution),
+				);
+				if (outcome === "stop") return;
+				if (outcome === "retry") continue;
 			}
 
 			if (isDeadlineExceeded(config.deadline)) {
@@ -2080,20 +2087,24 @@ function openLiveSteering(
 			if (messages.length > 0) config.onLiveSteeringTaken?.(messages);
 			return messages;
 		},
-		toProvider: async (messages, signal) => {
-			const transformed = config.transformContext
-				? await config.transformContext(messages, bound(signal))
-				: messages;
-			const converted = normalizeMessagesForProvider(await config.convertToLlm(transformed), prepared.model);
-			const userMessages: UserMessage[] = [];
-			for (const message of converted) {
-				if (message.role !== "user") return undefined;
-				if (typeof message.content !== "string" && message.content.some(part => part.type === "image")) {
-					return undefined;
+		toProvider: (messages, signal) => {
+			const conversionSignal = bound(signal);
+			const run = async () => {
+				const transformed = config.transformContext
+					? await config.transformContext(messages, conversionSignal)
+					: messages;
+				const converted = normalizeMessagesForProvider(await config.convertToLlm(transformed), prepared.model);
+				const userMessages: UserMessage[] = [];
+				for (const message of converted) {
+					if (message.role !== "user") return undefined;
+					if (typeof message.content !== "string" && message.content.some(part => part.type === "image")) {
+						return undefined;
+					}
+					userMessages.push(message);
 				}
-				userMessages.push(message);
-			}
-			return userMessages.length > 0 ? userMessages : undefined;
+				return userMessages.length > 0 ? userMessages : undefined;
+			};
+			return config.runWithTurnInput?.(() => (conversionSignal.aborted ? [] : messages), run) ?? run();
 		},
 	});
 }

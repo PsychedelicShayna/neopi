@@ -6711,7 +6711,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 							observation = this.#startTurnObservation(options.turnRecords ?? []);
 						}
 					: undefined;
-				const promise = this.#runAgentContinue(signal, request, coalescedSources, onStart);
+				const promise = this.agent.runWithUnattributedTurn(() =>
+					this.#runAgentContinue(signal, request, coalescedSources, onStart),
+				);
 				const attempt: ActiveAgentContinue = {
 					schedulerToken: request.schedulerToken,
 					turnEnded: false,
@@ -7106,7 +7108,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#runCheckScheduled = true;
 		queueMicrotask(() => {
 			this.#runCheckScheduled = false;
-			this.#checkRun();
+			this.agent.runWithUnattributedTurn(() => this.#checkRun());
 		});
 	}
 

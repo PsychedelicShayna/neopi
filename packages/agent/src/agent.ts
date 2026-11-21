@@ -1052,7 +1052,10 @@ export class Agent {
 	}
 
 	async #runBeforeQueuedMessageDequeueHooks(signal?: AbortSignal): Promise<void> {
-		for (const hook of this.#beforeQueuedMessageDequeueHooks) await hook(signal);
+		if (this.#beforeQueuedMessageDequeueHooks.size === 0) return;
+		return this.runWithUnattributedTurn(async () => {
+			for (const hook of this.#beforeQueuedMessageDequeueHooks) await hook(signal);
+		});
 	}
 
 	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal, liveOnly = false): Promise<AgentMessage[]> {
@@ -1079,42 +1082,50 @@ export class Agent {
 		const runController = this.#abortController;
 		if (!prepare) {
 			this.#queuedMessageDeliveries.add({ queue, controller: runController, messages, next: 0, additional: [] });
-			this.#emitQueueChanged();
+			this.#turnInput.run(
+				() => (signal.aborted || this.#abortController !== runController ? [] : messages),
+				() => this.#emitQueueChanged(),
+			);
 			return messages;
 		}
 
 		const claim: QueuedMessageClaim = { messages, controller: new AbortController() };
 		this.#queuedMessageClaims[queue] = claim;
 		const preparationSignal = AbortSignal.any([signal, claim.controller.signal]);
-		this.#emitQueueChanged();
-		try {
-			const preparation = await prepare(messages, preparationSignal, queue);
-			signal.throwIfAborted();
-			if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
-			const additional = preparation?.commit();
-			if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
-			if (preparation && additional === undefined) {
-				// Stop this attempt before the loop can immediately reclaim the restored batch.
-				runController?.abort();
-				throw new DOMException("Queued message preparation cancelled", "AbortError");
-			}
-			delete this.#queuedMessageClaims[queue];
-			this.#queuedMessageDeliveries.add({
-				queue,
-				controller: runController,
-				messages,
-				next: 0,
-				additional: additional ?? [],
-			});
-			this.#emitQueueChanged();
-			return additional?.length ? [...messages, ...additional] : messages;
-		} catch (error) {
-			if (signal.aborted) throw error;
-			if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
-			throw error;
-		} finally {
-			if (this.#queuedMessageClaims[queue] === claim) this.#cancelQueuedMessagePreparation(queue, true);
-		}
+		return this.#turnInput.run(
+			() => (preparationSignal.aborted || this.#abortController !== runController ? [] : messages),
+			async () => {
+				try {
+					this.#emitQueueChanged();
+					const preparation = await prepare(messages, preparationSignal, queue);
+					signal.throwIfAborted();
+					if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
+					const additional = preparation?.commit();
+					if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
+					if (preparation && additional === undefined) {
+						// Stop this attempt before the loop can immediately reclaim the restored batch.
+						runController?.abort();
+						throw new DOMException("Queued message preparation cancelled", "AbortError");
+					}
+					delete this.#queuedMessageClaims[queue];
+					this.#queuedMessageDeliveries.add({
+						queue,
+						controller: runController,
+						messages,
+						next: 0,
+						additional: additional ?? [],
+					});
+					this.#emitQueueChanged();
+					return additional?.length ? [...messages, ...additional] : messages;
+				} catch (error) {
+					if (signal.aborted) throw error;
+					if (preparationSignal.aborted || this.#queuedMessageClaims[queue] !== claim) return [];
+					throw error;
+				} finally {
+					if (this.#queuedMessageClaims[queue] === claim) this.#cancelQueuedMessagePreparation(queue, true);
+				}
+			},
+		);
 	}
 
 	#cancelQueuedMessagePreparation(queue: QueuedMessageQueue, restore = false): void {
@@ -1264,9 +1275,14 @@ export class Agent {
 		this.#onModelCallSystemPrompt = fn;
 	}
 
-	/** The delivered input for this provider or tool call; undefined outside that scope. */
+	/** Input attributed to this operation; empty when unattributed, undefined outside a model run. */
 	get turnInput(): readonly AgentMessage[] | undefined {
 		return this.#turnInput.getStore()?.();
+	}
+
+	/** Run model-related work without attributing it to an ambient caller. */
+	runWithUnattributedTurn<T>(run: () => T): T {
+		return this.#turnInput.run(() => [], run);
 	}
 
 	/**
@@ -1833,7 +1849,7 @@ export class Agent {
 			promptOptions = imagesOrOptions as AgentPromptOptions | undefined;
 		}
 
-		await this.#inLogContext(() => this.#runLoop(msgs, promptOptions));
+		await this.#inLogContext(() => this.runWithUnattributedTurn(() => this.#runLoop(msgs, promptOptions)));
 	}
 
 	/**
@@ -1859,7 +1875,7 @@ export class Agent {
 
 	continue(signal?: AbortSignal): Promise<void> {
 		// Queued-message hooks run before the loop and are this agent's work too.
-		return this.#inLogContext(() => this.#continue(signal));
+		return this.#inLogContext(() => this.runWithUnattributedTurn(() => this.#continue(signal)));
 	}
 
 	async #continue(signal?: AbortSignal) {

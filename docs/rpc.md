@@ -1330,6 +1330,10 @@ text) per choice. Builds or transports without support return a failed
 On a terminal-owned control socket it is off by default for each connection.
 Only the opted-in attachment whose delivered input produced the Ask receives
 the typed request, including after a queued `steer` or `follow_up` takes effect.
+That includes extension requests made while preparing a claimed input. A batch
+with mixed or missing origins, a disconnected author, or run work without a
+claimed input (such as detached lifecycle notifications or a retry without new
+input) stays in the pane.
 Opting in does not mirror questions opened by the terminal owner or another
 attachment. The pane keeps its own Ask open and the first answer or
 dismissal wins. If the pane settles first, or the request is aborted or times

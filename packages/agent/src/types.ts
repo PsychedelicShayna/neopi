@@ -425,7 +425,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 
-	/** Scope provider and tool work to the latest delivered batch of user input, not the request that started the loop. */
+	/** Scope a claimed input batch's preparation, provider, tool and turn-end work. */
 	runWithTurnInput?: <T>(input: () => readonly AgentMessage[], run: () => T) => T;
 
 	/**
