@@ -196,7 +196,6 @@
 				"voice.postprocess"
 			],
 			"commands": [
-				"agent",
 				"chain",
 				"chat",
 				"contract",
@@ -231,11 +230,7 @@
 				"update.auto",
 				"update.channel"
 			],
-			"commands": [
-				"chron",
-				"neoproxy",
-				"personality"
-			]
+			"commands": ["chron", "neoproxy", "personality", "spawn"]
 		}
 	},
 	"upstream": [

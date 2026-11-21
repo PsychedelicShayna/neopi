@@ -56,6 +56,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		overlay.handleInput("\r");
 		overlay.handleInput("\x7f"); // Inside the editor: ordinary deletion, not reset.
 		overlay.handleInput("\x1b");
+		overlay.handleInput("\x1b"); // Vim leaves Insert first; the next Escape backs out of the editor.
 		expect(doc.advisors[0].systemPrompt).toBe("XY");
 		expect(strip(overlay.render(200))).not.toContain("● unsaved");
 
@@ -82,6 +83,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		overlay.handleInput("\r");
 		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\r");
+		overlay.handleInput("\x1b");
 		overlay.handleInput("\x1b");
 		expect(doc.advisors[0].systemPrompt).toBeUndefined();
 		expect(strip(overlay.render(200))).not.toContain("● unsaved");
@@ -119,6 +121,7 @@ describe("AdvisorConfigOverlayComponent", () => {
 		overlay.handleInput("\r");
 		for (let i = 0; i < 9; i++) overlay.handleInput("\x1b[B");
 		overlay.handleInput("\x7f");
+		overlay.handleInput("\x1b");
 		overlay.handleInput("\x1b");
 		overlay.handleInput("G");
 		overlay.handleInput("\x1b[A");

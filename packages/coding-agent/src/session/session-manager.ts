@@ -3949,6 +3949,8 @@ export class SessionManager {
 		advisor?: string;
 		advisorConfigs?: readonly InlineAgentAdvisor[];
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
+		contextCap?: SessionInitEntry["contextCap"];
+		prewalkContextCap?: SessionInitEntry["prewalkContextCap"];
 		isolated?: boolean;
 		workPoolYieldItems?: WorkPoolYieldItem[];
 	}): string {
@@ -5104,6 +5106,8 @@ export interface PersistedSessionInit {
 	advisor?: string;
 	advisorConfigs?: readonly InlineAgentAdvisor[];
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
+	contextCap?: SessionInitEntry["contextCap"];
+	prewalkContextCap?: SessionInitEntry["prewalkContextCap"];
 	isolated?: boolean;
 	workPoolYieldItems?: WorkPoolYieldItem[];
 }
@@ -5138,6 +5142,8 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			advisorConfigs: entry.advisorConfigs,
 			isolated: entry.isolated,
 			...(entry.compactionThreshold !== undefined ? { compactionThreshold: entry.compactionThreshold } : undefined),
+			...(entry.contextCap === undefined ? undefined : { contextCap: entry.contextCap }),
+			...(entry.prewalkContextCap === undefined ? undefined : { prewalkContextCap: entry.prewalkContextCap }),
 			...(entry.workPoolYieldItems !== undefined ? { workPoolYieldItems: entry.workPoolYieldItems } : undefined),
 		};
 	}

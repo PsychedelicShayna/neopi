@@ -417,3 +417,15 @@ function overrideKind(model: Model<Api>, override: ModelOverride): ModelKind | u
 export function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
 	return applyModelPatch(model, { ...(override as ModelPatch), kind: overrideKind(model, override) }, "merge");
 }
+
+export interface ModelContextCaps {
+	contextCap?: number;
+	/** A lower window for the prewalk execution model, retained after handoff. */
+	prewalkContextCap?: { model: string; tokens: number };
+}
+
+/** Apply a session-local window limit without touching the shared registry row. */
+export function capModelContextWindow(model: Model, cap?: number): Model {
+	if (cap === undefined || (model.contextWindow !== null && model.contextWindow <= cap)) return model;
+	return { ...model, contextWindow: cap };
+}

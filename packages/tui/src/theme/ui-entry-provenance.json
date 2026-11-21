@@ -53,7 +53,7 @@
 			"statusSegments": [],
 			"roles": [],
 			"composerShapes": [],
-			"features": ["agent-menu", "agent-definition-editor"]
+			"features": ["agent-menu", "agent-definition-editor", "spawn-screen"]
 		}
 	},
 	"upstream": [

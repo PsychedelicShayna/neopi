@@ -1,32 +1,50 @@
-import { runAgentLauncher } from "../neopi/agent-launcher";
+import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import { completeSpawnTypes, createAgentLauncher, parseSpawnArguments } from "../neopi/agent-launcher";
 import { clearSubmittedText } from "./helpers/draft";
+import { commandConsumed, errorMessage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
-export const AGENT_LAUNCHER_COMMAND: SlashCommandSpec = {
-	name: "agent",
+export const SPAWN_COMMAND: SlashCommandSpec = {
+	name: "spawn",
 	icon: "agents",
-	description: "Launch a named worker or advisor after reviewing its resolved model and cost",
+	description: "Launch an agent from its definition or edit its launch settings",
 	allowArgs: true,
-	subcommands: [{ name: "launch", description: "Choose preset, model, effort, tools, policy and fixed name" }],
-	handle: async (_command, runtime) => {
-		await runtime.output("/agent launch opens an interactive launcher and is only available in the TUI.");
+	getTuiInlineHint: prefix => (prefix.trim() ? null : "<type>[spec] [assignment]"),
+	inlineHint: "[type[spec] [assignment]]",
+	getTuiArgumentCompletions: (prefix, runtime) => (runtime ? completeSpawnTypes(runtime.ctx.session, prefix) : null),
+	handle: async (command, runtime) => {
+		const input = parseSpawnArguments(command.args);
+		if (!input?.assignment.trim()) {
+			await runtime.output(
+				"Use /spawn <type>[spec] <assignment>. The launcher and assignment editor require the TUI.",
+			);
+			return commandConsumed({ failed: true });
+		}
+		try {
+			const launcher = await createAgentLauncher(runtime.session);
+			const draft = launcher.resolveSpec(input.spec);
+			draft.assignment = input.assignment;
+			await runtime.output(await launcher.launch(draft, runtime.signal));
+		} catch (error) {
+			await runtime.output(errorMessage(error));
+			return commandConsumed({ failed: true });
+		}
 	},
 	handleTui: async (command, runtime) => {
 		clearSubmittedText(runtime);
-		if (command.args.trim() !== "launch") {
-			runtime.ctx.showStatus("Usage: /agent launch. No agent starts until you confirm the resolved model.");
-			return;
-		}
-		const ui = runtime.ctx.getToolUIContext();
-		if (!ui) {
-			runtime.ctx.showStatus("Agent launcher is unavailable until the interactive dialogs are ready.");
-			return;
-		}
 		try {
-			const result = await runAgentLauncher(runtime.ctx.session, ui);
-			if (result) runtime.ctx.showStatus(result);
+			const input = parseSpawnArguments(command.args);
+			const launcher = await createAgentLauncher(runtime.ctx.session);
+			const draft = input ? launcher.resolveSpec(input.spec) : await runtime.ctx.showSpawn(launcher);
+			if (!draft) return;
+			if (input) {
+				const assignment = input.assignment.trim() ? input.assignment : await runtime.ctx.showSpawnAssignment();
+				if (assignment === undefined) return;
+				draft.assignment = assignment;
+			}
+			runtime.ctx.showStatus(sanitizeDisplayLine(await launcher.launch(draft)));
 		} catch (error) {
-			runtime.ctx.showError(error instanceof Error ? error.message : String(error));
+			runtime.ctx.showError(sanitizeDisplayLine(errorMessage(error)));
 		}
 	},
 };

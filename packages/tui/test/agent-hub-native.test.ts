@@ -310,6 +310,24 @@ test("hub pane motion wins over an armed close and unrelated input disarms it", 
 	}
 });
 
+test("deep links open in-scope transcripts and Activity returns to the hub", () => {
+	const hub = createHub([agent("alpha", 2), agent("elsewhere", 1)], [], undefined, {
+		inSession: ref => ref.id === "alpha",
+	});
+	try {
+		hub.showSection("activity");
+		expect(hub.openChat("missing")).toBe(false);
+		expect(hub.openChat("elsewhere")).toBe(false);
+		expect(hub.openChat("alpha")).toBe(true);
+		expect(hub.navigationSnapshot().transcript?.agentId).toBe("alpha");
+		hub.showSection("activity");
+		expect(hub.navigationSnapshot().transcript).toBeUndefined();
+		expect(hub.navigationSnapshot().section).toBe("activity");
+	} finally {
+		hub.dispose();
+	}
+});
+
 test("hub transcript stays in the same overlay and restores its unsent editor draft silently", () => {
 	const agents = [agent("alpha", 2), agent("beta", 1)];
 	const showOverlay = vi.fn();

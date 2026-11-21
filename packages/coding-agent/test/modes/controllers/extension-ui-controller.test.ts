@@ -326,6 +326,7 @@ describe("ExtensionUiController Ask dialog input", () => {
 		const paste = input.handleImagePaste();
 		harness.handleInput("\r");
 		harness.handleInput("\x1b");
+		harness.handleInput("\x1b"); // Leave Vim Insert mode, then back out of the editor.
 		await Promise.resolve();
 		await Promise.resolve();
 
@@ -843,6 +844,7 @@ describe("ExtensionUiController editor UI", () => {
 
 		// Cancelling the nested prompt settles its awaited state before restoring
 		// the ask surface and remounting the guarded draft editor.
+		promptEditor?.handleInput?.("\x1b");
 		promptEditor?.handleInput?.("\x1b");
 		await Promise.resolve();
 		expect(harness.editorContainer.children).toEqual([harness.editor]);

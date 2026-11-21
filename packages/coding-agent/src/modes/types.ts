@@ -1,5 +1,6 @@
 import type { SidePanelController } from "./controllers/side-panel-controller";
 import type { MenuHost, MenuKind } from "./controllers/selector-controller";
+import type { AgentLauncher, SpawnDraft } from "../neopi/agent-launcher";
 import type { PersonaScope } from "../neopi/persona-config";
 import type { ReplMode, ReplTarget } from "../neopi/repl";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -56,7 +57,7 @@ import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-
 import type { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import type { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import type { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
-import type { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
+import type { HookEditorComponent, HookEditorOptions } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import type { PresentedBlock } from "@oh-my-pi/pi-tui/chat/transcript-presentation";
 import type { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import type { HookSelectorComponent, HookSelectorOptions } from "@oh-my-pi/pi-tui/overlays/hook-selector";
@@ -189,6 +190,7 @@ export interface AgentHubOpenOptions {
 	requireContent?: boolean;
 	armCloseTap?: boolean;
 	initialSection?: "agents" | "activity";
+	initialTranscript?: string;
 	/** The agents-hub key: on a native host showing tray cards, focus moves into the tray instead. */
 	trayFirst?: boolean;
 }
@@ -748,6 +750,8 @@ export interface InteractiveModeContext {
 	showDebugSelector(): Promise<void>;
 	showAgentMenu(shutdown: () => void, restart: () => void, forceShutdown: () => void): void;
 	showAgentHub(options?: AgentHubOpenOptions): void;
+	showSpawn(launcher: AgentLauncher): Promise<SpawnDraft | undefined>;
+	showSpawnAssignment(): Promise<string | undefined>;
 	showIrcViewer(): void;
 	resetObserverRegistry(): void;
 
@@ -883,7 +887,7 @@ export interface InteractiveModeContext {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: { promptStyle?: boolean },
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
 	): Promise<string | undefined>;
 	hideHookEditor(): void;
 	showHookNotify(message: string, type?: "info" | "warning" | "error"): void;

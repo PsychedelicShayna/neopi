@@ -83,6 +83,10 @@ app.history.search: []
 
 `Ctrl+G` opens `$VISUAL` / `$EDITOR` with the currently painted terminal viewport above `<!-- omp:message starts here -->`. The visible conversation and status are reference only: saving sends just the text below that marker back to the composer. Keep the marker intact; removing it leaves the original draft unchanged.
 
+In the `/spawn` multiline assignment editor, `Ctrl+G` instead opens just the
+assignment. For bare `/spawn`, `Esc` returns from a field editor to the launch
+screen; `Ctrl+C` cancels the launch. See [launch an agent yourself](./task-agent-discovery.md#launch-an-agent-yourself).
+
 Inside either session-model picker, press the configured `app.model.selectTemporary` shortcut again (normally `Alt+P`) to switch between the session model and a temporary Task-subagent override. The Task target has a red frame and a session-only cue; it does not change saved role assignments.
 
 Model hubs show cached catalogs immediately; moving the sidebar highlight does not start discovery. Entering a provider's model list refreshes it at most once per process. When provider discovery is available, `F5` forces a refresh of the current provider (including command-backed credentials), and `Ctrl+F5` refreshes all catalogs. Cached rows remain available during discovery, and the refreshed catalog replaces them in the same open menu.

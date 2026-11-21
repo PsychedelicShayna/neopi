@@ -21,6 +21,7 @@ import {
 	type TUI,
 	truncateToWidth,
 } from "../index";
+import { Checklist, type ChecklistOptions as ChecklistSelectionOptions } from "../components/checklist";
 import { MenuKeyReader } from "../components/menu-navigation";
 import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
@@ -131,15 +132,10 @@ interface ChoiceOption {
 	label: string;
 	description?: string;
 }
-interface ChecklistOptions {
+interface ChecklistOptions extends ChecklistSelectionOptions {
 	title: string;
 	subtitle: string;
 	field: AgentDefinitionField;
-	entries: readonly ChoiceOption[];
-	/** Position numbers instead of checkmarks: order matters (spawns' first entry is the default). */
-	ordered?: boolean;
-	/** Rows above the entries that replace the whole selection (defaults, presets, wildcard). */
-	presets?: readonly (ChoiceOption & { apply: () => string[] | undefined })[];
 	/** Row label for adding a name not in the catalog. */
 	custom?: string;
 	apply: (selected: string[] | undefined) => void;
@@ -734,33 +730,16 @@ export class AgentDefinitionEditor implements Component {
 	}
 
 	/** Enter toggles; Done or Esc applies, like the advisor tools editor. */
-	#checklist(options: ChecklistOptions & { selected: readonly string[] }): void {
-		let selected: string[] | undefined = [...options.selected];
+	#checklist(options: ChecklistOptions): void {
+		const checklist = new Checklist(options);
 		const back = (): void => this.#showDetail(options.field);
 		const apply = (): void => {
-			options.apply(selected);
+			options.apply(checklist.selected);
 			back();
 		};
 		const build = (cursor: string | undefined): void => {
-			const names = [
-				...options.entries.map(entry => entry.value),
-				...(selected ?? []).filter(name => !options.entries.some(entry => entry.value === name)),
-			];
 			const items: SelectItem[] = [
-				...(options.presets ?? []).map(preset => ({
-					value: preset.value,
-					label: preset.label,
-					description: preset.description,
-				})),
-				...names.map(name => {
-					const position = selected?.indexOf(name) ?? -1;
-					const mark = position < 0 ? "[ ]" : options.ordered ? `[${position + 1}]` : "[x]";
-					return {
-						value: `item:${name}`,
-						label: `${mark} ${name}`,
-						description: options.entries.find(entry => entry.value === name)?.description ?? "not in catalog",
-					};
-				}),
+				...checklist.items(),
 				...(options.custom ? [{ value: "__custom", label: options.custom }] : []),
 				{ value: DONE, label: "Done" },
 			];
@@ -773,20 +752,12 @@ export class AgentDefinitionEditor implements Component {
 							options.custom!.replace(/^\+\s*/, "").replace(/…$/, ""),
 							"",
 							value => {
-								for (const name of splitList(value) ?? [])
-									if (!selected?.includes(name)) selected = [...(selected ?? []), name];
+								checklist.add(splitList(value) ?? []);
 							},
 							() => build(DONE),
 							options.field,
 						);
-					const preset = options.presets?.find(candidate => candidate.value === item.value);
-					if (preset) {
-						selected = preset.apply();
-						return;
-					}
-					const name = item.value.slice("item:".length);
-					const current = selected ?? [];
-					selected = current.includes(name) ? current.filter(entry => entry !== name) : [...current, name];
+					checklist.toggle(item.value);
 				});
 			list.onCancel = apply;
 			this.#setScreen("checklist", list, `${options.title} · Enter toggle · Done / Esc apply`, {
@@ -797,7 +768,7 @@ export class AgentDefinitionEditor implements Component {
 					title: options.title,
 					subtitle: options.subtitle,
 					noun: "entries",
-					current: (selected ?? []).map(name => `item:${name}`),
+					current: checklist.current,
 					confirm: "Toggle",
 				},
 			});

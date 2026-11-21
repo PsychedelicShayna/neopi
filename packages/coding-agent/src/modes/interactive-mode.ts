@@ -3,6 +3,7 @@ import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
  * Interactive mode for the coding agent.
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
+import type { AgentLauncher, SpawnDraft } from "../neopi/agent-launcher";
 import type { PersonaScope } from "../neopi/persona-config";
 import { REPL_STATUS_KEY, ReplMode, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import * as fs from "node:fs/promises";
@@ -350,7 +351,7 @@ import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { ErrorBannerComponent } from "@oh-my-pi/pi-tui/overlays/error-banner";
 import type { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
-import type { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
+import type { HookEditorComponent, HookEditorOptions } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import type { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import type { HookSelectorComponent, HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import {
@@ -10363,6 +10364,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showAgentHub(this.#observerRegistry, options);
 	}
 
+	showSpawn(launcher: AgentLauncher): Promise<SpawnDraft | undefined> {
+		return this.#selectorController.showSpawn(launcher);
+	}
+
+	async showSpawnAssignment(): Promise<string | undefined> {
+		return (
+			await this.showHookEditor("Spawn assignment", undefined, undefined, {
+				promptStyle: true,
+				escapeBack: true,
+				requireText: true,
+			})
+		)?.trim();
+	}
+
 	showIrcViewer(): void {
 		this.#selectorController.showIrcViewer();
 	}
@@ -10922,7 +10937,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: { promptStyle?: boolean },
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
 	): Promise<string | undefined> {
 		return this.#extensionUiController.showHookEditor(title, prefill, dialogOptions, editorOptions);
 	}

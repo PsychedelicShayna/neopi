@@ -8832,8 +8832,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#agentLauncherSession;
 	}
 
-	launchAdvisor(config: AdvisorConfig): void {
-		this.#advisors.launchAdvisor(config);
+	launchAdvisor(config: AdvisorConfig, contextCap?: number): void {
+		this.#advisors.launchAdvisor(config, contextCap);
 	}
 
 	/** Looks up an enabled eval-bridge tool with the session's permission gate applied. */
