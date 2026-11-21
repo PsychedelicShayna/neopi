@@ -16,6 +16,47 @@ function text(messages: AgentMessage[]): string {
 		.join("\n");
 }
 
+test("renders a control-socket sender separately from a locally typed user entry", () => {
+	const timestamp = "2026-11-13T12:00:00.000Z";
+	const entries: ChronicleEntry[] = [
+		{
+			id: "owner",
+			parentId: null,
+			timestamp,
+			message: { role: "user", content: "Can you report on the retry?", timestamp: Date.parse(timestamp) },
+		},
+		{
+			id: "crew",
+			parentId: "owner",
+			timestamp,
+			message: {
+				role: "user",
+				content: "The retry completed.",
+				origin: { kind: "control", connectionId: "c3", label: "%84", callerInstanceId: "crew-session" },
+				timestamp: Date.parse(timestamp),
+			},
+		},
+		{
+			id: "unlabelled",
+			parentId: "crew",
+			timestamp,
+			message: {
+				role: "user",
+				content: "A second control message.",
+				origin: { kind: "control", connectionId: "c4", label: "", callerInstanceId: "other-session" },
+				timestamp: Date.parse(timestamp),
+			},
+		},
+	];
+	const rendered = text(renderChronicleDelta(entries, { includeThinking: false }));
+	const sections = rendered.split("### Source entry").slice(1);
+	expect(sections[0]).toContain("**user**:\nCan you report on the retry?");
+	expect(sections[1]).toContain("**control sender %84**:\nThe retry completed.");
+	expect(sections[1]).not.toContain("**user**:");
+	expect(sections[2]).toContain("**control sender other-session**:\nA second control message.");
+	expect(sections[2]).not.toContain("**user**:");
+});
+
 test("retains provenance and an explicit empty marker for suppressed transcript content", () => {
 	const entries: ChronicleEntry[] = [
 		{
