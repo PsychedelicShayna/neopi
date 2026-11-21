@@ -698,6 +698,45 @@ The winning global rule restricts **implicit** choices after intersecting the mo
 
 The replacement Auto classifier uses the `@effort` chat role and its own configured fallback chain. Its built-in candidate order is `openai-codex/gpt-6-luna:xhigh`, then `openai-codex/gpt-5.6-luna:xhigh`; set `modelRoles.effort`, `roleEffortSelections.effort` (fixed concrete level), and `retry.fallbackChains.effort`/its per-entry effort selections to choose a different classifier. Without a configured level, a candidate starts at fixed `xhigh`; unsupported implicit fixed levels are adjusted against that model and any rule. There is no fallback to `judge` or the active session model. The classifier reads the committed Chronicler diary and uncovered active-branch transcript for context; if the diary is missing/unreadable it classifies from the transcript. On classification failure, replacement mode warns and uses the lowest permitted level; legacy mode retains the last resolved level or provisional fallback. In legacy mode Auto uses the old `judge` chain and ceiling. See [Models](./models.md#effort-controls-in-models) for the interactive rule/role/fallback controls and [task](./tools/task.md) for the dynamic spawn wire.
 
+### Model Variants
+
+Use **Model Variants** beneath the effort policy in `/models` to create, edit,
+rename, or delete a named configuration of an existing model. Switch the hub's
+scope to edit global, project, or session variants. Pick the variant by name
+in `/model`, or assign it to a model role and use `@role` normally. A variant
+uses the base model's provider and credentials; it never creates a new
+provider or sends its local name to the provider.
+
+Only changed fields are stored. **Inherit** leaves a field at its normal
+settings value; choosing `-1` for a sampling field explicitly restores the
+provider's default. Sampling fields the base model or endpoint does not
+support are omitted, even if set in a variant. Assignments use the generated
+variant ID so they survive renames and changes of base model.
+
+The `modelVariants` list in `config.yml` stores the same entries:
+
+```yaml
+modelVariants:
+  - id: variant--a281b024-cbe0-4670-a948-a777bc630ff7
+    name: Concise GPT
+    baseModel: openai/gpt-4o-mini
+    overrides:
+      contextWindow: 64000
+      temperature: 0.2
+      topK: -1
+      textVerbosity: low
+```
+
+The editor exposes the registered model request settings: default thinking
+level, allowed implicit efforts, Auto's ceiling, per-level thinking token
+budgets, thinking summary and external thinking, context and output limits,
+compaction token/percentage thresholds, sampling, verbosity, family-specific
+service tiers, and cache, transport, routing, and request guard options.
+Nested settings use their dotted names under `overrides` (for example
+`thinkingBudgets.high`, `tier.openai`, and `providers.cacheRetention`).
+Settings about credentials, global provider eligibility, or how the harness
+chooses an advisor or subagent are not properties of a model variant.
+
 ### Sampling
 
 For the numeric sampling settings, a negative value (normally `-1`) means "use the provider/model default" — `omp` does not send that parameter.

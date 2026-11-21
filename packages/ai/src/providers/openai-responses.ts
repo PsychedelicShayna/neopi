@@ -127,6 +127,7 @@ import {
 	type ResponsesToolNaming,
 	shouldDropAutoToolChoiceForReasoning,
 	shouldRetryWithoutStrictTools,
+	stripUnsupportedOpenAISamplingParams,
 	throwOpenAIResponsesEventError,
 } from "./openai-shared";
 import { readOpenRouterGenerationError } from "./openrouter-generation";
@@ -880,6 +881,7 @@ const streamOpenAIResponsesOnce = (
 				const replacementPayload = await options?.onPayload?.(requestParams, model);
 				const payload =
 					replacementPayload !== undefined ? (replacementPayload as OpenAIResponsesSamplingParams) : requestParams;
+				if (options?.onPayload) stripUnsupportedOpenAISamplingParams(payload, model.compat);
 				applyReasoningEffortFallbackForRequest(payload);
 				return payload;
 			};
@@ -2013,7 +2015,10 @@ export function buildParams(
 		applyOpenAIGatewayRouting(params, model.compat);
 	}
 
-	applyOpenAIExtraBody(params, options?.extraBody);
+	if (options?.extraBody) {
+		applyOpenAIExtraBody(params, options.extraBody);
+		stripUnsupportedOpenAISamplingParams(params, model.compat);
+	}
 	applyOpenAIResponsesPromptCachePolicy(params, model, options, statefulCacheBaseline);
 
 	let trailingScaffoldingItems = 0;

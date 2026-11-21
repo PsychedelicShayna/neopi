@@ -39,6 +39,7 @@ import {
 	getOpenAIPromptCacheKey,
 	parseAzureDeploymentNameMap,
 	processResponsesStream,
+	stripUnsupportedOpenAISamplingParams,
 } from "./openai-shared";
 
 export { parseAzureDeploymentNameMap } from "./openai-shared";
@@ -132,6 +133,7 @@ const streamAzureOpenAIResponsesOnce = (
 			if (replacementPayload !== undefined) {
 				params = replacementPayload as typeof params;
 			}
+			if (options?.onPayload) stripUnsupportedOpenAISamplingParams(params, requestModel.compat);
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);

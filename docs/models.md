@@ -1102,6 +1102,14 @@ context:
 ```
 
 
+### Model Variants
+
+The **Model Variants** section under effort policy in `/models` lets you save
+named copies of a model's request configuration without changing the base
+model. Pick one as you would any model, assign it to a role, or keep several
+variants of the same base. For storage, scope, supported overrides and
+inheritance, see [Model Variants in Settings](./settings.md#model-variants).
+
 ### Model presets
 
 A model preset is a named snapshot of every role assignment plus `defaultThinkingLevel`, so you can swap a whole setup at once:

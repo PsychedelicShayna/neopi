@@ -14,6 +14,7 @@
 
 ### Added
 
+- Edit Model Variants from the model hub, including their base model and request overrides, without editing YAML ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
 
 - The agent definition editor uses a field list with a live preview pane and dedicated screens per field, in the terminal and as native pickers ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).

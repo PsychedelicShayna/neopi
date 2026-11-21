@@ -92,6 +92,7 @@ import { renderSegmentTrack } from "../chrome/segment-track";
 import { EffortToggle } from "./effort-toggle";
 import { ModelOverridesPanel, type ModelOverridesHost } from "./model-overrides";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
+import { MODEL_VARIANTS_FEATURE, ModelVariantsPanel } from "./model-variants";
 
 export type HubEffortSelection =
 	| { mode: "inherit" }
@@ -224,6 +225,37 @@ type AssignTarget =
 	| { kind: "fallbackKey" }
 	| { kind: "effortRule" };
 
+export interface HubModelVariantDraft {
+	/** Omitted on creation; the host assigns the stable ID. */
+	readonly id?: string;
+	readonly name: string;
+	readonly baseModel: string;
+	readonly overrides: Readonly<Record<string, unknown>>;
+}
+
+export interface HubModelVariant extends HubModelVariantDraft {
+	readonly id: string;
+}
+
+interface HubModelVariantNumberBounds {
+	readonly min?: number;
+	readonly max?: number;
+	readonly integer?: boolean;
+}
+
+export type HubModelVariantField = {
+	readonly key: string;
+	readonly label: string;
+	readonly validate?: (value: unknown) => string | undefined;
+} & (
+	| ({ readonly kind: "number" } & HubModelVariantNumberBounds)
+	| ({ readonly kind: "number-list" } & HubModelVariantNumberBounds)
+	| { readonly kind: "string" }
+	| { readonly kind: "boolean" }
+	| { readonly kind: "string-list" }
+	| { readonly kind: "choice"; readonly choices: readonly string[] }
+);
+
 /** Live preferences and selector operations supplied by the host. */
 export interface ModelHubSource extends ModelBrowserSource {
 	readonly disabledProviders: readonly string[];
@@ -240,6 +272,10 @@ export interface ModelHubSource extends ModelBrowserSource {
 	getModelRoleSource(role: string): "global" | "project" | "default";
 	readonly effortRules: readonly HubEffortRule[];
 	readonly contextRules?: readonly HubContextRule[];
+	readonly modelVariants?: readonly HubModelVariant[];
+	readonly modelVariantFields?: readonly HubModelVariantField[];
+	readonly onSaveModelVariant?: (variant: HubModelVariantDraft) => void | Promise<void>;
+	readonly onDeleteModelVariant?: (id: string) => void | Promise<void>;
 	/** Saved browsing collections; independent of the role assignment being edited. */
 	readonly modelFolders?: {
 		readonly entries: readonly HubModelFolder[];
@@ -391,7 +427,7 @@ export interface ModelHubOptions {
 }
 
 interface SidebarEntry extends HubSidebarEntry<
-	"recent" | "roles" | "effort" | "overrides" | "all" | "separator" | "provider" | "folder"
+	"recent" | "roles" | "effort" | "variants" | "overrides" | "all" | "separator" | "provider" | "folder"
 > {
 	providerId?: string;
 	locked?: boolean;
@@ -793,6 +829,30 @@ export class ModelHubComponent implements Component {
 
 	#assigning: AssignTarget | null = null;
 	#overridesPanel?: ModelOverridesPanel;
+	#variantsPanel?: ModelVariantsPanel;
+
+	#variants(): ModelVariantsPanel {
+		return (this.#variantsPanel ??= new ModelVariantsPanel({
+			scope: () => this.#settings.editingScope,
+			list: () => this.#settings.modelVariants ?? [],
+			fields: () => this.#settings.modelVariantFields ?? [],
+			models: () => this.#registry.getAll("all"),
+			save: variant => {
+				if (!this.#settings.onSaveModelVariant) throw new Error("Model variants are read-only.");
+				return this.#settings.onSaveModelVariant(variant);
+			},
+			remove: id => {
+				if (!this.#settings.onDeleteModelVariant) throw new Error("Model variants are read-only.");
+				return this.#settings.onDeleteModelVariant(id);
+			},
+			changed: () => {
+				if (!this.#disposed) this.#refreshAfterMutation();
+			},
+			back: () => {
+				this.#focus = "scope";
+			},
+		}));
+	}
 
 	#overrides(): ModelOverridesPanel {
 		return (this.#overridesPanel ??= new ModelOverridesPanel({
@@ -819,6 +879,13 @@ export class ModelHubComponent implements Component {
 				this.#focus = "scope";
 			},
 		}));
+	}
+
+	#activeConfigPanel(): ModelOverridesPanel | ModelVariantsPanel | undefined {
+		if (this.#assigning !== null) return undefined;
+		const kind = this.#activeEntry().kind;
+		if (kind === "overrides") return this.#overrides();
+		if (kind === "variants") return this.#variants();
 	}
 	#strip: StripState | null = null;
 	#assignmentPending = false;
@@ -852,6 +919,10 @@ export class ModelHubComponent implements Component {
 		this.#pinnedActionLine = null;
 		if (entry.kind === "overrides" && this.#assigning === null) {
 			lines.push(...this.#overrides().render(width, rows - 1));
+			return lines.slice(0, rows);
+		}
+		if (entry.kind === "variants" && this.#assigning === null) {
+			lines.push(...this.#variants().render(width, rows - 1));
 			return lines.slice(0, rows);
 		}
 		if (entry.kind === "effort" && this.#assigning === null) {
@@ -1190,6 +1261,7 @@ export class ModelHubComponent implements Component {
 	#syncFromRegistryState(): void {
 		this.#nativeVersion++;
 		this.#overridesPanel?.reload();
+		this.#variantsPanel?.reload();
 		// A background rebuild (provider refresh, mutation) must not yank the
 		// sidebar viewport: remember the focused entry's screen row so it — or
 		// its nearest survivor — stays put after #buildSidebar reshuffles entries.
@@ -1388,6 +1460,15 @@ export class ModelHubComponent implements Component {
 					label: "Effort rules",
 					annotation: String(this.#settings.effortRules.length),
 				},
+			);
+			const variants = this.#settings.modelVariants;
+			if (variants !== undefined) {
+				entries.push(
+					{ id: "sep:variants", kind: "separator", label: "" },
+					{ id: "variants", kind: "variants", label: "Model Variants", annotation: String(variants.length) },
+				);
+			}
+			entries.push(
 				{
 					id: "context",
 					kind: "effort",
@@ -1465,6 +1546,7 @@ export class ModelHubComponent implements Component {
 		this.#applyScope();
 		const entry = this.#activeEntry();
 		if (entry.kind === "overrides") this.#overridesPanel?.reload();
+		if (entry.kind === "variants") this.#variantsPanel?.reload();
 		// Hops must never steal arrow focus: landing on a scope keeps provider
 		// navigation active. Diving into the roles rows is explicit (Enter, →,
 		// or a click on the Roles entry).
@@ -3392,7 +3474,8 @@ export class ModelHubComponent implements Component {
 			!this.#assignmentPending &&
 			!this.#externalEditPending &&
 			this.#assigning === null &&
-			!(this.#activeEntry().kind === "overrides" && this.#overrides().editing)
+			!this.#activeConfigPanel()?.editing &&
+			!(this.#activeEntry().kind === "variants" && this.#variants().busy)
 		);
 	}
 
@@ -3421,9 +3504,7 @@ export class ModelHubComponent implements Component {
 			this.#handleInput(rawData);
 			return;
 		}
-		const overridesEditing =
-			this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing;
-		if (!fieldFocused && !overridesEditing && this.#help.handleInput(rawData)) {
+		if (!fieldFocused && !this.#activeConfigPanel()?.editing && this.#help.handleInput(rawData)) {
 			this.#requestRender();
 			return;
 		}
@@ -3445,6 +3526,7 @@ export class ModelHubComponent implements Component {
 		}
 		if (
 			!this.#sessionOnly &&
+			this.#activeEntry().kind !== "variants" &&
 			this.#settings.editingScope !== "session" &&
 			matchesKey(rawData, "ctrl+g") &&
 			!this.#keys.read(rawData) &&
@@ -3491,8 +3573,8 @@ export class ModelHubComponent implements Component {
 			this.#handleStripInput(rawData);
 			return;
 		}
-		if (this.#activeEntry().kind === "overrides" && this.#assigning === null) {
-			const panel = this.#overrides();
+		const panel = this.#activeConfigPanel();
+		if (panel) {
 			if (this.#focus === "list" || panel.editing) {
 				if (
 					!panel.editing &&
@@ -4135,9 +4217,10 @@ export class ModelHubComponent implements Component {
 			event.col,
 		);
 		const entry = this.#activeEntry();
-		if (overBody && entry.kind === "overrides" && this.#assigning === null) {
+		const panel = overBody ? this.#activeConfigPanel() : undefined;
+		if (panel) {
 			if (event.leftClick) this.#focus = "list";
-			this.#overrides().routeMouse(event, bodyLine - 1, event.col);
+			panel.routeMouse(event, bodyLine - 1, event.col);
 			return true;
 		}
 
@@ -4265,11 +4348,12 @@ export class ModelHubComponent implements Component {
 		this.#filterEditing = false;
 		if (this.#strip) this.#closeStrip();
 		const already = clicked.id === this.#activeEntryId;
-		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#assigning = null;
+		const config = clicked.kind === "overrides" || clicked.kind === "variants";
+		if (clicked.kind === "roles" || clicked.kind === "effort" || config) this.#assigning = null;
 		this.#setActiveEntry(clicked.id);
 		if (clicked.kind === "provider") this.#enterProvider();
 		// A click on settings deliberately dives into its rows.
-		if (clicked.kind === "roles" || clicked.kind === "effort" || clicked.kind === "overrides") this.#focus = "list";
+		if (clicked.kind === "roles" || clicked.kind === "effort" || config) this.#focus = "list";
 		if (already && clicked.kind === "provider" && clicked.locked) {
 			this.#requestLogin(clicked);
 		}
@@ -4422,6 +4506,9 @@ export class ModelHubComponent implements Component {
 			}
 			case "effort":
 				text = this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
+				break;
+			case "variants":
+				text = `${entry.annotation ?? "0"} saved${entry.annotation === "1" ? " variant" : " variants"}`;
 				break;
 			case "provider":
 				if (entry.locked) {
@@ -4709,6 +4796,11 @@ export class ModelHubComponent implements Component {
 		const scopeHint = this.#canCycleScope ? " · Ctrl+S cycle scope" : "";
 		if (entry.kind === "overrides" && this.#assigning === null)
 			return `${this.#overrides().hint}${scopeHint}${configFile}`;
+		if (entry.kind === "variants" && this.#assigning === null) {
+			return this.#focus === "scope"
+				? `↑/↓ scopes · Enter/→ Model Variants · Esc close${scopeHint}`
+				: `${this.#variants().hint}${scopeHint}`;
+		}
 		const refreshHint =
 			this.#scopedModels.length === 0 && !this.#strip && !this.#filterEditing
 				? `${entry.kind === "provider" && !entry.locked ? " · F5 refresh" : ""} · Ctrl+F5 refresh all`
@@ -5014,7 +5106,7 @@ export class ModelHubComponent implements Component {
 		const textFocused =
 			this.#filterEditing ||
 			((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) ||
-			(this.#activeEntry().kind === "overrides" && this.#assigning === null && this.#overrides().editing);
+			this.#activeConfigPanel()?.editing;
 		const footer = menuHintLines(
 			`${this.#footerHint()}${textFocused ? "" : " · ? help"}`,
 			innerWidth,
@@ -5037,7 +5129,7 @@ export class ModelHubComponent implements Component {
 
 	/** A `picker` is its own sheet: the backend mounts it in `layer` without an `overlay` wrapper. */
 	nativeSheet(cx: DescribeContext): boolean {
-		return cx.supports("picker") && (this.#activeEntry().kind !== "overrides" || this.#assigning !== null);
+		return cx.supports("picker") && !this.#activeConfigPanel();
 	}
 
 	describe(cx: DescribeContext): NativeNode {
@@ -5092,6 +5184,16 @@ export class ModelHubComponent implements Component {
 		) {
 			this.#focus = "list";
 			this.#overrides().handleNativeEvent(event);
+			this.#requestRender();
+			return;
+		}
+		if (
+			this.#activeEntry().kind === "variants" &&
+			this.#assigning === null &&
+			event.key.replaceAll("^", "").split("/").includes("modelVariants")
+		) {
+			this.#focus = "list";
+			this.#variants().handleNativeEvent(event);
 			this.#requestRender();
 			return;
 		}
@@ -5178,7 +5280,8 @@ export class ModelHubComponent implements Component {
 	#describeBody(): NativeNode {
 		const children: NativeChild[] = [this.#describeStatus()];
 		const entry = this.#activeEntry();
-		if (entry.kind === "overrides" && this.#assigning === null) return this.#overrides().describe();
+		const panel = this.#activeConfigPanel();
+		if (panel) return panel.describe();
 		if (entry.kind === "roles" && this.#assigning === null) {
 			children.push(...this.#describeRolesView());
 		} else if (entry.kind === "effort" && this.#assigning === null) {
@@ -5714,6 +5817,21 @@ export class ModelHubComponent implements Component {
 					break;
 				case "roles":
 					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
+					break;
+				case "variants":
+					scopes.push({
+						id: entry.id,
+						label: [
+							span(entry.label),
+							span(
+								uiProvenanceSuffix("features", MODEL_VARIANTS_FEATURE),
+								provenanceColor(uiProvenance("features", MODEL_VARIANTS_FEATURE)),
+							),
+						],
+						icon: "sliders",
+						group: "Variants",
+						count: Number(entry.annotation ?? 0),
+					});
 					break;
 				case "effort":
 					if (entry.id === "context") {

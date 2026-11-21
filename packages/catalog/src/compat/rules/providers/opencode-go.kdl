@@ -32,6 +32,12 @@ provider "opencode-go" {
 	// Anthropic Messages: claude-haiku-5-5 warmed under any key (control
 	// 2/2), so no Messages lane opts in.
 	on-api "openai-completions" {
+		// residue: these two V4.1 Flash IDs share the speculative-decoding
+		// deployment that rejects min_p (#759). Other hosts and Go models
+		// have independent sampling contracts.
+		models "deepseek-v4.1-flash" "deepseek-flash" {
+			unsupported-sampling-params "minP"
+		}
 		models "deepseek-v4-pro" "omen-alpha" {
 			shared-prompt-cache #true
 		}
