@@ -966,6 +966,34 @@ describe("AgentSession checkpoint rewind branch context", () => {
 		expect(expectLastAssistant(session.messages).stopReason).toBe("stop");
 	});
 
+	it("yields normally from an active checkpoint when rewind is unavailable", async () => {
+		const agentEnds: Array<boolean | undefined> = [];
+		const { session, mock } = await createHarness(
+			[
+				{
+					content: [
+						{ type: "toolCall", id: "call_checkpoint", name: "checkpoint", arguments: { goal: "inspect" } },
+					],
+					stopReason: "toolUse",
+				},
+				{ content: ["done without rewind"], stopReason: "stop" },
+			],
+			[checkpointTool as AgentTool],
+			{ onAgentEnd: willContinue => agentEnds.push(willContinue) },
+		);
+
+		await session.prompt("investigate with a checkpoint");
+		await session.waitForIdle();
+
+		expect(session.getCheckpointState()).toBeDefined();
+		expect(session.getEnabledToolNames()).not.toContain("rewind");
+		expect(agentEnds).toHaveLength(1);
+		expect(agentEnds[0]).toBeFalsy();
+		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls[1]!.context.messages.map(messageText).join("\n")).not.toContain("rewind` before yielding");
+		expect(expectLastAssistant(session.messages).stopReason).toBe("stop");
+	});
+
 	it("rehydrates an active checkpoint from an xdev write after branching and resume", async () => {
 		const harness = await createHarness(
 			[

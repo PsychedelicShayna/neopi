@@ -29,7 +29,7 @@ afterEach(() => {
 	for (const hub of hubs.splice(0)) hub.dispose();
 });
 
-function createHub(chain = [FIRST, SECOND]) {
+function createHub(chain = [FIRST, SECOND], chainRole = "default") {
 	const models = ["primary", "first", "second", "existing"].map(id =>
 		buildModel({
 			id,
@@ -44,7 +44,7 @@ function createHub(chain = [FIRST, SECOND]) {
 			maxTokens: 1024,
 		}),
 	);
-	const chains: Record<string, string[]> = { default: [...chain] };
+	const chains: Record<string, string[]> = { [chainRole]: [...chain] };
 	const rolePolicies: Record<string, HubEffortSelection> = {
 		default: { mode: "auto", selector: PRIMARY, allowed: [Effort.Low, Effort.High] },
 	};
@@ -74,7 +74,7 @@ function createHub(chain = [FIRST, SECOND]) {
 		formatModelSelector: model => `${model.provider}/${model.id}`,
 		defaultThinkingLevel: "high",
 		modelProviderOrder: [],
-		knownRoleIds: ["default", "smol", "slow"],
+		knownRoleIds: ["default", "smol", "slow", "effort"],
 		mruOrder: [],
 		modelPerf: new Map(),
 		getRoleInfo: role => ({ name: role, section: "chat", accepts: () => true }),
@@ -116,6 +116,19 @@ function createHub(chain = [FIRST, SECOND]) {
 	const focus = (item: string) => hub.handleNativeEvent({ type: "select", key: "", item });
 	return { hub, chains, rolePolicies, fallbackPolicies, focus };
 }
+
+test.each(["effort", "default"])("fallback effort options for @%s", role => {
+	const { hub, focus } = createHub([SECOND, "demo/*"], role);
+	for (const [index, kind] of (["thinking", "patternEffort"] as const).entries()) {
+		focus(`fallback:${role}:${index}`);
+		hub.handleInput("t");
+		const strip = hub.navigationSnapshot().strip;
+		expect(strip?.kind).toBe(kind);
+		if (strip?.kind !== "thinking" && strip?.kind !== "patternEffort") throw new Error("Expected an effort strip");
+		expect(strip.chips.some(chip => chip.label.toLowerCase() === "auto")).toBe(role !== "effort");
+		hub.handleInput("\x1b");
+	}
+});
 
 test("root yank snapshots the complete ordered chain and effort metadata without overwriting target metadata", () => {
 	const state = createHub();

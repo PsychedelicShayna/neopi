@@ -7,7 +7,7 @@ Illustrative estimates: 136K used of 200K, speculation at 144K, recent turn foot
 Footprints and occupancy are estimates, not exact capacity guarantees. Missing telemetry? Use the investigation's expected intermediate context cost.
 
 Rules:
-- MUST `rewind` before yielding after starting a checkpoint.
+- Active checkpoint and `rewind` available? MUST `rewind` before yielding.
 - NEVER `checkpoint` while another checkpoint active.
 - Subagents: disabled by default. Enable: agent-definition `tools:` frontmatter lists `checkpoint` or `rewind`; sister tool auto-included; requires `checkpoint.enabled` setting.
 

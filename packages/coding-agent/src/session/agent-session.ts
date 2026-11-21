@@ -5754,7 +5754,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			};
 			this.#pendingRewindReport = undefined;
 			this.#lastCompletedRewind = undefined;
-			this.agent.steer(checkpointReminder);
+			if (this.getEnabledToolNames().includes("rewind")) this.agent.steer(checkpointReminder);
 		}
 
 		// Local completion time for prompt→yield timing: stamped here, not by the
@@ -15099,7 +15099,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#enforceRewindBeforeYield(): boolean {
-		if (!this.#checkpointState || this.#pendingRewindReport) {
+		if (!this.#checkpointState || this.#pendingRewindReport || !this.getEnabledToolNames().includes("rewind")) {
 			return false;
 		}
 		const reminder = [
@@ -17606,8 +17606,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return inspectAgentTelemetry(this.#agentTelemetryHost);
 	}
 
-	/** One transient telemetry record per model-call boundary, never session history. */
+	/** Project checkpoint notices and transient telemetry at the model-call boundary. */
 	prepareAgentTelemetry(messages: AgentMessage[]): AgentMessage[] {
+		// The active notice can survive in a resumed transcript after rewind is disabled.
+		if (this.#checkpointState && !this.getEnabledToolNames().includes("rewind")) {
+			messages = messages.filter(
+				message => message.role !== "custom" || message.customType !== CHECKPOINT_ACTIVE_REMINDER_TYPE,
+			);
+		}
 		return injectAgentTelemetry(messages, this.#agentTelemetryHost);
 	}
 

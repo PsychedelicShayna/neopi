@@ -192,6 +192,7 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 	if (contextMode === "off" && toolMode === "off" && !thresholdEvents) return messages;
 	const record = inspectAgentTelemetry(host, contextMode === "full" || toolMode === "full");
 	if (!record) return messages;
+	const rewindRequired = record.checkpoint.active && host.session.getEnabledToolNames().includes("rewind");
 	let projected = messages;
 	if (toolMode !== "off") {
 		const lastAssistant = messages.findLastIndex(message => message.role === "assistant");
@@ -212,7 +213,13 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 				durationMs,
 				...(toolMode === "full" ? { runtime: record } : {}),
 			};
-			return { ...message, content: [...message.content, { type: "text", text: renderTelemetry(value) }] };
+			return {
+				...message,
+				content: [
+					...message.content,
+					{ type: "text", text: renderTelemetry(value, toolMode === "full" && rewindRequired) },
+				],
+			};
 		});
 	}
 	if (contextMode !== "off" || (thresholdEvents && record.events)) {
@@ -227,7 +234,7 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 			{
 				role: "custom",
 				customType: "agent-runtime-telemetry",
-				content: renderTelemetry(value),
+				content: renderTelemetry(value, contextMode !== "off" && rewindRequired),
 				display: false,
 				attribution: "agent",
 				timestamp: messages.at(-1)?.timestamp ?? 0,
@@ -237,6 +244,6 @@ export function injectAgentTelemetry(messages: AgentMessage[], host: AgentTeleme
 	return projected;
 }
 
-function renderTelemetry(value: object): string {
-	return renderPromptAsset("system/agent-telemetry.md", template, { json: JSON.stringify(value) });
+function renderTelemetry(value: object, rewindRequired: boolean): string {
+	return renderPromptAsset("system/agent-telemetry.md", template, { json: JSON.stringify(value), rewindRequired });
 }

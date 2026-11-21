@@ -239,6 +239,29 @@ describe("agent-visible runtime telemetry", () => {
 		expect(session.getAgentTelemetry()!.checkpoint.available).toBe(false);
 	});
 
+	it("only instructs an active checkpoint to rewind when the tool is reachable", () => {
+		const { session } = fixture(Settings.isolated({ "telemetry.agent_context": "minimal" }));
+		session.setCheckpointState({ checkpointEntryId: null, checkpointMessageCount: 1, startedAt: "now" });
+		const savedNotice: AgentMessage = {
+			role: "custom",
+			customType: "checkpoint-active-reminder",
+			content: "MUST `rewind` before yielding",
+			display: false,
+			timestamp: 1,
+		};
+		const names = vi.spyOn(session, "getEnabledToolNames").mockReturnValue(["write", "rewind"]);
+		const withRewind = session.prepareAgentTelemetry([savedNotice]);
+		expect(withRewind).toContain(savedNotice);
+		expect(JSON.stringify(withRewind)).toContain("You MUST rewind with a concise report before yielding.");
+		expect(telemetryFrom(withRewind).checkpoint).toEqual({ active: true, available: false });
+
+		names.mockReturnValue(["write"]);
+		const withoutRewind = session.prepareAgentTelemetry([savedNotice]);
+		expect(withoutRewind).not.toContain(savedNotice);
+		expect(JSON.stringify(withoutRewind)).not.toContain("before yielding");
+		expect(telemetryFrom(withoutRewind).checkpoint).toEqual({ active: true, available: false });
+	});
+
 	it.each([
 		{ "compaction.enabled": false },
 		{ "compaction.asyncEnabled": false },

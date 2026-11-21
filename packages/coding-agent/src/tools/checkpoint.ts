@@ -56,7 +56,7 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 	readonly approval = "read" as const;
 	readonly label = "Checkpoint";
 	readonly summary =
-		"Start a non-nestable context transaction by saving the conversation boundary; rewind before yielding to replace intermediate exploration messages with a report";
+		"Start a non-nestable context transaction by saving the conversation boundary; if available, rewind before yielding to replace intermediate exploration messages with a report";
 	get description(): string {
 		return renderPromptAsset("tools/checkpoint.md", checkpointDescription, {}, { cwd: this.session.cwd });
 	}

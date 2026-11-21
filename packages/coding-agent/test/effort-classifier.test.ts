@@ -93,7 +93,7 @@ describe("on-demand effort classification", () => {
 			modelRoles: { effort: "mock/classifier:xhigh", judge: "mock/unavailable" },
 		});
 		const call = vi.spyOn(ai, "completeSimple").mockImplementation(
-			async (_model, context, options) =>
+			async () =>
 				({
 					api: model.api,
 					provider: model.provider,
@@ -200,6 +200,27 @@ describe("on-demand effort classification", () => {
 		).rejects.toThrow("Auto");
 		expect(call).not.toHaveBeenCalled();
 	});
+
+	it.each(["suffix", "policy"])(
+		"rejects a saved Auto classifier fallback via %s before calling the primary",
+		async source => {
+			const fallback = { ...model, id: "backup" };
+			const selector = `${fallback.provider}/${fallback.id}`;
+			const settings = Settings.isolated({
+				modelRoles: { effort: "mock/classifier:low" },
+				"retry.fallbackChains": { effort: [source === "suffix" ? `${selector}:auto` : selector] },
+				"retry.fallbackEffortSelections": source === "policy" ? { effort: { [selector]: { mode: "auto" } } } : {},
+			});
+			const call = vi.spyOn(ai, "completeSimple");
+			await expect(
+				classifyDifficulty(
+					{ request: "anything" },
+					{ settings, registry: registry([model, fallback]), model, allowedEfforts: [Effort.Low, Effort.High] },
+				),
+			).rejects.toThrow("@effort cannot use Auto for its own role or fallbacks");
+			expect(call).not.toHaveBeenCalled();
+		},
+	);
 	it("applies global policy to a direct judgment's fixed implicit effort on the wire", async () => {
 		const settings = Settings.isolated({
 			modelRoles: { judge: "mock/classifier:xhigh" },
