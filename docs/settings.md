@@ -4,6 +4,8 @@
 
 Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional; numbers and arrays without UI choices remain config-file-only unless the setting opts into the panel's JSON editor (such as `contextFiles.extra`).
 
+Settings label suffixes distinguish feature origin from the value's source scope. A green crescent marks a NeoPi addition in the latest published stable release; purple marks a nightly-only NeoPi addition. Gold, silver, and bronze stars mark the newest, previous, and older upstream sync cohorts. No marker means the row is not in the provenance inventory.
+
 - For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
 - For custom model definitions in `models.yml`, see [Models](./models.md).
 - For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
@@ -1255,7 +1257,7 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `startup.showSplash` | boolean | `false` | Show the full setup animation on ordinary interactive startup without rerunning setup. |
 | `startup.changelogMode` | enum | `summary` | `summary`, `expanded`, `hidden`: choose startup release-note presentation. |
 | `startup.setupWizard` | boolean | `true` | Show newly added onboarding steps once per setup version. |
-| `update.channel` | enum | build channel | `stable` follows the latest non-prerelease NeoPi GitHub release; `nightly` follows the latest prerelease. Stable release builds default to stable, nightly/source builds to nightly. Existing `canary` values migrate to `nightly`. |
+| `update.channel` | enum | build channel | `stable` follows the latest non-prerelease NeoPi GitHub release; `nightly` follows the latest prerelease. Stable release builds default to stable, nightly/source builds to nightly. Existing `canary` values migrate to `nightly`. Only a persisted global change to a different channel (including a reset that changes the channel) or a successful `npi update stable\|nightly` releases a rollback hold. Project, session, and process overrides do not. |
 | `update.auto` | enum | `notify` | `off`, `notify`, `auto`: check after ordinary interactive startup, at most once per 24 hours per executable unless the channel changes. Auto applies a verified release for the next launch; existing sessions stay running. Legacy booleans migrate `true` → `auto`, `false` → `off`. |
 | `btw.inject` | boolean | `false` | `/btw` answers wrap a requested steering prompt in `<inject>…</inject>`, shown highlighted; assign `app.btw.inject` a key to send it to the main session (a steer while it runs, else a new turn). NeoPi keeps `Alt+I` for the IRC viewer. |
 
