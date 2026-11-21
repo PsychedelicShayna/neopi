@@ -65,7 +65,7 @@ starts a session-local advisor; `/advisor configure` still manages saved advisor
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `harness`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `harness`, `inherit`, `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `structured`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -87,9 +87,22 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 - `task.agentPrewalkAuto` is a settings-only record (agent name → `"on"` / `"off"` / pattern; no frontmatter field) that judges per assignment instead of arming unconditionally. For an agent whose frontmatter, `task.prewalk` and `task.agentPrewalk` resolve to nothing, an entry of `"on"` or a pattern sends the assignment text once to the same native judge used by auto-prewalk, at spawn; `"on"` hands off to `prewalk.autoTarget` and any other value is the target model pattern or role. An unconditional prewalk wins and is never judged. See [Subagent prewalk](./prewalk.md#subagent-prewalk).
 - `advisor: true` pairs spawned sessions of the agent with an advisor running the model resolved for the `advisor` role; a string value (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern (optional `:level` suffix), applied as the spawned session's `modelRoles.advisor`. The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / pattern, configured per agent from the `/agents` hub via its advisor strip) overrides the frontmatter. Resolution happens in `runSubprocess` (`src/task/executor.ts`); subagents default to no advisor, and the effective opt-in is persisted in `session_init` so cold revival restores it.
 
+### Prompt inheritance
+
+Native NeoPi agents have four inheritance modes. Choose **Inherits** in `/agents` or set `inherit` in the definition's YAML frontmatter:
+
+| Value | Context files | Harness system prompt |
+| --- | --- | --- |
+| `all` (default) | Yes | Yes |
+| `context` | Yes | No |
+| `system` | No | Yes |
+| `none` | No | No |
+
+Context files include applicable user, ancestor and repository instructions such as `AGENTS.md` and `CLAUDE.md`, loaded at the child's working directory unless explicitly pinned by the host. The harness prompt is the generated NeoPi base, including any custom system template or append text. Disabling either does not remove the definition's Markdown body, the assignment, or the subagent's coordination and completion instructions. Each definition selects its own mode; reviving a persisted session retains its saved prompt and mode. This setting controls prompt composition, not filesystem or tool permissions. The Claude external adapter rejects values other than `all`.
+
 ### Rich definition editing
 
-Use **Edit definition** (Ctrl-G) in `/agents` for an existing definition, or **New agent** to start an empty draft. Both open the same editor. Every supported field appears even when absent. Existing files are edited in place; new definitions and copies of bundled agents can be saved in Project or User scope.
+Select an agent in `/agents` to edit its fields, or choose **New agent** to start an empty draft. Every supported field appears even when absent. On the definition page, Ctrl+G opens the backing file in `$VISUAL` or `$EDITOR` and reloads it when the editor closes. Save or discard any unsaved draft first. For a bundled agent, Ctrl+G shows “Save a copy to edit the file”. New definitions and copies can be saved in Project or User scope.
 
 The Tools page lists built-ins, hidden structured-output tools and registered extension tools as checkboxes. Default selection remains distinct from an explicit empty allowlist. Structured output has an enable toggle, a JSON Schema / JSON Type Definition selector, nested field rows, required switches and descriptions. Its typed keyword forms support constraints, enums, lists, tagged unions, references and other schema metadata without editing YAML.
 

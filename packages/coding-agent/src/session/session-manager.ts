@@ -3934,6 +3934,8 @@ export class SessionManager {
 		tools: string[];
 		mountedTools?: string[];
 		agent?: string;
+		inherit?: SessionInitEntry["inherit"];
+		noContextFiles?: boolean;
 		modelRole?: string;
 		resolvedModel?: string;
 		perCallModel?: boolean;
@@ -5091,6 +5093,8 @@ export interface PersistedSessionInit {
 	tools: string[];
 	mountedTools?: string[];
 	agent?: string;
+	inherit?: SessionInitEntry["inherit"];
+	noContextFiles?: boolean;
 	modelRole?: string;
 	resolvedModel?: string;
 	perCallModel?: boolean;
@@ -5126,6 +5130,8 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			tools: entry.tools,
 			mountedTools: entry.mountedTools,
 			agent: entry.agent,
+			inherit: entry.inherit,
+			noContextFiles: entry.noContextFiles,
 			modelRole: entry.modelRole,
 			resolvedModel: entry.resolvedModel,
 			...(entry.perCallModel ? { perCallModel: true } : undefined),

@@ -11,11 +11,15 @@ export type AgentAdvisor =
 	| string
 	| { ref: string; scope?: AdvisorConfigScope }
 	| { inline: InlineAgentAdvisor };
+export const AGENT_INHERITANCE_VALUES = ["all", "context", "system", "none"] as const;
+export type AgentInheritance = (typeof AGENT_INHERITANCE_VALUES)[number];
+
 export interface AgentDefinitionDraft {
 	name: string;
 	description: string;
 	systemPrompt: string;
 	harness?: "omp" | "claude" | "codex";
+	inherit?: AgentInheritance;
 	model?: string[];
 	thinkingLevel?: ConfiguredThinkingLevel;
 	prewalk?: boolean | string;
@@ -57,6 +61,14 @@ export const AGENT_DEFINITION_FIELDS: readonly DefinitionField[] = [
 		kind: "choice",
 		choices: ["omp", "claude", "codex"],
 		description: "Runtime harness used to execute this agent.",
+	},
+	{
+		key: "inherit",
+		label: "Inherits",
+		kind: "choice",
+		choices: AGENT_INHERITANCE_VALUES,
+		description:
+			"NeoPi prompt inheritance: all (default) keeps context files and the harness prompt, context keeps only files, system keeps only the harness prompt, none keeps neither. The agent's instructions always apply.",
 	},
 	{
 		key: "model",
