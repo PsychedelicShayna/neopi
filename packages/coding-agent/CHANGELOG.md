@@ -15,6 +15,7 @@
 
 ### Added
 
+- Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
 - Create named model folders in the fullscreen `/model` and `/roles` pickers to switch and assign models without scrolling through providers. Folders persist across sessions and can be edited per project.
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.

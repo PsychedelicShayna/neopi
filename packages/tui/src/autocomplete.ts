@@ -240,7 +240,7 @@ export interface AutocompleteItem {
 	 * user moved the selection onto it.
 	 */
 	descriptionMatch?: boolean;
-	/** An exact hidden alias is already typed; Enter submits it unless the user navigates the popup. */
+	/** Enter submits typed input until the user navigates the popup; Tab can still accept this item. */
 	preserveInputOnSubmit?: boolean;
 }
 
@@ -319,6 +319,8 @@ export interface AutocompleteProvider {
 	 * the collapsed `/skill:` namespace row. Returns null outside a command-name token or with no match.
 	 */
 	trySyncSlashCompletion?(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null;
+	/** Whether the current argument belongs to a registered slash command with its own completer. */
+	hasSlashArgumentCompletions?(textBeforeCursor: string): boolean;
 	/**
 	 * Synchronously list `^` model mention completions for the token at the cursor, so a
 	 * shown mention popup never lags the typed text.
@@ -402,6 +404,27 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 		getCommandAliases(cmd).includes(commandName) ||
 		("hiddenAliases" in cmd && cmd.hiddenAliases?.includes(commandName) === true)
 	);
+}
+
+/** Parse the command's argument span, including an explicitly declared `name:` alias. */
+export function findSlashArguments(
+	commands: readonly CommandEntry[],
+	commandText: string,
+): { command: CommandEntry; argumentText: string } | null {
+	const space = commandText.indexOf(" ");
+	const colon = commandText.indexOf(":");
+	if (colon !== -1 && (space === -1 || colon < space)) {
+		const alias = commandText.slice(1, colon + 1);
+		const command = commands.find(cmd => getCommandAliases(cmd).includes(alias));
+		if (command) {
+			const start = space === colon + 1 ? space + 1 : colon + 1;
+			return { command, argumentText: commandText.slice(start) };
+		}
+	}
+	if (space === -1) return null;
+	const name = commandText.slice(1, space);
+	const command = commands.find(cmd => commandMatchesNameOrAlias(cmd, name));
+	return command ? { command, argumentText: commandText.slice(space + 1) } : null;
 }
 
 function getAutocompleteCommandName(cmd: CommandEntry): string | undefined {
@@ -783,9 +806,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const commandText = textBeforeCursor.slice(slashStart);
 			const spaceIndex = commandText.indexOf(" ");
 			const isMidPromptSkillLookup = hasPromptTextBeforeTrailingSlash;
+			const args = isMidPromptSkillLookup ? null : findSlashArguments(this.#commands, commandText);
 
-			if (spaceIndex === -1) {
-				// No space yet - complete command names
+			if (spaceIndex === -1 && !args) {
+				// The command name is still being typed.
 				const prefix = commandText.slice(1); // Remove the "/"
 				const lowerPrefix = prefix.toLowerCase();
 
@@ -814,19 +838,13 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				// A slash token with no matching command may still be an absolute
 				// path (`/tmp/fo` at prompt start, `see /tmp` mid-prompt); fall
 				// through to file-path completion.
-			} else if (!isMidPromptSkillLookup) {
-				// Give matched commands first chance to complete arguments, then
-				// fall through to prompt-composer file completion when they have
-				// no argument provider or it has no matches.
-				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
-				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
-
-				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
-				if (command && "allowArgs" in command && command.allowArgs === false && !/\S/.test(argumentText)) {
+			} else if (args) {
+				// Give matched commands first chance, then fall back to prompt-composer completion.
+				const { command, argumentText } = args;
+				if ("allowArgs" in command && command.allowArgs === false && !/\S/.test(argumentText)) {
 					return null;
 				}
 				if (
-					command &&
 					(!("allowArgs" in command) || command.allowArgs !== false) &&
 					"getArgumentCompletions" in command &&
 					command.getArgumentCompletions
@@ -1412,26 +1430,23 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		if (slashStart === null) return null;
 
-		const commandText = textBeforeCursor.slice(slashStart);
-		const spaceIndex = commandText.indexOf(" ");
-		if (spaceIndex === -1) return null;
-
-		const commandName = commandText.slice(1, spaceIndex);
-		const argumentText = commandText.slice(spaceIndex + 1);
-
-		const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
-
-		if (!command || !("getInlineHint" in command) || !command.getInlineHint) {
-			return null;
-		}
-
-		return command.getInlineHint(argumentText);
+		const args = findSlashArguments(this.#commands, textBeforeCursor.slice(slashStart));
+		return args && "getInlineHint" in args.command ? (args.command.getInlineHint?.(args.argumentText) ?? null) : null;
 	}
+
+	hasSlashArgumentCompletions(textBeforeCursor: string): boolean {
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		if (slashStart === null) return false;
+		const args = findSlashArguments(this.#commands, textBeforeCursor.slice(slashStart));
+		if (!args || !("getArgumentCompletions" in args.command)) return false;
+		return args.command.allowArgs !== false && args.command.getArgumentCompletions !== undefined;
+	}
+
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		if (slashStart === null) return null;
 		const commandText = textBeforeCursor.slice(slashStart);
-		if (commandText.includes(" ")) return null; // Only complete command name, not args
+		if (commandText.includes(" ") || findSlashArguments(this.#commands, commandText)) return null;
 
 		const lowerPrefix = commandText.slice(1).toLowerCase();
 		const matches = buildSlashCommandCompletions(

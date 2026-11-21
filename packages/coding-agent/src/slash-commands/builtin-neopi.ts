@@ -12,7 +12,14 @@ import {
 import { formatVisionMarker } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
 import type { InteractiveModeContext } from "../modes/types";
-import { deferredSubmissionsFor, DEFER_USAGE, isDeferredSubmissionActive, parseDeferredInput } from "../neopi/defer";
+import {
+	completeDeferredDuration,
+	deferredSubmissionsFor,
+	DEFER_USAGE,
+	isDeferredSubmissionActive,
+	parseDeferredInput,
+	pendingDeferredSubmissionIds,
+} from "../neopi/defer";
 import { type LoadoutHost, loadoutFeature } from "../neopi/loadout";
 import { BUILTIN_PERSONALITIES, completePersonalityNames, isBuiltinPersonality } from "../neopi/personalities";
 import {
@@ -37,10 +44,18 @@ import { describeNeoProxy, withNeoProxyLoginUrl } from "../neopi/neoproxy-connec
 import { parseReplTarget, REPL_TARGETS, type ReplTarget, replTargetLabel } from "../neopi/repl";
 import noticeTemplate from "../prompts/system/operator-notice.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
-import { buildArgumentCompletions, buildSubcommandInlineHint, ghostHint } from "./builtin-completions";
+import {
+	argumentValues,
+	buildArgumentCompletions,
+	buildSubcommandInlineHint,
+	completeArguments,
+	ghostHint,
+} from "./builtin-completions";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
+
+const deferCancelValues = argumentValues("cancel");
 
 // Compile the static wrapper without prompt.format(), which would rewrite payload whitespace.
 
@@ -86,7 +101,7 @@ async function subcommandThenNameCompletions(
 ): Promise<AutocompleteItem[] | null> {
 	const space = prefix.indexOf(" ");
 	if (space === -1) {
-		const items = buildArgumentCompletions(defs)(prefix);
+		const items = await buildArgumentCompletions(defs)(prefix);
 		return items?.map(item => ({ ...item, value: `${lead}${item.value}` })) ?? null;
 	}
 	const verb = prefix.slice(0, space).toLowerCase();
@@ -360,6 +375,31 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Submit composer input after a delay, or cancel a deferred submission",
 		inlineHint: "<duration> <input> | cancel <id|all>",
 		allowArgs: true,
+		getTuiArgumentCompletions: (prefix, runtime) =>
+			completeArguments(
+				prefix,
+				runtime,
+				value => {
+					const durations = completeDeferredDuration(value);
+					return durations.length > 0
+						? durations.map(duration => ({ value: `${duration} `, label: duration }))
+						: deferCancelValues(value);
+				},
+				(value, current) => {
+					if (!/^cancel\s/.test(prefix.trimStart())) return null;
+					const ids = current ? pendingDeferredSubmissionIds(current.ctx.session) : [];
+					// Completing a prefix must not turn Enter into cancellation of a guessed ID or "all".
+					return (
+						argumentValues(
+							"all",
+							...ids.map(String),
+						)(value)?.map(item => ({
+							...item,
+							preserveInputOnSubmit: true,
+						})) ?? null
+					);
+				},
+			),
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			clearSubmittedText(runtime);

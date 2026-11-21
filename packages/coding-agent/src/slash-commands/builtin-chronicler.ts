@@ -1,11 +1,13 @@
 import { dispatchSessionChronicleIndex } from "../chronicler/session-index";
 import type { AgentSession } from "../session/agent-session";
 import { ChronicleRecallTool } from "../tools/chronicle-recall";
+import { argumentValues } from "./builtin-completions";
 import { clearSubmittedText } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef } from "./types";
 
 const CHRON_USAGE = 'Usage: /chron [status|pause|resume|blind|unblind|off [--confirm]|on|index|recall "question"]';
+const chronConfirmValues = argumentValues("--confirm");
 const CHRON_OFF_WARNING = "Turning off the Chronicler will wipe Luna's context window.";
 const CHRON_SUBCOMMANDS: SubcommandDef[] = [
 	{ name: "status", description: "Show enabled state, capture mode, and health" },
@@ -17,6 +19,10 @@ const CHRON_SUBCOMMANDS: SubcommandDef[] = [
 		name: "off",
 		description: "Disable the Chronicler and wipe Luna's context (confirmation required)",
 		usage: "[--confirm]",
+		// A bare `off` must still pass through the normal confirmation prompt.
+		arguments: [
+			prefix => chronConfirmValues(prefix)?.map(item => ({ ...item, preserveInputOnSubmit: true })) ?? null,
+		],
 	},
 	{ name: "on", description: "Enable the Chronicler for this session" },
 	{ name: "index", description: "Index captured atoms from the current session" },
