@@ -2206,6 +2206,9 @@ export async function runRootCommand(
 		}
 
 		const settingsInstance = await settingsPromise;
+		if (!isInteractive) {
+			for (const warning of settingsInstance.startupWarnings) writeStartupWarning(warning);
+		}
 		setMenuSearchVimMode(cfgTuiVimMode.get(settingsInstance));
 		if (parsedArgs.approvalMode) {
 			// Runtime override (not persisted): every `tools.approvalMode` read downstream

@@ -35,6 +35,7 @@ import {
 	cfgSetupVersion,
 	cfgStatusLineLeftSegments,
 	cfgSpellingAutocomplete,
+	cfgSteeringMode,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
@@ -82,7 +83,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { cfgModelRoles, cfgDisabledProviders, cfgEnabledModels } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgShellPath } from "@oh-my-pi/pi-coding-agent/exec/settings";
-import { cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
+import { cfgChroniclerBackfillTimeoutMs, cfgChroniclerEnabled } from "@oh-my-pi/pi-coding-agent/chronicler/settings";
 
 import {
 	cfgAdvisorEnabled,
@@ -624,7 +625,73 @@ describe("Settings", () => {
 	});
 
 	describe("config file failure safety", () => {
-		it("moves malformed main config aside and refuses to start with silent defaults", async () => {
+		it("warns and defaults only invalid YAML settings without writing the file", async () => {
+			const configPath = getConfigPath();
+			const original =
+				'chronicler: {backfill: {timeoutMs: -1}}\ndisplay: {showTokenUsage: "yes"}\nsteeringMode: unknown\nsetupVersion: 42\n';
+			await Bun.write(configPath, original);
+			const before = fs.statSync(configPath, { bigint: true });
+			const warn = vi.spyOn(logger, "warn");
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgChroniclerBackfillTimeoutMs.get(settings)).toBe(7_200_000);
+			expect(cfgDisplayShowTokenUsage.get(settings)).toBe(false);
+			expect(cfgSteeringMode.get(settings)).toBe(cfgSteeringMode.default);
+			expect(cfgSetupVersion.get(settings)).toBe(42);
+			expect(settings.startupWarnings).toEqual(
+				expect.arrayContaining([
+					expect.stringContaining(`${configPath}: chronicler.backfill.timeoutMs must be a nonnegative number`),
+					expect.stringContaining(`${configPath}: display.showTokenUsage: expected a boolean`),
+					expect.stringContaining(`${configPath}: steeringMode: expected one of`),
+				]),
+			);
+			for (const message of settings.startupWarnings) expect(warn).toHaveBeenCalledWith(message);
+			await settings.flush();
+			expect(await Bun.file(configPath).text()).toBe(original);
+			const after = fs.statSync(configPath, { bigint: true });
+			expect([after.ino, after.mtimeNs, after.ctimeNs]).toEqual([before.ino, before.mtimeNs, before.ctimeNs]);
+		});
+
+		it("defaults invalid TOML overlay values without restoring the masked YAML value", async () => {
+			const yamlPath = getConfigPath();
+			const tomlPath = path.join(agentDir, "settings.toml");
+			const yaml = "steeringMode: all\n";
+			const toml = 'steeringMode = "unknown"\nsetupVersion = 42\n';
+			await Bun.write(yamlPath, yaml);
+			await Bun.write(tomlPath, toml);
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgSteeringMode.get(settings)).toBe(cfgSteeringMode.default);
+			expect(cfgSetupVersion.get(settings)).toBe(42);
+			expect(settings.startupWarnings).toEqual([
+				expect.stringContaining(`${tomlPath}: steeringMode: expected one of`),
+			]);
+			await settings.flush();
+			expect(await Bun.file(yamlPath).text()).toBe(yaml);
+			expect(await Bun.file(tomlPath).text()).toBe(toml);
+
+			settings.writeScopeValue(cfgSteeringMode, "all", "global");
+			await settings.flush();
+			expect(cfgSteeringMode.get(settings)).toBe("all");
+			expect(await Bun.file(yamlPath).text()).toBe(yaml);
+			expect(Bun.TOML.parse(await Bun.file(tomlPath).text())).toMatchObject({ steeringMode: "all" });
+		});
+
+		it("names the native project config and leaves its other settings active", async () => {
+			const configPath = path.join(getProjectAgentDir(projectDir), "config.yml");
+			const original = "chronicler: {backfill: {timeoutMs: -1}}\nsteeringMode: all\n";
+			await Bun.write(configPath, original);
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgChroniclerBackfillTimeoutMs.get(settings)).toBe(7_200_000);
+			expect(cfgSteeringMode.get(settings)).toBe("all");
+			expect(settings.startupWarnings).toEqual([
+				expect.stringContaining(`${configPath}: chronicler.backfill.timeoutMs must be a nonnegative number`),
+			]);
+			expect(await Bun.file(configPath).text()).toBe(original);
+		});
+
+		it("warns about malformed main config and starts with defaults without moving it aside", async () => {
 			const configPath = getConfigPath();
 			const original = [
 				"auth:",
@@ -636,15 +703,15 @@ describe("Settings", () => {
 			].join("\n");
 			await Bun.write(configPath, original);
 
-			await expect(Settings.init({ cwd: projectDir, agentDir })).rejects.toThrow("Settings config is invalid");
-
-			expect(await Bun.file(configPath).exists()).toBe(false);
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgSetupVersion.get(settings)).toBe(cfgSetupVersion.default);
+			expect(settings.startupWarnings).toEqual([expect.stringContaining(configPath)]);
+			expect(await Bun.file(configPath).text()).toBe(original);
 			const backupNames = fs.readdirSync(agentDir).filter(name => name.startsWith("config.yml.broken-"));
-			expect(backupNames).toHaveLength(1);
-			expect(await Bun.file(path.join(agentDir, backupNames[0])).text()).toBe(original);
+			expect(backupNames).toEqual([]);
 		});
 
-		it("rejects when another process quarantines malformed config before the lock is acquired", async () => {
+		it("does not take the write lock when startup encounters malformed config", async () => {
 			const configPath = getConfigPath();
 			const backupPath = `${configPath}.broken-other-process`;
 			const original = 'modelRoles:\n  default: "unterminated\n';
@@ -660,13 +727,11 @@ describe("Settings", () => {
 				return await withFileLock(filePath, fn, options);
 			});
 
-			await expect(Settings.init({ cwd: projectDir, agentDir })).rejects.toThrow(
-				"invalid before locking and is now missing",
-			);
+			await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(movedAside).toBe(true);
-			expect(await Bun.file(configPath).exists()).toBe(false);
-			expect(await Bun.file(backupPath).text()).toBe(original);
+			expect(movedAside).toBe(false);
+			expect(await Bun.file(configPath).text()).toBe(original);
+			expect(await Bun.file(backupPath).exists()).toBe(false);
 		});
 
 		it("keeps malformed config in place for read-only loads", async () => {
@@ -674,9 +739,8 @@ describe("Settings", () => {
 			const original = 'modelRoles:\n  default: "unterminated\n';
 			await Bun.write(configPath, original);
 
-			await expect(Settings.loadReadOnly({ cwd: projectDir, agentDir })).rejects.toThrow(
-				"Settings config is invalid",
-			);
+			const settings = await Settings.loadReadOnly({ cwd: projectDir, agentDir });
+			expect(settings.startupWarnings).toEqual([expect.stringContaining(configPath)]);
 
 			expect(await Bun.file(configPath).text()).toBe(original);
 			expect(fs.readdirSync(agentDir).filter(name => name.startsWith("config.yml.broken-"))).toEqual([]);
@@ -1420,24 +1484,26 @@ describe("Settings", () => {
 			});
 		});
 
-		it("observes both failures when global and project configs are malformed", async () => {
+		it("warns about both malformed configs without modifying either file", async () => {
 			const malformed = 'modelRoles:\n  default: "unterminated\n';
-			await Promise.all([
-				Bun.write(getConfigPath(), malformed),
-				Bun.write(path.join(projectDir, ".omp", "config.yml"), malformed),
-			]);
+			const projectConfigPath = path.join(projectDir, ".omp", "config.yml");
+			await Promise.all([Bun.write(getConfigPath(), malformed), Bun.write(projectConfigPath, malformed)]);
 			const unhandled: unknown[] = [];
 			const onUnhandled = (reason: unknown): void => {
 				unhandled.push(reason);
 			};
 			process.on("unhandledRejection", onUnhandled);
 			try {
-				await expect(Settings.init({ cwd: projectDir, agentDir })).rejects.toThrow("Settings config is invalid");
+				const settings = await Settings.init({ cwd: projectDir, agentDir });
 				expect(unhandled).toEqual([]);
-				expect(fs.readdirSync(agentDir).some(name => name.startsWith("config.yml.broken-"))).toBe(true);
-				expect(
-					fs.readdirSync(path.join(projectDir, ".omp")).some(name => name.startsWith("config.yml.broken-")),
-				).toBe(true);
+				expect(settings.startupWarnings).toEqual(
+					expect.arrayContaining([
+						expect.stringContaining(getConfigPath()),
+						expect.stringContaining(projectConfigPath),
+					]),
+				);
+				expect(await Bun.file(getConfigPath()).text()).toBe(malformed);
+				expect(await Bun.file(projectConfigPath).text()).toBe(malformed);
 			} finally {
 				process.removeListener("unhandledRejection", onUnhandled);
 			}
@@ -3135,12 +3201,14 @@ describe("Settings", () => {
 				expect(maxActive).toBe(1);
 			});
 
-			it("rejects invalid provider limits from config.yml", async () => {
+			it("warns and uses the default for invalid provider limits from config.yml", async () => {
 				await writeSettings({ providers: { maxInFlightRequests: { openai: "2" } } });
 
-				await expect(Settings.init({ cwd: projectDir, agentDir })).rejects.toThrow(
-					"Provider request limits must be positive numbers: openai",
-				);
+				const settings = await Settings.init({ cwd: projectDir, agentDir });
+				expect(cfgProvidersMaxInFlightRequests.get(settings)).toEqual(cfgProvidersMaxInFlightRequests.default);
+				expect(settings.startupWarnings).toEqual([
+					expect.stringContaining("Provider request limits must be positive numbers: openai"),
+				]);
 			});
 
 			it("rejects invalid provider limits from project settings", async () => {

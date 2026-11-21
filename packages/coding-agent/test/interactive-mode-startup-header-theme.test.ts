@@ -58,6 +58,9 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-interactive-mode-startup-header-theme-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		const agentDir = path.join(tempDir.path(), "agent");
+		await Bun.write(path.join(agentDir, "config.yml"), "chronicler: {backfill: {timeoutMs: -1}}\n");
+		const settings = await Settings.loadReadOnly({ cwd: tempDir.path(), agentDir });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -65,7 +68,7 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry,
 		});
 		mode = new InteractiveMode(session, "test");
@@ -102,6 +105,19 @@ describe("InteractiveMode startup header after the terminal reports a light back
 		if (line === undefined) throw new Error(`Expected a rendered row containing ${JSON.stringify(text)}`);
 		return line;
 	}
+
+	it("renders invalid settings from disk as a startup warning", async () => {
+		await mode.init();
+		const configPath = path.join(tempDir.path(), "agent", "config.yml");
+		expect(
+			mode.ui
+				.render(240)
+				.map(row => Bun.stripANSI(row))
+				.join("\n"),
+		).toContain(
+			`Warning: Settings: ${configPath}: chronicler.backfill.timeoutMs must be a nonnegative number; using the default`,
+		);
+	});
 
 	it("recolors the What's New heading", async () => {
 		await mode.init();

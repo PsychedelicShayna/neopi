@@ -9575,7 +9575,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Header rows for the current config warnings, rebuilt when they change (#10048). */
 	#buildConfigWarningComponents(): Component[] {
 		const components: Component[] = [];
-		for (const warning of this.session.configWarnings) {
+		for (const warning of [...this.settings.startupWarnings, ...this.session.configWarnings]) {
 			components.push(
 				new Text(`Warning: ${warning}`, 1, 0).setStyleFn(t => theme.fg("warning", t)),
 				new Spacer(1),
