@@ -15,6 +15,7 @@
 
 ### Added
 
+- **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).

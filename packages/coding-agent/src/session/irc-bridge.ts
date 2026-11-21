@@ -19,6 +19,7 @@ export interface IrcBridgeHost {
 	isStreaming(): boolean;
 	planModeEnabled(): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
+	canWake?(record: AgentMessage): boolean;
 	wakeForIrc(records: AgentMessage[]): void;
 }
 
@@ -292,7 +293,7 @@ export class IrcBridge {
 			}
 			return "injected";
 		}
-		if (this.#host.planModeEnabled()) {
+		if (this.#host.planModeEnabled() || this.#host.canWake?.(record) === false) {
 			this.#host.agent.appendMessage(record);
 			setMessageEntryId(
 				record,
