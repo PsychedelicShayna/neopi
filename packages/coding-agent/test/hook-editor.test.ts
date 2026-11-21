@@ -1,6 +1,7 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
@@ -258,6 +259,44 @@ describe("HookEditorComponent default (hook) mode", () => {
 });
 
 describe("HookEditorComponent prompt-style mode", () => {
+	it.each([false, true])("saves note drafts on Escape (Vim: %s)", vim => {
+		const previous = getMenuSearchVimMode();
+		setMenuSearchVimMode(vim);
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const note = new HookEditorComponent(createTui(), "Note for A", undefined, onSubmit, onCancel, {
+			promptStyle: true,
+			saveOnEscape: true,
+		});
+		try {
+			for (const char of "keep this") note.handleInput(char);
+			note.handleInput("\x1b");
+			if (vim) {
+				expect(onSubmit).not.toHaveBeenCalled();
+				expect(renderText(note)).toContain("keep this");
+				note.handleInput("\x1b");
+			}
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+			expect(onSubmit).toHaveBeenCalledWith("keep this");
+			expect(onCancel).not.toHaveBeenCalled();
+		} finally {
+			note.dispose();
+			setMenuSearchVimMode(previous);
+		}
+	});
+
+	it("uses Ctrl+C to cancel a note edit without saving", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const note = new HookEditorComponent(createTui(), "Note for A", "existing", onSubmit, onCancel, {
+			promptStyle: true,
+			saveOnEscape: true,
+		});
+		note.handleInput("\x03");
+		expect(onCancel).toHaveBeenCalledWith("existing");
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("cuts a long question to the terminal title but gives native hosts all of it", () => {
 		const question = `${"Which of these directions should the effort meter take? ".repeat(12)}FINAL-WORDS`;
 		const component = new HookEditorComponent(createTui(), "Custom answer", undefined, vi.fn(), vi.fn(), {

@@ -1391,6 +1391,7 @@ export class ExtensionUiController {
 						(text, images) => finishPrompt({ draft: { text, images } }),
 						{
 							promptStyle: true,
+							saveOnEscape: prompt.saveOnEscape,
 							externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
 							question: prompt.question,
 							...options,

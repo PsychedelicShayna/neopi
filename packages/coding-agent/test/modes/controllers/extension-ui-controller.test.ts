@@ -315,6 +315,36 @@ describe("ExtensionUiController Ask dialog input", () => {
 		});
 	});
 
+	it("leaves Vim Insert before saving the item note on Escape; Ctrl+C discards an edit", async () => {
+		const previousVim = getMenuSearchVimMode();
+		setMenuSearchVimMode(true);
+		try {
+			const harness = makeHarness();
+			const pending = harness.controller.showAskDialog(questions);
+			harness.handleInput("n");
+			const note = harness.getPrompt();
+			for (const char of "keep") harness.handleInput(char);
+			harness.handleInput("\x1b");
+			expect(harness.getFocused()).toBe(note);
+			harness.handleInput("\x1b");
+			await Promise.resolve();
+			expect(harness.getFocused()).toBeInstanceOf(AskDialogComponent);
+
+			harness.handleInput("n");
+			expect(stripVTControlCharacters(harness.getPrompt().render(80).join("\n"))).toContain("keep");
+			harness.handleInput("x");
+			harness.handleInput("\x03");
+			await Promise.resolve();
+			harness.handleInput("\r");
+			expect(await pending).toMatchObject({
+				kind: "submit",
+				results: [{ selectedOptions: ["Default"], notes: [{ option: "Default", note: "keep" }] }],
+			});
+		} finally {
+			setMenuSearchVimMode(previousVim);
+		}
+	});
+
 	it("discards a cancelled prompt's late paste after a new custom editor opens", async () => {
 		const harness = makeHarness();
 		const clipboard = Promise.withResolvers<string>();
@@ -713,7 +743,7 @@ describe("ExtensionUiController editor UI", () => {
 					multi: false,
 					selectedOptions: ["Yes"],
 					customInput: undefined,
-					note: undefined,
+					notes: undefined,
 					timedOut: undefined,
 				},
 			],

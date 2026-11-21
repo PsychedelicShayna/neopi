@@ -5279,18 +5279,17 @@
 			],
 			"description": "Raw session tree roots."
 		},
-		"TreeAskOptionNote": {
+		"TreeAskItemNote": {
 			"type": "object",
 			"properties": {
-				"option": {
+				"note": {
 					"type": "string"
 				},
-				"note": {
+				"option": {
 					"type": "string"
 				}
 			},
 			"required": [
-				"option",
 				"note"
 			]
 		},
@@ -5321,17 +5320,11 @@
 				"customInput": {
 					"type": "string"
 				},
-				"note": {
-					"type": "string"
-				},
-				"optionNotes": {
+				"notes": {
 					"type": "array",
 					"items": {
-						"$ref": "#/$defs/TreeAskOptionNote"
+						"$ref": "#/$defs/TreeAskItemNote"
 					}
-				},
-				"noteOption": {
-					"type": "string"
 				},
 				"timedOut": {
 					"type": "boolean"
@@ -5369,17 +5362,11 @@
 				"customInput": {
 					"type": "string"
 				},
-				"note": {
-					"type": "string"
-				},
-				"optionNotes": {
+				"notes": {
 					"type": "array",
 					"items": {
-						"$ref": "#/$defs/TreeAskOptionNote"
+						"$ref": "#/$defs/TreeAskItemNote"
 					}
-				},
-				"noteOption": {
-					"type": "string"
 				},
 				"timedOut": {
 					"type": "boolean"

@@ -24,12 +24,20 @@ function expected(question: ExtensionAskDialogQuestion, selectedOptions: string[
 describe("controlAnswerToAskResult", () => {
 	it.each([
 		[0, ["Alpha"], {}],
-		[{ index: 1, note: "because" }, ["BETA"], { note: "because" }],
+		[
+			{ index: 1, notes: [{ option: "BETA", note: "because" }] },
+			["BETA"],
+			{ notes: [{ option: "BETA", note: "because" }] },
+		],
 		[{ indices: [2] }, ["beta"], {}],
 		["beta", ["beta"], {}],
 		["  BeTa  ", ["BETA"], {}],
 		["A custom answer", [], { customInput: "A custom answer" }],
-		[{ text: "Alpha", note: "literal text" }, [], { customInput: "Alpha", note: "literal text" }],
+		[
+			{ text: "Alpha", notes: [{ note: "literal text" }] },
+			[],
+			{ customInput: "Alpha", notes: [{ note: "literal text" }] },
+		],
 		[{ custom: "Other" }, [], { customInput: "Other" }],
 	])("normalizes a single answer %j", (value, selectedOptions, extra) => {
 		expect(controlAnswerToAskResult([single], value)).toEqual({
@@ -39,9 +47,13 @@ describe("controlAnswerToAskResult", () => {
 	});
 
 	it("selects multiple raw labels and permits an empty multi-selection", () => {
-		expect(controlAnswerToAskResult([multi], { indices: [0, 2], note: "both" })).toEqual({
+		const notes = [
+			{ option: "Alpha", note: "first" },
+			{ option: "BETA", note: "not this" },
+		];
+		expect(controlAnswerToAskResult([multi], { indices: [0, 2], notes })).toEqual({
 			kind: "submit",
-			results: [expected(multi, ["Alpha", "beta"], { note: "both" })],
+			results: [expected(multi, ["Alpha", "beta"], { notes })],
 		});
 		expect(controlAnswerToAskResult([multi], { indices: [] })).toEqual({
 			kind: "submit",
@@ -61,24 +73,30 @@ describe("controlAnswerToAskResult", () => {
 						options: [],
 						multi: true,
 						selectedOptions: ["Alpha"],
-						note: "yes",
+						notes: [{ option: "Alpha", note: "yes" }],
 					},
 					{ selectedOptions: [], customInput: "custom" },
 				],
 			}),
 		).toEqual({
 			kind: "submit",
-			results: [expected(single, ["Alpha"], { note: "yes" }), expected(multi, [], { customInput: "custom" })],
+			results: [
+				expected(single, ["Alpha"], { notes: [{ option: "Alpha", note: "yes" }] }),
+				expected(multi, [], { customInput: "custom" }),
+			],
 		});
 	});
 
 	it.each([
-		[[{ index: 2 }, { indices: [0, 1], note: "together" }]],
-		{ many: { indices: [0, 1], note: "together" }, choice: { index: 2 } },
+		[[{ index: 2 }, { indices: [0, 1], notes: [{ option: "Alpha", note: "together" }] }]],
+		{ many: { indices: [0, 1], notes: [{ option: "Alpha", note: "together" }] }, choice: { index: 2 } },
 	])("maps multiple questions in order from %j", value => {
 		expect(controlAnswerToAskResult([single, multi], value)).toEqual({
 			kind: "submit",
-			results: [expected(single, ["beta"]), expected(multi, ["Alpha", "BETA"], { note: "together" })],
+			results: [
+				expected(single, ["beta"]),
+				expected(multi, ["Alpha", "BETA"], { notes: [{ option: "Alpha", note: "together" }] }),
+			],
 		});
 	});
 
@@ -106,6 +124,14 @@ describe("controlAnswerToAskResult", () => {
 			{ text: 1 },
 			{ custom: false },
 			{ index: 0, note: 1 },
+			{ index: 0, notes: [{ option: "unknown", note: "no" }] },
+			{
+				index: 0,
+				notes: [
+					{ option: "Alpha", note: "first" },
+					{ option: "Alpha", note: "second" },
+				],
+			},
 			{ kind: "submit" },
 			{ kind: "submit", results: [] },
 			{ kind: "submit", results: [{ selectedOptions: [0] }] },

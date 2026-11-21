@@ -5085,20 +5085,20 @@ func (v *SessionTree) decodeFrom(raw map[string]json.RawMessage) error {
 	return nil
 }
 
-type TreeAskOptionNote struct {
-	Option string `json:"option"`
-	Note   string `json:"note"`
+type TreeAskItemNote struct {
+	Note   string  `json:"note"`
+	Option *string `json:"option,omitempty"`
 }
 
-func (v *TreeAskOptionNote) UnmarshalJSON(data []byte) error {
-	return decodeWith(data, "TreeAskOptionNote", v.decodeFrom)
+func (v *TreeAskItemNote) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "TreeAskItemNote", v.decodeFrom)
 }
 
-func (v *TreeAskOptionNote) decodeFrom(raw map[string]json.RawMessage) error {
-	var out TreeAskOptionNote
-	d := fieldDecoder{raw: raw, owner: "TreeAskOptionNote"}
-	d.required("option", &out.Option)
+func (v *TreeAskItemNote) decodeFrom(raw map[string]json.RawMessage) error {
+	var out TreeAskItemNote
+	d := fieldDecoder{raw: raw, owner: "TreeAskItemNote"}
 	d.required("note", &out.Note)
+	d.optional("option", &out.Option)
 	if d.err != nil {
 		return d.err
 	}
@@ -5107,16 +5107,14 @@ func (v *TreeAskOptionNote) decodeFrom(raw map[string]json.RawMessage) error {
 }
 
 type TreeAskQuestionResult struct {
-	ID              string              `json:"id"`
-	Question        string              `json:"question"`
-	Options         []string            `json:"options"`
-	Multi           bool                `json:"multi"`
-	SelectedOptions []string            `json:"selectedOptions"`
-	CustomInput     *string             `json:"customInput,omitempty"`
-	Note            *string             `json:"note,omitempty"`
-	OptionNotes     []TreeAskOptionNote `json:"optionNotes,omitempty"`
-	NoteOption      *string             `json:"noteOption,omitempty"`
-	TimedOut        *bool               `json:"timedOut,omitempty"`
+	ID              string            `json:"id"`
+	Question        string            `json:"question"`
+	Options         []string          `json:"options"`
+	Multi           bool              `json:"multi"`
+	SelectedOptions []string          `json:"selectedOptions"`
+	CustomInput     *string           `json:"customInput,omitempty"`
+	Notes           []TreeAskItemNote `json:"notes,omitempty"`
+	TimedOut        *bool             `json:"timedOut,omitempty"`
 }
 
 func (v *TreeAskQuestionResult) UnmarshalJSON(data []byte) error {
@@ -5132,9 +5130,7 @@ func (v *TreeAskQuestionResult) decodeFrom(raw map[string]json.RawMessage) error
 	d.required("multi", &out.Multi)
 	d.required("selectedOptions", &out.SelectedOptions)
 	d.optional("customInput", &out.CustomInput)
-	d.optional("note", &out.Note)
-	d.optional("optionNotes", &out.OptionNotes)
-	d.optional("noteOption", &out.NoteOption)
+	d.optional("notes", &out.Notes)
 	d.optional("timedOut", &out.TimedOut)
 	if d.err != nil {
 		return d.err
@@ -5149,9 +5145,7 @@ type TreeAskDetails struct {
 	Multi           *bool                   `json:"multi,omitempty"`
 	SelectedOptions []string                `json:"selectedOptions,omitempty"`
 	CustomInput     *string                 `json:"customInput,omitempty"`
-	Note            *string                 `json:"note,omitempty"`
-	OptionNotes     []TreeAskOptionNote     `json:"optionNotes,omitempty"`
-	NoteOption      *string                 `json:"noteOption,omitempty"`
+	Notes           []TreeAskItemNote       `json:"notes,omitempty"`
 	TimedOut        *bool                   `json:"timedOut,omitempty"`
 	Results         []TreeAskQuestionResult `json:"results,omitempty"`
 	ChatRedirect    *bool                   `json:"chatRedirect,omitempty"`
@@ -5170,9 +5164,7 @@ func (v *TreeAskDetails) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("multi", &out.Multi)
 	d.optional("selectedOptions", &out.SelectedOptions)
 	d.optional("customInput", &out.CustomInput)
-	d.optional("note", &out.Note)
-	d.optional("optionNotes", &out.OptionNotes)
-	d.optional("noteOption", &out.NoteOption)
+	d.optional("notes", &out.Notes)
 	d.optional("timedOut", &out.TimedOut)
 	d.optional("results", &out.Results)
 	d.optional("chatRedirect", &out.ChatRedirect)

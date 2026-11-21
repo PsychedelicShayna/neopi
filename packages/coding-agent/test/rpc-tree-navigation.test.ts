@@ -448,9 +448,10 @@ describe("native RPC tree navigation", () => {
 				details: {
 					question: "Where?",
 					selectedOptions: ["production"],
-					note: "Wait for the deployment window",
-					noteOption: "production",
-					optionNotes: [{ option: "production", note: "Use the approved rollout" }],
+					notes: [
+						{ option: "staging", note: "Wait for the deployment window" },
+						{ option: "production", note: "Use the approved rollout" },
+					],
 				},
 			},
 		});
@@ -463,9 +464,10 @@ describe("native RPC tree navigation", () => {
 			message: {
 				role: "toolResult",
 				details: {
-					note: "Wait for the deployment window",
-					noteOption: "production",
-					optionNotes: [{ option: "production", note: "Use the approved rollout" }],
+					notes: [
+						{ option: "staging", note: "Wait for the deployment window" },
+						{ option: "production", note: "Use the approved rollout" },
+					],
 				},
 			},
 		});

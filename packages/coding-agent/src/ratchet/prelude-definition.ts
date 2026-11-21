@@ -173,7 +173,10 @@ async function askApproval(
 		const choice = answer.selectedOptions[0];
 		if (choice === "Approve") return { approved: true };
 		if (choice === "Abort") return { approved: false, aborted: true };
-		const feedback = answer.customInput ?? answer.note ?? (await ui.input("What should change?"));
+		const feedback =
+			answer.customInput ??
+			answer.notes?.find(note => note.option === choice)?.note ??
+			(await ui.input("What should change?"));
 		return { approved: false, aborted: false, feedback: feedback ?? "" };
 	}
 	const choice = await untilAborted(context.signal, () =>
