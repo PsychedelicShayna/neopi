@@ -36,6 +36,7 @@ interface AppKeybindings {
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
 	"app.model.selectTemporary": true;
+	"app.settings.open": true;
 	"app.tools.expand": true;
 	"app.tools.toggleVisibility": true;
 	"app.ask.hide": true;
@@ -152,6 +153,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "alt+p",
 		description: "Select temporary model for current session",
 	},
+	"app.settings.open": {
+		defaultKeys: "alt+s",
+		description: "Open Settings without changing the draft",
+	},
 	"app.tools.expand": {
 		// Ctrl+O is menu-history back (app.navigation.back), Vim's jumplist key.
 		defaultKeys: "alt+e",
@@ -170,7 +175,7 @@ export const KEYBINDINGS = {
 		description: "Cancel a pending ask dialog",
 	},
 	"app.chain.skipStep": {
-		defaultKeys: "alt+s",
+		defaultKeys: "ctrl+alt+s",
 		description: "Skip the current preprocessing step",
 	},
 	"app.ask.note": {
@@ -202,7 +207,7 @@ export const KEYBINDINGS = {
 	"app.message.chain": {
 		// Not an Enter chord: legacy terminals and tmux send Alt+Enter as ESC CR,
 		// the same bytes many terminals map Shift+Enter (newline) to.
-		defaultKeys: "alt+c",
+		defaultKeys: "ctrl+alt+c",
 		description: "Send through the active post-processing chain",
 	},
 	"app.repl.toggle": {

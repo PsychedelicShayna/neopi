@@ -319,6 +319,8 @@ describe("chain send default", () => {
 		for (const newline of ["\x1b\r", "\x1b[13;2~", "\x1b[13;2u", "\x1b[13;3u", "\n"]) {
 			expect(keybindings.matches(newline, "app.message.chain")).toBe(false);
 		}
-		expect(keybindings.matches("\x1bc", "app.message.chain")).toBe(true);
+		expect(keybindings.matches("\x1b\x03", "app.message.chain")).toBe(true);
+		// Alt+C is reserved for other use; it no longer sends through the chain.
+		expect(keybindings.matches("\x1bc", "app.message.chain")).toBe(false);
 	});
 });

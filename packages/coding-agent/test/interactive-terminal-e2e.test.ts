@@ -7,6 +7,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -78,6 +79,56 @@ describe("libkitty end-to-end", () => {
 		const hits = viewport.filter(row => row.includes("hi there omp"));
 		if (hits.length !== 1) dump("viewport after submit", viewport);
 		expect(hits.length).toBe(1);
+	});
+
+	it("opens Settings from a multiline draft and returns to the original insertion point", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+
+		term.sendInput("\x1b[200~first\nsecond\x1b[201~");
+		term.sendInput("\x1b[D");
+		term.sendInput(",");
+		const draft = "first\nsecon,d";
+		expect(mode.editor.getText()).toBe(draft);
+		expect(mode.ui.getFocused()).toBe(mode.editor);
+
+		term.sendInput("\x1bs");
+		await term.waitForRender(() => mode.ui.getFocused() instanceof SettingsSelectorComponent);
+		expect(mode.ui.getFocused()).toBeInstanceOf(SettingsSelectorComponent);
+		expect(mode.editor.getText()).toBe(draft);
+
+		term.sendInput("\x1b");
+		expect(mode.ui.getFocused()).toBe(mode.editor);
+		expect(mode.editor.getText()).toBe(draft);
+		term.sendInput("!");
+		expect(mode.editor.getText()).toBe("first\nsecon,!d");
+	});
+
+	it("honors a remapped Settings shortcut without leaving Vim Normal mode", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+
+		mode.keybindings.setUserBindings({ "app.settings.open": "alt+j" });
+		mode.editor.setVimMode(true);
+		mode.editor.setText("first\nsecond");
+		term.sendInput("\x1b");
+		expect(mode.editor.vimMode).toBe("normal");
+		const cursor = mode.editor.getCursor();
+
+		term.sendInput("\x1bs");
+		await term.waitForRender();
+		expect(mode.ui.getFocused()).toBe(mode.editor);
+
+		term.sendInput("\x1bj");
+		await term.waitForRender(() => mode.ui.getFocused() instanceof SettingsSelectorComponent);
+		expect(mode.ui.getFocused()).toBeInstanceOf(SettingsSelectorComponent);
+		term.sendInput("\x1b");
+		expect(mode.ui.getFocused()).toBe(mode.editor);
+		expect(mode.editor.vimMode).toBe("normal");
+		expect(mode.editor.getText()).toBe("first\nsecond");
+		expect(mode.editor.getCursor()).toEqual(cursor);
 	});
 
 	it("keeps the whole buffer clean across non-overflowing width resizes", async () => {

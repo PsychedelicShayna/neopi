@@ -557,6 +557,11 @@ export class InputController {
 					this.ctx.showHistorySearch();
 					return { consume: true };
 				}
+				if (this.ctx.keybindings.matches(data, "app.settings.open")) {
+					if (this.ctx.ui.hasOverlay() || this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.ctx.showSettingsSelector();
+					return { consume: true };
+				}
 				if (this.ctx.keybindings.matches(data, "app.editor.external")) {
 					if (this.ctx.ui.hasOverlay()) return undefined;
 					const focused = this.ctx.ui.getFocused();

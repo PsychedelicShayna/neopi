@@ -174,6 +174,27 @@ describe("parseKey", () => {
 		setKittyProtocolActive(false);
 	});
 
+	it("distinguishes Ctrl+comma from plain comma in enhanced keyboard input", () => {
+		setKittyProtocolActive(true);
+		expect(parseKey("\x1b[44;5u")).toBe("ctrl+,");
+		expect(matchesKey("\x1b[44;5u", "ctrl+,")).toBe(true);
+		setKittyProtocolActive(false);
+		expect(parseKey("\x1b[27;5;44~")).toBe("ctrl+,");
+		expect(matchesKey("\x1b[27;5;44~", "ctrl+,")).toBe(true);
+		expect(parseKey(",")).toBe(",");
+		expect(matchesKey(",", "ctrl+,")).toBe(false);
+	});
+
+	it.each([
+		["\x1bs", "alt+s"],
+		["\x1b\x13", "ctrl+alt+s"],
+		["\x1b\x03", "ctrl+alt+c"],
+	] as const)("decodes legacy %j as %s without Kitty", (data, key) => {
+		setKittyProtocolActive(false);
+		expect(parseKey(data)).toBe(key);
+		expect(matchesKey(data, key)).toBe(true);
+	});
+
 	it("parses keypad operators as printable keys", () => {
 		setKittyProtocolActive(true);
 		expect(parseKey("\x1b[57410u")).toBe("/");

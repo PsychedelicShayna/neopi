@@ -20,7 +20,7 @@ describe("CustomEditor chain lock", () => {
 		editor.handleInput("\x1b");
 		expect(onSkip).not.toHaveBeenCalled();
 		expect(onCancel).not.toHaveBeenCalled();
-		editor.handleInput("\x1bs");
+		editor.handleInput("\x1b\x13");
 		expect(onSkip).toHaveBeenCalledTimes(1);
 
 		editor.handleInput("\x03");
