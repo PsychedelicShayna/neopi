@@ -1,3 +1,6 @@
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -5,16 +8,33 @@ import { parseInternalUrl } from "../../internal-urls/parse";
 import { SecurityProtocolHandler } from "../../internal-urls/security-protocol";
 import validationRequestPrompt from "../../prompts/security/validate-request.md" with { type: "text" };
 import { selectSecurityOAuthAccount } from "../../security/auth";
-import { CodexSecurityCloudClient, pullCodexSecurityCloudResults } from "../../security/cloud";
+import {
+	type CodexSecurityCloudConfiguration,
+	CodexSecurityCloudClient,
+	pullCodexSecurityCloudResults,
+} from "../../security/cloud";
 import type { SecurityDispositionStatus } from "../../security/contracts";
 import type { SecurityPreflightInput } from "../../security/coordinator";
-import { getSecurityCoordinator } from "../../security/coordinator";
+import { getSecurityCoordinator, listKnownSecurityOperations } from "../../security/coordinator";
 import { importCodexSecurityBundle, importSarifFile } from "../../security/importers";
 import type { SecurityTargetRequest } from "../../security/preflight";
 import { SecurityStore, writeSecurityFileAtomic } from "../../security/store";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { parseCommandArgs } from "../../utils/command-args";
-import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
+import {
+	argumentValues,
+	buildArgumentCompletions,
+	buildDirectoryArgumentCompletions,
+	completeCurrentArgument,
+} from "../builtin-completions";
+import type {
+	ArgumentValueProvider,
+	ParsedSlashCommand,
+	SlashCommandResult,
+	SlashCommandRuntime,
+	SubcommandDef,
+	TuiSlashCommandRuntime,
+} from "../types";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./parse";
 
 import { cfgSecurityEnabled } from "../../tools/settings";
@@ -34,6 +54,370 @@ const DISPOSITIONS: ReadonlySet<SecurityDispositionStatus> = new Set([
 	"fixed",
 	"wont_fix",
 ]);
+
+const EXPORT_FORMATS = ["bundle", "sarif", "report"] as const;
+const CLOUD_PROVIDER = "openai-codex";
+// Only explicit cloud commands populate suggestions. Typing never contacts the provider.
+const CLOUD_OPTIONS = new WeakMap<SlashCommandRuntime["session"], Map<number, CodexSecurityCloudConfiguration[]>>();
+
+type OptionSlots = Readonly<Record<string, readonly (ArgumentValueProvider | null)[]>>;
+
+function completionContext(runtime: TuiSlashCommandRuntime | undefined) {
+	if (!runtime || !cfgSecurityEnabled.get(runtime.ctx.settings)) return null;
+	return { session: runtime.ctx.session, cwd: runtime.ctx.sessionManager.getCwd() };
+}
+
+async function withCompletionStore(
+	runtime: TuiSlashCommandRuntime | undefined,
+	complete: (store: SecurityStore) => Promise<AutocompleteItem[] | null>,
+) {
+	const context = completionContext(runtime);
+	if (!context) return null;
+	try {
+		return await complete(await SecurityStore.openForCwd(context.cwd, { initialize: false }));
+	} catch {
+		return null;
+	}
+}
+
+function scanValues(acceptsUri: boolean): ArgumentValueProvider {
+	return (prefix, runtime) =>
+		withCompletionStore(runtime, async store => {
+			const ids = await store.listIds("scan");
+			const values =
+				acceptsUri && prefix.toLowerCase().startsWith("security:") ? ids.map(id => `security://scans/${id}`) : ids;
+			return argumentValues(...values)(prefix);
+		});
+}
+
+const scanIdValues = scanValues(false);
+const planIdValues: ArgumentValueProvider = (prefix, runtime) =>
+	withCompletionStore(runtime, async store => argumentValues(...(await store.listIds("plan")))(prefix));
+
+async function findingValues(store: SecurityStore, scanId: string, prefix: string, uriPrefix = "") {
+	if (!/^secscan_[a-z0-9]+$/i.test(scanId)) return null;
+	const lower = prefix.toLowerCase();
+	return (await store.listFindings(scanId))
+		.filter(finding => finding.id.toLowerCase().startsWith(lower))
+		.map(finding => ({
+			value: `${uriPrefix}${finding.id} `,
+			label: finding.id,
+			description: `${finding.severity.level}: ${sanitizeText(finding.title)}`,
+			submitsCommand: false,
+		}));
+}
+
+const findingIdValues: ArgumentValueProvider = (prefix, runtime, previous) =>
+	withCompletionStore(runtime, store => findingValues(store, previous[0] ?? "", prefix));
+
+function scanResourceValues(findingOnly: boolean): ArgumentValueProvider {
+	return (prefix, runtime, previous) => {
+		if (!prefix.toLowerCase().startsWith("security:")) return scanIdValues(prefix, runtime, previous);
+		return withCompletionStore(runtime, async store => {
+			const lower = prefix.toLowerCase();
+			const findingsPath = /^security:\/\/scans\/(secscan_[a-z0-9]+)\/findings\/([^/]*)$/i.exec(prefix);
+			if (findingsPath) {
+				const scanId = findingsPath[1]!;
+				return findingValues(store, scanId, findingsPath[2]!, `security://scans/${scanId}/findings/`);
+			}
+			const ids = await store.listIds("scan");
+			if (findingOnly) {
+				return ids
+					.map(id => `security://scans/${id}/findings/`)
+					.filter(uri => uri.toLowerCase().startsWith(lower))
+					.map(uri => ({ value: uri, label: uri, submitsCommand: false }));
+			}
+			const root = "security://scans";
+			const paths = [root];
+			for (const id of ids) {
+				const scan = `${root}/${id}`;
+				paths.push(scan);
+				if (lower.startsWith(`${scan.toLowerCase()}/`)) {
+					for (const child of ["findings", "manifest", "coverage", "provenance"]) paths.push(`${scan}/${child}`);
+				}
+			}
+			return argumentValues(...paths)(prefix);
+		});
+	};
+}
+
+function operationValues(cancellableOnly: boolean): ArgumentValueProvider {
+	return async (prefix, runtime) => {
+		const context = completionContext(runtime);
+		if (!context) return null;
+		const operations = new Map<string, string>(
+			listKnownSecurityOperations(context.cwd, context.session.sessionId, cancellableOnly).map(snapshot => [
+				snapshot.operationId,
+				snapshot.phase,
+			]),
+		);
+		if (!cancellableOnly) {
+			try {
+				const store = await SecurityStore.openForCwd(context.cwd, { initialize: false });
+				for (const scanId of await store.listIds("scan")) {
+					const scan = await store.getScan(scanId);
+					const operationId = scan?.provenance.metadata?.operationId;
+					if (scan && typeof operationId === "string" && !operations.has(operationId)) {
+						operations.set(operationId, scan.status);
+					}
+				}
+			} catch {
+				// Preserve the live coordinator entries if persisted state cannot be read.
+			}
+		}
+		const lower = prefix.toLowerCase();
+		return [...operations]
+			.filter(([id]) => id.toLowerCase().startsWith(lower))
+			.map(([id, phase]) => ({
+				value: `${id} `,
+				label: id,
+				description: phase,
+				submitsCommand: !cancellableOnly,
+			}));
+	};
+}
+
+function pathValues(includeFiles: boolean): ArgumentValueProvider {
+	return async (prefix, runtime) => {
+		if (!runtime || /^["']?~/.test(prefix)) return null;
+		const items = await buildDirectoryArgumentCompletions({
+			cwd: runtime.ctx.sessionManager.getCwd(),
+			includeFiles,
+		})(prefix.replace(/^["']|["']$/g, ""));
+		return (
+			items?.flatMap(item => {
+				const value = item.value;
+				if (!/[\t "']/.test(value)) return [item];
+				const quote = !value.includes('"') ? '"' : !value.includes("'") ? "'" : null;
+				if (!quote) return [];
+				// Keep the quote open while descending into a directory.
+				return [{ ...item, value: `${quote}${value}${value.endsWith("/") ? "" : quote}` }];
+			}) ?? null
+		);
+	};
+}
+
+const pathOrFileValues = pathValues(true);
+const directoryValues = pathValues(false);
+
+const revisionValues: ArgumentValueProvider = async (prefix, runtime) => {
+	if (!runtime) return null;
+	const repo = vcs.git(runtime.ctx.sessionManager.getCwd());
+	if (!repo) return null;
+	const refs = await repo.listBranches(true).catch(() => []);
+	return argumentValues("HEAD", ...refs)(prefix);
+};
+
+function credentialValues(provider?: string): ArgumentValueProvider {
+	return (prefix, runtime) => {
+		const context = completionContext(runtime);
+		const providerId = provider ?? context?.session.model?.provider;
+		if (!context || !providerId) return null;
+		const { session } = context;
+		const accounts = session.modelRegistry.authStorage.oauth.accounts(providerId, session.sessionId);
+		return argumentValues(...accounts.map(account => String(account.credentialId)))(prefix);
+	};
+}
+
+const PLAN_OPTIONS = {
+	"--path": [pathOrFileValues],
+	"--exclude": [pathOrFileValues],
+	"--working-tree": [],
+	"--diff": [revisionValues, revisionValues],
+	"--knowledge-base": [pathOrFileValues],
+	"--output": [directoryValues],
+	"--archive-existing": [],
+	"--credential": [credentialValues()],
+} satisfies OptionSlots;
+
+const EXPORT_OPTIONS = {
+	"--output": [pathOrFileValues],
+	"--format": [argumentValues(...EXPORT_FORMATS)],
+} satisfies OptionSlots;
+
+const cloudCredential = credentialValues(CLOUD_PROVIDER);
+const cloudLookback = argumentValues("all");
+
+function cachedCloudConfigurations(runtime: TuiSlashCommandRuntime | undefined, previous: readonly string[]) {
+	const context = completionContext(runtime);
+	if (!context) return [];
+	const { session } = context;
+	const cache = CLOUD_OPTIONS.get(session);
+	if (!cache) return [];
+	try {
+		const selectedIndex = previous.lastIndexOf("--credential");
+		const id = selectedIndex === -1 ? undefined : parsePositiveCredential(previous[selectedIndex + 1] ?? "");
+		const account = selectSecurityOAuthAccount(
+			session.modelRegistry.authStorage,
+			CLOUD_PROVIDER,
+			id,
+			session.sessionId,
+		);
+		return cache.get(account.credentialId) ?? [];
+	} catch {
+		return [];
+	}
+}
+
+function cloudConfigurationValues(key: "id" | "repositoryId" | "environmentId"): ArgumentValueProvider {
+	return (prefix, runtime, previous) => {
+		const configurations = cachedCloudConfigurations(runtime, previous);
+		const ids = configurations.map(configuration => configuration[key]).filter(id => /^[a-z0-9_./:-]+$/i.test(id));
+		return argumentValues(...new Set(ids))(prefix);
+	};
+}
+
+function completeOptions(options: OptionSlots, positional?: ArgumentValueProvider): ArgumentValueProvider {
+	const flags = argumentValues(...Object.keys(options));
+	return (prefix, runtime, previous) => {
+		let hasPositional = false;
+		for (let index = 0; index < previous.length; index++) {
+			const token = previous[index]!;
+			const slots = Object.hasOwn(options, token) ? options[token] : undefined;
+			if (!slots) {
+				if (!positional || hasPositional || token.startsWith("--")) return null;
+				hasPositional = true;
+				continue;
+			}
+			for (const slot of slots) {
+				index++;
+				if (index === previous.length) return slot?.(prefix, runtime, previous) ?? null;
+				if (!previous[index] || previous[index]!.startsWith("--")) return null;
+			}
+		}
+		const choices = flags(prefix);
+		if (!positional || hasPositional || prefix.startsWith("-")) return choices;
+		const extras = positional(prefix, runtime, previous);
+		return extras instanceof Promise
+			? extras.then(items => [...(choices ?? []), ...(items ?? [])])
+			: [...(choices ?? []), ...(extras ?? [])];
+	};
+}
+
+/** Bind active-argument completion while retaining the option prefix verbatim. */
+function optionTail(provider: ArgumentValueProvider): NonNullable<SubcommandDef["getArgumentCompletions"]> {
+	return (prefix, runtime) => completeCurrentArgument(prefix, runtime, provider);
+}
+
+const completePlanOptions = completeOptions(PLAN_OPTIONS);
+const completeExportOptions = completeOptions(EXPORT_OPTIONS);
+const scanIdOrUriValues = scanValues(true);
+const completeCloudLookup = completeOptions({ "--credential": [cloudCredential] }, cloudConfigurationValues("id"));
+const CLOUD_SUBCOMMANDS: SubcommandDef[] = [
+	{
+		name: "scans",
+		description: "List cloud scan configurations",
+		usage: "[--credential <id>]",
+		getArgumentCompletions: optionTail(completeOptions({ "--credential": [cloudCredential] })),
+	},
+	{
+		name: "start",
+		description: "Start a cloud scan",
+		usage: "--repo-id <id> --repo-url <url> --environment <id> [--lookback <days|all>] [--credential <id>]",
+		getArgumentCompletions: optionTail(
+			completeOptions({
+				"--repo-id": [cloudConfigurationValues("repositoryId")],
+				"--repo-url": [null],
+				"--environment": [cloudConfigurationValues("environmentId")],
+				"--lookback": [cloudLookback],
+				"--credential": [cloudCredential],
+			}),
+		),
+	},
+	{
+		name: "status",
+		description: "Show a cloud scan’s status",
+		usage: "<configuration-id> [--credential <id>]",
+		getArgumentCompletions: optionTail(completeCloudLookup),
+	},
+	{
+		name: "pull",
+		description: "Import a cloud scan’s results",
+		usage: "<configuration-id> [--credential <id>]",
+		getArgumentCompletions: optionTail(completeCloudLookup),
+	},
+];
+
+export const SECURITY_SUBCOMMANDS: SubcommandDef[] = [
+	{
+		name: "plan",
+		description: "Create an immutable security scan plan",
+		usage: "[options]",
+		getArgumentCompletions: optionTail(completePlanOptions),
+	},
+	{
+		name: "scan",
+		description: "Start a planned or newly planned native scan",
+		usage: "[plan-id | options]",
+		getArgumentCompletions: optionTail(async (active, runtime, previous) => {
+			if (previous[0]?.startsWith("secplan_")) return null;
+			const flags = await completePlanOptions(active, runtime, previous);
+			const ids =
+				previous.length === 0 && !active.startsWith("-") ? await planIdValues(active, runtime, previous) : null;
+			return [...(ids ?? []), ...(flags ?? [])];
+		}),
+	},
+	{
+		name: "status",
+		description: "Show native scan operation status",
+		usage: "[operation-id]",
+		arguments: [operationValues(false)],
+	},
+	{
+		name: "cancel",
+		description: "Cancel a running native scan",
+		usage: "<operation-id>",
+		arguments: [operationValues(true)],
+	},
+	{ name: "scans", description: "List stored project security scans" },
+	{
+		name: "cloud",
+		description: "List, start, inspect, or import cloud scans",
+		usage: "[scans|start|status|pull]",
+		getArgumentCompletions: (prefix, runtime) =>
+			buildArgumentCompletions(CLOUD_SUBCOMMANDS, { optional: true, runtime })(prefix),
+	},
+	{
+		name: "show",
+		description: "Render a scan or security:// resource",
+		usage: "<scan-id | security:// URI>",
+		arguments: [scanResourceValues(false)],
+	},
+	{
+		name: "import",
+		description: "Import SARIF or a Codex Security bundle",
+		usage: "<path>",
+		arguments: [pathOrFileValues],
+	},
+	{
+		name: "export",
+		description: "Export a canonical bundle, SARIF, or report",
+		usage: "<scan-id> --output <path> [--format bundle|sarif|report]",
+		getArgumentCompletions: optionTail((active, runtime, previous) =>
+			previous.length === 0
+				? scanIdOrUriValues(active, runtime, previous)
+				: completeExportOptions(active, runtime, previous.slice(1)),
+		),
+	},
+	{
+		name: "validate",
+		description: `Validate one finding with ${PRODUCT_NAME}-native tools`,
+		usage: "<finding URI | scan-id finding-id>",
+		arguments: [scanResourceValues(true), findingIdValues],
+	},
+	{
+		name: "compare",
+		description: "Compare finding lineage across two scans",
+		usage: "<before-scan-id> <after-scan-id>",
+		arguments: [scanIdValues, scanIdValues],
+	},
+	{
+		name: "disposition",
+		description: "Set a finding disposition with rationale",
+		usage: "<scan-id> <finding-id> <status> [rationale]",
+		arguments: [scanIdValues, findingIdValues, argumentValues(...DISPOSITIONS), null],
+	},
+];
 
 function coordinatorFor(runtime: SlashCommandRuntime) {
 	return getSecurityCoordinator({
@@ -178,16 +562,15 @@ async function exportResults(runtime: SlashCommandRuntime, rest: string): Promis
 	const scanId = tokens[0];
 	if (!scanId) throw new Error("export requires <scan-id> --output <path> [--format bundle|sarif|report]");
 	let outputPath: string | undefined;
-	let format: "bundle" | "sarif" | "report" = "bundle";
+	let format: (typeof EXPORT_FORMATS)[number] = "bundle";
 	for (let index = 1; index < tokens.length; index++) {
 		const token = tokens[index]!;
 		if (token === "--output") outputPath = requireToken(tokens, ++index, token);
 		else if (token === "--format") {
 			const value = requireToken(tokens, ++index, token);
-			if (value !== "bundle" && value !== "sarif" && value !== "report") {
-				throw new Error(`Unknown export format: ${value}`);
-			}
-			format = value;
+			const selected = EXPORT_FORMATS.find(candidate => candidate === value);
+			if (!selected) throw new Error(`Unknown export format: ${value}`);
+			format = selected;
 		} else throw new Error(`Unknown export option: ${token}`);
 	}
 	if (!outputPath) throw new Error("export requires --output <path>");
@@ -260,20 +643,31 @@ function parseCloudOptions(rest: string, subcommand: string): CloudCliOptions {
 	return options;
 }
 
-function cloudClientFor(runtime: SlashCommandRuntime, credentialId?: number): CodexSecurityCloudClient {
-	const authStorage = runtime.session.modelRegistry.authStorage;
-	const account = selectSecurityOAuthAccount(authStorage, "openai-codex", credentialId, runtime.session.sessionId);
-	return new CodexSecurityCloudClient({ authStorage, account });
+function cloudConfigurationsFor(session: SlashCommandRuntime["session"]) {
+	let configurations = CLOUD_OPTIONS.get(session);
+	if (!configurations) {
+		configurations = new Map();
+		CLOUD_OPTIONS.set(session, configurations);
+	}
+	return configurations;
 }
 
 async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): Promise<void> {
 	const { verb, rest: optionsText } = parseSubcommand(rest);
 	const subcommand = verb || "scans";
 	const options = parseCloudOptions(optionsText, subcommand);
-	const client = cloudClientFor(runtime, options.credentialId);
+	const authStorage = runtime.session.modelRegistry.authStorage;
+	const account = selectSecurityOAuthAccount(
+		authStorage,
+		CLOUD_PROVIDER,
+		options.credentialId,
+		runtime.session.sessionId,
+	);
+	const client = new CodexSecurityCloudClient({ authStorage, account });
 	switch (subcommand) {
 		case "scans": {
 			const configurations = await client.listAllConfigurations();
+			cloudConfigurationsFor(runtime.session).set(account.credentialId, configurations);
 			await runtime.output(
 				configurations.length === 0
 					? "No Codex Security cloud scan configurations are available for this account."
@@ -305,6 +699,9 @@ async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): P
 				environmentId: options.environmentId,
 				lookbackDays: options.lookbackDays,
 			});
+			const cache = cloudConfigurationsFor(runtime.session);
+			const existing = cache.get(account.credentialId) ?? [];
+			cache.set(account.credentialId, [configuration, ...existing.filter(item => item.id !== configuration.id)]);
 			await runtime.output(
 				`Codex Security cloud scan ${configuration.id} started for ${configuration.repositoryUrl}. This consumes cloud scan allowance.`,
 			);

@@ -12,6 +12,7 @@ import type {
 	ResolvedOpenAICompat,
 	ResolvedOpenAIResponsesCompat,
 	ResolvedOpenAISharedCompat,
+	SamplingParameter,
 	VercelGatewayRouting,
 } from "@oh-my-pi/pi-catalog/types";
 import { parseAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
@@ -4265,6 +4266,41 @@ export function createInitialResponsesAssistantMessage(api: Api, provider: strin
 	};
 }
 
+const OPENAI_SAMPLING_WIRE_KEYS = {
+	temperature: "temperature",
+	topP: "top_p",
+	topK: "top_k",
+	minP: "min_p",
+	presencePenalty: "presence_penalty",
+	repetitionPenalty: "repetition_penalty",
+	frequencyPenalty: "frequency_penalty",
+} as const satisfies Record<SamplingParameter, string>;
+
+const ALL_OPENAI_SAMPLING_KEYS = Object.values(OPENAI_SAMPLING_WIRE_KEYS);
+
+/** Enforce the request's sampling contract, including fields from raw payload overrides. */
+export function stripUnsupportedOpenAISamplingParams(
+	params: object,
+	compat: Pick<
+		ResolvedOpenAISharedCompat,
+		"supportsSamplingParams" | "supportsPenaltyAndStopParams" | "unsupportedSamplingParams"
+	>,
+): void {
+	const body = params as Partial<Record<(typeof ALL_OPENAI_SAMPLING_KEYS)[number], unknown>>;
+	if (!compat.supportsSamplingParams) {
+		for (const key of ALL_OPENAI_SAMPLING_KEYS) delete body[key];
+		return;
+	}
+	if (!compat.supportsPenaltyAndStopParams) {
+		delete body.presence_penalty;
+		delete body.repetition_penalty;
+		delete body.frequency_penalty;
+	}
+	if (compat.unsupportedSamplingParams) {
+		for (const key of compat.unsupportedSamplingParams) delete body[OPENAI_SAMPLING_WIRE_KEYS[key]];
+	}
+}
+
 /** Extension fields we add on top of `ResponseCreateParamsStreaming` across the Responses-family providers. */
 export type ResponsesSamplingParamsExtras = {
 	top_p?: number;
@@ -4296,7 +4332,10 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	model: Pick<Model, "provider" | "api" | "id" | "omitMaxOutputTokens" | "maxTokens" | "identity"> & {
 		compat: Pick<
 			ResolvedOpenAISharedCompat,
-			"supportsSamplingParams" | "supportsPenaltyAndStopParams" | "clampOutputToModelMax"
+			| "supportsSamplingParams"
+			| "supportsPenaltyAndStopParams"
+			| "unsupportedSamplingParams"
+			| "clampOutputToModelMax"
 		>;
 	},
 ): void {
@@ -4319,6 +4358,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 			if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;
 		}
 	}
+	stripUnsupportedOpenAISamplingParams(params, model.compat);
 	applyOpenAIServiceTier(params, options?.serviceTier, model);
 }
 

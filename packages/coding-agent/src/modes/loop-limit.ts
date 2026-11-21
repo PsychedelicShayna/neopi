@@ -41,6 +41,9 @@ const CONDITION_FLAGS: Record<string, boolean | undefined> = {
 	"--until": true,
 };
 
+export const LOOP_DURATION_UNITS = [...TIME_UNITS_MS.keys()];
+export const LOOP_CONDITION_FLAGS = Object.keys(CONDITION_FLAGS);
+
 export interface ParsedLoopArgs {
 	/** Iteration/duration budget, when the user supplied a leading limit token. */
 	limit?: LoopLimitConfig;

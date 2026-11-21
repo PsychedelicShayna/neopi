@@ -10,6 +10,7 @@
  */
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Model } from "@oh-my-pi/pi-ai";
+import type { TspPrefsRow, TspPrefsSection } from "@oh-my-pi/pi-wire";
 import {
 	type Component,
 	Input,
@@ -51,6 +52,7 @@ import {
 	type AgentDefinitionField,
 	type AgentDefinitionInspection,
 	type AgentEditorDeps,
+	type AgentGenerationSource,
 	type DefinitionField,
 	type InlineAgentAdvisor,
 } from "./agent-definition-fields";
@@ -66,7 +68,7 @@ const FIELD_HELP: Record<AgentDefinitionField, string> = {
 	description:
 		"Shown to the delegating agent in the task catalog; it decides when this type is chosen. Say what the type is for and when not to use it.",
 	systemPrompt:
-		"The Markdown body, handed to the child as its Role. The harness appends its own context, coordination and completion (yield) instructions after it, so the body need not explain them.",
+		"The Markdown body becomes the child's Role. Write standing instructions in second person: the job, judgment calls, expected result, and what to do if blocked. The harness supplies each assignment and the mechanics of returning a result.",
 	harness:
 		"omp runs natively (default). claude runs through the Claude adapter with the subset of tools it can represent. codex parses but cannot be spawned.",
 	inherit:
@@ -104,6 +106,7 @@ const FIELD_BY_KEY = new Map(AGENT_DEFINITION_FIELDS.map(field => [field.key, fi
 const FIELD_KEYS = new Set<string>(AGENT_DEFINITION_FIELDS.map(field => field.key));
 const EFFORT_SUFFIX = /:(minimal|low|medium|high|xhigh|max)$/;
 const DONE = "__done";
+const INHERITS_ITEM = "inherits";
 
 type Screen =
 	| "detail"
@@ -134,7 +137,8 @@ interface ChoiceOption {
 	label: string;
 	description?: string;
 }
-interface ChecklistOptions extends ChecklistSelectionOptions {
+interface ChecklistOptions extends Omit<ChecklistSelectionOptions, "selected"> {
+	selected: readonly string[] | undefined;
 	title: string;
 	subtitle: string;
 	field: AgentDefinitionField;
@@ -142,6 +146,7 @@ interface ChecklistOptions extends ChecklistSelectionOptions {
 	custom?: string;
 	apply: (selected: string[] | undefined) => void;
 }
+type GenerationReferences = Pick<Parameters<AgentEditorDeps["generate"]>[0], "baseDefinitions" | "sources">;
 type PreviewBlock =
 	| { kind: "title"; text: string; sub?: string }
 	| { kind: "section"; text: string }
@@ -244,6 +249,7 @@ export class AgentDefinitionEditor implements Component {
 		this.#close = close;
 		this.#scope = scope;
 		this.#saved = deps.serialize(this.#draft);
+		if (deps.embedded) this.#split.setLeftSize({ ratio: 0.46, min: 22, max: 72 });
 		this.#title = definition.name ? `Edit ${definition.name}` : "New agent definition";
 		this.#active = new SelectList([], 1, getSelectListTheme());
 		this.#showDetail();
@@ -257,6 +263,40 @@ export class AgentDefinitionEditor implements Component {
 	}
 	get dirty(): boolean {
 		return this.#deps.serialize(this.#draft) !== this.#saved;
+	}
+	get rosterVisible(): boolean {
+		return !this.#closed && this.#screen === "detail";
+	}
+	get selectedDetailItem(): string | undefined {
+		return this.rosterVisible && this.#active instanceof SelectList
+			? this.#active.getSelectedItem()?.value
+			: undefined;
+	}
+	get detailNotice(): string | undefined {
+		return this.rosterVisible ? this.#notice || undefined : undefined;
+	}
+	detailSections(): readonly TspPrefsSection[] {
+		if (!this.rosterVisible || !(this.#active instanceof SelectList)) return [];
+		const sections: { id: string; title: string; rows: TspPrefsRow[] }[] = [];
+		const selected = this.selectedDetailItem;
+		let section: (typeof sections)[number] | undefined;
+		for (const item of this.#active.pickerView().items) {
+			if (item.value.startsWith("group:")) {
+				const group = item.value.slice("group:".length);
+				section = { id: group.toLowerCase(), title: group === "actions" ? "Author & file" : group, rows: [] };
+				sections.push(section);
+				continue;
+			}
+			const field = FIELD_BY_KEY.get(item.value as AgentDefinitionField);
+			section?.rows.push({
+				id: item.value,
+				label: item.label.trim(),
+				hint: field && item.value === selected ? FIELD_HELP[field.key] : undefined,
+				disabled: item.disabled ? item.description || "Not available" : undefined,
+				control: { k: "action", label: item.description || "Open", act: "edit" },
+			});
+		}
+		return sections;
 	}
 	invalidate(): void {
 		this.#active.invalidate?.();
@@ -414,6 +454,7 @@ export class AgentDefinitionEditor implements Component {
 
 	#showDetail(selected?: string): void {
 		this.#pages = [];
+		const dirty = this.dirty;
 		const inspection = this.#inspect();
 		const warned = new Set(
 			inspection?.findings.filter(finding => finding.level === "warn").map(finding => finding.field) ?? [],
@@ -433,6 +474,14 @@ export class AgentDefinitionEditor implements Component {
 					description: this.#fieldSummary(key),
 				});
 			}
+			if (group.title === "Identity") {
+				items.push({
+					value: INHERITS_ITEM,
+					label: "  Inherits (not yet available)",
+					description: "AGENTS.md / harness system prompt",
+					disabled: true,
+				});
+			}
 		}
 		items.push({ value: "group:actions", label: theme.fg("dim", "AUTHOR & FILE"), disabled: true });
 		items.push(
@@ -441,7 +490,11 @@ export class AgentDefinitionEditor implements Component {
 				label: "  Generate with the author…",
 				description: "Describe the agent; filled fields are kept",
 			},
-			{ value: "from-existing", label: "  Generate from existing definitions…", description: "Mix selected types" },
+			{
+				value: "from-existing",
+				label: "  Generate from sources…",
+				description: "Mix definitions and other harness sources",
+			},
 		);
 		for (const missing of this.#missingSpawnTargets())
 			if (this.#deps.createMissing)
@@ -450,6 +503,13 @@ export class AgentDefinitionEditor implements Component {
 					label: `  Create missing "${missing}"…`,
 					description: "Spawn target",
 				});
+		if (this.#deps.openDefinitionFile)
+			items.push({
+				value: "open-file",
+				label: "  Open backing file",
+				description: dirty ? "Save or discard draft changes first" : "Ctrl+G",
+				disabled: dirty,
+			});
 		items.push(
 			{ value: "raw", label: "  Edit definition file contents…", description: "Front matter and body as text" },
 			{
@@ -457,7 +517,7 @@ export class AgentDefinitionEditor implements Component {
 				label: this.#deps.saveScopeEditable === false ? "  File scope (edit in place)" : "  Save scope",
 				description: this.#scope,
 			},
-			{ value: "save", label: "  Save definition", description: this.dirty ? "● unsaved changes" : "no changes" },
+			{ value: "save", label: "  Save definition", description: dirty ? "● unsaved changes" : "no changes" },
 			{ value: "copy", label: "  Save as a new copy…", description: "New name, new file" },
 		);
 		if (this.#deps.remove) items.push({ value: "delete", label: "  Delete definition file…" });
@@ -467,7 +527,7 @@ export class AgentDefinitionEditor implements Component {
 		this.#setScreen(
 			"detail",
 			list,
-			"Enter edit · r regenerate field · R with comment · c copy · Del delete · ←/Esc close",
+			`${this.#deps.openDefinitionFile ? "Ctrl+G open file · " : ""}Enter edit · r regenerate · R with comment · c copy${this.#deps.remove ? " · Del delete" : ""} · ←/Esc close`,
 			{ preview: true, rebuild: next => this.#showDetail(next) },
 		);
 	}
@@ -488,12 +548,15 @@ export class AgentDefinitionEditor implements Component {
 				this.#showText(
 					"Describe the agent for the author",
 					"",
-					comment => void this.#generate("all", comment),
+					comment => void this.#generate("all", comment.trim() || undefined),
 					() => this.#showDetail("generate"),
 				);
 				return;
 			case "from-existing":
-				this.#existingPicker();
+				void this.#generationSourcePicker();
+				return;
+			case "open-file":
+				void this.#openDefinitionFile();
 				return;
 			case "raw":
 				this.#showText(
@@ -677,9 +740,10 @@ export class AgentDefinitionEditor implements Component {
 			value,
 			result => {
 				try {
-					apply(result);
+					const revision = this.#revision;
 					this.#notice = "";
-					back();
+					apply(result);
+					if (!this.#closed && revision === this.#revision) back();
 				} catch (error) {
 					this.#showText(
 						title,
@@ -735,7 +799,8 @@ export class AgentDefinitionEditor implements Component {
 
 	/** Enter toggles; Done or Esc applies, like the advisor tools editor. */
 	#checklist(options: ChecklistOptions): void {
-		const checklist = new Checklist(options);
+		const checklist = new Checklist({ ...options, selected: options.selected ?? [] });
+		if (options.selected === undefined) checklist.selected = undefined;
 		const back = (): void => this.#showDetail(options.field);
 		const apply = (): void => {
 			options.apply(checklist.selected);
@@ -743,7 +808,13 @@ export class AgentDefinitionEditor implements Component {
 		};
 		const build = (cursor: string | undefined): void => {
 			const items: SelectItem[] = [
-				...checklist.items(),
+				...checklist
+					.items()
+					.map(item =>
+						item.value === "__defaults" && checklist.selected === undefined
+							? { ...item, label: `${item.label}  ✓` }
+							: item,
+					),
 				...(options.custom ? [{ value: "__custom", label: options.custom }] : []),
 				{ value: DONE, label: "Done" },
 			];
@@ -785,7 +856,6 @@ export class AgentDefinitionEditor implements Component {
 	#showTools(): void {
 		const all = this.#deps.tools;
 		const readOnly = this.#deps.readOnlyTools ?? [];
-		const defaults = this.#draft.tools === undefined;
 		this.#checklist({
 			title: "Tools",
 			subtitle: FIELD_HELP.tools,
@@ -797,12 +867,12 @@ export class AgentDefinitionEditor implements Component {
 					label: tool.name,
 					description: `${readOnly.includes(tool.name) ? "read-only · " : ""}${tool.description ?? ""}`,
 				})),
-			selected: this.#draft.tools ?? [],
+			selected: this.#draft.tools,
 			presets: [
 				{
 					value: "__defaults",
-					label: defaults ? "Default selection  ✓" : "Default selection",
-					description: "Omit the field; the harness picks the built-ins.",
+					label: "Default selection",
+					description: "Omit the field; toggling individual tools starts an explicit list.",
 					apply: () => undefined,
 				},
 				...(readOnly.length
@@ -1818,40 +1888,76 @@ export class AgentDefinitionEditor implements Component {
 
 	// ───────────────────────────── generation, save, delete ─────────────────────────────
 
-	#existingPicker(): void {
-		const selected = new Set<number>();
+	async #generationSourcePicker(): Promise<void> {
+		if (this.#busy) return;
+		this.#busy = true;
+		this.#render();
+		let sources: readonly AgentGenerationSource[];
+		try {
+			sources = this.#deps.listGenerationSources ? await this.#deps.listGenerationSources() : [];
+		} catch (error) {
+			if (!this.#closed) this.#notice = error instanceof Error ? error.message : String(error);
+			return;
+		} finally {
+			this.#busy = false;
+			this.#render();
+		}
+		if (this.#closed) return;
+		const knownAgents = new Set(sources.filter(source => source.kind === "agent").map(source => source.name));
+		const bases = this.#deps.existing.filter(definition => !knownAgents.has(definition.name));
+		const entries: SelectItem[] = [
+			...bases.map((definition, index) => ({
+				value: `base:${index}`,
+				label: `agent: ${sanitizeDisplaySingleLine(definition.name)}`,
+				description: sanitizeDisplaySingleLine(firstLine(definition.description, "")),
+			})),
+			...sources.map((source, index) => ({
+				value: `source:${index}`,
+				label: `${sanitizeDisplaySingleLine(source.kind)}: ${sanitizeDisplaySingleLine(source.name)}`,
+				description: sanitizeDisplaySingleLine(firstLine(source.description ?? "", "")),
+			})),
+		];
+		const checklist = new Checklist({ entries, selected: [] });
+		const next = { value: "generate", label: "Continue to instructions…" };
 		const build = (cursor: string | undefined): void => {
-			const items: SelectItem[] = [
-				{ value: "generate", label: "Generate from selected definitions…" },
-				...this.#deps.existing.map((definition, index) => ({
-					value: String(index),
-					label: `${selected.has(index) ? "[x]" : "[ ]"} ${definition.name}`,
-					description: firstLine(definition.description, ""),
-				})),
-			];
-			const list = this.#list(items, cursor);
+			const list = this.#list([next, ...checklist.items()], cursor);
 			list.onSelect = item =>
 				this.#run(() => {
 					if (item.value !== "generate") {
-						const index = Number(item.value);
-						if (selected.has(index)) selected.delete(index);
-						else selected.add(index);
+						checklist.toggle(item.value);
+						list.setItems([next, ...checklist.items()]);
+						if (this.#sheet) this.#sheet = { ...this.#sheet, current: checklist.current };
 						return;
 					}
-					const bases = this.#deps.existing.filter((_, index) => selected.has(index));
-					if (!bases.length) throw new Error("Select at least one base definition");
+					const selected = new Set(checklist.selected);
+					const baseDefinitions = bases.filter((_, index) => selected.has(`base:${index}`));
+					const pickedSources = sources.filter((_, index) => selected.has(`source:${index}`));
 					this.#showText(
-						"What should the new agent do? (optional)",
+						"What should the new agent do?",
 						"",
-						comment => void this.#generate("all", comment.trim() || undefined, bases),
+						comment => {
+							const instructions = comment.trim();
+							if (!instructions && !selected.size)
+								throw new Error("Describe the agent or select at least one source.");
+							void this.#generate("all", instructions || undefined, {
+								...(baseDefinitions.length ? { baseDefinitions } : {}),
+								...(pickedSources.length ? { sources: pickedSources } : {}),
+							});
+						},
 						() => build("generate"),
+						undefined,
+						"Describe what to use from the selected sources; optional when sources are selected.",
 					);
 				});
 			list.onCancel = () => this.#showDetail("from-existing");
-			this.#setScreen("checklist", list, "Base definitions · Enter select · Esc back", {
-				preview: false,
-				rebuild: build,
-				sheet: { title: "Base definitions", subtitle: "Select any, then generate.", noun: "definitions" },
+			this.#setScreen("checklist", list, "Generation sources · Enter toggle or continue · Esc back", {
+				sheet: {
+					title: "Generation sources",
+					subtitle: "Select references to give to the author, then continue to instructions.",
+					noun: "sources",
+					current: checklist.current,
+					confirm: "Select",
+				},
 			});
 		};
 		build(undefined);
@@ -1860,14 +1966,14 @@ export class AgentDefinitionEditor implements Component {
 	async #generate(
 		target: AgentDefinitionField | "all",
 		comment?: string,
-		baseDefinitions?: readonly AgentDefinitionDraft[],
+		references?: GenerationReferences,
 	): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true;
 		this.#notice = "";
 		const controller = new AbortController();
 		this.#controller = controller;
-		const returnTo = target === "all" ? "generate" : target;
+		const returnTo = target === "all" ? (references ? "from-existing" : "generate") : target;
 		const cancel = this.#list([{ value: "cancel", label: "The author is writing…" }], "cancel");
 		cancel.onSelect = cancel.onCancel = () => {
 			controller.abort();
@@ -1883,7 +1989,7 @@ export class AgentDefinitionEditor implements Component {
 				definition: this.definition,
 				target,
 				comment,
-				baseDefinitions,
+				...references,
 				conversationId: this.#conversationId,
 				signal: controller.signal,
 			});
@@ -1902,6 +2008,27 @@ export class AgentDefinitionEditor implements Component {
 				this.#controller = undefined;
 				if (!this.#closed && !controller.signal.aborted) this.#showDetail(returnTo);
 			}
+			this.#render();
+		}
+	}
+
+	async #openDefinitionFile(): Promise<void> {
+		const open = this.#deps.openDefinitionFile;
+		if (!open || !this.rosterVisible || this.#busy) return;
+		if (this.dirty) {
+			this.#notice = "Save or discard draft changes before opening the backing file.";
+			this.#render();
+			return;
+		}
+		this.#busy = true;
+		this.#notice = "";
+		this.#render();
+		try {
+			await open();
+		} catch (error) {
+			if (!this.#closed) this.#notice = error instanceof Error ? error.message : String(error);
+		} finally {
+			this.#busy = false;
 			this.#render();
 		}
 	}
@@ -2173,13 +2300,16 @@ export class AgentDefinitionEditor implements Component {
 		return `${sanitizeDisplaySingleLine(this.#title)}${uiProvenanceSuffix("features", "agent-definition-editor", true)}${state}`;
 	}
 
-	render(width: number): readonly string[] {
-		const height = Math.max(14, this.#tui.terminal?.rows ?? process.stdout.rows ?? 40);
-		const bodyRows = Math.max(3, height - 4);
+	render(width: number, availableHeight?: number): readonly string[] {
+		const height =
+			this.#deps.embedded && availableHeight !== undefined
+				? Math.max(0, Math.floor(availableHeight))
+				: Math.max(14, this.#tui.terminal?.rows ?? process.stdout.rows ?? 40);
+		const bodyRows = Math.max(0, height - 4);
 		this.#bodyRows = bodyRows;
 		const title = this.#frameTitle();
-		this.#split.setNarrowPane(this.#preview ? undefined : "left");
-		this.#split.setSplitAt(this.#preview ? 0 : Number.MAX_SAFE_INTEGER);
+		this.#split.setNarrowPane(!this.#preview || this.#deps.embedded ? "left" : undefined);
+		this.#split.setSplitAt(this.#preview ? (this.#deps.embedded ? 54 : 0) : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
 		const geometry = this.#split.measure(width);
 		const isSplit = geometry.mode === "split";
@@ -2193,7 +2323,7 @@ export class AgentDefinitionEditor implements Component {
 			),
 		]);
 		this.#frameBottom.setLines([bottomBorder(width)]);
-		this.#frame.setHeight(bodyRows + 4);
+		this.#frame.setHeight(height);
 		return this.#frame.render(width);
 	}
 
@@ -2210,9 +2340,14 @@ export class AgentDefinitionEditor implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.rosterVisible && this.#deps.openDefinitionFile && matchesKey(data, "ctrl+g")) {
+			this.#keys.reset();
+			void this.#openDefinitionFile();
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			this.#keys.reset();
-			routeSgrMouseInput(data, event => this.#routeMouse(event));
+			routeSgrMouseInput(data, event => this.routeMouse(event));
 			return;
 		}
 		const active = this.#active;
@@ -2308,9 +2443,10 @@ export class AgentDefinitionEditor implements Component {
 		if (this.#active instanceof HookEditorComponent) this.#active.pasteText(value);
 	}
 
-	#routeMouse(event: SgrMouseEvent): boolean {
+	routeMouse(event: SgrMouseEvent): boolean {
 		const hit = this.#frame.locate(event.row, event.col);
 		if (!hit || hit.index !== 1) return false;
+		if (this.#busy && this.#screen !== "generating") return true;
 		const pane = this.#split.locate(hit.line, hit.col);
 		if (pane?.pane === "right") {
 			if (event.wheel !== null) {
@@ -2333,7 +2469,7 @@ export class AgentDefinitionEditor implements Component {
 
 	describe(cx: DescribeContext): NativeNode {
 		const active = this.#active;
-		if (!cx.supports("picker")) return col([text(this.render(120).join("\n"))]);
+		if (!cx.supports("picker")) return col([text(this.render(cx.cols).join("\n"))]);
 		const notice = this.#notice ? [text(this.#notice, { tone: "warning" })] : [];
 		if (active instanceof ModelBrowser) {
 			const order = active.pickerOrder({ providers: false, rest: active.query.trim() ? "Matches" : "All" });
@@ -2372,6 +2508,9 @@ export class AgentDefinitionEditor implements Component {
 							pickerAction("confirm", "Edit", "enter", { primary: true }),
 							{ id: "generate", label: "Regenerate field", keys: ["r"] },
 							{ id: "comment", label: "Regenerate with comment", keys: ["shift", "r"] },
+							...(this.#deps.openDefinitionFile && !this.dirty
+								? [pickerAction("open-file", "Open file", "ctrl+g")]
+								: []),
 							CLOSE_ACTION,
 						]
 					: props.actions;
@@ -2389,7 +2528,12 @@ export class AgentDefinitionEditor implements Component {
 		}
 		const picked = pickerEvent(event);
 		if (!picked) return;
+		if (this.#screen === "detail" && picked.kind !== "action" && picked.item === INHERITS_ITEM) return;
 		if (this.#busy && this.#screen !== "generating" && !(picked.kind === "action" && picked.act === "close")) return;
+		if (picked.kind === "action" && picked.act === "open-file") {
+			void this.#openDefinitionFile();
+			return;
+		}
 		if (active instanceof ModelBrowser) {
 			if (picked.kind !== "action") active.routePickerItem(picked.item, picked.kind === "activate");
 			else if (picked.act === "close") active.handleCancel();

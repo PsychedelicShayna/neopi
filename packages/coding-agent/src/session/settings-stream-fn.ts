@@ -11,10 +11,12 @@
  * and OpenRouter response-cache hits across advisor calls.
  */
 import { fitOutputTokensToContextWindow, type StreamFn, Tokenizer } from "@oh-my-pi/pi-agent-core";
-import { type Model, type SimpleStreamOptions, streamSimple } from "@oh-my-pi/pi-ai";
+import { applyModelVariantRequest, type Model, type SimpleStreamOptions, streamSimple } from "@oh-my-pi/pi-ai";
 import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/openai-responses-state";
 import { serverSideFallbackModels } from "@oh-my-pi/pi-catalog/compat/server-side-fallback";
 import { cfgOffline } from "../config/auxiliary-model-policy";
+import { modelVariantSetting } from "../config/model-variant-settings";
+import type { Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { type AnthropicSlowModeLanes, anthropicSlowModeLanes } from "./anthropic-slow-mode";
 
@@ -26,6 +28,7 @@ import {
 	cfgProvidersAnthropicSlowMode,
 	cfgProvidersAntigravityEndpoint,
 	cfgProvidersCacheRetention,
+	cfgProvidersKimiApiFormat,
 	cfgProvidersMaxInFlightRequests,
 	cfgProvidersMuseCodeStoreResponses,
 	cfgProvidersOpenaiCodexDaybreak,
@@ -40,6 +43,8 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "./settings";
 
+const identity = <T>(value: T): T => value;
+
 /** Apply each API's setting once; standard Responses preferences can only narrow it. */
 export function resolveWebsocketPreference(
 	settings: Settings,
@@ -48,13 +53,16 @@ export function resolveWebsocketPreference(
 ): boolean | undefined {
 	if (model?.api === "openai-responses") {
 		return (
-			cfgProvidersOpenaiResponsesWebsockets.get(settings) &&
+			modelVariantSetting(model, cfgProvidersOpenaiResponsesWebsockets, settings) &&
 			model.preferWebsockets !== false &&
 			requestPreference !== false
 		);
 	}
 	if (model?.api !== "openai-codex-responses") return requestPreference;
-	const setting = cfgProvidersOpenaiWebsockets.get(settings);
+	const setting = modelVariantSetting(model, cfgProvidersOpenaiWebsockets, settings);
+	// A named profile may veto WebSocket use; call sites can still narrow an
+	// enabled profile to HTTP for requests that must not reuse the transport.
+	if (setting === "off" && model.variant?.settings[cfgProvidersOpenaiWebsockets.id] !== undefined) return false;
 	return requestPreference ?? (setting === "on" ? true : setting === "off" ? false : undefined);
 }
 
@@ -98,10 +106,12 @@ export function createSettingsAwareStreamFn(
 	// replayed thinking and reasoning) belong to that model and request state.
 	const tokenizers = new Map<string, Tokenizer>();
 	return (model, context, streamOptions) => {
-		const openrouterRoutingPreset = cfgProvidersOpenrouterVariant.get(settings);
-		const openrouterVariant =
-			openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
-		const antigravityEndpointMode = cfgProvidersAntigravityEndpoint.get(settings);
+		// Some callers supply pre-resolved ambient defaults. An explicit variant
+		// setting replaces those defaults, including a reset to provider policy.
+		const resolveOption = <T, U>(setting: Setting<T>, supplied: U | undefined, map: (value: T) => U | undefined) =>
+			supplied !== undefined && model.variant?.settings[setting.id] === undefined
+				? supplied
+				: map(modelVariantSetting(model, setting, settings));
 		const textVerbosity =
 			model.api === "openai-codex-responses" || model.api === "openai-responses"
 				? cfgTextVerbosity.get(settings)
@@ -112,15 +122,14 @@ export function createSettingsAwareStreamFn(
 		// implicitly disables the short-entry keep-alive refresh loop).
 		const cacheRetentionSetting = cfgProvidersCacheRetention.get(settings);
 		const cacheRetention = cacheRetentionSetting === "auto" ? undefined : cacheRetentionSetting;
-		const streamFirstEventTimeoutMs = timeoutSecondsToMs(cfgProvidersStreamFirstEventTimeoutSeconds.get(settings));
-		const streamIdleTimeoutMs = timeoutSecondsToMs(cfgProvidersStreamIdleTimeoutSeconds.get(settings));
 		// Server-side fallback (opt-in): when the user enables it, inject the
 		// catalog-owned `fallbacks` chain (`server-side-fallback-models` axis,
 		// authored for Fable/Mythos on first-party Anthropic). The provider
 		// layer picks it up, sends the beta header, and honors the response
 		// signals. Models without a rule-assigned chain are untouched.
 		const serverSideFallbackChain =
-			streamOptions?.fallbacks === undefined && cfgProvidersAnthropicServerSideFallback.get(settings)
+			streamOptions?.fallbacks === undefined &&
+			modelVariantSetting(model, cfgProvidersAnthropicServerSideFallback, settings)
 				? serverSideFallbackModels(model)
 				: [];
 		const fallbacks =
@@ -135,7 +144,7 @@ export function createSettingsAwareStreamFn(
 		const slowModeHooks =
 			streamOptions?.anthropicSlowMode === undefined && model.provider === "anthropic"
 				? slowModeLanes.hooks({
-						lowPriority: () => cfgProvidersAnthropicSlowMode.get(settings) === "auto",
+						lowPriority: () => modelVariantSetting(model, cfgProvidersAnthropicSlowMode, settings) === "auto",
 						canAutoAccept: canAutoAccept ? () => canAutoAccept(model) : undefined,
 						notify: slowModeContext?.notify,
 						onLane: slowModeContext?.onLane,
@@ -144,13 +153,15 @@ export function createSettingsAwareStreamFn(
 		// Opt-in: storage keeps prompts and outputs on Meta's side. The setting
 		// also reads PI_MUSE_STORE_RESPONSES, which overrides it while set.
 		const storeResponses =
-			streamOptions?.storeResponses ??
-			(model.provider === "muse-code" ? cfgProvidersMuseCodeStoreResponses.get(settings) : undefined);
+			model.provider === "muse-code"
+				? resolveOption(cfgProvidersMuseCodeStoreResponses, streamOptions?.storeResponses, identity)
+				: undefined;
 		// Per request from this session's settings: the process-wide default in
 		// pi-ai follows whichever session bound effects last.
 		const codexAccessPrograms =
-			streamOptions?.codexAccessPrograms ??
-			(model.api === "openai-codex-responses" ? cfgProvidersOpenaiCodexDaybreak.get(settings) : undefined);
+			model.api === "openai-codex-responses"
+				? resolveOption(cfgProvidersOpenaiCodexDaybreak, streamOptions?.codexAccessPrograms, identity)
+				: undefined;
 		const maxInFlightRequests = validateProviderMaxInFlightRequests(
 			streamOptions?.maxInFlightRequests ?? cfgProvidersMaxInFlightRequests.get(settings),
 		);
@@ -172,22 +183,48 @@ export function createSettingsAwareStreamFn(
 			...streamOptions,
 			maxTokens,
 			preferWebsockets: resolveWebsocketPreference(settings, model, streamOptions?.preferWebsockets),
-			openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
-			antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
+			openrouterVariant: resolveOption(cfgProvidersOpenrouterVariant, streamOptions?.openrouterVariant, value =>
+				value && value !== "default" ? value : undefined,
+			),
+			antigravityEndpointMode: resolveOption(
+				cfgProvidersAntigravityEndpoint,
+				streamOptions?.antigravityEndpointMode,
+				identity,
+			),
+			kimiApiFormat:
+				model.provider === "kimi-code" && model.variant?.settings[cfgProvidersKimiApiFormat.id] !== undefined
+					? resolveOption(cfgProvidersKimiApiFormat, streamOptions?.kimiApiFormat, value =>
+							value === "auto" ? undefined : value,
+						)
+					: streamOptions?.kimiApiFormat,
 			textVerbosity: streamOptions?.textVerbosity ?? textVerbosity,
 			cacheRetention: streamOptions?.cacheRetention ?? cacheRetention,
-			streamFirstEventTimeoutMs: streamOptions?.streamFirstEventTimeoutMs ?? streamFirstEventTimeoutMs,
-			streamIdleTimeoutMs: streamOptions?.streamIdleTimeoutMs ?? streamIdleTimeoutMs,
-			maxRetryDelayMs: streamOptions?.maxRetryDelayMs ?? cfgRetryMaxDelayMs.get(settings),
+			streamFirstEventTimeoutMs: resolveOption(
+				cfgProvidersStreamFirstEventTimeoutSeconds,
+				streamOptions?.streamFirstEventTimeoutMs,
+				timeoutSecondsToMs,
+			),
+			streamIdleTimeoutMs: resolveOption(
+				cfgProvidersStreamIdleTimeoutSeconds,
+				streamOptions?.streamIdleTimeoutMs,
+				timeoutSecondsToMs,
+			),
+			maxRetryDelayMs: resolveOption(cfgRetryMaxDelayMs, streamOptions?.maxRetryDelayMs, identity),
 			maxInFlightRequests,
 			loopGuard: {
-				enabled: cfgModelLoopGuardEnabled.get(settings),
-				checkAssistantContent: cfgModelLoopGuardCheckAssistantContent.get(settings),
 				...streamOptions?.loopGuard,
+				enabled: resolveOption(cfgModelLoopGuardEnabled, streamOptions?.loopGuard?.enabled, identity),
+				checkAssistantContent: resolveOption(
+					cfgModelLoopGuardCheckAssistantContent,
+					streamOptions?.loopGuard?.checkAssistantContent,
+					identity,
+				),
 			},
 			hideThinkingSummary: streamOptions?.hideThinkingSummary ?? cfgOmitThinking.get(settings),
 			// An off switch, not a default: the agent loop always offers its queue.
-			liveSteering: cfgProvidersOpenaiLiveSteering.get(settings) ? streamOptions?.liveSteering : undefined,
+			liveSteering: modelVariantSetting(model, cfgProvidersOpenaiLiveSteering, settings)
+				? streamOptions?.liveSteering
+				: undefined,
 			...(fallbacks !== undefined ? { fallbacks } : {}),
 			...(storeResponses !== undefined ? { storeResponses } : {}),
 			// A per-call worker never switches models: no fallback chain, including a
@@ -198,6 +235,6 @@ export function createSettingsAwareStreamFn(
 			...(codexAccessPrograms !== undefined ? { codexAccessPrograms } : {}),
 			...(slowModeHooks !== undefined ? { anthropicSlowMode: slowModeHooks } : {}),
 		};
-		return base(model, context, merged);
+		return base(model, context, applyModelVariantRequest(model, merged));
 	};
 }

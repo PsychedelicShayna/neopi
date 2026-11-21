@@ -67,6 +67,8 @@ export interface SecurityScanSummary {
 export interface SecurityStoreOptions {
 	stateRoot?: string;
 	signal?: AbortSignal;
+	/** Skip all initialization writes when only listing existing state. */
+	initialize?: boolean;
 }
 
 async function ensurePrivateDirectory(directory: string): Promise<void> {
@@ -161,9 +163,9 @@ export class SecurityStore {
 		const projectDirectory = options.stateRoot
 			? path.join(path.resolve(options.stateRoot), projectKey)
 			: getSecurityProjectDir(projectKey);
-		await ensurePrivateDirectory(projectDirectory);
+		if (options.initialize !== false) await ensurePrivateDirectory(projectDirectory);
 		const store = new SecurityStore(canonicalRoot, projectKey, projectDirectory);
-		await withSecurityStoreWrite(projectDirectory, () => store.#ensureIndex());
+		if (options.initialize !== false) await withSecurityStoreWrite(projectDirectory, () => store.#ensureIndex());
 		return store;
 	}
 
@@ -231,6 +233,17 @@ export class SecurityStore {
 			throw new Error(`Invalid security store plan index at ${this.#indexPath()}`);
 		}
 		return { ...value, planIds: value.planIds ?? [] } as SecurityStoreIndex;
+	}
+
+	/** Read the manifest's IDs without opening any plans, bundles, or locks. */
+	async listIds(kind: "scan" | "plan"): Promise<string[]> {
+		try {
+			const index = await this.#readIndex();
+			return (kind === "scan" ? index.scanIds : index.planIds).reverse();
+		} catch (error) {
+			if (isEnoent(error)) return [];
+			throw error;
+		}
 	}
 
 	async #writeIndex(index: SecurityStoreIndex): Promise<void> {
@@ -316,12 +329,26 @@ export class SecurityStore {
 		}
 	}
 
+	async #readFindings(scanId: string): Promise<SecurityFinding[]> {
+		const raw = await readJsonFile(path.join(this.#scanDirectory(scanId), "findings.json"));
+		if (!Array.isArray(raw)) throw new Error(`Invalid findings list for ${scanId}`);
+		return raw.map(parseSecurityFinding);
+	}
+
+	/** Read the atomically replaced finding list without loading report/SARIF artifacts. */
+	async listFindings(scanId: string): Promise<SecurityFinding[]> {
+		try {
+			return await this.#readFindings(scanId);
+		} catch (error) {
+			if (isEnoent(error)) return [];
+			throw error;
+		}
+	}
+
 	async #getBundleUnlocked(scanId: string): Promise<SecurityScanBundle | null> {
 		const scan = await this.getScan(scanId);
 		if (!scan) return null;
-		const rawFindings = await readJsonFile(path.join(this.#scanDirectory(scanId), "findings.json"));
-		if (!Array.isArray(rawFindings)) throw new Error(`Invalid findings list for ${scanId}`);
-		const findings = rawFindings.map(parseSecurityFinding);
+		const findings = await this.#readFindings(scanId);
 		const report = await readOptionalText(path.join(this.#scanDirectory(scanId), "report.md"));
 		const sarifText = await readOptionalText(path.join(this.#scanDirectory(scanId), "results.sarif"));
 		const bundle: SecurityScanBundle = { scan, findings };

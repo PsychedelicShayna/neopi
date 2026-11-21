@@ -4,6 +4,8 @@
 
 Settings are stored as plain YAML mappings. Every key, its type, default, and enum values come from its setting definition (declared with `register(...)` next to the owning feature, e.g. `packages/coding-agent/src/tools/settings.ts`, and collected by `packages/coding-agent/src/config/all-settings.ts`). `omp config` exposes the complete schema; the interactive `/settings` panel exposes entries with supported UI editors. Some entries are conditional; numbers and arrays without UI choices remain config-file-only unless the setting opts into the panel's JSON editor (such as `contextFiles.extra`).
 
+Settings label suffixes distinguish feature origin from the value's source scope. A green crescent marks a NeoPi addition in the latest published stable release; purple marks a nightly-only NeoPi addition. Gold, silver, and bronze stars mark the newest, previous, and older upstream sync cohorts. No marker means the row is not in the provenance inventory.
+
 - For model/provider credentials, `.env` files, and the env-var table that resolves API keys, see [Providers](./providers.md).
 - For custom model definitions in `models.yml`, see [Models](./models.md).
 - For instruction files discovered into the agent context (`AGENTS.md`, `.omp/`, etc.), see [Context files](./context-files.md).
@@ -696,6 +698,45 @@ The winning global rule restricts **implicit** choices after intersecting the mo
 
 The replacement Auto classifier uses the `@effort` chat role and its own configured fallback chain. Its built-in candidate order is `openai-codex/gpt-6-luna:xhigh`, then `openai-codex/gpt-5.6-luna:xhigh`; set `modelRoles.effort`, `roleEffortSelections.effort` (fixed concrete level), and `retry.fallbackChains.effort`/its per-entry effort selections to choose a different classifier. Without a configured level, a candidate starts at fixed `xhigh`; unsupported implicit fixed levels are adjusted against that model and any rule. There is no fallback to `judge` or the active session model. The classifier reads the committed Chronicler diary and uncovered active-branch transcript for context; if the diary is missing/unreadable it classifies from the transcript. On classification failure, replacement mode warns and uses the lowest permitted level; legacy mode retains the last resolved level or provisional fallback. In legacy mode Auto uses the old `judge` chain and ceiling. See [Models](./models.md#effort-controls-in-models) for the interactive rule/role/fallback controls and [task](./tools/task.md) for the dynamic spawn wire.
 
+### Model Variants
+
+Use **Model Variants** beneath the effort policy in `/models` to create, edit,
+rename, or delete a named configuration of an existing model. Switch the hub's
+scope to edit global, project, or session variants. Pick the variant by name
+in `/model`, or assign it to a model role and use `@role` normally. A variant
+uses the base model's provider and credentials; it never creates a new
+provider or sends its local name to the provider.
+
+Only changed fields are stored. **Inherit** leaves a field at its normal
+settings value; choosing `-1` for a sampling field explicitly restores the
+provider's default. Sampling fields the base model or endpoint does not
+support are omitted, even if set in a variant. Assignments use the generated
+variant ID so they survive renames and changes of base model.
+
+The `modelVariants` list in `config.yml` stores the same entries:
+
+```yaml
+modelVariants:
+  - id: variant--a281b024-cbe0-4670-a948-a777bc630ff7
+    name: Concise GPT
+    baseModel: openai/gpt-4o-mini
+    overrides:
+      contextWindow: 64000
+      temperature: 0.2
+      topK: -1
+      textVerbosity: low
+```
+
+The editor exposes the registered model request settings: default thinking
+level, allowed implicit efforts, Auto's ceiling, per-level thinking token
+budgets, thinking summary and external thinking, context and output limits,
+compaction token/percentage thresholds, sampling, verbosity, family-specific
+service tiers, and cache, transport, routing, and request guard options.
+Nested settings use their dotted names under `overrides` (for example
+`thinkingBudgets.high`, `tier.openai`, and `providers.cacheRetention`).
+Settings about credentials, global provider eligibility, or how the harness
+chooses an advisor or subagent are not properties of a model variant.
+
 ### Sampling
 
 For the numeric sampling settings, a negative value (normally `-1`) means "use the provider/model default" — `omp` does not send that parameter.
@@ -1216,7 +1257,7 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `startup.showSplash` | boolean | `false` | Show the full setup animation on ordinary interactive startup without rerunning setup. |
 | `startup.changelogMode` | enum | `summary` | `summary`, `expanded`, `hidden`: choose startup release-note presentation. |
 | `startup.setupWizard` | boolean | `true` | Show newly added onboarding steps once per setup version. |
-| `update.channel` | enum | build channel | `stable` follows the latest non-prerelease NeoPi GitHub release; `nightly` follows the latest prerelease. Stable release builds default to stable, nightly/source builds to nightly. Existing `canary` values migrate to `nightly`. |
+| `update.channel` | enum | build channel | `stable` follows the latest non-prerelease NeoPi GitHub release; `nightly` follows the latest prerelease. Stable release builds default to stable, nightly/source builds to nightly. Existing `canary` values migrate to `nightly`. Only a persisted global change to a different channel (including a reset that changes the channel) or a successful `npi update stable\|nightly` releases a rollback hold. Project, session, and process overrides do not. |
 | `update.auto` | enum | `notify` | `off`, `notify`, `auto`: check after ordinary interactive startup, at most once per 24 hours per executable unless the channel changes. Auto applies a verified release for the next launch; existing sessions stay running. Legacy booleans migrate `true` → `auto`, `false` → `off`. |
 | `btw.inject` | boolean | `false` | `/btw` answers wrap a requested steering prompt in `<inject>…</inject>`, shown highlighted; assign `app.btw.inject` a key to send it to the main session (a steer while it runs, else a new turn). NeoPi keeps `Alt+I` for the IRC viewer. |
 

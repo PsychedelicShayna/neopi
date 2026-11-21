@@ -338,6 +338,10 @@ function operationPhaseFromStatus(status: SecurityScan["status"]): SecurityOpera
 	return status === "running" || status === "planned" ? "failed" : status;
 }
 
+function isCancellablePhase(phase: SecurityOperationPhase): boolean {
+	return phase === "queued" || phase === "preparing" || phase === "reviewing" || phase === "publishing";
+}
+
 async function tryRemoveWorktree(repo: VcsGitRepo | null, cwd: string): Promise<boolean> {
 	if (!repo) return false;
 	try {
@@ -542,7 +546,13 @@ export class SecurityCoordinator {
 
 	async listOperations(): Promise<SecurityOperationSnapshot[]> {
 		await this.#ensureRecovered();
+		return this.knownOperations();
+	}
+
+	/** Snapshot existing operations without recovering interrupted operations or writing storage. */
+	knownOperations(cancellableOnly = false): SecurityOperationSnapshot[] {
 		return [...this.#operations.values()]
+			.filter(record => !cancellableOnly || isCancellablePhase(record.snapshot.phase))
 			.map(record => ({ ...record.snapshot }))
 			.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 	}
@@ -551,7 +561,7 @@ export class SecurityCoordinator {
 		await this.#ensureRecovered();
 		const record = this.#operations.get(operationId);
 		if (!record) return false;
-		if (["completed", "partial", "cancelled", "failed"].includes(record.snapshot.phase)) return false;
+		if (!isCancellablePhase(record.snapshot.phase)) return false;
 		if (record.snapshot.jobId && this.#host.asyncJobManager) {
 			return this.#host.asyncJobManager.cancel(record.snapshot.jobId, { ownerId: this.#host.agentId });
 		}
@@ -735,8 +745,21 @@ export class SecurityCoordinator {
 
 const COORDINATORS = new Map<string, SecurityCoordinator>();
 
+function coordinatorKey(cwd: string, sessionId: string | undefined): string {
+	return `${path.resolve(cwd)}\u0000${sessionId ?? "sessionless"}`;
+}
+
+/** Completion uses the local coordinator's live state, without creating a coordinator. */
+export function listKnownSecurityOperations(
+	cwd: string,
+	sessionId: string | undefined,
+	cancellableOnly = false,
+): SecurityOperationSnapshot[] {
+	return COORDINATORS.get(coordinatorKey(cwd, sessionId))?.knownOperations(cancellableOnly) ?? [];
+}
+
 export function getSecurityCoordinator(host: SecurityCoordinatorHost): SecurityCoordinator {
-	const key = `${path.resolve(host.cwd)}\u0000${host.sessionId ?? "sessionless"}`;
+	const key = coordinatorKey(host.cwd, host.sessionId);
 	const existing = COORDINATORS.get(key);
 	if (existing) return existing;
 	const coordinator = new SecurityCoordinator(host);

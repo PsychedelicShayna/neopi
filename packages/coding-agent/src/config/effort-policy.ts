@@ -12,6 +12,7 @@ import {
 	validateConfiguredModelRules,
 } from "./selector-pattern";
 import { cfgProvidersAutoThinkingMaxEffort } from "../session/settings";
+import { modelVariantSetting } from "./model-variant-settings";
 import type { Settings } from "./settings";
 
 /** Only choices without a deliberate caller/manual override are subject to these rules. */
@@ -215,6 +216,8 @@ export class EffortPolicyError extends Error {
 
 /** Exact provider/model identifiers beat regex rules, then globs; patterns retain declaration order within a tier. */
 export function matchEffortRule(settings: Settings, model: Model): EffortRule | undefined {
+	const authored = model.variant?.settings["effort.allowed"] as ThinkingEffort[] | undefined;
+	if (authored) return { selector: `${model.provider}/${model.id}`, allowed: authored };
 	return matchValidatedModelSelectorRule(cfgEffortRules.get(settings), model, loadEffortRule);
 }
 
@@ -263,6 +266,10 @@ export function resolveImplicitEffort(
 	origin: EffortOrigin = "default",
 	options?: { alternatives?: readonly string[] },
 ): EffortDecision {
+	const variantLevel = model.variant?.request.thinkingLevel;
+	if (variantLevel !== undefined && (origin === "default" || origin === "inherited")) {
+		selection = variantLevel === "auto" ? { mode: "auto" } : { mode: "fixed", level: variantLevel };
+	}
 	const modelLevels = getSupportedThinkingLevels(model);
 	const supported = THINKING_CHOICES.filter(effort => modelLevels.includes(effort));
 	const rule = cfgEffortPolicyMode.get(settings) === "replacement" ? matchEffortRule(settings, model) : undefined;
@@ -323,8 +330,9 @@ export function resolveImplicitEffort(
 	const authoredLegacyAutoCeiling =
 		activeSelection?.mode === "auto" &&
 		savedAuto === undefined &&
-		settings.getProvenance(cfgProvidersAutoThinkingMaxEffort) !== "default"
-			? cfgProvidersAutoThinkingMaxEffort.get(settings)
+		(model.variant?.settings[cfgProvidersAutoThinkingMaxEffort.id] !== undefined ||
+			settings.getProvenance(cfgProvidersAutoThinkingMaxEffort) !== "default")
+			? modelVariantSetting(model, cfgProvidersAutoThinkingMaxEffort, settings)
 			: undefined;
 	const candidates =
 		activeSelection?.mode === "auto"

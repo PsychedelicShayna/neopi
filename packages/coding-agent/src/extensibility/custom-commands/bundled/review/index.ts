@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
@@ -11,10 +12,12 @@ import { parseMrUrl } from "../../../../internal-urls/mr-protocol";
 import { parseInternalUrl } from "../../../../internal-urls/parse";
 import reviewCustomRequestTemplate from "../../../../prompts/review-custom-request.md" with { type: "text" };
 import reviewHeadlessRequestTemplate from "../../../../prompts/review-headless-request.md" with { type: "text" };
+import { buildDirectoryArgumentCompletions } from "../../../../slash-commands/builtin-completions";
 import * as gh from "../../../../tools/gh";
 import * as glab from "../../../../tools/glab-mr";
 import { resolveToCwd } from "../../../../tools/path-utils";
 import { listDirectChildRepos } from "../../../../utils/active-repo-context";
+import { parseCommandArgs } from "../../../../utils/command-args";
 import { github } from "../../../../utils/github";
 import { gitlab } from "../../../../utils/gitlab";
 import { buildReviewPrompt } from "./prompt";
@@ -68,7 +71,7 @@ const DIR_ARG_PATTERN = /^(?:\.{1,2}(?:[\\/]|$)|~(?:[\\/]|$)|[\\/]|[A-Za-z]:[\\/
 const PR_SCHEME_PATTERN =
 	/^pr:\/\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/([1-9]\d*)(?:\/diff(?:\/(?:all|[1-9]\d*))?)?(?:\?at=\d+)?$/;
 const PR_REF_TEXT_PATTERN =
-	/https:\/\/github\.com\/[^\s<>"']+|pr:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/[^\s<>"']+|https:\/\/[^\s<>"'/]+\/[^\s<>"']*\/-\/merge_requests\/[^\s<>"']+|mr:\/\/[^\s<>"']+/g;
+	/https:\/\/github\.com\/[^\s<>"']+|pr:\/\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/[^\s<>"']+|https:\/\/[^\s<>"'/]+\/[^\s<>"']*\/-\/merge_requests\/[^\s<>"']+|mr:\/\/[^\s<>"']+|(?<![A-Za-z0-9_./-])[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*(?![\w-])/g;
 
 function stripTrailingPrRefPunctuation(text: string): string {
 	return text.replace(/[.,)\]>]+$/g, "");
@@ -166,6 +169,13 @@ export function formatReviewRefLabel(ref: ReviewPrRef): string {
 	return ref.forge === "gitlab" ? `MR ${ref.repo}!${ref.number}` : `PR ${ref.repo}#${ref.number}`;
 }
 
+async function existingReviewDirectory(argument: string | undefined, cwd: string): Promise<string | undefined> {
+	if (argument === undefined || !DIR_ARG_PATTERN.test(argument)) return undefined;
+	const dir = resolveToCwd(argument, cwd);
+	const stat = await fs.promises.stat(dir).catch(() => undefined);
+	return stat?.isDirectory() ? dir : undefined;
+}
+
 /**
  * A leading path that is an existing directory names the checkout; any other
  * leading path (`./src/auth.ts …`) stays instruction text. Only the next
@@ -175,15 +185,9 @@ export function formatReviewRefLabel(ref: ReviewPrRef): string {
  */
 export async function resolveReviewRequest(args: string[], sessionCwd: string): Promise<ReviewRequest> {
 	const rest = [...args];
-	let cwd = sessionCwd;
-	if (rest[0] !== undefined && DIR_ARG_PATTERN.test(rest[0])) {
-		const dir = resolveToCwd(rest[0], sessionCwd);
-		const stat = await fs.promises.stat(dir).catch(() => undefined);
-		if (stat?.isDirectory()) {
-			cwd = dir;
-			rest.shift();
-		}
-	}
+	const checkout = await existingReviewDirectory(rest[0], sessionCwd);
+	const cwd = checkout ?? sessionCwd;
+	if (checkout) rest.shift();
 	let prRef: ReviewPrRef | undefined;
 	const numberMatch = rest[0] !== undefined ? CHANGE_NUMBER_PATTERN.exec(rest[0]) : null;
 	const number = numberMatch ? parsePositivePrNumber(numberMatch[2]) : undefined;
@@ -298,7 +302,7 @@ function getTextContentParts(content: unknown): string[] {
 	return parts;
 }
 
-export function findRecentPrRefs(ctx: HookCommandContext, limit: number): ReviewPrRef[] {
+export function findRecentPrRefs(ctx: Pick<HookCommandContext, "sessionManager">, limit: number): ReviewPrRef[] {
 	const refs: ReviewPrRef[] = [];
 	const seen = new Set<string>();
 	const entries = ctx.sessionManager.getBranch();
@@ -320,6 +324,59 @@ export function findRecentPrRefs(ctx: HookCommandContext, limit: number): Review
 		}
 	}
 	return refs;
+}
+
+/**
+ * Complete only the optional leading checkout and reference. After those
+ * positions, the input belongs to the user's review instructions.
+ */
+export async function getReviewArgumentCompletions(
+	argumentPrefix: string,
+	cwd: string,
+	context?: Pick<HookCommandContext, "sessionManager">,
+): Promise<AutocompleteItem[] | null> {
+	const prefix = argumentPrefix.trimStart();
+	const first = /^(?:"[^"]*"|'[^']*'|\S+)[ \t]+/.exec(prefix)?.[0];
+	const checkout = first ? await existingReviewDirectory(parseCommandArgs(first)[0], cwd) : undefined;
+	const refPrefix = checkout && first ? prefix.slice(first.length) : prefix;
+	const query = refPrefix.toLowerCase();
+	const items: AutocompleteItem[] = [];
+	if (context && !/\s/.test(query)) {
+		for (const ref of findRecentPrRefs(context, REVIEW_CONTEXT_PR_LIMIT)) {
+			const shorthand = `${ref.forge === "github" ? "#" : "!"}${ref.number}`;
+			const qualified = `${ref.repo}${shorthand}`;
+			if (
+				!ref.raw.toLowerCase().startsWith(query) &&
+				!qualified.toLowerCase().startsWith(query) &&
+				!shorthand.startsWith(query)
+			) {
+				continue;
+			}
+			const preceding = checkout ? first : "";
+			items.push({
+				label: formatReviewRefLabel(ref),
+				value: `${preceding}${ref.raw} `,
+				...(refPrefix === "" ? { preserveInputOnSubmit: true } : {}),
+			});
+		}
+	}
+	const pathPrefix = prefix.replace(/^(["'])(.*?)\1?$/, "$2");
+	if (!checkout && (pathPrefix === "" || DIR_ARG_PATTERN.test(pathPrefix))) {
+		const dirs = await buildDirectoryArgumentCompletions({ cwd })(pathPrefix || "./");
+		for (const dir of dirs ?? []) {
+			if (/[\r\n]/.test(dir.value)) continue;
+			const quote = dir.value.includes('"') ? "'" : '"';
+			const value = /[ \t]/.test(dir.value) ? `${quote}${dir.value}${quote}` : dir.value;
+			if (parseCommandArgs(value)[0] !== dir.value) continue;
+			items.push({
+				...dir,
+				label: pickerText(dir.label),
+				value,
+				...(prefix === "" ? { preserveInputOnSubmit: true } : {}),
+			});
+		}
+	}
+	return items.length > 0 ? items : null;
 }
 
 interface PrListItem {
@@ -622,6 +679,8 @@ export class ReviewCommand implements CustomCommand {
 	description = "Launch interactive code review";
 
 	constructor(private readonly api: CustomCommandAPI) {}
+
+	getArgumentCompletions = getReviewArgumentCompletions;
 
 	async execute(args: string[], ctx: HookCommandContext): Promise<string | undefined> {
 		const sessionCwd = liveCommandCwd(this.api, ctx);

@@ -425,6 +425,7 @@ import {
 	ASYNC_PREVIEW_MAX_CHARS,
 	ASYNC_PREVIEW_TAIL_CHARS,
 	ASYNC_RESULT_MESSAGE_TYPE,
+	type AsyncResultDetails,
 	type AsyncResultEntry,
 	buildAsyncResultBatchMessage,
 } from "./async-job-delivery";
@@ -645,6 +646,7 @@ import {
 } from "../advisor/settings";
 import { cfgDisasmBackend } from "../disasm/active";
 import { cfgBrowserEnabled, cfgBrowserFreezeOnTurnEnd, cfgBrowserIdleCloseSec } from "../tools/browser/settings";
+import { type AgentWakeEvent, canWakeAgent, cfgAgentWake } from "./wake-settings";
 import {
 	cfgClaudeResets,
 	cfgCodexResets,
@@ -681,6 +683,7 @@ import { cfgSteeringMode } from "../modes/settings";
 import { observeThemesConfiguration } from "../modes/themes-configuration";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../config/model-facts";
+import { cfgModelVariants, modelVariantSetting } from "../config/model-variant-settings";
 import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalJs, cfgEvalPy, cfgEvalToolsEnabled, cfgEvalWorkpoolFreshAgents } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
@@ -1966,7 +1969,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// so they neither auto-resume the run the user stopped (a non-empty steer queue
 		// otherwise bypasses the latch in #canAutoContinueForFollowUp) nor linger to
 		// flush at the next prompt. Real user steers/follow-ups are left untouched.
-		if (this.#advisors.autoResumeSuppressed && !this.isStreaming) {
+		if (!this.isStreaming && !this.#canWakeFor("advisors")) {
 			for (const card of this.#extractQueuedAdvisorCards()) {
 				this.#preserveAdvisorCard(card);
 			}
@@ -1998,29 +2001,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// and race the transition's own reset — same rationale as #drainStrandedQueuedMessages.
 		if (this.#unsubscribeAgent === undefined) return;
 		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		// Parked wake records resume alongside ordinary stranded asides; they were
-		// already decided wake-intended at deferral time.
+		// Recheck wake policy for parked records alongside ordinary stranded asides.
 		const records = [...this.#irc.drainDeferredWakes(), ...this.#irc.drainPending()];
 		if (this.#planModeState?.enabled) {
 			// Plan mode: fold stranded IRC asides into context without waking an
 			// autonomous turn. Convergence to ask/resolve stays user-driven.
 			this.#recordWithoutTurn(records);
-			return;
-		}
-		if (this.#advisors.autoResumeSuppressed) {
-			// A user interrupt is still in effect (it reclaimed advisor cards, and an
-			// editor-restoring one recorded the visible agent work it withdrew, to keep the run
-			// the user stopped from auto-resuming). Only a real peer IRC message justifies waking a fresh
-			// turn here; extension/user asides fold into context like the plan-mode branch above,
-			// staying user-driven until the next deliberate prompt.
-			const wake: AgentMessage[] = [];
-			const fold: AgentMessage[] = [];
-			for (const record of records) {
-				if (record.role === "custom" && record.customType === "irc:incoming") wake.push(record);
-				else fold.push(record);
-			}
-			this.#recordWithoutTurn(fold);
-			if (wake.length > 0) this.#wakeForIrc(wake);
 			return;
 		}
 		this.#wakeForIrc(records);
@@ -2039,6 +2025,51 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.agent.emitExternalEvent({ type: "message_start", message: record });
 			this.agent.emitExternalEvent({ type: "message_end", message: record });
 		}
+	}
+
+	#canWakeFor(event: AgentWakeEvent, afterInterrupt = this.#advisors.autoResumeSuppressed): boolean {
+		return canWakeAgent(this.#agentKind === "main" ? this.settings : undefined, event, afterInterrupt);
+	}
+
+	#canWakeForIrc(record: AgentMessage): boolean {
+		// Extension/user asides share this queue but are not incoming IRC.
+		return record.role === "custom" && record.customType === "irc:incoming"
+			? this.#canWakeFor("irc")
+			: !this.#advisors.autoResumeSuppressed;
+	}
+
+	#canWakeForBackgroundMessage(message: AgentMessage): boolean {
+		const afterInterrupt = this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
+		if (message.role === "custom") {
+			if (message.customType === ASYNC_RESULT_MESSAGE_TYPE) {
+				const jobs = (message.details as AsyncResultDetails | undefined)?.jobs;
+				return jobs?.length
+					? jobs.some(job => this.#canWakeFor(job.type === "task" ? "subagents" : "asyncJobs", afterInterrupt))
+					: this.#canWakeFor("asyncJobs", afterInterrupt);
+			}
+			if (message.customType === LAUNCH_COMPLETION_MESSAGE_TYPE) return this.#canWakeFor("launches", afterInterrupt);
+		}
+		return this.#canWakeFor("notices", afterInterrupt);
+	}
+
+	/** An autonomous wake must not consume a user follow-up an interrupt left blocked. */
+	#parkBlockedFollowUps(): (() => void) | undefined {
+		const followUps = this.agent.peekFollowUpQueue();
+		if (followUps.length === 0 || this.agent.peekSteeringQueue().length > 0 || this.#canAutoContinueForFollowUp()) {
+			return undefined;
+		}
+		const parked = [...followUps];
+		const wasBlocked = this.#queuedMessageDrainBlocked;
+		this.#holdQueuedMessages(parked);
+		this.agent.replaceQueues([], []);
+		this.#queuedMessageDrainBlocked = false;
+		return () => {
+			this.agent.replaceQueues(
+				[...this.agent.peekSteeringQueue()],
+				[...this.#releaseHeldQueuedMessages(parked), ...this.agent.peekFollowUpQueue()],
+			);
+			this.#queuedMessageDrainBlocked ||= wasBlocked;
+		};
 	}
 
 	/** Draw and save the rows kept out of context that a live run queued (see {@link #pendingExcludedRows}). */
@@ -2099,12 +2130,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#irc.queueAside(wakeRecords);
 			return;
 		}
+		if (this.#abortInProgress) {
+			this.#irc.queueAside(wakeRecords);
+			return;
+		}
+		let records = wakeRecords;
+		if (records.some(record => !this.#canWakeForIrc(record))) {
+			this.#recordWithoutTurn(records.filter(record => !this.#canWakeForIrc(record)));
+			records = records.filter(record => this.#canWakeForIrc(record));
+			if (records.length === 0) return;
+		}
 		// The owner has not prompted the assignment yet: a wake turn now would run on the
 		// system prompt alone and the assignment would then lose the prompt race (#17587).
 		// Parent records ride the first prompt's turn (#promptWithMessage flushes asides);
 		// a peer's keep a wake turn of their own once that run allows it, as under a hold.
 		if (this.#ircAwaitingAssignment) {
-			for (const record of wakeRecords) {
+			for (const record of records) {
 				if (this.#irc.isPeerMessage(record)) this.#irc.queueDeferredWake([record]);
 				else this.#irc.queueAside([record]);
 			}
@@ -2134,7 +2175,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					if (this.hasAdmittedSubmission) {
 						// Input admitted during the compaction goes first. Prompt setup folds pending IRC
 						// into its turn; whatever is still pending once it settles wakes as usual.
-						this.#irc.queueAside(wakeRecords);
+						this.#irc.queueAside(records);
 						await this.waitForAdmittedSubmissions();
 						this.#resumeStrandedIrcAsides();
 						return;
@@ -2143,11 +2184,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						// An abort during the wait never saw this wake start, so it does not cancel it: the records
 						// take the stranded-aside path, which wakes for IRC messages as a delivery right after the
 						// abort would, and folds other asides while the user's interrupt holds.
-						this.#irc.queueAside(wakeRecords);
+						this.#irc.queueAside(records);
 						this.#resumeStrandedIrcAsides();
 						return;
 					}
-					this.#wakeForIrc(wakeRecords);
+					this.#wakeForIrc(records);
 				})
 				.catch(error => logger.warn("IRC wake after compaction failed", { error: String(error) }))
 				.finally(() => {
@@ -2158,7 +2199,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		// While a driven run holds wakes, its monitor would take this turn's answer
 		// as the run's result: park a non-parent message for a turn of its own.
-		let records = wakeRecords;
 		if (this.#ircWakeHolds > 0) {
 			const held = records.filter(record => this.#irc.isPeerMessage(record));
 			if (held.length > 0) {
@@ -2167,20 +2207,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				if (records.length === 0) return;
 			}
 		}
-		// Park only a *blocked* follow-up (one a user interrupt is intentionally holding); an
-		// already-resumable follow-up can ride the wake turn normally without reordering.
-		const parkedFollowUps =
-			this.agent.peekSteeringQueue().length === 0 &&
-			this.agent.peekFollowUpQueue().length > 0 &&
-			!this.#canAutoContinueForFollowUp()
-				? [...this.agent.peekFollowUpQueue()]
-				: [];
-		const parkedQueueDrainBlocked = parkedFollowUps.length > 0 && this.#queuedMessageDrainBlocked;
-		if (parkedFollowUps.length > 0) {
-			this.#holdQueuedMessages(parkedFollowUps);
-			this.agent.replaceQueues([...this.agent.peekSteeringQueue()], []);
-			if (parkedQueueDrainBlocked) this.#queuedMessageDrainBlocked = false;
-		}
+		const restoreFollowUps = this.#parkBlockedFollowUps();
 		// The wake observer is attached only once prompt ownership is won below: a
 		// deferred wake runs no turn, so observing it would capture the next
 		// turn's yield/output and relay it as this wake's reply.
@@ -2247,13 +2274,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					turnError ??= error;
 					logger.warn("IRC wake turn recovery failed", { error: String(error) });
 				}
-				if (parkedFollowUps.length > 0) {
-					this.agent.replaceQueues(
-						[...this.agent.peekSteeringQueue()],
-						[...this.#releaseHeldQueuedMessages(parkedFollowUps), ...this.agent.peekFollowUpQueue()],
-					);
-					this.#queuedMessageDrainBlocked ||= parkedQueueDrainBlocked;
-				}
+				restoreFollowUps?.();
 				// Release the in-flight bracket BEFORE settling owned async work.
 				this.#endInFlight(inFlightEpoch);
 				await this.#finishTurnObservation(observation, turnError);
@@ -2586,6 +2607,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			isStreaming: () => this.isStreaming,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
+			canWake: record => this.#canWakeForIrc(record),
 			wakeForIrc: records => this.#wakeForIrc(records),
 		};
 		this.#irc = new IrcBridge(ircHost);
@@ -2946,27 +2968,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.yieldQueue = new YieldQueue({
 			// A transition swaps the transcript under the agent: hold idle deliveries until it
 			// settles, so a result from the outgoing session cannot start a turn in the target.
-			isStreaming: () => this.isStreaming || this.isSessionTransitioning,
+			isStreaming: () => this.isStreaming || this.isSessionTransitioning || this.#abortInProgress,
 			injectIdle: async delivered => {
 				const first = delivered[0];
 				if (!first) return;
 				// A background job may have made a prelude's first call: its guide rides the job's delivery.
 				const guide = this.#tools.takeEvalPreludeGuide();
 				const messages = guide ? [...delivered, guide] : delivered;
-				if (this.#clientBridge?.deferAgentInitiatedTurns) {
-					this.#recordWithoutTurn(messages);
-					return;
-				}
-				// A user interrupt is still in effect: background completions (async job
-				// results, launch completions, MCP/LSP/advisor asides) must not restart
-				// the run the user stopped. Fold them into context so the next deliberate
-				// prompt sees them — same policy as #resumeStrandedIrcAsides — until a later
-				// turn has ended on its own.
-				if (this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt) {
-					logger.debug("Background delivery folded into context without a turn", {
-						count: messages.length,
-						customTypes: messages.map(message => (message.role === "custom" ? message.customType : message.role)),
-					});
+				// Disabled events stay in context. A mixed batch may start one turn if at least
+				// one member is eligible, so it still reaches the model in transcript order.
+				if (
+					this.#clientBridge?.deferAgentInitiatedTurns ||
+					!delivered.some(msg => this.#canWakeForBackgroundMessage(msg))
+				) {
 					this.#recordWithoutTurn(messages);
 					return;
 				}
@@ -2975,6 +2989,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						? this.#startTurnObservation(messages)
 						: undefined;
 				let turnError: unknown;
+				const restoreFollowUps = this.#advisors.autoResumeSuppressed ? this.#parkBlockedFollowUps() : undefined;
 				const inFlightEpoch = this.#beginInFlight();
 				try {
 					await this.agent.prompt(messages.length === 1 ? first : messages);
@@ -2982,6 +2997,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					turnError = error;
 					throw error;
 				} finally {
+					restoreFollowUps?.();
 					this.#endInFlight(inFlightEpoch);
 					// The delivery receipt settles when injectIdle returns; waiting for
 					// owned deliveries here would wait on this very flush.
@@ -3333,6 +3349,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			onSseEvent: this.#onSseEvent,
 			isDisposed: () => this.#isDisposed,
 			abortInProgress: () => this.#abortInProgress,
+			canWakeForAdvisor: afterInterrupt => this.#canWakeFor("advisors", afterInterrupt),
 			planModeState: () => this.#planModeState,
 			clientBridge: () => this.#clientBridge,
 			emitSessionEvent: event => this.#emitSessionEvent(event),
@@ -3626,6 +3643,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		cfgModelFactsEnabled.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgModelFactsSources.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgModelFactsOverrides.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelVariants.listen(this, async () => {
+			this.#models.refreshScopedModelVariants();
+			const previous = this.model;
+			if (!previous?.variant || this.#isDisposed) return;
+			const next =
+				this.#modelRegistry.find(previous.provider, previous.id) ??
+				this.#modelRegistry.find(previous.provider, previous.variant.baseModelId);
+			if (!next || next === previous) return;
+			try {
+				await this.#setModelWithProviderSessionReset(next);
+				this.#models.reapplyModelVariantThinking(previous);
+			} catch (error) {
+				logger.warn("Model Variant policy reapply failed", { error: String(error) });
+			}
+		});
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
@@ -3827,6 +3859,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		cfgSteeringMode.listen(this, mode => this.agent.setSteeringMode(mode));
 		cfgFollowUpMode.listen(this, mode => this.agent.setFollowUpMode(mode));
 		cfgInterruptMode.listen(this, mode => this.agent.setInterruptMode(mode));
+		if (this.#agentKind === "main") cfgAgentWake.listen(this, () => this.#notifyWakeState());
 		cfgSampling.listen(this, sampling => this.#applySamplingSettings(sampling));
 		cfgTierOpenai.listen(this, tier => this.setServiceTierFamily("openai", serviceTierSettingToTier(tier)));
 		cfgTierAnthropic.listen(this, tier => this.setServiceTierFamily("anthropic", serviceTierSettingToTier(tier)));
@@ -4260,33 +4293,38 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * - results or peer messages already queued for a wake turn (wakes parked for a
 	 *   later run of their own do not count).
 	 *
-	 * Undefined when nothing can: a client deferring agent-initiated turns, or a user
-	 * interrupt that stopped the run (until a later turn ends on its own), folds every
-	 * delivery into context instead of waking. While a paused run has wake sources it
-	 * awaits them; the stop-time passes (todo reminder, `session_stop` hooks, idle
-	 * compaction) defer to the run's end.
+	 * Undefined when none of those sources may wake the session under the current
+	 * settings and client policy. While a paused run has wake sources it awaits
+	 * them; stop-time passes (todo reminders, `session_stop` hooks, idle compaction)
+	 * defer to the run's end.
 	 */
 	get wakeSources(): WakeSources | undefined {
 		return this.#wakeSources();
 	}
 
 	#wakeSources(): WakeSources | undefined {
-		if (this.#agentInitiatedTurnsSuppressed()) return undefined;
+		if (this.#clientBridge?.deferAgentInitiatedTurns) return undefined;
+		const afterInterrupt = this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
+		const canWakeForJobs = this.#canWakeFor("asyncJobs", afterInterrupt);
+		const canWakeForTasks = this.#canWakeFor("subagents", afterInterrupt);
 		const jobs = new Set<string>();
 		const manager = this.#asyncJobManager;
+		const canWakeForJob = (job: AsyncJob | undefined) => (job?.type === "task" ? canWakeForTasks : canWakeForJobs);
 		if (manager) {
 			const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
 			for (const job of manager.getRunningJobs(ownerFilter)) {
-				if (!manager.isDeliverySuppressed(job.id)) jobs.add(job.id);
+				if (canWakeForJob(job) && !manager.isDeliverySuppressed(job.id)) jobs.add(job.id);
 			}
-			for (const jobId of manager.getDeliveryState(ownerFilter).pendingJobIds) jobs.add(jobId);
+			for (const jobId of manager.getDeliveryState(ownerFilter).pendingJobIds) {
+				if (canWakeForJob(manager.getJob(jobId))) jobs.add(jobId);
+			}
 		}
 		const agents: string[] = [];
 		const registry = this.#agentRegistry;
 		const agentId = this.#agentId;
 		// A child wakes this run only with a message. Plan mode folds messages into context
 		// without a turn, and a driver holding wakes parks them for a later run of their own.
-		if (registry && agentId && !this.#planModeState?.enabled && this.#ircWakeHolds === 0) {
+		if (canWakeForTasks && registry && agentId && !this.#planModeState?.enabled && this.#ircWakeHolds === 0) {
 			for (const ref of registry.list()) {
 				if (ref.parentId !== agentId || ref.kind !== "sub" || !registry.isRunning(ref)) continue;
 				if (registry.awaits.blocksOn(ref.id, agentId, 0)) continue;
@@ -4298,20 +4336,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// parked under a wake hold or pooled contract belong to a later run, not this one:
 		// counting them would hold the run open against the very driver that parked them.
 		const queued =
-			this.yieldQueue.hasDeliverable(ASYNC_RESULT_MESSAGE_TYPE) ||
-			this.yieldQueue.hasDeliverable(ASYNC_NOTIFY_MESSAGE_TYPE) ||
-			this.yieldQueue.hasDeliverable(LAUNCH_COMPLETION_MESSAGE_TYPE) ||
-			this.#irc.hasWakeable() ||
-			this.#ircWakesAwaitingCompaction > 0;
+			this.yieldQueue.hasDeliverable<AsyncResultEntry>(ASYNC_RESULT_MESSAGE_TYPE, entry =>
+				canWakeForJob(entry.job),
+			) ||
+			(this.#canWakeFor("notices", afterInterrupt) && this.yieldQueue.hasDeliverable(ASYNC_NOTIFY_MESSAGE_TYPE)) ||
+			(this.#canWakeFor("launches", afterInterrupt) &&
+				this.yieldQueue.hasDeliverable(LAUNCH_COMPLETION_MESSAGE_TYPE)) ||
+			(this.#canWakeFor("irc") &&
+				!afterInterrupt &&
+				(this.#irc.hasWakeable() || this.#ircWakesAwaitingCompaction > 0));
 		if (jobs.size === 0 && agents.length === 0 && !queued) return undefined;
 		return { jobs: [...jobs], agents, queued };
 	}
 
-	/**
-	 * Whether nothing the session did not schedule itself may start a turn: a client deferring
-	 * agent-initiated turns, or a user interrupt that stopped the run (until a later turn ends
-	 * on its own), folds every delivery into context instead.
-	 */
+	/** The stall guard must not resume a stopped run, even if some specific background events may. */
 	#agentInitiatedTurnsSuppressed(): boolean {
 		if (this.#clientBridge?.deferAgentInitiatedTurns) return true;
 		return this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
@@ -4333,8 +4371,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * before this agent acts. Without one, the agent stays idle once its turn ends until messaged.
 	 */
 	hasWakeAfterTurn(): boolean {
-		if (this.agent.hasQueuedMessages() || this.#irc.hasPending()) return true;
-		if (this.#evalToolSession && hasLiveOwnedService(this.#evalToolSession)) return true;
+		if (this.agent.hasQueuedMessages() || (this.#canWakeFor("irc") && this.#irc.hasPending())) return true;
+		const afterInterrupt = this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
+		if (
+			this.#canWakeFor("notices", afterInterrupt) &&
+			this.#evalToolSession &&
+			hasLiveOwnedService(this.#evalToolSession)
+		)
+			return true;
 		const sources = this.#wakeSources();
 		if (!sources) return false;
 		if (sources.queued || sources.agents.length > 0) return true;
@@ -7268,7 +7312,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#promptCacheArmSessionId = sessionId;
 		// A copy: `/clear` truncates the live array in place, which an alias would follow.
 		const armMessages = this.messages.slice();
-		const retentionSetting = cfgProvidersCacheRetention.get(this.settings);
+		const retentionSetting = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const warmingOptions = {
 			...options,
 			cacheRetention: options.cacheRetention ?? (retentionSetting === "auto" ? undefined : retentionSetting),
@@ -7319,7 +7363,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#promptCacheShape(model: Model | undefined): PromptCacheShape {
 		const { tools, systemPrompt } = this.agent.state;
 		const thinkingLevel = this.thinkingLevel;
-		const retention = cfgProvidersCacheRetention.get(this.settings);
+		const retention = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const intentTracing = this.agent.intentTracing;
 		const intentDescription = this.agent.intentDescription;
 		const pruneToolDescriptions = this.agent.prunesToolDescriptions(model);
@@ -7405,7 +7449,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			fallback?.type === "fallback" ? fallback.from.model : reply.model,
 		);
 		if (!model) return undefined;
-		const retention = cfgProvidersCacheRetention.get(this.settings);
+		const retention = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const isOAuth = model.api === "anthropic-messages" && this.#modelRegistry.isUsingOAuth(model);
 		const requestedTier = resolvePromptCacheTier(
 			model,
@@ -10543,7 +10587,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const externalThinkingToolChoice =
 			!options?.synthetic &&
 			!hasPendingUserDirective &&
-			cfgExternalThinking.get(this.settings) &&
+			modelVariantSetting(activeModel, cfgExternalThinking, this.settings) &&
 			this.getEnabledToolNames().includes("think") &&
 			supportsExternalThinking(activeModel)
 				? buildNamedToolChoice("think", activeModel)
@@ -12470,6 +12514,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			signal?: AbortSignal;
 		},
 	): Promise<boolean> {
+		const restoreFollowUps =
+			isAdvisorCard(message) && this.#advisors.autoResumeSuppressed ? this.#parkBlockedFollowUps() : undefined;
 		const inFlightEpoch = this.#beginInFlight();
 		let receiptConfirmation: Promise<boolean> | undefined;
 		const confirmer = this.#usageFallbackConfirmer
@@ -12508,6 +12554,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#tools.clearTurnSystemPromptOverride();
 			this.#usagePreflightReadyForNextModelCall = false;
 			this.#recovery.setAcceptTerminalEmptyStop(false);
+			restoreFollowUps?.();
 			this.#endInFlight(inFlightEpoch);
 			if (this.#promptSetupAbortController === setupAbort) this.#promptSetupAbortController = undefined;
 			await this.#waitForPostPromptRecovery();
@@ -14249,6 +14296,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 		} finally {
 			this.#abortInProgress = false;
+			this.yieldQueue.requestIdleFlush();
+			if (this.#unsubscribeAgent && !this.#isDisposed) this.#advisors.onPrimaryAbortSettled();
 			this.#drainStrandedQueuedMessages();
 			if (forceQueuedDelivery) this.#forcedQueuedMessageDeliveryCount--;
 			this.#abortUnwinds.delete(unwind.promise);
@@ -15426,7 +15475,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * manager as needed. Called on model switch AND setting change.
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
-		const setting = cfgProviderAppendOnlyContext.get(this.settings);
+		const setting = modelVariantSetting(model, cfgProviderAppendOnlyContext, this.settings);
 		const enable = shouldEnableAppendOnlyContext(setting, model);
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;

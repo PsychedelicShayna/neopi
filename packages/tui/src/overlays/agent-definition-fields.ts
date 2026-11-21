@@ -263,7 +263,16 @@ export interface AgentDefinitionInspection {
 	findings: readonly AgentDefinitionFinding[];
 }
 
+export interface AgentGenerationSource {
+	kind: string;
+	name: string;
+	description?: string;
+	content: string;
+}
+
 export interface AgentEditorDeps {
+	/** Render the detail screen in a parent pane rather than as a standalone editor. */
+	embedded?: boolean;
 	tools: readonly { name: string; description?: string }[];
 	/** Built-in tools the harness classifies as read-only; drives the Read-only preset. */
 	readOnlyTools?: readonly string[];
@@ -272,6 +281,7 @@ export interface AgentEditorDeps {
 	browserSource?: ModelBrowserSource;
 	getAvailableModels?: () => Model[];
 	listAdvisors: () => Promise<readonly NamedAgentAdvisor[]>;
+	listGenerationSources?: () => Promise<readonly AgentGenerationSource[]>;
 	parse: (raw: string) => AgentDefinitionDraft;
 	serialize: (definition: AgentDefinitionDraft) => string;
 	generate: (request: {
@@ -279,6 +289,7 @@ export interface AgentEditorDeps {
 		target: AgentDefinitionField | "all";
 		comment?: string;
 		baseDefinitions?: readonly AgentDefinitionDraft[];
+		sources?: readonly AgentGenerationSource[];
 		conversationId?: string;
 		signal: AbortSignal;
 	}) => Promise<{ fields: Partial<AgentDefinitionDraft>; conversationId?: string }>;
@@ -292,6 +303,8 @@ export interface AgentEditorDeps {
 	/** Effective facts and findings for the live draft; recomputed on every change. */
 	inspect?: (definition: AgentDefinitionDraft) => AgentDefinitionInspection;
 	externalEditor?: (raw: string) => Promise<string | null>;
+	/** Opens the actual backing file, not the draft sent to externalEditor. */
+	openDefinitionFile?: () => Promise<void>;
 	outputSchemaDialect?: (schema: unknown) => "json-schema" | "jtd";
 	saveScopeEditable?: boolean;
 }

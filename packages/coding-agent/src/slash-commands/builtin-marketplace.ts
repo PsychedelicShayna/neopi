@@ -1,26 +1,17 @@
-import { clearSubmittedText } from "./helpers/draft";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { reset as resetCapabilities } from "../capability";
-import {
-	clearPluginRootsAndCaches,
-	resolveActiveProjectRegistryPath,
-	resolveOrDefaultProjectRegistryPath,
-} from "../discovery/helpers.js";
+import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { PluginManager } from "../extensibility/plugins";
 import { setInstalledPluginEnabled } from "../extensibility/plugins/toggle";
-import {
-	getInstalledPluginsRegistryPath,
-	getMarketplacesCacheDir,
-	getMarketplacesRegistryPath,
-	getPluginsCacheDir,
-	MarketplaceManager,
-} from "../extensibility/plugins/marketplace";
 import { MCPCommandController } from "../modes/controllers/mcp-command-controller";
 import type { InteractiveModeContext } from "../modes/types";
 import { refreshAgentDiscovery } from "../task";
+import { argumentValues, completeCurrentArgument } from "./builtin-completions";
+import { clearSubmittedText } from "./helpers/draft";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { parseMarketplaceInstallArgs, parsePluginScopeArgs } from "./marketplace-install-parser";
-import type { SlashCommandSpec } from "./types";
+import type { ArgumentValueProvider, SlashCommandSpec, SubcommandDef } from "./types";
 
 /**
  * Reload the interactive session's plugin runtime: invalidate fs/plugin-root
@@ -41,6 +32,101 @@ export async function reloadTuiPluginState(ctx: InteractiveModeContext): Promise
 	}
 }
 
+const completeMarketplaceName: ArgumentValueProvider = async (prefix, runtime) => {
+	if (!runtime) return null;
+	const manager = await createMarketplaceManager(runtime.ctx.sessionManager.getCwd()).catch(() => null);
+	if (!manager) return null;
+	const lower = prefix.toLowerCase();
+	return (await manager.listMarketplaces().catch(() => []))
+		.filter(marketplace => marketplace.name.toLowerCase().startsWith(lower))
+		.map(({ name, sourceUri }) => ({ value: `${name} `, label: name, description: sourceUri }));
+};
+
+type PluginCompletionMode = "install" | "uninstall" | "upgrade" | "toggle";
+type PluginScope = "user" | "project";
+const completePluginScope = argumentValues("user", "project");
+
+function completePluginArguments(mode: PluginCompletionMode): NonNullable<SubcommandDef["getArgumentCompletions"]> {
+	return (tail, runtime) =>
+		completeCurrentArgument(tail, runtime, async (prefix, context, previous) => {
+			let hasPlugin = false;
+			let force = false;
+			let scope: PluginScope | undefined;
+			for (let index = 0; index < previous.length; index++) {
+				const token = previous[index];
+				if (token === "--scope") {
+					if (index === previous.length - 1) return completePluginScope(prefix);
+					const value = previous[++index];
+					if (value !== "user" && value !== "project") return null;
+					scope = value;
+				} else if (token === "--force" && mode === "install") {
+					force = true;
+				} else if (token.startsWith("-") || hasPlugin) {
+					return null;
+				} else {
+					hasPlugin = true;
+				}
+			}
+
+			const items =
+				argumentValues(
+					...(scope === undefined ? ["--scope"] : []),
+					...(mode === "install" && !force ? ["--force"] : []),
+				)(prefix) ?? [];
+			if (hasPlugin || prefix.startsWith("-") || !context) return items;
+
+			const cwd = context.ctx.sessionManager.getCwd();
+			const manager = await createMarketplaceManager(cwd).catch(() => null);
+			if (!manager) return items;
+			const lower = prefix.toLowerCase();
+			const matches = new Map<string, AutocompleteItem>();
+			const add = (id: string, description?: string) => {
+				if (!id.toLowerCase().startsWith(lower)) return;
+				const existing = matches.get(id);
+				if (existing?.description && description) {
+					existing.description = `${existing.description}; ${description}`;
+				} else if (!existing || description) {
+					matches.set(id, { value: `${id} `, label: id, description });
+				}
+			};
+			switch (mode) {
+				case "install": {
+					// These catalogs are local copies; do not refresh or clone while completing.
+					const catalogues = await Promise.all(
+						(await manager.listMarketplaces().catch(() => [])).map(async ({ name }) => ({
+							name,
+							plugins: await manager.listAvailablePlugins(name).catch(() => []),
+						})),
+					);
+					for (const { name, plugins } of catalogues) {
+						for (const plugin of plugins) add(`${plugin.name}@${name}`, plugin.description);
+					}
+					break;
+				}
+				case "upgrade":
+					for (const row of await manager.listCatalogVersions().catch(() => [])) {
+						if (scope && scope !== row.scope) continue;
+						const versions = row.to && row.to !== row.from ? `${row.from} → ${row.to}` : row.from;
+						add(row.pluginId, `${row.scope}: ${versions}`);
+					}
+					break;
+				case "uninstall":
+				case "toggle": {
+					const installed = await manager.listInstalledPlugins().catch(() => []);
+					for (const plugin of installed) {
+						if (scope && scope !== plugin.scope) continue;
+						add(plugin.id, plugin.scope);
+					}
+					if (mode === "toggle" && scope !== "project") {
+						for (const plugin of await new PluginManager(cwd).list().catch(() => [])) add(plugin.name, "npm");
+					}
+					break;
+				}
+			}
+			return [...matches.values(), ...items];
+		});
+}
+
 export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "marketplace",
@@ -50,18 +136,50 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 		acpInputHint: "<subcommand>",
 		subcommands: [
 			{ name: "add", description: "Add a marketplace source", usage: "<source>" },
-			{ name: "remove", description: "Remove a marketplace source", usage: "<name>" },
-			{ name: "update", description: "Update marketplace catalog(s)", usage: "[name]" },
+			{
+				name: "remove",
+				description: "Remove a marketplace source",
+				usage: "<name>",
+				arguments: [completeMarketplaceName],
+			},
+			{
+				name: "rm",
+				description: "Remove a marketplace source (alias)",
+				usage: "<name>",
+				arguments: [completeMarketplaceName],
+			},
+			{
+				name: "update",
+				description: "Update marketplace catalog(s)",
+				usage: "[name]",
+				arguments: [completeMarketplaceName],
+			},
 			{ name: "list", description: "List configured marketplaces" },
-			{ name: "discover", description: "Browse available plugins", usage: "[marketplace]" },
+			{
+				name: "discover",
+				description: "Browse available plugins",
+				usage: "[marketplace]",
+				arguments: [completeMarketplaceName],
+			},
 			{
 				name: "install",
 				description: "Install a plugin (interactive browser if no args)",
-				usage: "[--force] [name@marketplace]",
+				usage: "[--force] [--scope user|project] [name@marketplace]",
+				getArgumentCompletions: completePluginArguments("install"),
 			},
-			{ name: "uninstall", description: "Uninstall a plugin (selector if no args)", usage: "[name@marketplace]" },
+			{
+				name: "uninstall",
+				description: "Uninstall a plugin (selector if no args)",
+				usage: "[--scope user|project] [name@marketplace]",
+				getArgumentCompletions: completePluginArguments("uninstall"),
+			},
 			{ name: "installed", description: "List installed marketplace plugins" },
-			{ name: "upgrade", description: "Upgrade outdated plugins", usage: "[name@marketplace]" },
+			{
+				name: "upgrade",
+				description: "Upgrade outdated plugins",
+				usage: "[--scope user|project] [name@marketplace]",
+				getArgumentCompletions: completePluginArguments("upgrade"),
+			},
 			{ name: "help", description: "Show usage guide" },
 		],
 		allowArgs: true,
@@ -69,7 +187,7 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb) {
 				try {
-					const manager = await createMarketplaceManager(runtime);
+					const manager = await createMarketplaceManager(runtime.cwd);
 					const marketplaces = await manager.listMarketplaces();
 					if (marketplaces.length === 0) {
 						await runtime.output(
@@ -114,7 +232,7 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 				);
 			}
 			try {
-				const manager = await createMarketplaceManager(runtime);
+				const manager = await createMarketplaceManager(runtime.cwd);
 				switch (verb) {
 					case "add": {
 						if (!rest) return usage("Usage: /marketplace add <source>", runtime);
@@ -250,18 +368,8 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 				return;
 			}
 
-			const mgr = new MarketplaceManager({
-				marketplacesRegistryPath: getMarketplacesRegistryPath(),
-				installedRegistryPath: getInstalledPluginsRegistryPath(),
-				projectInstalledRegistryPath: await resolveOrDefaultProjectRegistryPath(
-					runtime.ctx.sessionManager.getCwd(),
-				),
-				marketplacesCacheDir: getMarketplacesCacheDir(),
-				pluginsCacheDir: getPluginsCacheDir(),
-				clearPluginRootsCache: clearPluginRootsAndCaches,
-			});
-
 			try {
+				const mgr = await createMarketplaceManager(runtime.ctx.sessionManager.getCwd());
 				switch (sub) {
 					case "add": {
 						if (!rest) {
@@ -431,8 +539,18 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 		acpInputHint: "[list|enable|disable]",
 		subcommands: [
 			{ name: "list", description: "List all installed plugins (npm + marketplace)" },
-			{ name: "enable", description: "Enable an installed plugin", usage: "<plugin>" },
-			{ name: "disable", description: "Disable an installed plugin", usage: "<plugin>" },
+			{
+				name: "enable",
+				description: "Enable an installed plugin",
+				usage: "[--scope user|project] <plugin>",
+				getArgumentCompletions: completePluginArguments("toggle"),
+			},
+			{
+				name: "disable",
+				description: "Disable an installed plugin",
+				usage: "[--scope user|project] <plugin>",
+				getArgumentCompletions: completePluginArguments("toggle"),
+			},
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -441,7 +559,7 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 				if (verb === "enable" || verb === "disable") {
 					const parsed = parsePluginScopeArgs(rest, `Usage: /plugins ${verb} [--scope user|project] <plugin>`);
 					if ("error" in parsed) return usage(parsed.error, runtime);
-					const marketplace = await createMarketplaceManager(runtime);
+					const marketplace = await createMarketplaceManager(runtime.cwd);
 					const marketplaceIds = new Set((await marketplace.listInstalledPlugins()).map(plugin => plugin.id));
 					await setInstalledPluginEnabled(parsed.pluginId, {
 						enabled: verb === "enable",
@@ -466,7 +584,7 @@ export const BUILTIN_MARKETPLACE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec>
 					}
 				}
 
-				const marketplaceManager = await createMarketplaceManager(runtime);
+				const marketplaceManager = await createMarketplaceManager(runtime.cwd);
 				const marketplacePlugins = await marketplaceManager.listInstalledPlugins();
 				if (marketplacePlugins.length > 0) {
 					if (lines.length > 0) lines.push("");

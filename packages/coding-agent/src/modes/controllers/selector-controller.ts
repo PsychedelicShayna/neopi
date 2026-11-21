@@ -1641,8 +1641,7 @@ export class SelectorController {
 	}
 
 	/**
-	 * Fullscreen agents hub on the alternate screen (the /roles idiom): scope
-	 * sidebar, agent rows, and chip strips that dive into the model browser.
+	 * Fullscreen agent configurator: a roster beside the selected definition.
 	 */
 	async showAgentsDashboard(): Promise<void> {
 		if (this.#focusOpenMenu("agents-dashboard")) return;
@@ -1675,8 +1674,8 @@ export class SelectorController {
 						model => this.ctx.session.effectiveServiceTier(model),
 						{
 							tools: () => this.ctx.session.getAllToolInfos(),
-							skills: () =>
-								this.ctx.session.skills.map(skill => ({ name: skill.name, description: skill.description })),
+							skills: () => this.ctx.session.skills,
+							promptTemplates: () => this.ctx.session.promptTemplates,
 							sessionDir: () => this.ctx.session.sessionManager.getArtifactsDir() ?? undefined,
 							externalEditor: text => {
 								const env = this.ctx.session.environment.snapshot();
@@ -1685,6 +1684,16 @@ export class SelectorController {
 							},
 						},
 					),
+					openDefinitionFile: async filePath => {
+						const env = this.ctx.session.environment.snapshot();
+						await withExternalEditor(
+							this.ctx,
+							async command => {
+								await openEditorOnPath(command, filePath, env);
+							},
+							env,
+						);
+					},
 				},
 				{ onCancel: () => done() },
 			);
@@ -1935,6 +1944,7 @@ export class SelectorController {
 			this.ctx.settings,
 			model => this.ctx.session.effectiveServiceTier(model),
 			hubOptions.sessionOnly ? undefined : initialScope,
+			hubOptions.sessionOnly ? undefined : this.ctx.session.modelRegistry,
 		);
 		const hub = new ModelHubComponent(
 			this.ctx.ui,

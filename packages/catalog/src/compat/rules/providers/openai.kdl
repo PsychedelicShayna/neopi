@@ -11,7 +11,6 @@ provider "openai" {
 	}
 	on-api "openai-responses" {
 		supports-websockets #true
-		unsupported-sampling-params "topK" "minP" "presencePenalty" "repetitionPenalty" "frequencyPenalty"
 	}
 	kind-apis {
 		embedding "openai-embeddings"

@@ -15,7 +15,12 @@
 
 ### Added
 
+- Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
+- Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
+- **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
+- Create named model folders in the fullscreen `/model` and `/roles` pickers to switch and assign models without scrolling through providers. Folders persist across sessions and can be edited per project.
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.
+- The composer keeps the active chain stage, elapsed time, and bound skip/cancel keys visible throughout preprocessing in ANSI and Tern, including when a stage is skipped ([#850](https://github.com/PsychedelicShayna/neopi/issues/850)).
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
@@ -37,7 +42,7 @@
 - `/model` and Alt+P now open the fullscreen Big Pickle by default; choose Small picker in Settings → Model → Session model picker (`models.sessionPicker: small`) for the compact view. Both support the temporary Task-model target.
 
 - Select supported Codex Fast, Ultra, and extended-context profiles with ordinary model slugs in CLI selections, roles, advisors, tasks, and web search without changing other assignments ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
-- Slash commands and Settings distinguish nightly-only NeoPi additions with moons, published stable additions with purple stars, and the newest and previous upstream sync ranges with gold and silver stars.
+- Settings and slash commands now use the integrated v19.0.0 release for the gold star cohort, age v18.18.8 to silver and v18.14.0 to bronze, and show a nightly crescent for newly inventoried fork additions ([#430](https://github.com/PsychedelicShayna/neopi/issues/430)).
 - Recover NeoPi independently of normal startup with `npi update stable|nightly`, verified platform-specific GitHub releases and retained previous binaries. POSIX replacement is atomic; Windows uses journalled recoverable replacement with an independent PowerShell recovery helper (real Windows verification remains pending). Repurposed update-channel and automatic-update settings follow NeoPi stable/nightly releases; rollback has a cumulative cursor, a cross-profile auto-update hold, and explicit confirmation before losing the recovery command on an older release.
 - Slash commands and Settings mark NeoPi additions with a crescent: purple for nightly-only features, original green for features in the latest published stable release; gold and silver stars mark the newest and previous upstream sync ranges, while every older range remains bronze.
 - Run `/chron index` to refresh the current session's captured atoms without replacing other sessions' shared view, or `/chron recall "question"` to dispatch historical recall across sessions; results arrive as background jobs ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
@@ -181,6 +186,11 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
+- Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
+- Chronicler attributes control-socket messages to their senders instead of the session owner ([#828](https://github.com/PsychedelicShayna/neopi/issues/828)).
+- Chronicler preserves named advisor warnings and distinguishes the agent acting on advice from correcting itself ([#829](https://github.com/PsychedelicShayna/neopi/issues/829)).
+- Enter and `npi ctl steer` remain available while the terminal shows that a yielded turn is waiting for a background Bash job ([#582](https://github.com/PsychedelicShayna/neopi/issues/582)).
 - An active checkpoint no longer demands a rewind or blocks yielding when the rewind tool is unavailable ([#645](https://github.com/PsychedelicShayna/neopi/issues/645)).
 - Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
 - Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).

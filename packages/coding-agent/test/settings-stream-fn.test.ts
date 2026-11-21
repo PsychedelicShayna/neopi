@@ -96,6 +96,45 @@ function replayedReasoningContext(producer: Model): Context {
 }
 
 describe("createSettingsAwareStreamFn", () => {
+	it("applies local provider settings and request sentinels only to the requested variant", () => {
+		const settings = Settings.isolated({
+			"providers.openaiResponsesWebsockets": true,
+			"providers.openrouterVariant": "floor",
+		});
+		const { fn, calls } = captureBase();
+		const stream = createSettingsAwareStreamFn(settings, fn);
+		const model: Model = {
+			...stubResponsesModel,
+			id: "profile",
+			variant: {
+				baseModelId: "base",
+				settings: {
+					"providers.openaiResponsesWebsockets": false,
+					"providers.openrouterVariant": "default",
+				},
+				request: { temperature: -1, topP: 0, cacheRetention: "auto", textVerbosity: "high" },
+			},
+		};
+		const ambient: SimpleStreamOptions = { temperature: 0.8, topP: 0.9, cacheRetention: "long" };
+
+		void stream(model, stubContext, ambient);
+		void stream(stubResponsesModel, stubContext, ambient);
+
+		expect(calls[0]?.options).toMatchObject({
+			temperature: undefined,
+			topP: 0,
+			cacheRetention: undefined,
+			textVerbosity: "high",
+			preferWebsockets: false,
+			openrouterVariant: undefined,
+		});
+		expect(calls[1]?.options).toMatchObject({
+			...ambient,
+			preferWebsockets: true,
+			openrouterVariant: "floor",
+		});
+	});
+
 	it("keeps the WebSocket setting exclusive to Codex", () => {
 		for (const setting of ["auto", "on", "off"] as const) {
 			const settings = Settings.isolated({ "providers.openaiWebsockets": setting });

@@ -5,8 +5,9 @@ import * as path from "node:path";
 import { refreshDirsFromEnv } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import { SecurityStore } from "../../src/security";
+import { buildTuiBuiltinSlashCommands } from "../../src/slash-commands/builtin-registry";
 import { handleSecurityCommand } from "../../src/slash-commands/helpers/security";
-import type { SlashCommandRuntime } from "../../src/slash-commands/types";
+import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "../../src/slash-commands/types";
 import type { ToolSession } from "../../src/tools";
 import { SecurityScanTool } from "../../src/tools/security-scan";
 
@@ -56,7 +57,49 @@ async function command(args: string) {
 	return handleSecurityCommand({ name: "security", args, text: `/security ${args}` }, runtime());
 }
 
+function completion() {
+	const tuiRuntime = {
+		ctx: { settings, session: {}, sessionManager: { getCwd: () => repositoryRoot } },
+	} as unknown as TuiSlashCommandRuntime;
+	const complete = buildTuiBuiltinSlashCommands(tuiRuntime).find(
+		item => item.name === "security",
+	)!.getArgumentCompletions!;
+	return async (prefix: string) => (await complete(prefix))?.map(item => item.value) ?? [];
+}
+
 describe("/security", () => {
+	test("completes cloud verbs, plan flags, formats, and dispositions without opening storage", async () => {
+		const complete = completion();
+		expect(await complete("cl")).toEqual(["cloud "]);
+		expect(await complete("cloud st")).toEqual(["cloud start ", "cloud status "]);
+		expect(await complete("cloud start --lookback a")).toEqual(["cloud start --lookback all "]);
+		expect(await complete("plan --w")).toEqual(["plan --working-tree "]);
+		expect(await complete("export secscan_fixture --format s")).toEqual(["export secscan_fixture --format sarif "]);
+		expect(await complete("disposition secscan_fixture secf_fixture fa")).toEqual([
+			"disposition secscan_fixture secf_fixture false_positive ",
+		]);
+		expect(await complete("show secscan_")).toEqual([]);
+		const store = await SecurityStore.openForCwd(repositoryRoot, { initialize: false });
+		expect(await Bun.file(path.join(store.projectDirectory, "index.json")).exists()).toBeFalse();
+	});
+
+	test("completes project scan and finding IDs in their parser positions", async () => {
+		await command(`import ${JSON.stringify(SARIF_FIXTURE)}`);
+		const store = await SecurityStore.open(repositoryRoot);
+		const [scan] = await store.listScans();
+		expect(scan).toBeDefined();
+		const scanId = scan!.id;
+		const findings = await store.listFindings(scanId);
+		const uri = `security://scans/${scanId}/findings/`;
+		const complete = completion();
+		expect(await complete("show secscan_")).toEqual([`show ${scanId} `]);
+		expect(await complete(`compare ${scanId} secscan_`)).toEqual([`compare ${scanId} ${scanId} `]);
+		expect(await complete(`validate ${scanId} secf_`)).toEqual(
+			findings.map(finding => `validate ${scanId} ${finding.id} `),
+		);
+		expect(await complete(`show ${uri}secf_`)).toEqual(findings.map(finding => `show ${uri}${finding.id} `));
+	});
+
 	test("imports SARIF, lists it, renders it, and records dispositions explicitly", async () => {
 		await command(`import ${JSON.stringify(SARIF_FIXTURE)}`);
 		const store = await SecurityStore.open(repositoryRoot);
