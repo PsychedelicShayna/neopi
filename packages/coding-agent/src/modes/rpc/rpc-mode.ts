@@ -1414,17 +1414,17 @@ export function requestRpcDialog<T>(
 			targetId: id,
 		} as RpcExtensionUIRequest);
 	const onAbort = () => {
-		cancelHostDialog();
 		cleanup();
+		cancelHostDialog();
 		resolve(defaultValue);
 	};
 	opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 	if (opts?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
-			opts.onTimeout?.();
-			cancelHostDialog();
 			cleanup();
+			cancelHostDialog();
+			opts.onTimeout?.();
 			resolve(defaultValue);
 		}, opts.timeout);
 	}
@@ -1438,7 +1438,10 @@ export function requestRpcDialog<T>(
 				reject(err);
 			}
 		},
-		reject,
+		reject: error => {
+			cleanup();
+			reject(error);
+		},
 	});
 	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 	return promise;
@@ -1555,7 +1558,7 @@ export interface RpcCommandHandlerContext {
 	toolApprovalBridge: RpcToolApprovalBridge;
 	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
 	createUiContext: (pending: Map<string, PendingExtensionRequest>, output: RpcOutput) => ExtensionUIContext;
-	/** RPC stdio ask-dialog negotiation; native pane UI has no protocol fallback to toggle. */
+	/** Enables typed Ask for this RPC peer, without changing other UI peers. */
 	setAskDialogEnabled?: (enabled: boolean) => void;
 	inputGate?: RpcUserInputGate;
 	isShutdownRequested?: () => boolean;

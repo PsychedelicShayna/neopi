@@ -11,10 +11,12 @@ import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, isMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { runSubagentFastCommand } from "../../src/registry/subagent-controls";
+import type { ExtensionAskDialogQuestion, ExtensionUIDialogOptions } from "../../src/extensibility/extensions";
+import { ExtensionUiController } from "../../src/modes/controllers/extension-ui-controller";
 import { InputController } from "../../src/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "../../src/modes/types";
 import type { RpcSubagentSnapshot } from "../../src/modes/rpc/rpc-types";
@@ -41,7 +43,7 @@ import type { ControlSnapshot } from "../../src/control/types";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { LiveSessionController } from "../../src/live/controller";
 import { LiveCommandController } from "../../src/modes/controllers/live-command-controller";
-import { Container } from "@oh-my-pi/pi-tui/tui";
+import { type Component, Container } from "@oh-my-pi/pi-tui/tui";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { makeAssistantMessage } from "../session-manager/helpers";
@@ -107,7 +109,7 @@ describe("control host", () => {
 
 	async function start(
 		settings: Record<string, unknown> = {},
-		options: { subagentEventBus?: EventBus } = {},
+		options: { subagentEventBus?: EventBus; role?: "tui" | "rpc" } = {},
 	): Promise<{ host: ControlHost; client: ControlClient; hello: ControlSnapshot }> {
 		session = createSession(settings);
 		dir = mkdtempSync(join(tmpdir(), "omp-ctl-host-"));
@@ -149,6 +151,193 @@ describe("control host", () => {
 		});
 		return call.promise;
 	}
+
+	const askQuestions: ExtensionAskDialogQuestion[] = [
+		{
+			id: "storage",
+			question: "Which storage?",
+			options: [{ label: "SQLite" }, { label: "Memory" }],
+			recommended: 0,
+		},
+		{ id: "checks", question: "Which checks?", options: [{ label: "Unit" }, { label: "Smoke" }], multi: true },
+	];
+
+	async function startAskOwner(options?: ExtensionUIDialogOptions) {
+		const { host, client } = await start({}, { role: "tui" });
+		const editor = new CustomEditor(getEditorTheme());
+		const editorContainer = new Container();
+		const askContainer = new Container();
+		editorContainer.addChild(editor);
+		let focused: Component = editor;
+		const mounted = Promise.withResolvers<void>();
+		const ui = new ExtensionUiController({
+			session: session!,
+			editor,
+			editorContainer,
+			askContainer,
+			ui: {
+				getFocused: () => focused,
+				setFocus: (component: Component) => {
+					focused = component;
+				},
+				requestRender: () => {},
+			},
+			closeLinkBrowser: () => {},
+			statusLine: { setAwaitingAnswer: () => {} },
+		} as unknown as InteractiveModeContext);
+		host.presenter = {
+			...stubPresenter({ approvalOpen: false }).presenter,
+			async submit() {
+				const answer = ui.showAskDialog(askQuestions, options);
+				mounted.resolve();
+				return { delivery: "local", answer: await answer };
+			},
+		};
+		return { client, ui, editor, askContainer, mounted: mounted.promise, focused: () => focused };
+	}
+
+	function nextAskFrame(connection: ControlClient, method: "ask" | "cancel") {
+		const { promise, resolve } = Promise.withResolvers<Record<string, unknown>>();
+		const unsubscribe = connection.onEvent(frame => {
+			if (frame.type !== "extension_ui_request" || frame.method !== method) return;
+			unsubscribe();
+			resolve(frame);
+		});
+		return promise;
+	}
+
+	test("a terminal attachment negotiates and answers the typed Ask it initiates", async () => {
+		const { client, ui, editor, askContainer, focused } = await startAskOwner();
+		const other = await connectAnother("other guest");
+		const otherUiFrames: unknown[] = [];
+		other.onEvent(frame => {
+			if (frame.type === "extension_ui_request") otherUiFrames.push(frame);
+		});
+		expect(await client.request({ id: "ask-opt-in", type: "set_ask_dialog", enabled: true })).toMatchObject({
+			success: true,
+			data: { enabled: true },
+		});
+		expect(focused()).toBe(editor);
+		const model = session!.model;
+		if (!model || !isMockModel(model)) throw new Error("Expected scripted model");
+		model.push({ content: [{ type: "toolCall", id: "ask-1", name: "test_ask", arguments: {} }] });
+		model.push({ content: ["Done."] });
+		session!.agent.setTools([
+			{
+				name: "test_ask",
+				label: "Test Ask",
+				description: "Open the terminal Ask",
+				parameters: { type: "object", properties: {} },
+				execute: async (_id, _params, signal) => {
+					const answer = await ui.showAskDialog(askQuestions, { signal });
+					return { content: [], details: answer };
+				},
+			},
+		]);
+		const shown = nextAskFrame(client, "ask");
+		expect((await client.request({ type: "prompt", message: "Open the question" })).success).toBe(true);
+		const request = await shown;
+		expect(request).toMatchObject({ questions: askQuestions });
+		expect(typeof request.id).toBe("string");
+		const answers = [
+			{ id: "storage", selectedOptions: ["Memory"] },
+			{ id: "checks", selectedOptions: ["Unit", "Smoke"], customInput: "Manual too" },
+		];
+		await other.request({ type: "extension_ui_response", id: request.id, cancelled: true });
+		expect(askContainer.children).toHaveLength(1);
+		expect(otherUiFrames).toEqual([]);
+		expect((await client.request({ type: "extension_ui_response", id: request.id, answers })).success).toBe(true);
+		await session!.waitForIdle();
+		expect(session!.messages.find(message => message.role === "toolResult")).toMatchObject({
+			details: { kind: "submit", results: answers },
+		});
+		expect(focused()).toBe(editor);
+	});
+
+	test.each(["opts back out", "never opts in"])("keeps the pane path when a second guest %s", async mode => {
+		const { client, ui, editor, mounted, focused } = await startAskOwner();
+		const other = await connectAnother("legacy guest");
+		expect((await client.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+		if (mode === "opts back out") {
+			expect((await other.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+			expect(await other.request({ type: "set_ask_dialog", enabled: false })).toMatchObject({
+				success: true,
+				data: { enabled: false },
+			});
+		}
+		const uiFrames: unknown[] = [];
+		for (const connection of [client, other]) {
+			connection.onEvent(frame => {
+				if (frame.type === "extension_ui_request") uiFrames.push(frame);
+			});
+		}
+		const ownerAsk = ui.showAskDialog(askQuestions);
+		expect(focused()).not.toBe(editor);
+		expect(ui.cancelAsk()).toBe(true);
+		expect(await ownerAsk).toBeUndefined();
+
+		const completed = other.request({ type: "input", text: "Open the question" });
+		await mounted;
+		expect(focused()).not.toBe(editor);
+		expect(ui.cancelAsk()).toBe(true);
+		expect(await completed).toMatchObject({ success: true, data: { delivery: "local" } });
+		await client.request({ type: "state" });
+		expect(uiFrames).toEqual([]);
+		expect(focused()).toBe(editor);
+	});
+
+	test.each(["guest dismissal", "guest timeout", "timer expiry", "abort", "pane dismissal"] as const)(
+		"settles an attached Ask only once on %s",
+		async end => {
+			const abort = new AbortController();
+			const onTimeout = vi.fn();
+			const timeout = end === "timer expiry" ? 100 : undefined;
+			const { client, ui, askContainer } = await startAskOwner({ signal: abort.signal, timeout, onTimeout });
+			expect((await client.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+			const cancels: unknown[] = [];
+			client.onEvent(frame => {
+				if (frame.type === "extension_ui_request" && frame.method === "cancel") cancels.push(frame.targetId);
+			});
+			const shown = nextAskFrame(client, "ask");
+			const completed = client.request({ type: "input", text: "Open the question" });
+			const request = await shown;
+			if (end === "abort") abort.abort();
+			else if (end === "pane dismissal") expect(ui.cancelAsk()).toBe(true);
+			else if (end !== "timer expiry") {
+				await client.request({
+					type: "extension_ui_response",
+					id: request.id,
+					cancelled: true,
+					timedOut: end === "guest timeout",
+				});
+			}
+			const result = await completed;
+			expect(result.success).toBe(true);
+			if (end === "guest timeout" || end === "timer expiry") {
+				expect(result.data).toMatchObject({
+					answer: {
+						kind: "submit",
+						results: [
+							{ id: "storage", selectedOptions: ["SQLite"] },
+							{ id: "checks", selectedOptions: ["Unit"] },
+						],
+					},
+				});
+				expect(onTimeout).toHaveBeenCalledTimes(1);
+			} else {
+				expect(result.data).toEqual({ delivery: "local" });
+				expect(onTimeout).not.toHaveBeenCalled();
+			}
+			await client.request({ type: "extension_ui_response", id: request.id, cancelled: true, timedOut: true });
+			abort.abort();
+			await client.request({ type: "state" });
+			expect(cancels).toEqual(
+				end === "abort" || end === "timer expiry" || end === "pane dismissal" ? [request.id] : [],
+			);
+			expect(onTimeout).toHaveBeenCalledTimes(end === "guest timeout" || end === "timer expiry" ? 1 : 0);
+			expect(askContainer.children).toEqual([]);
+		},
+	);
 
 	test("advertises connection-owned host tools to attached clients", async () => {
 		const { host } = await start();

@@ -25,6 +25,11 @@ import {
 import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
+import type {
+	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
+	ExtensionUIDialogOptions,
+} from "../extensibility/extensions";
 import type { AgentSession } from "../session/agent-session";
 import { inspectSessionFileLease } from "../session/session-lease";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -127,12 +132,18 @@ export function currentControlCaller(): ControlCallerIdentity | null {
 	return null;
 }
 
+type GuestAskDialog = (
+	questions: ExtensionAskDialogQuestion[],
+	options: ExtensionUIDialogOptions,
+) => Promise<ExtensionAskDialogResult | "unavailable" | undefined>;
+
 interface ConnectionBridges {
 	forwarder: RpcSessionEventForwarder;
 	hostTools: RpcHostToolBridge;
 	hostUris: RpcHostUriBridge;
 	approvals: RpcToolApprovalBridge;
 	pending: RpcPendingExtensionRequests;
+	askDialog?: GuestAskDialog;
 }
 
 type ConnectionRpcHandler = (command: RpcCommand) => Promise<RpcResponse>;
@@ -572,11 +583,22 @@ export class ControlHost {
 		return initialization;
 	}
 
+	/** Only the control actor that initiated this operation can mirror its Ask. */
+	guestAskDialog(): GuestAskDialog | undefined {
+		const actor = currentControlActor();
+		if (!actor) return undefined;
+		for (const connection of this.#connections) {
+			if (connection.id === actor.connectionId) return this.#bridges.get(connection)?.askDialog;
+		}
+		return undefined;
+	}
+
 	async #createHandlerFor(
 		connection: ControlConnection,
 		subscription?: Record<string, unknown>,
 	): Promise<ConnectionRpcHandler> {
-		const { RpcPendingExtensionRequests, createRpcCommandHandler } = await import("../modes/rpc/rpc-mode");
+		const { RpcPendingExtensionRequests, createRpcCommandHandler, requestRpcAskDialog } =
+			await import("../modes/rpc/rpc-mode");
 		if (!this.#connections.has(connection)) throw new Error("control connection closed");
 		const session = this.#options.session;
 		const output = (frame: object) => {
@@ -678,6 +700,17 @@ export class ControlHost {
 			createUiContext: () => {
 				throw new Error("control login uses the pane dialog");
 			},
+			setAskDialogEnabled:
+				this.#options.role === "tui"
+					? enabled => {
+							bridges.askDialog = enabled
+								? (questions, options) =>
+										requestRpcAskDialog(pending, output, questions, options).catch(
+											() => "unavailable" as const,
+										)
+								: undefined;
+						}
+					: undefined,
 			origin: connection.origin,
 		});
 		this.#handlers.set(connection, handler);
