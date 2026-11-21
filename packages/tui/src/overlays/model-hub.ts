@@ -2633,7 +2633,7 @@ export class ModelHubComponent implements Component {
 		const options: ConfiguredThinkingLevel[] = [
 			ThinkingLevel.Inherit,
 			ThinkingLevel.Off,
-			AUTO_THINKING,
+			...(target.role === "effort" ? [] : [AUTO_THINKING]),
 			...THINKING_EFFORTS,
 		];
 		const level =
@@ -2662,7 +2662,7 @@ export class ModelHubComponent implements Component {
 		const options: ConfiguredThinkingLevel[] = [
 			ThinkingLevel.Inherit,
 			ThinkingLevel.Off,
-			AUTO_THINKING,
+			...(target.role === "effort" ? [] : [AUTO_THINKING]),
 			...getSupportedEfforts(item.model),
 		];
 		const level =
