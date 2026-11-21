@@ -340,6 +340,7 @@ export class HubFrame {
 		const hit = this.#stack.locate(row, col);
 		const bodyHeight = this.#stack.childRect(1)?.height ?? 0;
 		let contentLine = -1;
+		let contentColumn = -1;
 		let overSidebar = false;
 		let overBody = false;
 		if (hit && hit.index === 1) {
@@ -347,9 +348,11 @@ export class HubFrame {
 			if (pane?.pane === "left") {
 				overSidebar = true;
 				contentLine = pane.line;
+				contentColumn = pane.col;
 			} else if (pane?.pane === "right") {
 				overBody = true;
 				contentLine = pane.line;
+				contentColumn = pane.col;
 			}
 		}
 		const overContent = contentLine >= 0 && contentLine < bodyHeight;
@@ -357,6 +360,7 @@ export class HubFrame {
 			footerColumn: hit?.index === 3 ? hit.col : undefined,
 			bodyHeight,
 			contentLine,
+			contentColumn,
 			overSidebar: overSidebar && overContent,
 			overBody: overBody && overContent,
 			bodyLine: contentLine - 1,

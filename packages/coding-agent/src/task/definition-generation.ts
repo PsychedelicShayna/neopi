@@ -1,5 +1,6 @@
 import { completeSimple, type Message } from "@oh-my-pi/pi-ai";
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
+import type { AgentGenerationSource } from "@oh-my-pi/pi-tui/overlays/agent-definition-fields";
 import { AUTO_THINKING, shouldDisableReasoning, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -12,6 +13,7 @@ export interface DefinitionGenerationRequest<T extends object> {
 	target: Extract<keyof T, string> | "all";
 	comment?: string;
 	baseDefinitions?: readonly T[];
+	sources?: readonly AgentGenerationSource[];
 	conversationId?: string;
 	signal?: AbortSignal;
 }
@@ -88,7 +90,9 @@ export function createDefinitionGenerator<T extends object>(
 			if (keys.some(key => !Object.hasOwn(properties, key)))
 				throw new Error(`Unknown definition field: ${request.target}`);
 			// Starting from references fills gaps instead of overwriting the operator's choices.
-			const preservePreset = request.target === "all" && (request.baseDefinitions?.length ?? 0) > 0;
+			const preservePreset =
+				request.target === "all" &&
+				((request.baseDefinitions?.length ?? 0) > 0 || (request.sources?.length ?? 0) > 0);
 			const preset = Object.fromEntries(
 				Object.entries(request.definition).filter(
 					([key, value]) =>
