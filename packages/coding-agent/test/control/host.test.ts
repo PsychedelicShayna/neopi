@@ -28,6 +28,7 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { ctlList, ctlState, withCtlCaller, withCtlIo } from "../../src/cli/ctl-cli";
+import { runAsControlCommand } from "../../src/control/actor";
 import { ControlClient } from "../../src/control/client";
 import type { ControlPresenter } from "../../src/control/presenter";
 import { ControlHost } from "../../src/control/host";
@@ -132,6 +133,34 @@ describe("control host", () => {
 		return extra;
 	}
 
+	test.each(["rpc", "tui"] as const)("advertises rich-dialog provenance in %s ready frames", async role => {
+		const { host } = await start({}, { role });
+		const metadata = host.publication!.metadata();
+		const early = new ControlClient({ metadata, label: "early capability probe", kind: "cli" });
+		extraClients.push(early);
+		const earlyFrames: Record<string, unknown>[] = [];
+		early.onEvent(frame => earlyFrames.push(frame));
+		await early.connect();
+		await early.request({ type: "state" });
+		expect(earlyFrames.filter(frame => frame.type === "ready")).toHaveLength(1);
+		const earlyReady = earlyFrames.find(frame => frame.type === "ready");
+		expect(earlyReady?.capabilities).not.toContain("rich_dialog_provenance_v1");
+		if (role === "tui") host.presenter = stubPresenter({ approvalOpen: false }).presenter;
+		const peer = new ControlClient({ metadata, label: "capability probe", kind: "cli" });
+		extraClients.push(peer);
+		const ready = Promise.withResolvers<Record<string, unknown>>();
+		peer.onEvent(frame => {
+			if (frame.type === "ready") ready.resolve(frame);
+		});
+		await peer.connect();
+		const capabilities = (await ready.promise).capabilities;
+		expect(capabilities).toContain("control_v1");
+		if (role === "tui") expect(capabilities).toContain("rich_dialog_provenance_v1");
+		else expect(capabilities).not.toContain("rich_dialog_provenance_v1");
+		await early.request({ type: "state" });
+		expect(earlyFrames.filter(frame => frame.type === "ready")).toHaveLength(1);
+	});
+
 	function hostDefinition(name: string) {
 		return { name, description: name, parameters: { type: "object", properties: {} } };
 	}
@@ -187,10 +216,12 @@ describe("control host", () => {
 		} as unknown as InteractiveModeContext);
 		host.presenter = {
 			...stubPresenter({ approvalOpen: false }).presenter,
-			async submit() {
-				const answer = ui.showAskDialog(askQuestions, options);
-				mounted.resolve();
-				return { delivery: "local", answer: await answer };
+			async submit(_text, _images, commandActor) {
+				return runAsControlCommand(commandActor, async () => {
+					const answer = ui.showAskDialog(askQuestions, options);
+					mounted.resolve();
+					return { delivery: "local", answer: await answer };
+				});
 			},
 		};
 		return { client, ui, editor, askContainer, mounted: mounted.promise, focused: () => focused };

@@ -1334,8 +1334,10 @@ command produced the Ask receives the typed request. That includes extension
 requests preparing the attachment's input, including a claimed `steer` or
 `follow_up`. A batch with mixed or missing origins, a disconnected author, or
 work without input or command provenance stays in the pane. Examples include
-historical error recovery, detached lifecycle notifications and retries without
-new input.
+historical error recovery, detached callbacks after prompt preparation returns,
+input hooks that consume a slash submission before dispatch, and retries without
+new input. Before opting a terminal attachment in, check for
+`rich_dialog_provenance_v1` in the control socket's `ready.capabilities`.
 Opting in does not mirror questions opened by the terminal owner or another
 attachment. The pane keeps its own Ask open and the first answer or
 dismissal wins. If the pane settles first, or the request is aborted or times
@@ -1360,9 +1362,9 @@ future questions.
 ### `set_form_dialog` payload
 
 `set_form_dialog` independently opts in to the [typed form](#form-dialog).
-Like `set_ask_dialog`, it is off by default and scoped to the stdio host or the
-terminal attachment whose delivered input produced the dialog. A host can
-disable it again for future dialogs. On stdio without opt-in, `ctx.ui.formDialog`
+Like `set_ask_dialog`, it is off by default and uses the same attribution rules
+and terminal capability. A host can disable it again for future dialogs. On stdio
+without opt-in, `ctx.ui.formDialog`
 remains absent so extensions can keep their field-by-field fallback via `select`,
 `input`, or `editor`. On a terminal control socket, the form remains actionable in
 the pane; the first answer or dismissal wins. If the pane settles first, the

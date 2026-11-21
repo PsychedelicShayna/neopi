@@ -12,7 +12,7 @@ import type { AgentSession } from "../session/agent-session";
 import type { AgentViewSession } from "../session/agent-session-handle";
 import type { ToolApprovalVerdict } from "../extensibility/extensions/tool-approval-requester";
 import { cfgControlApprovals } from "./settings";
-import { currentControlActor, runAsControlActor } from "./actor";
+import { type ControlActor, currentControlActor, runAsControlActor } from "./actor";
 import { DialogRegistry, setDialogRegistry } from "./dialogs";
 import type { ControlHost } from "./host";
 import type { ControlPresenter, RewindOutcome } from "./presenter";
@@ -25,7 +25,7 @@ export interface TuiControlSurface {
 		setText(text: string): void;
 		setDraft(text: string, images?: readonly ImageContent[]): void;
 		insertText(text: string): void;
-		onSubmit?: (text: string) => void | Promise<void>;
+		onSubmit?: (text: string, commandActor?: ControlActor) => void | Promise<void>;
 		onEscape?: () => void;
 		pendingImages: ImageContent[];
 		onChange?: (text: string) => void;
@@ -74,7 +74,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 	};
 	installApprovalArbiter(host, surface.session, registry, surface.notify);
 	const presenter: ControlPresenter = {
-		async submit(text, images) {
+		async submit(text, images, commandActor) {
 			const outer = currentControlActor();
 			const actor = outer ?? {
 				connectionId: "control",
@@ -87,7 +87,7 @@ export function attachTuiPresenter(host: ControlHost, surface: TuiControlSurface
 				await runWithDetachedDraft(async () => {
 					surface.editor.pendingImages = images ? [...images] : [];
 					surface.editor.setText(submitted);
-					await surface.editor.onSubmit?.(submitted);
+					await surface.editor.onSubmit?.(submitted, commandActor);
 				});
 				return { delivery: "started" };
 			});

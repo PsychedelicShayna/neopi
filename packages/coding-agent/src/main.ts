@@ -518,6 +518,7 @@ export async function submitInteractiveInput(
 					forwarded = await session.prompt(input.text, {
 						images: input.images,
 						streamingBehavior,
+						...(input.commandActor && { commandActor: input.commandActor }),
 						followUps: input.followUps,
 					});
 				} catch (error: unknown) {

@@ -3,12 +3,17 @@
  * this unset and screen/editor commands answer `no_tui`.
  */
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ControlActor } from "./actor";
 import type { AgentViewSession } from "../session/agent-session-handle";
 import type { DialogSummary, Revisions } from "./types";
 
 export interface ControlPresenter {
 	/** Keyboard-contextual submit through the editor's own onSubmit, on a detached draft. */
-	submit(text: string, images?: ImageContent[]): Promise<{ delivery: string; agentInvoked?: boolean }>;
+	submit(
+		text: string,
+		images?: ImageContent[],
+		commandActor?: ControlActor,
+	): Promise<{ delivery: string; agentInvoked?: boolean }>;
 	/** Run one app.* or tui.* action by id. `exempt` when the plan excludes it. */
 	action(actionId: string): Promise<{ handled: boolean; exempt?: string; text?: string }>;
 	/** Inject already-encoded terminal bytes as control input. */

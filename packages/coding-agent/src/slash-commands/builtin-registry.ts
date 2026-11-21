@@ -1,5 +1,6 @@
 import { entryProvenance } from "../config/entry-provenance";
 import type { Settings } from "../config/settings";
+import { type ControlActor, runAsControlCommand } from "../control/actor";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
@@ -163,6 +164,7 @@ export const BUILTIN_SLASH_COMMANDS_INTERNAL: ReadonlyArray<SlashCommandSpec> = 
 export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,
+	commandActor?: ControlActor,
 ): Promise<string | boolean> {
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
@@ -184,12 +186,15 @@ export async function executeBuiltinSlashCommand(
 		}
 		return true;
 	}
-	if (command.handleTui) {
-		const result = await command.handleTui(parsed, runtime);
+	const { handleTui, handle } = command;
+	if (handleTui) {
+		const result = commandActor
+			? await runAsControlCommand(commandActor, async () => handleTui(parsed, runtime))
+			: await handleTui(parsed, runtime);
 		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
 		return true;
 	}
-	if (command.handle) {
+	if (handle) {
 		// No TUI-specific override → adapt the ACP/text-mode `handle` to the
 		// TUI by routing `runtime.output` through `ctx.showStatus`, clearing
 		// the editor after the call, and reusing the active session's plugin
@@ -209,7 +214,9 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: () => reloadTuiPluginState(ctx),
 			notifySessionPinChanged: (sessionId: string, pinned: boolean) => ctx.applySessionPin(sessionId, pinned),
 		};
-		const result = await command.handle(parsed, adapted);
+		const result = commandActor
+			? await runAsControlCommand(commandActor, async () => handle(parsed, adapted))
+			: await handle(parsed, adapted);
 		clearSubmittedText(runtime);
 		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
 		return true;

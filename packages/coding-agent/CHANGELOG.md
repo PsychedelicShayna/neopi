@@ -192,6 +192,7 @@
 
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
+- Fixed terminal attachment routing for rich Ask and Form: dialogs from completed prompt preparation or consumed slash input stay in the pane; clients can detect the fix with `rich_dialog_provenance_v1` ([#878](https://github.com/PsychedelicShayna/neopi/issues/878)).
 - Answering an extension form from an attachment no longer sends the pane's unfinished draft to the extension ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
 - Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).

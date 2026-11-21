@@ -10520,7 +10520,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
-				const command = await runAsControlCommand(controlActorForOrigin(options?.origin), () =>
+				const commandActor = controlActorForOrigin(options?.origin) ?? options?.commandActor;
+				const command = await runAsControlCommand(commandActor, () =>
 					this.#tryExecuteExtensionCommand(text, options?.onPromptAdmitted),
 				);
 				if (!isDeferredSubmissionActive()) return false;
@@ -10535,9 +10536,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				// Try custom commands (TypeScript slash commands)
 				const customResult =
 					options?.customCommandResult ??
-					(await runAsControlCommand(controlActorForOrigin(options?.origin), () =>
-						this.executeCustomCommand(text),
-					));
+					(await runAsControlCommand(commandActor, () => this.executeCustomCommand(text)));
 				if (!isDeferredSubmissionActive()) return false;
 				if (customResult !== null) {
 					if (customResult === "") {
@@ -11403,9 +11402,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				}
 			}
 
-			const activePromptInput = () =>
-				setupAbort.signal.aborted || this.#promptGeneration !== generation ? [] : messages;
-			const preparation = await this.agent.runWithTurnInput(activePromptInput, () =>
+			// Each preparation step owns attribution only until it returns. Keep an
+			// empty batch in detached children so they cannot fall back to a command.
+			const runPreparationWithInput = async <T>(run: () => Promise<T>): Promise<T> => {
+				let active = true;
+				try {
+					return await this.agent.runWithTurnInput(
+						() => (active && !setupAbort.signal.aborted && this.#promptGeneration === generation ? messages : []),
+						run,
+					);
+				} finally {
+					active = false;
+				}
+			};
+			const preparation = await runPreparationWithInput(() =>
 				logger.time("prompt:prepareAgentStart", () =>
 					this.#prepareAgentStart(
 						message,
@@ -11453,7 +11463,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			if (maintenanceMessages !== messages && previewXdevMountNotice?.notice) {
 				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
 			}
-			await this.agent.runWithTurnInput(activePromptInput, () =>
+			await runPreparationWithInput(() =>
 				logger.time("prompt:prePromptCompaction", () =>
 					this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages),
 				),

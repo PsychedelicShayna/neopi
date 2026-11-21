@@ -33,6 +33,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { ControlActor } from "../control/actor";
 import type { SkillsSettings } from "../extensibility/settings";
 import type { CursorMcpResourceAdapter } from "../cursor";
 import type { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
@@ -501,6 +502,8 @@ export interface PromptOptions {
 	 * drivers disable it so an assignment is always delivered to the model.
 	 */
 	runCommands?: boolean;
+	/** In-process terminal attachment to attribute a dispatched command to, not a model prompt. */
+	commandActor?: ControlActor;
 	/**
 	 * Reject with `PromptDroppedError` when the prompt is dropped before
 	 * reaching the agent, instead of resolving `true` (default: false).

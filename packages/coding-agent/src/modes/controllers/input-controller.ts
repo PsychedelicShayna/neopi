@@ -55,6 +55,7 @@ import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
+import type { ControlActor } from "../../control/actor";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
@@ -1370,7 +1371,7 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		const submit = async (text: string) => {
+		const submit = async (text: string, commandActor?: ControlActor) => {
 			const deferred = currentDeferredDraft() !== undefined;
 			if (!isDeferredSubmissionActive()) return;
 			// A timer owns no real Enter gesture or live-call speech admission.
@@ -1424,7 +1425,7 @@ export class InputController {
 					this.#holdForLiveHandoff(text);
 					return;
 				}
-				await this.#submitToFocusedSession(text, "steer");
+				await this.#submitToFocusedSession(text, "steer", commandActor);
 				return;
 			}
 
@@ -1599,7 +1600,11 @@ export class InputController {
 						: undefined;
 				let slashResult: string | boolean;
 				try {
-					slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
+					slashResult = await executeBuiltinSlashCommand(
+						text,
+						{ ctx: this.ctx, input, draftDetached },
+						commandActor,
+					);
 				} catch (error) {
 					if (!isDeferredSubmissionActive()) return;
 					// Detached mode commands (plan/vibe/goal/guided-goal) rethrow so
@@ -1759,7 +1764,7 @@ export class InputController {
 			if (this.#isLocalExtensionCommand(text)) {
 				this.ctx.editor.clearDraft(text);
 				try {
-					await this.ctx.session.prompt(text, { images: inputImages });
+					await this.ctx.session.prompt(text, { images: inputImages, ...(commandActor && { commandActor }) });
 				} catch (error) {
 					// Restore the snapshot only when nothing newer was attached
 					// while the command ran; otherwise the newer draft wins.
@@ -1836,7 +1841,12 @@ export class InputController {
 				try {
 					const forwarded = await this.ctx.withLocalSubmission(
 						text,
-						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						() =>
+							this.ctx.session.prompt(text, {
+								streamingBehavior: "steer",
+								images,
+								...(commandActor && { commandActor }),
+							}),
 						{ imageCount: images?.length ?? 0 },
 					);
 					// An inline `/loop` body arms the loop only after dispatch
@@ -1888,6 +1898,7 @@ export class InputController {
 					},
 					{ clearEditor: false },
 				);
+				if (commandActor) submission.commandActor = commandActor;
 				const consumed = waitForDeferredInput(submission);
 				this.ctx.onInputCallback(submission);
 				await consumed;
@@ -1906,7 +1917,12 @@ export class InputController {
 				try {
 					const forwarded = await this.ctx.withLocalSubmission(
 						text,
-						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						() =>
+							this.ctx.session.prompt(text, {
+								streamingBehavior: "steer",
+								images,
+								...(commandActor && { commandActor }),
+							}),
 						{
 							imageCount: images?.length ?? 0,
 						},
@@ -1929,7 +1945,8 @@ export class InputController {
 		};
 		// A queued `/compact` waits for Enter input taken before it to reach the session (skill
 		// expansion, `/queue`, mode commands), the same as for the follow-up key.
-		this.ctx.editor.onSubmit = text => this.#trackSubmission(() => submit(text));
+		this.ctx.editor.onSubmit = (text, commandActor?: ControlActor) =>
+			this.#trackSubmission(() => submit(text, commandActor));
 	}
 
 	/** A voice handoff of the draft's speech landed as the operator submitted: put the draft back
@@ -2257,7 +2274,11 @@ export class InputController {
 	}
 
 	/** Submit chat, viewer commands, or session-only /fast to the focused subagent. */
-	async #submitToFocusedSession(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
+	async #submitToFocusedSession(
+		text: string,
+		streamingBehavior: "steer" | "followUp",
+		commandActor?: ControlActor,
+	): Promise<void> {
 		const target = this.ctx.viewSession;
 		const draftText = this.ctx.editor.getText();
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
@@ -2307,7 +2328,7 @@ export class InputController {
 				// and /effort changes the focused agent's thinking. Model controls stay main-session-only.
 				this.#recordSlashCommandUsage(text);
 				const input = images ? { images, imageLinks } : undefined;
-				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx, input })) === true) {
+				if ((await executeBuiltinSlashCommand(text, { ctx: this.ctx, input }, commandActor)) === true) {
 					if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 					return;
 				}
