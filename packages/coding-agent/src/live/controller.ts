@@ -25,6 +25,7 @@ import { resolveLiveIngestSettings } from "./ingest-settings";
 import { stripLiveKeyword } from "./keywords";
 import { resolveLiveInstructions } from "./personas";
 import agentFinalMessageTemplate from "./prompts/agent-final-message.md" with { type: "text" };
+import codexFinalMessageTemplate from "./prompts/codex-final-message.md" with { type: "text" };
 import operatorSharedMessageTemplate from "./prompts/operator-shared-message.md" with { type: "text" };
 import operatorSubmittedMessageTemplate from "./prompts/operator-submitted-message.md" with { type: "text" };
 import operatorTypedMessageTemplate from "./prompts/operator-typed-message.md" with { type: "text" };
@@ -168,6 +169,8 @@ export interface LiveSessionControllerOptions {
 	includeVoiceNote?: () => boolean;
 	/** Attach the active voice conversation to explicit handoffs. */
 	transcriptHandoffs?: boolean;
+	/** Standalone Codex prompt for the transcript-aware command. */
+	codexInstructions?: string;
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
@@ -269,6 +272,7 @@ export class LiveSessionController {
 	readonly #ircRelayAllowed: (message: CustomMessage) => boolean;
 	readonly #includeVoiceNote: () => boolean;
 	readonly #handoffTranscript: LiveHandoffTranscript | undefined;
+	readonly #codexInstructions: string | undefined;
 	#transcriptFlush: Promise<void> | undefined;
 	readonly #delegationDelivery: () => LiveDelegationDelivery;
 	readonly #serverDelegationIds = new Set<string>();
@@ -428,6 +432,7 @@ export class LiveSessionController {
 		this.#ircRelayAllowed = options.ircRelayAllowed ?? (() => true);
 		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
 		this.#handoffTranscript = options.transcriptHandoffs ? new LiveHandoffTranscript() : undefined;
+		this.#codexInstructions = options.codexInstructions;
 		this.#delegationDelivery = options.delegationDelivery ?? (() => "steer");
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		this.#delegationKeywords = options.delegationKeywords ?? (() => ({ suppress: "", force: "" }));
@@ -501,19 +506,21 @@ export class LiveSessionController {
 			}
 			this.#assertProviderAllowed();
 			const user = currentUser();
-			const instructions = renderPromptAsset(
-				"live/session-instructions.md",
-				sessionInstructionsTemplate,
-				{
-					transcriptHandoffs: this.#handoffTranscript !== undefined,
-					personaInstructions: prompt.render(
-						await resolveLiveInstructions(undefined, this.#session.sessionManager.getCwd()),
-						user,
-					),
-				},
-				{ cwd: this.#session.sessionManager.getCwd() },
-			);
-			const historySettings = await resolveLiveIngestSettings();
+			const userContext = { ...user, user_first_name: user.firstName };
+			const cwd = this.#session.sessionManager.getCwd();
+			const instructions =
+				this.#codexInstructions !== undefined
+					? prompt.render(this.#codexInstructions, userContext)
+					: renderPromptAsset(
+							"live/session-instructions.md",
+							sessionInstructionsTemplate,
+							{
+								transcriptHandoffs: this.#handoffTranscript !== undefined,
+								personaInstructions: prompt.render(await resolveLiveInstructions(undefined, cwd), userContext),
+							},
+							{ cwd },
+						);
+			const historySettings = await resolveLiveIngestSettings(undefined, this.#codexInstructions !== undefined);
 			const history = historySettings.seedHistory
 				? buildLiveHistorySeed(
 						this.#session.messages,
@@ -1225,12 +1232,7 @@ export class LiveSessionController {
 				const text = this.#extractAssistantText(message).trim();
 				if (!text) continue;
 				this.#lastRelayedResponse = message;
-				const finalContext = renderPromptAsset(
-					"live/agent-final-message.md",
-					agentFinalMessageTemplate,
-					{ message: text },
-					{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
-				);
+				const finalContext = this.#renderFinalMessage(text);
 				// The operator asked for this answer: deliver it now. The speakable hold is for
 				// unsolicited context only; holding a final answer delays it until the next handoff.
 				this.#contextSinceResponse = true;
@@ -1257,6 +1259,16 @@ export class LiveSessionController {
 		this.#refreshAudioPhase();
 	}
 
+	#renderFinalMessage(message: string): string {
+		const codex = this.#codexInstructions !== undefined;
+		return renderPromptAsset(
+			codex ? "live/codex-final-message.md" : "live/agent-final-message.md",
+			codex ? codexFinalMessageTemplate : agentFinalMessageTemplate,
+			{ message },
+			{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
+		);
+	}
+
 	/** Relay the final answer of an operator-started turn at session level, labeled per chunk. */
 	#relayOperatorTurnResult(messages: readonly AgentMessage[], options: { closeDelegation: boolean }): void {
 		if (this.#relayGates().finalAnswers) {
@@ -1265,28 +1277,11 @@ export class LiveSessionController {
 				message && message !== this.#lastRelayedResponse ? this.#extractAssistantText(message).trim() : "";
 			if (text && message) {
 				this.#lastRelayedResponse = message;
-				const labelBytes = Buffer.byteLength(
-					renderPromptAsset(
-						"live/agent-final-message.md",
-						agentFinalMessageTemplate,
-						{ message: "" },
-						{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
-					),
-					"utf8",
-				);
+				const labelBytes = Buffer.byteLength(this.#renderFinalMessage(""), "utf8");
 				this.#contextSinceResponse = true;
 				this.refreshTurnGate(false);
 				for (const part of chunkLiveContext(text, CONTEXT_CHUNK_BYTES - labelBytes)) {
-					this.#queueSend(
-						buildSessionContextAppend(
-							renderPromptAsset(
-								"live/agent-final-message.md",
-								agentFinalMessageTemplate,
-								{ message: part },
-								{ cwd: this.#session.sessionManager.getCwd(), kind: "notice" },
-							),
-						),
-					);
+					this.#queueSend(buildSessionContextAppend(this.#renderFinalMessage(part)));
 				}
 			}
 		}

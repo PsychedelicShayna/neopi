@@ -549,6 +549,15 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "live-persona",
+		icon: "prompt",
+		description: "Edit live voice personas, including the Codex profile for /live-transcript",
+		handleTui: async (_command, runtime) => {
+			clearSubmittedText(runtime);
+			runtime.ctx.showPersonaConfigure("live");
+		},
+	},
+	{
 		name: "loadout",
 		icon: "swap",
 		description: "Switch runtime model loadouts (model roles, fallback chains, task-agent models)",

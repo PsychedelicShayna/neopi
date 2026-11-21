@@ -17,7 +17,7 @@
 
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available; `live.endpoint` still overrides automatic routing.
 - Use `/fast force fast` or `/fast force ultra` to request an OpenAI-compatible service tier even when the current model doesn't advertise it.
-- Start or stop `/live-transcript` to keep the live conversation together when Iris hands work to the main agent, without spoken reasoning or progress updates ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
+- Start `/live-transcript` to keep the live conversation together across handoffs, without spoken reasoning or progress updates. Edit its built-in **Codex** prompt, model, and voice in `/live-persona` without changing regular `/live` ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).

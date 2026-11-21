@@ -13,3 +13,7 @@ The experiment retains NeoPi's audio transport, interruption policy, eligibility
 ## Status-line audio meter
 
 The meter defaults to `Mic {mic}  Out {output}`. See [Live audio meter](../settings.md#live-audio-meter) for layout and template settings.
+
+## Codex live persona
+
+`/live-transcript` uses the permanent **Codex** entry in `/live-persona` (also available under `/persona live`). Edit its system prompt, requested model, voice, and context sources there. Prompt, model, and voice changes take effect on the next call. The defaults are `gpt-live-1.1-codex` and Maple, with the [OpenAI Codex backend prompt](https://github.com/openai/codex/blob/e73da8b/codex-rs/prompts/templates/realtime/backend_prompt.md) (Apache-2.0). Clearing the requested model or voice restores its default. Regular `/live` keeps its own selected prompt and the global `live.model` and `live.voice` settings.

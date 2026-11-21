@@ -215,6 +215,21 @@ describe("PersonaConfigOverlayComponent", () => {
 		expect(saved.at(-1)?.entries[1]?.content).toBe("bundled");
 	});
 
+	it("edits the permanent Codex prompt, model, and voice without activating it for /live", async () => {
+		const codex = entry("Codex", { builtin: true, editableBuiltin: true, originalName: undefined });
+		const { press, saved } = makeOverlay({ entries: [entry("default", { builtin: true }), codex] }, "live");
+		press(DOWN, DELETE, DELETE, ENTER, DOWN, ENTER, " Revised.", "\x11", DOWN, ENTER, "new-live-model", ENTER);
+		press(DOWN, ENTER, "breeze", ENTER, "s");
+		await Promise.resolve();
+		expect(saved.at(-1)).toMatchObject({
+			entries: [
+				{ name: "default" },
+				{ name: "Codex", content: "Codex text Revised.", liveModel: "new-live-model", liveVoice: "breeze" },
+			],
+		});
+		expect(saved.at(-1)?.active).toBeUndefined();
+	});
+
 	it("appends client protocol lines once on a custom live persona", async () => {
 		const protocol = "<client-protocol>\nFollow the labels.\n</client-protocol>\n";
 		const first = makeOverlay({ entries: [entry("custom", { content: "Be concise.  \n" })] }, "live", {
