@@ -103,7 +103,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.interrupt")], action: "Cancel active work without clearing the draft or quitting" },
 				{
 					keys: [act("app.agent.menu")],
-					action: "Open the Agent Menu / force exit during teardown",
+					action: "Open the Agent Menu (Ctrl+D: empty composer only) / force exit during teardown",
 				},
 				{ keys: [act("tui.editor.deleteCharForward")], action: "Delete char forward" },
 				{ keys: [act("tui.editor.redo")], action: "Redo (Vim normal mode)" },

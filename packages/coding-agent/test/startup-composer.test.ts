@@ -503,7 +503,7 @@ describe("Composer prepaint", () => {
 		}
 	});
 
-	it("routes Ctrl+D to Vim settings navigation, then opens the Agent Menu from a draft", async () => {
+	it("routes Ctrl+D to Vim settings navigation, draft deletion, and the empty composer's Agent Menu", async () => {
 		const previousVimMode = getMenuSearchVimMode();
 		const terminal = new CountingTerminal(120, 24);
 		const composer = new Composer({ preferences: config, terminal });
@@ -544,18 +544,30 @@ describe("Composer prepaint", () => {
 			terminal.sendInput("\x1b");
 			expect(mode.ui.getFocused()).toBe(mode.editor);
 			mode.editor.setText("keep this draft");
+			mode.editor.moveToLineStart();
 			const chain = { onCancel: vi.fn(), onSkip: vi.fn() };
 			mode.editor.setChainLock(chain);
 			terminal.sendInput("\x04");
 			expect(mode.ui.getFocused()).toBe(mode.editor);
 			expect(mode.editor.getExpandedText()).toBe("keep this draft");
+			mode.editor.setText("");
+			terminal.sendInput("\x04");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			expect(mode.editor.getExpandedText()).toBe("");
 			expect(chain.onCancel).not.toHaveBeenCalled();
 			expect(chain.onSkip).not.toHaveBeenCalled();
 			mode.editor.setChainLock(undefined);
 
+			mode.editor.setText("keep this draft");
+			mode.editor.moveToLineStart();
+			terminal.sendInput("\x04");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			expect(mode.editor.getExpandedText()).toBe("eep this draft");
+			mode.editor.setText("");
+
 			terminal.sendInput("\x04");
 			expect(mode.ui.getFocused()?.render(80).join("\n")).toContain("Agent Menu");
-			expect(mode.editor.getExpandedText()).toBe("keep this draft");
+			expect(mode.editor.getExpandedText()).toBe("");
 		} finally {
 			mode.stop();
 			await testSession.cleanup();
@@ -775,6 +787,7 @@ describe("Composer prepaint", () => {
 		expect(composer.editor.getExpandedText()).toBe("draft");
 		expect(terminal.stops).toBe(0);
 		expect(exit).not.toHaveBeenCalled();
+		composer.editor.setText("");
 		terminal.sendInput("\x04");
 		expect(composer.ui.hasOverlay()).toBe(true);
 		terminal.sendInput("\x1b[B");
@@ -783,7 +796,7 @@ describe("Composer prepaint", () => {
 		expect(exit).toHaveBeenCalledWith(130);
 	});
 
-	it("uses Delete to edit during startup and confirms a graceful shutdown with a draft", () => {
+	it("uses Delete and Ctrl+D to edit during startup and opens the Agent Menu on an empty composer", () => {
 		const terminal = new CountingTerminal();
 		const exit = vi.fn();
 		const composer = new Composer({ preferences: config, terminal, exit });
@@ -797,10 +810,16 @@ describe("Composer prepaint", () => {
 		expect(terminal.stops).toBe(0);
 
 		expect(composer.ui.getFocused()).toBe(composer.editor);
+		terminal.sendInput("\x1b[D");
+		terminal.sendInput("\x04");
+		expect(composer.ui.getFocused()).toBe(composer.editor);
+		expect(composer.editor.getExpandedText()).toBe("dra");
+
+		composer.editor.setText("");
 		terminal.sendInput("\x04");
 		expect(composer.ui.hasOverlay()).toBe(true);
 		expect(composer.ui.getFocused()?.render(80).join("\n")).toContain("Agent Menu");
-		expect(composer.editor.getExpandedText()).toBe("draf");
+		expect(composer.editor.getExpandedText()).toBe("");
 		expect(exit).not.toHaveBeenCalled();
 		terminal.sendInput("\r");
 

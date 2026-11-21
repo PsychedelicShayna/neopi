@@ -2059,8 +2059,16 @@ export class CustomEditor extends Editor {
 				return;
 			}
 
-			if (this.onAgentMenu && this.#matchesAction(canonical, "app.agent.menu") && this.onAgentMenu(data) !== false)
-				return;
+			if (this.onAgentMenu && this.#matchesAction(canonical, "app.agent.menu")) {
+				// A shared chord (Ctrl+D by default) edits a non-empty draft in this
+				// precedence slot, rather than falling through to other bindings.
+				if (getKeybindings().matchesCanonical(canonical, "tui.editor.deleteCharForward") && !this.textEquals("")) {
+					this.deleteCharForward();
+					this.#normalizeQueuePrefix(hadBareQueuePrefix);
+					return;
+				}
+				if (this.onAgentMenu(data) !== false) return;
+			}
 
 			// Intercept configured dequeue shortcut (restore queued message to editor)
 			if (this.#matchesAction(canonical, "app.message.dequeue") && this.onDequeue) {

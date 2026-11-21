@@ -30,8 +30,8 @@ app.history.search: []
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.interrupt` | `Ctrl+C` | Cancel active work, including a pending ask, without quitting or clearing the draft |
 | `app.navigation.dismiss` | `Esc` | Leave the current view or Vim mode; does not cancel active work |
-| `app.agent.menu` | `Ctrl+D` | Open the Agent Menu, or force exit once teardown is committed |
-| `tui.editor.deleteCharForward` | `Delete` | Delete the character forward |
+| `app.agent.menu` | `Ctrl+D` | Open the Agent Menu from an empty composer, or force exit once teardown is committed |
+| `tui.editor.deleteCharForward` | `Delete`, `Ctrl+D` | Delete the character forward (`Ctrl+D` opens the Agent Menu from an empty composer) |
 | `tui.editor.redo` | `Alt+U` | Redo an undone edit in Vim Normal mode |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
@@ -93,7 +93,7 @@ Model hubs show cached catalogs immediately; moving the sidebar highlight does n
 
 ### Agent Menu
 
-`Ctrl+D` opens the Agent Menu even with a draft. **Detach from Agent** and **Reattach to Agent** are disabled pending NeoCore. **Shutdown Agent** is selected by default and runs the same graceful close as `/exit`. **Restart Agent** runs `/restart`. **Force Shutdown** restores the terminal and exits immediately without waiting for normal teardown. Use Up/Down (`j`/`k` with Vim mode), Enter to choose, and Esc or `q` to return without taking action.
+`Ctrl+D` opens the Agent Menu from an empty startup or main composer; with text in the composer it deletes forward instead. A rebinding of `app.agent.menu` that does not also bind forward-delete can open the menu with a draft. **Detach from Agent** and **Reattach to Agent** are disabled pending NeoCore. **Shutdown Agent** is selected by default and runs the same graceful close as `/exit`. **Restart Agent** runs `/restart`. **Force Shutdown** restores the terminal and exits immediately without waiting for normal teardown. Use Up/Down (`j`/`k` with Vim mode), Enter to choose, and Esc or `q` to return without taking action.
 
 While `/exit` still waits for confirmation, `Ctrl+D` opens the menu normally. Once teardown is committed, `Ctrl+D` restores the terminal and exits with status 130 without opening the menu, even during final process cleanup. `Ctrl+C` never exits. If you customized `app.exit`, move that binding to `app.agent.menu`; `app.clear` has been removed. Move an old Escape remap from `app.interrupt` to `app.navigation.dismiss` if you want it to stay a navigation key.
 

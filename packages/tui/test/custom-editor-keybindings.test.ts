@@ -71,18 +71,18 @@ describe("CustomEditor keybindings", () => {
 		expect(menu).toHaveBeenCalledTimes(1);
 	});
 
-	it("forward-deletes with Delete and opens the menu without editing on ctrl+d", () => {
+	it("forward-deletes with Ctrl+D and Delete without opening the menu on a draft", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		const menu = vi.fn();
 		editor.onAgentMenu = menu;
-		editor.setText("ab");
+		editor.setText("abc");
 		editor.moveToLineStart();
 		editor.handleInput("\x04");
-		expect(menu).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("ab");
+		expect(menu).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("bc");
 		editor.handleInput("\x1b[3~"); // Delete
-		expect(menu).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("b");
+		expect(menu).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("c");
 	});
 
 	it("opens the menu on ctrl+d after the last attachment chip is deleted", () => {
@@ -99,7 +99,7 @@ describe("CustomEditor keybindings", () => {
 		expect(menu).toHaveBeenCalledTimes(1);
 	});
 
-	it("gives the agent menu precedence over later handlers bound to the same chord", () => {
+	it("gives Ctrl+D deletion and the agent menu precedence over later handlers on the same chord", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		const menu = vi.fn();
 		const onDequeue = vi.fn();
@@ -113,13 +113,16 @@ describe("CustomEditor keybindings", () => {
 		editor.setText("ab");
 		editor.moveToLineStart();
 		editor.handleInput("\x04"); // Ctrl+D
-		expect(editor.getText()).toBe("ab");
+		expect(editor.getText()).toBe("b");
+		expect(menu).not.toHaveBeenCalled();
+		editor.setText("");
+		editor.handleInput("\x04");
 		expect(menu).toHaveBeenCalledTimes(1);
 		expect(onDequeue).not.toHaveBeenCalled();
 		expect(customHandler).not.toHaveBeenCalled();
 	});
 
-	it("gives the agent menu precedence over an earlier base-editor submit binding", () => {
+	it("gives Ctrl+D deletion and the agent menu precedence over an earlier base-editor submit binding", () => {
 		const previous = getKeybindings();
 		setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": ["enter", "ctrl+d"] }));
 		try {
@@ -131,7 +134,10 @@ describe("CustomEditor keybindings", () => {
 			editor.setText("ab");
 			editor.moveToLineStart();
 			editor.handleInput("\x04"); // Ctrl+D
-			expect(editor.getText()).toBe("ab");
+			expect(editor.getText()).toBe("b");
+			expect(menu).not.toHaveBeenCalled();
+			editor.setText("");
+			editor.handleInput("\x04");
 			expect(onSubmit).not.toHaveBeenCalled();
 			expect(menu).toHaveBeenCalledTimes(1);
 		} finally {
