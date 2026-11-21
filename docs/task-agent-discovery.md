@@ -89,7 +89,7 @@ Parsing comes from frontmatter via `parseAgentFields()` (`src/discovery/helpers.
 
 ### Prompt inheritance
 
-Set `inherit` in a native NeoPi agent definition's YAML frontmatter:
+Native NeoPi agents have four inheritance modes. Choose **Inherits** in `/agents` or set `inherit` in the definition's YAML frontmatter:
 
 | Value | Context files | Harness system prompt |
 | --- | --- | --- |
@@ -98,11 +98,11 @@ Set `inherit` in a native NeoPi agent definition's YAML frontmatter:
 | `system` | No | Yes |
 | `none` | No | No |
 
-Context files include applicable user, ancestor and repository instructions such as `AGENTS.md` and `CLAUDE.md`, loaded at the child's working directory unless explicitly pinned by the host. The harness prompt is the generated NeoPi base, including any custom system template or append text. Disabling either does not remove the definition's Markdown body, the assignment, or the subagent's coordination and completion instructions. Each definition selects its own mode; reviving a persisted session retains its saved prompt and mode. This setting controls prompt composition, not filesystem or tool permissions. External harnesses keep their own defaults and do not accept non-default values.
+Context files include applicable user, ancestor and repository instructions such as `AGENTS.md` and `CLAUDE.md`, loaded at the child's working directory unless explicitly pinned by the host. The harness prompt is the generated NeoPi base, including any custom system template or append text. Disabling either does not remove the definition's Markdown body, the assignment, or the subagent's coordination and completion instructions. Each definition selects its own mode; reviving a persisted session retains its saved prompt and mode. This setting controls prompt composition, not filesystem or tool permissions. The Claude external adapter rejects values other than `all`.
 
 ### Rich definition editing
 
-Use **Edit definition** (Ctrl-G) in `/agents` for an existing definition, or **New agent** to start an empty draft. Both open the same editor. Every supported field appears even when absent. Existing files are edited in place; new definitions and copies of bundled agents can be saved in Project or User scope.
+Select an agent in `/agents` to edit its fields, or choose **New agent** to start an empty draft. Every supported field appears even when absent. On the definition page, Ctrl+G opens the backing file in `$VISUAL` or `$EDITOR` and reloads it when the editor closes. Save or discard any unsaved draft first. For a bundled agent, Ctrl+G shows “Save a copy to edit the file”. New definitions and copies can be saved in Project or User scope.
 
 The Tools page lists built-ins, hidden structured-output tools and registered extension tools as checkboxes. Default selection remains distinct from an explicit empty allowlist. Structured output has an enable toggle, a JSON Schema / JSON Type Definition selector, nested field rows, required switches and descriptions. Its typed keyword forms support constraints, enums, lists, tagged unions, references and other schema metadata without editing YAML.
 

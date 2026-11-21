@@ -170,7 +170,10 @@ describe("agent definition editor", () => {
 		expect(ui.editor.render(70, 9)).toHaveLength(9);
 		expect(ui.editor.render(70, 2)).toHaveLength(2);
 		const identity = ui.editor.detailSections().find(section => section.id === "identity");
-		expect(identity?.rows.find(row => row.id === "inherits")?.disabled).toBeDefined();
+		expect(identity?.rows.find(row => row.id === "inherit")).toMatchObject({
+			label: "Inherits",
+			control: { k: "action", label: "all (default)", act: "edit" },
+		});
 		ui.select("description");
 		expect(ui.editor.selectedDetailItem).toBe("description");
 		ui.activate("description");
@@ -180,18 +183,27 @@ describe("agent definition editor", () => {
 		expect(ui.editor.rosterVisible).toBe(true);
 	});
 
-	test("Inherits is rendered but cannot be selected or persisted", () => {
-		const ui = setup();
-		expect(ui.screen()).toContain("not yet available");
-		expect(ui.rows().find(row => row.id === "inherits")).toMatchObject({ disabled: true });
+	test("Inherits opens from ANSI, defaults to all, and saves the selected mode", async () => {
+		const saved = Promise.withResolvers<AgentDefinitionDraft>();
+		const ui = setup(undefined, {
+			save: async draft => saved.resolve(parseAgentDefinitionDocument(serializeAgentDefinitionDocument(draft))),
+		});
+		expect(ui.screen()).toContain("Inherits");
+		expect(ui.rows().filter(row => row.id === "inherit")).toHaveLength(1);
 		ui.select("systemPrompt");
-		ui.select("inherits");
-		ui.activate("inherits");
 		ui.editor.handleInput("\x1b[B");
+		expect(ui.editor.selectedDetailItem).toBe("inherit");
+		ui.editor.handleInput("\r");
 		const root = ui.editor.describe(cx);
 		if (root.k !== "picker") throw new Error(`Expected a picker, got ${root.k}`);
-		expect(root.p?.selected).toBe("model");
-		expect(ui.editor.definition).not.toHaveProperty("inherits");
+		expect(root.p?.selected).toBe("all");
+		expect(ui.rows().map(row => row.id)).toEqual(["all", "context", "system", "none"]);
+		ui.editor.handleInput("\x1b[B");
+		ui.editor.handleInput("\r");
+		expect(ui.editor.definition.inherit).toBe("context");
+		ui.editor.handleInput("c");
+		ui.editor.handleInput("\r");
+		expect((await saved.promise).inherit).toBe("context");
 	});
 
 	test("lists every manifest field for new and existing definitions; a clean draft closes on Esc", () => {
@@ -199,6 +211,7 @@ describe("agent definition editor", () => {
 			"name",
 			"description",
 			"systemPrompt",
+			"inherit",
 			"harness",
 			"model",
 			"thinkingLevel",

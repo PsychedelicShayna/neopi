@@ -345,12 +345,28 @@ describe("AgentsHub configurator", () => {
 		]);
 		const fields = prefsProps(hub).sections.flatMap(section => section.rows);
 		expect(fields.map(field => field.id)).toContain("tools");
-		expect(fields.find(field => field.id === "inherits")?.disabled).toBeTruthy();
+		expect(fields.find(field => field.id === "inherit")).toMatchObject({
+			label: "Inherits",
+			control: { k: "action", label: "all (default)", act: "edit" },
+		});
+		expect(fields.find(field => field.id === "inherit")?.disabled).toBeUndefined();
 		hub.handleNativeEvent({ type: "action", key: "", act: "page", value: "agent:bundled:scout", mods: [] });
 		expect(prefsProps(hub).page).toBe("agent:bundled:scout");
 		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "tools", mods: [] });
 		expect(hub.navigationSnapshot().create?.definition.name).toBe("scout");
 		expect(hub.describe(prefsCx).k).not.toBe("prefs");
+		hub.dispose();
+	});
+
+	test("opens the Inherits enum picker from native preferences and applies a choice to the draft", async () => {
+		const { hub } = await createHub(new TestSettings());
+		hub.handleNativeEvent({ type: "action", key: "", act: "edit", value: "inherit", mods: [] });
+		const root = hub.describe(prefsCx);
+		if (root.k !== "picker") throw new Error(`Expected a picker, got ${root.k}`);
+		expect(root.p?.items?.map(item => item.id)).toEqual(["all", "context", "system", "none"]);
+		expect(root.p?.selected).toBe("all");
+		hub.handleNativeEvent({ type: "activate", key: "", item: "none" });
+		expect(hub.navigationSnapshot().create?.definition.inherit).toBe("none");
 		hub.dispose();
 	});
 

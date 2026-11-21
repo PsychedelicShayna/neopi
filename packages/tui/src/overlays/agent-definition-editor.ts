@@ -48,6 +48,7 @@ import { getThinkingLevelMetadata, parseThinkingLevel } from "../thinking";
 import type { AdvisorConfig } from "./advisor-config";
 import {
 	AGENT_DEFINITION_FIELDS,
+	AGENT_INHERITANCE_VALUES,
 	type AgentDefinitionDraft,
 	type AgentDefinitionField,
 	type AgentDefinitionInspection,
@@ -72,7 +73,7 @@ const FIELD_HELP: Record<AgentDefinitionField, string> = {
 	harness:
 		"omp runs natively (default). claude runs through the Claude adapter with the subset of tools it can represent. codex parses but cannot be spawned.",
 	inherit:
-		"all keeps context files and the harness prompt (default); context keeps only files; system keeps only the harness prompt; none keeps neither. Agent instructions always apply.",
+		"For native NeoPi agents, all keeps context files and the harness prompt (default); context keeps only files; system keeps only the harness prompt; none keeps neither. Agent instructions always apply. Claude supports only all.",
 	model: "Ordered fallbacks: @role aliases or provider/model selectors, each with an optional :effort suffix. The first available one is used; an empty list inherits the parent's model. A per-call model and the task.agentModelOverrides setting win over this list.",
 	thinkingLevel:
 		"Reasoning effort when the chosen model selector carries no :effort suffix; a per-call effort wins over both. inherit follows the parent, auto lets the harness choose.",
@@ -96,7 +97,7 @@ const FIELD_HELP: Record<AgentDefinitionField, string> = {
 
 /** Detail list: field rows grouped by purpose, then actions. */
 const DETAIL_GROUPS: readonly { title: string; fields: readonly AgentDefinitionField[] }[] = [
-	{ title: "Identity", fields: ["name", "description", "systemPrompt"] },
+	{ title: "Identity", fields: ["name", "description", "systemPrompt", "inherit"] },
 	{ title: "Model", fields: ["model", "thinkingLevel", "harness"] },
 	{ title: "Powers", fields: ["tools", "spawns", "autoloadSkills", "readSummarize"] },
 	{ title: "Lifecycle", fields: ["blocking", "prewalk", "advisor"] },
@@ -106,7 +107,6 @@ const FIELD_BY_KEY = new Map(AGENT_DEFINITION_FIELDS.map(field => [field.key, fi
 const FIELD_KEYS = new Set<string>(AGENT_DEFINITION_FIELDS.map(field => field.key));
 const EFFORT_SUFFIX = /:(minimal|low|medium|high|xhigh|max)$/;
 const DONE = "__done";
-const INHERITS_ITEM = "inherits";
 
 type Screen =
 	| "detail"
@@ -474,14 +474,6 @@ export class AgentDefinitionEditor implements Component {
 					description: this.#fieldSummary(key),
 				});
 			}
-			if (group.title === "Identity") {
-				items.push({
-					value: INHERITS_ITEM,
-					label: "  Inherits (not yet available)",
-					description: "AGENTS.md / harness system prompt",
-					disabled: true,
-				});
-			}
 		}
 		items.push({ value: "group:actions", label: theme.fg("dim", "AUTHOR & FILE"), disabled: true });
 		items.push(
@@ -629,6 +621,19 @@ export class AgentDefinitionEditor implements Component {
 						{ value: "codex", label: "codex", description: "Parses, but cannot be spawned today." },
 					],
 					pick: value => this.#set("harness", value || undefined),
+					back,
+				});
+				return;
+			case "inherit":
+				this.#choose({
+					title: field.label,
+					field: field.key,
+					current: this.#draft.inherit ?? "all",
+					options: AGENT_INHERITANCE_VALUES.map(value => ({
+						value,
+						label: value === "all" ? "all (default)" : value,
+					})),
+					pick: value => this.#set("inherit", value === "all" ? undefined : value),
 					back,
 				});
 				return;
@@ -2528,7 +2533,6 @@ export class AgentDefinitionEditor implements Component {
 		}
 		const picked = pickerEvent(event);
 		if (!picked) return;
-		if (this.#screen === "detail" && picked.kind !== "action" && picked.item === INHERITS_ITEM) return;
 		if (this.#busy && this.#screen !== "generating" && !(picked.kind === "action" && picked.act === "close")) return;
 		if (picked.kind === "action" && picked.act === "open-file") {
 			void this.#openDefinitionFile();
