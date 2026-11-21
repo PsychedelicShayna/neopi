@@ -1,5 +1,7 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { KeybindingsManager } from "../src/app-keybindings";
+import { getKeybindings, setKeybindings } from "../src/keybindings";
 import {
 	SessionSelectorComponent,
 	type SessionSelectorEntry,
@@ -42,7 +44,6 @@ function make() {
 		sessions.slice(),
 		() => {},
 		() => {},
-		() => {},
 		{ getTerminalRows: () => 24 },
 	);
 }
@@ -76,14 +77,29 @@ describe("session selector Vim navigation and safe history", () => {
 		}
 	});
 
-	it("keeps a focused query literal, including editing keys, and exits it before closing natively", () => {
-		const cancelled = vi.fn();
+	it("moves half a page down in the standalone session picker on Ctrl+D", () => {
+		const previousKeybindings = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory());
 		const selector = new SessionSelectorComponent(
 			sessions.slice(),
 			() => {},
-			cancelled,
 			() => {},
+			{ getTerminalRows: () => 24, standalone: true },
 		);
+		try {
+			selector.render(120);
+			expect(snapshot(selector).list.selected).toBe(sessions[0]!.path);
+			selector.handleInput("\x04");
+			expect(snapshot(selector).list.selected).toBe(sessions[2]!.path);
+		} finally {
+			setKeybindings(previousKeybindings);
+			selector.dispose();
+		}
+	});
+
+	it("keeps a focused query literal, including editing keys, and exits it before closing natively", () => {
+		const cancelled = vi.fn();
+		const selector = new SessionSelectorComponent(sessions.slice(), () => {}, cancelled);
 		try {
 			selector.handleInput("/");
 			selector.handleInput("jkgG/ ");
@@ -103,20 +119,10 @@ describe("session selector Vim navigation and safe history", () => {
 	it("restores query caret, scope, result order, selected session and viewport without resuming", () => {
 		const resumed = vi.fn();
 		const options = { allSessions: { sessions: sessions.slice() }, getTerminalRows: () => 24 };
-		const selector = new SessionSelectorComponent(
-			sessions.slice(0, 5),
-			resumed,
-			() => {},
-			() => {},
-			options,
-		);
-		const reopened = new SessionSelectorComponent(
-			sessions.slice(0, 5),
-			resumed,
-			() => {},
-			() => {},
-			{ getTerminalRows: () => 24 },
-		);
+		const selector = new SessionSelectorComponent(sessions.slice(0, 5), resumed, () => {}, options);
+		const reopened = new SessionSelectorComponent(sessions.slice(0, 5), resumed, () => {}, {
+			getTerminalRows: () => 24,
+		});
 		try {
 			selector.handleInput("\x0e"); // Ctrl-N next scope.
 			expect(snapshot(selector).scope).toBe("all");
@@ -152,7 +158,6 @@ describe("session selector Vim navigation and safe history", () => {
 			sessions.slice(),
 			() => {},
 			() => {},
-			() => {},
 			{ onDelete },
 		);
 		try {
@@ -180,7 +185,6 @@ describe("session selector Vim navigation and safe history", () => {
 		const repaint = vi.fn();
 		const selector = new SessionSelectorComponent(
 			sessions.slice(0, 2),
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -212,12 +216,10 @@ describe("session selector Vim navigation and safe history", () => {
 			sessions.slice(0, 2),
 			() => {},
 			() => {},
-			() => {},
 			{ allSessions: { sessions: sessions.slice(0, 2), complete: complete.promise } },
 		);
 		const reopened = new SessionSelectorComponent(
 			sessions.slice(0, 2),
-			() => {},
 			() => {},
 			() => {},
 			{ allSessions: { sessions: sessions.slice() } },
@@ -265,7 +267,6 @@ describe("session selector Vim navigation and safe history", () => {
 			rows.slice(0, 2),
 			() => {},
 			() => {},
-			() => {},
 			{
 				allSessions: { sessions: rows.slice(0, 2), complete: complete.promise },
 				historyMatcher: () => [history.id],
@@ -273,7 +274,6 @@ describe("session selector Vim navigation and safe history", () => {
 		);
 		const reopened = new SessionSelectorComponent(
 			rows.slice(0, 2),
-			() => {},
 			() => {},
 			() => {},
 			{ allSessions: { sessions: rows }, historyMatcher: () => [history.id] },
@@ -313,7 +313,6 @@ describe("session selector Vim navigation and safe history", () => {
 		const repaint = vi.fn();
 		const selector = new SessionSelectorComponent(
 			sessions.slice(),
-			() => {},
 			() => {},
 			() => {},
 			{ historyMatcher: matcher },

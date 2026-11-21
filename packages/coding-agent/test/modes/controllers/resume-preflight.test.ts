@@ -206,7 +206,6 @@ describe("SelectorController.handleResumeSession preflight flush", () => {
 				sessions: SessionInfo[],
 				onSelect: (session: SessionInfo) => void,
 				onCancel: () => void,
-				onExit: () => void,
 				options: SessionSelector.SessionSelectorOptions<SessionInfo>,
 			) =>
 				new OriginalSelector<SessionInfo>(
@@ -215,7 +214,6 @@ describe("SelectorController.handleResumeSession preflight flush", () => {
 						selectionPromises.push(onSelect(selected) as unknown as Promise<void>);
 					},
 					onCancel,
-					onExit,
 					options,
 				)) as never,
 		);
@@ -266,7 +264,6 @@ describe("SelectorController.handleResumeSession preflight flush", () => {
 				sessions: SessionInfo[],
 				onSelect: (session: SessionInfo) => void,
 				onCancel: () => void,
-				onExit: () => void,
 				options: SessionSelector.SessionSelectorOptions<SessionInfo>,
 			) =>
 				new OriginalSelector<SessionInfo>(
@@ -275,7 +272,6 @@ describe("SelectorController.handleResumeSession preflight flush", () => {
 						selectionPromise = onSelect(selected) as unknown as Promise<void>;
 					},
 					onCancel,
-					onExit,
 					options,
 				)) as never,
 		);

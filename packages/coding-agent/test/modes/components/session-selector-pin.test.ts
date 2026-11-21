@@ -33,7 +33,6 @@ function picker(onSetPinned: (session: SessionInfo, pinned: boolean) => Promise<
 		[newest, middle, oldest],
 		() => {},
 		() => {},
-		() => {},
 		{
 			onSetPinned,
 			pinnedIds,

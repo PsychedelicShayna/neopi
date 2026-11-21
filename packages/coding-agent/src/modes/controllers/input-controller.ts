@@ -441,7 +441,12 @@ export class InputController {
 		this.ctx.editor.setActionKeys("app.navigation.dismiss", this.ctx.keybindings.getKeys("app.navigation.dismiss"));
 		this.ctx.editor.setActionKeys("app.agent.menu", this.ctx.keybindings.getKeys("app.agent.menu"));
 		this.ctx.editor.setActionKeys("app.chain.skipStep", this.ctx.keybindings.getKeys("app.chain.skipStep"));
-		this.ctx.editor.onAgentMenu = () => this.handleCtrlD();
+		this.ctx.editor.onAgentMenu = data => {
+			// A dialog can forward typing to the composer without giving it focus.
+			if (this.ctx.ui.getFocused() !== this.ctx.editor) return false;
+			if (!isKeyRelease(data) && !isKeyRepeat(data)) this.handleCtrlD();
+			return true;
+		};
 		this.ctx.editor.onCancel = () => this.handleCtrlC();
 		if (!this.#askCancelListenerInstalled) {
 			this.#askCancelListenerInstalled = true;
@@ -516,10 +521,6 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
-				if (this.ctx.keybindings.matches(data, "app.agent.menu")) {
-					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.handleCtrlD();
-					return { consume: true };
-				}
 				const chordView = this.#takeSidebarChord(data);
 				if (chordView === "cancel") return { consume: true };
 				if (chordView !== undefined) {
@@ -930,6 +931,8 @@ export class InputController {
 				editor.onEscape?.();
 				return true;
 			case "app.agent.menu":
+				if (!this.ctx.isTeardownCommitted && (this.ctx.ui.getFocused() !== editor || editor.chainLocked))
+					return false;
 				this.handleCtrlD();
 				return true;
 			case "app.suspend":

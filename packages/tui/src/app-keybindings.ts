@@ -119,7 +119,7 @@ export const KEYBINDINGS = {
 	},
 	"app.agent.menu": {
 		defaultKeys: "ctrl+d",
-		description: "Open the agent menu (force exit during teardown)",
+		description: "Open the agent menu from the main composer (force exit during teardown)",
 	},
 	"app.suspend": {
 		defaultKeys: "ctrl+z",

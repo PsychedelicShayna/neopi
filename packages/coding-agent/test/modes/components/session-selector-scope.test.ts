@@ -34,7 +34,6 @@ describe("SessionSelectorComponent scope toggle", () => {
 			[createSession("alpha", "Alpha", "/work/current"), createSession("beta", "Beta", "/work/current")],
 			session => selected.push(session.id),
 			() => cancelled++,
-			() => {},
 		);
 		selector.handleInput("j");
 		selector.handleInput("\n");
@@ -61,7 +60,6 @@ describe("SessionSelectorComponent scope toggle", () => {
 		let loads = 0;
 		const selector = new SessionSelectorComponent(
 			folder,
-			() => {},
 			() => {},
 			() => {},
 			{
@@ -101,14 +99,12 @@ describe("SessionSelectorComponent scope toggle", () => {
 			[createSession("a", "Alpha", "/work/repo"), createSession("b", "Beta", "/work/repo")],
 			() => {},
 			() => {},
-			() => {},
 		);
 		expect(single.render(120).join("\n")).not.toContain("/work/repo");
 
 		const folder = [createSession("main", "Main", "/work/repo"), createSession("wt", "Moved", "/work/repo-wt")];
 		const selector = new SessionSelectorComponent(
 			folder,
-			() => {},
 			() => {},
 			() => {},
 			// Preloaded, so both Tab toggles apply synchronously.
@@ -131,7 +127,6 @@ describe("SessionSelectorComponent scope toggle", () => {
 		const selector = new SessionSelectorComponent(
 			folder,
 			session => selected.push(session),
-			() => {},
 			() => {},
 			{ loadAllSessions: async () => ({ sessions: [remote] }) },
 		);
@@ -157,7 +152,6 @@ describe("SessionSelectorComponent scope toggle", () => {
 			[],
 			() => {},
 			() => {},
-			() => {},
 			opts,
 		);
 
@@ -175,7 +169,6 @@ describe("SessionSelectorComponent scope toggle", () => {
 		const child = createSession("child", "Incident", "/work/current", parent.path);
 		const selector = new SessionSelectorComponent(
 			[parent, child],
-			() => {},
 			() => {},
 			() => {},
 		);

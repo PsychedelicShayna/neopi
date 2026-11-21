@@ -6,6 +6,8 @@ import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-co
 import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -25,7 +27,7 @@ import {
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { getProjectDir, isInteractiveHost, setInteractiveHost, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isInteractiveHost, setInteractiveHost, setProjectDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
 import { cfgTierOpenai } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -48,6 +50,7 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
+	cfgTuiVimMode,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 class CountingTerminal extends VirtualTerminal {
@@ -473,11 +476,12 @@ describe("Composer prepaint", () => {
 			expect(adoptedEditor).not.toContain("╭");
 
 			terminal.sendInput("\x04");
+			const forwardDeletedDraft = expectedDraft.slice(0, -1); // Deleted the final "a" in "omega".
 			expect(mode.ui.hasOverlay()).toBe(false);
-			expect(mode.editor.getExpandedText()).toBe(expectedDraft);
+			expect(mode.editor.getExpandedText()).toBe(forwardDeletedDraft);
 			terminal.sendInput("\x18");
 			expect(mode.ui.hasOverlay()).toBe(true);
-			expect(mode.editor.getExpandedText()).toBe(expectedDraft);
+			expect(mode.editor.getExpandedText()).toBe(forwardDeletedDraft);
 			terminal.sendInput("q");
 			expect(mode.ui.hasOverlay()).toBe(false);
 			mode.editor.setText("");
@@ -496,6 +500,67 @@ describe("Composer prepaint", () => {
 			await testSession.cleanup();
 			vi.restoreAllMocks();
 			await initTheme();
+		}
+	});
+
+	it("routes Ctrl+D to Vim settings navigation, then opens the Agent Menu from a draft", async () => {
+		const previousVimMode = getMenuSearchVimMode();
+		const terminal = new CountingTerminal(120, 24);
+		const composer = new Composer({ preferences: config, terminal });
+		const testSession = await createTestSession({ inMemory: true });
+		cfgTuiVimMode.override(settings, true);
+		const mode = new InteractiveMode(
+			testSession.session,
+			"test",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			composer,
+		);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(KeybindingsManager, "create").mockReturnValue(KeybindingsManager.inMemory({}));
+		try {
+			composer.start();
+			await mode.init({ suppressWelcomeIntro: true });
+			expect(getMenuSearchVimMode()).toBe(true);
+
+			const opened = Promise.withResolvers<SettingsSelectorComponent>();
+			const setFocus = mode.ui.setFocus.bind(mode.ui);
+			vi.spyOn(mode.ui, "setFocus").mockImplementation(component => {
+				setFocus(component);
+				if (component instanceof SettingsSelectorComponent) opened.resolve(component);
+			});
+			mode.showSettingsSelector();
+			const settingsMenu = await withTimeout(opened.promise, 2000, "/settings did not open");
+			settingsMenu.render(120);
+			const initial = settingsMenu.navigationSnapshot();
+			terminal.sendInput("\x04");
+			expect(mode.ui.getFocused()).toBe(settingsMenu);
+			expect(settingsMenu.navigationSnapshot()).not.toEqual(initial);
+			terminal.sendInput("\x15");
+			expect(settingsMenu.navigationSnapshot()).toEqual(initial);
+
+			terminal.sendInput("\x1b");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			mode.editor.setText("keep this draft");
+			const chain = { onCancel: vi.fn(), onSkip: vi.fn() };
+			mode.editor.setChainLock(chain);
+			terminal.sendInput("\x04");
+			expect(mode.ui.getFocused()).toBe(mode.editor);
+			expect(mode.editor.getExpandedText()).toBe("keep this draft");
+			expect(chain.onCancel).not.toHaveBeenCalled();
+			expect(chain.onSkip).not.toHaveBeenCalled();
+			mode.editor.setChainLock(undefined);
+
+			terminal.sendInput("\x04");
+			expect(mode.ui.getFocused()?.render(80).join("\n")).toContain("Agent Menu");
+			expect(mode.editor.getExpandedText()).toBe("keep this draft");
+		} finally {
+			mode.stop();
+			await testSession.cleanup();
+			setMenuSearchVimMode(previousVimMode);
+			vi.restoreAllMocks();
 		}
 	});
 
@@ -731,8 +796,10 @@ describe("Composer prepaint", () => {
 		expect(exit).not.toHaveBeenCalled();
 		expect(terminal.stops).toBe(0);
 
+		expect(composer.ui.getFocused()).toBe(composer.editor);
 		terminal.sendInput("\x04");
 		expect(composer.ui.hasOverlay()).toBe(true);
+		expect(composer.ui.getFocused()?.render(80).join("\n")).toContain("Agent Menu");
 		expect(composer.editor.getExpandedText()).toBe("draf");
 		expect(exit).not.toHaveBeenCalled();
 		terminal.sendInput("\r");

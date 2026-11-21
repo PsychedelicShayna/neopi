@@ -58,7 +58,6 @@ function makeHarness(sessions: SessionInfo[], historyMatcher?: (query: string) =
 		sessions,
 		() => {},
 		() => {},
-		() => {},
 		historyMatcher ? { historyMatcher } : {},
 	);
 	selector.setOnRequestRender(() => renders++);
