@@ -269,7 +269,11 @@ export class MenuSearchField {
 			: this.focused
 				? t("tui.components.search.focused_hint", {
 						vim: menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : "",
-						escape: t(menuSearchVimMode && this.vimMode === "insert" ? "tui.components.search.normal" : "tui.components.search.cancel"),
+						escape: t(
+							menuSearchVimMode && this.vimMode === "insert"
+								? "tui.components.search.normal"
+								: "tui.components.search.cancel",
+						),
 					})
 				: t("tui.components.search.idle_hint");
 		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));

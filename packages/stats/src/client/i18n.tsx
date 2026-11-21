@@ -32,7 +32,8 @@ const spanish: Record<string, string> = {
 	"costs.empty": "No hay uso en este período",
 	"costs.empty_hint": "Elige un período más amplio en la barra superior.",
 	"costs.daily": "Estimación diaria",
-	"costs.description": "Lo que costaría el uso de {window} con las tarifas públicas de la API. El uso por suscripción sin un precio público se contabiliza como uso sin precio, no como gratuito.",
+	"costs.description":
+		"Lo que costaría el uso de {window} con las tarifas públicas de la API. El uso por suscripción sin un precio público se contabiliza como uso sin precio, no como gratuito.",
 	"costs.window.1h": "la última hora",
 	"costs.window.24h": "las últimas 24 horas",
 	"costs.window.7d": "los últimos 7 días",
