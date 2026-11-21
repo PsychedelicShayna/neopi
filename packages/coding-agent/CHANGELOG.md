@@ -183,6 +183,8 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Chronicler attributes control-socket messages to their senders instead of the session owner ([#828](https://github.com/PsychedelicShayna/neopi/issues/828)).
+- Chronicler preserves named advisor warnings and distinguishes the agent acting on advice from correcting itself ([#829](https://github.com/PsychedelicShayna/neopi/issues/829)).
 - Enter and `npi ctl steer` remain available while the terminal shows that a yielded turn is waiting for a background Bash job ([#582](https://github.com/PsychedelicShayna/neopi/issues/582)).
 - An active checkpoint no longer demands a rewind or blocks yielding when the rewind tool is unavailable ([#645](https://github.com/PsychedelicShayna/neopi/issues/645)).
 - Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
