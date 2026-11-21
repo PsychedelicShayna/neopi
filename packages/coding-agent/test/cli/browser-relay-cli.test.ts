@@ -15,7 +15,9 @@ function runExtensionWorker(
 	script: string,
 	port: number,
 	manifest: object,
-	onStorageListener?: (listener: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void) => void,
+	onStorageListener?: (
+		listener: (changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void,
+	) => void,
 ): () => void {
 	let stopped = false;
 	const event = { addListener() {} };
@@ -114,7 +116,9 @@ describe("omp browser-relay install", () => {
 				if (message === "extension connected") hello.resolve();
 			},
 		});
-		let storageChanged: ((changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void) | undefined;
+		let storageChanged:
+			| ((changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, area: string) => void)
+			| undefined;
 		stopWorker = runExtensionWorker(
 			relayExtensionFiles(VERSION)["background.js"]!,
 			port,
