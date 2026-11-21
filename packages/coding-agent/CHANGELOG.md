@@ -11,6 +11,7 @@
 - Bare `npi update` now reports binary-update status; the preserved prompted source-fork integration workflow moves to `npi update source`.
 - Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, revealed by a literal prefix once no visible command name or ordinary alias shares it.
 - Renamed `/agent launch` to `/spawn`; the `/agent` command is removed. Both `/spawn task@task` and `/spawn agent task@task` select the `task` agent type with the `@task` model role ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
+- `--tools` now restricts CLI and RPC sessions to the named built-in model tools, without discovered or host-registered extras. RPC hosts can require `restricted_tool_loadout` in `ready` and verify the live tool list using `get_state` ([#698](https://github.com/PsychedelicShayna/neopi/issues/698)).
 
 ### Added
 

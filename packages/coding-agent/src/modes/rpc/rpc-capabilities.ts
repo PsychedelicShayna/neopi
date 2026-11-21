@@ -48,6 +48,7 @@ export const RPC_CAPABILITIES: readonly string[] = [
  */
 const RPC_STDIO_CAPABILITIES: readonly string[] = [
 	"dictation", // #668; dictation_start/dictation_stop and their frames, and get_state.dictationEnabled.
+	"restricted_tool_loadout", // #698; --tools enforces the explicit model tool allowlist.
 ];
 
 /** What the stdio `ready` frame advertises. */

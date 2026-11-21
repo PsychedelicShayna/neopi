@@ -9096,8 +9096,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#tools.previewPersonalityPrompt(personality);
 	}
 
+	/** Whether the SDK limits this session to its launch tool loadout. */
+	get hasRestrictedToolLoadout(): boolean {
+		return this.#evalToolSession?.restrictToolNames === true;
+	}
+
 	/** Replaces connected MCP tools, enabling new names without changing existing selections. */
 	refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
+		if (this.hasRestrictedToolLoadout) {
+			return mcpTools.length === 0
+				? Promise.resolve()
+				: Promise.reject(new Error("MCP tools cannot be added to a restricted tool loadout."));
+		}
 		return this.#tools.refreshMCPTools(mcpTools);
 	}
 
@@ -9198,6 +9208,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#rpcHostToolRefreshTail: Promise<void> = Promise.resolve();
 
 	async #refreshRpcHostTools(rpcTools: AgentTool[], owner: object): Promise<void> {
+		if (this.hasRestrictedToolLoadout) {
+			if (rpcTools.length > 0) throw new Error("Host tools cannot be added to a restricted tool loadout.");
+			return;
+		}
 		const stash = this.#chatModeStashedTools;
 		const previousHostNames = new Set(stash?.enabled.filter(name => this.#tools.hasRpcHostTool(name, owner)));
 		const previouslyMountable = stash

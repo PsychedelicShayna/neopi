@@ -540,8 +540,9 @@ source. Its `session_start` still runs (it is delivered when the extension
 binds), and the first submitted message and every model turn wait until it is
 loaded, so its tools, commands, and `input`/`before_agent_start` hooks apply from
 the first request. Events emitted before it binds are not replayed. Resumed
-sessions, `--tools`, and launches with flags omp does not recognize load every
-extension before the session starts.
+sessions and launches with flags omp does not recognize normally load every
+extension before the session starts. Restricted `--tools` launches do not load
+extensions.
 
 `session_clear` receives `{ type: "session_clear" }` after a successful in-place
 context reset (`/clear` or `AgentSession.resetSessionContext()`), including an
