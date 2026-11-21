@@ -225,6 +225,7 @@
 				"chronicler.notices",
 				"customPersonalities",
 				"models.defaultScope",
+				"notifyAgent.when",
 				"settings.defaultScope",
 				"task.definitionGenerationConversationTtlMs",
 				"update.auto",
