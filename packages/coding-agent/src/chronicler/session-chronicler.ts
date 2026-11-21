@@ -30,7 +30,6 @@ import { estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-u
 import contextTemplate from "../prompts/chronicler/context.md" with { type: "text" };
 import systemTemplate from "../prompts/chronicler/system.md" with { type: "text" };
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { SessionMessageEntry } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../session/turn-persistence";
 import {
@@ -42,8 +41,7 @@ import {
 import { getChroniclerToolSchemas, ChronicleTool, FinishChronicleTool, ReadChronicleTool } from "./chronicle-tool";
 import * as captureSettings from "./capture-settings";
 import { type ChroniclerNoteEmitter, NoteTool } from "./note-tool";
-import type { ChronicleEntry } from "./render";
-import { renderChronicleDelta } from "./render";
+import { type ChronicleEntry, isChroniclerSourceEntry, renderChronicleDelta, toChronicleEntry } from "./render";
 import { type CaptureBatch, type CaptureSource, ChroniclerStore, isChroniclerCorruption } from "./store";
 import {
 	ChroniclerBlindMetadataError,
@@ -654,15 +652,9 @@ export class SessionChronicler {
 		const entryIds = new Set<string>();
 		const orderedEntries = manager.getEntries();
 		for (const entry of orderedEntries) {
-			if (entry.type !== "message") continue;
-			const message = entry as SessionMessageEntry;
-			entries.push({
-				id: message.id,
-				parentId: message.parentId,
-				timestamp: message.timestamp,
-				message: message.message,
-			});
-			entryIds.add(message.id);
+			if (!isChroniclerSourceEntry(entry)) continue;
+			entries.push(toChronicleEntry(entry));
+			entryIds.add(entry.id);
 		}
 
 		this.#pendingScan = {
