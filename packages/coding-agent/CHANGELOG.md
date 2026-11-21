@@ -185,6 +185,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
 - Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
 - Chronicler attributes control-socket messages to their senders instead of the session owner ([#828](https://github.com/PsychedelicShayna/neopi/issues/828)).
 - Chronicler preserves named advisor warnings and distinguishes the agent acting on advice from correcting itself ([#829](https://github.com/PsychedelicShayna/neopi/issues/829)).

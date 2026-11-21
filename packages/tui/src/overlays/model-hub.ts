@@ -600,7 +600,6 @@ type RolesAction =
 	| "later"
 	| "new"
 	| "thinking"
-	| "compaction"
 	| "description"
 	| "budget"
 	| "save"
@@ -618,9 +617,7 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 	"]": "later",
 	n: "new",
 	t: "thinking",
-	// `k` is vim navigation and `p`/`P` paste fallbacks in this fork, so the
-	// compaction limit lives on `m` and preset switching only on ctrl+←/→.
-	m: "compaction",
+	m: "budget",
 	s: "save",
 };
 
@@ -628,7 +625,6 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "model", head: "Model", format: "text", priority: 2 },
 	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
-	{ id: "compaction", head: "Compaction", format: "dim", priority: 1 },
 	{ id: "budget", head: "Role budget", format: "dim", priority: 1 },
 ];
 
@@ -3159,7 +3155,7 @@ export class ModelHubComponent implements Component {
 		this.#strip = { kind: "name", purpose: "roleBudget", role, input };
 	}
 
-	/** The model a Roles row resolves to (assigned role or fallback), whose compaction point `m` edits. */
+	/** The model a Roles row resolves to, for the model facts inspector. */
 	#roleRowModel(): Model | undefined {
 		const row = this.#rolesRows[this.#roleIndex];
 		if (row?.kind === "role") return this.#roles[row.role]?.model;
@@ -3167,11 +3163,21 @@ export class ModelHubComponent implements Component {
 		return undefined;
 	}
 
-	/** Open the footer input for the Roles row's model compaction point, prefilled with its own entry. */
-	#openCompactionStrip(): void {
-		if (!this.#callbacks.onCompactionPointChange) return;
-		const model = this.#roleRowModel();
-		if (!model) return;
+	#modelCompactionTarget(): Model | undefined {
+		if (
+			!this.#callbacks.onCompactionPointChange ||
+			this.#sessionOnly ||
+			this.#assigning !== null ||
+			this.#focus !== "list" ||
+			this.#pinnedActionFocused ||
+			!this.#isBrowserView(this.#activeEntry())
+		)
+			return undefined;
+		return this.#browser.getSelected()?.model;
+	}
+
+	/** Open the model row's compaction editor, prefilled with its own entry. */
+	#openCompactionStrip(model: Model): void {
 		const input = new Input();
 		input.focused = true;
 		input.setValue(this.#settings.compactionPointFor?.(model)?.draft ?? "");
@@ -3642,6 +3648,11 @@ export class ModelHubComponent implements Component {
 			}
 		}
 		const printable = extractPrintableText(data);
+		const compactionTarget = printable === "m" ? this.#modelCompactionTarget() : undefined;
+		if (!action && compactionTarget) {
+			this.#openCompactionStrip(compactionTarget);
+			return;
+		}
 		const actionKey =
 			(rolesView && printable !== undefined && Object.hasOwn(ROLES_ACTION_KEYS, printable)) ||
 			(effortView && (printable === "x" || printable === "[" || printable === "]")) ||
@@ -4185,9 +4196,6 @@ export class ModelHubComponent implements Component {
 			case "prevPreset":
 				this.#switchPreset(action === "nextPreset" ? 1 : -1);
 				return;
-			case "compaction":
-				this.#openCompactionStrip();
-				return;
 			case "thinking":
 				if (role) {
 					const target = this.#roleThinkingTarget(role);
@@ -4625,10 +4633,7 @@ export class ModelHubComponent implements Component {
 						: policy?.mode === "fixed"
 							? `  ${policy.level}`
 							: "";
-				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
-				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
-				const compaction = limit ? `  compact ${limit}` : "";
-				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix + compaction)}`;
+				let line = ` ${cursor} ${branch} ${selector}${theme.fg("dim", suffix)}`;
 				line = this.#finishRolesRow(line, width, hovered);
 				body.push(line);
 				continue;
@@ -4682,16 +4687,12 @@ export class ModelHubComponent implements Component {
 			const cycleIndex = cycleOrder.indexOf(role);
 			const cycleStyled = cycleIndex >= 0 ? theme.fg("accent", `${theme.icon.loop} ${cycleIndex + 1}`) : "";
 
-			const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
-			const compactionStyled = limit ? theme.fg("dim", `compact ${limit}`) : "";
 			let line = ` ${cursor} ${dot} ${tagStyled}  ${value}`;
 			const scopeNote = this.#settings.getRoleScopeNote?.(role);
 			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
 			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
-			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled]
-				.filter(part => part.length > 0)
-				.join("  ");
+			const right = [budgetStyled, levelStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4911,15 +4912,11 @@ export class ModelHubComponent implements Component {
 			const row = this.#rolesRows[this.#roleIndex];
 			const copyKeys = getMenuSearchVimMode() ? (["y", "shift+y"] as const) : (["alt+y", "alt+shift+y"] as const);
 			const pasteKey = getMenuSearchVimMode() ? "p" : "alt+p";
-			const compaction =
-				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
-					? ` · ${formatKeyHint("m")} compaction limit`
-					: "";
 			if (row?.kind === "fallback") {
 				// Advertise thinking only when the entry resolves to an editable model.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				const thinking = editable ? ` · ${formatKeyHint("t")} effort` : "";
-				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(copyKeys)} copy · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} scopes`;
+				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(copyKeys)} copy · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} remove${thinking} · [/] reorder · ${left} scopes`;
 			}
 			if (row?.kind === "chainKey") {
 				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
@@ -4930,12 +4927,16 @@ export class ModelHubComponent implements Component {
 			// Thinking is editable only when the assigned model has reasoning levels.
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
 			const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
+			const budget =
+				row?.kind === "role" && this.#callbacks.onRoleTokenBudgetChange
+					? ` · ${formatKeyHint("m")} token budget`
+					: "";
 			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
 			const switchPreset =
 				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
 			const yank =
 				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y")} ${yank} · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y")} ${yank} · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear${thinking}${budget} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
@@ -4951,7 +4952,8 @@ export class ModelHubComponent implements Component {
 		if (this.#focus === "scope") {
 			return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return `${enter} assign roles · ${upDown} models · ${left} providers · / search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+		const compaction = this.#modelCompactionTarget() ? ` · ${formatKeyHint("m")} compaction limit` : "";
+		return `${enter} assign roles · ${upDown} models · ${left} providers · / search · ${altLeftRight} kind${compaction}${refresh} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -5464,13 +5466,10 @@ export class ModelHubComponent implements Component {
 				);
 			}
 			case "fallback": {
-				const model = this.#resolveFallbackEntry(rowDef.role, rowDef.chainIndex)?.item.model;
-				const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
 				return node(
 					"item",
 					{
 						label: [span("  ↳ ", "dim"), span(rowDef.selector, "muted")],
-						value: limit ? [span(`compact ${limit}`, "dim")] : undefined,
 					},
 					undefined,
 					key,
@@ -5506,10 +5505,10 @@ export class ModelHubComponent implements Component {
 		if (uiProvenance("roles", role)) {
 			label.push(span(uiProvenanceSuffix("roles", role), provenanceColor(uiProvenance("roles", role))));
 		}
-		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
-		if (limit) {
+		const budget = this.#settings.getRoleTokenBudget?.(role);
+		if (budget !== undefined) {
 			if (value.length > 0) value.push(span("  "));
-			value.push(span(`compact ${limit}`, "dim"));
+			value.push(span(`budget ${budget.toLocaleString("en-US")}`, "dim"));
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
 		const cycleIndex = cycleOrder.indexOf(role);
@@ -6063,10 +6062,6 @@ export class ModelHubComponent implements Component {
 					primary ? { primary: true } : undefined,
 				);
 			const actions: (TspPickerAction | undefined)[] = [];
-			const compaction =
-				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
-					? roleAction("compaction", "Compaction limit", "m")
-					: undefined;
 			switch (row?.kind) {
 				case "role": {
 					const assigned = this.#roles[row.role];
@@ -6075,11 +6070,10 @@ export class ModelHubComponent implements Component {
 						this.#callbacks.onRoleDescriptionChange
 							? roleAction("description", "Description", "shift+d")
 							: undefined,
-						this.#callbacks.onRoleTokenBudgetChange ? roleAction("budget", "Token budget", "b") : undefined,
+						this.#callbacks.onRoleTokenBudgetChange ? roleAction("budget", "Token budget", "m") : undefined,
 						roleAction("fallback", "Add fallback", "f"),
 						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
 						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
-						compaction,
 						roleAction("cycle", this.#cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
 						roleAction("new", "New role", "n"),
 						this.#callbacks.onSavePreset ? roleAction("save", "Save preset", "s") : undefined,
@@ -6095,7 +6089,6 @@ export class ModelHubComponent implements Component {
 						this.#resolveFallbackEntry(row.role, row.chainIndex)
 							? roleAction("thinking", "Thinking", "t")
 							: undefined,
-						compaction,
 						roleAction("earlier", "Earlier", "["),
 						roleAction("later", "Later", "]"),
 					);
@@ -6142,6 +6135,7 @@ export class ModelHubComponent implements Component {
 			refresh,
 			refreshAll,
 			facts,
+			this.#modelCompactionTarget() ? pickerAction("editCompaction", "Compaction limit", "m") : undefined,
 			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
 			cancel,
 		]);
@@ -6294,15 +6288,12 @@ export class ModelHubComponent implements Component {
 					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: "fallback chain" });
 					return;
 				case "fallback": {
-					const model = this.#resolveFallbackEntry(row.role, row.chainIndex)?.item.model;
-					const limit = model && this.#settings.compactionPointFor?.(model)?.limit;
 					items.push({
 						id,
 						label: row.selector,
 						mono: true,
 						depth: 1,
 						detail: `fallback ${row.chainIndex + 1}`,
-						...(limit ? { facts: { compaction: `compact ${limit}` } } : {}),
 					});
 					return;
 				}
@@ -6321,8 +6312,6 @@ export class ModelHubComponent implements Component {
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
-				const limit = this.#settings.compactionPointFor?.(assignment.model)?.limit;
-				if (limit) facts.compaction = `compact ${limit}`;
 			} else {
 				facts.model = "—";
 			}
@@ -6410,11 +6399,18 @@ export class ModelHubComponent implements Component {
 				const info = this.#settings.getRoleInfo(row.role);
 				const assignment = this.#roles[row.role];
 				if (assignment) {
-					children.push(...this.#browser.modelPreview(modelItem(assignment.model), "full", this.#currentSelector));
+					children.push(
+						...this.#browser.modelPreview(modelItem(assignment.model), "full", this.#currentSelector, false),
+					);
+					const budget = this.#settings.getRoleTokenBudget?.(row.role);
 					children.push(
 						node("kv", {
 							items: [
 								{ k: [span("Role", "muted")], v: info.name },
+								{
+									k: [span("Role budget", "muted")],
+									v: budget === undefined ? "inherits" : budget.toLocaleString("en-US"),
+								},
 								{
 									k: [span("Thinking", "muted")],
 									v: getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label,
@@ -6435,7 +6431,8 @@ export class ModelHubComponent implements Component {
 			}
 			case "fallback": {
 				const resolved = this.#resolveFallbackEntry(row.role, row.chainIndex);
-				if (resolved) children.push(...this.#browser.modelPreview(resolved.item, "full", this.#currentSelector));
+				if (resolved)
+					children.push(...this.#browser.modelPreview(resolved.item, "full", this.#currentSelector, false));
 				else children.push(text([span(row.selector, "mono")], { role: "omp.picker.title" }));
 				const chain = chainList(row.role);
 				if (chain) children.push(chain);
@@ -6627,6 +6624,11 @@ export class ModelHubComponent implements Component {
 			case "roleDescription":
 				this.#submitNameStrip();
 				return;
+			case "editCompaction": {
+				const model = this.#modelCompactionTarget();
+				if (!this.#strip && model) this.#openCompactionStrip(model);
+				return;
+			}
 			case "compactionPoint":
 				this.#submitNameStrip();
 				return;
