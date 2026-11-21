@@ -250,8 +250,7 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 				.map(s => s.trim())
 				.filter(Boolean),
 		);
-		// Validation runs after session tool discovery. At this point extension,
-		// custom, plugin-manifest, and MCP tools are not all known yet.
+		// Validate availability after the session has built its restricted registry.
 		result.tools = names;
 	},
 	"--thinking": (result, value, deps) => {

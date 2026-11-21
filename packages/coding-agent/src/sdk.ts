@@ -4603,6 +4603,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		let writeRegistration: Promise<boolean> | undefined;
 		const ensureWriteRegistered = (): Promise<boolean> => {
 			if (toolRegistry.has("write")) return Promise.resolve(builtInRegistryToolNames.has("write"));
+			if (restrictToolNames) return Promise.resolve(false);
 			writeRegistration ??= (async () => {
 				const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
 				if (!writeTool || toolRegistry.has("write")) return builtInRegistryToolNames.has("write");
@@ -6200,9 +6201,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						);
 						return tools.filter((tool): tool is AgentTool => tool !== null);
 					},
-			createThinkTool: async () => (await HIDDEN_TOOLS.think(toolSession)) ?? null,
+			createThinkTool:
+				!restrictToolNames || explicitlyRequestedToolNames?.includes("think")
+					? async () => (await HIDDEN_TOOLS.think(toolSession)) ?? null
+					: undefined,
 			createVibeTools:
-				(options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
+				!restrictToolNames && (options.taskDepth ?? 0) === 0 && !options.parentTaskPrefix
 					? () => createVibeTools(toolSession)
 					: undefined,
 			builtInToolNames: builtInRegistryToolNames,

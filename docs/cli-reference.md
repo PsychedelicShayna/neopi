@@ -141,7 +141,7 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 
 | Flag | Description |
 | --- | --- |
-| `--tools <a,b,c>` | Comma-separated list of tools to enable (default: all). |
+| `--tools <a,b,c>` | Restrict the session to the named built-in tools. Extension, MCP and host tools cannot be added. Omit the flag for the normal settings-driven tool loadout. |
 | `--no-tools` | Disable all built-in tools. |
 | `--no-lsp` | Disable LSP tools, formatting, and diagnostics. |
 | `--no-pty` | Disable PTY-based interactive bash execution. |
@@ -156,6 +156,12 @@ See [providers](./providers.md) and [models](./models.md) for model resolution.
 | `--max-fps <n>` | Repaint ceiling in frames per second (default `30`; `1`–`120`), streaming text included; keystroke echo keeps 30 fps. Overrides `tui.maxFps` and `PI_MAX_FPS` for this run. |
 | `--warn-cost <usd>` | Warn when session and subagent spend reaches this many USD (`session.warnCost`). |
 | `--max-cost <usd>` | Stop sending requests at this spend; an in-flight request can exceed it (`session.maxCost`). |
+
+`--tools read,grep,glob` gives the model only those tools, not the other tools
+enabled by your settings. An empty list (`--tools=`) grants none. If you request
+`checkpoint` or `rewind`, list both so the model can complete the rollback.
+`--tools` cannot be combined with explicit extensions or hooks. This is a
+model-tool restriction, not a filesystem or process sandbox.
 
 `--approval-mode` also accepts `always-ask-cached`.
 

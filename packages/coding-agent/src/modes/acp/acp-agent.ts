@@ -3317,6 +3317,9 @@ export class AcpAgent implements Agent {
 	}
 
 	async #configureMcpServers(record: ManagedSessionRecord, servers: McpServer[]): Promise<void> {
+		if (record.session.hasRestrictedToolLoadout && servers.length > 0) {
+			throw new Error("MCP tools cannot be added to a restricted tool loadout.");
+		}
 		if (record.mcpManager) {
 			await record.mcpManager.disconnectAll();
 		}
