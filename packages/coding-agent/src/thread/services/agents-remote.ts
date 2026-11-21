@@ -293,8 +293,8 @@ export class RemoteIrcBus implements IrcBusApi {
 		return this.#remote.call("group", sender, request);
 	}
 
-	filterBroadcastTargets(targets: string[]): string[] {
-		return this.#remote.callSync("filterBroadcastTargets", targets);
+	filterBroadcastTargets(sender: string, targets: string[]): string[] {
+		return this.#remote.callSync("filterBroadcastTargets", sender, targets);
 	}
 
 	sentSince(from: string, to: string, sinceTs: number): boolean {

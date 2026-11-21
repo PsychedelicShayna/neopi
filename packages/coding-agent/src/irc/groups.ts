@@ -5,6 +5,8 @@ import addedTemplate from "../prompts/system/irc-group-added.md" with { type: "t
 import messageTemplate from "../prompts/system/irc-group-message.md" with { type: "text" };
 import reminderTemplate from "../prompts/system/irc-group-reminder.md" with { type: "text" };
 import type { AgentRef, AgentRegistryApi } from "../registry/agent-registry";
+import { isCurrentSessionRosterRef } from "../registry/persisted-agents";
+import type { SessionEntry } from "../session/session-entries";
 import type { IrcBusApi } from "./bus";
 
 export const IRC_EVERYONE = "everyone";
@@ -32,6 +34,35 @@ interface Group {
 	timer?: NodeJS.Timeout;
 }
 
+export const IRC_GROUPS_CUSTOM_TYPE = "irc-groups";
+
+export interface IrcGroupSnapshot {
+	groups: { name: string; members: string[]; deadline?: number }[];
+	everyoneOptOuts: string[];
+	everyoneAdvisors: string[];
+}
+
+export function readIrcGroupSnapshot(branch: readonly SessionEntry[]): IrcGroupSnapshot | undefined {
+	for (let i = branch.length - 1; i >= 0; --i) {
+		const entry = branch[i];
+		if (entry.type === "custom" && entry.customType === IRC_GROUPS_CUSTOM_TYPE) {
+			const snapshot = entry.data as IrcGroupSnapshot | undefined;
+			if (
+				Array.isArray(snapshot?.groups) &&
+				Array.isArray(snapshot.everyoneOptOuts) &&
+				Array.isArray(snapshot.everyoneAdvisors)
+			)
+				return snapshot;
+		}
+	}
+	return undefined;
+}
+
+interface GroupPersistence {
+	isCurrent(): boolean;
+	save(snapshot: IrcGroupSnapshot): void;
+}
+
 function isParticipant(ref: AgentRef | undefined): ref is AgentRef {
 	if (!ref || ref.status === "aborted" || ref.kind === "mailbox") return false;
 	// Live advisors can speak and belong to named groups, but the bus still
@@ -43,24 +74,96 @@ function isParticipant(ref: AgentRef | undefined): ref is AgentRef {
 /** Main IRC host's address lists. Messages still live only in each recipient's own session. */
 export class IrcGroups {
 	readonly #groups = new Map<string, Group>([[IRC_EVERYONE, { members: new Set() }]]);
+	readonly #everyoneOptOuts: Set<string>;
+	readonly #everyoneAdvisors: Set<string>;
 	readonly #unsubscribe: () => void;
+	#restorePending: boolean;
 
 	constructor(
 		private readonly registry: AgentRegistryApi,
 		private readonly bus: Pick<IrcBusApi, "send">,
+		snapshot?: IrcGroupSnapshot,
+		private readonly persistence?: GroupPersistence,
 	) {
+		this.#restorePending = snapshot !== undefined;
+		this.#everyoneOptOuts = new Set(snapshot?.everyoneOptOuts);
+		this.#everyoneAdvisors = new Set(snapshot?.everyoneAdvisors);
 		const everyone = this.#groups.get(IRC_EVERYONE)!;
 		for (const ref of registry.list()) {
-			if (isParticipant(ref) && ref.kind !== "advisor") everyone.members.add(ref.id);
+			if (this.#joinsEveryone(ref)) everyone.members.add(ref.id);
 		}
 		this.#unsubscribe = registry.onChange(({ type, ref }) => {
+			if (this.persistence && !this.persistence.isCurrent()) return;
 			if (type === "removed" || !isParticipant(ref)) {
+				let changed = !this.#restorePending && this.#everyoneAdvisors.delete(ref.id);
 				for (const [name, group] of this.#groups) {
-					if (group.members.delete(ref.id)) this.#resize(name, group);
+					if (!group.members.delete(ref.id)) continue;
+					this.#resize(name, group);
+					if (name !== IRC_EVERYONE) changed = true;
 				}
-			} else if (type === "registered" && ref.kind !== "advisor") {
+				if (changed) this.#save();
+			} else if (type === "registered" && this.#joinsEveryone(ref)) {
 				everyone.members.add(ref.id);
 			}
+		});
+	}
+
+	/** Prune against the registry only after the persisted child roster has been loaded. */
+	restore(snapshot: IrcGroupSnapshot, sessionFile: string | undefined): void {
+		let changed = false;
+		for (const id of this.#everyoneAdvisors) {
+			if (!this.#isRestorableMember(id, sessionFile)) {
+				this.#everyoneAdvisors.delete(id);
+				this.#groups.get(IRC_EVERYONE)!.members.delete(id);
+				changed = true;
+			}
+		}
+		for (const { name, members, deadline } of snapshot.groups) {
+			const group: Group = {
+				members: new Set(members.filter(id => this.#isRestorableMember(id, sessionFile))),
+			};
+			if (group.members.size !== members.length) changed = true;
+			if (!group.members.size || (group.members.size === 1 && deadline !== undefined && deadline <= Date.now())) {
+				changed = true;
+				continue;
+			}
+			this.#groups.set(name, group);
+			if (group.members.size === 1) {
+				if (deadline === undefined) {
+					this.#resize(name, group);
+					changed = true;
+				} else {
+					this.#scheduleExpiry(name, group, deadline);
+				}
+			}
+		}
+		this.#restorePending = false;
+		if (changed) this.#save();
+	}
+
+	#isRestorableMember(id: string, sessionFile: string | undefined): boolean {
+		const ref = this.registry.get(id);
+		return isParticipant(ref) && isCurrentSessionRosterRef(ref, sessionFile);
+	}
+
+	#joinsEveryone(ref: AgentRef): boolean {
+		return (
+			isParticipant(ref) &&
+			!this.#everyoneOptOuts.has(ref.id) &&
+			(ref.kind !== "advisor" || this.#everyoneAdvisors.has(ref.id))
+		);
+	}
+
+	#save(): void {
+		if (this.#restorePending || !this.persistence?.isCurrent()) return;
+		const groups: IrcGroupSnapshot["groups"] = [];
+		for (const [name, { members, deadline }] of this.#groups) {
+			if (name !== IRC_EVERYONE) groups.push({ name, members: [...members], deadline });
+		}
+		this.persistence.save({
+			groups,
+			everyoneOptOuts: [...this.#everyoneOptOuts],
+			everyoneAdvisors: [...this.#everyoneAdvisors],
 		});
 	}
 
@@ -137,10 +240,16 @@ export class IrcGroups {
 				const removed: string[] = [];
 				for (const member of members) {
 					const id = member.trim();
-					if (group.members.delete(id)) removed.push(id);
+					if (!group.members.delete(id)) continue;
+					removed.push(id);
+					if (name === IRC_EVERYONE) {
+						this.#everyoneOptOuts.add(id);
+						this.#everyoneAdvisors.delete(id);
+					}
 				}
 				if (!removed.length) return { text: `No matching members in IRC group ${name}.`, isError: true };
 				this.#resize(name, group);
+				this.#save();
 				return {
 					text: `Removed ${removed.join(", ")} from IRC group ${name}.${this.#groups.has(name) ? "" : " Empty group deleted."}`,
 				};
@@ -152,6 +261,7 @@ export class IrcGroups {
 				const reason = request.reason.trim();
 				if (!reason) return { text: "A reason is required to keep a group.", isError: true };
 				this.#scheduleExpiry(name, group, group.deadline + IRC_KEEP_MINUTES * MINUTE_MS);
+				this.#save();
 				return { text: `Kept IRC group ${name} for ${IRC_KEEP_MINUTES} more minutes: ${reason}` };
 			}
 		}
@@ -168,6 +278,10 @@ export class IrcGroups {
 		for (const id of ids) {
 			if (group.members.has(id)) continue;
 			group.members.add(id);
+			if (name === IRC_EVERYONE) {
+				this.#everyoneOptOuts.delete(id);
+				if (this.registry.get(id)?.kind === "advisor") this.#everyoneAdvisors.add(id);
+			}
 			added.push(id);
 		}
 		if (!added.length) return { text: `No new members added to IRC group ${name}.` };
@@ -175,6 +289,7 @@ export class IrcGroups {
 		const notice = renderPromptAsset("system/irc-group-added.md", addedTemplate, { group: name }).trimEnd();
 		const notices = added.map(to => this.#notice(sender, to, notice));
 		this.#resize(name, group);
+		this.#save();
 		await Promise.all(notices);
 		return { text: `${create ? "Created" : "Updated"} IRC group ${name}; added ${added.join(", ")}.` };
 	}
@@ -200,7 +315,9 @@ export class IrcGroups {
 	#scheduleExpiry(name: string, group: Group, deadline: number): void {
 		clearTimeout(group.timer);
 		group.deadline = deadline;
-		group.timer = setTimeout(() => this.#groups.delete(name), deadline - Date.now());
+		group.timer = setTimeout(() => {
+			if (this.#groups.delete(name)) this.#save();
+		}, deadline - Date.now());
 		group.timer.unref?.();
 	}
 

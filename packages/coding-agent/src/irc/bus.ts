@@ -13,8 +13,17 @@ import { type IrcDeliveryReceipt, type IrcLogEntry, type IrcMessage } from "@oh-
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { registerPersistedSubagents } from "../registry/persisted-agents";
+import { isAgentViewSession } from "../session/agent-session-handle";
 import type { CustomMessage } from "../session/messages";
-import { IrcGroups, type IrcGroupRequest, type IrcGroupResult } from "./groups";
+import {
+	IRC_GROUPS_CUSTOM_TYPE,
+	IrcGroups,
+	type IrcGroupRequest,
+	type IrcGroupResult,
+	type IrcGroupSnapshot,
+	readIrcGroupSnapshot,
+} from "./groups";
 import { ircHistoryMaxEntries, ircRelayToMainTranscript } from "./policy";
 import { agentMesh } from "./mesh";
 import { parsePeerAddress } from "./mesh-protocol";
@@ -112,6 +121,12 @@ interface IrcHistoryRecord extends IrcLogEntry {
 	readonly seq: number;
 }
 
+interface IrcGroupScope {
+	isCurrent(): boolean;
+	groups: IrcGroups;
+	ready?: Promise<boolean>;
+}
+
 /** Public surface of the process-global IRC bus, implemented locally on main and by a proxy in workers. */
 export interface IrcBusApi {
 	/** Fire-and-forget delivery; the receipt reports how the message reached the recipient. */
@@ -119,7 +134,7 @@ export interface IrcBusApi {
 	/** Execute a namespace operation on the IRC host. */
 	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult>;
 	/** Apply explicit everyone removals to the legacy live-peer broadcast roster. */
-	filterBroadcastTargets(targets: string[]): string[];
+	filterBroadcastTargets(sender: string, targets: string[]): string[];
 	/** Whether `from` successfully sent `to` anything, progress included, at or after `sinceTs`. */
 	sentSince(from: string, to: string, sinceTs: number): boolean;
 	/** Agents `from` messaged directly at or after `sinceTs` that have not answered since. */
@@ -169,8 +184,36 @@ export class IrcBus implements IrcBusApi {
 
 	/** Reset the global bus. Test-only. */
 	static resetGlobalForTests(): void {
-		if (IrcBus.#global instanceof IrcBus) IrcBus.#global.#groups?.dispose();
+		const bus = IrcBus.#global;
+		if (bus instanceof IrcBus) {
+			bus.#fallbackGroups?.dispose();
+			for (const scope of bus.#groupScopes.values()) scope.groups.dispose();
+			bus.#groupScopes.clear();
+		}
 		IrcBus.#global = undefined;
+	}
+
+	/** Start restoring once the host's root (and the operator in interactive mode) is registered. */
+	static restoreGroupsForRoot(root: AgentRef): void {
+		const existing = IrcBus.#global;
+		if (existing instanceof IrcBus) {
+			existing.#groupScope(root, true);
+		} else if (!existing && root.session && isAgentViewSession(root.session)) {
+			const snapshot = readIrcGroupSnapshot(root.session.sessionManager.getBranch());
+			if (!snapshot) return;
+			const bus = new IrcBus();
+			IrcBus.#global = bus;
+			bus.#groupScope(root, true, snapshot);
+		}
+	}
+
+	/** Freeze the journal before host shutdown unregisters peers that can return on resume. */
+	static closeGroupsForRoot(root: AgentRef): void {
+		const bus = IrcBus.#global;
+		if (!(bus instanceof IrcBus)) return;
+		bus.#closingGroupRoots.add(root);
+		bus.#groupScopes.get(root)?.groups.dispose();
+		bus.#groupScopes.delete(root);
 	}
 
 	/**
@@ -185,7 +228,9 @@ export class IrcBus implements IrcBusApi {
 
 	readonly #registry: AgentRegistryApi;
 	readonly #lifecycle: () => AgentLifecycleApi;
-	#groups?: IrcGroups;
+	readonly #groupScopes = new Map<AgentRef, IrcGroupScope>();
+	readonly #closingGroupRoots = new WeakSet<AgentRef>();
+	#fallbackGroups?: IrcGroups;
 	readonly #mailboxes = new Map<string, IrcMessage[]>();
 	readonly #waiters = new Map<string, IrcWaiter[]>();
 	/** The latest successful non-progress send per `from` → `to`; see {@link sentSince}. */
@@ -212,12 +257,89 @@ export class IrcBus implements IrcBusApi {
 		this.#lifecycle = () => lifecycle ?? AgentLifecycleManager.global();
 	}
 
-	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {
-		return (this.#groups ??= new IrcGroups(this.#registry, this)).execute(sender, request);
+	async group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {
+		const root = ircRelayRoot(this.#registry, sender);
+		if (root && this.#closingGroupRoots.has(root)) return { text: "The IRC session is closing.", isError: true };
+		const scope = root && this.#groupScope(root);
+		if (!scope) return (this.#fallbackGroups ??= new IrcGroups(this.#registry, this)).execute(sender, request);
+		if (scope.ready && !(await scope.ready)) {
+			return { text: "Could not restore IRC groups for this session.", isError: true };
+		}
+		if (!scope.isCurrent()) return { text: "The IRC session changed during restore.", isError: true };
+		return scope.groups.execute(sender, request);
 	}
 
-	filterBroadcastTargets(targets: string[]): string[] {
-		return this.#groups?.filterBroadcastTargets(targets) ?? targets;
+	filterBroadcastTargets(sender: string, targets: string[]): string[] {
+		const root = ircRelayRoot(this.#registry, sender);
+		const groups = (root && this.#groupScope(root)?.groups) ?? this.#fallbackGroups;
+		return groups?.filterBroadcastTargets(targets) ?? targets;
+	}
+
+	#groupScope(root: AgentRef, restoreOnly = false, snapshot?: IrcGroupSnapshot): IrcGroupScope | undefined {
+		const session = root.session;
+		if (root.kind !== "main" || this.#closingGroupRoots.has(root) || !session || !isAgentViewSession(session)) {
+			return undefined;
+		}
+		const manager = session.sessionManager;
+		const sessionId = manager.getSessionId();
+		const current = this.#groupScopes.get(root);
+		if (current?.isCurrent()) return current;
+		current?.groups.dispose();
+
+		snapshot ??= readIrcGroupSnapshot(manager.getBranch());
+		if (!snapshot && restoreOnly) {
+			this.#groupScopes.delete(root);
+			return undefined;
+		}
+		const sessionFile = manager.getSessionFile();
+		const isCurrent = (): boolean =>
+			this.#groupScopes.get(root) === scope &&
+			this.#registry.get(root.id) === root &&
+			root.session === session &&
+			!this.#closingGroupRoots.has(root) &&
+			manager.getSessionId() === sessionId;
+		let materialized = snapshot !== undefined;
+		const groups = new IrcGroups(this.#registry, this, snapshot, {
+			isCurrent,
+			save: state => {
+				manager.appendCustomEntry(IRC_GROUPS_CUSTOM_TYPE, state);
+				if (!materialized) {
+					// Operator IRC can change groups before the first assistant turn.
+					materialized = true;
+					void manager.ensureOnDisk().catch(error => {
+						materialized = false;
+						logger.warn("Could not materialize IRC group session", { sessionId, error: String(error) });
+					});
+				}
+			},
+		});
+		const scope: IrcGroupScope = { isCurrent, groups };
+		this.#groupScopes.set(root, scope);
+		if (snapshot && sessionFile && snapshot.groups.length) {
+			// A missing ref is not necessarily gone until the session's revivable
+			// child transcripts have been registered. Incomplete scans must not
+			// turn a transient I/O failure into a durable membership removal.
+			scope.ready = registerPersistedSubagents(this.#registry, sessionFile, {
+				hydrateHistory: false,
+				rootAgentId: root.id,
+				shouldContinue: isCurrent,
+			})
+				.then(() => {
+					if (!isCurrent()) return false;
+					groups.restore(snapshot, sessionFile);
+					scope.ready = undefined;
+					return true;
+				})
+				.catch(error => {
+					logger.warn("Could not restore IRC group roster", { sessionId, error: String(error) });
+					if (this.#groupScopes.get(root) === scope) this.#groupScopes.delete(root);
+					groups.dispose();
+					return false;
+				});
+		} else if (snapshot) {
+			groups.restore(snapshot, sessionFile);
+		}
+		return scope;
 	}
 
 	/**

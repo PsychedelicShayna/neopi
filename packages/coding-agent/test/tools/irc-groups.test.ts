@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { IrcBus } from "../../src/irc/bus";
 import { executeSend } from "../../src/irc/messaging";
 import { registerIrcOperator } from "../../src/irc/operator";
 import { AgentRegistry, type AgentRef } from "../../src/registry/agent-registry";
+import { getAgentTombstonePath } from "../../src/registry/agent-tombstone";
 import type { AgentSessionHandle } from "../../src/session/agent-session-handle";
 import type { CustomMessage } from "../../src/session/messages";
+import { SessionManager } from "../../src/session/session-manager";
 import { IrcTool } from "../../src/tools/irc";
 
 let registry: AgentRegistry;
@@ -20,10 +24,11 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function peer(id: string, kind: AgentRef["kind"] = "sub") {
+function peer(id: string, kind: AgentRef["kind"] = "sub", sessionManager?: SessionManager) {
 	const messages: IrcMessage[] = [];
 	const observations: CustomMessage[] = [];
 	const session = {
+		...(sessionManager && { sessionManager, activeToolExecutionUpdates: () => [] }),
 		deliverIrcMessage: async (message: IrcMessage) => {
 			messages.push(message);
 			return "injected";
@@ -33,7 +38,7 @@ function peer(id: string, kind: AgentRef["kind"] = "sub") {
 	registry.register({ id, kind, displayName: id, session, parentId: kind === "sub" ? "Main" : undefined });
 	const tool = new IrcTool({
 		cwd: import.meta.dir,
-		getSessionFile: () => null,
+		getSessionFile: () => sessionManager?.getSessionFile() ?? null,
 		getAgentId: () => id,
 		agentRegistry: registry,
 	});
@@ -43,6 +48,175 @@ function peer(id: string, kind: AgentRef["kind"] = "sub") {
 function bodies(messages: IrcMessage[]): string[] {
 	return messages.map(message => message.body);
 }
+
+async function reopen(manager: SessionManager): Promise<SessionManager> {
+	const file = manager.getSessionFile()!;
+	const rootRef = registry.get("Main");
+	if (rootRef) IrcBus.closeGroupsForRoot(rootRef);
+	await manager.close();
+	IrcBus.resetGlobalForTests();
+	registry = new AgentRegistry();
+	IrcBus.installGlobal(new IrcBus(registry));
+	return SessionManager.open(file, undefined, undefined, { throwIfMissing: true });
+}
+
+describe("IRC group session persistence", () => {
+	it("delivers a restored council message to exactly its three members", async () => {
+		using temp = TempDir.createSync("irc-council-");
+		const manager = SessionManager.create(temp.path(), temp.path());
+		const root = peer("Main", "main", manager);
+		for (const id of ["A", "B", "C"]) peer(id);
+		await root.call({ op: "create", group: "council", members: ["A", "B", "C"] });
+
+		const resumed = await reopen(manager);
+		try {
+			const main = peer("Main", "main", resumed);
+			const a = peer("A");
+			const b = peer("B");
+			const c = peer("C");
+			const outsider = peer("D");
+			expect((await main.call({ op: "members", group: "council" })).content).toEqual([
+				{ type: "text", text: "Members of IRC group council: A, B, C." },
+			]);
+			const journalLeaf = resumed.getLeafId();
+			const sent = await main.call({ op: "send", group: "council", message: "After restart." });
+			expect(sent.details?.receipts?.map(receipt => receipt.to)).toEqual(["A", "B", "C"]);
+			expect(resumed.getLeafId()).toBe(journalLeaf);
+			for (const member of [a, b, c]) {
+				expect(bodies(member.messages)).toEqual([
+					"Main sent this to group council, which you are part of.\n\nAfter restart.",
+				]);
+			}
+			expect(outsider.messages).toEqual([]);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("keeps everyone opt-outs for both the legacy broadcast and the IRC group", async () => {
+		using temp = TempDir.createSync("irc-everyone-");
+		const manager = SessionManager.create(temp.path(), temp.path());
+		const root = peer("Main", "main", manager);
+		peer("Excluded");
+		await root.call({ op: "remove", group: "everyone", members: ["Excluded"] });
+
+		const resumed = await reopen(manager);
+		try {
+			const main = peer("Main", "main", resumed);
+			const excluded = peer("Excluded");
+			const included = peer("Included");
+			const legacy = await executeSend({ registry, senderId: "Main" }, { to: "all", message: "Legacy" });
+			expect(legacy.details?.receipts?.map(receipt => receipt.to)).toEqual(["Included"]);
+			expect((await excluded.call({ op: "my_groups" })).content).toEqual([{ type: "text", text: "No IRC groups." }]);
+			const broadcast = await main.call({ op: "broadcast", message: "IRC" });
+			expect(broadcast.details?.receipts?.map(receipt => receipt.to)).toEqual(["Main", "Included"]);
+			expect(bodies(included.messages)).toEqual(["Legacy", expect.stringContaining("\n\nIRC")]);
+			expect(excluded.messages).toEqual([]);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("drops gone and killed agents, deletes empty groups, and retains agents restored as parked", async () => {
+		using temp = TempDir.createSync("irc-roster-");
+		const manager = SessionManager.create(temp.path(), temp.path());
+		const root = peer("Main", "main", manager);
+		peer("Gone");
+		for (const id of ["Parked", "Killed"]) {
+			peer(id);
+			const file = path.join(manager.getArtifactsDir()!, `${id}.jsonl`);
+			const child = await SessionManager.open(file, temp.path());
+			child.appendSessionInit({ systemPrompt: ["persisted"], task: "persisted task", tools: ["yield"] });
+			await child.ensureOnDisk();
+			await child.close();
+			if (id === "Killed") await Bun.write(getAgentTombstonePath(file), "");
+		}
+		await root.call({ op: "create", group: "empty-after-restore", members: ["Gone"] });
+		await root.call({ op: "create", group: "sole-after-restore", members: ["Main", "Gone"] });
+		await root.call({ op: "create", group: "parked-member", members: ["Main", "Parked", "Gone", "Killed"] });
+
+		const resumed = await reopen(manager);
+		try {
+			const main = peer("Main", "main", resumed);
+			expect((await main.call({ op: "members", group: "empty-after-restore" })).isError).toBe(true);
+			expect((await main.call({ op: "members", group: "sole-after-restore" })).content).toEqual([
+				{ type: "text", text: "Members of IRC group sole-after-restore: Main." },
+			]);
+			expect(bodies(main.messages)).toEqual([expect.stringContaining("deleted in 10 minutes")]);
+			expect((await main.call({ op: "members", group: "parked-member" })).content).toEqual([
+				{ type: "text", text: "Members of IRC group parked-member: Main, Parked." },
+			]);
+			expect(registry.get("Parked")?.status).toBe("parked");
+			expect(registry.get("Killed")?.status).toBe("aborted");
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("expires past deadlines offline and lets a sole member keep a pending group after resume", async () => {
+		vi.useFakeTimers();
+		using temp = TempDir.createSync("irc-deadline-");
+		const manager = SessionManager.create(temp.path(), temp.path());
+		const root = peer("Main", "main", manager);
+		await root.call({ op: "create", group: "expired", members: ["Main"] });
+		await root.call({ op: "create", group: "pending", members: ["Main"] });
+		await root.call({ op: "keep", group: "pending", reason: "First extension" });
+		IrcBus.resetGlobalForTests();
+		vi.advanceTimersByTime(11 * 60_000);
+
+		const resumed = await reopen(manager);
+		try {
+			const main = peer("Main", "main", resumed);
+			expect((await main.call({ op: "my_groups" })).content).toEqual([
+				{ type: "text", text: "everyone (1)\npending (1)" },
+			]);
+			expect(main.messages).toEqual([]);
+			expect((await main.call({ op: "keep", group: "pending", reason: "Second extension" })).content).toEqual([
+				{ type: "text", text: "Kept IRC group pending for 5 more minutes: Second extension" },
+			]);
+			vi.advanceTimersByTime(8 * 60_000);
+			expect((await main.call({ op: "members", group: "pending" })).isError).not.toBe(true);
+			vi.advanceTimersByTime(60_000);
+			expect((await main.call({ op: "members", group: "pending" })).isError).toBe(true);
+		} finally {
+			await resumed.close();
+		}
+	});
+
+	it("copies the historical group's state into a fork without sharing later membership edits", async () => {
+		using temp = TempDir.createSync("irc-fork-");
+		const manager = SessionManager.create(temp.path(), temp.path());
+		const originalFile = manager.getSessionFile()!;
+		const main = peer("Main", "main", manager);
+		peer("A");
+		peer("B");
+		await main.call({ op: "create", group: "council", members: ["Main", "A", "B"] });
+		const forkPoint = manager.getLeafId()!;
+		await main.call({ op: "remove", group: "council", members: ["B"] });
+		await manager.flush();
+		manager.createBranchedSession(forkPoint);
+		await manager.flush();
+
+		expect((await main.call({ op: "members", group: "council" })).content).toEqual([
+			{ type: "text", text: "Members of IRC group council: Main, A, B." },
+		]);
+		await main.call({ op: "remove", group: "council", members: ["A"] });
+		expect((await main.call({ op: "members", group: "council" })).content).toEqual([
+			{ type: "text", text: "Members of IRC group council: Main, B." },
+		]);
+		await manager.close();
+
+		const original = await SessionManager.open(originalFile);
+		try {
+			const root = peer("Main", "main", original);
+			expect((await root.call({ op: "members", group: "council" })).content).toEqual([
+				{ type: "text", text: "Members of IRC group council: Main, A." },
+			]);
+		} finally {
+			await original.close();
+		}
+	});
+});
 
 describe("IRC namespaces", () => {
 	it("delivers a council message to exactly its three members, including the creator", async () => {

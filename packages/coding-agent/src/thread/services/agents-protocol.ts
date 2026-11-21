@@ -80,7 +80,7 @@ export type AgentLifecycleProtocol = {
 export type IrcBusProtocol = {
 	send: RpcMethod<[msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions], IrcDeliveryReceipt>;
 	group: RpcMethod<[sender: string, request: IrcGroupRequest], IrcGroupResult>;
-	filterBroadcastTargets: RpcMethod<[targets: string[]], string[]>;
+	filterBroadcastTargets: RpcMethod<[sender: string, targets: string[]], string[]>;
 	sentSince: RpcMethod<[from: string, to: string, sinceTs: number], boolean>;
 	unansweredSends: RpcMethod<[from: string, sinceTs: number], UnansweredSend[]>;
 	lastMessageAt: RpcMethod<[from: string, to: string], number | undefined>;

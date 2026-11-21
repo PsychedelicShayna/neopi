@@ -26,6 +26,8 @@ Group names are case-sensitive and use letters, digits, hyphens, or underscores;
 
 The primary, operator, and spawned agents join fixed `everyone` by default. Explicitly removing a member opts that peer out of broadcasts (including `write agent://all`) without affecting DMs or other groups. `everyone` remains even when empty. Other groups disappear when the last member leaves or is removed; idle and parked members stay, while killed or unregistered peers are removed. When a group has just one member, that member is reminded that the group expires in ten minutes unless kept or joined by another peer. If another member joins, expiry is canceled.
 
+When session persistence is enabled, the owning session saves named groups, `everyone` opt-outs, and expiry deadlines, including extensions from `keep`. Restarting or resuming the session restores them. Parked agents can still be members; peers that are gone or killed are removed. Time offline counts toward an expiry deadline. A fork takes the group state at its fork point, and later membership edits are independent.
+
 ## Operator `/irc`
 
 `/irc` alone opens the existing IRC viewer. Send as the operator with `/irc Scout <message>` (or `/irc Scout,Reviewer <message>` for several DMs), `/irc #council <message>`, or `/irc all <message>`. The viewer's reply action still sends a DM.
