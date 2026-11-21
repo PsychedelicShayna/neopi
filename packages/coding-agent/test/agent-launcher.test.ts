@@ -2,7 +2,10 @@ import { afterEach, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildAsyncResultBlock } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AsyncJobManager } from "../src/async/job-manager";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
@@ -14,6 +17,7 @@ import {
 } from "../src/neopi/agent-launcher";
 import { AgentLifecycleManager } from "../src/registry/agent-lifecycle";
 import { AgentRegistry } from "../src/registry/agent-registry";
+import { createAgentSession } from "../src/sdk";
 import type { AgentSession } from "../src/session/agent-session";
 import { SessionManager } from "../src/session/session-manager";
 import { SPAWN_COMMAND } from "../src/slash-commands/builtin-agent-launcher";
@@ -42,11 +46,12 @@ afterEach(async () => {
 
 interface CompletionRequest {
 	model: string;
+	reasoning_effort?: string;
 	messages: { role: string; content: unknown }[];
 	tools?: { function: { name: string } }[];
 }
 
-async function fixture(serveCompletion = false) {
+async function fixture(serveCompletion = false, firstToolCall?: { name: string; arguments: string }) {
 	// Agent discovery stops at HOME; keep the fixture in its own directory beneath it.
 	const cwd = await fs.mkdtemp(path.join(os.homedir(), ".spawn-test-"));
 	cleanup.push(async () => fs.rm(cwd, { recursive: true, force: true }));
@@ -56,7 +61,7 @@ async function fixture(serveCompletion = false) {
 	);
 	await Bun.write(
 		path.join(cwd, ".omp", "agents", "task.md"),
-		'---\nname: task\ndescription: Perform the assignment.\nmodel: "@task"\ntools: read, task\n---\nComplete the assignment.',
+		'---\nname: task\ndescription: Perform the assignment.\nmodel: "@task"\nthinking-level: medium\ntools: read, write, task\n---\nComplete the assignment.',
 	);
 	const settings = Settings.isolated({
 		"task.isolation.enabled": false,
@@ -86,11 +91,22 @@ async function fixture(serveCompletion = false) {
 				if (new URL(request.url).pathname !== "/v1/chat/completions") {
 					return new Response(null, { status: 404 });
 				}
-				requests.push((await request.json()) as CompletionRequest);
+				const completion = (await request.json()) as CompletionRequest;
+				const toolCall =
+					completion.model === "selected" && !requests.some(r => r.model === "selected")
+						? firstToolCall
+						: undefined;
+				requests.push(completion);
+				const chunk = (delta: object, finishReason: string | null = null) =>
+					`data: ${JSON.stringify({ id: "spawn-test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`;
+				const content = completion.model === "selected" ? "73" : "finished";
 				return new Response(
-					'data: {"id":"spawn-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"finished"}}]}\n\n' +
-						'data: {"id":"spawn-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
-						"data: [DONE]\n\n",
+					(toolCall
+						? chunk({
+								role: "assistant",
+								tool_calls: [{ index: 0, id: "call_write", type: "function", function: toolCall }],
+							}) + chunk({}, "tool_calls")
+						: chunk({ role: "assistant", content }) + chunk({}, "stop")) + "data: [DONE]\n\n",
 					{ headers: { "content-type": "text/event-stream" } },
 				);
 			},
@@ -103,7 +119,7 @@ async function fixture(serveCompletion = false) {
 			api: "openai-completions",
 			apiKey: "fixture-key",
 			baseUrl,
-			models: ["local", "selected"].map(id => ({
+			models: ["local", "selected", "execution", "reviewer"].map(id => ({
 				...plain,
 				id,
 				name: `Spawn fixture ${id}`,
@@ -111,6 +127,13 @@ async function fixture(serveCompletion = false) {
 				baseUrl,
 				contextWindow: 128_000,
 				maxTokens: 16_384,
+				...(id === "local"
+					? {}
+					: {
+							reasoning: true,
+							thinking: { mode: "effort" as const, efforts: [Effort.Low, Effort.Medium, Effort.High] },
+							compat: { supportsReasoningParams: true, supportsReasoningEffort: true },
+						}),
 			})),
 		});
 	}
@@ -164,8 +187,19 @@ async function fixture(serveCompletion = false) {
 			editor: { setText },
 		},
 	} as unknown as TuiSlashCommandRuntime;
-	const submit = (args: string) => SPAWN_COMMAND.handleTui!({ name: "spawn", args, text: `/spawn ${args}` }, runtime);
+	const submit = (args: string, owner = session) =>
+		SPAWN_COMMAND.handleTui!(
+			{ name: "spawn", args, text: `/spawn ${args}` },
+			{
+				...runtime,
+				ctx: { ...runtime.ctx, session: owner },
+			},
+		);
 	return {
+		auth,
+		cwd,
+		registry,
+		root,
 		manager,
 		toolSession,
 		session,
@@ -184,6 +218,8 @@ async function fixture(serveCompletion = false) {
 it.each([
 	["", undefined],
 	[" \t\n ", undefined],
+	["agent task@task", { spec: "task@task", assignment: "" }],
+	["task@task", { spec: "task@task", assignment: "" }],
 	["scout", { spec: "scout", assignment: "" }],
 	[" \tscout   Inspect the source.", { spec: "scout", assignment: "Inspect the source." }],
 	[
@@ -273,6 +309,60 @@ it("launches /spawn scout with inline text, definition defaults and no dialog", 
 	expect(JSON.stringify(request?.messages)).toContain("Inspect the source.");
 	expect(JSON.stringify(request?.messages)).toContain("Report your findings.");
 	expect(request?.tools?.map(tool => tool.function.name)).toEqual(["read"]);
+}, 20_000);
+
+it("applies inline thinking, prewalk and advisor overrides in the launched worker", async () => {
+	const f = await fixture(true, { name: "write", arguments: '{"path":"fixture.txt","content":"done"}' });
+	await f.submit(
+		"task@spawn-fixture/selected:low;pre=spawn-fixture/execution:low;advisor=spawn-fixture/reviewer:high Write the fixture.",
+	);
+	expect(f.showError.mock.calls).toEqual([]);
+	const jobs = f.manager.getAllJobs();
+	expect(jobs).toHaveLength(1);
+	const [job] = jobs;
+	await job!.promise;
+	expect(job!.status).toBe("completed");
+	const child = AgentRegistry.global().get(job!.id);
+	expect(child).toMatchObject({ id: job!.id, status: "idle", sessionFile: expect.any(String) });
+	const journal = (child!.session as AgentSession).sessionManager.getEntries();
+	expect({
+		start: f.requests.find(request => request.model === "selected")?.reasoning_effort,
+		execution: f.requests.find(request => request.model === "execution")?.reasoning_effort,
+		advisor: journal.find(entry => entry.type === "session_init")?.advisor,
+	}).toEqual({ start: "low", execution: "low", advisor: "spawn-fixture/reviewer:high" });
+}, 20_000);
+
+it("delivers a spawned worker's reply into the launching session without opening Hub", async () => {
+	const f = await fixture(true);
+	const { session: owner } = await createAgentSession({
+		cwd: f.cwd,
+		agentDir: path.join(f.cwd, ".omp", "agent"),
+		agentId: "SpawnResultOwner",
+		sessionManager: f.root,
+		settings: f.session.settings,
+		authStorage: f.auth,
+		modelRegistry: f.registry,
+		model: f.registry.getAvailable().find(model => model.provider === "spawn-fixture" && model.id === "local")!,
+		enableMCP: false,
+	});
+	cleanup.push(async () => {
+		await owner.cancelRootWork();
+		await owner.dispose();
+	});
+	await f.submit("agent scout@spawn-fixture/selected:low Return the number.", owner);
+	expect(f.showError.mock.calls).toEqual([]);
+	await owner.settleAsyncWork();
+
+	const result = f.root
+		.buildSessionContext()
+		.messages.find(message => message.role === "custom" && message.customType === "async-result");
+	expect(result).toMatchObject({ display: true, content: expect.stringMatching(/^73$/m) });
+	if (result?.role !== "custom") throw new Error("Expected a delivered async-result");
+	await initTheme(false, undefined, undefined, "dark", "light");
+	const rendered = buildAsyncResultBlock(result)
+		.render(100)
+		.map(line => Bun.stripANSI(line).trim());
+	expect(rendered).toContain("73");
 }, 20_000);
 
 it("opens only the assignment editor for /spawn scout and launches after it returns multiline text", async () => {

@@ -10,7 +10,7 @@
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 - Bare `npi update` now reports binary-update status; the preserved prompted source-fork integration workflow moves to `npi update source`.
 - Model role management is now `/roles [session|project|global]`; `/model [selector]` switches the current session like Alt+P. `/models` and `/switch` remain accepted as hidden aliases, revealed by a literal prefix once no visible command name or ordinary alias shares it.
-- Renamed `/agent launch` to `/spawn`; the `/agent` command is removed ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
+- Renamed `/agent launch` to `/spawn`; the `/agent` command is removed. Both `/spawn task@task` and `/spawn agent task@task` select the `task` agent type with the `@task` model role ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 
 ### Added
 
@@ -178,6 +178,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler’s startup consent notice is no longer repeated when reopening a session or forking from history that already contains it. Explicit `/chron on` and `/chron off` still show their status notices.
 - Chronicler now captures the user's `/skill:` arguments in live sessions and backfill, without capturing the expanded skill instructions ([#827](https://github.com/PsychedelicShayna/neopi/issues/827)).
 - Restored **Refresh provider** in the model hub when a model scope is active ([#731](https://github.com/PsychedelicShayna/neopi/pull/731)).

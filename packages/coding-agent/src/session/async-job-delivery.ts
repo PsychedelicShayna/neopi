@@ -60,6 +60,7 @@ type AsyncResultJobDetails = {
 	meta?: OutputMeta;
 	/** Full structured payload (source/mode/status/data/error), when the job used an output schema. */
 	schema?: StructuredSubagentOutput;
+	transcriptPreview?: string;
 };
 
 export type AsyncResultDetails = {
@@ -163,6 +164,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			namedByCommand: command !== undefined,
 			durationMs: entry.durationMs,
 			meta: entry.job?.latestDetails?.meta,
+			transcriptPreview: entry.job?.latestDetails?.transcriptPreview,
 			structured,
 			structuredJson: structuredJson === undefined ? undefined : escapeHarnessTags(structuredJson),
 			hasStructuredData,
@@ -182,6 +184,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			label: job.label,
 			durationMs: job.durationMs,
 			...(job.meta ? { meta: job.meta } : {}),
+			...(job.transcriptPreview ? { transcriptPreview: job.transcriptPreview } : {}),
 			...(job.structured ? { schema: job.structured } : {}),
 		})),
 	};

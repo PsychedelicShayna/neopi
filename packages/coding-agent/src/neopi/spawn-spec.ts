@@ -34,9 +34,9 @@ export interface SpawnSpec {
 	advisor?: string;
 }
 
-/** The first word is the spec; whitespace and semicolons after it belong to the assignment. */
+/** After an optional `agent` prefix, only the first word is parsed as a spec. */
 export function parseSpawnArguments(input: string): { spec: string; assignment: string } | undefined {
-	const text = input.trimStart();
+	const text = input.trimStart().replace(/^agent\s+(?=\S)/, "");
 	if (!text) return;
 	const space = text.search(/\s/);
 	return space < 0

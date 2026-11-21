@@ -10,6 +10,7 @@ import {
 	type ConfiguredThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
 import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import { truncateMiddle } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { ADVISOR_DEFAULT_TOOL_NAMES } from "../advisor/advise-tool";
 import {
 	extractExplicitThinkingSelector,
@@ -25,6 +26,7 @@ import type { Settings } from "../config/settings";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { advisorAgentId } from "../registry/live-advisors";
 import type { AgentSession } from "../session/agent-session";
+import { ASYNC_PREVIEW_MAX_CHARS } from "../session/async-job-delivery";
 import { cfgDefaultThinkingLevel } from "../session/settings";
 import { discoverAgents } from "../task/discovery";
 import { generateTaskName } from "../task/name-generator";
@@ -412,7 +414,12 @@ export async function createAgentLauncher(session: AgentSession): Promise<AgentL
 					});
 					if (execution.result.exitCode !== 0)
 						throw new Error(execution.result.error ?? execution.result.stderr ?? `Agent ${id} failed.`);
-					return `Agent ${id} completed.\n${execution.result.output}${execution.mergeSummary}`;
+					return {
+						text: `Agent ${id} completed.\n${execution.result.output}${execution.mergeSummary}`,
+						transcriptPreview: truncateMiddle(execution.result.output.trim(), {
+							maxBytes: ASYNC_PREVIEW_MAX_CHARS,
+						}).content,
+					};
 				},
 				{ id, agentId: id, ownerId: spawnSession.getAgentId?.() ?? undefined },
 			);
