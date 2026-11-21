@@ -1,8 +1,10 @@
 <project-context>
+{{#unless contextOnly}}
 <workstation>
 {{#list environment prefix="- " join="\n"}}{{label}}: {{value}}{{/list}}
 {{#if model}}- Model: {{model}}{{/if}}
 </workstation>
+{{/unless}}
 
 {{#if contextFiles.length}}
 <repo-rules>
@@ -27,6 +29,7 @@ Before changes in these directories, MUST read:
 Context files above auto-loaded. NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context; others noise.
 {{/ifAny}}
 
+{{#unless contextOnly}}
 {{#if includeWorkspaceTree}}
 {{#if workspaceTree.rendered}}
 <workspace-tree>
@@ -49,8 +52,10 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 {{#if activeRepoContext}}
 {{activeRepoContext}}
 {{/if}}
+{{/unless}}
 </project-context>
 
+{{#unless contextOnly}}
 <critical>
 - Each response MUST advance the task; completion only stopping condition.
 - MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
@@ -62,3 +67,4 @@ Additional workspace directories. This CURRENT workspace state supersedes worksp
 {{#if appendPrompt}}
 {{appendPrompt}}
 {{/if}}
+{{/unless}}

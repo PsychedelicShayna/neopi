@@ -1,4 +1,4 @@
-import type { InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import type { AgentInheritance, InlineAgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-fields";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
 	ImageContent,
@@ -351,6 +351,10 @@ export interface SessionInitEntry extends SessionEntryBase, ModelContextCaps {
 	mountedTools?: string[];
 	/** Agent definition name (for example `scout` or `reviewer`). */
 	agent?: string;
+	/** Prompt inheritance chosen at spawn; omitted means `all`. */
+	inherit?: AgentInheritance;
+	/** Inherited SDK opt-out of context-file discovery. */
+	noContextFiles?: boolean;
 	/** Semantic model role declared by the agent, retained even after concrete model resolution. */
 	modelRole?: string;
 	/** Initially resolved provider/model selector for historical display. */

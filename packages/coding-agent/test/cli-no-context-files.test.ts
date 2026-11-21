@@ -139,12 +139,11 @@ describe("--no-context-files", () => {
 		try {
 			const prompt = ambient.systemPrompt.join("\n");
 			for (const marker of MARKERS) expect(prompt).toContain(marker);
-			// Subagents rediscover additional roots but never receive an AGENTS.md: not the
-			// parent's, not the user-level one, and not one found under an additional root.
+			// Default task inheritance loads the applicable workspace and user context files.
 			const childPrompt = await subagentPrompt(ambient);
 			expect(childPrompt).toContain(EXTRA_CLAUDE_MARKER);
 			for (const marker of [PRIMARY_MARKER, EXTRA_ROOT_MARKER, IMPORTED_MARKER, USER_AGENTS_MARKER]) {
-				expect(childPrompt).not.toContain(marker);
+				expect(childPrompt).toContain(marker);
 			}
 		} finally {
 			await ambient.dispose();

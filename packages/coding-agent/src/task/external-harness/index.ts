@@ -18,6 +18,9 @@ export function assertExternalHarnessCapabilities(agent: AgentDefinition): void 
 		);
 	}
 	if (agent.harness === "claude") {
+		if (agent.inherit !== undefined && agent.inherit !== "all") {
+			throw new Error("Claude external harness cannot represent NeoPi's inherit setting; omit it or use all");
+		}
 		const unsupported = requested.filter(tool => !CLAUDE_TOOLS.has(tool));
 		if (unsupported.length > 0) {
 			throw new Error(`Claude external harness cannot represent requested tools: ${unsupported.join(", ")}`);
