@@ -180,6 +180,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
 - An active checkpoint no longer demands a rewind or blocks yielding when the rewind tool is unavailable ([#645](https://github.com/PsychedelicShayna/neopi/issues/645)).
 - Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
 - Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).

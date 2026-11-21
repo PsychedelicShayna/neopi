@@ -310,6 +310,37 @@ describe("ModelHub", () => {
 		expect(createSettingsHost(settings).entries.some(entry => entry.path.startsWith("roleSettings."))).toBe(false);
 	});
 
+	test("editing a role context cap leaves another slot on the same model unchanged after reopening", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "model-hub-role-cap-"));
+		try {
+			const options = { agentDir: path.join(dir, "agent"), cwd: dir };
+			const settings = await Settings.init(options);
+			const models = [makeModel("test", "shared")];
+			settings.writeScopeValue(cfgModelRoles, { default: "test/shared", smol: "test/shared" }, "global");
+			settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+			settings.setRoleSetting("smol", cfgCompactionThresholdTokens, 32_000);
+			const onCompactionPointChange = vi.fn(() => undefined);
+			const { hub } = createHub({ models, settings, callbacks: { onCompactionPointChange } });
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+			hub.handleInput("m");
+			expect(footerLine(hub.render(220))).toContain("default token budget:");
+			for (const key of ["\x01", "\x0b", ..."64000", "\n"]) hub.handleInput(key);
+			expect(onCompactionPointChange).not.toHaveBeenCalled();
+			await settings.flush();
+
+			const reopened = await Settings.init(options);
+			expect(reopened.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(64_000);
+			expect(reopened.getRoleSetting("smol", cfgCompactionThresholdTokens)).toBe(32_000);
+			const { hub: reopenedHub } = createHub({ models, settings: reopened });
+			reopenedHub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+			const rows = reopenedHub.render(220).map(line => normalize([line]));
+			expect(rows.find(line => line.includes("test/shared") && line.includes("budget 64,000"))).toBeDefined();
+			expect(rows.find(line => line.includes("test/shared") && line.includes("budget 32,000"))).toBeDefined();
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("invalid role budget edits retain the field and saved budget", () => {
 		const settings = Settings.isolated({ roleSettings: { default: { "compaction.thresholdTokens": 32000 } } });
 		const { hub } = createHub({ models: [makeModel("test", "model")], settings, scoped: true });
@@ -695,7 +726,7 @@ describe("ModelHub", () => {
 			[120_000, "120k"],
 			["60%", "60%"],
 			["f120000", "f120k"],
-		] as const)("shows configured compaction %s beside the effort summary", (entry, label) => {
+		] as const)("separates role budgets from the model-wide compaction entry %s", (entry, label) => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled reasoning model");
 			const selector = `${model.provider}/${model.id}`;
@@ -705,14 +736,22 @@ describe("ModelHub", () => {
 				"compaction.modelThresholdsEnabled": false,
 			});
 			settings.setRoleEffortSelection("default", { mode: "auto", allowed: [Effort.Low, Effort.High] });
-			const { hub } = createHub({ models: [model], scoped: true, settings });
+			settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: { onCompactionPointChange: () => undefined },
+			});
 			hub.handleInput(UP);
 			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
 			const defaultRow = lines.find(line => line.includes("DEFAULT"));
 			const smolRow = lines.find(line => line.includes("SMOL"));
 			expect(defaultRow).toContain("Auto [low, high]");
-			expect(defaultRow).toContain(`compact ${label}`);
-			expect(smolRow).toContain(`compact ${label}`);
+			expect(defaultRow).toContain("budget 80,000");
+			expect(smolRow).not.toContain("budget");
+			expect(defaultRow).not.toContain(`compact ${label}`);
+			expect(smolRow).not.toContain(`compact ${label}`);
 			const native = hub.describe({
 				cols: 220,
 				reduceMotion: false,
@@ -721,10 +760,17 @@ describe("ModelHub", () => {
 				feature: () => true,
 			});
 			if (native.k !== "picker" || !native.p) throw new Error("Expected model hub picker");
-			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBe(`compact ${label}`);
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts).toMatchObject({ budget: "80000" });
+			expect(native.p.items?.find(item => item.id === "role:smol")?.facts?.budget).toBeUndefined();
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBeUndefined();
 			for (const width of [36, 60, 90]) {
 				expect(hub.render(width).every(line => Bun.stringWidth(line) <= width)).toBe(true);
 			}
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+			hub.handleInput("\n");
+			hub.handleInput("m");
+			expect(footerLine(hub.render(220))).toContain(`${model.id} limit:`);
+			expect(footerLine(hub.render(220))).toContain(label);
 		});
 
 		test("real settings initialization without model limits renders no compaction summary", async () => {
@@ -3558,24 +3604,39 @@ test("an existing menu Ctrl-G binding wins over opening the model config", () =>
 	}
 });
 
-test("Ctrl-G opens global settings for a project role's per-model compaction editor", async () => {
+test("Ctrl-G opens global settings for the model row's per-model compaction editor", async () => {
 	const open = vi.fn(async () => {});
-	const settings = Settings.isolated({ modelRoleStorage: "project" });
+	const settings = Settings.isolated({
+		modelRoleStorage: "project",
+		"compaction.modelThresholds": { "test/one": 96_000 },
+	});
 	settings.setProjectModelRole("default", "test/one");
+	settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+	settings.setActiveRole("default");
+	const onCompactionPointChange = vi.fn(() => undefined);
 	const { hub } = createHub({
 		models: [makeModel("test", "one")],
 		settings,
 		callbacks: {
 			onOpenConfigFile: open,
-			onCompactionPointChange: () => undefined,
+			onCompactionPointChange,
 		},
 	});
-	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\n");
 	hub.handleInput("m");
 	expect(footerLine(hub.render(140))).toContain("one limit:");
+	expect(footerLine(hub.render(140))).toContain("96k");
 	hub.handleInput("\x07");
 	await Bun.sleep(0);
 	expect(open).toHaveBeenCalledWith("context", "global");
+	for (const key of ["\x01", "\x0b", ..."48k", "\n"]) hub.handleInput(key);
+	expect(onCompactionPointChange).toHaveBeenCalledWith(
+		expect.objectContaining({ provider: "test", id: "one" }),
+		"48k",
+		false,
+	);
+	expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(80_000);
 });
 
 let previousVimMode: boolean;
