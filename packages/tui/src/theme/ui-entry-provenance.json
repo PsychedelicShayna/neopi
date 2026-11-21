@@ -58,6 +58,16 @@
 	},
 	"upstream": [
 		{
+			"version": "19.0.0",
+			"entries": {
+				"keybindings": [],
+				"statusSegments": [],
+				"roles": [],
+				"composerShapes": [],
+				"features": []
+			}
+		},
+		{
 			"version": "18.18.8",
 			"entries": {
 				"keybindings": [],

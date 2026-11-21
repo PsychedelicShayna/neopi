@@ -3,7 +3,7 @@
 		"tag": "v18.10.3+build.40993232157.1",
 		"commit": "4f821b135cda8a46ab7669c8522f9e58fe4a84d0"
 	},
-	"forkRevision": "dd55e07778dc86a2eee85edf397000741a32bd04",
+	"forkRevision": "d7cc72d14e296fbab25810f41a1c47be150dec3d",
 	"fork": {
 		"stable": {
 			"settings": [
@@ -224,16 +224,63 @@
 				"chronicler.recall.branchFloor",
 				"chronicler.notices",
 				"customPersonalities",
+				"language",
 				"models.defaultScope",
+				"models.sessionPicker",
 				"settings.defaultScope",
 				"task.definitionGenerationConversationTtlMs",
 				"update.auto",
 				"update.channel"
 			],
-			"commands": ["chron", "neoproxy", "personality", "spawn"]
+			"commands": ["chron", "language", "neoproxy", "personality", "roles", "spawn"]
 		}
 	},
 	"upstream": [
+		{
+			"version": "19.0.0",
+			"previous": "679691a78141de0dd6ba1b7a5d5c1b1d7d967a63",
+			"through": "028f1d6b495425022db0a417e4bb134a919cfed3",
+			"entries": {
+				"settings": [
+					"auth.unpausedProviders",
+					"bash.allowedEnvVars",
+					"browser.webkit",
+					"browser.webkitPath",
+					"commit.enabled",
+					"disassembler.backend",
+					"disassembler.idleCloseSec",
+					"disassembler.maxOpen",
+					"encourageEdits",
+					"find.hitThreshold",
+					"find.verifyModel",
+					"ghidra.installDir",
+					"ghidra.python",
+					"launch.persist",
+					"live.apiKey",
+					"live.endpoint",
+					"mcp.builtinTransforms",
+					"mcp.evalNamespaces",
+					"mnemopi.embeddingInputType",
+					"mnemopi.embeddingQueryPrefix",
+					"mnemopi.recallRelevance",
+					"models.noJudge",
+					"models.noSpotlight",
+					"models.offline",
+					"providers.cacheWarmingCompactPercent",
+					"providers.cacheWarmingCompactTokens",
+					"providers.cacheWarmingStrategy",
+					"providers.webKeyless",
+					"systemPromptTemplates",
+					"task.agentPrewalkAuto",
+					"task.autoParallel",
+					"task.crossInstance",
+					"task.steps",
+					"todo.midRunNudges",
+					"tui.renderEmbeds"
+				],
+				"commands": ["commit"]
+			}
+		},
 		{
 			"version": "18.18.8",
 			"previous": "31147f9d1a76608549821c3759f8487b4d66c72d",
@@ -275,9 +322,7 @@
 					"tui.motion",
 					"tui.spinnerInterval"
 				],
-				"commands": [
-					"unpin"
-				]
+				"commands": ["unpin"]
 			}
 		},
 		{
@@ -300,24 +345,17 @@
 					"out.enabled",
 					"prewalk.auto",
 					"prewalk.autoTarget",
-					"prewalk.from",
-					"prewalk.into",
 					"retry.rateLimitWalksChain",
 					"session.maxCost",
 					"session.warnCost",
 					"session.worktreeScope",
 					"sharpshooter.minPromptLength",
 					"shellCommandPrefix",
-					"task.file",
 					"tools.restrictedFolders",
 					"tools.xdevNotices",
 					"tui.completeScrollback"
 				],
-				"commands": [
-					"forget-approvals",
-					"local",
-					"seance"
-				]
+				"commands": ["forget-approvals", "local"]
 			}
 		}
 	]

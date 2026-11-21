@@ -36,7 +36,7 @@
 - `/model` and Alt+P now open the fullscreen Big Pickle by default; choose Small picker in Settings → Model → Session model picker (`models.sessionPicker: small`) for the compact view. Both support the temporary Task-model target.
 
 - Select supported Codex Fast, Ultra, and extended-context profiles with ordinary model slugs in CLI selections, roles, advisors, tasks, and web search without changing other assignments ([#229](https://github.com/PsychedelicShayna/neopi/issues/229)).
-- Slash commands and Settings distinguish nightly-only NeoPi additions with moons, published stable additions with purple stars, and the newest and previous upstream sync ranges with gold and silver stars.
+- Settings and slash commands now use the integrated v19.0.0 release for the gold star cohort, age v18.18.8 to silver and v18.14.0 to bronze, and show a nightly crescent for newly inventoried fork additions ([#430](https://github.com/PsychedelicShayna/neopi/issues/430)).
 - Recover NeoPi independently of normal startup with `npi update stable|nightly`, verified platform-specific GitHub releases and retained previous binaries. POSIX replacement is atomic; Windows uses journalled recoverable replacement with an independent PowerShell recovery helper (real Windows verification remains pending). Repurposed update-channel and automatic-update settings follow NeoPi stable/nightly releases; rollback has a cumulative cursor, a cross-profile auto-update hold, and explicit confirmation before losing the recovery command on an older release.
 - Slash commands and Settings mark NeoPi additions with a crescent: purple for nightly-only features, original green for features in the latest published stable release; gold and silver stars mark the newest and previous upstream sync ranges, while every older range remains bronze.
 - Run `/chron index` to refresh the current session's captured atoms without replacing other sessions' shared view, or `/chron recall "question"` to dispatch historical recall across sessions; results arrive as background jobs ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
@@ -180,6 +180,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
 - An active checkpoint no longer demands a rewind or blocks yielding when the rewind tool is unavailable ([#645](https://github.com/PsychedelicShayna/neopi/issues/645)).
 - Invalid YAML or TOML settings now warn at startup and use their defaults without editing either file. Malformed `config.yml` warns and is ignored without being moved aside ([#653](https://github.com/PsychedelicShayna/neopi/issues/653)).
 - Completed `/spawn` jobs show an output preview in the launching session, without opening `/hub` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
