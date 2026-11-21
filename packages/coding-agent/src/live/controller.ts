@@ -18,6 +18,7 @@ import {
 	type LiveDelegationDetails,
 	type LiveVoiceNoteEntry,
 } from "./delegation-note";
+import { LiveHandoffTranscript } from "./handoff-transcript";
 import { buildLiveHistorySeed } from "./history-seed";
 import { resolveLiveIngestSettings } from "./ingest-settings";
 import { stripLiveKeyword } from "./keywords";
@@ -163,6 +164,8 @@ export interface LiveSessionControllerOptions {
 	delegationDelivery?: () => LiveDelegationDelivery;
 	/** Whether a voice-authored note reaches the main agent (read at dispatch). */
 	includeVoiceNote?: () => boolean;
+	/** Attach the active voice conversation to explicit handoffs. */
+	transcriptHandoffs?: boolean;
 	relayGates?: () => { reasoning: boolean; progress: boolean; finalAnswers: boolean };
 	/** Realtime output voice, defaulting to sol. */
 	voice?: string;
@@ -263,6 +266,8 @@ export class LiveSessionController {
 	readonly #ircRelayTransform: (message: CustomMessage, body: string) => string | undefined;
 	readonly #ircRelayAllowed: (message: CustomMessage) => boolean;
 	readonly #includeVoiceNote: () => boolean;
+	readonly #handoffTranscript: LiveHandoffTranscript | undefined;
+	#transcriptFlush: Promise<void> | undefined;
 	readonly #delegationDelivery: () => LiveDelegationDelivery;
 	readonly #serverDelegationIds = new Set<string>();
 	readonly #delegationAliases = new Map<string, string>();
@@ -366,6 +371,7 @@ export class LiveSessionController {
 				dispatchEnabled: boolean;
 				dispatching: boolean;
 				voiceText: string;
+				transcriptThrough?: number;
 		  }
 		| undefined;
 	#pendingDelivery: CustomMessageDelivery | undefined;
@@ -419,6 +425,7 @@ export class LiveSessionController {
 		this.#ircRelayTransform = options.ircRelayTransform ?? ((_, body) => body);
 		this.#ircRelayAllowed = options.ircRelayAllowed ?? (() => true);
 		this.#includeVoiceNote = options.includeVoiceNote ?? (() => true);
+		this.#handoffTranscript = options.transcriptHandoffs ? new LiveHandoffTranscript() : undefined;
 		this.#delegationDelivery = options.delegationDelivery ?? (() => "steer");
 		this.#relayGates = options.relayGates ?? (() => ({ reasoning: true, progress: true, finalAnswers: true }));
 		this.#delegationKeywords = options.delegationKeywords ?? (() => ({ suppress: "", force: "" }));
@@ -496,6 +503,7 @@ export class LiveSessionController {
 				"live/session-instructions.md",
 				sessionInstructionsTemplate,
 				{
+					transcriptHandoffs: this.#handoffTranscript !== undefined,
 					personaInstructions: prompt.render(
 						await resolveLiveInstructions(undefined, this.#session.sessionManager.getCwd()),
 						user,
@@ -612,6 +620,7 @@ export class LiveSessionController {
 		// that case retire its speech from the composer now, while the caller still listens.
 		const pending = this.#pendingDelegation;
 		if (pending?.dispatching && this.#pendingDelivery && !this.#pendingDelivery.cancel()) {
+			if (pending.transcriptThrough !== undefined) this.#handoffTranscript?.accept(pending.transcriptThrough);
 			const turns = this.#deleteTurns(turn => turn.claim === pending.generation);
 			this.#acceptSpeech(
 				turns
@@ -673,6 +682,8 @@ export class LiveSessionController {
 		}
 		this.#recordAudioDropSummary();
 		await this.#transcriptLogChain;
+		await this.#transcriptFlush;
+		await this.#flushHandoffTranscript(true);
 
 		await this.#sendChain;
 		const transport = this.#transport;
@@ -734,21 +745,25 @@ export class LiveSessionController {
 				break;
 			case "input_transcript.added":
 				this.#recordLiveTranscript("user", event.item.text, false);
+				this.#handoffTranscript?.delta("user", event.item.text);
 				this.#ingestUserTurn(event.item.text, false);
 				this.#addTranscript("user", event.item.text);
 				break;
 			case "output_transcript.added":
+				this.#handoffTranscript?.delta("assistant", event.item.text);
 				this.#noteResponseStart();
 				this.#addTranscript("assistant", event.item.text);
 				break;
 			case "turn.done":
 				this.#recordLiveTranscript(event.turn.role, event.turn.transcript, true);
+				this.#handoffTranscript?.done(event.turn.role, event.turn.transcript);
 				if (event.turn.role === "user") this.#ingestUserTurn(event.turn.transcript, true);
 				else {
 					this.#noteResponseStart();
 					this.#retireAnsweredTurns();
 				}
 				this.#finishTranscript(event.turn.role, event.turn.transcript);
+				void this.#flushHandoffTranscript(false);
 				break;
 			case "delegation.created":
 				// This response hands the operator's words off rather than answering them.
@@ -797,7 +812,9 @@ export class LiveSessionController {
 			latest.forcedDelegationId = event.item.id;
 		}
 
-		const voiceText = joinDelegationContent(event.item.content);
+		const voiceText = this.#handoffTranscript
+			? event.item.content.map(part => part.text).join("")
+			: joinDelegationContent(event.item.content);
 		// A claimed turn belongs to an earlier handoff; it cannot authorize superseding it.
 		const newOperatorWork =
 			this.#turnsWhere(turn => this.#mayDelegateTurn(turn) && turn.claim === undefined).length > 0;
@@ -816,6 +833,9 @@ export class LiveSessionController {
 			// agent turn and must never be folded into this handoff. The old
 			// continuation stops at the generation check, so retire their speech
 			// from the composer here.
+			if (previousPending?.transcriptThrough !== undefined) {
+				this.#handoffTranscript?.accept(previousPending.transcriptThrough);
+			}
 			const accepted = this.#deleteTurns(turn => turn.claim === previousGeneration);
 			this.#acceptSpeech(
 				accepted
@@ -878,7 +898,33 @@ export class LiveSessionController {
 		await this.#dispatchPendingDelegation(generation);
 	}
 
+	#flushHandoffTranscript(tail: boolean): Promise<void> | undefined {
+		const transcript = this.#handoffTranscript;
+		if (!transcript || this.#transcriptFlush || (!tail && (this.#stopped || this.#pendingDelegation))) return;
+		const entries = tail ? transcript.tail() : transcript.completed();
+		if (!entries.length) return;
+		const delivery = this.#session.sendCustomMessageWithReceipt(
+			{
+				customType: "live-transcript-context",
+				content: transcript.formatContext(entries, tail),
+				display: false,
+				attribution: "agent",
+			},
+			{ deliverAs: "nextTurn", triggerTurn: false },
+		);
+		void delivery.completed.catch(() => {});
+		const flush = delivery.accepted
+			.then(() => transcript.flushed(entries))
+			.catch(cause => logger.warn("Live transcript context delivery failed", { error: String(cause) }))
+			.finally(() => {
+				this.#transcriptFlush = undefined;
+			});
+		this.#transcriptFlush = flush;
+		return flush;
+	}
+
 	async #dispatchPendingDelegation(generation: number): Promise<void> {
+		if (this.#transcriptFlush) await this.#transcriptFlush;
 		const pending = this.#pendingDelegation;
 		if (!pending || pending.generation !== generation || !pending.dispatchEnabled || pending.dispatching) {
 			return;
@@ -894,12 +940,19 @@ export class LiveSessionController {
 			.trim();
 		if (!merged) return;
 		pending.dispatching = true;
-		const { content, details } = buildLiveDelegationMessage(merged, pending.voiceText, this.#includeVoiceNote());
+		const transcript = this.#handoffTranscript?.snapshot(pending.forced ? merged : pending.voiceText);
+		pending.transcriptThrough = transcript?.through;
+		const { content, details } = buildLiveDelegationMessage(
+			merged,
+			pending.voiceText,
+			!transcript && this.#includeVoiceNote(),
+		);
+		const handoffContent = transcript?.content ?? content;
 		if (pending.delivery !== "interrupt") details.delegationId = pending.id;
 		const delivery = this.#session.sendCustomMessageWithReceipt(
 			{
 				customType: LIVE_DELEGATION_MESSAGE_TYPE,
-				content,
+				content: handoffContent,
 				display: true,
 				attribution: "agent",
 				details,
@@ -915,6 +968,7 @@ export class LiveSessionController {
 		let accepted = false;
 		try {
 			await delivery.accepted;
+			if (transcript) this.#handoffTranscript?.accept(transcript.through);
 			accepted = true;
 			if (generation !== this.#delegationGeneration) return;
 			this.#deleteTurns(turn => turn.claim === generation);
@@ -1428,7 +1482,12 @@ export class LiveSessionController {
 		const answered = this.#answeredTurns;
 		this.#answeredTurns = undefined;
 		if (!answered?.length) return;
-		const turns = this.#deleteTurns(turn => turn.claim === undefined && answered.includes(turn.turn));
+		const turns = this.#deleteTurns(
+			turn =>
+				turn.claim === undefined &&
+				answered.includes(turn.turn) &&
+				(!this.#handoffTranscript || this.#isDirectAddress(turn.routingText ?? turn.text)),
+		);
 		const text = turns
 			.map(turn => turn.text)
 			.join("\n\n")

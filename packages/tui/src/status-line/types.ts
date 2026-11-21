@@ -44,6 +44,7 @@ export interface StatusLineSegmentOptions {
 	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
 	/** Per-widget text templates for `usage:<provider>:<window>[:<tier>]` bars, keyed by segment id. */
 	usageBars?: { templates?: Record<string, string> };
+	liveMeter?: { template?: string };
 }
 
 export interface StatusLineSettings {
@@ -138,6 +139,8 @@ export interface SegmentContext {
 		/** Where Enter sends composer text during the call. */
 		destination: "primary" | "voice" | "both";
 	} | null;
+	/** Quantized active bars, from zero to six cells. */
+	liveLevels?: { mic: number; output: number };
 	// Cached values for performance (computed once per render)
 	usageStats: {
 		input: number;

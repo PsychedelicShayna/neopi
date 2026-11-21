@@ -380,12 +380,17 @@ export function renderCommandHelp(
 	lines.push(translate("cli.help.usage", "USAGE"));
 	lines.push(`  ${commandUsageLine(bin, id, Cmd)}\n`);
 	if (Object.keys(Cmd.subcommands ?? {}).length) {
-		lines.push(`${translate("cli.help.subcommands", "Run `{bin} {id} <subcommand> --help` for subcommand flags.")
-			.replace("{bin}", bin)
-			.replace("{id}", id)}\n`);
+		lines.push(
+			`${translate("cli.help.subcommands", "Run `{bin} {id} <subcommand> --help` for subcommand flags.")
+				.replace("{bin}", bin)
+				.replace("{id}", id)}\n`,
+		);
 	}
 	renderCommandBody(lines, Cmd, (key, fallback) =>
-		translate(key.startsWith("cli.flag.") || key.startsWith("cli.argument.") ? `cli.command.${id}.${key.slice(4)}` : key, fallback),
+		translate(
+			key.startsWith("cli.flag.") || key.startsWith("cli.argument.") ? `cli.command.${id}.${key.slice(4)}` : key,
+			fallback,
+		),
 	);
 	process.stdout.write(lines.join("\n"));
 }

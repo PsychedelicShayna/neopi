@@ -1209,7 +1209,12 @@ export class SelectorController {
 				composerShape: cfgComposerShape.get(settings),
 				leftSegments: restore.leftSegments,
 				rightSegments: restore.rightSegments,
-				usageTemplates: { ...restore.segmentOptions.usageBars?.templates },
+				usageTemplates: {
+					...restore.segmentOptions.usageBars?.templates,
+					...(restore.segmentOptions.liveMeter?.template
+						? { live_meter: restore.segmentOptions.liveMeter.template }
+						: {}),
+				},
 			}),
 			draft,
 			saveDraft: next => {

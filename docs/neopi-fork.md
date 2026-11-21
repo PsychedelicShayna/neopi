@@ -115,6 +115,10 @@ Use `/live model` to show the requested realtime model slug, or `/live model <sl
 
 Provenance: `c7bb908557`, `7a87cfe115`, `3b4dd762b6`, `6fa90d9a09`, `14c6e4406f`, `21b0e7cf7e`, `6983ee1a60`, `990964437a`, `4eb5e2594f`, `a991cf58d0`.
 
+### Transcript-aware live calls (issue #816)
+
+Use `/live-transcript` to start or stop a call that hands the conversation so far to the main agent when Iris delegates. Brief replies from Iris don't discard earlier speech unless it was addressed to Iris. Reasoning and progress narration are off in this mode. Ending the call queues the remaining transcript as context for the next turn without starting one. Ordinary `/live` keeps its existing handoff behavior. See the [design notes](specs/live-transcript.md) and [audio meter settings](settings.md#live-audio-meter).
+
 ### Live composer (issue #41)
 
 `/live` leaves the ordinary composer mounted and focused. Speech appears as a volatile preview while speaking, then the final transcript replaces it. A sent speech batch clears the entire draft and saves the exact delivered text in composer history; Up recalls it even when Iris answered without delegating.

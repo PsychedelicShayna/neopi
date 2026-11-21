@@ -111,6 +111,7 @@ interface Harness {
 }
 
 function makeHarness(options?: {
+	transcriptHandoffs?: boolean;
 	artifactPath?: string | undefined;
 	speakableIdleMs?: number;
 	thinkingFlushMs?: number;
@@ -257,6 +258,7 @@ function makeHarness(options?: {
 
 	const controller = new LiveSessionController({
 		session,
+		transcriptHandoffs: options?.transcriptHandoffs,
 		callbacks: {
 			onPhase() {},
 			onLevels() {},
@@ -1201,6 +1203,82 @@ function followUpMessage(id: string): CustomMessage {
 		timestamp: 1,
 	};
 }
+
+describe("transcript-aware live handoff", () => {
+	it("keeps speech across a backchannel and delivers two-sided context once", async () => {
+		const h = makeHarness({ transcriptHandoffs: true });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Keep the editor keyboard-first." } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Mm-hmm." } });
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Add a shortcut for creating an edge." } });
+			expect(h.prompts).toEqual([]);
+			h.fireLive({
+				type: "delegation.created",
+				item: {
+					type: "delegation",
+					target: "client",
+					id: "dlg-transcript-1",
+					content: [{ type: "input_text", text: "Add a shortcut for creating an edge." }],
+				},
+			});
+			await settle();
+			expect(h.prompts[0]).toContain("<input>Add a shortcut for creating an edge.</input>");
+			expect(h.prompts[0]).toContain(
+				"<transcript_delta>user: Keep the editor keyboard-first.\nassistant: Mm-hmm.\nuser: Add a shortcut for creating an edge.</transcript_delta>",
+			);
+
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Now document it." } });
+			h.fireLive(delegation("dlg-transcript-2", ""));
+			await settle();
+			expect(h.prompts[1]).toContain("<transcript_delta>user: Now document it.</transcript_delta>");
+			expect(h.prompts[1]).not.toContain("keyboard-first");
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("keeps the same transcript delta available when a handoff fails before acceptance", async () => {
+		const h = makeHarness({ transcriptHandoffs: true, holdDelivery: true });
+		await h.controller.start();
+		try {
+			h.fireLive({ type: "turn.done", turn: { role: "user", transcript: "Keep the old wire settings." } });
+			h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "Mm-hmm." } });
+			h.fireLive(delegation("dlg-transcript-rejected", ""));
+			await settle();
+			const first = h.deliveries[0];
+			expect(first?.content).toContain("assistant: Mm-hmm.");
+			first?.failBeforeAcceptance();
+			await settle();
+
+			h.fireLive(delegation("dlg-transcript-retry", ""));
+			await settle();
+			const retry = h.deliveries[1];
+			expect(retry?.content).toEqual(first?.content);
+			retry?.accept();
+			await settle();
+			expect(h.prompts).toEqual([retry?.content]);
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
+	it("queues overflow and the final tail as context without starting work", async () => {
+		const h = makeHarness({ transcriptHandoffs: true });
+		await h.controller.start();
+		const longInput = "A".repeat(4100);
+		h.fireLive({ type: "turn.done", turn: { role: "user", transcript: longInput } });
+		await settle();
+		expect(h.deliveries[0]?.options).toEqual({ deliverAs: "nextTurn", triggerTurn: false });
+		expect(h.deliveries[0]?.content).toContain(`user: ${longInput}`);
+		h.fireLive({ type: "turn.done", turn: { role: "assistant", transcript: "A final listening cue." } });
+		await h.controller.stop();
+		expect(h.deliveries[1]?.options).toEqual({ deliverAs: "nextTurn", triggerTurn: false });
+		expect(h.deliveries[1]?.content).toContain("<source>transcript_tail_flush</source>");
+		expect(h.deliveries[1]?.content).toContain("assistant: A final listening cue.");
+		expect(h.deliveries[1]?.content).not.toContain(longInput);
+	});
+});
 
 describe("live controller delegation ownership", () => {
 	it("does not create an empty forced handoff or discard speech awaiting delegation", async () => {

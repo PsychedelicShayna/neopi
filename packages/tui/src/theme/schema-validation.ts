@@ -65,6 +65,8 @@ const themeColorsSchema = type({
 	btwMode: "string | number",
 	statusLineBg: "string | number",
 	statusLineSep: "string | number",
+	"liveMeterMic?": "string | number",
+	"liveMeterOutput?": "string | number",
 	statusLineModel: "string | number",
 	statusLinePath: "string | number",
 	statusLineGitClean: "string | number",

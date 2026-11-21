@@ -23,7 +23,7 @@ Custom theme files are JSON objects validated by `validateThemeJson()` in `packa
 Top-level fields:
 
 - `name` (required)
-- `colors` (required; all tokens except `thinkingMax` required)
+- `colors` (required; see [required and optional color tokens](#required-and-optional-color-tokens))
 - `vars` (optional; reusable color variables)
 - `export` (optional; HTML export colors)
 - `symbols` (optional)
@@ -39,7 +39,7 @@ Color values accept:
 
 ## Required and optional color tokens
 
-All tokens below are required in `colors` except `thinkingMax` (falls back to `thinkingXhigh`), `assistantMessageText` (unset/empty keeps the terminal default foreground), `mdExtensionLink` (unset derives a muted `mdLink`) and `subagent1`–`subagent6` (unset lets omp pick agent colors from the theme).
+All tokens below are required in `colors` except those marked optional.
 
 ### Core text and borders (11)
 
@@ -72,9 +72,11 @@ With the `tui.colorfulMarkdown` setting on (the default), headings, `**strong**`
 
 `thinkingOff`, `thinkingMinimal`, `thinkingLow`, `thinkingMedium`, `thinkingHigh`, `thinkingXhigh`, optional `thinkingMax`, `bashMode`, `pythonMode`, `btwMode`
 
-### Status line segment colors (13)
+### Status line segment colors (13 required, 2 optional)
 
 `statusLineSep`, `statusLineModel`, `statusLinePath`, `statusLineGitClean`, `statusLineGitDirty`, `statusLineContext`, `statusLineSpend`, `statusLineStaged`, `statusLineDirty`, `statusLineUntracked`, `statusLineOutput`, `statusLineCost`, `statusLineSubagents`
+
+Optional `liveMeterMic` and `liveMeterOutput` color the active microphone and playback cells. When omitted, they default to `#18b7c8` and `#e98039`, respectively.
 
 ### Agent name colors (6 optional)
 
