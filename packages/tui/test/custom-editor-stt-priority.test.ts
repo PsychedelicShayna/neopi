@@ -91,7 +91,7 @@ describe("fork-owned Ctrl+Space: xAI priority over configured Space gestures", (
 
 	it("reaches xAI even while a post-processing chain owns normal composer input", () => {
 		const { editor, xai } = editorWithShortcuts();
-		editor.setChainLock({ onEscape() {}, onClear() {} });
+		editor.setChainLock({ onSkip() {}, onCancel() {} });
 		editor.handleInput("\x00");
 		expect(xai).toHaveBeenCalledTimes(1);
 	});

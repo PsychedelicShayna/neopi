@@ -444,7 +444,9 @@ describe("Composer prepaint", () => {
 		try {
 			await initTheme(false, "ascii");
 			cfgComposerShape.set(settings, "box");
-			vi.spyOn(KeybindingsManager, "create").mockReturnValue(KeybindingsManager.inMemory({ "app.clear": "ctrl+x" }));
+			vi.spyOn(KeybindingsManager, "create").mockReturnValue(
+				KeybindingsManager.inMemory({ "app.agent.menu": "ctrl+x" }),
+			);
 			mode = new InteractiveMode(
 				testSession.session,
 				"test",
@@ -470,10 +472,15 @@ describe("Composer prepaint", () => {
 			expect(adoptedEditor.startsWith("+")).toBe(true);
 			expect(adoptedEditor).not.toContain("╭");
 
-			terminal.sendInput("\x03");
+			terminal.sendInput("\x04");
+			expect(mode.ui.hasOverlay()).toBe(false);
 			expect(mode.editor.getExpandedText()).toBe(expectedDraft);
 			terminal.sendInput("\x18");
-			expect(mode.editor.getExpandedText()).toBe("");
+			expect(mode.ui.hasOverlay()).toBe(true);
+			expect(mode.editor.getExpandedText()).toBe(expectedDraft);
+			terminal.sendInput("q");
+			expect(mode.ui.hasOverlay()).toBe(false);
+			mode.editor.setText("");
 			expect(mode.editor.disableSubmit).toBe(false);
 			terminal.sendInput("ready");
 			expect(mode.editor.getExpandedText()).toBe("ready");
@@ -692,39 +699,43 @@ describe("Composer prepaint", () => {
 		}
 	});
 
-	it("restores the terminal before an early double interrupt exits", () => {
-		const terminal = new CountingTerminal();
-		const exit = vi.fn();
-		let now = 1_000;
-		const composer = new Composer({ preferences: config, terminal, exit, now: () => now });
-		composer.start();
-
-		terminal.sendInput("draft");
-		terminal.sendInput("\x03");
-		expect(composer.editor.getExpandedText()).toBe("");
-		now += 100;
-		terminal.sendInput("\x03");
-
-		expect(terminal.stops).toBe(1);
-		expect(exit).toHaveBeenCalledWith(130);
-	});
-
-	it("forward-deletes a startup draft before interactive keybindings load, exiting once it is empty", () => {
+	it("preserves a startup draft on repeated Ctrl+C and restores the terminal on explicit Force Shutdown", () => {
 		const terminal = new CountingTerminal();
 		const exit = vi.fn();
 		const composer = new Composer({ preferences: config, terminal, exit });
 		composer.start();
 
 		terminal.sendInput("draft");
-		terminal.sendInput("\x1b[D"); // Left, so Ctrl+D has a character ahead of the cursor
+		for (let i = 0; i < 3; i++) terminal.sendInput("\x03");
+		expect(composer.editor.getExpandedText()).toBe("draft");
+		expect(terminal.stops).toBe(0);
+		expect(exit).not.toHaveBeenCalled();
 		terminal.sendInput("\x04");
+		expect(composer.ui.hasOverlay()).toBe(true);
+		terminal.sendInput("\x1b[B");
+		terminal.sendInput("\r");
+		expect(terminal.stops).toBe(1);
+		expect(exit).toHaveBeenCalledWith(130);
+	});
+
+	it("uses Delete to edit during startup and confirms a graceful shutdown with a draft", () => {
+		const terminal = new CountingTerminal();
+		const exit = vi.fn();
+		const composer = new Composer({ preferences: config, terminal, exit });
+		composer.start();
+
+		terminal.sendInput("draft");
+		terminal.sendInput("\x1b[D");
+		terminal.sendInput("\x1b[3~"); // Delete
 		expect(composer.editor.getExpandedText()).toBe("draf");
 		expect(exit).not.toHaveBeenCalled();
 		expect(terminal.stops).toBe(0);
 
-		for (let i = 0; i < 4; i++) terminal.sendInput("\x7f"); // Backspace the rest of the draft
-		expect(composer.editor.getExpandedText()).toBe("");
 		terminal.sendInput("\x04");
+		expect(composer.ui.hasOverlay()).toBe(true);
+		expect(composer.editor.getExpandedText()).toBe("draf");
+		expect(exit).not.toHaveBeenCalled();
+		terminal.sendInput("\r");
 
 		expect(exit).toHaveBeenCalledWith(0);
 		expect(terminal.stops).toBe(1);
@@ -738,9 +749,10 @@ describe("Composer prepaint", () => {
 		const lease = new ComposerLease(composer);
 		lease.adopt();
 
-		// InputController.setupKeyHandlers() has not run yet; a stalled startup must
-		// still honor Ctrl+D so a raw-mode user can abort.
+		// A stalled handoff must still expose the explicit menu action.
 		terminal.sendInput("\x04");
+		expect(composer.ui.hasOverlay()).toBe(true);
+		terminal.sendInput("\r");
 
 		expect(exit).toHaveBeenCalledWith(0);
 		expect(terminal.stops).toBe(1);

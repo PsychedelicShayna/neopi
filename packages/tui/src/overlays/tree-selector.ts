@@ -1,15 +1,5 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import {
-	type Component,
-	Container,
-	FuzzyQuery,
-	FuzzyText,
-	Input,
-	matchesKey,
-	Spacer,
-	TruncatedText,
-	truncateToWidth,
-} from "../index";
+import { type Component, Container, FuzzyQuery, FuzzyText, Input, matchesKey, Spacer, truncateToWidth } from "../index";
 import { isRecord, oklabDistance, sanitizeText } from "@oh-my-pi/pi-utils";
 /** Available session-tree display filters. */
 export const TREE_FILTER_MODES = ["default", "no-tools", "user-only", "labeled-only", "all"] as const;
@@ -17,7 +7,7 @@ export const TREE_FILTER_MODES = ["default", "no-tools", "user-only", "labeled-o
 export type TreeFilterMode = (typeof TREE_FILTER_MODES)[number];
 import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
-import { matchesAppInterrupt } from "../keybinding-matchers";
+import { matchesAppDismiss } from "../keybinding-matchers";
 import { isUserRequestEntry, type TranscriptEntryLike } from "../chat/transcript-entry";
 import { MenuHelp, MenuHints } from "../components/menu-hints";
 
@@ -52,7 +42,7 @@ import { resolveAssistantErrorPresentation } from "../chat/transcript-render-hel
 import { OverlayPanel, PanelDivider } from "../chrome/overlay-box";
 import { TreeView, type TreeAncestor, type TreeRow } from "../components/tree-view";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, editorKey, editorKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, editorKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 import type { TspPickerItem, TspPickerProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { ThemeColor } from "../theme/schema";
@@ -1622,7 +1612,7 @@ class LabelInput implements Component {
 			this.#input,
 			hintsRow([
 				{ keys: ["enter"], label: "save" },
-				{ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
+				{ keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
 			]),
 		]);
 		return this.#native;
@@ -1648,7 +1638,7 @@ class LabelInput implements Component {
 		const lines: string[] = [];
 		lines.push(truncateToWidth(theme.fg("muted", "Label (empty to remove):"), width));
 		lines.push(...this.#input.render(width));
-		const cancel = interruptKey();
+		const cancel = dismissKey();
 		lines.push(
 			truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width),
 		);
@@ -1658,7 +1648,7 @@ class LabelInput implements Component {
 	handleInput(keyData: string): void {
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.submit();
-		} else if (matchesAppInterrupt(keyData)) {
+		} else if (matchesAppDismiss(keyData)) {
 			this.onCancel?.();
 		} else {
 			this.#input.handleInput(keyData);

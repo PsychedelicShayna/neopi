@@ -374,14 +374,6 @@ export class StdoutStallWatchdog {
 let altScreenActive = false;
 let terminalRestoreRegistered = false;
 
-function registerPostmortemTerminalRestore(): void {
-	if (terminalRestoreRegistered) return;
-	terminalRestoreRegistered = true;
-	postmortem.register("terminal-restore", () => {
-		emergencyTerminalRestore();
-	});
-}
-
 /** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
 export function setAltScreenActive(active: boolean): void {
 	altScreenActive = active;
@@ -511,6 +503,10 @@ export interface Terminal {
 	 * @param idleMs - Exit early if no input arrives within this time (default: 50ms)
 	 */
 	drainInput(maxMs?: number, idleMs?: number): Promise<void>;
+
+	/** Route only shutdown input and defer manual postmortem restore until stop(). */
+	captureExitInput?(handler: (data: string) => void): () => void;
+	readonly hasExitInputCapture?: boolean;
 
 	// Write output to terminal
 	write(data: string): void;
@@ -788,6 +784,7 @@ export class ProcessTerminal implements Terminal {
 	// whatever the kernel line-buffered meanwhile. See restoreCookedEnter.
 	#cookedTypeahead = false;
 	#inputHandler?: (data: string) => void;
+	#releaseExitInput?: () => void;
 	#resizeHandler?: () => void;
 	/** True between a `deferInput` start() and enableInput(). */
 	#inputDeferred = false;
@@ -1104,7 +1101,16 @@ export class ProcessTerminal implements Terminal {
 		// escapes never reach the developer's terminal during `bun test`.
 		this.#headless = isTerminalHeadless();
 		if (this.#headless) return;
-		registerPostmortemTerminalRestore();
+		if (!terminalRestoreRegistered) {
+			terminalRestoreRegistered = true;
+			postmortem.register("terminal-restore", reason => {
+				const terminal = getActiveTerminal();
+				if (reason === postmortem.Reason.MANUAL && terminal?.hasExitInputCapture) {
+					return;
+				}
+				emergencyTerminalRestore();
+			});
+		}
 
 		// Own stdout: out-of-band writers route through this terminal, and the
 		// emergency restore finds it on crash.
@@ -2484,6 +2490,23 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
+	get hasExitInputCapture(): boolean {
+		return this.#releaseExitInput !== undefined;
+	}
+
+	captureExitInput(handler: (data: string) => void): () => void {
+		this.#releaseExitInput?.();
+		const previousHandler = this.#inputHandler;
+		this.#inputHandler = handler;
+		const release = () => {
+			if (this.#releaseExitInput !== release) return;
+			this.#releaseExitInput = undefined;
+			this.#inputHandler = previousHandler;
+		};
+		this.#releaseExitInput = release;
+		return release;
+	}
+
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
 		if (this.#headless) return;
 		if (this.#kittyProtocolActive) {
@@ -2504,7 +2527,7 @@ export class ProcessTerminal implements Terminal {
 		this.#disableWin32InputMode();
 
 		const previousHandler = this.#inputHandler;
-		this.#inputHandler = undefined;
+		if (!this.#releaseExitInput) this.#inputHandler = undefined;
 
 		let lastDataTime = Date.now();
 		const onData = () => {
@@ -2544,7 +2567,7 @@ export class ProcessTerminal implements Terminal {
 			}
 		} finally {
 			process.stdin.removeListener("data", onData);
-			this.#inputHandler = previousHandler;
+			if (this.#active) this.#inputHandler = previousHandler;
 			// A report head captured while no handler could claim its body is
 			// stale once the TTY is handed back.
 			this.#clearCsiIntroducer();
@@ -2566,6 +2589,7 @@ export class ProcessTerminal implements Terminal {
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
+		this.#releaseExitInput = undefined;
 		// Release stdout ownership (out-of-band writers and emergency cleanup)
 		// before headless/teardown exits, without disturbing another owner's RGB.
 		if (getActiveTerminal() === this) {

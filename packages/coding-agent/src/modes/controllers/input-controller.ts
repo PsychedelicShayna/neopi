@@ -25,7 +25,7 @@ import { currentDeferredDraft, runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { discoverChains } from "../../chains/config";
-import { EscapeGesture } from "../../chains/escape-gesture";
+import { ChainStepGesture } from "../../chains/escape-gesture";
 import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
@@ -386,6 +386,7 @@ export class InputController {
 	#menuHistoryListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
 	#linkHintListenerInstalled = false;
+	#askCancelListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -438,6 +439,23 @@ export class InputController {
 	setupKeyHandlers(): void {
 		this.#draftText ??= this.ctx.editor.getText();
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
+		this.ctx.editor.setActionKeys("app.navigation.dismiss", this.ctx.keybindings.getKeys("app.navigation.dismiss"));
+		this.ctx.editor.setActionKeys("app.agent.menu", this.ctx.keybindings.getKeys("app.agent.menu"));
+		this.ctx.editor.setActionKeys("app.chain.skipStep", this.ctx.keybindings.getKeys("app.chain.skipStep"));
+		this.ctx.editor.onAgentMenu = () => this.handleCtrlD();
+		this.ctx.editor.onCancel = () => this.handleCtrlC();
+		if (!this.#askCancelListenerInstalled) {
+			this.#askCancelListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (
+					this.ctx.keybindings.matches(data, "app.interrupt") &&
+					((this.ctx.isShuttingDown && this.ctx.cancelPendingClose()) || this.ctx.cancelAsk())
+				) {
+					return { consume: true };
+				}
+				return undefined;
+			});
+		}
 		if (!this.#linkHintListenerInstalled) {
 			this.#linkHintListenerInstalled = true;
 			// Reserved speech input (including repeats/releases) outranks even link hints and modals.
@@ -499,6 +517,10 @@ export class InputController {
 			// These actions target the main transcript/editor rather than the
 			// focused prompt. Keep focused components' own bindings authoritative.
 			this.ctx.ui.addInputListener(data => {
+				if (this.ctx.keybindings.matches(data, "app.agent.menu")) {
+					if (!isKeyRelease(data) && !isKeyRepeat(data)) this.handleCtrlD();
+					return { consume: true };
+				}
 				const chordView = this.#takeSidebarChord(data);
 				if (chordView === "cancel") return { consume: true };
 				if (chordView !== undefined) {
@@ -631,150 +653,27 @@ export class InputController {
 			this.ctx.ui.addInputListener(data => this.#handleInlineMouse(data));
 		}
 		this.ctx.editor.onEscape = () => {
-			// `/mcp test` advertises Esc until each owner's post-settlement grace expires.
-			// Cancel every overlapping test before any main-turn or side-channel action.
-			if (this.ctx.mcpTestEscapeHandlers.size > 0) {
-				// One Esc cancels every advertised /mcp test and consumes the ownership;
-				// the next Esc must reach the actions below instead of being swallowed
-				// by a stale registration or grace timer.
-				const handlers = [...this.ctx.mcpTestEscapeHandlers];
-				this.ctx.mcpTestEscapeHandlers.clear();
-				for (const handler of handlers) handler();
-				return;
-			}
-
-			// Side-channel panels own Esc for cancellation or closing before
-			// loop mode, maintenance, or the underlying main turn.
-			// Active context maintenance owns Esc: compaction and retry backoff advertise
-			// "(esc to cancel)". Dispatch on live session state instead of
-			// swapping onEscape handlers — interleaved start/end events used
-			// to clobber the single saved-handler slot (auto-compaction start
-			// → /compact → auto end → manual finally), leaving Esc wired to a
-			// stale no-op closure until restart.
-			//
-			// While a subagent is focused, Esc honors the advertised view action
-			// ("Esc returns to main") instead of cancelling maintenance —
-			// accidentally killing a focused subagent's compaction on the way out
-			// was #2819. The auto-maintenance loaders relabel their hint to match
-			// (see EventController). Main-session maintenance still owns Esc and
-			// stays cancellable from the main view (manual compaction is main-only).
-			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) {
-				return;
-			}
-			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgEscape()) {
-				return;
-			}
-			if (this.ctx.hasActiveCleanse() && this.ctx.handleCleanseEscape()) {
-				return;
-			}
+			if (this.ctx.hasActiveBtw() && this.ctx.handleBtwEscape()) return;
+			if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgDismiss()) return;
+			if (this.ctx.hasActiveCleanse() && this.ctx.handleCleanseEscape()) return;
 			if (this.ctx.dismissCommandReport()) {
 				return;
 			}
-
-			if (!this.ctx.focusedAgentId) {
-				const viewSession = this.ctx.viewSession;
-				let aborted = false;
-				if (viewSession.isCompacting || this.ctx.session.isBackgroundCompacting) {
-					safeAbort("compaction", () => viewSession.abortCompaction());
-					aborted = true;
-				}
-				if (viewSession.isRetrying) {
-					safeAbort("retry", () => viewSession.abortRetry());
-					aborted = true;
-				}
-				if (aborted) return;
-			}
-
-			if (vocalizer.isSpeaking()) {
-				// Playback from the completed response can overlap the next agent
-				// turn. Silence it before interrupting any ongoing main-turn work.
-				vocalizer.clear();
-				this.ctx.lastEscapeTime = 0;
-				return;
-			}
-
-			// The agent waits on an ask above the composer: interrupting the turn would cancel it. Esc keeps
-			// the composer's meaning (Vim's Normal mode took it before here); the ask's own key cancels it.
-			if (!this.ctx.focusedAgentId && this.ctx.askBlocksRun()) {
-				this.ctx.lastEscapeTime = 0;
-				this.ctx.showStatus(
-					`The questions stay open · ↑ answers them · ${appKey(this.ctx.keybindings, "app.ask.cancel")} cancels them`,
-				);
-				return;
-			}
-
-			if (this.ctx.loopModeEnabled) {
-				// Esc suspends the loop even mid-iteration: abort the live turn,
-				// then drop the captured prompt so the 800ms auto-resubmit never
-				// fires. Loop stays enabled (paused) — the next manual prompt
-				// resumes with a new body.
-				if (this.ctx.session.isStreaming) {
-					this.#abortStreamingTurn();
-				}
-				this.ctx.pauseLoop();
-				this.ctx.cancelPendingSubmission();
-				// A setup cancelled before its turn starts emits no `agent_end`: hand the queue back here.
-				this.#restoreYieldCompactionOnStop();
-				return;
-			}
 			if (this.ctx.focusedAgentId) {
-				// Esc never interrupts the focused agent's turn: clear typed text,
-				// else return the view to the main session. Interrupt via empty
-				// steer-flush submit if needed.
-				if (this.ctx.editor.getText().trim()) {
-					this.ctx.editor.setText("");
-					this.ctx.ui.requestRender();
-				} else {
-					void this.ctx.unfocusSession();
-				}
-				return; // double-escape backtrack (/tree, /branch) stays main-only
-			}
-			if (this.ctx.collabGuest) {
-				// Guest Esc: ask the host to interrupt its agent; the local replica
-				// session is never streaming, so the native abort path below would
-				// no-op.
-				if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) {
-					this.ctx.collabGuest.sendAbort();
-				}
+				void this.ctx.unfocusSession();
 				return;
 			}
-			if (this.ctx.loadingAnimation && this.ctx.cancelPendingSubmission()) {
-				this.#restoreYieldCompactionOnStop();
-				return;
-			}
-			// The run is paused and only outside work (background jobs, child agents,
-			// peer messages) can resume it; its row stays mounted, so this is checked
-			// before the loader's abort.
-			const awaitingAsyncWork = this.ctx.eventController.isAwaitingAsyncWork();
-			if (this.ctx.loadingAnimation && !awaitingAsyncWork) {
-				this.restoreQueuedMessagesToEditor({ abort: true });
-			} else if (this.ctx.session.isBashRunning) {
-				this.ctx.session.abortBash();
-			} else if (this.ctx.isBashMode) {
-				this.ctx.editor.setText("");
-				this.ctx.isBashMode = false;
-				this.ctx.updateEditorBorderColor();
-			} else if (this.ctx.session.isEvalRunning) {
-				this.ctx.session.abortEval();
-			} else if (this.ctx.isPythonMode) {
-				this.ctx.editor.setText("");
-				this.ctx.isPythonMode = false;
-				this.ctx.updateEditorBorderColor();
-			} else if (this.ctx.isBtwMode) {
-				this.ctx.editor.setText("");
-				this.ctx.isBtwMode = false;
-				this.ctx.updateEditorBorderColor();
-			} else if (awaitingAsyncWork) {
-				// End the wait: the run ends now. The jobs keep running; their results
-				// land in context for the next prompt instead of starting a turn.
-				void this.ctx.eventController.stopAwaitingAsyncWork();
-			} else if (this.ctx.session.isStreaming) {
-				this.#abortStreamingTurn();
-			} else if (this.ctx.editor.getText().trim()) {
+			if (
+				this.ctx.editor.getText().trim() ||
+				this.ctx.session.isStreaming ||
+				this.ctx.loadingAnimation ||
+				this.ctx.session.isBashRunning ||
+				this.ctx.session.isEvalRunning
+			) {
 				// Esc must not destroy an in-progress draft.
 				this.ctx.lastEscapeTime = 0;
 			} else {
-				// Double-interrupt with an empty editor runs the configured action:
+				// Double-Escape with an idle, empty editor opens the configured view:
 				// the transcript rewind selector (default) or the session tree.
 				const doubleEscapeAction = cfgDoubleEscapeAction.get(settings);
 				if (doubleEscapeAction !== "none") {
@@ -799,9 +698,6 @@ export class InputController {
 			}
 		};
 
-		this.ctx.editor.setActionKeys("app.clear", this.ctx.keybindings.getKeys("app.clear"));
-		this.ctx.editor.onClear = () => this.handleCtrlC();
-		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
 		this.ctx.editor.setActionKeys("app.display.reset", this.ctx.keybindings.getKeys("app.display.reset"));
 		this.ctx.editor.onDisplayReset = () => {
 			// Explicit user gesture (display reset, Alt+L by default): re-query the
@@ -812,7 +708,6 @@ export class InputController {
 			// probe per gesture — no timers, no periodic polling.
 			this.ctx.resetDisplayAfterAppearanceRefresh();
 		};
-		this.ctx.editor.onExit = () => this.handleCtrlD();
 		this.ctx.editor.setActionKeys("app.suspend", this.ctx.keybindings.getKeys("app.suspend"));
 		this.ctx.editor.onSuspend = () => this.handleCtrlZ();
 		this.ctx.editor.setActionKeys("app.thinking.cycle", this.ctx.keybindings.getKeys("app.thinking.cycle"));
@@ -1025,15 +920,12 @@ export class InputController {
 		const editor = this.ctx.editor;
 		switch (id) {
 			case "app.interrupt":
+				editor.onCancel?.();
+				return true;
+			case "app.navigation.dismiss":
 				editor.onEscape?.();
 				return true;
-			case "app.clear":
-				// Control actions clear the composer without entering the human
-				// Ctrl-C double-press/hard-abort shutdown state.
-				this.ctx.discardLiveSpeech();
-				this.ctx.clearEditor();
-				return true;
-			case "app.exit":
+			case "app.agent.menu":
 				this.handleCtrlD();
 				return true;
 			case "app.suspend":
@@ -2060,7 +1952,9 @@ export class InputController {
 		}
 		if (target === "bash") {
 			if (this.ctx.session.isBashRunning) {
-				this.ctx.showWarning("A bash command is already running. Press Esc to cancel it first.");
+				this.ctx.showWarning(
+					`A bash command is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+				);
 				restore();
 				return;
 			}
@@ -2070,7 +1964,9 @@ export class InputController {
 			return;
 		}
 		if (this.ctx.session.isEvalLanguageRunning(target)) {
-			this.ctx.showWarning(`The ${target} kernel is busy. Press Esc to cancel it first.`);
+			this.ctx.showWarning(
+				`The ${target} kernel is busy. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+			);
 			restore();
 			return;
 		}
@@ -2097,12 +1993,12 @@ export class InputController {
 	 * composer instead of sending: no chain, a cancelled pick, an abort (the typed
 	 * draft), or a failed step (the last completed output).
 	 *
-	 * While the chain runs the composer is locked and shimmering; Esc Esc skips the
-	 * step in flight, Esc Esc Esc or the clear key aborts.
+	 * While the chain rewrites the locked composer, two chain-control taps skip the
+	 * current step, three abort it, and the interrupt binding cancels immediately.
 	 */
 	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
 		const control = new ChainControl();
-		const gesture = new EscapeGesture();
+		const gesture = new ChainStepGesture();
 		let lastOutput = text;
 		let chainName = "";
 		let currentStep = "";
@@ -2116,17 +2012,18 @@ export class InputController {
 		}
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
-			onEscape: () => {
-				const action = gesture.press();
-				if (action === "skip") {
-					control.skipStep();
-					if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
-				} else if (action === "abort") {
-					control.abort();
+			onSkip: () => {
+				switch (gesture.press()) {
+					case "skip":
+						control.skipStep();
+						if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
+						break;
+					case "abort":
+						control.abort();
+						break;
 				}
 			},
-			// Never handleCtrlC: its double-press exit must not race a running step.
-			onClear: () => control.abort(),
+			onCancel: () => control.abort(),
 		});
 		this.ctx.ui.requestRender();
 		let resolved: ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined;
@@ -2164,7 +2061,7 @@ export class InputController {
 				onStep: (step, index, total) => {
 					currentStep = step.name;
 					this.ctx.showStatus(
-						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (Esc Esc skip · Esc Esc Esc abort · Ctrl+C abort)`,
+						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (${formatDoubleTap(this.ctx.keybindings.getKeys("app.chain.skipStep")[0] ?? "alt+s")} skip · ${appKey(this.ctx.keybindings, "app.interrupt")} cancel)`,
 					);
 				},
 				onStepDone: (_step, _index, output) => {
@@ -2463,60 +2360,109 @@ export class InputController {
 	}
 
 	handleCtrlC(): void {
-		// Sync-flush the session JSONL so in-flight writes survive a hard exit.
-		// The TUI consumes Ctrl+C as a key event in raw mode, so postmortem's
-		// process-level SIGINT handler never fires. shutdown() awaits its own
-		// async flush — this sync pass is a superset that also covers the
-		// first-press case and the hard-abort path below.
-		try {
-			this.ctx.sessionManager.flushSync();
-		} catch (err) {
-			logger.warn("session-manager sync flush on Ctrl+C failed", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-
-		// Hard-abort: a Ctrl+C arriving while shutdown() is already running
-		// means the user has waited long enough for whatever teardown step is
-		// stuck (typically an extension's session_shutdown handler hanging on
-		// IPC). The 2s session_shutdown cap (see runner.ts) already bounds the
-		// common case; this is the defense-in-depth ladder for everything
-		// else. See issue #2600.
-		if (this.ctx.isShuttingDown) {
-			// Route through postmortem: this hard-abort can fire while an
-			// extension-load guard window is open, where raw process.exit is a
-			// throwing ExtensionExitError stub (#11789). exitProcess skips the
-			// postmortem cleanups, so hand the terminal back first: shutdown() has
-			// not reached ui.stop() yet, and a kitty keyboard frame left pushed
-			// makes the parent shell receive Ctrl+C as `CSI 99;5u` (prints `9;5u`).
-			emergencyTerminalRestore();
-			postmortem.exitProcess(130); // 128 + SIGINT
-		}
-
-		// A graceful close already failed at the memoized dispose stage (#12238),
-		// so re-running it can only re-fail. The user was told one more Ctrl+C
-		// exits; honour that with a single press — skip the double-tap gate below
-		// and let shutdown() take its force-quit escape hatch.
-		if (this.ctx.teardownFailed) {
-			void this.ctx.shutdown();
+		if (this.ctx.isTeardownCommitted || this.ctx.teardownFailed) return;
+		if (this.ctx.cancelAsk()) return;
+		if (this.ctx.mcpTestEscapeHandlers.size > 0) {
+			const handlers = [...this.ctx.mcpTestEscapeHandlers];
+			this.ctx.mcpTestEscapeHandlers.clear();
+			for (const handler of handlers) handler();
 			return;
 		}
+		if (this.ctx.handleBtwCancel()) return;
+		if (this.ctx.hasActiveOmfg() && this.ctx.handleOmfgCancel()) return;
+		if (this.ctx.handleCleanseCancel()) return;
 
-		const now = Date.now();
-		if (now - this.ctx.lastSigintTime < 500) {
-			void this.ctx.shutdown();
-		} else {
-			this.ctx.discardLiveSpeech();
-			this.ctx.clearEditor();
-			this.ctx.lastSigintTime = now;
+		if (!this.ctx.focusedAgentId) {
+			const viewSession = this.ctx.viewSession;
+			let aborted = false;
+			if (viewSession.isCompacting || this.ctx.session.isBackgroundCompacting) {
+				safeAbort("compaction", () => viewSession.abortCompaction());
+				aborted = true;
+			}
+			if (viewSession.isRetrying) {
+				safeAbort("retry", () => viewSession.abortRetry());
+				aborted = true;
+			}
+			if (aborted) return;
+		}
+		if (vocalizer.isSpeaking()) {
+			vocalizer.clear();
+			return;
+		}
+		if (this.ctx.loopModeEnabled) {
+			if (this.ctx.session.isStreaming) this.#abortStreamingTurn();
+			this.ctx.pauseLoop();
+			this.ctx.cancelPendingSubmission();
+			this.#restoreYieldCompactionOnStop();
+			return;
+		}
+		if (this.ctx.focusedAgentId) return;
+		if (this.ctx.collabGuest) {
+			if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) this.ctx.collabGuest.sendAbort();
+			return;
+		}
+		if (this.ctx.loadingAnimation && this.ctx.cancelPendingSubmission()) {
+			this.#restoreYieldCompactionOnStop();
+			return;
+		}
+		const awaitingAsyncWork = this.ctx.eventController.isAwaitingAsyncWork();
+		if (this.ctx.loadingAnimation && !awaitingAsyncWork) {
+			this.restoreQueuedMessagesToEditor({ abort: true });
+		} else if (this.ctx.session.isBashRunning) {
+			this.ctx.session.abortBash();
+		} else if (this.ctx.session.isEvalRunning) {
+			this.ctx.session.abortEval();
+		} else if (awaitingAsyncWork) {
+			void this.ctx.eventController.stopAwaitingAsyncWork();
+		} else if (this.ctx.session.isStreaming) {
+			this.#abortStreamingTurn();
 		}
 	}
 
+	#flushBeforeClose(): void {
+		try {
+			this.ctx.sessionManager.flushSync();
+		} catch (err) {
+			logger.warn("session-manager sync flush before close failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	#forceShutdown(): void {
+		if (!this.ctx.isTeardownCommitted) {
+			if (this.ctx.teardownFailed) {
+				// Dispose already failed and is memoized. Use the host-owned escape hatch.
+				void this.ctx.shutdown();
+				return;
+			}
+			this.#flushBeforeClose();
+		}
+		emergencyTerminalRestore();
+		postmortem.exitProcess(130);
+	}
+
+	captureExitInput(): (() => void) | undefined {
+		return this.ctx.ui.terminal.captureExitInput?.(data => {
+			if (this.ctx.keybindings.matches(data, "app.agent.menu") && !isKeyRelease(data) && !isKeyRepeat(data)) {
+				this.#forceShutdown();
+			}
+		});
+	}
+
 	handleCtrlD(): void {
-		// Editor text (if any) is snapshotted at the start of shutdown() and
-		// persisted as a draft for the next resume. Empty text is also fine —
-		// shutdown clears any stale sidecar in that case.
-		void this.ctx.shutdown();
+		if (this.ctx.isTeardownCommitted) {
+			this.#forceShutdown();
+			return;
+		}
+		this.ctx.showAgentMenu(
+			() => {
+				this.#flushBeforeClose();
+				void this.ctx.shutdown();
+			},
+			() => void this.ctx.restart(),
+			() => this.#forceShutdown(),
+		);
 	}
 
 	handleCtrlZ(): void {

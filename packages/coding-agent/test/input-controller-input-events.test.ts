@@ -103,7 +103,9 @@ async function createHarness(factory: ExtensionFactory) {
 		isBashMode: false,
 		isPythonMode: false,
 		replMode: { active: false },
-		lastSigintTime: 0,
+		cancelAsk: () => false,
+		handleBtwCancel: () => false,
+		handleCleanseCancel: () => false,
 		hasActiveBtw: () => false,
 		hasActiveOmfg: () => false,
 		hasActiveCleanse: () => false,
@@ -879,7 +881,7 @@ describe("interactive native input ingress", () => {
 		expect(h.editor.pendingImages).toEqual([]);
 	});
 
-	it("a delayed Ctrl+Enter handler leaves display, abort and shutdown keys responsive and retains generated work", async () => {
+	it("a delayed Ctrl+Enter handler leaves display, cancel and the agent menu responsive and retains generated work", async () => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const downstream = vi.fn();
@@ -892,14 +894,20 @@ describe("interactive native input ingress", () => {
 			});
 			pi.on("input", downstream);
 		});
+		const menu = vi.fn<InteractiveModeContext["showAgentMenu"]>();
+		h.ctx.showAgentMenu = menu;
 		h.editor.setText("local action");
 		const submitting = h.pressSubmit(FOLLOW_UP);
 		await entered.promise;
 		try {
 			h.editor.handleInput("\x1bl");
 			h.editor.handleInput("\x1b");
+			expect(h.session.abort).not.toHaveBeenCalled();
 			h.editor.handleInput("\x03");
-			h.editor.handleInput("\x03");
+			h.editor.handleInput("\x04");
+			expect(menu).toHaveBeenCalledTimes(1);
+			expect(h.ctx.shutdown).not.toHaveBeenCalled();
+			menu.mock.calls[0]![0]();
 			expect(h.ctx.resetDisplayAfterAppearanceRefresh).toHaveBeenCalled();
 			expect(h.session.abort).toHaveBeenCalledTimes(1);
 			expect(h.ctx.shutdown).toHaveBeenCalledTimes(1);

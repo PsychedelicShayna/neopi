@@ -7,21 +7,24 @@ describe("CustomEditor chain lock", () => {
 		await initTheme();
 	});
 
-	it("drops typing, routes Escape and Ctrl+C to the lock, and edits again once unlocked", () => {
+	it("drops typing and Escape, routes skip and cancel, and edits again once unlocked", () => {
 		const editor = new CustomEditor(getEditorTheme());
-		const onEscape = vi.fn();
-		const onClear = vi.fn();
+		const onSkip = vi.fn();
+		const onCancel = vi.fn();
 		editor.setText("draft");
-		editor.setChainLock({ onEscape, onClear });
+		editor.setChainLock({ onCancel, onSkip });
 
 		editor.handleInput("abc");
 		expect(editor.getText()).toBe("draft");
 
 		editor.handleInput("\x1b");
-		expect(onEscape).toHaveBeenCalledTimes(1);
+		expect(onSkip).not.toHaveBeenCalled();
+		expect(onCancel).not.toHaveBeenCalled();
+		editor.handleInput("\x1bs");
+		expect(onSkip).toHaveBeenCalledTimes(1);
 
 		editor.handleInput("\x03");
-		expect(onClear).toHaveBeenCalledTimes(1);
+		expect(onCancel).toHaveBeenCalledTimes(1);
 		expect(editor.getText()).toBe("draft");
 
 		editor.setChainLock(undefined);
@@ -34,7 +37,7 @@ describe("CustomEditor chain lock", () => {
 		const onSubmit = vi.fn();
 		editor.onSubmit = onSubmit;
 		editor.setText("draft");
-		editor.setChainLock({ onEscape: vi.fn(), onClear: vi.fn() });
+		editor.setChainLock({ onSkip: vi.fn(), onCancel: vi.fn() });
 
 		editor.setVolatileText(" spoken");
 		editor.commitVolatileText(" spoken");

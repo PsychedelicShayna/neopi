@@ -4,7 +4,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import { postmortem, setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
-// A Ctrl+C while shutdown() is still closing the session hard-exits through
+// A Ctrl+D during committed shutdown hard-exits through
 // postmortem.exitProcess(), which skips the postmortem cleanups — including the
 // terminal restore. The kitty keyboard frame omp pushed stayed on the terminal's
 // stack, so the parent shell received Ctrl+C as `CSI 99;5u` and zsh printed
@@ -25,7 +25,7 @@ function restoreProperty(target: object, key: string, descriptor: PropertyDescri
 
 class ExitCalled extends Error {}
 
-describe("InputController hard-abort Ctrl+C", () => {
+describe("InputController hard-abort Ctrl+D", () => {
 	beforeEach(() => {
 		previousHeadless = setTerminalHeadless(false);
 	});
@@ -69,13 +69,32 @@ describe("InputController hard-abort Ctrl+C", () => {
 
 		const ctx = {
 			isShuttingDown: true,
+			isTeardownCommitted: true,
 			sessionManager: { flushSync: () => {} },
 		} as unknown as InteractiveModeContext;
-		expect(() => new InputController(ctx).handleCtrlC()).toThrow(ExitCalled);
+		const controller = new InputController(ctx);
+		controller.handleCtrlC();
+		expect(exitSpy).not.toHaveBeenCalled();
+		expect(() => controller.handleCtrlD()).toThrow(ExitCalled);
 
 		expect(exitSpy).toHaveBeenCalledWith(130);
 		expect(atExit).toContain("\x1b[<u");
 		expect(atExit).toContain("\x1b[?2004l");
 		expect(terminal.kittyEnableSequence).toBeNull();
+	});
+
+	it("opens the menu rather than forcing exit while a close prompt is still open", () => {
+		const showAgentMenu = vi.fn();
+		const exit = vi.spyOn(postmortem, "exitProcess").mockImplementation(() => {
+			throw new ExitCalled();
+		});
+		const ctx = {
+			isShuttingDown: true,
+			isTeardownCommitted: false,
+			showAgentMenu,
+		} as unknown as InteractiveModeContext;
+		new InputController(ctx).handleCtrlD();
+		expect(showAgentMenu).toHaveBeenCalledTimes(1);
+		expect(exit).not.toHaveBeenCalled();
 	});
 });

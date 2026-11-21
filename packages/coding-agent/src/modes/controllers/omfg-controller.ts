@@ -22,6 +22,7 @@ interface OmfgRequest {
 	component: OmfgPanelComponent;
 	abortController: AbortController;
 	complaint: string;
+	settled: boolean;
 }
 
 interface OmfgCandidate extends ParsedGeneratedRule {
@@ -57,9 +58,15 @@ export class OmfgController {
 		return this.#activeRequest !== undefined;
 	}
 
-	handleEscape(): boolean {
-		if (!this.#activeRequest) return false;
-		this.#closeActiveRequest({ abort: this.#activeRequest.abortController.signal.aborted === false });
+	handleCancel(): boolean {
+		if (!this.#activeRequest || this.#activeRequest.settled) return false;
+		this.#closeActiveRequest({ abort: true });
+		return true;
+	}
+
+	handleDismiss(): boolean {
+		if (!this.#activeRequest?.settled) return false;
+		this.#closeActiveRequest({ abort: false });
 		return true;
 	}
 
@@ -86,6 +93,7 @@ export class OmfgController {
 			component: new OmfgPanelComponent({ complaint: trimmedComplaint, tui: this.ctx.ui }),
 			abortController: new AbortController(),
 			complaint: trimmedComplaint,
+			settled: false,
 		};
 		this.ctx.omfgContainer.clear();
 		this.ctx.omfgContainer.addChild(request.component);
@@ -138,6 +146,8 @@ export class OmfgController {
 				return;
 			}
 			request.component.markError(error instanceof Error ? error.message : String(error));
+		} finally {
+			request.settled = true;
 		}
 	}
 

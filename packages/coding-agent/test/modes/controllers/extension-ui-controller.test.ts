@@ -599,7 +599,7 @@ describe("ExtensionUiController form dialog", () => {
 			if (!(dialog instanceof HtmlFormDialog)) throw new Error("Expected the form dialog");
 			harness.handleInput("\x1bh"); // Alt+H hides
 			expect(harness.getFocused()).toBe(harness.editor);
-			expect(stripVTControlCharacters(dialog.render(120).join("\n"))).toContain("Alt+H show · Alt+X cancel");
+			expect(stripVTControlCharacters(dialog.render(120).join("\n"))).toContain("Alt+H show · Ctrl+C cancel");
 			harness.handleInput("h");
 			harness.handleInput("i");
 			expect(harness.editor.getText()).toBe("hi");
@@ -799,36 +799,20 @@ describe("ExtensionUiController editor UI", () => {
 		expect(harness.editor.focused).toBe(false);
 	});
 
-	it("lets the clear action empty the draft and lift the ask guard (#6738)", () => {
+	it("Ctrl+C cancels the pending ask and releases its guard without clearing the draft (#6738)", async () => {
 		const harness = makeHarness();
-		// Route Ctrl+C to the guard: keep app.clear on Ctrl+C but move the ask
-		// cancel key off it, so Ctrl+C reaches draft editing instead of cancelling.
-		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "ctrl+g" }));
-		harness.editor.setActionKeys("app.clear", ["ctrl+c"]);
-		let cleared = 0;
-		// Mirror interactive wiring: app.clear (Ctrl+C) clears the draft.
-		harness.editor.onClear = () => {
-			cleared++;
-			harness.editor.setText("");
-		};
 		harness.editor.setText("half typed prompt");
 		const questions: ExtensionAskDialogQuestion[] = [
 			{ id: "confirm", question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] },
 		];
 
-		harness.controller.showAskDialog(questions);
+		const pending = harness.controller.showAskDialog(questions);
 		const ask = harness.askContainer.children[0];
 		expect(ask).toBeInstanceOf(AskDialogComponent);
 
-		// Ctrl+C is reserved by the base editor and never clears; the guard must
-		// dispatch the configured clear action so the "finish or clear" hint works.
 		ask?.handleInput?.("\x03");
-		expect(cleared).toBe(1);
-		expect(harness.editor.getText()).toBe("");
-
-		// With the draft gone the guard releases: the next key reaches the ask
-		// controls and submits the highlighted option.
-		ask?.handleInput?.("\n");
+		expect(await pending).toBeUndefined();
+		expect(harness.editor.getText()).toBe("half typed prompt");
 		expect(harness.askContainer.children).toEqual([]);
 		expect(harness.editorContainer.children).toEqual([harness.editor]);
 	});
@@ -909,7 +893,7 @@ describe("ExtensionUiController editor UI", () => {
 
 			harness.handleInput("\x1bh"); // Alt+H hides
 			expect(harness.getFocused()).toBe(harness.editor);
-			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("Alt+H show · Alt+X cancel");
+			expect(stripVTControlCharacters(ask.render(120).join("\n"))).toContain("Alt+H show · Ctrl+C cancel");
 			harness.handleInput("h");
 			harness.handleInput("i");
 			expect(harness.editor.getText()).toBe("hi");
@@ -948,6 +932,10 @@ describe("ExtensionUiController editor UI", () => {
 			expect(harness.controller.focusAsk()).toBe(true);
 			expect(harness.getFocused()).toBe(ask);
 			harness.handleInput("\x1b");
+			expect(harness.getFocused()).toBe(harness.editor);
+			expect(harness.askContainer.children).toEqual([ask]);
+			expect(harness.controller.focusAsk()).toBe(true);
+			harness.handleInput("\x03");
 			expect(await pending).toBeUndefined();
 		});
 

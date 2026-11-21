@@ -160,9 +160,9 @@ If abort hits while sleeping, catch path emits:
 On `auto_retry_start`, EventController (`#handleAutoRetryStart`):
 
 - stops the working loader and clears the status container
-- renders a `retryLoader` with text: `Retrying (attempt/maxAttempts) in Ns… (esc to cancel)`
+- renders a `retryLoader` with text: `Retrying (attempt/maxAttempts) in Ns… (Ctrl+C to cancel)` (uses the configured interrupt binding)
 
-`Esc` cancellation dispatches on live session state rather than a swapped handler: the input controller checks `viewSession.isRetrying` and calls `viewSession.abortRetry()` (alongside its compaction/handoff abort checks).
+`Ctrl+C` cancellation dispatches on live session state rather than a swapped handler: the input controller checks `viewSession.isRetrying` and calls `viewSession.abortRetry()` (alongside its compaction/handoff abort checks).
 
 On `auto_retry_end` (`#handleAutoRetryEnd`), it stops and clears the `retryLoader` and status container.
 

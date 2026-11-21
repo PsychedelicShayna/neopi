@@ -16,6 +16,8 @@
  */
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildBrowserItems, ModelBrowser, type ModelBrowserSource } from "./model-browser";
+import { interruptKey } from "../chrome/keybinding-hints";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import {
 	type Component,
 	extractPrintableText,
@@ -339,7 +341,7 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	handleInput(data: string): void {
 		if (this.#generationAbort) {
-			if (matchesKey(data, "escape")) {
+			if (matchesAppInterrupt(data)) {
 				this.#generationAbort.abort();
 				this.#generationAbort = undefined;
 				if (this.#screen === "generator") this.#showGenerator();
@@ -1037,7 +1039,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#generationModel = item.model;
 			const controller = new AbortController();
 			this.#generationAbort = controller;
-			this.#flash("Loading references · Esc cancel", "success");
+			this.#flash(`Loading references · ${interruptKey()} cancel`, "success");
 			void deps
 				.references(this.#doc)
 				.then(references => {
@@ -1099,7 +1101,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			if (!deps || !model) return this.#showGenerator();
 			const controller = new AbortController();
 			this.#generationAbort = controller;
-			this.#flash("Generating persona · Esc cancel", "success");
+			this.#flash(`Generating persona · ${interruptKey()} cancel`, "success");
 			void deps
 				.generate({
 					model,

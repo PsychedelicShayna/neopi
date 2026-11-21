@@ -164,7 +164,7 @@ describe("SignInScene", () => {
 		}
 	});
 
-	it("Esc in the login dialog aborts the flow and returns to the list without an error", async () => {
+	it("Ctrl+C aborts login and returns to the list without an error", async () => {
 		const aborted = Promise.withResolvers<void>();
 		const { host, state } = sceneHost(async (_provider, callbacks) => {
 			callbacks.onAuth({ url: "https://example.com/oauth/authorize?state=cancel" });
@@ -179,7 +179,11 @@ describe("SignInScene", () => {
 		const scene = new SignInScene(host);
 		try {
 			signInTo(scene, "anthropic");
-			state.focus?.handleInput?.("\x1b");
+			const login = state.focus;
+			expect(login).toBeDefined();
+			login?.handleInput?.("\x1b");
+			expect(state.focus).toBe(login);
+			login?.handleInput?.("\x03");
 			expect(state.focus).toBeUndefined();
 			// The aborted flow settles after the list is back; drain its rejection before reading the sheet.
 			await aborted.promise;
@@ -328,7 +332,7 @@ describe("fullscreen setup sign-in cursor", () => {
 					expect(movement).not.toContain("\x1b[?25h");
 				}
 
-				terminal.sendInput("\x1b");
+				terminal.sendInput("\x03");
 				await cancelled.promise;
 				await Promise.resolve();
 				await scheduler.settle(terminal);

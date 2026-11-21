@@ -283,7 +283,7 @@ describe("fork-owned Ctrl+Space: xAI preempts configured dictation", () => {
 	});
 
 	it("reaches the xAI toggle with a locked composer chain", async () => {
-		mode.editor.setChainLock({ onEscape() {}, onClear() {} });
+		mode.editor.setChainLock({ onSkip() {}, onCancel() {} });
 		await pressXai();
 		expect(audio).toHaveLength(1);
 		mode.editor.setChainLock(undefined);

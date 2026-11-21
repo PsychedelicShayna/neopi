@@ -95,6 +95,9 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		mode = new InteractiveMode(session, "test");
 		mode.ui.requestRender = vi.fn();
 		mode.ui.terminal.drainInput = async () => {};
+		vi.spyOn(postmortem, "exitProcess").mockImplementation(() => {
+			throw new Error("Unexpected forced process exit");
+		});
 		vi.spyOn(postmortem, "quit").mockImplementation(async () => {
 			quitCalled.resolve();
 		});
@@ -134,7 +137,7 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		expect(postmortem.quit).toHaveBeenCalledTimes(1);
 	});
 
-	it("leaves the prompt's keys to the prompt: Ctrl+D edits its text instead of skipping it", async () => {
+	it("Ctrl+D opens the menu over a pending close prompt; Delete still edits the prompt", async () => {
 		new InputController(mode).setupKeyHandlers();
 		const entered = Promise.withResolvers<void>();
 		let answer: string | undefined;
@@ -145,7 +148,11 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		};
 		const quitting = mode.shutdown();
 		await entered.promise;
-		for (const key of ["a", "b", "\x1b[D", "\x04"]) mode.ui.injectDebugInput(key);
+		for (const key of ["a", "b", "\x1b[D", "\x1b[3~", "\x04"]) mode.ui.injectDebugInput(key);
+		expect(mode.ui.hasOverlay()).toBe(true);
+		expect(postmortem.exitProcess).not.toHaveBeenCalled();
+		mode.ui.injectDebugInput("q");
+		expect(mode.ui.hasOverlay()).toBe(false);
 		expect(session.isDisposed).toBe(false);
 		mode.ui.injectDebugInput("\r");
 		await quitting;
@@ -154,6 +161,25 @@ describe("InteractiveMode pre-quit extension gate", () => {
 		expect(session.isDisposed).toBe(true);
 		expect(shutdownEvents).toBe(1);
 		expect(postmortem.quit).toHaveBeenCalledTimes(1);
+	});
+
+	it("Ctrl+C refuses a pending close without disposing the session", async () => {
+		new InputController(mode).setupKeyHandlers();
+		const entered = Promise.withResolvers<void>();
+		beforeShutdown = async (_event, ctx) => {
+			const prompt = ctx.ui.input("Session outcome");
+			entered.resolve();
+			await prompt;
+		};
+		const quitting = mode.shutdown();
+		await entered.promise;
+		mode.ui.injectDebugInput("\x03");
+		await quitting;
+		expect(mode.isShuttingDown).toBe(false);
+		expect(session.isDisposed).toBe(false);
+		expect(shutdownEvents).toBe(0);
+		expect(postmortem.quit).not.toHaveBeenCalled();
+		expect(postmortem.exitProcess).not.toHaveBeenCalled();
 	});
 
 	it("cancels before anything is stopped and asks again on the next quit", async () => {
@@ -173,7 +199,13 @@ describe("InteractiveMode pre-quit extension gate", () => {
 	});
 
 	it.each([
-		["a further Ctrl+D", (m: InteractiveMode): void => m.handleCtrlD()],
+		[
+			"an explicit Shutdown Agent selection",
+			(m: InteractiveMode): void => {
+				m.handleCtrlD();
+				m.ui.getFocused()?.handleInput?.("\r");
+			},
+		],
 		["a fatal close", (m: InteractiveMode): void => void m.shutdown({ cancellable: false })],
 	] as const)("skips a pending prompt on %s, ignores its late cancel, and tears down once", async (_name, request) => {
 		const entered = Promise.withResolvers<AbortSignal>();

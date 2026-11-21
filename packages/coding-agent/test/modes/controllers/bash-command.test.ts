@@ -300,7 +300,12 @@ describe("bash shortcut command", () => {
 		let focused: unknown = editor;
 		Object.assign(ctx, {
 			editor,
-			keybindings: { matches: (data: string, id: string) => id === "app.interrupt" && data === "\x1b" },
+			keybindings: {
+				matches: (data: string, id: string) =>
+					(id === "app.interrupt" && data === "\x03") ||
+					(id === "app.navigation.dismiss" && data === "\x1b") ||
+					(id === "app.agent.menu" && data === "\x04"),
+			},
 			ui: {
 				requestRender: vi.fn(),
 				requestComponentRender: vi.fn(),
@@ -325,6 +330,8 @@ describe("bash shortcut command", () => {
 			pressed.nanoWrite = press("\x0f");
 			pressed.enter = press("\r");
 			pressed.escape = press("\x1b");
+			pressed.cancel = press("\x03");
+			pressed.menu = press("\x04");
 			pressed.mouse = press("\x1b[<0;10;5M");
 			focused = {}; // a dialog took focus
 			pressed.dialog = press("n");
@@ -347,12 +354,14 @@ describe("bash shortcut command", () => {
 
 		expect(written).toEqual(["y", "\x0f", "\r"]);
 		expect(globalExpansions).toBe(0);
-		// Esc stays the cancel key; mouse reports and focused dialogs keep their input.
+		// Cancel, navigation, and the agent menu stay with the harness.
 		expect(pressed).toEqual({
 			answer: true,
 			nanoWrite: true,
 			enter: true,
 			escape: false,
+			cancel: false,
+			menu: false,
 			mouse: false,
 			dialog: false,
 		});

@@ -4,7 +4,7 @@ import { getMarkdownTheme, theme } from "../theme/theme";
 import { sanitizeErrorLine } from "../chrome/error-block";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { StreamingPanelContent } from "../chrome/streaming-panel";
-import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, interruptKey } from "../chrome/keybinding-hints";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import type { NativeNode } from "../native/node";
 import { col, md, node, span, text } from "../native/describe";
@@ -205,10 +205,10 @@ export class BtwPanelComponent extends OverlayPanel {
 	}
 
 	#describeFooter(canFollowUp: boolean, canBranch: boolean, injectKey: KeyId | undefined): NativeNode {
-		const esc: NativeHint = { keys: boundKeys("app.interrupt", ["escape"]).slice(0, 1), label: "to close" };
+		const esc: NativeHint = { keys: boundKeys("app.navigation.dismiss", ["escape"]).slice(0, 1), label: "to close" };
 		switch (this.#state) {
 			case "running":
-				return hintsRow([{ ...esc, label: "to cancel" }]);
+				return hintsRow([{ keys: boundKeys("app.interrupt", ["ctrl+c"]).slice(0, 1), label: "to cancel" }, esc]);
 			case "complete": {
 				const hints: NativeHint[] = [];
 				if (injectKey) hints.push({ keys: [injectKey], label: "to inject" });
@@ -239,11 +239,10 @@ export class BtwPanelComponent extends OverlayPanel {
 	}
 
 	#footerLine(): string {
-		// The main editor routes `app.interrupt` (Escape by default) to the panel.
-		const esc = interruptKey();
+		const esc = dismissKey();
 		switch (this.#state) {
 			case "running":
-				return theme.fg("muted", `${esc} to cancel`);
+				return theme.fg("muted", `${interruptKey()} to cancel · ${esc} to close`);
 			case "complete": {
 				const actions: string[] = [];
 				const copyKey = formatKeyHint("c");

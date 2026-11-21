@@ -194,7 +194,7 @@ export interface ControlSnapshot {
 export const CONTROL_EXEMPTIONS: readonly string[] = [
 	"app.suspend: OS job control; a stopped process cannot serve its socket (exempt_job_control)",
 	"app.editor.external, /todo edit, dialog external-editor shortcuts: external $EDITOR/child programs (exempt_external_program); twins draft_get/draft_set, set_todos, dialog_answer",
-	"app.clear double-press shutdown (exempt_double_press); use /exit",
+	"app.agent.menu can force process exit during teardown (exempt_process_exit); close from the pane itself",
 	"tool approvals from control connections only under control.approvals",
 ];
 

@@ -16,6 +16,7 @@ import { isMenuHistoryLeaver, isMenuHistoryParticipant, Loader, Spacer, Text } f
 import { MenuHistory } from "../menu-history";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import { AgentMenuComponent } from "@oh-my-pi/pi-tui/overlays/agent-menu";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -155,7 +156,7 @@ import { operatorIrcLogSource } from "../../irc/operator";
 import { cfgIrcViewerEnabled } from "../../irc/settings";
 import { IrcViewerComponent } from "@oh-my-pi/pi-tui/overlays/irc-viewer";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
-import { COPY_SELECTOR_OVERLAY_OPTIONS, CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
@@ -201,7 +202,7 @@ import {
 } from "../../config/model-settings";
 import { cfgRoleSettings, type RoleSettings } from "../../config/role-settings";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains, cfgSessionWorktreeScope } from "../../session/settings";
-import { cfgEffortRules, cfgFallbackEffortSelections } from "../../config/effort-policy";
+import { cfgEffortRules } from "../../config/effort-policy";
 import { cfgContextRules } from "../../config/context-policy";
 import { parseCompactionPointInput } from "../../config/compaction-threshold";
 import {
@@ -251,6 +252,7 @@ export type MenuKind =
 	| "model-facts"
 	| "agents-dashboard"
 	| "agent-hub"
+	| "agent-menu"
 	| "irc-viewer"
 	| "usage-dashboard"
 	| "advisor-config"
@@ -534,7 +536,7 @@ export class SelectorController {
 				this.ctx.ui.setFocus(sameMenu.component);
 				return true;
 			}
-			for (const [kind, menu] of [...this.#openMenus]) {
+			for (const [kind, menu] of this.#openMenus) {
 				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
 				if (menu.component instanceof SettingsSelectorComponent) menu.component.dispose();
@@ -2874,12 +2876,12 @@ export class SelectorController {
 							break;
 						}
 
-						// Set up escape handler and loader if summarizing
+						// Set up the cancel handler and loader if summarizing.
 						let summaryLoader: Loader | undefined;
-						const originalOnEscape = this.ctx.editor.onEscape;
+						const originalOnCancel = this.ctx.editor.onCancel;
 
 						if (wantsSummary) {
-							this.ctx.editor.onEscape = () => {
+							this.ctx.editor.onCancel = () => {
 								this.ctx.session.abortBranchSummary();
 							};
 							this.ctx.chatContainer.addChild(new Spacer(1));
@@ -2962,7 +2964,7 @@ export class SelectorController {
 								summaryLoader.stop();
 								this.ctx.statusContainer.disposeChildren();
 							}
-							this.ctx.editor.onEscape = originalOnEscape;
+							this.ctx.editor.onCancel = originalOnCancel;
 						}
 					},
 					() => {
@@ -3227,12 +3229,7 @@ export class SelectorController {
 				}
 			},
 			done,
-			() => {
-				// Release the alt buffer before teardown: shutdown() awaits flush/save/
-				// dispose/drain before stop() leaves the alt screen.
-				done();
-				void this.ctx.shutdown();
-			},
+			() => this.ctx.handleCtrlD(),
 			{
 				...selectorOptions,
 				getTerminalRows: () => this.ctx.ui.terminal.rows,
@@ -3897,6 +3894,24 @@ export class SelectorController {
 			const selector = new DebugSelectorComponent(this.ctx, done);
 			return { component: selector, focus: selector };
 		}, menu);
+	}
+
+	showAgentMenu(shutdown: () => void, restart: () => void, forceShutdown: () => void): void {
+		const menu = this.openMenu("agent-menu", () => this.showAgentMenu(shutdown, restart, forceShutdown));
+		if (!menu) return;
+		let handle: OverlayHandle;
+		const component = new AgentMenuComponent({
+			shutdown,
+			restart,
+			forceShutdown,
+			close: () => {
+				if (menu.close()) handle.hide();
+			},
+		});
+		menu.mount(component, () => {
+			handle = this.ctx.ui.showOverlay(component, { anchor: "center", width: 42 });
+			return handle;
+		});
 	}
 
 	/** Open the `/effort` picker for the viewed session (the focused subagent's, else main). */

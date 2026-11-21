@@ -171,7 +171,7 @@ describe("OmfgController", () => {
 		await controller.start("stop this");
 
 		expect(harness.container.children).toHaveLength(1);
-		expect(controller.handleEscape()).toBe(true);
+		expect(controller.handleCancel()).toBe(true);
 		expect(harness.container.children).toHaveLength(0);
 		expect(signal?.aborted).toBe(true);
 		expect(controller.hasActiveRequest()).toBe(false);

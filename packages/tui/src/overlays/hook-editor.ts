@@ -247,7 +247,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			clauses.map(([label, key]) => (key ? `${label}  ${formatTooltipKey(key)}` : label)).join(" · ");
 		const submitKey: KeyName = this.#promptStyle ? "enter" : primaryFollowUpKey;
 		const newlineKey: KeyName = this.#promptStyle ? "shift+enter" : "enter";
-		const cancelKey = this.#promptStyle ? "escape" : (boundKeys("app.interrupt", ["escape"])[0] ?? "escape");
+		const cancelKey = this.#promptStyle ? "escape" : (boundKeys("app.interrupt", ["ctrl+c"])[0] ?? "ctrl+c");
 		const buttons: (NativeNode | null)[] = [];
 		if (this.#externalEditor) {
 			const [externalKey] = boundKeys("app.editor.external", ["ctrl+g"]);
@@ -457,7 +457,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			return;
 		}
 
-		// Escape to cancel
+		// Cancel the editor.
 		if (matchesAppInterrupt(keyData)) {
 			this.#cancel();
 			return;

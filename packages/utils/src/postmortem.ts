@@ -177,7 +177,7 @@ function invokeCleanup(
  *
  * Returns a Promise that settles after all cleanups complete or error out.
  */
-function runCleanup(reason: Reason, keepAlive = false): Promise<void> {
+function runCleanup(reason: Reason, keepAlive = false, finalize?: () => void | Promise<void>): Promise<void> {
 	switch (cleanupStage) {
 		case "idle":
 			cleanupStage = "running";
@@ -214,7 +214,7 @@ function runCleanup(reason: Reason, keepAlive = false): Promise<void> {
 		if (passDone || !baseDeadlineElapsed || openExtensions > 0) return;
 		passDone = true;
 		logger.error("Cleanup deadline exceeded; proceeding with exit", { reason });
-		settle();
+		if (!finalize) settle();
 		deadline.resolve();
 	};
 	// Holds that still keep the pass open and have a message for the user. The
@@ -284,7 +284,7 @@ function runCleanup(reason: Reason, keepAlive = false): Promise<void> {
 		// Join callbacks registered while this pass ran (already error-caught);
 		// each batch may register more. The deadline race still bounds the pass.
 		while (late.length > 0) await Promise.allSettled(late.splice(0));
-		settle();
+		if (!finalize) settle();
 	});
 	deadlineTimers.push(
 		setTimeout(() => {
@@ -300,9 +300,13 @@ function runCleanup(reason: Reason, keepAlive = false): Promise<void> {
 		passDone = true;
 		for (const timer of deadlineTimers) clearTimeout(timer);
 		if (activePassDeadline === passDeadline) activePassDeadline = undefined;
-		// A re-armed pass must drop only its own settled promise; an older
-		// deadline-limited pass may finish after a newer one has already started.
-		if (keepAlive && cleanupPass === pass && cleanupPromise === passPromise) cleanupPromise = undefined;
+		const finish = () => {
+			if (finalize) settle();
+			// Do not drop a newer pass started after this one settled.
+			if (keepAlive && cleanupPass === pass && cleanupPromise === passPromise) cleanupPromise = undefined;
+		};
+		// A concurrent signal joins the pass and may only exit after the handoff.
+		return finalize ? Promise.try(finalize).finally(finish) : finish();
 	});
 	cleanupPromise = passPromise;
 	return cleanupPromise;
@@ -967,8 +971,8 @@ export function register(
  * resources opened afterwards are still cleaned at the eventual real exit.
  * Use this in workers or when you need to clean up but continue execution.
  */
-export function cleanup(): Promise<void> {
-	return runCleanup(Reason.MANUAL, true);
+export function cleanup(finalize?: () => void | Promise<void>): Promise<void> {
+	return runCleanup(Reason.MANUAL, true, finalize);
 }
 
 /**
@@ -989,6 +993,8 @@ export function cleanupForExit(reason: Reason): Promise<void> {
 export interface QuitOptions {
 	/** Wait for buffered stdout before exiting; disable after the terminal has disconnected. */
 	drainStdout?: boolean;
+	/** Last handoff, after cleanup and stdout drain but before any joined exit. */
+	beforeExit?: () => void | Promise<void>;
 }
 
 /**
@@ -1004,15 +1010,25 @@ export async function drainStdout(): Promise<void> {
 }
 
 async function runQuit(code: number, exitMode: "guarded" | "native", options: QuitOptions = {}): Promise<void> {
-	await runCleanup(Reason.MANUAL);
+	const { beforeExit } = options;
+	await runCleanup(
+		Reason.MANUAL,
+		false,
+		beforeExit &&
+			(async () => {
+				try {
+					if (Bun.isMainThread && options.drainStdout !== false) await drainStdout();
+				} finally {
+					await beforeExit();
+				}
+			}),
+	);
 
 	if (!Bun.isMainThread) {
 		return; // Workers: cleanup done, let worker exit naturally
 	}
 
-	if (options.drainStdout !== false) {
-		await drainStdout();
-	}
+	if (!beforeExit && options.drainStdout !== false) await drainStdout();
 
 	switch (exitMode) {
 		case "guarded":

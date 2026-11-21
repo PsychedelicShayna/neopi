@@ -692,6 +692,8 @@ describe("live persona generation", () => {
 		h.press(SPACE, "G", ENTER, "Try this", ENTER);
 		expect(h.overlay.blocksMenuHistory).toBe(true);
 		h.press(ESC);
+		expect(request?.signal.aborted).toBe(false);
+		h.press("\x03");
 		expect(request?.signal.aborted).toBe(true);
 		expect(h.overlay.blocksMenuHistory).toBe(false);
 		pending.resolve("late response");

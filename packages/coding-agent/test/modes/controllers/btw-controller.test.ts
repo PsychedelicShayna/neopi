@@ -244,7 +244,7 @@ describe("BtwController", () => {
 
 		await controller.start("Question?");
 		expect(btwContainer.children).toHaveLength(1);
-		expect(controller.handleEscape()).toBe(true);
+		expect(controller.handleCancel()).toBe(true);
 		expect(runEphemeralTurn.mock.calls[0]?.[0].signal?.aborted).toBe(true);
 		expect(btwContainer.children).toHaveLength(1);
 		expect(controller.hasActiveRequest()).toBe(true);
@@ -686,7 +686,7 @@ describe("BtwController", () => {
 		const abortedRun = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
 		const abortedController = new BtwController(makeCtx(makeFakeSession(abortedRun)));
 		await abortedController.start("Question?");
-		expect(abortedController.handleEscape()).toBe(true);
+		expect(abortedController.handleCancel()).toBe(true);
 		expect(abortedController.canBranch()).toBe(false);
 
 		const erroredRun = vi.fn(async () => {

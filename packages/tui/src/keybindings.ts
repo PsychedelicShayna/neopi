@@ -27,6 +27,7 @@ export interface Keybindings {
 	"tui.editor.yank": true;
 	"tui.editor.yankPop": true;
 	"tui.editor.undo": true;
+	"tui.editor.redo": true;
 	"tui.editor.spellingSuggestions": true;
 	// Generic input actions
 	"tui.input.newLine": true;
@@ -109,7 +110,7 @@ export const TUI_KEYBINDINGS = {
 		description: "Delete character backward",
 	},
 	"tui.editor.deleteCharForward": {
-		defaultKeys: ["delete", "ctrl+d"],
+		defaultKeys: "delete",
 		description: "Delete character forward",
 	},
 	"tui.editor.deleteWordBackward": {
@@ -131,6 +132,7 @@ export const TUI_KEYBINDINGS = {
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
 	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: ["ctrl+-", "ctrl+_"], description: "Undo" },
+	"tui.editor.redo": { defaultKeys: "alt+u", description: "Redo (Vim normal mode)" },
 	"tui.editor.spellingSuggestions": {
 		defaultKeys: "ctrl+.",
 		description: "Show spelling replacements",

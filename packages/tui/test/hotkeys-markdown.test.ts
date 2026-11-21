@@ -12,8 +12,7 @@ beforeEach(() => {
 });
 afterEach(() => setMenuSearchVimMode(previousVimMode));
 
-/** Exit-row wiring for stubs that only care about display strings: no key claims the
- *  forward-delete role, so the exit row renders its plain "Exit" wording. */
+/** Stub bindings for tests that only exercise display strings. */
 const noForwardDelete = { getKeys: () => [], matchesCanonical: () => false };
 
 function scrollOffset(sheet: HotkeysSheetComponent): number {
@@ -40,9 +39,9 @@ describe("buildHotkeysMarkdown", () => {
 			"app.tools.expand": "Ctrl+O",
 			"app.tools.toggleVisibility": "Ctrl+Shift+O",
 			"app.display.reset": "Alt+L",
-			"app.interrupt": "Esc",
-			"app.clear": "Ctrl+C",
-			"app.exit": "Ctrl+D",
+			"app.interrupt": "Ctrl+C",
+			"app.navigation.dismiss": "Esc",
+			"app.agent.menu": "Ctrl+D",
 			"app.suspend": "Ctrl+Z",
 			"app.thinking.cycle": "Shift+Tab",
 			"app.model.cycleForward": "Ctrl+P",
@@ -76,6 +75,9 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
 		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
+		expect(markdown).toContain("| `Ctrl+C` | Cancel active work without clearing the draft or quitting |");
+		expect(markdown).toContain("| `Esc` | Leave the current view / dismiss autocomplete ");
+		expect(markdown).toContain("| `Ctrl+D` | Open the Agent Menu / force exit during teardown ");
 		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
 		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
 		for (const line of lines) {

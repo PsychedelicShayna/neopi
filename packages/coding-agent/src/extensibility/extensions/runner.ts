@@ -170,7 +170,7 @@ function normalizeHandlerTimeout(timeoutMs: number): number {
  * `before_provider_request`), but `session_shutdown` is fire-and-forget
  * teardown — extensions receive no result and the user has already asked to
  * leave. A hung handler (e.g. an extension waiting on a stuck IPC pipe to a
- * companion app) MUST NOT hold Ctrl+C / `/exit` hostage for the full window.
+ * companion app) MUST NOT hold shutdown hostage for the full window.
  * See issue #2600.
  */
 export const SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS = 2_000;

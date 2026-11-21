@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import { EscapeGesture } from "../src/chains/escape-gesture";
+import { ChainStepGesture } from "../src/chains/escape-gesture";
 
 function presses(times: number[]): string[] {
-	const gesture = new EscapeGesture();
+	const gesture = new ChainStepGesture();
 	return times.map(time => gesture.press(time));
 }
 
-describe("EscapeGesture", () => {
+describe("ChainStepGesture", () => {
 	it("skips on the second press and aborts on the third, then starts over", () => {
 		expect(presses([0, 100, 200, 300])).toEqual(["none", "skip", "abort", "none"]);
 	});

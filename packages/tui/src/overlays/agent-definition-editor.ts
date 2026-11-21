@@ -27,6 +27,8 @@ import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
 import { extractPrintableText } from "../keys";
+import { interruptKey } from "../chrome/keybinding-hints";
+import { matchesAppInterrupt } from "../keybinding-matchers";
 import { col, node, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import {
@@ -1891,13 +1893,13 @@ export class AgentDefinitionEditor implements Component {
 		const controller = new AbortController();
 		this.#controller = controller;
 		const returnTo = target === "all" ? "generate" : target;
-		const cancel = this.#list([{ value: "cancel", label: "The author is writing… Esc cancels" }], "cancel");
+		const cancel = this.#list([{ value: "cancel", label: "The author is writing…" }], "cancel");
 		cancel.onSelect = cancel.onCancel = () => {
 			controller.abort();
 			this.#busy = false;
 			this.#showDetail(returnTo);
 		};
-		this.#setScreen("generating", cancel, "Generating · Esc cancel", {
+		this.#setScreen("generating", cancel, `Generating · ${interruptKey()} cancel`, {
 			preview: true,
 			field: target === "all" ? undefined : target,
 		});
@@ -2247,7 +2249,12 @@ export class AgentDefinitionEditor implements Component {
 			this.#render();
 			return;
 		}
-		if (this.#busy && this.#screen !== "generating") return;
+		if (this.#screen === "generating" && active instanceof SelectList) {
+			if (matchesAppInterrupt(data)) active.onCancel?.();
+			else if (matchesKey(data, "enter")) active.handleInput(data);
+			return;
+		}
+		if (this.#busy) return;
 		if (this.#screen === "detail" && active instanceof SelectList) {
 			const value = active.getSelectedItem()?.value;
 			if (data === "r" || data === "R" || matchesKey(data, "ctrl+r")) {

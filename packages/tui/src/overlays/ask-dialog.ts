@@ -85,7 +85,7 @@ export type ExtensionAskDialogResult = ExtensionAskDialogSubmitResult | Extensio
 import { disambiguateDisplayLabels, expandKeyHint, sanitizeCarriageReturns } from "../render/render-utils";
 import { getTabBarTheme } from "../chrome/shared";
 import { getMarkdownTheme, highlightCode, theme } from "../theme/theme";
-import { matchesAppToolsExpand, matchesSelectCancel } from "../keybinding-matchers";
+import { matchesAppDismiss, matchesAppInterrupt, matchesAppToolsExpand } from "../keybinding-matchers";
 import { extractPrintableText } from "../keys";
 import { MenuKeyReader, menuScrollBy, type MenuNavAction } from "../components/menu-navigation";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
@@ -787,13 +787,13 @@ export class AskDialogComponent implements Component {
 			this.#keys.reset();
 			return;
 		}
-		if (getKeybindings().matches(keyData, "app.ask.cancel")) {
+		if (matchesAppInterrupt(keyData) || getKeybindings().matches(keyData, "app.ask.cancel")) {
 			this.#finishCancel();
 			return;
 		}
-		if (matchesSelectCancel(keyData)) {
+		if (matchesAppDismiss(keyData)) {
 			if (composerOwns) this.#toComposer(keyData);
-			else this.#finishCancel();
+			else this.#releaseKeys();
 			return;
 		}
 		if (getKeybindings().matches(keyData, "app.ask.hide")) {
@@ -1052,8 +1052,7 @@ export class AskDialogComponent implements Component {
 			...(hideKey ? { keys: hideKey } : {}),
 			title: `${t("tui.ask.show_question")}${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
-		// Hidden, the composer holds the keys and Esc is its own: the ask's cancel key skips.
-		const cancelKey = getKeybindings().getKeys("app.ask.cancel")[0];
+		const cancelKey = getKeybindings().getKeys("app.interrupt")[0] ?? "ctrl+c";
 		const skip = actionButton(t("tui.ask.skip"), "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
@@ -1168,8 +1167,7 @@ export class AskDialogComponent implements Component {
 	 * shows its hint in place of the answer actions.
 	 */
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
-		// While a draft owns typing, Esc is the composer's: the ask's cancel key skips.
-		const cancelKey = getKeybindings().getKeys(blocked ? "app.ask.cancel" : "tui.select.cancel")[0];
+		const cancelKey = getKeybindings().getKeys("app.interrupt")[0] ?? "ctrl+c";
 		const skip = actionButton(t("tui.ask.skip"), "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			title: `${t("tui.ask.skip_unanswered")}${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
@@ -1460,7 +1458,7 @@ export class AskDialogComponent implements Component {
 	 */
 	#renderHidden(width: number): readonly string[] {
 		const showKey = editorKey("app.ask.hide");
-		const cancelKey = editorKey("app.ask.cancel");
+		const cancelKey = editorKey("app.interrupt");
 		const hints = [
 			showKey && `${showKey} ${t("tui.ask.hint.show")}`,
 			cancelKey && `${cancelKey} ${t("tui.ask.hint.cancel")}`,
@@ -1544,13 +1542,13 @@ export class AskDialogComponent implements Component {
 	): string {
 		// Hide rides along with cancel: both leave the question view without answering.
 		const hideKey = editorKey("app.ask.hide");
-		const cancel = `${editorKey("tui.select.cancel")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
+		const cancel = `${editorKey("app.interrupt")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
 		// While the draft owns typing, Esc is the composer's: the ask's own cancel key cancels.
 		if (inputGuard && this.#guardBlocks())
-			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${editorKey("app.ask.cancel")} ${t("tui.ask.hint.cancel")}${hideKey ? ` · ${hideKey} ${t("tui.ask.hint.hide")}` : ""}`;
+			return `${this.#guardHint(inputGuard)}${this.#expandHint(question)} · ${cancel}`;
 		if (submit) {
 			const scroll = indicator ? ` ${indicator} ${t("tui.ask.hint.scroll")} ·` : "";
 			return `${enter} ${t("tui.ask.hint.submit")} · ${cancel} · ${upDown} ${t("tui.ask.hint.scroll")} ·${scroll} PgUp/Dn ${t("tui.ask.hint.page")} · ? ${t("tui.ask.hint.help")}`;

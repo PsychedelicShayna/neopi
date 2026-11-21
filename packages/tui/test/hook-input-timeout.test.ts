@@ -148,13 +148,13 @@ describe("HookInputComponent timeout", () => {
 });
 
 describe("HookInputComponent native sheet", () => {
-	it("Submit and Cancel run what Enter and Esc run; keys live only in tooltips", () => {
+	it("shows the Submit and Cancel bindings in the native tooltips and dispatches both buttons", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
 		const component = new HookInputComponent("Search pull requests", undefined, onSubmit, onCancel);
 		const buttons = nodes(component.describe(CX)).filter(node => node.p?.role === "omp.btn");
 		expect(buttons.map(button => [button.key, button.p?.title])).toEqual([
-			["cancel", "Cancel  esc"],
+			["cancel", "Cancel  Ctrl+C"],
 			["submit", "Submit  ⏎"],
 		]);
 		// No key legend text in the native body: the terminal-only hint stays in render().

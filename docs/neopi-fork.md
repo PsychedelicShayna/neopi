@@ -213,8 +213,8 @@ Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and
 
 While a chain runs, the composer is locked: the draft stays visible with every line painted by the `display.shimmer` sweep (static muted text when shimmer is disabled), typing is ignored, and the status line shows the chain, the step, and `preprocessing…`. Each completed step replaces the composer text, so the rewrite is visible as it happens.
 
-- **Esc Esc** (within 3 s) skips the step in flight; its input passes to the next step unchanged.
-- **Esc Esc Esc** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
+- **Alt+S twice** (within 3 s) skips the step in flight; its input passes to the next step unchanged.
+- **Alt+S three times** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
 Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:

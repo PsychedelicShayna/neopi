@@ -137,7 +137,7 @@ export class BtwController {
 		return this.ctx.focusedAgentId ? this.#sessionManager.getSessionId() : undefined;
 	}
 
-	/** Whether /btw owns Escape: the inline panel, or a note the composer talks to. */
+	/** Whether /btw owns navigation: the inline panel, or a note the composer talks to. */
 	hasActiveRequest(): boolean {
 		return this.#visible || this.#focus !== undefined;
 	}
@@ -273,7 +273,6 @@ export class BtwController {
 			return true;
 		}
 		if (!this.#visible) return false;
-		if (this.handleCancel()) return true;
 		this.#hideInline();
 		return true;
 	}
@@ -779,8 +778,7 @@ export class BtwController {
 					}
 				: undefined,
 			getHeight: () => this.ctx.ui.terminal.rows,
-			// Tern has no inline panel: Esc puts the sheet away, `x` cancels.
-			escapeHides: this.ctx.ui.nativeRendering,
+			cancelWithX: this.ctx.ui.nativeRendering,
 		});
 		const menu = this.ctx.openMenu("btw-history", () => this.#showHistory(store));
 		if (!menu) return panel;

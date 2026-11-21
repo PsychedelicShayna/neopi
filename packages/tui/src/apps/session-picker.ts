@@ -1,4 +1,6 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, postmortem } from "@oh-my-pi/pi-utils";
+import { AgentMenuComponent } from "../overlays/agent-menu";
+import type { OverlayHandle } from "../tui";
 import {
 	SessionSelectorComponent,
 	type SessionHistoryMatcher,
@@ -61,13 +63,25 @@ export async function selectSession<T extends SessionSelectorEntry>(
 
 	return runStandaloneTui<T | null>(
 		({ ui, finish }) => {
+			let agentMenuHandle: OverlayHandle | undefined;
 			const selector = new SessionSelectorComponent(
 				sessions,
 				(session: T) => finish(session),
 				() => finish(null),
 				() => {
-					ui.stop();
-					process.exit(0);
+					if (agentMenuHandle) return;
+					const close = () => {
+						agentMenuHandle?.hide();
+						agentMenuHandle = undefined;
+					};
+					const exit = (code: number) => {
+						ui.stop();
+						postmortem.exitProcess(code);
+					};
+					agentMenuHandle = ui.showOverlay(
+						new AgentMenuComponent({ close, shutdown: () => exit(0), forceShutdown: () => exit(130) }),
+						{ anchor: "center", width: 42 },
+					);
 				},
 				{
 					onDelete: options.allowDelete === false ? undefined : host.deleteSession,

@@ -1,13 +1,13 @@
 import { uiProvenanceSuffix } from "./theme/provenance";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
+import { formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
 import { getMenuSearchVimMode, MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
 import { MenuHelp, menuHintLines } from "./components/menu-hints";
 import { ScrollView } from "./components/scroll-view";
 import { matchesSelectCancel } from "./keybinding-matchers";
 import type { KeyName } from "./key-hint-format";
-import { canonicalKeyId } from "./keybindings";
+import type { Keybinding } from "./keybindings";
 import { col, node, span, text } from "./native/describe";
 import type { NativeNode, NativeScroll, NativeUiEvent } from "./native/node";
 import { actionBar, actionButton } from "./native/overlay";
@@ -29,7 +29,7 @@ type HotkeyPart =
 			keys: readonly string[];
 			/** Key ids (`ctrl+r`) for native keycaps, which the terminal draws with platform glyphs. */
 			ids: readonly KeyName[];
-			action?: AppKeybinding;
+			action?: Keybinding;
 	  }
 	| { token: string }
 	| { text: string };
@@ -61,37 +61,11 @@ function markdownPart(bindings: HotkeysMarkdownBindings, part: HotkeyPart): stri
 function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 	const isMac = keyHintPlatform() === "darwin";
 	// An action's effective keys, one keycap each; `Disabled` when unbound.
-	const act = (action: AppKeybinding): HotkeyPart => {
+	const act = (action: Keybinding): HotkeyPart => {
 		const keys = bindings.keybindings.getKeys(action);
 		if (keys.length > 0) return { keys: keys.map(formatKeyHint), ids: keys, action };
 		return { keys: [bindings.keybindings.getDisplayString(action) || "Disabled"], ids: [], action };
 	};
-	// CustomEditor tests the chord that was actually pressed, so exit keys split by role: a key
-	// that also carries tui.editor.deleteCharForward (the readline `^D` overlap) forward-deletes
-	// while the prompt holds a draft, any other exit key quits immediately. Mixed bindings such as
-	// `["ctrl+d", "ctrl+q"]` therefore get one row per behavior instead of a single row claiming
-	// both keys delete.
-	const exitKeys = bindings.keybindings.getKeys("app.exit");
-	const deletingExitKeys = exitKeys.filter(key =>
-		bindings.keybindings.matchesCanonical(canonicalKeyId(key), "tui.editor.deleteCharForward"),
-	);
-	const quittingExitKeys = exitKeys.filter(
-		key => !bindings.keybindings.matchesCanonical(canonicalKeyId(key), "tui.editor.deleteCharForward"),
-	);
-	const exitRows: HotkeyRow[] = [];
-	if (deletingExitKeys.length > 0) {
-		exitRows.push({
-			keys: [hints(deletingExitKeys)],
-			action: "Delete char forward (with draft) / exit (empty prompt)",
-		});
-	}
-	// An unbound exit action still gets its row, mirroring the `Disabled` hint every other row uses.
-	if (quittingExitKeys.length > 0 || deletingExitKeys.length === 0) {
-		exitRows.push({
-			keys: [quittingExitKeys.length > 0 ? hints(quittingExitKeys) : { keys: ["Disabled"], ids: [] }],
-			action: "Exit",
-		});
-	}
 	const groups: HotkeyGroup[] = [
 		{
 			title: "Navigation",
@@ -124,9 +98,15 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 			title: "Other",
 			rows: [
 				{ keys: [hints(["tab"])], action: "Path completion / accept autocomplete" },
-				{ keys: [act("app.interrupt")], action: "Cancel autocomplete / interrupt active work" },
-				{ keys: [act("app.clear")], action: "Clear editor (first) / exit (second)" },
-				...exitRows,
+				{ keys: [act("app.navigation.dismiss")], action: "Leave the current view / dismiss autocomplete" },
+				{ keys: [act("app.interrupt")], action: "Cancel active work without clearing the draft or quitting" },
+				{
+					keys: [act("app.agent.menu")],
+					action: "Open the Agent Menu / force exit during teardown",
+				},
+				{ keys: [act("tui.editor.deleteCharForward")], action: "Delete char forward" },
+				{ keys: [act("tui.editor.redo")], action: "Redo (Vim normal mode)" },
+				{ keys: [act("app.chain.skipStep")], action: "Skip the current preprocessing step" },
 				{ keys: [act("app.suspend")], action: "Suspend to background" },
 				{ keys: [act("app.display.reset")], action: "Reset terminal display" },
 				{ keys: [act("app.thinking.cycle")], action: "Cycle thinking level" },
@@ -145,7 +125,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 					action: "Pick an extension link on screen by its tag; press again to browse the whole transcript",
 				},
 				{ keys: [act("app.ask.hide")], action: "Hide/show a pending ask question" },
-				{ keys: [act("app.ask.cancel")], action: "Cancel a pending ask question (Esc does only inside it)" },
+				{ keys: [act("app.ask.cancel")], action: "Cancel a pending ask question (also Cancel active work)" },
 				{ keys: [act("app.ask.note")], action: "Add or edit a note on an ask option" },
 				{ keys: [act("app.approval.approve")], action: "Approve a pending tool call" },
 				{ keys: [act("app.thinking.toggle")], action: "Toggle thinking block visibility" },

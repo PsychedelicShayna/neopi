@@ -4,8 +4,7 @@
  * Handles /mcp subcommands for managing MCP servers.
  */
 import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
-import { getMCPConfigPath, getProjectDir, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
-import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
+import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import type { SourceMeta } from "../../capability/types";
 import {
@@ -69,8 +68,8 @@ import { cfgMcpEnableProjectConfig, cfgMcpIncludeServers } from "../../mcp/setti
 const MCP_MANUAL_INPUT_PROVIDER_ID = "mcp";
 const MCP_MANUAL_LOGIN_TIP = "Headless? Paste the redirect URL or code with /login <value>.";
 const MCP_TEST_ESCAPE_GRACE_MS = 5_000;
-/** MCP OAuth Esc handlers mapped to the handler each one restores when its flow unwinds. */
-const mcpOAuthEscapeOriginals = new WeakMap<() => void, (() => void) | undefined>();
+/** MCP OAuth cancel handlers mapped to the handler each one restores when its flow unwinds. */
+const mcpOAuthCancelOriginals = new WeakMap<() => void, (() => void) | undefined>();
 
 /**
  * Hint block for an in-flight `/mcp test`. It remains active until settlement
@@ -687,7 +686,7 @@ export class MCPCommandController {
 	): Promise<OAuthFlowResult> {
 		const { callbacks, release } = this.#oauthFlowCallbacks();
 		try {
-			return await this.#withOAuthEscape((escapeSignal, onClaimed) =>
+			return await this.#withOAuthCancel((escapeSignal, onClaimed) =>
 				runMcpOAuthFlow({
 					authUrl,
 					tokenUrl,
@@ -830,26 +829,26 @@ export class MCPCommandController {
 	 * already-dead handler, so unwinding either order leaves the default
 	 * (interrupt, cancel compaction) installed for the session.
 	 */
-	#withOAuthEscape<T>(run: (escapeSignal: AbortSignal, onClaimed: () => void) => Promise<T>): Promise<T> {
+	#withOAuthCancel<T>(run: (signal: AbortSignal, onClaimed: () => void) => Promise<T>): Promise<T> {
 		const escape = new AbortController();
 		const installed = (): void => {
 			escape.abort(MCP_OAUTH_USER_CANCEL_REASON);
 		};
 		// Chain through any OAuth handler already installed to the session
 		// default underneath it, so unwinding in either order restores the default.
-		const current = this.ctx.editor.onEscape;
+		const current = this.ctx.editor.onCancel;
 		const original =
-			current !== undefined && mcpOAuthEscapeOriginals.has(current) ? mcpOAuthEscapeOriginals.get(current) : current;
-		mcpOAuthEscapeOriginals.set(installed, original);
+			current !== undefined && mcpOAuthCancelOriginals.has(current) ? mcpOAuthCancelOriginals.get(current) : current;
+		mcpOAuthCancelOriginals.set(installed, original);
 		const onClaimed = (): void => {
-			this.ctx.editor.onEscape = installed;
+			this.ctx.editor.onCancel = installed;
 		};
 		return run(escape.signal, onClaimed).finally(() => {
 			// Restore only while still owning the hook: a replacement flow
 			// installs its own handler after this one unwinds, and that
 			// handler (and the default it would restore) must survive here.
-			if (this.ctx.editor.onEscape === installed) {
-				this.ctx.editor.onEscape = original;
+			if (this.ctx.editor.onCancel === installed) {
+				this.ctx.editor.onCancel = original;
 			}
 		});
 	}
@@ -1005,10 +1004,7 @@ export class MCPCommandController {
 				"",
 				theme.fg("muted", "Server creation cancelled."),
 				"",
-				theme.fg(
-					"dim",
-					`Tip: Press ${formatKeyHint("ctrl+c")} or ${appKey(this.ctx.keybindings, "app.interrupt")} anytime to cancel`,
-				),
+				theme.fg("dim", `Tip: Press ${appKey(this.ctx.keybindings, "app.interrupt")} anytime to cancel`),
 				"",
 			].join("\n"),
 		);
@@ -1597,7 +1593,7 @@ export class MCPCommandController {
 
 			const { callbacks, release } = this.#oauthFlowCallbacks();
 			try {
-				const outcome = await this.#withOAuthEscape((signal, onClaimed) =>
+				const outcome = await this.#withOAuthCancel((signal, onClaimed) =>
 					reauthorizeMcpServer(name, found, {
 						authStorage: this.ctx.session.modelRegistry.authStorage,
 						authChallenge: options.authChallenge,
@@ -1617,8 +1613,7 @@ export class MCPCommandController {
 						onReauthorizing: () => {
 							this.#showMessage(["", theme.fg("muted", `Reauthorizing "${name}"...`), ""].join("\n"));
 						},
-						// Install the Esc hook once the flow's claim resolves, so a
-						// superseded flow restores nothing (see #withOAuthEscape).
+						// Install the cancel hook only once claimed, so a superseded flow restores nothing.
 						onClaimed,
 						...callbacks,
 					}),
