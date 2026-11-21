@@ -88,7 +88,7 @@ export function findLeadingSlashCommandStart(text: string): number | null {
 }
 
 export function findTrailingSlashCommandStart(text: string): number | null {
-	const match = /(?:^|[\s("'`\[{<])\/([^\s/]*)$/.exec(text);
+	const match = /(?:^|[\s("'`[{<])\/([^\s/]*)$/.exec(text);
 	if (!match || match.index === undefined) return null;
 	const slashOffset = match[0].indexOf("/");
 	return match.index + slashOffset;
@@ -261,6 +261,8 @@ export interface SlashCommand {
 	aliases?: string[];
 	/** Accepted aliases revealed by a literal prefix once no visible command name or alias shares it. */
 	hiddenAliases?: string[];
+	/** Choose the spelling shown in autocomplete instead of the primary name and hidden aliases. */
+	getAutocompleteName?: () => string;
 	description?: string;
 	/** Optional type-indicator glyph shown before the command name in autocomplete */
 	icon?: string;
@@ -402,6 +404,10 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 	);
 }
 
+function getAutocompleteCommandName(cmd: CommandEntry): string | undefined {
+	return ("getAutocompleteName" in cmd && cmd.getAutocompleteName?.()) || getCommandName(cmd);
+}
+
 export function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
 	if (lowerPrefix.length === 0) return 1;
 	if (lowerPrefix === lowerTarget) return 1000;
@@ -419,7 +425,7 @@ function buildSlashCommandCompletions(
 	commandUsage?: (name: string) => number,
 ): AutocompleteItem[] {
 	const matches = commands.flatMap(cmd => {
-		const name = getCommandName(cmd);
+		const name = getAutocompleteCommandName(cmd);
 		if (!name) return [];
 		const usage = commandUsage?.(name) ?? 0;
 		const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
@@ -470,7 +476,7 @@ function buildSlashCommandCompletions(
 			const fullDesc = resolveFullDesc();
 			best = {
 				value: name,
-				label: ("name" in cmd ? cmd.name : cmd.label) + provenanceSuffix(cmd.provenance),
+				label: ("name" in cmd ? name : cmd.label) + provenanceSuffix(cmd.provenance),
 				score: primaryScore,
 				usage,
 				...(cmd.icon && { icon: cmd.icon }),
@@ -511,7 +517,7 @@ function buildSlashCommandCompletions(
 		lowerPrefix.length > 0 &&
 		!commands.some(
 			cmd =>
-				getCommandName(cmd)?.toLowerCase().startsWith(lowerPrefix) === true ||
+				getAutocompleteCommandName(cmd)?.toLowerCase().startsWith(lowerPrefix) === true ||
 				getCommandAliases(cmd).some(alias => alias.toLowerCase().startsWith(lowerPrefix)),
 		)
 	) {
@@ -519,7 +525,7 @@ function buildSlashCommandCompletions(
 		// alias reveals only on its literal prefix, once visible prefixes run out.
 		for (const cmd of commands) {
 			const name = getCommandName(cmd);
-			if (!name) continue;
+			if (!name || ("getAutocompleteName" in cmd && cmd.getAutocompleteName)) continue;
 			for (const alias of ("hiddenAliases" in cmd ? cmd.hiddenAliases : undefined) ?? []) {
 				if (!alias.toLowerCase().startsWith(lowerPrefix)) continue;
 				matches.push({
@@ -537,7 +543,12 @@ function buildSlashCommandCompletions(
 	if (
 		lowerPrefix.length > 0 &&
 		commands.some(
-			cmd => "hiddenAliases" in cmd && cmd.hiddenAliases?.some(alias => alias.toLowerCase() === lowerPrefix),
+			cmd =>
+				("hiddenAliases" in cmd && cmd.hiddenAliases?.some(alias => alias.toLowerCase() === lowerPrefix)) ||
+				("getAutocompleteName" in cmd &&
+					cmd.getAutocompleteName &&
+					cmd.name.toLowerCase() === lowerPrefix &&
+					cmd.getAutocompleteName().toLowerCase() !== lowerPrefix),
 		)
 	) {
 		for (const match of matches) {
@@ -624,7 +635,7 @@ function collapseSkillNamespace(commands: CommandEntry[], lowerPrefix: string): 
 	let commandTier = 0;
 	if (!approachesNamespace) {
 		for (const cmd of commands) {
-			const name = getCommandName(cmd);
+			const name = getAutocompleteCommandName(cmd);
 			if (!name || name.startsWith(SKILL_NAMESPACE)) continue;
 			commandTier = Math.max(commandTier, commandBreakoutTier(lowerPrefix, name.toLowerCase()));
 			for (const alias of getCommandAliases(cmd)) {

@@ -23,6 +23,8 @@ export interface BuiltinSlashCommand {
 	aliases?: string[];
 	/** Accepted aliases revealed by a literal prefix once no visible command name or alias shares it. */
 	hiddenAliases?: string[];
+	/** Choose the spelling shown in autocomplete instead of the primary name and hidden aliases. */
+	getAutocompleteName?: () => string;
 	description: string;
 	/** Autocomplete type-indicator icon. Defaults to "action" (generic terminal glyph). */
 	icon?: SlashCommandIconName;

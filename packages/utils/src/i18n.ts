@@ -9,7 +9,6 @@ import tuiEs from "./i18n-catalogs/tui.es.toml" with { type: "text" };
 import cliEn from "./i18n-catalogs/cli.en.toml" with { type: "text" };
 import cliEs from "./i18n-catalogs/cli.es.toml" with { type: "text" };
 
-export type Locale = "en" | "es";
 export type TranslationValues = Readonly<Record<string, string | number>>;
 export type Catalog = Readonly<Record<string, string>>;
 
@@ -35,16 +34,27 @@ const english = loadCatalog([baseEn, settingsEn, statusEn, tuiEn, cliEn]);
 const spanish = Object.fromEntries(
 	Object.entries(loadCatalog([baseEs, settingsEs, statusEs, tuiEs, cliEs])).filter(([, value]) => value !== ""),
 );
-const effectiveCatalogs: Readonly<Record<Locale, Catalog>> = {
-	en: english,
-	es: { ...english, ...spanish },
+const localeRegistry = {
+	en: { name: "English", alternateName: "Inglés", catalog: english, overrides: english },
+	es: { name: "Español", alternateName: "Spanish", catalog: { ...english, ...spanish }, overrides: spanish },
 };
+
+export type Locale = keyof typeof localeRegistry;
+export const LOCALES = Object.keys(localeRegistry) as readonly Locale[];
+
+export function getLocaleNames(locale: Locale): { readonly name: string; readonly alternateName: string } {
+	return localeRegistry[locale];
+}
+
+function isLocale(value: string): value is Locale {
+	return Object.hasOwn(localeRegistry, value);
+}
 
 let activeLocale: Locale = "en";
 
 /** Select the active UI language; unsupported runtime values fail closed to English. */
 export function setLocale(locale: Locale): void {
-	activeLocale = locale === "es" ? "es" : "en";
+	activeLocale = isLocale(locale) ? locale : "en";
 }
 
 export function getLocale(): Locale {
@@ -53,12 +63,12 @@ export function getLocale(): Locale {
 
 /** Return the selected catalog, with English entries available for incomplete translations. */
 export function getCatalog(locale: Locale = activeLocale): Catalog {
-	return effectiveCatalogs[locale];
+	return localeRegistry[locale].catalog;
 }
 
 /** Return only messages authored for a locale, without English fallback. */
 export function getCatalogOverrides(locale: Locale = activeLocale): Catalog {
-	return locale === "es" ? spanish : english;
+	return localeRegistry[locale].overrides;
 }
 
 export function t(key: string, values?: TranslationValues): string;
@@ -68,11 +78,11 @@ export function t(
 	keyOrValues?: string | TranslationValues,
 	values?: TranslationValues,
 ): string {
-	const explicitLocale = localeOrKey === "en" || localeOrKey === "es";
+	const explicitLocale = typeof keyOrValues === "string" && isLocale(localeOrKey);
 	const locale = explicitLocale ? localeOrKey : activeLocale;
 	const key = explicitLocale ? (keyOrValues as string) : localeOrKey;
 	const substitutions = explicitLocale ? values : (keyOrValues as TranslationValues | undefined);
-	const message = effectiveCatalogs[locale][key] ?? key;
+	const message = getCatalog(locale)[key] ?? key;
 	if (!substitutions) return message;
 	return message.replace(/\{([A-Za-z0-9_]+)\}/g, (placeholder, name: string) =>
 		Object.hasOwn(substitutions, name) ? String(substitutions[name]) : placeholder,

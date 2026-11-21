@@ -18,6 +18,7 @@ import {
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
 import { BUILTIN_CONTROL_SLASH_COMMANDS } from "./builtin-control";
+import { LANGUAGE_SLASH_COMMAND } from "./builtin-language";
 import { BUILTIN_LIFECYCLE_SLASH_COMMANDS } from "./builtin-lifecycle";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
@@ -57,6 +58,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
 	...BUILTIN_NEOPI_SLASH_COMMANDS,
 	CHRONICLER_SLASH_COMMAND,
+	LANGUAGE_SLASH_COMMAND,
 	SPAWN_COMMAND,
 ];
 
@@ -76,6 +78,7 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		name: command.name,
 		aliases: command.aliases,
 		hiddenAliases: command.hiddenAliases,
+		getAutocompleteName: command.getAutocompleteName,
 		allowArgs: command.allowArgs === true,
 		// Getter: some descriptions name keys, formatted at read time (theme/preset may change).
 		get description() {
