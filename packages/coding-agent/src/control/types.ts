@@ -224,12 +224,13 @@ export type ControlOnlyCommand =
 			};
 			override?: { allowSelf?: boolean; allowNested?: boolean };
 			protocolVersion?: number;
-			/** Read-only probe used by `list`: only `get_status`/`bye` are served. */
+			/** Read-only connection for status, lease inspection, and `bye`. */
 			probe?: boolean;
 	  })
 	| (ControlBase & { type: "bye" })
 	| (ControlBase & { type: "get_status"; target?: "root" | "view" })
 	| (ControlBase & { type: "state"; target?: "root" | "view" })
+	| (ControlBase & { type: "get_session_file_lease"; sessionFile: string })
 	| (ControlBase & {
 			type: "subscribe";
 			events?: "all" | "lifecycle" | "none";
