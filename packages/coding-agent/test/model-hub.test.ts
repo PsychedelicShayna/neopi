@@ -18,7 +18,6 @@ import {
 	ModelHubComponent,
 	type ModelHubOptions,
 	type ModelHubRegistry,
-	resetProviderAutoRefreshGuard,
 } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
@@ -27,7 +26,12 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { thinkingLevelGlyph } from "@oh-my-pi/pi-tui/render/render-utils";
 
 import { getKnownRoleIds, getRoleInfo, setRoleDescription } from "@oh-my-pi/pi-coding-agent/config/model-roles";
-import { cfgCycleOrder, cfgModelPresets, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
+import {
+	cfgCatalogProviderStalenessMinutes,
+	cfgCycleOrder,
+	cfgModelPresets,
+	cfgModelRoles,
+} from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
 import { cfgContextRules } from "../src/config/context-policy";
 import { parseCompactionPointInput } from "../src/config/compaction-threshold";
@@ -84,6 +88,8 @@ function installTestTheme(): void {
 interface RegistryOverrides {
 	refresh?: (mode: string) => Promise<void>;
 	refreshProvider?: ModelRegistry["refreshProvider"];
+	refreshCatalogProvider?: ModelHubRegistry["refreshCatalogProvider"];
+	subscribeCatalogChanges?: ModelHubRegistry["subscribeCatalogChanges"];
 	getAvailable?: (kind?: ModelKind | "all") => Model[];
 	getAll?: () => Model[];
 	getDiscoverableProviders?: () => string[];
@@ -97,6 +103,8 @@ function makeRegistry(models: () => Model[], overrides: RegistryOverrides = {}):
 	return {
 		refresh: overrides.refresh ?? (async () => {}),
 		refreshProvider: overrides.refreshProvider ?? (async () => {}),
+		refreshCatalogProvider: overrides.refreshCatalogProvider,
+		subscribeCatalogChanges: overrides.subscribeCatalogChanges,
 		getError: () => undefined,
 		modelConfig: overrides.modelConfig,
 		getAvailable: overrides.getAvailable ?? models,
@@ -356,7 +364,6 @@ describe("ModelHub", () => {
 	});
 
 	afterEach(() => {
-		resetProviderAutoRefreshGuard();
 		for (const hub of openHubs.splice(0)) {
 			hub.dispose();
 		}
@@ -386,7 +393,7 @@ describe("ModelHub", () => {
 		expect(footerLine(hub.render(220))).not.toContain("config file");
 		expect(footerLine(hub.render(220))).not.toContain("model facts");
 		hub.handleInput("\x07");
-		hub.handleInput("\x1b[17~");
+		hub.handleInput("\x1bd");
 		expect(open).not.toHaveBeenCalled();
 		expect(facts).not.toHaveBeenCalled();
 	});
@@ -410,7 +417,7 @@ describe("ModelHub", () => {
 			expect(help).toContain("gg / G: first / last item");
 			expect(help).toContain("Ctrl-u / Ctrl-d: half page up / down");
 			hub.handleInput(ESC);
-			hub.handleInput("\x1b[17~");
+			hub.handleInput("\x1bd");
 			expect(facts).toHaveBeenCalledTimes(1);
 			hub.handleInput("\x07");
 			await Bun.sleep(0);
@@ -944,7 +951,7 @@ describe("ModelHub", () => {
 				installTestTheme();
 
 				// Sidebar order: Roles, All models, Effort rules, alpha, beta, delta-local, gamma.
-				// Hop down onto the keyless provider, which schedules its refresh.
+				// Highlight the keyless provider, then enter to schedule its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
 				hub.handleInput(DOWN); // Effort rules → Context rules
 				hub.handleInput(DOWN); // Context rules → Model overrides
@@ -2709,7 +2716,7 @@ describe("ModelHub", () => {
 				const refreshProvider = vi.fn(async () => {});
 				const { hub } = createHub({
 					models: [makeModel("prov-a", "model-a"), makeModel("prov-b", "model-b")],
-					registry: { refreshProvider },
+					registry: { refreshProvider, getDiscoverableProviders: () => ["prov-a", "prov-b"] },
 				});
 
 				expect(normalize(hub.render(220))).toContain("All available models");
@@ -2722,7 +2729,7 @@ describe("ModelHub", () => {
 				expect(normalize(hub.render(220))).toContain("All available models");
 
 				// No scope change means no provider auto-refresh either.
-				vi.advanceTimersByTime(200); // past the 120ms provider-refresh debounce
+				vi.advanceTimersByTime(1);
 				expect(refreshProvider).not.toHaveBeenCalled();
 			} finally {
 				vi.useRealTimers();
@@ -2940,13 +2947,54 @@ describe("ModelHub", () => {
 			await Promise.resolve();
 		}
 
-		test("auto-refreshes a provider once per process; F5 forces a re-fetch", async () => {
+		test("adopts an independently landed catalog without requesting discovery", async () => {
+			let models = [makeModel("prov-a", "cached-model")];
+			let notify: (() => void) | undefined;
+			const refresh = vi.fn(async () => {});
+			const { hub } = createHub({
+				models,
+				registry: {
+					refresh,
+					getAll: () => models,
+					getAvailable: () => models,
+					subscribeCatalogChanges: listener => {
+						notify = listener;
+						return () => {
+							notify = undefined;
+						};
+					},
+				},
+			});
+			expect(normalize(hub.render(220))).toContain("cached-model");
+			models = [...models, makeModel("prov-a", "new-model")];
+			notify?.();
+			await flushRefresh();
+			expect(normalize(hub.render(220))).toContain("new-model");
+			expect(refresh).not.toHaveBeenCalled();
+			hub.dispose();
+			expect(notify).toBeUndefined();
+		});
+
+		test("entry refreshes stale discoverable data, while Alt+R forces a credential refresh", async () => {
 			const model = makeModel("prov-a", "model-a");
 			const refresh = vi.fn(async () => {});
 			const refreshProvider = vi.fn<ModelRegistry["refreshProvider"]>(async () => {});
+			let fetchedAt = Date.now() - 60_000;
+			const refreshCatalogProvider = vi.fn(async (_providerId: string) => {
+				fetchedAt = Date.now();
+			});
+			const settings = Settings.isolated({});
+			cfgCatalogProviderStalenessMinutes.override(settings, 1);
 			const { hub } = createHub({
 				models: [model],
-				registry: { refresh, refreshProvider },
+				settings,
+				registry: {
+					refresh,
+					refreshProvider,
+					refreshCatalogProvider,
+					getDiscoverableProviders: () => ["prov-a"],
+					getProviderDiscoveryState: () => ({ optional: false, status: "ok", fetchedAt }),
+				},
 			});
 			installTestTheme();
 
@@ -2957,33 +3005,36 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN); // highlight prov-a without fetching
 			await flushRefresh();
-			expect(refreshProvider).not.toHaveBeenCalled();
+			expect(refreshCatalogProvider).not.toHaveBeenCalled();
 			hub.handleInput("\r"); // enter its catalog
 			await flushRefresh();
-			expect(refreshProvider).toHaveBeenCalledTimes(1);
-			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online");
-			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
+			expect(refreshCatalogProvider).toHaveBeenCalledTimes(1);
+			expect(refreshCatalogProvider).toHaveBeenCalledWith("prov-a");
+			expect(refreshProvider).not.toHaveBeenCalled();
 
 			hub.handleInput(LEFT);
-			hub.handleInput(UP); // back to All models
-			hub.handleInput(DOWN); // revisit prov-a
+			hub.handleInput("\x1b[C"); // re-enter while fresh
+			await flushRefresh();
+			expect(refreshCatalogProvider).toHaveBeenCalledTimes(1);
+
+			fetchedAt = Date.now() - 60_000;
+			hub.handleInput(LEFT);
 			hub.handleInput("\r");
 			await flushRefresh();
-			// Lifetime guard: revisiting must not re-fetch.
-			expect(refreshProvider).toHaveBeenCalledTimes(1);
+			expect(refreshCatalogProvider).toHaveBeenCalledTimes(2);
 
-			hub.handleInput("\x1b[15~"); // F5
+			hub.handleInput("\x1br");
 			await flushRefresh();
-			expect(refreshProvider).toHaveBeenCalledTimes(2);
+			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online", { refreshCommandCredentials: true });
 		});
 
-		test("F5 upgrades an explicit entry queued before the catalog fetch begins", async () => {
+		test("Alt+R upgrades an explicit entry queued before the catalog fetch begins", async () => {
 			const model = makeModel("prov-a", "model-a");
 			const refreshProvider = vi.fn(async () => {});
 			const { hub } = createHub({
 				models: [model],
-				registry: { refreshProvider },
+				registry: { refreshProvider, getDiscoverableProviders: () => ["prov-a"] },
 			});
 			installTestTheme();
 
@@ -2992,7 +3043,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // Context rules → Model overrides
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
-			hub.handleInput("\x1b[15~");
+			hub.handleInput("\x1br");
 			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider).toHaveBeenCalledWith("prov-a", "online", { refreshCommandCredentials: true });
@@ -3000,13 +3051,13 @@ describe("ModelHub", () => {
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 		});
 
-		test("F5 while a catalog refresh is in flight queues a credential re-mint", async () => {
+		test("Alt+R while a catalog refresh is in flight queues a credential re-mint", async () => {
 			const model = makeModel("prov-a", "model-a");
 			const gate = Promise.withResolvers<void>();
 			const refreshProvider = vi.fn<ModelRegistry["refreshProvider"]>(() => gate.promise);
 			const { hub } = createHub({
 				models: [model],
-				registry: { refreshProvider },
+				registry: { refreshProvider, getDiscoverableProviders: () => ["prov-a"] },
 			});
 			installTestTheme();
 
@@ -3019,7 +3070,7 @@ describe("ModelHub", () => {
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
 
-			hub.handleInput("\x1b[15~");
+			hub.handleInput("\x1br");
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 
 			gate.resolve();
@@ -3028,14 +3079,14 @@ describe("ModelHub", () => {
 			expect(refreshProvider).toHaveBeenLastCalledWith("prov-a", "online", { refreshCommandCredentials: true });
 		});
 
-		test("F5 still re-mints credentials after navigating away mid-fetch", async () => {
+		test("Alt+R still re-mints credentials after navigating away mid-fetch", async () => {
 			const modelA = makeModel("prov-a", "model-a");
 			const modelB = makeModel("prov-b", "model-b");
 			const gate = Promise.withResolvers<void>();
 			const refreshProvider = vi.fn<ModelRegistry["refreshProvider"]>(() => gate.promise);
 			const { hub } = createHub({
 				models: [modelA, modelB],
-				registry: { refreshProvider },
+				registry: { refreshProvider, getDiscoverableProviders: () => ["prov-a"] },
 			});
 			installTestTheme();
 
@@ -3048,9 +3099,9 @@ describe("ModelHub", () => {
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 			expect(refreshProvider.mock.calls[0]?.[2]).toBeUndefined();
 
-			hub.handleInput("\x1b[15~"); // queue credential refresh behind the in-flight catalog fetch
+			hub.handleInput("\x1br"); // queue credential refresh behind the in-flight catalog fetch
 			hub.handleInput(LEFT);
-			hub.handleInput(UP); // leaving the provider must not drop the F5
+			hub.handleInput(UP); // leaving the provider must not drop the explicit refresh
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
 
 			gate.resolve();
@@ -3064,7 +3115,7 @@ describe("ModelHub", () => {
 			const gate = Promise.withResolvers<void>();
 			const { hub } = createHub({
 				models: [model],
-				registry: { refreshProvider: () => gate.promise },
+				registry: { refreshProvider: () => gate.promise, getDiscoverableProviders: () => ["prov-b"] },
 			});
 			installTestTheme();
 
@@ -3093,7 +3144,7 @@ describe("ModelHub", () => {
 					},
 				},
 			});
-			hub.handleInput("\x1b[15;5~");
+			hub.handleInput("\x12");
 			await flushRefresh();
 			hub.handleInput("\r");
 			hub.handleInput(DOWN);
@@ -3118,7 +3169,7 @@ describe("ModelHub", () => {
 				},
 			});
 			expect(hub.navigationSnapshot().browser.selected).toBeUndefined();
-			hub.handleInput("\x1b[15;5~");
+			hub.handleInput("\x12");
 			await flushRefresh();
 			hub.handleInput("\r");
 			expect(hub.navigationSnapshot()).toMatchObject({

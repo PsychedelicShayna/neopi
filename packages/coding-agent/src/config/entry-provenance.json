@@ -224,6 +224,8 @@
 				"chronicler.recall.branchFloor",
 				"chronicler.notices",
 				"customPersonalities",
+				"models.catalogProviderStalenessMinutes",
+				"models.catalogRefreshCycleMinutes",
 				"models.defaultScope",
 				"settings.defaultScope",
 				"task.definitionGenerationConversationTtlMs",

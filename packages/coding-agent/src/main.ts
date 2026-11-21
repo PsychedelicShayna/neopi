@@ -1237,30 +1237,6 @@ export interface ScopedModelSink {
 }
 
 /**
- * Startup resolves the `--models`/`enabledModels` scope from the model registry
- * before background provider discovery runs — `createSession` fires
- * `refreshInBackground()` only after the session is built — so a scoped selector
- * whose model first materializes through runtime discovery (e.g.
- * `opencode-go/ox-alpha-free` on a fresh launch with no cache row) is absent from
- * the frozen scoped `/models` list even though it is in `enabledModels`, invokable
- * via `--model`, and listed by `npi models find`. Once the initial refresh settles,
- * re-resolve the scope and, when the set changed, push the fuller list into the
- * session so the scoped picker and Ctrl+P cycle include it. A scope that resolved
- * to zero models may become active here when the startup discovery pass returned
- * no models but the background pass succeeded. Fire-and-forget — never blocks the
- * prompt on background discovery latency. Issue #9220.
- */
-export async function rebuildScopedModelsAfterDiscovery(
-	session: ScopedModelSink,
-	parsed: Args,
-	modelRegistry: Pick<ModelRegistry, "getAvailable" | "awaitBackgroundRefresh">,
-	activeSettings: Settings,
-): Promise<void> {
-	await modelRegistry.awaitBackgroundRefresh();
-	await rebuildScopedModels(session, parsed, modelRegistry, activeSettings);
-}
-
-/**
  * Re-resolve the `--models`/`enabledModels` scope against the registry as it is
  * now and, when the set changed, push it into the session. Returns the new scope,
  * or `undefined` when the session keeps its current one. Extension providers
@@ -2901,14 +2877,7 @@ export async function runRootCommand(
 					message: `Auto resume skipped: ${sanitizeDisplayWarnings([error.message])[0]}. Started a new session without the saved history.`,
 				});
 			}
-			const {
-				session,
-				setToolUIContext,
-				modelFallbackMessage,
-				lspServers,
-				mcpManager,
-				startBackgroundModelDiscovery,
-			} = created;
+			const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = created;
 			const controlRole =
 				parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui"
 					? "rpc"
@@ -3002,12 +2971,6 @@ export async function runRootCommand(
 				);
 				if (rebuilt) scopedModels = rebuilt;
 			}
-			// Runtime provider discovery (opencode-go, models.yml `discovery:`, proxies)
-			// populates the registry AFTER the scope was snapshotted at startup; re-resolve
-			// once it settles so newly-discovered configured models join the scoped
-			// /models list and Ctrl+P cycle, including scopes that initially resolved
-			// empty (issue #9220). Fire-and-forget: the prompt must never block on the
-			// background pass.
 			// Interactive-only work that must not delay the first session-bound frame:
 			// runInteractiveMode calls it once init has painted. None feeds the first
 			// prompt: fallback-chain validation and the startup changelog only add header
@@ -3054,15 +3017,8 @@ export async function runRootCommand(
 				}
 				void session.loadDeferredExtensions();
 				session.startHintCompression();
-				modelRegistry.refreshInBackground();
+				session.startCatalogRefreshCycle();
 				session.validateRetryFallbackChains();
-				if (configuredScope.length > 0) {
-					// Must follow refreshInBackground: it waits on the in-flight refresh.
-					void rebuildScopedModelsAfterDiscovery(session, parsedArgs, modelRegistry, settingsInstance).catch(
-						error => logger.warn("Scoped model rebuild after discovery failed", { error: String(error) }),
-					);
-				}
-				void startBackgroundModelDiscovery?.();
 				if (cfgGcAutoCompress.get(settingsInstance)) {
 					void scheduleGcAutoCompress(getAgentDir()).catch(error =>
 						logger.warn("Background session compression failed to start", { error: String(error) }),

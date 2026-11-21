@@ -112,7 +112,7 @@ Legacy behavior still present:
 
 ## Optional model-fact sources and field overrides
 
-Open `/roles` and press F6 to edit model facts. The session-only `/model`
+Open `/roles` and press Alt+D to edit model facts. The session-only `/model`
 picker does not expose settings edits. Choose a provider and model, or type an
 unlisted model ID under a configured provider. Each field accepts a literal,
 a reference to that field on another `provider/model`, or Automatic. The preview
@@ -1026,6 +1026,10 @@ Consumers add another role by registering a `deck-<name>` key through the existi
 Assigning a non-default role in `/roles` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
 
 `/model [selector]` opens the fullscreen **Big Pickle** session-only picker by default, the same as Alt+P, or switches directly when given a selector. Choose **Small picker** in Settings → Model → **Session model picker** (`models.sessionPicker: small`) for the compact view. Both sizes support pressing Alt+P again to target the temporary Task-role override. Focused subagent selection continues to use its compact session-only picker. Selectors accept fuzzy model IDs, `provider/id`, `@role`, and an optional `:level` thinking suffix. Selecting a model changes only the active conversation, not the saved default or role mappings. `/roles [session|project|global]` and Alt+M open the role-management hub. `/models` is a hidden alias for `/roles`; `/switch` is a hidden alias for `/model`. A hidden alias appears with its command's description when the typed command text is a literal prefix of that alias and no visible command name or ordinary alias shares that prefix. Fuzzy name and description matches do not suppress it.
+
+Opening `/model` or `/roles` and moving the sidebar highlight do not trigger discovery. In an interactive session, the catalog refreshes one provider at a time in the background, in most-recently-used model order. `models.catalogRefreshCycleMinutes` defaults to 120; the usual delay is the cycle divided by the number of providers. Neighboring small or fast catalogs can refresh just six seconds apart, with the saved time returned at the end of the cycle.
+
+In the fullscreen hub, entering a provider starts discovery only if it has never been refreshed or its last refresh is older than `models.catalogProviderStalenessMinutes` (240 by default). Alt+R refreshes the current provider and Ctrl+R refreshes all providers where available. Explicit refresh can re-run command-backed credentials; entering a provider does not invalidate them. Cached rows remain usable while discovery is in flight.
 
 Vim navigation and editing are opt-in through `tui.vimMode: true` (default `false`; **Vim Navigation and Editing** in `/settings`). The Vim motions and yank/paste aliases described below require that setting. Ordinary arrows, paging, Home/End, Enter/Space, search focus, context switching and menu history remain available when it is off; text fields use literal editing.
 

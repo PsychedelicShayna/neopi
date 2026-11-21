@@ -135,4 +135,49 @@ describe("ModelRegistry sliced discovery merge", () => {
 		).toEqual(BULK_IDS);
 		expect(modelKeys(after.filter(model => model.provider !== PROVIDER)).sort()).toEqual([...beforeKeys].sort());
 	}, 60_000);
+
+	test("an input turn runs before a scheduled catalog refresh and while its roster lands", async () => {
+		const registry = await createRegistry();
+		const before = registry.getAll();
+		// The recurring refresh must not parse or install a new static config
+		// on a typing turn. A config reload here would remove the bulk provider.
+		await Bun.write(registry.getConfigFile(), "providers: {}\n");
+		const startingInput = Promise.withResolvers<void>();
+		let startSnapshot: Model<Api>[] | undefined;
+		setImmediate(() => {
+			startSnapshot = registry.getAll();
+			startingInput.resolve();
+		});
+
+		let clock = 0;
+		clockSpy = spyOn(performance, "now").mockImplementation(() => (clock += SLICED_CLOCK_STEP_MS));
+		const stop = registry.startCatalogRefreshCycle();
+		const refreshing = registry.awaitBackgroundRefresh();
+		let mergeInput = false;
+		let landed = false;
+		const keyRepeat = () => {
+			if (landed) return;
+			if (
+				registry.getProviderDiscoveryState(PROVIDER)?.status === "ok" &&
+				registry.find(PROVIDER, BULK_IDS[0]) === undefined
+			) {
+				mergeInput = true;
+				return;
+			}
+			setImmediate(keyRepeat);
+		};
+		setImmediate(keyRepeat);
+		try {
+			await startingInput.promise;
+			expect(startSnapshot).toBe(before);
+			expect(registry.getProviderDiscoveryState(PROVIDER)?.fetchedAt).toBeUndefined();
+			await refreshing;
+			expect(mergeInput).toBe(true);
+			expect(registry.find(PROVIDER, BULK_IDS[0])).toBeDefined();
+		} finally {
+			landed = true;
+			stop();
+			await refreshing;
+		}
+	}, 60_000);
 });

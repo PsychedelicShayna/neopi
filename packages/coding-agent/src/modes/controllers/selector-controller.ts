@@ -545,7 +545,9 @@ export class SelectorController {
 			for (const [kind, menu] of this.#openMenus) {
 				this.#openMenus.delete(kind);
 				if (isMenuHistoryLeaver(menu.component)) menu.component.leaveMenu();
-				if (menu.component instanceof SettingsSelectorComponent) menu.component.dispose();
+				if (menu.component instanceof SettingsSelectorComponent || menu.component instanceof ModelPickerComponent) {
+					menu.component.dispose();
+				}
 				menu.handle?.hide();
 			}
 			const reopen = target?.state?.reopen;
@@ -1813,6 +1815,7 @@ export class SelectorController {
 		const done = () => {
 			if (closed || this.#openMenus.get(menuKind) !== menu) return;
 			closed = true;
+			picker.dispose();
 			tracked.close?.();
 			menu.handle?.hide();
 			this.#releaseMenu(menuKind, menu);

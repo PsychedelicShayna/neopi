@@ -376,6 +376,7 @@ export type ModelRegistryProtocol = {
 		[providerId: string, strategy: ModelRefreshStrategy, options?: ModelRegistryRefreshOptions],
 		void
 	>;
+	refreshCatalogProvider: RpcMethod<[providerId: string], void>;
 	refreshDiscoverableProviders: RpcMethod<[providerIds: string[], strategy: ModelRefreshStrategy], void>;
 	refreshRuntimeProviders: RpcMethod<[strategy: ModelRefreshStrategy], void>;
 	hydrateCredentialScopedModelCaches: RpcMethod<[], void>;

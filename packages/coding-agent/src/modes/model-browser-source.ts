@@ -19,6 +19,7 @@ import { cfgContextRules } from "../config/context-policy";
 import { cfgCompactionThresholdTokens } from "../session/context-settings";
 
 import {
+	cfgCatalogProviderStalenessMinutes,
 	cfgCycleOrder,
 	cfgDisabledProviders,
 	cfgModelProviderOrder,
@@ -97,6 +98,9 @@ export function createModelBrowserSource(
 		},
 		get disabledProviders() {
 			return cfgDisabledProviders.get(settings);
+		},
+		get providerRefreshStalenessMs() {
+			return cfgCatalogProviderStalenessMinutes.get(settings) * 60_000;
 		},
 		get fallbackChains() {
 			return cfgRetryFallbackChains.get(settings);

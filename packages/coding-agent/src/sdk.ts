@@ -2529,9 +2529,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	}
 	await credentialScopedCacheHydration;
-	if (!options.modelRegistry) {
-		modelRegistry.refreshInBackground();
-	}
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		explicitDefaultProviders
 			? modelRegistry.getAvailableForProviders(explicitDefaultProviders)
@@ -3600,8 +3597,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		disposeCallbacks.add(releaseMixtureCatalog);
 		// Online runtime discovery must not steal the event loop from the first UI
 		// frame. Explicit deferred model selectors still start it immediately
-		// because they await it below; normal UI startup receives a one-shot
-		// starter in CreateAgentSessionResult and calls it after mode.init paints.
+		// because they await it below; embedders managing their own registry
+		// can also invoke the returned one-shot starter when needed.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
 		const startRuntimeDiscovery = (): Promise<void> => {
 			runtimeDiscoveryPromise ??= modelRegistry.refreshRuntimeProviders().catch(error => {
@@ -7225,6 +7222,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 
 		startupCleanup.move();
+		if (!options.modelRegistry) {
+			if (options.hasUI) session.startCatalogRefreshCycle();
+			else modelRegistry.refreshInBackground();
+		}
 		return {
 			session,
 			extensionsResult,

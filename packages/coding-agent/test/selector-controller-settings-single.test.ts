@@ -8,6 +8,7 @@ import { cfgSessionModelPicker } from "@oh-my-pi/pi-coding-agent/config/model-se
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
+import type { ModelPickerRegistry } from "@oh-my-pi/pi-tui/overlays/model-picker";
 import * as activityClient from "@oh-my-pi/pi-coding-agent/stats/activity-client";
 import * as settingsReload from "@oh-my-pi/pi-coding-agent/control/settings-reload";
 import { SessionEnvironment } from "@oh-my-pi/pi-coding-agent/session/environment";
@@ -115,7 +116,7 @@ function overlayUi(): {
 }
 
 /** The compact model picker context: the fork's session `/model` opens it only with `models.sessionPicker: small`. */
-function pickerContext(ui: OverlayUi) {
+function pickerContext(ui: OverlayUi, subscribeCatalogChanges?: ModelPickerRegistry["subscribeCatalogChanges"]) {
 	const settings = Settings.isolated();
 	cfgSessionModelPicker.override(settings, "small");
 	return createInteractiveModeContext({
@@ -130,7 +131,7 @@ function pickerContext(ui: OverlayUi) {
 				getError: () => undefined,
 				getAvailable: () => [],
 				getAll: () => [],
-				refreshIfStale: async () => false,
+				subscribeCatalogChanges,
 			},
 		},
 		ui,
@@ -529,6 +530,23 @@ describe("single-instance menus", () => {
 		shown[0]?.handleInput?.("\x1b");
 		controller.showModelSelector({ temporaryOnly: true });
 		expect(shown).toHaveLength(2);
+	});
+
+	it("unsubscribes the compact picker on cancel and when menu history leaves it", () => {
+		const { ui, shown } = overlayUi();
+		const unsubscribe = vi.fn();
+		const subscribe = vi.fn((_listener: () => void) => unsubscribe);
+		const controller = new SelectorController(pickerContext(ui, subscribe));
+
+		controller.showModelSelector({ temporaryOnly: true });
+		expect(subscribe).toHaveBeenCalledTimes(1);
+		shown[0]?.handleInput?.("\x03");
+		expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+		controller.showModelSelector({ temporaryOnly: true });
+		expect(subscribe).toHaveBeenCalledTimes(2);
+		expect(controller.navigateMenuHistory(-1)).toBe(true);
+		expect(unsubscribe).toHaveBeenCalledTimes(2);
 	});
 
 	it("raises an open model picker another overlay covers instead of focusing it hidden", () => {

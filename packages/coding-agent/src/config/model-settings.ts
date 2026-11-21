@@ -173,6 +173,46 @@ export const cfgSessionModelPicker = register({
 	},
 });
 
+// The runtime timer limit is a signed 32-bit delay in milliseconds.
+const MAX_CATALOG_TIMER_MINUTES = Math.floor(2_147_483_647 / 60_000);
+
+function validateCatalogTimerMinutes(raw: unknown): void {
+	if (raw === undefined) return;
+	if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MAX_CATALOG_TIMER_MINUTES) {
+		throw new Error(`Expected whole minutes from 1 through ${MAX_CATALOG_TIMER_MINUTES}.`);
+	}
+}
+
+export const cfgCatalogRefreshCycleMinutes = register({
+	id: "models.catalogRefreshCycleMinutes",
+	type: "number",
+	default: 120,
+	validate: validateCatalogTimerMinutes,
+	ui: {
+		tab: "model",
+		group: "Model Catalog",
+		label: "Catalog refresh cycle (minutes)",
+		description: "Time between background model catalog refresh cycles",
+		options: [{ value: "120", label: "120 minutes (default)" }],
+		customInput: true,
+	},
+});
+
+export const cfgCatalogProviderStalenessMinutes = register({
+	id: "models.catalogProviderStalenessMinutes",
+	type: "number",
+	default: 240,
+	validate: validateCatalogTimerMinutes,
+	ui: {
+		tab: "model",
+		group: "Model Catalog",
+		label: "Provider catalog staleness (minutes)",
+		description: "Age after which entering a provider triggers a catalog refresh",
+		options: [{ value: "240", label: "240 minutes (default)" }],
+		customInput: true,
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Total provider budget for one native judge candidate, including setup and retries. */

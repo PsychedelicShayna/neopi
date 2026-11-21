@@ -376,6 +376,7 @@ function serveModelRegistry(state: PeerAuthState): RpcServe<ModelRegistry, Model
 		refresh: (registry, strategy, options) => registry.refresh(strategy, options),
 		refreshProvider: (registry, providerId, strategy, options) =>
 			registry.refreshProvider(providerId, strategy, options),
+		refreshCatalogProvider: (registry, providerId) => registry.refreshCatalogProvider(providerId),
 		refreshDiscoverableProviders: (registry, providerIds, strategy) =>
 			registry.refreshDiscoverableProviders(providerIds, strategy),
 		refreshRuntimeProviders: (registry, strategy) => registry.refreshRuntimeProviders(strategy),

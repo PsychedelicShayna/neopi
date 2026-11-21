@@ -8,7 +8,6 @@ import type { DescribeContext, NativeChild, NativeNode } from "../src/native/nod
 import { plainText } from "../src/native/spans";
 import {
 	ModelHubComponent,
-	resetProviderAutoRefreshGuard,
 	type HubEffortRule,
 	type ModelHubRegistry,
 	type ModelHubSource,
@@ -117,7 +116,6 @@ function openHub(
 		ui,
 		{ ...source({ default: "demo/demo" }, ["demo/demo"]), ...overrides },
 		registry(models),
-		// A `--models` scope skips the background online refresh.
 		models.map(entry => ({ model: entry })),
 		{
 			onAssign: (_model, role, _level, selector) => {
@@ -138,7 +136,7 @@ function openQuickPicker(calls: { assign: string[]; cancel: number }, models: Mo
 	return new ModelPickerComponent(
 		ui,
 		source({ default: "demo/demo" }, ["demo/demo"]),
-		{ ...registry(models), refreshIfStale: async () => false },
+		registry(models),
 		models.map(entry => ({ model: entry })),
 		{
 			onPick: (_model, selector) => calls.assign.push(selector),
@@ -423,36 +421,98 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	expect(calls.cancel).toBe(1);
 });
 
-test.each(["F5", "pointer Refresh"])("a scoped hub skips automatic refresh but honors %s", action => {
-	const modelRegistry = registry(MODELS);
-	const refreshProvider = spyOn(modelRegistry, "refreshProvider");
-	resetProviderAutoRefreshGuard();
-	vi.useFakeTimers();
-	try {
-		const hub = new ModelHubComponent(
-			ui,
-			source({ default: "demo/demo" }, ["demo/demo"]),
-			modelRegistry,
-			MODELS.map(entry => ({ model: entry })),
-			{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
-		);
-		hubs.push(hub);
-		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:openai", mods: [] });
-		expect(props(hub.describe(withPicker)).scope).toBe("provider:openai");
-		vi.advanceTimersByTime(1);
-		expect(refreshProvider).not.toHaveBeenCalled();
+test.each(["Alt+R", "pointer Refresh"])(
+	"a scoped hub does not auto-refresh a non-discoverable provider but honors %s",
+	action => {
+		const modelRegistry = registry(MODELS);
+		const refreshProvider = spyOn(modelRegistry, "refreshProvider");
+		vi.useFakeTimers();
+		try {
+			const hub = new ModelHubComponent(
+				ui,
+				source({ default: "demo/demo" }, ["demo/demo"]),
+				modelRegistry,
+				MODELS.map(entry => ({ model: entry })),
+				{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+			);
+			hubs.push(hub);
+			hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "provider:openai", mods: [] });
+			expect(props(hub.describe(withPicker)).scope).toBe("provider:openai");
+			vi.advanceTimersByTime(1);
+			expect(refreshProvider).not.toHaveBeenCalled();
 
-		if (action === "F5") hub.handleInput("\x1b[15~");
-		else hub.handleNativeEvent({ type: "action", key: "", act: "refresh", mods: [] });
-		vi.advanceTimersByTime(1);
-		expect(refreshProvider).toHaveBeenCalledTimes(1);
-		expect(refreshProvider).toHaveBeenCalledWith("openai", "online", { refreshCommandCredentials: true });
-	} finally {
-		vi.useRealTimers();
-		resetProviderAutoRefreshGuard();
-		refreshProvider.mockRestore();
-	}
-});
+			if (action === "Alt+R") hub.handleInput("\x1br");
+			else hub.handleNativeEvent({ type: "action", key: "", act: "refresh", mods: [] });
+			vi.advanceTimersByTime(1);
+			expect(refreshProvider).toHaveBeenCalledTimes(1);
+			expect(refreshProvider).toHaveBeenCalledWith("openai", "online", { refreshCommandCredentials: true });
+		} finally {
+			vi.useRealTimers();
+			refreshProvider.mockRestore();
+		}
+	},
+);
+
+test.each(["Enter", "Right", "pointer", "native activate"])(
+	"a scoped hub refreshes stale discovery only on explicit %s entry",
+	action => {
+		const refreshDiscoverableProviders = vi.fn(async (_providerIds: string[], _strategy: "online") => {});
+		const refreshProvider = vi.fn(async () => {});
+		const modelRegistry: ModelHubRegistry = {
+			...registry(MODELS),
+			getDiscoverableProviders: () => ["openai"],
+			getProviderDiscoveryState: () => ({
+				optional: false,
+				status: "ok",
+				fetchedAt: Date.now() - 4 * 60 * 60 * 1000,
+			}),
+			refreshDiscoverableProviders,
+			refreshProvider,
+		};
+		vi.useFakeTimers();
+		try {
+			const hub = new ModelHubComponent(
+				ui,
+				source({}, []),
+				modelRegistry,
+				MODELS.map(entry => ({ model: entry })),
+				{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+				{ initialProviderId: "openai" },
+			);
+			hubs.push(hub);
+			vi.advanceTimersByTime(1);
+			expect(refreshDiscoverableProviders).not.toHaveBeenCalled();
+
+			const scope = "provider:openai";
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: scope });
+			hub.handleInput("\t"); // focus swap is not explicit entry
+			hub.handleInput("\t");
+			vi.advanceTimersByTime(1);
+			expect(refreshDiscoverableProviders).not.toHaveBeenCalled();
+
+			switch (action) {
+				case "pointer":
+					hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: scope, mods: [] });
+					break;
+				case "native activate":
+					hub.handleNativeEvent({ type: "activate", key: "scopes", item: scope });
+					break;
+				case "Enter":
+					hub.handleInput("\r");
+					break;
+				case "Right":
+					hub.handleInput("\x1b[C");
+					break;
+			}
+			vi.advanceTimersByTime(1);
+			expect(refreshDiscoverableProviders).toHaveBeenCalledTimes(1);
+			expect(refreshDiscoverableProviders).toHaveBeenCalledWith(["openai"], "online");
+			expect(refreshProvider).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	},
+);
 
 test("the Roles view picker names the active preset and ctrl+←/→ switches it", () => {
 	const presets = { names: ["fast", "slow"], active: "fast" as string | undefined };
@@ -500,7 +560,7 @@ function openScopedPicker(picked: string[], options: ModelPickerOptions = {}): M
 	return new ModelPickerComponent(
 		ui,
 		source({ default: "demo/demo" }, ["demo/demo"]),
-		{ ...registry(QUICK_MODELS), refreshIfStale: async () => false },
+		registry(QUICK_MODELS),
 		QUICK_MODELS.map(entry => ({ model: entry })),
 		{
 			onPick: (_model, selector, meta) =>
@@ -655,7 +715,7 @@ for (const kind of ["hub", "picker"] as const) {
 				: new ModelPickerComponent(
 						ui,
 						source({ default: "demo/demo" }, ["demo/demo"]),
-						{ ...registry(MODELS), refreshIfStale: async () => false },
+						registry(MODELS),
 						MODELS.map(entry => ({ model: entry })),
 						{ onPick: () => {}, onCancel: () => {} },
 					);
@@ -1090,7 +1150,7 @@ test("quick picker keeps literal search separate from navigation and restores it
 	const picker = new ModelPickerComponent(
 		ui,
 		source({}, []),
-		{ ...registry(MODELS), refreshIfStale: async () => false },
+		registry(MODELS),
 		MODELS.map(entry => ({ model: entry })),
 		{
 			onPick: (_model, selector) => picked.push(`session:${selector}`),
@@ -1461,7 +1521,7 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 			terminal: { rows: 40 },
 		} as unknown as TUI,
 		source({}, []),
-		{ ...registry(MODELS), refreshIfStale: async () => false },
+		registry(MODELS),
 		MODELS.map(entry => ({ model: entry })),
 		{
 			onPick: () => {},
@@ -1502,11 +1562,11 @@ test("model facts opens from full model configuration but never from the session
 		);
 		hubs.push(hub);
 		expect(props(hub.describe(withPicker)).actions?.some(action => action.id === "modelFacts")).toBe(!sessionOnly);
-		hub.handleInput("\x1b[17~");
+		hub.handleInput("\x1bd");
 		hub.handleNativeEvent({ type: "action", key: "", act: "modelFacts", mods: [] });
 		expect(edits).toEqual(sessionOnly ? [] : ["demo", "demo"]);
 		hub.handleInput("/");
-		hub.handleInput("\x1b[17~");
+		hub.handleInput("\x1bd");
 		expect(edits).toHaveLength(sessionOnly ? 0 : 2);
 	}
 });
