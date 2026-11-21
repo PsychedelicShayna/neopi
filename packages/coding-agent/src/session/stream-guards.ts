@@ -22,6 +22,7 @@ import {
 	toolCallLoopRedirectDetails,
 } from "./tool-call-loop-redirect";
 
+import { modelVariantSetting } from "../config/model-variant-settings";
 import { cfgEditStreamingAbort } from "../edit/settings";
 import { writeDeviceName } from "../tools/resolve";
 import {
@@ -289,8 +290,8 @@ export class LoopGuards {
 	#geminiHeaderGuardActive(): boolean {
 		const model = this.#host.model();
 		return (
-			cfgModelLoopGuardEnabled.get(this.#host.settings) === true &&
-			cfgModelLoopGuardToolCallReminder.get(this.#host.settings) === true &&
+			modelVariantSetting(model, cfgModelLoopGuardEnabled, this.#host.settings) &&
+			modelVariantSetting(model, cfgModelLoopGuardToolCallReminder, this.#host.settings) &&
 			model !== undefined &&
 			model.identity.class === "gemini"
 		);

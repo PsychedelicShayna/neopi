@@ -10,6 +10,7 @@ import { getSettingDef } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
+import { cfgAgentWake } from "@oh-my-pi/pi-coding-agent/session/wake-settings";
 import {
 	cfgProvidersMaxInFlightRequests,
 	cfgTemperature,
@@ -84,6 +85,31 @@ describe("settings registry", () => {
 		expect(cfgChroniclerEnabled.get(settings)).toBe(false);
 		host.set(cfgChroniclerEnabled.id, "ask");
 		expect(cfgChroniclerEnabled.get(settings)).toBe("ask");
+	});
+
+	it("exposes independent idle and post-interrupt agent wake choices in one checklist", () => {
+		const settings = Settings.isolated();
+		const host = createSettingsHost(settings, "session");
+		const def = getSettingDef(host.entries, cfgAgentWake.id);
+		expect(def?.label).toBe("Notify Agent When...");
+		expect(def?.type).toBe("multiselect");
+		if (def?.type !== "multiselect") throw new Error("Expected the agent wake checklist");
+		expect(def.options.map(option => option.value)).toContain("afterInterrupt.subagents");
+		expect(def.options.map(option => option.value)).toContain("afterInterrupt.asyncJobs");
+		expect(def.options.map(option => option.value)).toContain("afterInterrupt.advisors");
+		expect(host.get(cfgAgentWake.id)).toEqual([
+			"asyncJobs",
+			"subagents",
+			"advisors",
+			"irc",
+			"launches",
+			"notices",
+			"afterInterrupt.irc",
+		]);
+		host.set(cfgAgentWake.id, ["afterInterrupt.advisors"]);
+		expect(cfgAgentWake.get(settings)).toEqual(["afterInterrupt.advisors"]);
+		host.set(cfgAgentWake.id, []);
+		expect(cfgAgentWake.get(settings)).toEqual([]);
 	});
 
 	it("ranks a runtime override over an override env, that env over persisted layers, and a fallback env only over the default", () => {

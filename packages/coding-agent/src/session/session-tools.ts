@@ -85,6 +85,7 @@ import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
 import { cfgDisabledExtensions, cfgSkills, type SkillsSettings } from "../extensibility/settings";
+import { modelVariantSetting } from "../config/model-variant-settings";
 import {
 	cfgExternalThinking,
 	cfgIncludeModelInPrompt,
@@ -2649,8 +2650,9 @@ export class SessionTools {
 	 * @returns false when enabling was requested but this session cannot build the tool.
 	 */
 	reconcileThinkTool(): Promise<boolean> {
+		const model = this.#host.model();
 		return this.#setThinkToolActive(
-			cfgExternalThinking.get(this.#host.settings) && supportsExternalThinking(this.#host.model()),
+			modelVariantSetting(model, cfgExternalThinking, this.#host.settings) && supportsExternalThinking(model),
 		);
 	}
 

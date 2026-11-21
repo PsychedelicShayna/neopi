@@ -9,6 +9,8 @@ import { plainText } from "../src/native/spans";
 import {
 	ModelHubComponent,
 	type HubEffortRule,
+	type HubModelVariant,
+	type HubModelVariantDraft,
 	type ModelHubRegistry,
 	type ModelHubSource,
 } from "../src/overlays/model-hub";
@@ -209,6 +211,44 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(titleOf(root.c)).toBe("demo");
 	// Unchanged state keeps the node.
 	expect(hub.describe(withPicker)).toBe(root);
+});
+
+test("native folder scopes browse curated models and edit membership from a provider", () => {
+	let folders: readonly { name: string; models: readonly string[] }[] = [
+		{ name: "Review", models: ["openai/gpt-5.6"] },
+	];
+	const hub = openHub({ assign: [], cancel: 0 }, MODELS, {
+		modelFolders: {
+			get entries() {
+				return folders;
+			},
+			save: value => {
+				folders = value;
+			},
+		},
+	});
+	const picker = () => props(hub.describe(withPicker));
+	const scope = (value: string) => hub.handleNativeEvent({ type: "action", key: "", act: "scope", value, mods: [] });
+	const act = (action: string) => hub.handleNativeEvent({ type: "action", key: "", act: action, mods: [] });
+
+	expect(picker().scopes).toContainEqual({
+		id: "folder:Review",
+		label: "Review",
+		group: "Folders",
+		icon: "folder",
+		count: 1,
+	});
+	scope("folder:Review");
+	expect(picker()).toMatchObject({ scope: "folder:Review", selected: "openai/gpt-5.6", total: 1 });
+
+	scope("provider:openai");
+	hub.handleNativeEvent({ type: "select", key: "", item: "openai/gpt-5.6" });
+	expect(picker().actions?.find(action => action.id === "folderMembership")?.keys).toEqual(["ctrl", "alt", "a"]);
+	act("folderMembership");
+	expect(picker().strip?.items).toEqual([{ id: "0", label: "− Review" }]);
+	act("stripApply");
+	scope("folder:Review");
+	expect(picker()).toMatchObject({ scope: "folder:Review", selected: null, total: 0 });
 });
 
 test.each(["keyboard", "native"])(
@@ -1569,6 +1609,117 @@ test("model facts opens from full model configuration but never from the session
 		hub.handleInput("\x1bd");
 		expect(edits).toHaveLength(sessionOnly ? 0 : 2);
 	}
+});
+
+test("Model Variants creates, validates, inherits, renames and deletes through the hub", async () => {
+	const variants: HubModelVariant[] = [];
+	const saves: HubModelVariantDraft[] = [];
+	const base = model("demo", "base-model");
+	const derived: Model = {
+		...base,
+		id: "existing-variant-model",
+		name: "Already a variant",
+		variant: { baseModelId: base.id, settings: {}, request: {} },
+	};
+	const hub = openHub({ assign: [], cancel: 0 }, [...MODELS, base, derived], {
+		modelVariants: variants,
+		modelVariantFields: [
+			{ key: "temperature", label: "Temperature", kind: "number", min: 0, max: 2 },
+			{ key: "stop", label: "Stop sequences", kind: "string-list" },
+		],
+		onSaveModelVariant: draft => {
+			saves.push(structuredClone(draft));
+			const variant = { ...draft, id: draft.id ?? "stable-variant" };
+			variants.splice(0, variants.length, variant);
+		},
+		onDeleteModelVariant: id => {
+			expect(id).toBe("stable-variant");
+			variants.splice(0);
+		},
+	});
+	const scopes = props(hub.describe(withPicker)).scopes ?? [];
+	const effortScope = scopes.findIndex(scope => scope.id === "effort");
+	expect(effortScope).toBeGreaterThanOrEqual(0);
+	expect(scopes[effortScope + 1]).toMatchObject({ id: "variants", count: 0 });
+	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "variants", mods: [] });
+	expect(hub.nativeSheet(withPicker)).toBe(false);
+
+	const click = (item: string) => hub.handleNativeEvent({ type: "select", key: "modelVariants/list", item });
+	const type = (characters: string) => {
+		for (const char of characters) hub.handleInput(char);
+	};
+	const screen = () => plainText(hub.render(120).join("\n"));
+	click("new");
+	click("save");
+	expect(screen()).toContain("Enter a variant name");
+	click("name");
+	type("Draft\r");
+	click("base");
+	expect(screen()).toContain("demo/base-model");
+	expect(screen()).not.toContain("existing-variant-model");
+	click("base:demo/base-model");
+	expect(screen()).toContain("Inherit");
+
+	click("field:temperature");
+	type("9\r");
+	expect(screen()).toContain("Use a value of at most 2");
+	type("\x7f0\r");
+	click("field:stop");
+	type('["finish, please"]\r');
+	click("save");
+	await Promise.resolve();
+	expect(saves).toEqual([
+		{ name: "Draft", baseModel: "demo/base-model", overrides: { temperature: 0, stop: ["finish, please"] } },
+	]);
+	expect(screen()).toContain("1 saved variant");
+
+	click("variant:stable-variant");
+	click("name");
+	type("\x7f".repeat("Draft".length) + "Renamed\r");
+	click("field:temperature");
+	click("inherit");
+	click("save");
+	await Promise.resolve();
+	expect(saves[1]).toEqual({
+		id: "stable-variant",
+		name: "Renamed",
+		baseModel: "demo/base-model",
+		overrides: { stop: ["finish, please"] },
+	});
+	expect(screen()).toContain("Renamed");
+
+	click("variant:stable-variant");
+	click("delete");
+	click("confirm-delete");
+	expect(variants).toHaveLength(1);
+	expect(screen()).toContain("Enter again to delete this variant");
+	click("confirm-delete");
+	await Promise.resolve();
+	expect(variants).toEqual([]);
+	expect(screen()).toContain("+ New variant");
+});
+
+test("the model hub keyboard skips the Variants divider and Escape unwinds an unsaved draft", () => {
+	const calls = { assign: [], cancel: 0 };
+	const hub = openHub(calls, MODELS, { modelVariants: [], modelVariantFields: [] });
+	hub.handleInput("\x1b[B");
+	expect(hub.navigationSnapshot().entry).toBe("effort");
+	hub.handleInput("\x1b[B");
+	expect(hub.navigationSnapshot().entry).toBe("variants");
+	hub.handleInput("\x1b[C");
+	hub.handleInput("\r");
+	hub.handleInput("\r");
+	hub.handleInput("?");
+	const screen = () => plainText(hub.render(120).join("\n"));
+	expect(screen()).toContain("Variant name");
+	hub.handleInput("\x1b");
+	expect(screen()).toContain("New variant");
+	expect(screen()).toContain("Required");
+	hub.handleInput("\x1b");
+	expect(screen()).toContain("+ New variant");
+	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot()).toMatchObject({ entry: "variants", focus: "scope" });
+	expect(calls.cancel).toBe(0);
 });
 
 let previousVimMode: boolean;

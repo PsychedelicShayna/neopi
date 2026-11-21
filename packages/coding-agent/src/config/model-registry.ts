@@ -62,7 +62,12 @@ import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import { redactUrlForLog } from "../mcp/json-rpc";
 import type { AuthStorage } from "../session/auth-storage";
-import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
+import {
+	type ApiKeyResolverModel,
+	type ApiKeyResolverOptions,
+	createApiKeyResolver,
+	modelRequestCredentialId,
+} from "./api-key-resolver";
 import type { ConfigError, ConfigFile, LoadResult } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -148,6 +153,12 @@ import {
 } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
 import { ModelConfigEditor } from "./model-config-editor";
+import {
+	cfgModelVariants,
+	isModelVariantId,
+	type ModelVariantDefinition,
+	modelVariantRequestOverrides,
+} from "./model-variant-settings";
 import { registerNeoProxyLogin } from "../neopi/neoproxy-connect";
 import { Settings, settings } from "./settings";
 
@@ -603,6 +614,8 @@ export class ModelRegistry {
 	#ignoreLocalModelConfig: boolean;
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
+	#variantRows = new WeakMap<Model<Api>, WeakMap<ModelVariantDefinition, Model<Api>>>();
+	#variantCatalogs = new WeakMap<Model<Api>[], { definitions: ModelVariantDefinition[]; models: Model<Api>[] }>();
 	#modelFactSources: readonly ModelFactSourceSnapshot[] = [];
 	#modelFactResolutions = new Map<string, ModelFactResolution>();
 	/** Registry this one mirrors (on another thread); see the constructor option. */
@@ -1486,6 +1499,11 @@ export class ModelRegistry {
 	 * and patch its context window to what the backend actually serves.
 	 */
 	async refreshSelectedModelMetadata(model: Model<Api>): Promise<Model<Api>> {
+		if (model.variant) {
+			const base = this.find(model.provider, model.variant.baseModelId);
+			if (base) await this.refreshSelectedModelMetadata(base);
+			return this.find(model.provider, model.id) ?? model;
+		}
 		const discoveryConfig = this.#findLazyRuntimeDiscovery(model.provider);
 		if (!discoveryConfig) {
 			return model;
@@ -4053,10 +4071,16 @@ export class ModelRegistry {
 	 * widens it; undefined when no larger window exists or an explicit
 	 * `contextWindow` override pins it.
 	 */
-	contextWindowTiers(model: { provider: string; id: string }): ContextWindowTiers | undefined {
+	contextWindowTiers(model: {
+		provider: string;
+		id: string;
+		variant?: Model<Api>["variant"];
+	}): ContextWindowTiers | undefined {
+		if (model.variant?.settings.contextWindow !== undefined) return undefined;
+		const base = model.variant ? { provider: model.provider, id: model.variant.baseModelId } : model;
 		// Tiers are recorded as the provider's rows compose; compose them first.
 		this.#modelsForProviderLookup(model.provider);
-		return this.#windowTiers.get(contextWindowKey(model));
+		return this.#windowTiers.get(contextWindowKey(base));
 	}
 
 	/**
@@ -4091,15 +4115,19 @@ export class ModelRegistry {
 		if (model.codexVariant) return model;
 		const tiers = this.contextWindowTiers(model);
 		if (!tiers || (model.contextWindow !== tiers.standard && model.contextWindow !== tiers.extended)) return model;
+		const extended = model.variant?.settings.extendedContext as boolean | undefined;
 		const window =
-			isExtendedContextEnabledFromSettings(scope) ||
-			compactionPointReaches(getModelCompactionPointsFromSettings(scope), model, tiers.standard)
+			(extended ??
+			(isExtendedContextEnabledFromSettings(scope) ||
+				compactionPointReaches(getModelCompactionPointsFromSettings(scope), model, tiers.standard)))
 				? tiers.extended
 				: tiers.standard;
 		if (model.contextWindow === window) return model;
 		const cached = this.#refittedRows.get(model);
 		if (cached?.contextWindow === window) return cached;
-		const refitted = applyModelOverride(model, { contextWindow: window });
+		const refitted = model.variant
+			? { ...model, contextWindow: window }
+			: applyModelOverride(model, { contextWindow: window });
 		const standard = this.#standardWindows.get(model);
 		if (standard !== undefined) this.#standardWindows.set(refitted, standard);
 		this.#refittedRows.set(model, refitted);
@@ -4290,6 +4318,86 @@ export class ModelRegistry {
 		return models;
 	}
 
+	#variantDefinitions(): ModelVariantDefinition[] {
+		try {
+			return cfgModelVariants.get(this.#settings ?? settings);
+		} catch (error) {
+			if (this.#settings) throw error;
+			// Standalone registries can be constructed before process Settings.
+			return cfgModelVariants.default;
+		}
+	}
+
+	#variantBase(definition: ModelVariantDefinition): [provider: string, id: string] {
+		const slash = definition.baseModel.indexOf("/");
+		return [definition.baseModel.slice(0, slash), definition.baseModel.slice(slash + 1)];
+	}
+
+	#projectVariant(base: Model<Api>, definition: ModelVariantDefinition, catalog: Model<Api>[]): Model<Api> {
+		let rows = this.#variantRows.get(base);
+		const cached = rows?.get(definition);
+		if (cached) return cached;
+		if (!rows) {
+			rows = new WeakMap();
+			this.#variantRows.set(base, rows);
+		}
+		const { overrides, id, name } = definition;
+		let contextWindow = base.contextWindow;
+		if (typeof overrides.contextWindow === "number") {
+			contextWindow = clampsContextOverride(base)
+				? clampCodexContextWindow(base, overrides.contextWindow)
+				: overrides.contextWindow;
+		} else if (typeof overrides.extendedContext === "boolean" && !base.codexVariant) {
+			const tiers = this.#windowTiers.get(contextWindowKey(base));
+			if (tiers) contextWindow = overrides.extendedContext ? tiers.extended : tiers.standard;
+		}
+		const maxTokens =
+			typeof overrides.maxTokens === "number"
+				? Math.min(overrides.maxTokens, base.maxTokens ?? Infinity, contextWindow ?? Infinity)
+				: base.maxTokens;
+		const request = modelVariantRequestOverrides(base, overrides);
+		const tierSource =
+			request.serviceTier !== undefined && base.codexVariant
+				? resolveProviderModelReference(base.provider, base.codexVariant.baseModelId, catalog)
+				: undefined;
+		const variant: Model<Api> = {
+			...base,
+			id,
+			name,
+			contextWindow,
+			maxTokens,
+			requestModelId: base.requestModelId ?? base.id,
+			...(tierSource && { serviceTiers: tierSource.serviceTiers, accountAccess: tierSource.accountAccess }),
+			variant: {
+				baseModelId: base.id,
+				settings: overrides,
+				request,
+			},
+		};
+		this.#carryStandardWindow(base, variant);
+		rows.set(definition, variant);
+		return variant;
+	}
+
+	#withModelVariants(models: Model<Api>[]): Model<Api>[] {
+		const definitions = this.#variantDefinitions();
+		if (definitions.length === 0) return models;
+		const cached = this.#variantCatalogs.get(models);
+		if (cached?.definitions === definitions) return cached.models;
+		const variants: Model<Api>[] = [];
+		const seen = new Set<string>();
+		for (const definition of definitions) {
+			if (seen.has(definition.id)) continue;
+			seen.add(definition.id);
+			const [provider, id] = this.#variantBase(definition);
+			const base = resolveProviderModelReference(provider, id, models);
+			if (base) variants.push(this.#projectVariant(base, definition, models));
+		}
+		const augmented = variants.length === 0 ? models : [...models, ...variants];
+		this.#variantCatalogs.set(models, { definitions, models: augmented });
+		return augmented;
+	}
+
 	/**
 	 * Get all models (built-in + custom) of one catalog kind.
 	 * If custom config had errors, returns only built-in models. The default
@@ -4297,7 +4405,7 @@ export class ModelRegistry {
 	 * Pass `"all"` to retrieve the complete catalog.
 	 */
 	getAll(kind: ModelKind | "all" = "chat"): Model<Api>[] {
-		const models = this.#ensureFullSnapshot();
+		const models = this.#withModelVariants(this.#ensureFullSnapshot());
 		if (kind === "all") return models;
 		let snapshots = this.#fullKindSnapshots.get(models);
 		if (!snapshots) {
@@ -4350,7 +4458,7 @@ export class ModelRegistry {
 		const requested = new Set([...providers].map(provider => provider.trim().toLowerCase()).filter(Boolean));
 		const isProviderAvailable = this.#createProviderAvailabilityCheck();
 		if (this.#hasFullSnapshot) {
-			return this.#models.filter(
+			return this.#withModelVariants(this.#models).filter(
 				model =>
 					requested.has(model.provider.toLowerCase()) &&
 					isProviderAvailable(model.provider) &&
@@ -4368,10 +4476,12 @@ export class ModelRegistry {
 		// catalog modifiers can inspect live credentials, so keep reprojecting
 		// those rather than extending the lifetime of their output.
 		if (availableProviders.size === 1 && !this.#modelModifierCanApply()) {
-			const models = this.#modelsForProviderLookup(availableProviders.values().next().value!);
+			const models = this.#withModelVariants(
+				this.#modelsForProviderLookup(availableProviders.values().next().value!),
+			);
 			return kind === "all" ? models.slice() : models.filter(model => modelKind(model) === kind);
 		}
-		const models = this.#composeStaticModels(availableProviders);
+		const models = this.#withModelVariants(this.#composeStaticModels(availableProviders));
 		return kind === "all" ? models : models.filter(model => modelKind(model) === kind);
 	}
 
@@ -4527,6 +4637,16 @@ export class ModelRegistry {
 	 * advisors, restored and CLI models) would otherwise reach it anyway.
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
+		if (isModelVariantId(modelId)) {
+			const definition = this.#variantDefinitions().find(entry => entry.id.toLowerCase() === modelId.toLowerCase());
+			if (definition) {
+				const [baseProvider, baseId] = this.#variantBase(definition);
+				if (this.#isProviderDisabled(baseProvider)) return undefined;
+				const catalog = this.#modelsForProviderLookup(baseProvider);
+				const base = resolveProviderModelReference(baseProvider, baseId, catalog);
+				return base ? this.#projectVariant(base, definition, catalog) : undefined;
+			}
+		}
 		if (this.#isProviderDisabled(provider)) return undefined;
 		return resolveProviderModelReference(provider, modelId, this.#modelsForProviderLookup(provider));
 	}
@@ -4544,7 +4664,7 @@ export class ModelRegistry {
 	 */
 	getProviderModels(provider: string): Model<Api>[] {
 		const normalizedProvider = provider.trim().toLowerCase();
-		return this.#modelsForProviderLookup(provider).filter(
+		return this.#withModelVariants(this.#modelsForProviderLookup(provider)).filter(
 			model => model.provider.toLowerCase() === normalizedProvider,
 		);
 	}
@@ -4606,7 +4726,7 @@ export class ModelRegistry {
 		}
 		return this.authStorage.keys.get(model.provider, sessionId, {
 			baseUrl: model.baseUrl,
-			modelId: model.id,
+			modelId: modelRequestCredentialId(model),
 			accountIds: model.accountAccess && Object.keys(model.accountAccess),
 			signal: options?.signal,
 		});
@@ -4695,7 +4815,7 @@ export class ModelRegistry {
 		return createApiKeyResolver(this, target.provider, {
 			...options,
 			baseUrl: target.baseUrl,
-			modelId: target.id,
+			modelId: modelRequestCredentialId(target),
 		});
 	}
 

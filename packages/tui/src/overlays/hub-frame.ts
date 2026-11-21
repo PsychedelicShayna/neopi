@@ -106,7 +106,11 @@ export function describeHubSidebar<TEntry extends SidebarEntry<string>>(
 	for (let i = 0; i < entries.length; i++) {
 		const entry = entries[i]!;
 		if (entry.kind === "separator") {
-			items.push(node("rule", undefined, undefined, entry.id));
+			items.push(
+				entry.label
+					? node("text", { spans: [span(entry.label, "dim")] }, undefined, entry.id)
+					: node("rule", undefined, undefined, entry.id),
+			);
 			continue;
 		}
 		const decoration = style(entry, i);
@@ -284,7 +288,13 @@ export class HubFrame {
 			const entry = entries[i];
 			if (!entry) continue;
 			if (entry.kind === "separator") {
-				lines.push(theme.fg("border", "─".repeat(width)));
+				const label = entry.label ? `─ ${entry.label} ` : "";
+				lines.push(
+					theme.fg(
+						"border",
+						truncateToWidth(`${label}${"─".repeat(Math.max(0, width - visibleWidth(label)))}`, width),
+					),
+				);
 				continue;
 			}
 			const active = entry.id === selection.id;
@@ -330,6 +340,7 @@ export class HubFrame {
 		const hit = this.#stack.locate(row, col);
 		const bodyHeight = this.#stack.childRect(1)?.height ?? 0;
 		let contentLine = -1;
+		let contentColumn = -1;
 		let overSidebar = false;
 		let overBody = false;
 		if (hit && hit.index === 1) {
@@ -337,9 +348,11 @@ export class HubFrame {
 			if (pane?.pane === "left") {
 				overSidebar = true;
 				contentLine = pane.line;
+				contentColumn = pane.col;
 			} else if (pane?.pane === "right") {
 				overBody = true;
 				contentLine = pane.line;
+				contentColumn = pane.col;
 			}
 		}
 		const overContent = contentLine >= 0 && contentLine < bodyHeight;
@@ -347,6 +360,7 @@ export class HubFrame {
 			footerColumn: hit?.index === 3 ? hit.col : undefined,
 			bodyHeight,
 			contentLine,
+			contentColumn,
 			overSidebar: overSidebar && overContent,
 			overBody: overBody && overContent,
 			bodyLine: contentLine - 1,

@@ -1,9 +1,16 @@
-import { getSSHConfigPath } from "@oh-my-pi/pi-utils";
+import { getSSHConfigPath, sanitizeText } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
-import { addSSHHost, readSSHConfigFile, removeSSHHost, type SSHHostConfig } from "../../ssh/config-writer";
+import {
+	addSSHHost,
+	listSSHHosts,
+	readSSHConfigFile,
+	removeSSHHost,
+	type SSHHostConfig,
+} from "../../ssh/config-writer";
 import { parseCommandArgs } from "../../utils/command-args";
-import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
-import { commandConsumed, errorMessage, parseNamedScopeArgs, parseSubcommand, usage } from "./parse";
+import { argumentValues, buildDirectoryArgumentCompletions, completeCurrentArgument } from "../builtin-completions";
+import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, TuiSlashCommandRuntime } from "../types";
+import { type ConfigScope, commandConsumed, errorMessage, parseNamedScopeArgs, parseSubcommand, usage } from "./parse";
 
 interface ParsedSshAddArgs {
 	name?: string;
@@ -72,6 +79,96 @@ const SSH_ADD_OPTION_PARSERS = new Map<string, SshAddOptionParser>([
 		},
 	],
 ]);
+
+const sshScopeValues = argumentValues("project", "user");
+// The interactive controller also accepts --desc (one value) and --compat (a toggle).
+const sshAddFlags = argumentValues(...SSH_ADD_OPTION_PARSERS.keys(), "--desc", "--compat");
+const sshRemoveFlags = argumentValues("--scope");
+
+/** Quote an argument only when necessary for parseCommandArgs to keep it intact. */
+function quoteSshArgument(value: string, preferred?: string, closed = true): string | undefined {
+	if (!preferred && !/^["']|[ \t]/.test(value)) return value;
+	const quote = [preferred, '"', "'"].find(delimiter => delimiter && !value.includes(delimiter));
+	return quote ? `${quote}${value}${closed ? quote : ""}` : undefined;
+}
+
+export function completeSshAddArguments(prefix: string, runtime?: TuiSlashCommandRuntime) {
+	return completeCurrentArgument(prefix, runtime, async (query, currentRuntime, previous) => {
+		if (!previous[0] || previous[0].startsWith("-")) return null; // A new host name is open input.
+
+		let valueFor: string | undefined;
+		let hasHost = false;
+		for (const flag of previous.slice(1)) {
+			if (valueFor) {
+				hasHost ||= valueFor === "--host" && flag.length > 0;
+				valueFor = undefined;
+			} else if (flag !== "--compat") {
+				if (flag !== "--desc" && !SSH_ADD_OPTION_PARSERS.has(flag)) return null;
+				valueFor = flag;
+			}
+		}
+		if (valueFor === "--scope") return sshScopeValues(query);
+		if (valueFor === "--key") {
+			const quote = /^["']/.test(query) ? query[0] : undefined;
+			let pathPrefix = quote ? query.slice(1) : query;
+			if (quote && pathPrefix.endsWith(quote)) pathPrefix = pathPrefix.slice(0, -1);
+			const cwd = currentRuntime?.ctx.sessionManager.getCwd();
+			const paths = await buildDirectoryArgumentCompletions({ cwd, includeFiles: true })(pathPrefix);
+			const matches = paths?.flatMap(item => {
+				const isDirectory = item.value.endsWith("/");
+				const value = quoteSshArgument(item.value, quote, !isDirectory);
+				return value === undefined ? [] : [{ ...item, value: isDirectory ? value : `${value} ` }];
+			});
+			return matches?.length ? matches : null;
+		}
+		if (valueFor) return null;
+		const flags = sshAddFlags(query);
+		return hasHost && !query && flags ? flags.map(item => ({ ...item, preserveInputOnSubmit: true })) : flags;
+	});
+}
+
+export function completeSshRemoveArguments(prefix: string, runtime?: TuiSlashCommandRuntime) {
+	return completeCurrentArgument(prefix, runtime, async (query, currentRuntime, previous) => {
+		if (previous.length) {
+			if (previous[0]?.startsWith("-")) return null;
+			if (previous.length === 1) {
+				const flags = sshRemoveFlags(query);
+				return !query && flags ? flags.map(item => ({ ...item, preserveInputOnSubmit: true })) : flags;
+			}
+			if (previous.length === 2 && previous[1] === "--scope") return sshScopeValues(query);
+			return null;
+		}
+		if (!currentRuntime) return null;
+		const cwd = currentRuntime.ctx.sessionManager.getCwd();
+		const lower = query.replace(/^["']/, "").toLowerCase();
+		const scopes: readonly ConfigScope[] = ["project", "user"];
+		const scoped = await Promise.all(
+			scopes.map(async scope => {
+				try {
+					return (await listSSHHosts(getSSHConfigPath(scope, cwd)))
+						.filter(name => !name.startsWith("-") && !/[\r\n]/.test(name) && name.toLowerCase().startsWith(lower))
+						.sort()
+						.flatMap(name => {
+							const value = quoteSshArgument(name);
+							if (value === undefined) return [];
+							// Bare names remove from project scope, including names shared by both scopes.
+							return [
+								{
+									value: scope === "project" ? `${value} ` : `${value} --scope user `,
+									label: sanitizeText(name),
+									description: scope,
+								},
+							];
+						});
+				} catch {
+					return [];
+				}
+			}),
+		);
+		const matches = scoped.flat();
+		return matches.length ? matches : null;
+	});
+}
 
 function parseSshAddArgs(rest: string): ParsedSshAddArgs {
 	const tokens = parseCommandArgs(rest);

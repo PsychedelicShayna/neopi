@@ -3,7 +3,7 @@ import { clearSubmittedText, runWithDetachedDraft } from "./helpers/draft";
 import * as path from "node:path";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
-import { PRODUCT_NAME } from "@oh-my-pi/pi-utils";
+import { isRecord, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { formatModelString } from "../config/model-resolver";
 import { resolveSessionModelSelector } from "../config/session-model-selector";
 import type { Settings } from "../config/settings";
@@ -20,17 +20,24 @@ import {
 	saveModelPreset,
 } from "../config/model-presets";
 import { describeLoopCondition } from "../modes/loop-condition";
-import { describeLoopLimitRuntime } from "../modes/loop-limit";
+import {
+	describeLoopLimitRuntime,
+	LOOP_CONDITION_FLAGS,
+	LOOP_DURATION_UNITS,
+	parseLoopArgs,
+} from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import ratchetKickoffPrompt from "../prompts/ratchet-kickoff.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
 import { FAST_USAGE, formatFastModeStatus, runFastCommand } from "../session/fast-command";
 import { describePrewalkCrew, getPrewalkPatterns, resolvePrewalkCrewSelection } from "../session/prewalk-crew";
 import { CLI_THINKING_LEVELS, getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
+import { argumentValues, buildArgumentCompletions, completeCurrentArgument } from "./builtin-completions";
 import { noThinkingMessage, resolveThinkingArgument } from "./helpers/effort";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
-import { handleSecurityCommand } from "./helpers/security";
-import type { SlashCommandSpec } from "./types";
+import { handleSecurityCommand, SECURITY_SUBCOMMANDS } from "./helpers/security";
+import { buildModelSelectorCompletions } from "./model-selector-completions";
+import type { ArgumentValueProvider, SlashCommandSpec, SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 import {
 	cfgComputerBackgroundFallback,
@@ -45,11 +52,135 @@ import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgPlanEnabled } from "../plan-mode/settings";
-import { type ChatModeConfig, parseChatCommandArgs } from "../chat/chat-mode";
+import {
+	CHAT_INCLUDES,
+	CHAT_MODES,
+	type ChatModeChangeRequest,
+	type ChatModeConfig,
+	parseChatCommandArgs,
+} from "../chat/chat-mode";
 
 function formatChatModeStatus(config: ChatModeConfig | undefined): string {
 	if (!config) return "off";
 	return config.include.length > 0 ? `${config.mode} (include: ${config.include.join(", ")})` : config.mode;
+}
+
+const clearArgument = argumentValues("clear");
+
+const loopFlags = argumentValues(...LOOP_CONDITION_FLAGS);
+const loopUnits = argumentValues(...LOOP_DURATION_UNITS);
+
+const loopArguments: ArgumentValueProvider = (prefix, _runtime, previous) => {
+	if (previous.length === 0) {
+		const compact = /^((?:\d+[a-z]+)*\d+)([a-z]*)$/i.exec(prefix);
+		if (!compact) return loopFlags(prefix);
+		return (
+			loopUnits(compact[2]!)?.flatMap(item => {
+				const value = compact[1] + item.value;
+				return typeof parseLoopArgs(value) === "string"
+					? []
+					: [{ value, label: value.trimEnd(), preserveInputOnSubmit: /^\d+$/.test(prefix) }];
+			}) ?? null
+		);
+	}
+	const parsed = parseLoopArgs(previous.join(" "));
+	if (typeof parsed === "string" || !parsed.limit || parsed.prompt || parsed.condition) return null;
+	const flags = loopFlags(prefix);
+	const units = parsed.limit.kind === "iterations" && !prefix.startsWith("-") ? loopUnits(prefix) : null;
+	return flags && units ? [...flags, ...units] : (flags ?? units);
+};
+
+const CHAT_INCLUDE_OPTION = "--include";
+const CHAT_SUBCOMMANDS: SubcommandDef[] = [
+	{ name: "chat", description: "Conversation-first system prompt", usage: "[--include <categories>]" },
+	{ name: "erp", description: "Explicit erotic roleplay system prompt", usage: "[--include <categories>]" },
+	{ name: "raw", description: "No system prompt; only the conversation", usage: "[--include <categories>]" },
+	{ name: "off", description: "Return to the ordinary coding session" },
+];
+const chatModeCompletions = buildArgumentCompletions(CHAT_SUBCOMMANDS, { optional: true });
+const chatActiveModes = argumentValues(...CHAT_MODES);
+
+function chatIncludeCompletions(prefix: string, attached: string) {
+	const parts = prefix.split(",");
+	const query = parts.pop()!.toLowerCase();
+	const existing = new Set(parts.map(part => part.toLowerCase()));
+	const preceding = parts.length > 0 ? `${parts.join(",")},` : "";
+	return CHAT_INCLUDES.filter(name => name.toLowerCase().startsWith(query) && !existing.has(name.toLowerCase())).map(
+		name => ({
+			label: name,
+			value: `${attached}${preceding}${name} `,
+		}),
+	);
+}
+
+const chatArguments: ArgumentValueProvider = async (prefix, _runtime, previous) => {
+	const expectingInclude = previous.at(-1) === CHAT_INCLUDE_OPTION;
+	const consumed = expectingInclude ? previous.slice(0, -1) : previous;
+	let request: ChatModeChangeRequest;
+	try {
+		request = parseChatCommandArgs(consumed.join(" "));
+	} catch {
+		return null;
+	}
+	if (request.mode === "off") return null;
+	if (expectingInclude) return request.include === undefined ? chatIncludeCompletions(prefix, "") : null;
+	if (request.include !== undefined) {
+		return request.mode ? null : chatActiveModes(prefix);
+	}
+	const attached = `${CHAT_INCLUDE_OPTION}=`;
+	if (prefix.startsWith(attached)) return chatIncludeCompletions(prefix.slice(attached.length), attached);
+	const flag = CHAT_INCLUDE_OPTION.startsWith(prefix)
+		? [{ label: CHAT_INCLUDE_OPTION, value: `${CHAT_INCLUDE_OPTION} ` }]
+		: [];
+	const modes = request.mode ? null : await chatModeCompletions(prefix);
+	return [...(modes ?? []), ...flag];
+};
+
+const completeModelArgument: ArgumentValueProvider = (prefix, runtime) => {
+	if (!runtime) return null;
+	return (
+		buildModelSelectorCompletions(runtime)(prefix)?.map(item => ({
+			...item,
+			submitsCommand: false,
+		})) ?? null
+	);
+};
+
+const PREWALK_SUBCOMMANDS: SubcommandDef[] = [
+	{
+		name: "restart",
+		description: "Return to the planning crew and re-arm the execution handoff",
+		usage: "[from] [into]",
+		arguments: [completeModelArgument, completeModelArgument],
+	},
+	{ name: "off", description: "Cancel this session's handoff without changing the active model" },
+];
+
+async function completePrewalkArguments(prefix: string, runtime: TuiSlashCommandRuntime | undefined) {
+	const verbs = await buildArgumentCompletions(PREWALK_SUBCOMMANDS, { optional: true, runtime })(prefix);
+	const trimmed = prefix.trimStart();
+	if (/\s/.test(trimmed) || trimmed.toLowerCase() === "off" || !runtime) return verbs;
+	const models = buildModelSelectorCompletions(runtime)(trimmed);
+	return [
+		...(verbs ?? []),
+		...(models?.map(item => ({
+			...item,
+			value: prefix.slice(0, prefix.length - trimmed.length) + item.value,
+			preserveInputOnSubmit: trimmed.length === 0,
+		})) ?? []),
+	];
+}
+
+function modelPresetNames(deletable: boolean): ArgumentValueProvider {
+	return (prefix, runtime) => {
+		const settings = runtime?.ctx.settings;
+		if (!settings) return null;
+		const global = settings.getGlobalSettings().modelPresets;
+		const names = getModelPresetNames(settings).filter(
+			name => !deletable || (isRecord(global) && Object.hasOwn(global, name)),
+		);
+		return argumentValues(...names)(prefix);
+	};
 }
 
 export function refreshStatusLine(ctx: InteractiveModeContext): void {
@@ -190,20 +321,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "shield",
 		description: `Plan, run, inspect, import, and compare ${PRODUCT_NAME}-native security scans`,
 		allowArgs: true,
-		acpInputHint: "<plan|scan|status|cancel|scans|show|import|export|validate|compare|disposition>",
-		subcommands: [
-			{ name: "plan", description: "Create an immutable security scan plan" },
-			{ name: "scan", description: "Start a planned or newly planned native scan" },
-			{ name: "status", description: "Show native scan operation status" },
-			{ name: "cancel", description: "Cancel a running native scan" },
-			{ name: "scans", description: "List stored project security scans" },
-			{ name: "show", description: "Render a scan or security:// resource" },
-			{ name: "import", description: "Import SARIF or a Codex Security bundle" },
-			{ name: "export", description: "Export a canonical bundle, SARIF, or report" },
-			{ name: "validate", description: `Validate one finding with ${PRODUCT_NAME}-native tools` },
-			{ name: "compare", description: "Compare finding lineage across two scans" },
-			{ name: "disposition", description: "Set a finding disposition with rationale" },
-		],
+		acpInputHint: "<plan|scan|status|cancel|scans|cloud|show|import|export|validate|compare|disposition>",
+		subcommands: SECURITY_SUBCOMMANDS,
+		subcommandOptional: true,
 		handle: handleSecurityCommand,
 	},
 	{
@@ -212,8 +332,18 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open settings menu",
 		allowArgs: true,
 		subcommands: [
-			{ name: "session", description: "Edit session overrides; session clear removes them" },
-			{ name: "project", description: "Edit project overrides; project clear removes them" },
+			{
+				name: "session",
+				description: "Edit session overrides; session clear removes them",
+				usage: "[clear]",
+				arguments: [clearArgument],
+			},
+			{
+				name: "project",
+				description: "Edit project overrides; project clear removes them",
+				usage: "[clear]",
+				arguments: [clearArgument],
+			},
 			{ name: "global", description: "Edit global settings" },
 		],
 		handleTui: async (command, runtime) => {
@@ -323,7 +453,12 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "pause", description: "Pause the current goal" },
 			{ name: "resume", description: "Resume a paused goal" },
 			{ name: "drop", description: "Drop the current goal" },
-			{ name: "budget", description: "Adjust the token budget", usage: "<N|off>" },
+			{
+				name: "budget",
+				description: "Adjust the token budget",
+				usage: "<N|off>",
+				arguments: [argumentValues("off")],
+			},
 		],
 		inlineHint: "[objective]",
 		allowArgs: true,
@@ -359,6 +494,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
+		getTuiArgumentCompletions: (prefix, runtime) => completeCurrentArgument(prefix, runtime, loopArguments),
 		getTuiAutocompleteDescription: runtime => {
 			if (!runtime.ctx.loopModeEnabled) return "Loop: off";
 			if (runtime.ctx.loopModePaused) return "Loop: paused";
@@ -423,6 +559,13 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[model]",
 		inlineHint: "[model]",
 		allowArgs: true,
+		getTuiArgumentCompletions: (prefix, runtime) =>
+			runtime
+				? (buildModelSelectorCompletions(runtime)(prefix)?.map(item => ({
+						...item,
+						preserveInputOnSubmit: prefix.length === 0,
+					})) ?? null)
+				: null,
 		getTuiAutocompleteDescription: runtime => {
 			const model = runtime.ctx.viewSession.model;
 			return model ? `Model: ${model.provider}/${model.id}` : "Model: none selected";
@@ -490,6 +633,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex and relay models that offer it)" },
 			{ name: "off", description: "Disable fast mode" },
 			{ name: "status", description: "Show fast mode status" },
+			{ name: "toggle", description: "Toggle fast mode" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -518,6 +662,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "on", description: "Flex tier, or Anthropic low priority at the session limit (auto)" },
 			{ name: "off", description: "Standard service; stop Anthropic low priority" },
 			{ name: "status", description: "Show slow mode status" },
+			{ name: "toggle", description: "Toggle slow mode" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -545,6 +690,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "on", description: "List skills in the prompt for this session" },
 			{ name: "off", description: "Omit the skills listing for this session" },
 			{ name: "status", description: "Show skill listing status" },
+			{ name: "toggle", description: "Toggle listing skills in the prompt" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -597,12 +743,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Switch chat mode for this session; bare /chat toggles between off and the last-used mode",
 		acpDescription: "Switch chat mode",
 		acpInputHint: "[chat|erp|raw|off] [--include <categories>]",
-		subcommands: [
-			{ name: "chat", description: "Conversation-first system prompt", usage: "[--include <categories>]" },
-			{ name: "erp", description: "Explicit erotic roleplay system prompt", usage: "[--include <categories>]" },
-			{ name: "raw", description: "No system prompt; only the conversation", usage: "[--include <categories>]" },
-			{ name: "off", description: "Return to the ordinary coding session" },
-		],
+		subcommands: CHAT_SUBCOMMANDS,
+		subcommandOptional: true,
+		getTuiArgumentCompletions: (prefix, runtime) => completeCurrentArgument(prefix, runtime, chatArguments),
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => `Chat mode: ${formatChatModeStatus(runtime.ctx.session.chatMode)}`,
 		handle: async (command, runtime) => {
@@ -625,6 +768,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "on", description: "Enable larger context windows" },
 			{ name: "off", description: "Use default or standard-pricing context windows" },
 			{ name: "status", description: "Show extended context status" },
+			{ name: "toggle", description: "Toggle extended context" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -652,6 +796,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "on", description: "Enable computer use for this session" },
 			{ name: "off", description: "Disable computer use for this session" },
 			{ name: "status", description: "Show computer use status" },
+			{ name: "toggle", description: "Toggle computer use" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
@@ -728,14 +873,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		acpDescription: "Arm, restart, or cancel prewalk",
 		acpInputHint: "[into] | restart [from] [into] | off",
-		subcommands: [
-			{
-				name: "restart",
-				description: "Return to the planning crew and re-arm the execution handoff",
-				usage: "[from] [into]",
-			},
-			{ name: "off", description: "Cancel this session's handoff without changing the active model" },
-		],
+		subcommands: PREWALK_SUBCOMMANDS,
+		subcommandOptional: true,
+		getTuiArgumentCompletions: completePrewalkArguments,
 		handle: async (command, runtime) => {
 			const [verb, ...rest] = command.args.trim().split(/\s+/).filter(Boolean);
 			const keyword = verb?.toLowerCase();
@@ -830,8 +970,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		subcommands: [
 			{ name: "list", description: "List saved presets" },
 			{ name: "save", description: "Save the current role models and thinking level", usage: "<name>" },
-			{ name: "switch", description: "Apply a saved preset", usage: "<name>" },
-			{ name: "delete", description: "Delete a saved preset", usage: "<name>" },
+			{ name: "switch", description: "Apply a saved preset", usage: "<name>", arguments: [modelPresetNames(false)] },
+			{ name: "delete", description: "Delete a saved preset", usage: "<name>", arguments: [modelPresetNames(true)] },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {

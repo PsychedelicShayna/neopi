@@ -60,6 +60,7 @@ import {
 	cfgTierOpenai,
 } from "./settings";
 import { cfgDisabledProviders, cfgEnabledModels } from "../config/model-settings";
+import { modelVariantSetting } from "../config/model-variant-settings";
 
 /**
  * Whether `model` takes effort per message, so changing it mid-conversation keeps the cached prefix:
@@ -130,8 +131,11 @@ export function serviceTierForModel(
 	model: Model,
 	tiers: ServiceTierByFamily,
 ): ServiceTier | undefined {
+	const variantTier = model.variant?.request.serviceTier;
+	if (variantTier !== undefined) return variantTier === "none" ? undefined : variantTier;
 	if (model.provider === "fireworks") {
-		return cfgProvidersFireworksTier.get(settings) === "priority" && !isFireworksFastModelId(model.id)
+		return modelVariantSetting(model, cfgProvidersFireworksTier, settings) === "priority" &&
+			!isFireworksFastModelId(model.variant?.baseModelId ?? model.id)
 			? "priority"
 			: undefined;
 	}
@@ -294,6 +298,15 @@ export class ModelControls {
 		this.#scopedModels = scopedModels;
 	}
 
+	refreshScopedModelVariants(): void {
+		if (!this.#scopedModels.some(entry => entry.model.variant)) return;
+		this.#scopedModels = this.#scopedModels.flatMap(entry => {
+			if (!entry.model.variant) return [entry];
+			const model = this.#host.modelRegistry.find(entry.model.provider, entry.model.id);
+			return model ? [{ ...entry, model }] : [];
+		});
+	}
+
 	/** Live per-provider-family service-tier selection. */
 	get serviceTierByFamily(): ServiceTierByFamily {
 		return this.#serviceTierByFamily;
@@ -454,7 +467,7 @@ export class ModelControls {
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
 		this.#validateTargetThinkingLevel(
 			targetModel,
-			thinkingLevel ?? this.#reappliedThinkingLevel(targetModel.thinking?.defaultLevel),
+			thinkingLevel ?? this.#reappliedThinkingLevel(targetModel.thinking?.defaultLevel, targetModel),
 			thinkingLevel === undefined ? this.#effortOrigin : "manual",
 		);
 		if (isCurrent?.() === false) return false;
@@ -599,7 +612,10 @@ export class ModelControls {
 		const len = scopedModels.length;
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const next = scopedModels[nextIndex];
-		const configured = this.#autoThinking ? AUTO_THINKING : next.thinkingLevel;
+		const configured =
+			(this.#effortOrigin !== "caller" && this.#effortOrigin !== "manual" && !next.explicitThinkingLevel
+				? next.model.variant?.request.thinkingLevel
+				: undefined) ?? (this.#autoThinking ? AUTO_THINKING : next.thinkingLevel);
 		const origin = this.#autoThinking ? this.#effortOrigin : next.explicitThinkingLevel ? "caller" : "default";
 		if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
 			resolveImplicitEffort(
@@ -644,7 +660,11 @@ export class ModelControls {
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
-		this.#validateTargetThinkingLevel(nextModel, this.#reappliedThinkingLevel(), this.#effortOrigin);
+		this.#validateTargetThinkingLevel(
+			nextModel,
+			this.#reappliedThinkingLevel(undefined, nextModel),
+			this.#effortOrigin,
+		);
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
@@ -779,8 +799,13 @@ export class ModelControls {
 	 * current level, clamped to the nearest effort the new model supports.
 	 * `fallback` (the new model's own default) applies only when no level is set.
 	 */
-	#reappliedThinkingLevel(preferredDefault?: ThinkingLevel): ConfiguredThinkingLevel | undefined {
+	#reappliedThinkingLevel(
+		preferredDefault?: ThinkingLevel,
+		target = this.#model,
+	): ConfiguredThinkingLevel | undefined {
 		const explicit = this.#effortOrigin === "manual" || this.#effortOrigin === "caller";
+		const variantLevel = target?.variant?.request.thinkingLevel;
+		if (!explicit && variantLevel !== undefined) return variantLevel;
 		return this.#autoThinking
 			? AUTO_THINKING
 			: explicit
@@ -803,6 +828,12 @@ export class ModelControls {
 
 	#reapplyThinkingLevel(preferredDefault?: ThinkingLevel): void {
 		this.setThinkingLevel(this.#reappliedThinkingLevel(preferredDefault), false, this.#effortOrigin);
+	}
+
+	reapplyModelVariantThinking(previous: Model): void {
+		if (previous.variant?.request.thinkingLevel !== this.#model?.variant?.request.thinkingLevel) {
+			this.#reapplyThinkingLevel(this.#model?.thinking?.defaultLevel);
+		}
 	}
 
 	/** All selectable effort selectors for the active model, in cycle order. */

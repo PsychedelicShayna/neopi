@@ -7,6 +7,7 @@ import type { AuthAccountPolicies } from "@oh-my-pi/pi-ai/auth-storage";
 import { setUnpausedProviders } from "@oh-my-pi/pi-ai/oauth";
 import { authProviders } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { cfgDefaultThinkingLevel } from "../session/settings";
+import type { HubModelFolder } from "@oh-my-pi/pi-tui/overlays/model-hub";
 
 /** Display metadata for one model tag. */
 export interface ModelTagDef {
@@ -233,6 +234,33 @@ export const cfgModelPresets = register({
 	id: "modelPresets",
 	type: "record",
 	default: EMPTY_MODEL_PRESETS_RECORD,
+});
+
+/** Named browsing collections shared by the fullscreen model picker and Roles. */
+export const cfgModelFolders = register({
+	id: "modelFolders",
+	type: "array",
+	default: [] as readonly HubModelFolder[],
+	validate(raw) {
+		if (raw === undefined) return;
+		if (!Array.isArray(raw)) throw new Error("Model folders must be a list");
+		const names = new Set<string>();
+		for (const folder of raw) {
+			if (
+				!folder ||
+				typeof folder.name !== "string" ||
+				!folder.name ||
+				folder.name !== folder.name.trim() ||
+				/[\p{Cc}\p{Zl}\p{Zp}]/u.test(folder.name) ||
+				!Array.isArray(folder.models) ||
+				folder.models.some((model: unknown) => typeof model !== "string" || !/^[^/]+\/.+$/u.test(model))
+			) {
+				throw new Error("Each model folder needs a single-line name and a list of provider/model IDs");
+			}
+			if (names.has(folder.name)) throw new Error(`Duplicate model folder "${folder.name}"`);
+			names.add(folder.name);
+		}
+	},
 });
 
 export const cfgModelTags = register({ id: "modelTags", type: "record", default: EMPTY_MODEL_TAGS_RECORD });

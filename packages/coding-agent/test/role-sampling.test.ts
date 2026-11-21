@@ -47,7 +47,10 @@ async function requestPayload(
 		...cfgSampling.get(settings),
 		apiKey: "test-key",
 		maxTokens: 16,
-		fetch: async () => new Response(new Uint8Array(), { status: 200 }),
+		// The assertions concern the outbound body, not provider output. Return a
+		// terminal HTTP reply so adapters that retry an empty successful stream
+		// cannot mask the later sampling assertions.
+		fetch: async () => Response.json({ error: { message: "payload captured" } }, { status: 400 }),
 		onPayload: payload => {
 			body = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
 		},

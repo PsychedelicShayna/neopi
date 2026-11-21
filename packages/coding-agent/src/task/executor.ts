@@ -2502,10 +2502,17 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 									block.type === "toolCall",
 							);
 				if (generated) {
+					const upstream = message.upstreamModel;
+					const sameLogicalModel =
+						!upstream ||
+						upstream === message.model ||
+						(session.model?.variant !== undefined &&
+							session.model.id === message.model &&
+							session.model.requestModelId === upstream);
 					if (
 						event.requestModelProvider === message.provider &&
 						event.requestModelId === message.model &&
-						(!message.upstreamModel || message.upstreamModel === message.model) &&
+						sameLogicalModel &&
 						event.requestDisableReasoning !== true &&
 						event.requestEffectiveThinkingLevel
 					) {

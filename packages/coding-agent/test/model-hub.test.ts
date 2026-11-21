@@ -284,6 +284,91 @@ describe("ModelHub", () => {
 		}
 	});
 
+	test("model folders cross the fullscreen and Roles pickers and survive settings reload", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-model-folders-"));
+		const options = { cwd: root, agentDir: path.join(root, "agent") };
+		const models = [makeModel("alpha", "review-model"), makeModel("beta", "other-model")];
+		const create = "\x1b[110;7u"; // Ctrl+Alt+N
+		const add = "\x1b[97;7u"; // Ctrl+Alt+A
+		const rename = "\x1b[114;7u"; // Ctrl+Alt+R
+		const clear = "\x1b[120;7u"; // Ctrl+Alt+X
+		const del = "\x1b[3~";
+		try {
+			const settings = await Settings.loadIsolated(options);
+			const { hub: session } = createHub({
+				models,
+				settings,
+				hub: { sessionOnly: true, initialProviderId: "alpha" },
+			});
+			expect(normalize(session.render(220))).toContain("Folders");
+			for (const key of [create, ..."Code review", "\n", "\n", add, "\n"]) session.handleInput(key);
+			session.handleInput(LEFT);
+			session.handleInput(UP); // alpha → Code review
+			expect(session.navigationSnapshot().entry).toBe("folder:Code review");
+			expect(normalize(session.render(220))).toContain("alpha/review-model");
+			expect(normalize(session.render(220))).not.toContain("other-model");
+			await settings.flush();
+
+			const reloaded = await Settings.loadIsolated(options);
+			const { hub: roles, onAssign } = createHub({ models, settings: reloaded, scoped: true, scope: "session" });
+			for (const key of [UP, "\n", "\n", "\n", LEFT]) roles.handleInput(key);
+			for (let i = 0; i < 8 && roles.navigationSnapshot().entry !== "folder:Code review"; i++)
+				roles.handleInput(DOWN);
+			expect(roles.navigationSnapshot().entry).toBe("folder:Code review");
+			expect(normalize(roles.render(220))).toContain("alpha/review-model");
+			roles.handleInput("\n"); // Sidebar → list.
+			roles.handleInput("\n"); // Assign saved member to the role.
+			expect(onAssign).toHaveBeenCalledTimes(1);
+			expect(onAssign.mock.calls[0]?.[1]).toBe("default");
+			expect(onAssign.mock.calls[0]?.[3]).toBe("alpha/review-model");
+
+			const { hub: edit } = createHub({
+				models,
+				settings: reloaded,
+				hub: { sessionOnly: true, initialProviderId: "alpha" },
+			});
+			for (const key of [UP, rename, "\x01", "\x0b", ..."Review", "\n"]) edit.handleInput(key);
+			expect(edit.navigationSnapshot().entry).toBe("folder:Review");
+			expect(normalize(edit.render(220))).toContain("alpha/review-model");
+			for (const key of ["\n", "\x7f"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("This folder is empty");
+
+			for (const key of [LEFT, DOWN, "\n", add, "\n", LEFT, UP]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("alpha/review-model");
+			for (const key of [clear, ..."Review", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("This folder is empty");
+
+			for (const key of [del, ..."Wrong", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).toContain("Type the exact folder name to confirm");
+			expect(edit.navigationSnapshot().entry).toBe("folder:Review");
+			for (const key of ["\x01", "\x0b", ..."Review", "\n"]) edit.handleInput(key);
+			expect(normalize(edit.render(220))).not.toContain("Review");
+			await reloaded.flush();
+			const last = await Settings.loadReadOnly(options);
+			expect(last.getGlobalSettings()).toHaveProperty("modelFolders", []);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("the project folder list is shared with the session picker without altering the global list", () => {
+		const settings = Settings.isolated();
+		const models = [makeModel("alpha", "review-model")];
+		const { hub: global } = createHub({ models, settings, scoped: true, scope: "global" });
+		const { hub: project } = createHub({ models, settings, scoped: true, scope: "project" });
+		for (const key of ["\x1b[110;7u", ..."Personal", "\n"]) global.handleInput(key);
+		for (const key of ["\x1b[110;7u", ..."Team", "\n"]) project.handleInput(key);
+		const { hub: session } = createHub({ models, settings, scoped: true, hub: { sessionOnly: true } });
+		expect(normalize(global.render(220))).toContain("Personal");
+		expect(normalize(global.render(220))).not.toContain("Team");
+		expect(normalize(session.render(220))).toContain("Team");
+		expect(settings.getGlobalSettings()).toHaveProperty("modelFolders", [{ name: "Personal", models: [] }]);
+		expect(settings.getProjectSettings()).toHaveProperty("modelFolders", [
+			{ name: "Personal", models: [] },
+			{ name: "Team", models: [] },
+		]);
+	});
+
 	test.each(["session", "project", "global"] as const)(
 		"Models %s edits its own assignment and shows higher-scope shadowing",
 		scope => {
@@ -316,6 +401,37 @@ describe("ModelHub", () => {
 		for (const key of ["b", "\x01", "\x0b", "\n"]) hub.handleInput(key);
 		expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBeUndefined();
 		expect(createSettingsHost(settings).entries.some(entry => entry.path.startsWith("roleSettings."))).toBe(false);
+	});
+
+	test("editing a role context cap leaves another slot on the same model unchanged after reopening", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "model-hub-role-cap-"));
+		try {
+			const options = { agentDir: path.join(dir, "agent"), cwd: dir };
+			const settings = await Settings.init(options);
+			const models = [makeModel("test", "shared")];
+			settings.writeScopeValue(cfgModelRoles, { default: "test/shared", smol: "test/shared" }, "global");
+			settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+			settings.setRoleSetting("smol", cfgCompactionThresholdTokens, 32_000);
+			const onCompactionPointChange = vi.fn(() => undefined);
+			const { hub } = createHub({ models, settings, callbacks: { onCompactionPointChange } });
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+			hub.handleInput("m");
+			expect(footerLine(hub.render(220))).toContain("default token budget:");
+			for (const key of ["\x01", "\x0b", ..."64000", "\n"]) hub.handleInput(key);
+			expect(onCompactionPointChange).not.toHaveBeenCalled();
+			await settings.flush();
+
+			const reopened = await Settings.init(options);
+			expect(reopened.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(64_000);
+			expect(reopened.getRoleSetting("smol", cfgCompactionThresholdTokens)).toBe(32_000);
+			const { hub: reopenedHub } = createHub({ models, settings: reopened });
+			reopenedHub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+			const rows = reopenedHub.render(220).map(line => normalize([line]));
+			expect(rows.find(line => line.includes("test/shared") && line.includes("budget 64,000"))).toBeDefined();
+			expect(rows.find(line => line.includes("test/shared") && line.includes("budget 32,000"))).toBeDefined();
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("invalid role budget edits retain the field and saved budget", () => {
@@ -702,7 +818,7 @@ describe("ModelHub", () => {
 			[120_000, "120k"],
 			["60%", "60%"],
 			["f120000", "f120k"],
-		] as const)("shows configured compaction %s beside the effort summary", (entry, label) => {
+		] as const)("separates role budgets from the model-wide compaction entry %s", (entry, label) => {
 			const model = getBundledModel("openai", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled reasoning model");
 			const selector = `${model.provider}/${model.id}`;
@@ -712,14 +828,22 @@ describe("ModelHub", () => {
 				"compaction.modelThresholdsEnabled": false,
 			});
 			settings.setRoleEffortSelection("default", { mode: "auto", allowed: [Effort.Low, Effort.High] });
-			const { hub } = createHub({ models: [model], scoped: true, settings });
+			settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+			const { hub } = createHub({
+				models: [model],
+				scoped: true,
+				settings,
+				callbacks: { onCompactionPointChange: () => undefined },
+			});
 			hub.handleInput(UP);
 			const lines = hub.render(220).map(line => stripVTControlCharacters(line));
 			const defaultRow = lines.find(line => line.includes("DEFAULT"));
 			const smolRow = lines.find(line => line.includes("SMOL"));
 			expect(defaultRow).toContain("Auto [low, high]");
-			expect(defaultRow).toContain(`compact ${label}`);
-			expect(smolRow).toContain(`compact ${label}`);
+			expect(defaultRow).toContain("budget 80,000");
+			expect(smolRow).not.toContain("budget");
+			expect(defaultRow).not.toContain(`compact ${label}`);
+			expect(smolRow).not.toContain(`compact ${label}`);
 			const native = hub.describe({
 				cols: 220,
 				reduceMotion: false,
@@ -728,10 +852,17 @@ describe("ModelHub", () => {
 				feature: () => true,
 			});
 			if (native.k !== "picker" || !native.p) throw new Error("Expected model hub picker");
-			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBe(`compact ${label}`);
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts).toMatchObject({ budget: "80000" });
+			expect(native.p.items?.find(item => item.id === "role:smol")?.facts?.budget).toBeUndefined();
+			expect(native.p.items?.find(item => item.id === "role:default")?.facts?.compaction).toBeUndefined();
 			for (const width of [36, 60, 90]) {
 				expect(hub.render(width).every(line => Bun.stringWidth(line) <= width)).toBe(true);
 			}
+			hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+			hub.handleInput("\n");
+			hub.handleInput("m");
+			expect(footerLine(hub.render(220))).toContain(`${model.id} limit:`);
+			expect(footerLine(hub.render(220))).toContain(label);
 		});
 
 		test("real settings initialization without model limits renders no compaction summary", async () => {
@@ -3609,24 +3740,39 @@ test("an existing menu Ctrl-G binding wins over opening the model config", () =>
 	}
 });
 
-test("Ctrl-G opens global settings for a project role's per-model compaction editor", async () => {
+test("Ctrl-G opens global settings for the model row's per-model compaction editor", async () => {
 	const open = vi.fn(async () => {});
-	const settings = Settings.isolated({ modelRoleStorage: "project" });
+	const settings = Settings.isolated({
+		modelRoleStorage: "project",
+		"compaction.modelThresholds": { "test/one": 96_000 },
+	});
 	settings.setProjectModelRole("default", "test/one");
+	settings.setRoleSetting("default", cfgCompactionThresholdTokens, 80_000);
+	settings.setActiveRole("default");
+	const onCompactionPointChange = vi.fn(() => undefined);
 	const { hub } = createHub({
 		models: [makeModel("test", "one")],
 		settings,
 		callbacks: {
 			onOpenConfigFile: open,
-			onCompactionPointChange: () => undefined,
+			onCompactionPointChange,
 		},
 	});
-	hub.handleNativeEvent({ type: "select", key: "scopes", item: "roles" });
+	hub.handleNativeEvent({ type: "select", key: "scopes", item: "all" });
+	hub.handleInput("\n");
 	hub.handleInput("m");
 	expect(footerLine(hub.render(140))).toContain("one limit:");
+	expect(footerLine(hub.render(140))).toContain("96k");
 	hub.handleInput("\x07");
 	await Bun.sleep(0);
 	expect(open).toHaveBeenCalledWith("context", "global");
+	for (const key of ["\x01", "\x0b", ..."48k", "\n"]) hub.handleInput(key);
+	expect(onCompactionPointChange).toHaveBeenCalledWith(
+		expect.objectContaining({ provider: "test", id: "one" }),
+		"48k",
+		false,
+	);
+	expect(settings.getRoleSetting("default", cfgCompactionThresholdTokens)).toBe(80_000);
 });
 
 let previousVimMode: boolean;

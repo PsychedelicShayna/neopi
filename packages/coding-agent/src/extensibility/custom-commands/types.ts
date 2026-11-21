@@ -90,10 +90,12 @@ export interface CustomCommand {
 	/**
 	 * Optional argument completions shown in the slash-command autocomplete UI.
 	 * @param cwd - Live session working directory (follows /move and /wt)
+	 * @param context - Read-only access to the current session transcript.
 	 */
 	getArgumentCompletions?(
 		argumentPrefix: string,
 		cwd: string,
+		context?: Pick<HookCommandContext, "sessionManager">,
 	): Promise<AutocompleteItem[] | null> | AutocompleteItem[] | null;
 	/**
 	 * Execute the command.

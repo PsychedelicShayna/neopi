@@ -17,6 +17,30 @@ inherit the ordinary context limit. These controls replace the per-role budget
 rows in Settings and keep the existing
 `roleSettings.<role>["compaction.thresholdTokens"]` keys and stored values.
 
+### Model folders
+
+The fullscreen `/model` picker (also Alt+P) and `/roles` share a **Folders**
+section in the sidebar. Press `Ctrl+Alt+N` to create a named folder, then
+highlight a model in any provider and press `Ctrl+Alt+A`. Choose a `+` folder
+to add the model or a `−` folder to remove it. Open a folder like a provider:
+in `/model`, Enter uses the highlighted model for the session; when picking a
+model in `/roles`, Enter assigns it to the selected role.
+
+- In the folder's model list, **Backspace** removes the highlighted model.
+- On the folder's sidebar row, **Ctrl+Alt+R** renames it, **Ctrl+Alt+X** clears
+  its models, and **Delete** deletes the folder. Clearing and deleting require
+  typing the folder's exact name.
+
+Folders are browsing shortcuts: editing them does not change models or role
+assignments. The active profile stores them under `modelFolders` (a list of
+`{ name, models }` entries, where `models` contains exact `provider/model` IDs).
+Editing folders in `/roles project` saves the list for that project. `/model` and
+`/roles session` use that list when present, otherwise they use the global list.
+`/roles global` always edits the global list. Models that aren't currently
+available are hidden from the picker but stay in their folders.
+
+### Model overrides
+
 Open `/roles` and choose **Model overrides**, beside Effort rules and Context
 rules. This lists every explicit override and custom model in the active models
 config, including entries that are not in the current catalog.
@@ -1081,6 +1105,14 @@ context:
       limit: 80%
 ```
 
+
+### Model Variants
+
+The **Model Variants** section under effort policy in `/models` lets you save
+named copies of a model's request configuration without changing the base
+model. Pick one as you would any model, assign it to a role, or keep several
+variants of the same base. For storage, scope, supported overrides and
+inheritance, see [Model Variants in Settings](./settings.md#model-variants).
 
 ### Model presets
 

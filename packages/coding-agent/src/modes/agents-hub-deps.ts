@@ -17,9 +17,11 @@ import {
 	resolveAgentPrewalkPattern,
 	resolveModelOverride,
 } from "../config/model-resolver";
+import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import { refreshAgentDiscovery } from "../task";
 import { createAgentFieldGenerator } from "../task/agent-generation";
+import { listAgentGenerationSources } from "../task/agent-generation-sources";
 import { parseAgentDefinitionDocument, serializeAgentDefinitionDocument } from "../task/agent-definition-document";
 import { inspectAgentDefinition } from "../task/agent-definition-inspection";
 import { discoverAgents } from "../task/discovery";
@@ -48,7 +50,8 @@ export function createAgentsHubDeps(
 	editorContext?: {
 		tools: () => readonly { name: string; description: string }[];
 		sessionDir: () => string | undefined;
-		skills?: () => readonly { name: string; description?: string }[];
+		skills?: () => readonly { name: string; description?: string; filePath?: string; containRoot?: string }[];
+		promptTemplates?: () => readonly PromptTemplate[];
 		externalEditor?: (text: string) => Promise<string | null>;
 	},
 ): AgentsHubDeps {
@@ -63,8 +66,9 @@ export function createAgentsHubDeps(
 	let knownAgents: readonly (AgentDefinitionDraft & { source: string })[] = [];
 	let advisorCache: readonly NamedAgentAdvisor[] | undefined;
 	const listAdvisors = async () => {
-		advisorCache = await listNamedAdvisors(cwd, getAgentDir(), editorContext?.sessionDir());
-		return advisorCache;
+		const advisors = await listNamedAdvisors(cwd, getAgentDir(), editorContext?.sessionDir());
+		advisorCache = advisors;
+		return advisors;
 	};
 	void listAdvisors().catch(() => undefined);
 	const modelPatterns = (name: string, model: string[] | undefined) => {
@@ -180,6 +184,16 @@ export function createAgentsHubDeps(
 				return skills();
 			},
 			listAdvisors,
+			listGenerationSources: () =>
+				listAgentGenerationSources({
+					cwd,
+					settings,
+					extensionRoots: extensionRoots(),
+					agents: async () => (await discoverAgents(cwd, undefined, extensionRoots())).agents,
+					advisors: listAdvisors,
+					promptTemplates: editorContext?.promptTemplates?.() ?? [],
+					skills: skills(),
+				}),
 			parse: parseAgentDefinitionDocument,
 			serialize: serializeAgentDefinitionDocument,
 			generate: request => generator.generateAgentFields(request),

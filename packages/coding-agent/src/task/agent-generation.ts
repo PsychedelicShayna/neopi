@@ -128,6 +128,7 @@ export function createAgentFieldGenerator(options: AgentFieldGeneratorOptions): 
 						name: definition.name,
 						definition: JSON.stringify(definition, null, 2),
 					})),
+					sources: request.sources?.length ? JSON.stringify(request.sources, null, 2) : undefined,
 				},
 				{ cwd: options.cwd },
 			),

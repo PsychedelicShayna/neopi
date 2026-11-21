@@ -21,11 +21,17 @@ import { applyBrowserModeChange } from "../tools/browser";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { openPath } from "../utils/open";
 import { copyToClipboard } from "../utils/clipboard";
+import {
+	argumentValues,
+	buildDirectoryArgumentCompletions,
+	completeArguments,
+	completeCurrentArgument,
+} from "./builtin-completions";
 import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { formatDumpArchiveReport } from "../session/session-dump-format";
-import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 import type { AgentSession } from "../session/agent-session";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
@@ -118,6 +124,64 @@ const CHAINING_USAGE = "Usage: /chain [on|off|status|use [name]|configure]";
 
 const MIXTURE_USAGE = "Usage: /moa [configure|list|use <name>|reset|status]";
 
+async function chainArgumentValues(tail: string, runtime?: TuiSlashCommandRuntime) {
+	if (!runtime) return null;
+	const { chains } = await discoverChains(runtime.ctx.sessionManager.getCwd(), getAgentDir());
+	return (
+		argumentValues(...chains.map(chain => chain.name))(tail)?.map(item => ({
+			...item,
+			preserveInputOnSubmit: !tail,
+		})) ?? null
+	);
+}
+
+async function mixtureArgumentValues(tail: string, runtime: TuiSlashCommandRuntime | undefined, registered: boolean) {
+	if (!runtime) return null;
+	const { session, sessionManager } = runtime.ctx;
+	const { mixtures } = await discoverMixtures(sessionManager.getCwd(), session.getMixtureAgentDir() ?? getAgentDir());
+	const values = mixtures
+		.map(item => item.definition.name)
+		.filter(
+			name => !registered || (session.getRegisteredMixture(name) && session.modelRegistry.find("mixture", name)),
+		);
+	return (
+		argumentValues(...values)(tail)?.map(item => ({
+			...item,
+			preserveInputOnSubmit: !registered && !tail,
+		})) ?? null
+	);
+}
+
+const exportThemeValues = argumentValues("--themes");
+
+function exportArgumentCompletions(prefix: string, runtime?: TuiSlashCommandRuntime) {
+	return completeCurrentArgument(prefix, runtime, async (active, _current, previous) => {
+		const hasPath = previous.some(value => value !== "--themes");
+		const flags = previous.includes("--themes") ? [] : (exportThemeValues(active) ?? []);
+		// Export resolves paths against the process cwd and takes only one
+		// whitespace-free output path. Suggest directories, not files to overwrite.
+		const dirs =
+			hasPath || active.startsWith("-") || active.startsWith("~")
+				? null
+				: await buildDirectoryArgumentCompletions({ cwd: process.cwd() })(active);
+		const matches = [
+			...flags.map(item => ({ ...item, preserveInputOnSubmit: !active })),
+			...(dirs ?? []).filter(item => !/\s/.test(item.value)).map(item => ({ ...item, preserveInputOnSubmit: true })),
+		];
+		return matches.length ? matches : null;
+	});
+}
+
+function optionalArgumentCompletions(...values: string[]) {
+	const provider = argumentValues(...values);
+	return (prefix: string, runtime?: TuiSlashCommandRuntime) =>
+		completeArguments(
+			prefix,
+			runtime,
+			active => provider(active)?.map(item => ({ ...item, preserveInputOnSubmit: !active })) ?? null,
+		);
+}
+
 async function mixtureList(runtime: Pick<SlashCommandRuntime, "session" | "settings" | "cwd">): Promise<string> {
 	const agentDir = runtime.session.getMixtureAgentDir() ?? getAgentDir();
 	const found = await discoverMixtures(runtime.cwd, agentDir);
@@ -179,7 +243,12 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			{ name: "on", description: "Enable the advisor" },
 			{ name: "off", description: "Disable the advisor" },
 			{ name: "status", description: "Show advisor status" },
-			{ name: "dump", description: "Copy the advisor's transcript to clipboard", usage: "[raw]" },
+			{
+				name: "dump",
+				description: "Copy the advisor's transcript to clipboard",
+				usage: "[raw]",
+				getArgumentCompletions: optionalArgumentCompletions("raw"),
+			},
 			{ name: "configure", description: "Open the advisor configuration editor (TUI)" },
 		],
 		allowArgs: true,
@@ -300,7 +369,12 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			{ name: "on", description: "Run every prompt through the active chain" },
 			{ name: "off", description: "Stop chaining every prompt (Ctrl+Alt+C still chains one)" },
 			{ name: "status", description: "Show chaining mode, active chain, and chains" },
-			{ name: "use", description: "Set the active chain; no name clears it", usage: "[name]" },
+			{
+				name: "use",
+				description: "Set the active chain; no name clears it",
+				usage: "[name]",
+				getArgumentCompletions: chainArgumentValues,
+			},
 			{ name: "configure", description: "Open the chain configuration editor (TUI)" },
 		],
 		allowArgs: true,
@@ -341,9 +415,19 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		acpDescription: "Manage Mixture of Agents models and runs",
 		acpInputHint: "[list|use <name>|configure [name]|reset|status]",
 		subcommands: [
-			{ name: "configure", description: "Open the fullscreen graph configurator (TUI)", usage: "[name]" },
+			{
+				name: "configure",
+				description: "Open the fullscreen graph configurator (TUI)",
+				usage: "[name]",
+				getArgumentCompletions: (tail, runtime) => mixtureArgumentValues(tail, runtime, false),
+			},
 			{ name: "list", description: "List discovered mixtures and validation state" },
-			{ name: "use", description: "Select a registered mixture model", usage: "<name>" },
+			{
+				name: "use",
+				description: "Select a registered mixture model",
+				usage: "<name>",
+				getArgumentCompletions: (tail, runtime) => mixtureArgumentValues(tail, runtime, true),
+			},
 			{ name: "reset", description: "Drop the current mixture run so the next message starts fresh" },
 			{ name: "status", description: "Show the current mixture run's hop, member, and spend" },
 		],
@@ -408,6 +492,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		description: "Export session to HTML file",
 		inlineHint: "[--themes] [path]",
 		allowArgs: true,
+		getTuiArgumentCompletions: exportArgumentCompletions,
 		handle: async (command, runtime) => {
 			try {
 				const { outputPath, useUserThemes } = parseExportArgs(command.args);
@@ -547,6 +632,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		description: "Share this session live via a relay",
 		inlineHint: "[start|view|list|stop|status] [relayUrl]",
 		subcommands: [
+			{ name: "start", description: "Share a link that lets guests prompt", usage: "[relayUrl]" },
 			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
 			{ name: "list", description: `List active local Collab hosts (no links; use \`${APP_NAME} collab link\`)` },
 			{ name: "status", description: "Show link + participants" },
@@ -802,6 +888,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "copy",
 		description: "Pick text or code from the conversation to copy",
 		allowArgs: true,
+		getTuiArgumentCompletions: optionalArgumentCompletions("code", "cmd", "command", "link", "url"),
 		handleTui: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (!arg) {
@@ -854,6 +941,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "globe",
 		description: "Open the last link from the conversation in your browser (or pick one with /copy)",
 		allowArgs: true,
+		getTuiArgumentCompletions: optionalArgumentCompletions("link", "url"),
 		handleTui: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "link" && arg !== "url") {

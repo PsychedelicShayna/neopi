@@ -13,6 +13,7 @@ function pickEditor(): { editor: Editor; submitted: string[] } {
 			[
 				{
 					name: "pick",
+					aliases: ["pick:"],
 					description: "Pick things",
 					allowArgs: true,
 					getArgumentCompletions(prefix: string) {
@@ -21,7 +22,7 @@ function pickEditor(): { editor: Editor; submitted: string[] } {
 						}
 						return [
 							{ value: "run ", label: "run", submitsCommand: true },
-							{ value: "set ", label: "set", hint: "<name>" },
+							{ value: "set ", label: "set", hint: "<name>", submitsCommand: false },
 						].filter(item => item.label.startsWith(prefix));
 					},
 				},
@@ -39,6 +40,15 @@ function pickEditor(): { editor: Editor; submitted: string[] } {
 async function typeAndSettle(editor: Editor, text: string): Promise<void> {
 	for (const ch of text) editor.handleInput(ch);
 	await Bun.sleep(150);
+}
+
+async function waitForAutocomplete(editor: Editor): Promise<void> {
+	while (!editor.isShowingAutocomplete()) {
+		const update = Promise.withResolvers<void>();
+		editor.onAutocompleteUpdate = update.resolve;
+		await update.promise;
+		editor.onAutocompleteUpdate = undefined;
+	}
 }
 
 describe("Editor slash-command argument completion on Enter", () => {
@@ -60,5 +70,40 @@ describe("Editor slash-command argument completion on Enter", () => {
 		expect(editor.isShowingAutocomplete()).toBe(true);
 		editor.handleInput(ENTER);
 		expect(submitted).toEqual(["/pick set alpha"]);
+	});
+
+	it("reopens command argument completion with Tab after Escape and chains to the next slot", async () => {
+		const { editor, submitted } = pickEditor();
+		for (const char of "/pick ") editor.handleInput(char);
+		await waitForAutocomplete(editor);
+		editor.handleInput("\u001b");
+		expect(editor.isShowingAutocomplete()).toBe(false);
+
+		editor.handleInput("\t");
+		await waitForAutocomplete(editor);
+		expect(editor.isShowingAutocomplete()).toBe(true);
+		editor.handleInput("\u001b[B");
+		editor.handleInput("\t");
+		expect(editor.getText()).toBe("/pick set ");
+		await waitForAutocomplete(editor);
+		expect(editor.render(80).join("\n")).toContain("alpha");
+		expect(submitted).toEqual([]);
+	});
+
+	it("supports an attached argument only for explicit colon aliases", async () => {
+		const { editor } = pickEditor();
+		for (const char of "/pick:r") editor.handleInput(char);
+		await waitForAutocomplete(editor);
+		editor.handleInput("\t");
+		expect(editor.getText()).toBe("/pick:run ");
+	});
+
+	it("does not accept a stale empty-prefix argument after typing a filter", async () => {
+		const { editor } = pickEditor();
+		for (const char of "/pick ") editor.handleInput(char);
+		await waitForAutocomplete(editor);
+		editor.handleInput("s");
+		editor.handleInput("\t");
+		expect(editor.getText()).toBe("/pick s");
 	});
 });

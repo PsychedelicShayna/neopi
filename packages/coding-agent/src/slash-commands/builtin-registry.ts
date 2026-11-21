@@ -12,8 +12,6 @@ import {
 	buildEffortArgumentCompletions,
 	buildEffortInlineHint,
 	buildLocalFileArgumentCompletions,
-	buildMcpArgumentCompletions,
-	buildModelSelectorCompletions,
 	buildStaticInlineHint,
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
@@ -104,19 +102,20 @@ function materializeTuiBuiltinSlashCommand(
 	if (customCompletions) {
 		materialized.getArgumentCompletions = prefix => customCompletions(prefix, runtime);
 		materialized.getInlineHint =
-			cmd.getTuiInlineHint ?? (cmd.subcommands ? buildSubcommandInlineHint(cmd.subcommands) : undefined);
+			cmd.getTuiInlineHint ??
+			(cmd.subcommands
+				? buildSubcommandInlineHint(cmd.subcommands, { optional: cmd.subcommandOptional })
+				: cmd.inlineHint
+					? buildStaticInlineHint(cmd.inlineHint)
+					: undefined);
 	} else if (cmd.subcommands) {
 		const subcommands = cmd.subcommands;
-		// `/mcp` and `/effort` narrow their declarative lists to live session
-		// state so the dropdown never offers a value the handler would reject.
-		if (runtime && cmd.name === "mcp") {
-			materialized.getArgumentCompletions = buildMcpArgumentCompletions(subcommands, runtime);
-			materialized.getInlineHint = buildSubcommandInlineHint(subcommands);
-		} else if (runtime && cmd.name === "effort") {
+		// `/effort` narrows its declarative list to the viewed session.
+		if (runtime && cmd.name === "effort") {
 			materialized.getArgumentCompletions = buildEffortArgumentCompletions(runtime);
 			materialized.getInlineHint = buildEffortInlineHint(runtime);
 		} else {
-			const options = { optional: cmd.subcommandOptional };
+			const options = { optional: cmd.subcommandOptional, runtime };
 			materialized.getArgumentCompletions = buildArgumentCompletions(subcommands, options);
 			materialized.getInlineHint = buildSubcommandInlineHint(subcommands, options);
 		}
@@ -125,9 +124,6 @@ function materializeTuiBuiltinSlashCommand(
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.name === "local" && runtime) {
 		materialized.getArgumentCompletions = buildLocalFileArgumentCompletions(runtime);
-		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
-	} else if (cmd.name === "model" && runtime) {
-		materialized.getArgumentCompletions = buildModelSelectorCompletions(runtime);
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.inlineHint) {
 		materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);

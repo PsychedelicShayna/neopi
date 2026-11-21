@@ -172,7 +172,7 @@ export interface ResolvedModelRoleValue {
 	warning?: string;
 }
 
-/** Where auto-compaction triggers for one model, as the model hub's preview shows it (edited from the Roles view). */
+/** Where auto-compaction triggers, as shown in the model row's preview. */
 export interface ModelCompactionPoint {
 	/** Context tokens that trigger auto-compaction; undefined when auto-compaction is off or the window is unknown. */
 	tokens: number | undefined;
@@ -2500,7 +2500,12 @@ export class ModelBrowser implements Component {
 	}
 
 	/** Preview children for any model row (the hub's Roles view previews assigned models with it); unmemoized. */
-	modelPreview(item: ModelBrowserItem, mode: "full" | "compact", current: string | undefined): NativeChild[] {
+	modelPreview(
+		item: ModelBrowserItem,
+		mode: "full" | "compact",
+		current: string | undefined,
+		showContextPolicy = true,
+	): NativeChild[] {
 		const model = item.model;
 		const selector = `${model.provider}/${model.id}`;
 		const measured = this.#perfFor(item);
@@ -2579,13 +2584,13 @@ export class ModelBrowser implements Component {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
 		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
-		const effectiveContext = this.#settings.effectiveContextWindowFor?.(model);
+		const effectiveContext = showContextPolicy ? this.#settings.effectiveContextWindowFor?.(model) : undefined;
 		if (effectiveContext !== undefined && effectiveContext !== ctx)
 			fact(
 				"Effective context *",
 				`${effectiveContext.toLocaleString("en-US")} · maintenance budget; Context is catalog`,
 			);
-		const compaction = this.#settings.compactionPointFor?.(model);
+		const compaction = showContextPolicy ? this.#settings.compactionPointFor?.(model) : undefined;
 		if (compaction) {
 			const value =
 				compaction.tokens === undefined

@@ -3,27 +3,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { formatModelRoleAlias, getKnownRoleIds } from "../config/model-roles";
-import { cfgCycleOrder } from "../config/model-settings";
 import { readMCPConfigFile } from "../mcp/config-writer";
 import { collectMcpServerNames } from "../modes/controllers/mcp-command-controller";
 import { InternalUrlRouter } from "../internal-urls";
 import { replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { encodeLocalPath } from "../modes/local-file-editor";
-import { createModelBrowserSource } from "../modes/model-browser-source";
-import {
-	createModelMentionSource,
-	type ModelMentionCandidateSource,
-} from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 import { expandTilde } from "../tools/path-utils";
-import type { SubcommandDef, TuiSlashCommandRuntime } from "./types";
+import { parseCommandArgs, splitCommandCompletionArgs } from "../utils/command-args";
+import type { ArgumentValueProvider, SubcommandDef, TuiSlashCommandRuntime } from "./types";
 
 /** Options shared by the declarative subcommand completers. */
 interface SubcommandCompletionOptions {
 	/** Mirrors `BuiltinSlashCommand.subcommandOptional`. */
 	optional?: boolean;
+	runtime?: TuiSlashCommandRuntime;
 }
 
 /** Ghost text completing `prefix` to `sub`: its remaining name characters, then its usage. */
@@ -32,31 +27,100 @@ function subcommandRemainderHint(sub: SubcommandDef, prefix: string): string | u
 	return hint || undefined;
 }
 
-/**
- * Build getArgumentCompletions from declarative subcommand definitions.
- * Returns subcommand names filtered by prefix in the dropdown; each item's
- * hint is the ghost text the editor shows while that item is selected. A
- * subcommand without `usage` takes no argument, so accepting it with Enter
- * also runs it. An optional subcommand offers nothing until a prefix is typed,
- * so Enter on the bare `/name ` submits it instead of accepting the first
- * subcommand.
- */
+/** A provider for fixed parser vocabulary. */
+export function argumentValues(...values: string[]): (prefix: string) => AutocompleteItem[] | null {
+	return prefix => {
+		const lower = prefix.toLowerCase();
+		const matches = values
+			.filter(value => value.toLowerCase().startsWith(lower))
+			.map(value => ({ value: `${value} `, label: value }));
+		return matches.length > 0 ? matches : null;
+	};
+}
+
+/** Completes one positional argument while retaining the preceding text verbatim. */
+export function completeArguments(
+	prefix: string,
+	runtime: TuiSlashCommandRuntime | undefined,
+	...providers: readonly (ArgumentValueProvider | null)[]
+): AutocompleteItem[] | null | Promise<AutocompleteItem[] | null> {
+	return completeCurrentArgument(
+		prefix,
+		runtime,
+		(active, context, previous) => providers[previous.length]?.(active, context, previous) ?? null,
+		providers.length - 1,
+	);
+}
+
+/** Complete a raw tail using a provider that chooses from earlier tokens (e.g. flags). */
+export function completeCurrentArgument(
+	prefix: string,
+	runtime: TuiSlashCommandRuntime | undefined,
+	provider: ArgumentValueProvider,
+	terminalIndex = -1,
+): AutocompleteItem[] | null | Promise<AutocompleteItem[] | null> {
+	const { previous, start } = splitCommandCompletionArgs(prefix);
+	const preceding = prefix.slice(0, start);
+	const active = prefix.slice(start);
+	const apply = (items: AutocompleteItem[] | null): AutocompleteItem[] | null =>
+		items?.length
+			? items.map(item => ({
+					...item,
+					value: preceding + item.value,
+					submitsCommand: item.submitsCommand ?? previous.length === terminalIndex,
+					// A keypress on an untouched empty slot must not run a guessed target.
+					preserveInputOnSubmit: item.preserveInputOnSubmit ?? active.length === 0,
+				}))
+			: null;
+	const items = provider(active, runtime, previous);
+	return items instanceof Promise ? items.then(apply) : apply(items);
+}
+
+/** Complete a verb (including multiword verbs), then dispatch its active argument slot. */
 export function buildArgumentCompletions(
-	subcommands: SubcommandDef[],
+	subcommands: readonly SubcommandDef[],
 	options: SubcommandCompletionOptions = {},
-): (prefix: string) => AutocompleteItem[] | null {
-	return (argumentPrefix: string) => {
-		if (argumentPrefix.includes(" ")) return null; // past the subcommand
-		if (options.optional && argumentPrefix.length === 0) return null;
-		const lower = argumentPrefix.toLowerCase();
+): (prefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null> {
+	// Match the longest complete verb before looking at the argument tail.
+	// Nested verbs must win over a shorter verb sharing the same first word.
+	const byLength = [...subcommands]
+		.sort((a, b) => b.name.length - a.name.length)
+		.map(sub => ({
+			sub,
+			verb: new RegExp(`^${sub.name.split(" ").map(RegExp.escape).join("[ \\t]+")}[ \\t]+`, "i"),
+		}));
+	return argumentPrefix => {
+		const trimmed = argumentPrefix.trimStart();
+		const leading = argumentPrefix.slice(0, argumentPrefix.length - trimmed.length);
+		for (const { sub, verb } of byLength) {
+			const match = verb.exec(trimmed);
+			if (!match) continue;
+			if (!sub.arguments && !sub.getArgumentCompletions) break;
+			const tail = trimmed.slice(match[0].length);
+			const insertedPrefix = leading + match[0];
+			const insert = (items: AutocompleteItem[] | null): AutocompleteItem[] | null =>
+				items?.length
+					? items.map(item => ({
+							...item,
+							value: insertedPrefix + item.value,
+							preserveInputOnSubmit: item.preserveInputOnSubmit ?? tail.length === 0,
+						}))
+					: null;
+			const items = sub.getArgumentCompletions
+				? sub.getArgumentCompletions(tail, options.runtime)
+				: completeArguments(tail, options.runtime, ...(sub.arguments ?? []));
+			return items instanceof Promise ? items.then(insert) : insert(items);
+		}
+		const lower = trimmed.toLowerCase().replace(/[ \t]+/g, " ");
 		const matches = subcommands
-			.filter(s => s.name.startsWith(lower))
-			.map(s => ({
-				value: `${s.name} `,
-				label: s.name,
-				description: s.description,
-				hint: subcommandRemainderHint(s, lower),
-				submitsCommand: s.usage === undefined,
+			.filter(sub => sub.name.startsWith(lower))
+			.map(sub => ({
+				value: `${leading}${sub.name} `,
+				label: sub.name,
+				description: sub.description,
+				hint: subcommandRemainderHint(sub, lower),
+				submitsCommand: sub.usage === undefined,
+				preserveInputOnSubmit: options.optional === true && lower.length === 0,
 			}));
 		return matches.length > 0 ? matches : null;
 	};
@@ -113,17 +177,6 @@ export function buildEffortInlineHint(runtime: TuiSlashCommandRuntime): (argumen
 	};
 }
 
-/** /mcp subcommands whose argument is a server name (per their `usage: "<name>..."`). */
-const MCP_SERVER_NAME_SUBCOMMANDS: Readonly<Record<string, true>> = {
-	enable: true,
-	disable: true,
-	test: true,
-	remove: true,
-	reconnect: true,
-	reauth: true,
-	unauth: true,
-};
-
 /** Subcommands that accept names found only in `userConfig.disabledServers`. */
 const MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> = {
 	enable: true,
@@ -141,42 +194,22 @@ const MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS: Readonly<Record<string, true>> =
 	unauth: true,
 };
 
-/**
- * Build getArgumentCompletions for /mcp. Delegates to the generic
- * declarative subcommand completer while the subcommand name itself is
- * still being typed, then switches to MCP server-name completion (sourced
- * from {@link collectMcpServerNames}) once a recognized server-name
- * subcommand (enable/disable/test/remove/reconnect/reauth/unauth) is
- * followed by a space. `remove` gets its own scope-aware completions (see
- * {@link buildMcpRemoveCompletions}) since — unlike the others —
- * it only ever succeeds against a config-file entry. Subcommands with a
- * different argument shape (add, ...) get no argument
- * completion.
- */
-export function buildMcpArgumentCompletions(
-	subcommands: SubcommandDef[],
-	runtime: TuiSlashCommandRuntime,
-): (argumentPrefix: string) => Promise<AutocompleteItem[] | null> {
-	const genericCompletions = buildArgumentCompletions(subcommands);
-	return async (argumentPrefix: string) => {
-		const spaceIndex = argumentPrefix.indexOf(" ");
-		if (spaceIndex === -1) return genericCompletions(argumentPrefix);
-
-		const rawSubcommand = argumentPrefix.slice(0, spaceIndex);
-		const lowerSubcommand = rawSubcommand.toLowerCase();
-		if (MCP_SERVER_NAME_SUBCOMMANDS[lowerSubcommand] !== true) return null;
-		const namePrefix = argumentPrefix.slice(spaceIndex + 1).toLowerCase();
-		if (lowerSubcommand === "remove") {
-			return await buildMcpRemoveCompletions(rawSubcommand, namePrefix);
-		}
+/** Names eligible for a specific MCP operation, without starting a server. */
+export function mcpServerArgumentValues(
+	subcommand: "enable" | "disable" | "test" | "remove" | "reconnect" | "reauth" | "unauth",
+): ArgumentValueProvider {
+	return async (prefix, runtime) => {
+		if (!runtime) return null;
+		const namePrefix = prefix.toLowerCase();
+		if (subcommand === "remove") return await buildMcpRemoveCompletions(namePrefix);
 
 		let serverNames: string[];
 		try {
 			serverNames = await collectMcpServerNames(
 				runtime.ctx,
 				undefined,
-				MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS[lowerSubcommand] === true,
-				MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS[lowerSubcommand] === true,
+				MCP_DISABLED_ONLY_ELIGIBLE_SUBCOMMANDS[subcommand] === true,
+				MCP_DISABLED_CONFIG_ELIGIBLE_SUBCOMMANDS[subcommand] === true,
 			);
 		} catch (error) {
 			logger.warn("MCP server-name autocomplete failed to read config", { error });
@@ -184,7 +217,7 @@ export function buildMcpArgumentCompletions(
 		}
 		const matches: AutocompleteItem[] = serverNames
 			.filter(name => name.toLowerCase().startsWith(namePrefix))
-			.map(name => ({ value: `${rawSubcommand} ${name} `, label: name, submitsCommand: true }));
+			.map(name => ({ value: `${name} `, label: name, submitsCommand: true }));
 		return matches.length > 0 ? matches : null;
 	};
 }
@@ -199,10 +232,7 @@ export function buildMcpArgumentCompletions(
  * names, and a name that exists only in the user config is completed with
  * `--scope user` appended so the inserted command is directly executable.
  */
-async function buildMcpRemoveCompletions(
-	rawSubcommand: string,
-	namePrefix: string,
-): Promise<AutocompleteItem[] | null> {
+async function buildMcpRemoveCompletions(namePrefix: string): Promise<AutocompleteItem[] | null> {
 	const cwd = getProjectDir();
 	let projectNames: string[];
 	let userNames: string[];
@@ -224,8 +254,8 @@ async function buildMcpRemoveCompletions(
 		.filter(name => name.toLowerCase().startsWith(namePrefix))
 		.map(name =>
 			projectNameSet.has(name)
-				? { value: `${rawSubcommand} ${name} `, label: name, submitsCommand: true }
-				: { value: `${rawSubcommand} ${name} --scope user `, label: `${name} (user)`, submitsCommand: true },
+				? { value: `${name} `, label: name, submitsCommand: true }
+				: { value: `${name} --scope user `, label: `${name} (user)`, submitsCommand: true },
 		)
 		.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 	return matches.length > 0 ? matches : null;
@@ -234,41 +264,30 @@ async function buildMcpRemoveCompletions(
 /**
  * Build getInlineHint from declarative subcommand definitions.
  * Shows remaining completion + usage as dim ghost text after cursor; an
- * optional subcommand advertises its choices before anything is typed, since
- * {@link buildArgumentCompletions} opens no dropdown there.
+ * optional subcommand retains an overview of its choices when the list is closed.
  */
 export function buildSubcommandInlineHint(
-	subcommands: SubcommandDef[],
+	subcommands: readonly SubcommandDef[],
 	options: SubcommandCompletionOptions = {},
 ): (argumentText: string) => string | null {
 	return (argumentText: string) => {
-		const trimmed = argumentText.trimStart();
-		const spaceIndex = trimmed.indexOf(" ");
+		const prefix = argumentText
+			.trimStart()
+			.toLowerCase()
+			.replace(/[ \t]+/g, " ");
+		if (prefix.length === 0) return options.optional ? `[${subcommands.map(sub => sub.name).join("|")}]` : null;
+		const partial = subcommands.find(sub => sub.name.startsWith(prefix));
+		if (partial) return subcommandRemainderHint(partial, prefix) ?? null;
 
-		if (spaceIndex === -1) {
-			// Still typing subcommand name — show remaining chars + usage
-			const prefix = trimmed.toLowerCase();
-			if (prefix.length === 0) {
-				return options.optional ? `[${subcommands.map(s => s.name).join("|")}]` : null;
-			}
-			const match = subcommands.find(s => s.name.startsWith(prefix));
-			return match ? (subcommandRemainderHint(match, prefix) ?? null) : null;
+		let matched: SubcommandDef | undefined;
+		for (const sub of subcommands) {
+			if ((!matched || sub.name.length > matched.name.length) && prefix.startsWith(`${sub.name} `)) matched = sub;
 		}
-
-		// Subcommand typed — show remaining usage params
-		const subName = trimmed.slice(0, spaceIndex).toLowerCase();
-		const afterSub = trimmed.slice(spaceIndex + 1);
-		const sub = subcommands.find(s => s.name === subName);
-		if (!sub?.usage) return null;
-
-		if (afterSub.length > 0) {
-			const usageParts = sub.usage.split(" ");
-			const inputParts = afterSub.trim().split(/\s+/);
-			const remaining = usageParts.slice(inputParts.length);
-			return remaining.length > 0 ? remaining.join(" ") : null;
-		}
-
-		return sub.usage;
+		if (!matched?.usage) return null;
+		const tail = prefix.slice(matched.name.length + 1);
+		if (!tail) return matched.usage;
+		const consumed = parseCommandArgs(tail).length;
+		return matched.usage.split(" ").slice(consumed).join(" ") || null;
 	};
 }
 
@@ -278,59 +297,6 @@ export function buildSubcommandInlineHint(
  */
 export function buildStaticInlineHint(hint: string): (argumentText: string) => string | null {
 	return (argumentText: string) => (argumentText.trim().length === 0 ? hint : null);
-}
-
-/**
- * Build getArgumentCompletions for `/switch <model>`, ordered like the alt+p
- * picker for the same query: a leading `@` lists configured role aliases
- * (ctrl+p cycle roles first, in cycle order); anything else lists the
- * session's cycle scope (or every authenticated model) as `provider/id`,
- * fuzzy-ranked with the picker's role/MRU/provider affinity. Any `:level`
- * suffix already typed is kept out of the match and re-appended. Returning
- * role matches also keeps `@smol` from falling through to `@`-file mention
- * completion.
- */
-export function buildModelSelectorCompletions(
-	runtime: TuiSlashCommandRuntime,
-): (argumentPrefix: string) => AutocompleteItem[] | null {
-	let rankModels: ModelMentionCandidateSource | undefined;
-	return (argumentPrefix: string) => {
-		if (argumentPrefix.includes(" ")) return null;
-		const suffixIndex = argumentPrefix.indexOf(":");
-		const suffix = suffixIndex === -1 ? "" : argumentPrefix.slice(suffixIndex);
-		const query = suffixIndex === -1 ? argumentPrefix : argumentPrefix.slice(0, suffixIndex);
-		const matches: AutocompleteItem[] = [];
-		if (query.startsWith("@")) {
-			const { settings } = runtime.ctx;
-			const lower = query.toLowerCase();
-			for (const role of new Set([...cfgCycleOrder.get(settings), ...getKnownRoleIds(settings)])) {
-				const configured = settings.getModelRole(role);
-				if (!configured) continue;
-				const alias = formatModelRoleAlias(role);
-				if (!alias.toLowerCase().includes(lower)) continue;
-				matches.push({ value: `${alias}${suffix} `, label: alias, description: configured, submitsCommand: true });
-			}
-		} else {
-			rankModels ??= createModelMentionSource({
-				source: createModelBrowserSource(runtime.ctx.settings, model =>
-					runtime.ctx.session.effectiveServiceTier(model),
-				),
-				registry: runtime.ctx.session.modelRegistry,
-				scopedModels: () => runtime.ctx.session.scopedModels.map(entry => entry.model),
-			});
-			// Later keystrokes list whatever a retry of failed provider discovery recovers.
-			void rankModels.retryDiscovery?.();
-			for (const { selector, model } of rankModels(query)) {
-				matches.push({
-					value: `${selector}${suffix} `,
-					label: selector,
-					description: model.name,
-					submitsCommand: true,
-				});
-			}
-		}
-		return matches.length > 0 ? matches : null;
-	};
 }
 
 /** Trailing path separator: `/` everywhere, `\` too on Windows. */
@@ -348,12 +314,14 @@ const UNTERMINATED_DIRECTORY = process.platform === "win32" ? /(?:^|[\\/])\.{1,2
  * without one (`..`, `~`, `foo/.`) completes the separator first; otherwise
  * Tab would jump straight into the first child.
  */
-export function buildDirectoryArgumentCompletions(): (prefix: string) => Promise<AutocompleteItem[] | null> {
+export function buildDirectoryArgumentCompletions(
+	options: { cwd?: string; includeFiles?: boolean } = {},
+): (prefix: string) => Promise<AutocompleteItem[] | null> {
 	return async (argumentPrefix: string) => {
 		const prefix = argumentPrefix.trim();
 		if (UNTERMINATED_DIRECTORY.test(prefix)) return [{ value: `${prefix}/`, label: `${prefix}/` }];
 
-		const cwd = getProjectDir();
+		const cwd = options.cwd ?? getProjectDir();
 		const expandedPrefix = expandTilde(prefix);
 		const isAbsolute = path.isAbsolute(expandedPrefix);
 		const resolvedPrefix = isAbsolute ? expandedPrefix : path.join(cwd, expandedPrefix);
@@ -371,23 +339,19 @@ export function buildDirectoryArgumentCompletions(): (prefix: string) => Promise
 		try {
 			const entries = await fs.readdir(searchDir, { withFileTypes: true });
 			const suggestions: AutocompleteItem[] = [];
+			const matchPrefix = searchPrefix.toLowerCase();
 			for (const entry of entries) {
-				if (!entry.name.toLowerCase().startsWith(searchPrefix.toLowerCase())) continue;
-				if (entry.name === ".git") continue;
-
-				let isDirectory = entry.isDirectory();
-				if (!isDirectory && entry.isSymbolicLink()) {
-					try {
-						isDirectory = (await fs.stat(path.join(searchDir, entry.name))).isDirectory();
-					} catch {
-						continue;
-					}
-				}
-				if (!isDirectory) continue;
+				if (!entry.name.toLowerCase().startsWith(matchPrefix)) continue;
+				if (entry.name === ".git" || /[\r\n]/.test(entry.name)) continue;
 
 				const absoluteValue = path.join(searchDir, entry.name);
-				const displayValue = buildDirectoryCompletionDisplayValue(prefix, isAbsolute, absoluteValue, cwd);
-				suggestions.push({ value: displayValue, label: `${entry.name}/` });
+				const target = entry.isSymbolicLink() ? await fs.stat(absoluteValue).catch(() => undefined) : entry;
+				const isDirectory = target?.isDirectory() ?? false;
+				if (!isDirectory && (!options.includeFiles || !target?.isFile())) continue;
+				const directoryValue = buildDirectoryCompletionDisplayValue(prefix, isAbsolute, absoluteValue, cwd);
+				const value = isDirectory ? directoryValue : directoryValue.slice(0, -1);
+				const label = replaceTabs(sanitizeText(entry.name));
+				suggestions.push({ value, label: isDirectory ? `${label}/` : label });
 			}
 			suggestions.sort((a, b) => a.label.localeCompare(b.label));
 			return suggestions.length > 0 ? suggestions : null;
