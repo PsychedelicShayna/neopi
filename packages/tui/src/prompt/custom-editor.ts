@@ -167,7 +167,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.interrupt": ["ctrl+c"],
 	"app.navigation.dismiss": ["escape"],
 	"app.agent.menu": ["ctrl+d"],
-	"app.chain.skipStep": ["alt+s"],
+	"app.chain.skipStep": ["ctrl+alt+s"],
 	"app.suspend": ["ctrl+z"],
 	"app.display.reset": ["alt+l"],
 	"app.thinking.cycle": ["shift+tab"],

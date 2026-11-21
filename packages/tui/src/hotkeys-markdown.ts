@@ -86,6 +86,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 			title: "Editing",
 			rows: [
 				{ keys: [hints(["enter"])], action: "Send message" },
+				{ keys: [act("app.message.chain")], action: "Send through the active post-processing chain" },
 				{ keys: [hints(["shift+enter", "alt+enter"])], action: "New line" },
 				{ keys: [hints(["ctrl+w", "alt+backspace"])], action: "Delete word backwards" },
 				{ keys: [hints(["ctrl+u"])], action: "Delete to start of line" },
@@ -114,6 +115,7 @@ function hotkeyGroups(bindings: HotkeysMarkdownBindings): HotkeyGroup[] {
 				{ keys: [act("app.model.cycleBackward")], action: "Cycle role models (backward)" },
 				{ keys: [act("app.model.selectTemporary")], action: "Select model (temporary)" },
 				{ keys: [act("app.model.select")], action: "Select model (set roles)" },
+				{ keys: [act("app.settings.open")], action: "Open Settings without changing the draft" },
 				{ keys: [act("app.plan.toggle")], action: "Toggle plan mode" },
 				{ keys: [act("app.history.search")], action: "Search prompt history" },
 				{ keys: [act("app.navigation.back")], action: "Back to the previous menu or the conversation" },

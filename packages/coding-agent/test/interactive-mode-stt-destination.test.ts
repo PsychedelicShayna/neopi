@@ -138,7 +138,7 @@ describe("xAI main-composer destination ownership", () => {
 				}
 			};
 			mode.editor.setText("Original draft");
-			mode.editor.handleInput("\x1bc");
+			mode.editor.handleInput("\x1b\x03");
 			await started.promise;
 			for (const words of ["FIRST", "SECOND"]) {
 				vi.spyOn(xai, "transcribeXaiAudio").mockResolvedValue(words);
@@ -149,8 +149,8 @@ describe("xAI main-composer destination ownership", () => {
 			expect(mode.editor.getText()).toBe("Original draft");
 			if (outcome === "abort") mode.editor.handleInput("\x03");
 			if (outcome === "skip") {
-				mode.editor.handleInput("\x1bs");
-				mode.editor.handleInput("\x1bs");
+				mode.editor.handleInput("\x1b\x13");
+				mode.editor.handleInput("\x1b\x13");
 			}
 			finish.resolve();
 			await completed.promise;

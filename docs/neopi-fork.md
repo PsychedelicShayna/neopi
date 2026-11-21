@@ -204,8 +204,8 @@ Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV 
 
 A chain rewrites a composer prompt through ordered model steps before it is sent. Each step's output is the next step's input, and the last output is what gets sent. Voice input needs nothing special: Ctrl+Space puts the transcript in the composer, and chaining happens when that text is sent.
 
-- **Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
-- **`/chain on`** runs every prompt through it; **`/chain off`** stops that (Alt+C still works).
+- **Alt+C** or **Ctrl+Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
+- **`/chain on`** runs every prompt through it; **`/chain off`** stops that (the shortcuts still work).
 - **`/chain use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
 - **`/chain status`** lists the mode, the active chain, and every chain's steps; **`/chain configure`** opens the editor.
 
@@ -213,8 +213,8 @@ Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and
 
 While a chain runs, the composer is locked: the draft stays visible with every line painted by the `display.shimmer` sweep (static muted text when shimmer is disabled), typing is ignored, and the status line shows the chain, the step, and `preprocessing…`. Each completed step replaces the composer text, so the rewrite is visible as it happens.
 
-- **Alt+S twice** (within 3 s) skips the step in flight; its input passes to the next step unchanged.
-- **Alt+S three times** (within the same 3 s) or **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
+- **Ctrl+Alt+S** skips the step in flight; its input passes to the next step unchanged.
+- **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
 - A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
 
 Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:

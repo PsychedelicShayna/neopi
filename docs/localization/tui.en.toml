@@ -281,7 +281,7 @@ auth_clear_failed = 'Failed to clear auth: ${error instanceof Error ? error.mess
 [interactive.selector]
 advisor_saved = 'Saved ${shortenPath(filePath)}. Press a to apply it to the live advisors.'
 advisor_applied = 'Applied WATCHDOG.yml — ${count} advisor${count === 1 ? "" : "s"} active.'
-chain_saved = 'Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C sends through the active chain.'
+chain_saved = 'Saved ${scope} CHAINS.yml — ${count} chain${count === 1 ? "" : "s"} available. Alt+C or Ctrl+Alt+C sends through the active chain.'
 agent_model = 'Agent ${focusedAgentId} model: ${selector}'
 effort_rules = 'Implicit effort rules: ${rules.length}'
 context_rules = 'Context rules: ${rules.length}'

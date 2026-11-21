@@ -287,7 +287,7 @@ auth_clear_failed = 'No se pudo borrar la autenticación: ${error instanceof Err
 [interactive.selector]
 advisor_saved = 'Se guardó ${shortenPath(filePath)}. Presiona a para aplicarlo a los asesores activos.'
 advisor_applied = 'Se aplicó WATCHDOG.yml — ${count} asesor${count === 1 ? "" : "s"} activo(s).'
-chain_saved = 'Se guardó CHAINS.yml de ${scope} — ${count} cadena${count === 1 ? "" : "s"} disponible(s). Alt+C envía por la cadena activa.'
+chain_saved = 'Se guardó CHAINS.yml de ${scope} — ${count} cadena${count === 1 ? "" : "s"} disponible(s). Alt+C o Ctrl+Alt+C envía por la cadena activa.'
 agent_model = 'Modelo del agente ${focusedAgentId}: ${selector}'
 effort_rules = 'Reglas de esfuerzo implícito: ${rules.length}'
 context_rules = 'Reglas de contexto: ${rules.length}'

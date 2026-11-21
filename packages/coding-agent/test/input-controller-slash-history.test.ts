@@ -141,7 +141,7 @@ function setupChainSubmit(ctx: InteractiveModeContext) {
 					case "app.message.chain":
 						return ["alt+c"];
 					case "app.chain.skipStep":
-						return ["alt+s"];
+						return ["ctrl+alt+s"];
 					case "app.interrupt":
 						return ["ctrl+c"];
 					default:
@@ -421,7 +421,7 @@ describe("input controller — post-processing chain controls (#629)", () => {
 			};
 
 			const firstSignal = await waitForStage(first, draft);
-			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("(Alt+S skip · Ctrl+C cancel)"));
+			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("(Ctrl+Alt+S skip · Ctrl+C cancel)"));
 			if (action !== "cancel second") {
 				chain.lock!.onSkip();
 				expect(firstSignal?.aborted).toBe(true);
