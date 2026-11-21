@@ -49,4 +49,42 @@ describe("endpoint sampling parameter capabilities", () => {
 		});
 		expect(model.compat.unsupportedSamplingParams).toEqual([]);
 	});
+
+	it.each([
+		["muse-code", "muse-wonder-full-1.0-contributor"],
+		["meta", "muse-spark-1.3"],
+		["opencode-go", "muse-spark-1.3-contributor"],
+		["opencode-go", "muse-spark-1.2-contributor"],
+		["custom-proxy", "compatible-model"],
+	])("resolves the base Responses contract for %s/%s", (provider, id) => {
+		const model = buildModel({ ...spec(provider, "openai-responses"), id });
+		expect(model.compat.supportsSamplingParams).toBe(true);
+		expect(model.compat.unsupportedSamplingParams).toEqual([
+			"topK",
+			"minP",
+			"presencePenalty",
+			"repetitionPenalty",
+			"frequencyPenalty",
+		]);
+	});
+
+	it("preserves documented extensions for OpenRouter Responses", () => {
+		const model = buildModel(spec("openrouter", "openai-responses"));
+		expect(model.compat.unsupportedSamplingParams).toEqual(["minP", "repetitionPenalty"]);
+	});
+
+	it("limits Go's speculative-decoding restriction to its V4.1 Flash lanes", () => {
+		for (const id of ["deepseek-v4.1-flash", "deepseek-flash"]) {
+			const model = buildModel({ ...spec("opencode-go", "openai-completions"), id });
+			expect(model.compat.supportsSamplingParams).toBe(true);
+			expect(model.compat.unsupportedSamplingParams).toEqual(["minP"]);
+		}
+		for (const [provider, id] of [
+			["opencode-go", "deepseek-v4-pro"],
+			["custom-proxy", "deepseek-v4.1-flash"],
+		] as const) {
+			const model = buildModel({ ...spec(provider, "openai-completions"), id });
+			expect(model.compat.unsupportedSamplingParams).toBeUndefined();
+		}
+	});
 });

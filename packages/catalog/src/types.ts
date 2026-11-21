@@ -1595,6 +1595,31 @@ export interface AntigravityModelWireProfile {
 	/** SKU thinking budget (`-1` is dynamic), sent when no level is advertised. */
 	thinkingBudget?: number;
 }
+/** Request settings carried by a locally declared model variant. */
+export interface ModelVariantRequestOverrides {
+	/** Negative sampling values explicitly select the provider default. */
+	temperature?: number;
+	topP?: number;
+	topK?: number;
+	minP?: number;
+	presencePenalty?: number;
+	repetitionPenalty?: number;
+	hideThinkingSummary?: boolean;
+	textVerbosity?: "low" | "medium" | "high";
+	serviceTier?: "none" | "auto" | "default" | "flex" | "scale" | "priority" | "ultrafast";
+	thinkingBudgets?: Partial<Record<Effort, number>>;
+	thinkingLevel?: Effort | "off" | "auto";
+	cacheRetention?: "auto" | "none" | "short" | "long";
+}
+
+export interface ModelVariant {
+	/** Catalog identity used for dispatch and account selection. */
+	readonly baseModelId: string;
+	/** Sparse overrides for registered harness settings, keyed by dotted setting ID. */
+	readonly settings: Readonly<Record<string, unknown>>;
+	readonly request: Readonly<ModelVariantRequestOverrides>;
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
 	/** Discovery supplied a text-only placeholder rather than reported input modalities. */
@@ -1606,6 +1631,8 @@ export interface Model<TApi extends Api = Api> {
 	/** Discovery conservatively disabled effort until optional facts establish reasoning support. */
 	discoveryMissingReasoningEffort?: boolean;
 	id: string;
+	/** User-declared selection identity with a separate, ordinary provider target. */
+	variant?: ModelVariant;
 	/** Role-specific runner capability; omitted for ordinary chat models. */
 	kind?: ModelKind;
 	/**

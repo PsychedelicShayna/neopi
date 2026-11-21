@@ -1935,6 +1935,7 @@ export class SelectorController {
 			this.ctx.settings,
 			model => this.ctx.session.effectiveServiceTier(model),
 			hubOptions.sessionOnly ? undefined : initialScope,
+			hubOptions.sessionOnly ? undefined : this.ctx.session.modelRegistry,
 		);
 		const hub = new ModelHubComponent(
 			this.ctx.ui,

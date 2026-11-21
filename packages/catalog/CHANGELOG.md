@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Catalog capabilities drop unsupported sampling fields on Responses endpoints and affected OpenCode Go DeepSeek deployments without dropping the fields they accept ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Preserved an existing intelligence or speed score when catalog enrichment fills the other missing metric.
 
 ## [19.0.0] - 2026-11-18

@@ -681,6 +681,7 @@ import { cfgSteeringMode } from "../modes/settings";
 import { observeThemesConfiguration } from "../modes/themes-configuration";
 import { cfgDisabledProviders, cfgModelRoles } from "../config/model-settings";
 import { cfgModelFactsEnabled, cfgModelFactsSources, cfgModelFactsOverrides } from "../config/model-facts";
+import { cfgModelVariants, modelVariantSetting } from "../config/model-variant-settings";
 import { cfgEffortRules, cfgRoleEffortSelections } from "../config/effort-policy";
 import { cfgEvalJs, cfgEvalPy, cfgEvalToolsEnabled, cfgEvalWorkpoolFreshAgents } from "../eval/settings";
 import { cfgExtensions, type SkillsSettings } from "../extensibility/settings";
@@ -3626,6 +3627,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		cfgModelFactsEnabled.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgModelFactsSources.listen(this, () => this.#reapplyContextWindowPolicy(true));
 		cfgModelFactsOverrides.listen(this, () => this.#reapplyContextWindowPolicy(true));
+		cfgModelVariants.listen(this, async () => {
+			this.#models.refreshScopedModelVariants();
+			const previous = this.model;
+			if (!previous?.variant || this.#isDisposed) return;
+			const next =
+				this.#modelRegistry.find(previous.provider, previous.id) ??
+				this.#modelRegistry.find(previous.provider, previous.variant.baseModelId);
+			if (!next || next === previous) return;
+			try {
+				await this.#setModelWithProviderSessionReset(next);
+				this.#models.reapplyModelVariantThinking(previous);
+			} catch (error) {
+				logger.warn("Model Variant policy reapply failed", { error: String(error) });
+			}
+		});
 		cfgBrowserEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("browser.enabled", enabled));
 		cfgComputerEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("computer.enabled", enabled));
 		cfgRatchetEnabled.listen(this, enabled => this.#reconcileEvalPreludeSetting("ratchet.enabled", enabled));
@@ -7268,7 +7284,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#promptCacheArmSessionId = sessionId;
 		// A copy: `/clear` truncates the live array in place, which an alias would follow.
 		const armMessages = this.messages.slice();
-		const retentionSetting = cfgProvidersCacheRetention.get(this.settings);
+		const retentionSetting = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const warmingOptions = {
 			...options,
 			cacheRetention: options.cacheRetention ?? (retentionSetting === "auto" ? undefined : retentionSetting),
@@ -7319,7 +7335,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#promptCacheShape(model: Model | undefined): PromptCacheShape {
 		const { tools, systemPrompt } = this.agent.state;
 		const thinkingLevel = this.thinkingLevel;
-		const retention = cfgProvidersCacheRetention.get(this.settings);
+		const retention = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const intentTracing = this.agent.intentTracing;
 		const intentDescription = this.agent.intentDescription;
 		const pruneToolDescriptions = this.agent.prunesToolDescriptions(model);
@@ -7405,7 +7421,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			fallback?.type === "fallback" ? fallback.from.model : reply.model,
 		);
 		if (!model) return undefined;
-		const retention = cfgProvidersCacheRetention.get(this.settings);
+		const retention = modelVariantSetting(model, cfgProvidersCacheRetention, this.settings);
 		const isOAuth = model.api === "anthropic-messages" && this.#modelRegistry.isUsingOAuth(model);
 		const requestedTier = resolvePromptCacheTier(
 			model,
@@ -10543,7 +10559,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const externalThinkingToolChoice =
 			!options?.synthetic &&
 			!hasPendingUserDirective &&
-			cfgExternalThinking.get(this.settings) &&
+			modelVariantSetting(activeModel, cfgExternalThinking, this.settings) &&
 			this.getEnabledToolNames().includes("think") &&
 			supportsExternalThinking(activeModel)
 				? buildNamedToolChoice("think", activeModel)
@@ -15426,7 +15442,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * manager as needed. Called on model switch AND setting change.
 	 */
 	#syncAppendOnlyContext(model: Model | null | undefined): void {
-		const setting = cfgProviderAppendOnlyContext.get(this.settings);
+		const setting = modelVariantSetting(model, cfgProviderAppendOnlyContext, this.settings);
 		const enable = shouldEnableAppendOnlyContext(setting, model);
 		const providerId = model?.provider;
 		const prev = this.#lastAppendOnlyResolution;
