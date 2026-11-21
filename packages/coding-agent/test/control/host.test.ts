@@ -254,6 +254,84 @@ describe("control host", () => {
 		expect(focused()).toBe(editor);
 	});
 
+	test.each([
+		["follow_up", false],
+		["follow_up", true],
+		["steer", true],
+	] as const)("routes Ask by the delivered %s (author opted in: %s)", async (type, optedIn) => {
+		const { client, ui } = await startAskOwner();
+		const author = await connectAnother("queued author");
+		expect((await client.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+		if (optedIn) expect((await author.request({ type: "set_ask_dialog", enabled: true })).success).toBe(true);
+		const frames = [client, author].map(connection => {
+			const requests: Record<string, unknown>[] = [];
+			connection.onEvent(frame => {
+				if (frame.type === "extension_ui_request" && frame.method === "ask") requests.push(frame);
+			});
+			return requests;
+		});
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const mounted = Promise.withResolvers<void>();
+		const model = session!.model;
+		if (!model || !isMockModel(model)) throw new Error("Expected scripted model");
+		model.push(async () => {
+			started.resolve();
+			await release.promise;
+			return { content: ["First turn finished."] };
+		});
+		model.push({ content: [{ type: "toolCall", id: "queued-ask", name: "test_ask", arguments: {} }] });
+		model.push({ content: ["Done."] });
+		session!.agent.setTools([
+			{
+				name: "test_ask",
+				label: "Test Ask",
+				description: "Open the terminal Ask",
+				parameters: { type: "object", properties: {} },
+				execute: async (_id, _params, signal) => {
+					const answer = ui.showAskDialog(askQuestions, { signal });
+					mounted.resolve();
+					return { content: [], details: await answer };
+				},
+			},
+		]);
+		try {
+			expect((await client.request({ type: "prompt", message: "Start the run" })).success).toBe(true);
+			await started.promise;
+			expect((await author.request({ type, message: "Ask from the queued author" })).success).toBe(true);
+			release.resolve();
+			await mounted.promise;
+			expect(model.calls[1]?.context.messages).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: [expect.objectContaining({ type: "text", text: "Ask from the queued author" })],
+				}),
+			);
+			// Each connection's state reply comes after any request already written to it.
+			await Promise.all([client, author].map(connection => connection.request({ type: "state" })));
+			expect(frames.map(requests => requests.length)).toEqual([0, optedIn ? 1 : 0]);
+			if (optedIn) {
+				const answers = [
+					{ id: "storage", selectedOptions: ["Memory"] },
+					{ id: "checks", selectedOptions: ["Unit"] },
+				];
+				expect(
+					(await author.request({ type: "extension_ui_response", id: frames[1][0].id, answers })).success,
+				).toBe(true);
+				await session!.waitForIdle();
+				expect(session!.messages.find(message => message.role === "toolResult")).toMatchObject({
+					details: { kind: "submit", results: answers },
+				});
+			} else {
+				expect(ui.cancelAsk()).toBe(true);
+				await session!.waitForIdle();
+			}
+		} finally {
+			release.resolve();
+			ui.cancelAsk();
+		}
+	});
+
 	test.each(["opts back out", "never opts in"])("keeps the pane path when a second guest %s", async mode => {
 		const { client, ui, editor, mounted, focused } = await startAskOwner();
 		const other = await connectAnother("legacy guest");

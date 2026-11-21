@@ -425,6 +425,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
 
+	/** Scope provider and tool work to the latest delivered batch of user input, not the request that started the loop. */
+	runWithTurnInput?: <T>(input: () => readonly AgentMessage[], run: () => T) => T;
+
 	/**
 	 * Refreshes prompt/tool context from live session state before each model call.
 	 * Use this when tool availability or the system prompt can change mid-turn.

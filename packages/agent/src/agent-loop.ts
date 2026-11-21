@@ -1397,6 +1397,10 @@ async function runLoopBody(
 		let softSatisfies: SoftToolRequirement["satisfies"];
 		let directiveResolvedForTurn = false;
 		let turnOpen = false;
+		let deliveredInput: readonly AgentMessage[] = [];
+		const hasUserInput = (messages: readonly AgentMessage[]): boolean =>
+			messages.some(message => message.role === "user" && !message.synthetic);
+		const withTurnInput = config.runWithTurnInput ?? ((_input, run) => run());
 		// A trailing assistant message with unpaired tool calls: the harness
 		// stripped the failed/aborted results so this run re-executes the calls
 		// (AgentSession.retry's tool replay). Run them before the first model
@@ -1410,15 +1414,9 @@ async function runLoopBody(
 			emitInputMessages(stream, messagesToEmit);
 			messagesToEmit = [];
 			turnOpen = true;
-			const executionResult = await executeToolCalls(
-				currentContext,
-				resumeTail,
-				signal,
-				stream,
-				config,
-				telemetry,
-				invokeAgentSpan,
-				[],
+			const executionResult = await withTurnInput(
+				() => [],
+				() => executeToolCalls(currentContext, resumeTail, signal, stream, config, telemetry, invokeAgentSpan, []),
 			);
 			for (const result of executionResult.toolResults) {
 				currentContext.messages.push(result);
@@ -1582,46 +1580,56 @@ async function runLoopBody(
 				let inputsEmitted = false;
 				try {
 					if (agentPauseGate.paused) await waitForProcessPause(config, signal);
-					message = await streamAssistantResponse(
-						currentContext,
-						config,
-						signal,
-						stream,
-						telemetry,
-						invokeAgentSpan,
-						stepCounter,
-						streamFn,
-						harmonyRetryAttempt,
-						hostToolChoice,
-						softRequirementState.forcedToolChoice,
-						preparedProviderCall,
-						() => {
-							if (config.isUndeliveredQueuedMessage) signal?.throwIfAborted();
-							emitTurnInputs();
-							inputsEmitted = true;
-						},
-						message => {
-							const finalToolCalls = message.content.filter(
-								(content): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
-									content.type === "toolCall" &&
-									(content as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
-							);
-							if (
-								finalToolCalls.length === 0 ||
-								(message.stopReason !== "toolUse" && message.stopReason !== "stop") ||
-								isDeadlineExceeded(config.deadline)
-							) {
-								return false;
-							}
-							const softGateActive =
-								softRequiredTool !== undefined && !hardToolChoiceBlocks(config.toolChoice, softRequiredTool);
-							return (
-								!softGateActive ||
-								finalToolCalls.every(
-									toolCall => softSatisfies?.(toolCall) ?? toolCall.name === softRequiredTool,
-								)
-							);
-						},
+					const nextInput = hasUserInput(turnMessages) ? turnMessages : deliveredInput;
+					const liveInput = preparedProviderCall.liveSteering?.accepted;
+					message = await withTurnInput(
+						() => (liveInput && hasUserInput(liveInput) ? liveInput : nextInput),
+						() =>
+							streamAssistantResponse(
+								currentContext,
+								config,
+								signal,
+								stream,
+								telemetry,
+								invokeAgentSpan,
+								stepCounter,
+								streamFn,
+								harmonyRetryAttempt,
+								hostToolChoice,
+								softRequirementState.forcedToolChoice,
+								preparedProviderCall,
+								() => {
+									if (config.isUndeliveredQueuedMessage) signal?.throwIfAborted();
+									deliveredInput = nextInput;
+									emitTurnInputs();
+									inputsEmitted = true;
+								},
+								message => {
+									const finalToolCalls = message.content.filter(
+										(
+											content,
+										): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+											content.type === "toolCall" &&
+											(content as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+									);
+									if (
+										finalToolCalls.length === 0 ||
+										(message.stopReason !== "toolUse" && message.stopReason !== "stop") ||
+										isDeadlineExceeded(config.deadline)
+									) {
+										return false;
+									}
+									const softGateActive =
+										softRequiredTool !== undefined &&
+										!hardToolChoiceBlocks(config.toolChoice, softRequiredTool);
+									return (
+										!softGateActive ||
+										finalToolCalls.every(
+											toolCall => softSatisfies?.(toolCall) ?? toolCall.name === softRequiredTool,
+										)
+									);
+								},
+							),
 					);
 					harmonyRetryAttempt = 0;
 					harmonyTruncateResumeCount = 0;
@@ -1811,15 +1819,14 @@ async function runLoopBody(
 					softRequirementState.escalations++;
 					hasMoreToolCalls = true;
 				} else if (hasMoreToolCalls) {
-					const executionResult = await executeToolCalls(
-						currentContext,
-						message,
-						signal,
-						stream,
-						config,
-						telemetry,
-						invokeAgentSpan,
-						[...liveAccepted, ...liveDeferred],
+					const input = hasUserInput(liveAccepted) ? liveAccepted : deliveredInput;
+					const executionResult = await withTurnInput(
+						() => input,
+						() =>
+							executeToolCalls(currentContext, message, signal, stream, config, telemetry, invokeAgentSpan, [
+								...liveAccepted,
+								...liveDeferred,
+							]),
 					);
 					toolResults.push(...executionResult.toolResults);
 

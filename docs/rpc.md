@@ -1328,9 +1328,10 @@ text) per choice. Builds or transports without support return a failed
 `response`; leave the existing dialog flow in place in that case.
 
 On a terminal-owned control socket it is off by default for each connection.
-Only the opted-in attachment whose operation opened the Ask receives the typed
-request; opting in does not mirror questions opened by the terminal owner or
-another attachment. The pane keeps its own Ask open and the first answer or
+Only the opted-in attachment whose delivered input produced the Ask receives
+the typed request, including after a queued `steer` or `follow_up` takes effect.
+Opting in does not mirror questions opened by the terminal owner or another
+attachment. The pane keeps its own Ask open and the first answer or
 dismissal wins. If the pane settles first, or the request is aborted or times
 out on the server, the guest gets a `cancel` with the original `targetId`.
 `enabled: false` returns the attachment to the existing pane dialog flow for
@@ -2265,7 +2266,8 @@ option, else its first.
 `answers` must list one entry per question in request order, with each `id` equal to that question's `id`.
 `selectedOptions` holds exact option labels without duplicates; a multi-select may be empty. A single-select
 (`multi` absent or false) takes at most one option and not both an option and `customInput`. `customInput`
-is trimmed and ignored when empty. Any other shape fails the `ask` tool call instead of guessing.
+is trimmed and ignored when empty. An invalid reply fails the `ask` tool call on
+stdio; on a terminal control socket it leaves the pane's Ask open for the owner.
 
 ```json
 {

@@ -583,12 +583,30 @@ export class ControlHost {
 		return initialization;
 	}
 
-	/** Only the control actor that initiated this operation can mirror its Ask. */
+	/** Only the attachment whose delivered input produced the Ask may answer it. */
 	guestAskDialog(): GuestAskDialog | undefined {
-		const actor = currentControlActor();
-		if (!actor) return undefined;
+		return this.#guestDialogBridges()?.askDialog;
+	}
+
+	#guestDialogBridges(): ConnectionBridges | undefined {
+		const turnInput = this.#options.session.agent.turnInput;
+		let connectionId: string | undefined;
+		if (turnInput === undefined) {
+			// Direct operations (e.g. a slash command) are not inside a model turn.
+			connectionId = currentControlActor()?.connectionId;
+		} else {
+			for (const message of turnInput) {
+				if (message.role !== "user" || message.synthetic) continue;
+				const origin = message.origin;
+				if (origin?.kind !== "control" || (connectionId !== undefined && connectionId !== origin.connectionId)) {
+					return undefined;
+				}
+				connectionId = origin.connectionId;
+			}
+		}
+		if (connectionId === undefined) return undefined;
 		for (const connection of this.#connections) {
-			if (connection.id === actor.connectionId) return this.#bridges.get(connection)?.askDialog;
+			if (connection.id === connectionId) return this.#bridges.get(connection);
 		}
 		return undefined;
 	}

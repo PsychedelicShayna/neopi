@@ -1,6 +1,7 @@
 /** Agent class that uses the agent-loop directly.
  * No transport abstraction - calls streamSimple via the loop.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
 import {
 	type ApiKey,
@@ -522,6 +523,7 @@ export class Agent {
 	#onBeforeYield?: () => Promise<void> | void;
 	#onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
 	#onModelCallSystemPrompt?: (systemPrompt: string[]) => void;
+	#turnInput = new AsyncLocalStorage<() => readonly AgentMessage[]>();
 	#beforeModelCall?: AgentBeforeModelCall;
 	#additionalBeforeModelCalls = new Set<AgentBeforeModelCall>();
 	#asideMessageProvider?: (boundary: AsideBoundary) => AsideMessage[] | Promise<AsideMessage[]>;
@@ -1260,6 +1262,11 @@ export class Agent {
 	/** Called with the exact system prompt each model call is built from, after before-model-call hooks. */
 	setOnModelCallSystemPrompt(fn: ((systemPrompt: string[]) => void) | undefined): void {
 		this.#onModelCallSystemPrompt = fn;
+	}
+
+	/** The delivered input for this provider or tool call; undefined outside that scope. */
+	get turnInput(): readonly AgentMessage[] | undefined {
+		return this.#turnInput.getStore()?.();
 	}
 
 	/**
@@ -2129,6 +2136,11 @@ export class Agent {
 			onSseEvent: this.#onSseEvent,
 			getApiKey: this.getApiKey,
 			getToolContext: this.#getToolContext,
+			runWithTurnInput: (input, run) =>
+				this.#turnInput.run(
+					() => (this.#abortController === loopAbortController && !loopSignal.aborted ? input() : []),
+					run,
+				),
 			syncContextBeforeModelCall: async (context, signal) => {
 				await this.#runBeforeModelCallHooks(signal, context);
 				if (this.#listeners.size > 0) {
