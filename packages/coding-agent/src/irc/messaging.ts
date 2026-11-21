@@ -40,7 +40,12 @@ export async function executeSend(
 	}
 
 	const bus = IrcBus.global();
-	const targets = isBroadcast ? bus.filterBroadcastTargets(registry.listVisibleTo(senderId).map(ref => ref.id)) : [to];
+	const targets = isBroadcast
+		? bus.filterBroadcastTargets(
+				senderId,
+				registry.listVisibleTo(senderId).map(ref => ref.id),
+			)
+		: [to];
 	// A broadcast that reaches the sender's root is shown there directly; the
 	// display-only relay to that root would duplicate it.
 	const relayRootId = ircRelayRoot(registry, senderId)?.id;

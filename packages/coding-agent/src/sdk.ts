@@ -395,6 +395,7 @@ import { createComputerPrelude } from "./tools/computer";
 import { createRatchetPrelude } from "./ratchet/prelude-definition";
 import { createArchivePrelude } from "./archive/prelude-definition";
 import { ToolContextStore } from "./tools/context";
+import { IrcBus } from "./irc/bus";
 import { isIrcEnabled } from "./irc/messaging";
 import { imageGenTool } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -2625,7 +2626,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		);
 	};
 	let thinkingLevel = pickInitialThinkingLevel(model);
-	let autoThinking = thinkingLevel === AUTO_THINKING;
 	// Concrete level the agent/session start with. With `auto` this is the
 	// provisional level shown until the first per-turn classification resolves;
 	// `auto` itself stays a session-only concept handled by AgentSession.
@@ -2667,7 +2667,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// so the settings default is clamped to the model's actual effort ladder.
 	const adoptThinkingForModel = (selectedModel: Model): void => {
 		thinkingLevel = pickInitialThinkingLevel(selectedModel);
-		autoThinking = thinkingLevel === AUTO_THINKING;
 		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 			resolveConfiguredThinkingLevel(selectedModel, thinkingLevel),
 		);
@@ -6783,6 +6782,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					// AgentSession.dispose() would otherwise set its guards.
 					session.beginDispose();
 					if (agentKind === "main") {
+						IrcBus.closeGroupsForRoot(rootRef);
 						// Top-level teardown owns this root's share of the agent
 						// lifecycle: park timers, adopted descendant sessions, revivers.
 						// Tear it down while shared resources (kernels, MCP, LSP) are
@@ -7196,6 +7196,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 		}
 		startDeferredMCPDiscovery?.(session);
+
+		// The TUI restores after its operator handle registers; headless hosts
+		// have no operator to wait for.
+		if (agentKind === "main" && registeredAgentRef && !isInteractiveHost() && options.hasUI !== true) {
+			const root = registeredAgentRef;
+			const restoreIrcGroups = () => IrcBus.restoreGroupsForRoot(root);
+			session.registerSessionChangeCallback(restoreIrcGroups);
+			restoreIrcGroups();
+		}
 
 		if (launchProfilePrompt !== undefined) {
 			sessionManager.appendCustomEntry("launch-profile", launchProfilePrompt);

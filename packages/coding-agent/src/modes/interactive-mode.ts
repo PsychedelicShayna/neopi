@@ -8809,6 +8809,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		const handle = cfgIrcOperatorHandle.get(this.settings).trim() || DEFAULT_IRC_OPERATOR_HANDLE;
 		this.#releaseIrcOperator = registerIrcOperator(registry, handle, root.id);
 		this.#ircOperatorId = this.#releaseIrcOperator ? handle : undefined;
+		IrcBus.restoreGroupsForRoot(root);
+		const releaseOperator = this.#releaseIrcOperator;
+		const unsubscribe = this.session.registerSessionChangeCallback(() => IrcBus.restoreGroupsForRoot(root));
+		this.#releaseIrcOperator = () => {
+			unsubscribe();
+			releaseOperator?.();
+		};
 	}
 
 	async #quitHostOwned(code: number): Promise<void> {
