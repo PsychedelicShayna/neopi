@@ -1367,6 +1367,9 @@ remains absent so extensions can keep their field-by-field fallback via `select`
 `input`, or `editor`. On a terminal control socket, the form remains actionable in
 the pane; the first answer or dismissal wins. If the pane settles first, the
 attachment gets a `cancel` with the original `targetId`.
+If the attachment settles first, closing the pane does not report its discarded
+draft to the extension. Only an abort from the caller can abandon a pending
+pane form and report its partial answers to the extension.
 
 ```json
 { "id": "form-opt-in", "type": "set_form_dialog", "enabled": true }

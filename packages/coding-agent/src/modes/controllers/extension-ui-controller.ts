@@ -909,7 +909,7 @@ export class ExtensionUiController {
 		const collab = this.ctx.collabHost;
 		return this.#raceGuestDialog(
 			dialogOptions,
-			options => this.#showLocalFormDialog(form, options),
+			options => this.#showLocalFormDialog(form, options, dialogOptions?.signal),
 			controlForm
 				? options => controlForm(form, options)
 				: collab && (options => this.#runGuestForm(collab, form, options.signal)),
@@ -1136,6 +1136,7 @@ export class ExtensionUiController {
 	#showLocalFormDialog(
 		form: HtmlForm,
 		dialogOptions: ExtensionUIDialogOptions | undefined,
+		callerSignal: AbortSignal | undefined,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const first = form.fields.find(field => field.name);
 		const prompt = { kind: "question", msg: first && fieldQuestions(form).get(first) } as const;
@@ -1169,10 +1170,10 @@ export class ExtensionUiController {
 				const unwatch = this.#watchDetach(slot, detachSignal);
 				return () => {
 					unwatch();
-					// Closed by its signal (a message sent instead, the turn aborted): what was answered goes along.
-					if (dialogOptions?.signal?.aborted) {
+					// Closing the losing pane isn't an abort by the extension caller.
+					if (callerSignal?.aborted && dialogOptions?.onAbandon) {
 						const given = dialog.givenAnswers();
-						if (given) dialogOptions.onAbandon?.(given);
+						if (given) dialogOptions.onAbandon(given);
 					}
 					slot.unmount(undefined);
 					dialog.dispose();
