@@ -50,6 +50,18 @@ export interface SessionLeaseHolder {
 	since: number;
 }
 
+export interface SessionFileLeaseIdentity {
+	pid: number;
+	instanceId: string;
+	imageId: string;
+}
+
+export type SessionFileLeaseReport =
+	| { status: "held"; sessionFile: string; holder: SessionFileLeaseIdentity }
+	| { status: "held_unknown"; sessionFile: string }
+	| { status: "not_held"; sessionFile: string }
+	| { status: "inspection_failed"; sessionFile: string; reason: string };
+
 /** A held lease. `release` (or leaving a `using` scope) is idempotent. */
 export interface SessionLease extends Disposable {
 	readonly sessionFile: string;
@@ -274,6 +286,48 @@ export function acquireSessionLease(sessionFile: string): SessionLease {
 		heldLeases.set(key, held);
 	}
 	return new ProcessSessionLease(key, resolved, held);
+}
+
+/** Resolve the exact gate key without hiding errors. A fresh session may not exist yet. */
+export function canonicalSessionLeaseFile(sessionFile: string): string {
+	const resolved = path.resolve(sessionFile);
+	try {
+		return fs.realpathSync(resolved);
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+		// A dangling file symlink is not a fresh session path.
+		if (fs.lstatSync(resolved, { throwIfNoEntry: false })) throw err;
+		return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+	}
+}
+
+/**
+ * Observe the canonical-file gate without reserving it or reading the advisory
+ * PID record. A control host can identify itself only if it owns a real gate.
+ */
+export function inspectSessionFileLease(
+	sessionFile: string,
+	identity?: SessionFileLeaseIdentity,
+): SessionFileLeaseReport {
+	let key = sessionFile;
+	try {
+		key = canonicalSessionLeaseFile(sessionFile);
+		const stat = fs.statSync(key, { throwIfNoEntry: false });
+		if (stat) {
+			if (!stat.isFile()) throw new Error("Session path is not a regular file");
+			fs.accessSync(key, fs.constants.R_OK);
+		}
+		if (!NativeFileLock.isHeld(leaseGatePath(sessionLeasePath(key)))) {
+			return { status: "not_held", sessionFile: key };
+		}
+		const held = heldLeases.get(key);
+		if (identity && held?.gate?.acquired && identity.pid === process.pid) {
+			return { status: "held", sessionFile: key, holder: identity };
+		}
+		return { status: "held_unknown", sessionFile: key };
+	} catch (err) {
+		return { status: "inspection_failed", sessionFile: key, reason: String(err) };
+	}
 }
 
 /**

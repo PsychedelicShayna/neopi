@@ -639,6 +639,32 @@ Ordinary completed appends update memory and local file storage synchronously on
 - `appendEntriesAtomically()` groups a synchronous callback's appends into one atomic publication. Failure rolls back staged entries and repairs retained concurrent work.
 - Rewrites serve renames, entry rewrites, migrations/sanitization, move/fork, and recovery. Session-title changes normally update the fixed-width title slot and append a `title_change` audit entry instead of rewriting the body.
 
+### Query the exact file's lifetime lease
+
+`npi session lease --file <path>` (optionally `--json`) prints one JSON object
+and exits successfully for any of the four outcomes:
+
+| `status` | Other fields besides `sessionFile` |
+| --- | --- |
+| `held` | `holder: { pid, instanceId, imageId }`: a live control instance confirms it holds the gate. |
+| `held_unknown` | None: the gate is held, but its holder could not be attested. |
+| `not_held` | None: the native gate probe found no holder. |
+| `inspection_failed` | `reason`: a diagnostic string explaining why the gate could not be inspected. |
+
+`sessionFile` is the canonical absolute path, or the supplied path if resolving
+it failed. This checks the canonical-file lifetime gate, not the session-ID
+lease queried by `npi session lease --json -- <id>...`. It bypasses the session
+catalog and works for a new untitled session even if the transcript has not
+been written yet. A native read-only probe neither takes the gate nor creates a
+sidecar. The advisory `.lease` PID is not consulted. Treat the report as a
+point-in-time observation: before sending work to a launched TUI, require
+`held` and compare the PID and control identity with the intended process.
+
+An authenticated control socket also accepts `get_session_file_lease` with an
+absolute `sessionFile`. It returns the same object as response `data` and can
+attest only its own process; a gate held elsewhere is `held_unknown`. The CLI
+checks matching live publications for that attestation.
+
 ### Error behavior
 
 - Ordinary append failures are latched and logged once with session-file context rather than thrown into the turn loop. Later appends may retry the complete in-memory journal; `flush()`/`flushSync()` and close surface unresolved failures.

@@ -362,10 +362,12 @@ export async function pruneControlEntry(dir: string, name: string, meta: Control
 }
 
 /**
- * Read every metadata file. Malformed entries and entries whose process is
- * conclusively dead are pruned; everything else is returned for probing.
+ * Read every metadata file. Malformed and dead entries are excluded and are
+ * pruned unless the caller requests a read-only scan.
  */
-export async function readControlEntries(options?: ControlRegistryOptions): Promise<ControlRegistryEntry[]> {
+export async function readControlEntries(
+	options?: ControlRegistryOptions & { prune?: boolean },
+): Promise<ControlRegistryEntry[]> {
 	const dir = options?.dir ?? controlSessionsDir();
 	let names: string[];
 	try {
@@ -389,15 +391,15 @@ export async function readControlEntries(options?: ControlRegistryOptions): Prom
 		}
 		const meta = parseControlMetadata(text);
 		if (!meta) {
-			await pruneControlEntry(dir, name, null);
+			if (options?.prune !== false) await pruneControlEntry(dir, name, null);
 			continue;
 		}
 		if (meta.version !== CONTROL_REGISTRY_VERSION) {
-			if (publicationProcessGone(meta)) await pruneControlEntry(dir, name, meta);
+			if (options?.prune !== false && publicationProcessGone(meta)) await pruneControlEntry(dir, name, meta);
 			continue;
 		}
 		if (publicationProcessGone(meta)) {
-			await pruneControlEntry(dir, name, meta);
+			if (options?.prune !== false) await pruneControlEntry(dir, name, meta);
 			continue;
 		}
 		entries.push({ name, dir, meta });

@@ -6,6 +6,7 @@ import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
  * command plus the control-only commands. A TUI presenter is attached once
  * the interactive mode is up; until then screen commands answer `no_tui`.
  */
+import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -25,6 +26,7 @@ import type { RpcLiveControl } from "../modes/rpc/rpc-live";
 import { RPC_CAPABILITIES } from "../modes/rpc/rpc-capabilities";
 import type { RpcCommand, RpcSubagentSubscriptionLevel } from "../modes/rpc/rpc-types";
 import type { AgentSession } from "../session/agent-session";
+import { inspectSessionFileLease } from "../session/session-lease";
 import { AgentRegistry } from "../registry/agent-registry";
 import { executeSend } from "../irc/messaging";
 import { IrcBus } from "../irc/bus";
@@ -496,7 +498,13 @@ export class ControlHost {
 			this.#reply(connection, frame, await this.monitor.handle(connection, connection.monitor, frame));
 			return;
 		}
-		if (connection.probe && type !== "get_status" && type !== "state" && type !== "bye") {
+		if (
+			connection.probe &&
+			type !== "get_status" &&
+			type !== "state" &&
+			type !== "get_session_file_lease" &&
+			type !== "bye"
+		) {
 			this.#reply(connection, frame, {
 				success: false,
 				error: "probe connections are read-only",
@@ -731,6 +739,26 @@ export class ControlHost {
 					data: this.snapshot(frame.target === "view" ? "view" : "root"),
 				});
 				return;
+			case "get_session_file_lease": {
+				const { sessionFile } = frame;
+				if (typeof sessionFile !== "string" || !path.isAbsolute(sessionFile)) {
+					this.#reply(connection, frame, {
+						success: false,
+						code: "invalid_argument",
+						error: "sessionFile must be an absolute path",
+					});
+					return;
+				}
+				this.#reply(connection, frame, {
+					success: true,
+					data: inspectSessionFileLease(sessionFile, {
+						pid: process.pid,
+						instanceId: this.instanceId,
+						imageId: this.imageId,
+					}),
+				});
+				return;
+			}
 			case "subscribe":
 				this.#subscribed.add(connection);
 				await this.#handlerFor(connection, frame);
