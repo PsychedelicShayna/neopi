@@ -102,6 +102,7 @@ import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
+import { IrcTool } from "./irc";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
 
@@ -361,8 +362,10 @@ export interface ToolSession {
 	enableLsp?: boolean;
 	/** Whether LSP is limited to navigation and diagnostics. */
 	lspReadOnly?: boolean;
-	/** Whether this invocation may expose IRC. `false` removes it even for subagents. */
+	/** Whether legacy agent:// messaging and IRC-backed waits are available. */
 	enableIrc?: boolean;
+	/** The dedicated capability can be granted independently in a restricted toolset. */
+	enableIrcTool?: boolean;
 	/**
 	 * Whether MCP capabilities may be forwarded to child sessions. `false`
 	 * prohibits inherited-manager and process-global MCP fallback.
@@ -711,6 +714,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
+	irc: s => new IrcTool(s),
 	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -906,6 +910,12 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgCheckpointEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
+		if (name === "irc") {
+			return (
+				(session.enableIrcTool ?? session.enableIrc) !== false &&
+				(requestedTools?.includes("irc") || isIrcEnabled(session.settings, session.taskDepth ?? 0))
+			);
+		}
 		if (name === "wait") {
 			return (
 				cfgAsyncEnabled.get(session.settings) ||

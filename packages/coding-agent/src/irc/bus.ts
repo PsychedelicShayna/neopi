@@ -14,6 +14,7 @@ import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
+import { IrcGroups, type IrcGroupRequest, type IrcGroupResult } from "./groups";
 import { ircHistoryMaxEntries, ircRelayToMainTranscript } from "./policy";
 import { agentMesh } from "./mesh";
 import { parsePeerAddress } from "./mesh-protocol";
@@ -90,6 +91,8 @@ export interface IrcSendOptions {
 	suppressRelay?: boolean;
 	/** This leg is one recipient of a `to: "all"` fan-out. */
 	broadcast?: boolean;
+	/** Show the operator's addressed group leg even when it came from her own root. */
+	groupDelivery?: boolean;
 }
 
 /** Which root's operator a history entry belongs to; see {@link IrcBus.history}. */
@@ -113,6 +116,10 @@ interface IrcHistoryRecord extends IrcLogEntry {
 export interface IrcBusApi {
 	/** Fire-and-forget delivery; the receipt reports how the message reached the recipient. */
 	send(msg: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt>;
+	/** Execute a namespace operation on the IRC host. */
+	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult>;
+	/** Apply explicit everyone removals to the legacy live-peer broadcast roster. */
+	filterBroadcastTargets(targets: string[]): string[];
 	/** Whether `from` successfully sent `to` anything, progress included, at or after `sinceTs`. */
 	sentSince(from: string, to: string, sinceTs: number): boolean;
 	/** Agents `from` messaged directly at or after `sinceTs` that have not answered since. */
@@ -162,6 +169,7 @@ export class IrcBus implements IrcBusApi {
 
 	/** Reset the global bus. Test-only. */
 	static resetGlobalForTests(): void {
+		if (IrcBus.#global instanceof IrcBus) IrcBus.#global.#groups?.dispose();
 		IrcBus.#global = undefined;
 	}
 
@@ -177,6 +185,7 @@ export class IrcBus implements IrcBusApi {
 
 	readonly #registry: AgentRegistryApi;
 	readonly #lifecycle: () => AgentLifecycleApi;
+	#groups?: IrcGroups;
 	readonly #mailboxes = new Map<string, IrcMessage[]>();
 	readonly #waiters = new Map<string, IrcWaiter[]>();
 	/** The latest successful non-progress send per `from` → `to`; see {@link sentSince}. */
@@ -201,6 +210,14 @@ export class IrcBus implements IrcBusApi {
 		// Lazy: the lifecycle global self-constructs against the global registry,
 		// so only touch it when a parked recipient actually needs reviving.
 		this.#lifecycle = () => lifecycle ?? AgentLifecycleManager.global();
+	}
+
+	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {
+		return (this.#groups ??= new IrcGroups(this.#registry, this)).execute(sender, request);
+	}
+
+	filterBroadcastTargets(targets: string[]): string[] {
+		return this.#groups?.filterBroadcastTargets(targets) ?? targets;
 	}
 
 	/**
@@ -414,7 +431,7 @@ export class IrcBus implements IrcBusApi {
 		// own model already shows as its hub tool call.
 		if (ref.kind === "operator") {
 			const root = ircRelayRoot(this.#registry, ref.id);
-			if (root && message.from !== root.id) this.#showOnUi(root, message);
+			if (root && (opts.groupDelivery || message.from !== root.id)) this.#showOnUi(root, message);
 			return { to: message.to, outcome: "injected" };
 		}
 		// Advisor/read-only refs are observability-only transcripts, never messageable peers.

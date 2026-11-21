@@ -472,7 +472,8 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 			enableLsp: restrictToolNames ? false : spec.enableLsp,
 			...(restrictToolNames
 				? {
-						enableIrc: false,
+						// Restricted sessions still deny legacy IRC; replay a dedicated tool grant.
+						enableIrc: revivedToolNames.includes("irc"),
 						enableMCP: false,
 						preloadedExtensionPaths: [],
 						preloadedCustomToolPaths: [],

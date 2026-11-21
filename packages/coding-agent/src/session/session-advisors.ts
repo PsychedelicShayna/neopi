@@ -476,8 +476,8 @@ export interface AdvisorToolSlate {
 export interface AdvisorToolFactory {
 	/** Every tool name a slate can hold. */
 	names(): readonly string[];
-	/** Build the granted `names` against a new tool session. */
-	create(names: ReadonlySet<string>): AdvisorToolSlate;
+	/** Build the granted `names` against a new tool session for the configured advisor. */
+	create(names: ReadonlySet<string>, slug?: string): AdvisorToolSlate;
 }
 
 /** Inputs that configure the advisor roster owned by a session. */
@@ -1557,7 +1557,7 @@ export class SessionAdvisors {
 				config.tools === undefined ? new Set([...ADVISOR_DEFAULT_TOOL_NAMES, "recall"]) : new Set(config.tools);
 			// A fresh slate per advisor: tool state such as repeat-read counts must
 			// reflect this advisor's own reads, not its siblings' (#18834).
-			const slate = this.#advisorTools?.create(names);
+			const slate = this.#advisorTools?.create(names, slug);
 			const tools = (slate?.tools ?? []).filter(t => names.has(t.name));
 			const advisorLoopTools: AgentTool<any>[] = [adviseTool, ...tools];
 			const advisorToolMap = new Map<string, AgentTool<any>>();

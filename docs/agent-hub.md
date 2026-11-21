@@ -135,8 +135,8 @@ The viewer is for the operator only. Agents still receive only messages addresse
 
 You take part in IRC under your own id, `Operator` unless `irc.operator.handle` names another (it takes effect the next time npi starts). This id is separate from `Main`, the model behind the composer:
 
-- Agents list you among their peers and can message you with `write agent://Operator`. Delivery does not wait for any model's turn: the message shows as a card in the main transcript and stays in the viewer. Broadcasts to `agent://all` reach you too.
-- `/irc <agent> <message>` or `/irc all <message>` sends as you, and `r` in the viewer replies to the selected message. Agents see these messages as coming from your id, never from `Main`. `/irc` alone opens the viewer.
+- Agents can message you with [`irc`](./tools/irc.md) or `write agent://Operator`. Direct messages from other agents appear in the viewer and can show in the main transcript without waiting for a model turn.
+- `/irc <agent> <message>`, `/irc #<group> <message>`, and `/irc all <message>` send as you, never as `Main`. Use `/irc group list` to see groups and [the other group commands](./tools/irc.md#operator-irc) to manage membership. `/irc` alone opens the viewer, where `r` replies to the selected message.
 - The composer still talks to `Main`.
 
 You are not listed in the Agent Hub, and collab guests do not get an id of their own.
@@ -150,9 +150,9 @@ Agent Hub is the human-facing live session view. Adjacent commands and internal 
 - `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
 - `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
 - `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
-- `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked subagent revives it; a killed subagent rejects messages until explicitly revived in the Hub. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
+- [`irc`](./tools/irc.md) is the built-in agent tool for direct messages and named address lists. `write agent://<id>` still steers or follows up with a normal subagent; `agent://all` broadcasts to visible live members of `everyone`. Messaging a parked subagent revives it; a killed subagent rejects messages until explicitly revived in the Hub. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
 - `read proc://` lists background jobs and project services; `read proc://<id>` inspects status/output without consuming delivery.
 
-Advisor rows are intentionally excluded from the agent-facing peer roster, `history://` index, and `agent://` messaging workflows.
+Advisor rows are excluded from the regular peer roster and cannot receive IRC into their read-only transcripts. A live advisor explicitly granted `irc` can join named groups and send under its own registry ID.
 
 See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).

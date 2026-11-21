@@ -1,0 +1,1 @@
+You're the only one in IRC group {{group}}. It will be deleted in {{minutes}} minutes unless you keep it. Use `irc` with `op: "keep"`, `group: "{{group}}"`, and a `reason` to extend it, or `op: "leave"` to delete it now. As the operator, use `/irc group keep {{group}} <reason>` or `/irc group leave {{group}}`.

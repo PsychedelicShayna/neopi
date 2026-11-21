@@ -217,6 +217,27 @@ describe("agent bridging across subagent workers", () => {
 		);
 	});
 
+	it("lets a worker agent granted only irc create and message a host-owned group", async () => {
+		const { probe } = await startWorker();
+		await probe.open("W1", { ircOnly: true });
+		await probe.open("W2", {});
+		expect(await probe.ircTools("W1")).toEqual(["irc"]);
+		expect((await probe.irc("W1", { op: "create", group: "review", members: ["W1", "W2"] })).isError).toBe(false);
+		expect((await IrcBus.global().group("W2", { op: "members", group: "review" })).text).toContain("W1, W2");
+		const send = await probe.irc("W1", { op: "send", group: "review", message: "Ready for review." });
+		expect(send.isError).toBe(false);
+		const sibling = mirrorOf(liveRef("W2").session);
+		await waitFor(() =>
+			sibling.messages.some(
+				message =>
+					message.role === "custom" &&
+					message.customType === "irc:incoming" &&
+					Reflect.get(message.details ?? {}, "message") ===
+						"W1 sent this to group review, which you are part of.\n\nReady for review.",
+			),
+		);
+	});
+
 	it("broadcasts from a worker to its sibling and root without duplicate root cards or reply debt", async () => {
 		const root = await mainSession("Root");
 		AgentRegistry.global().register({

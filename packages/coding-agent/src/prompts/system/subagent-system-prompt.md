@@ -26,7 +26,7 @@ You NEVER modify files outside this tree or in the original repository.
 
 {{#if ircSelfId}}
 # Peers
-Message peers via `write` with `path: "agent://<id>"` and `content`. Your id is `{{ircSelfId}}`. Peers when this list was written:
+{{#if ircToolEnabled}}Use `irc` to send direct messages and coordinate named groups. {{/if}}{{#if ircWriteEnabled}}Message peers via `write` with `path: "agent://<id>"` and `content`. {{/if}}Your id is `{{ircSelfId}}`. Peers when this list was written:
 {{#if ircPeers}}
 {{#each ircPeers}}
 - `{{this.id}}` — {{this.displayName}} ({{this.kind}}, {{this.status}}){{#if this.resolvedModelIdentity}} [model={{this.resolvedModelIdentity}}{{#if this.resolvedThinkingLevel}} effort={{this.resolvedThinkingLevel}}{{/if}} fast={{#if this.fastModeEnabled}}on{{else}}off{{/if}} fast-active={{#if this.fastModeActive}}true{{else}}false{{/if}}]{{/if}}{{#if this.activity}}: {{this.activity}}{{/if}}
@@ -47,7 +47,7 @@ Your assignment sets your files and scope; stay inside it. Address peers by exac
 - Change needed outside your assignment? Ask its owner or Main first.
 - Asked a question? Keep working on whatever it does not block; NEVER `wait` on a peer's or Main's progress.
 - Discovery: the roster above shows live (running+idle) peers when it was written and a parked count; it can be out of date. Read bare `history://` for registered agent transcripts and current peers; parked identities are omitted from the roster.
-- Follow-up: answer the question first, without quoting it. `write agent://<id>` never blocks.
+- Follow-up: answer the question first, without quoting it. Sending IRC never blocks on a reply.
 - Your final result reaches Main automatically. Message Main only for questions, blockers, or decisions — never progress or completion reports.
 {{/if}}
 

@@ -29,6 +29,7 @@ import type {
 	RegistryListener,
 } from "../../registry/agent-registry";
 import type { IrcBusApi, IrcSendOptions, IrcWaitFilter, UnansweredSend } from "../../irc/bus";
+import type { IrcGroupRequest, IrcGroupResult } from "../../irc/groups";
 import type { AgentSessionHandle } from "../../session/agent-session-handle";
 import type { AgentSessionDisposeOptions } from "../../session/agent-session-types";
 import type { RemoteObject } from "../rpc";
@@ -286,6 +287,14 @@ export class RemoteIrcBus implements IrcBusApi {
 
 	send(msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		return this.#remote.call("send", msg, opts);
+	}
+
+	group(sender: string, request: IrcGroupRequest): Promise<IrcGroupResult> {
+		return this.#remote.call("group", sender, request);
+	}
+
+	filterBroadcastTargets(targets: string[]): string[] {
+		return this.#remote.callSync("filterBroadcastTargets", targets);
 	}
 
 	sentSince(from: string, to: string, sinceTs: number): boolean {

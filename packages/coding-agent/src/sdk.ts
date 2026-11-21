@@ -210,7 +210,7 @@ import autolearnCaptureRefused from "./prompts/system/autolearn-capture-refused.
 import bundledMcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import bundledLateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
-import { trackLiveAdvisors } from "./registry/live-advisors";
+import { advisorAgentId, trackLiveAdvisors } from "./registry/live-advisors";
 import {
 	type AgentKind,
 	type AgentRef,
@@ -2947,6 +2947,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			enableLsp,
 			lspReadOnly,
 			enableIrc: restrictToolNames ? false : options.enableIrc,
+			enableIrcTool: options.enableIrc ?? true,
 			/**
 			 * Frozen at the last system-prompt rebuild: a mid-session `/skillful`
 			 * toggle rides the next turn's notice, never the tool prefix. The
@@ -5874,7 +5875,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// id), while edit/bash/write stay fully functional: the advisor is a full
 		// agent and its config's `tools` selects which of these it actually gets
 		// (defaulting to read/grep/glob).
-		const createAdvisorToolSession = (): ToolSession => ({
+		const createAdvisorToolSession = (id = advisorAgentId(resolvedAgentId, "")): ToolSession => ({
 			...toolSession,
 			state: new ToolConversationState(),
 			// The primary may carry a dormant xd:// write transport. Advisors use
@@ -5905,7 +5906,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// An advisor's job or service is not the primary's: its matches have no transcript to land in.
 			openAsyncNotify: undefined,
 			queueServiceNotify: undefined,
-			getAgentId: () => advisorAgent.id,
+			getAgentId: () => id,
 			// The primary's availability signals are wrong for advisors: their tool
 			// slate is filtered separately at runtime (default read/grep/glob, no
 			// write transport), so xd:// devices are unreachable. Images are inlined,
@@ -5922,6 +5923,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const advisorBuiltinNames = Object.keys(BUILTIN_TOOLS) as Array<keyof typeof BUILTIN_TOOLS>;
 		const buildAdvisorTool = (name: keyof typeof BUILTIN_TOOLS, advisorSession: ToolSession): Tool | null => {
 			if (name === "task") return TaskTool.withAgents(advisorSession, advisorTaskAgents);
+			if (name === "irc" && advisorSession.enableIrcTool === false) return null;
 			const tool = BUILTIN_TOOLS[name](advisorSession);
 			if (tool instanceof Promise) throw new Error(`Advisor tool "${name}" must build synchronously`);
 			return tool;
@@ -5935,8 +5937,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 				return advisorAvailableToolNames;
 			},
-			create: granted => {
-				const advisorSession = createAdvisorToolSession();
+			create: (granted, slug = "") => {
+				const advisorSession = createAdvisorToolSession(advisorAgentId(resolvedAgentId, slug));
 				// Descriptions, schemas, and execute-time gates read this live. A name
 				// is active only once its factory returns a tool, so a grant for an
 				// unavailable built-in (lsp with language servers off) is not advertised.

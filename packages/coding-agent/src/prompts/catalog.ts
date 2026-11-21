@@ -398,6 +398,10 @@ import asset386 from "../work-contracts/tool.md" with { type: "text" };
 import asset387 from "./system/chillax-notice.md" with { type: "text" };
 import asset388 from "./system/skill-notice.md" with { type: "text" };
 import asset389 from "./tools/wait-idle.md" with { type: "text" };
+import ircGroupAdded from "./system/irc-group-added.md" with { type: "text" };
+import ircGroupMessage from "./system/irc-group-message.md" with { type: "text" };
+import ircGroupReminder from "./system/irc-group-reminder.md" with { type: "text" };
+import ircTool from "./tools/irc.md" with { type: "text" };
 import chroniclerStatusNotice from "./chronicler/status-notice.md" with { type: "text" };
 import chroniclerNoteTool from "./chronicler/note-tool.md" with { type: "text" };
 import chroniclerNoteMessage from "./chronicler/note-message.md" with { type: "text" };
@@ -5707,6 +5711,42 @@ export const promptAssets: readonly PromptAsset[] = [
 		],
 	},
 	{
+		id: "system/irc-group-added.md",
+		relPath: "system/irc-group-added.md",
+		bundled: ircGroupAdded,
+		scope: "feature:system/irc-groups",
+		group: "core",
+		keys: [{ path: "group", type: "string", required: true, resolution: "runtime-only" }],
+		fixture: { group: "council" },
+		consumerHints: ["packages/coding-agent/src/irc/groups.ts"],
+	},
+	{
+		id: "system/irc-group-message.md",
+		relPath: "system/irc-group-message.md",
+		bundled: ircGroupMessage,
+		scope: "feature:system/irc-groups",
+		group: "core",
+		keys: [
+			{ path: "group", type: "string", required: true, resolution: "runtime-only" },
+			{ path: "sender", type: "string", required: true, resolution: "runtime-only" },
+		],
+		fixture: { group: "council", sender: "Scout" },
+		consumerHints: ["packages/coding-agent/src/irc/groups.ts"],
+	},
+	{
+		id: "system/irc-group-reminder.md",
+		relPath: "system/irc-group-reminder.md",
+		bundled: ircGroupReminder,
+		scope: "feature:system/irc-groups",
+		group: "core",
+		keys: [
+			{ path: "group", type: "string", required: true, resolution: "runtime-only" },
+			{ path: "minutes", type: "number", required: true, resolution: "runtime-only" },
+		],
+		fixture: { group: "council", minutes: 10 },
+		consumerHints: ["packages/coding-agent/src/irc/groups.ts"],
+	},
+	{
 		id: "system/irc-incoming.md",
 		relPath: "system/irc-incoming.md",
 		bundled: asset234,
@@ -6623,6 +6663,8 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "ircParkedCount", type: "number", required: true, resolution: "session-dependent" },
 			{ path: "ircOmittedCount", type: "number", required: true, resolution: "session-dependent" },
 			{ path: "ircSelfId", type: "string", required: false, resolution: "runtime-only" },
+			{ path: "ircToolEnabled", type: "boolean", required: false, resolution: "session-dependent" },
+			{ path: "ircWriteEnabled", type: "boolean", required: false, resolution: "session-dependent" },
 		],
 		fixture: {
 			agent: "Example agent",
@@ -6650,6 +6692,8 @@ export const promptAssets: readonly PromptAsset[] = [
 			ircParkedCount: 2,
 			ircOmittedCount: 2,
 			ircSelfId: "example-1",
+			ircToolEnabled: true,
+			ircWriteEnabled: true,
 		},
 		localHelpers: ["jtdToTypeScript", "renderYieldSchema"],
 		consumerHints: [
@@ -7827,6 +7871,16 @@ export const promptAssets: readonly PromptAsset[] = [
 			"packages/coding-agent/src/prompts/tools/image-question-system.md",
 			"packages/coding-agent/src/utils/image-question.ts",
 		],
+	},
+	{
+		id: "tools/irc.md",
+		relPath: "tools/irc.md",
+		bundled: ircTool,
+		scope: "tool:irc",
+		group: "core",
+		keys: [],
+		fixture: {},
+		consumerHints: ["packages/coding-agent/src/prompts/tools/irc.md", "packages/coding-agent/src/tools/irc.ts"],
 	},
 	{
 		id: "tools/isolation-error.md",

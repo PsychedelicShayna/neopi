@@ -4,6 +4,7 @@
  */
 import type { IrcDeliveryReceipt, IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { IrcSendOptions, IrcWaitFilter, UnansweredSend } from "../../irc/bus";
+import type { IrcGroupRequest, IrcGroupResult } from "../../irc/groups";
 import type { AwaitHoldOptions, AwaitWaiter } from "../../registry/agent-awaits";
 import type { AdoptOptions, AgentReleaseOptions } from "../../registry/agent-lifecycle";
 import type {
@@ -78,6 +79,8 @@ export type AgentLifecycleProtocol = {
 /** `IrcBusApi` over the link. */
 export type IrcBusProtocol = {
 	send: RpcMethod<[msg: Omit<IrcMessage, "id" | "ts">, opts?: IrcSendOptions], IrcDeliveryReceipt>;
+	group: RpcMethod<[sender: string, request: IrcGroupRequest], IrcGroupResult>;
+	filterBroadcastTargets: RpcMethod<[targets: string[]], string[]>;
 	sentSince: RpcMethod<[from: string, to: string, sinceTs: number], boolean>;
 	unansweredSends: RpcMethod<[from: string, sinceTs: number], UnansweredSend[]>;
 	lastMessageAt: RpcMethod<[from: string, to: string], number | undefined>;

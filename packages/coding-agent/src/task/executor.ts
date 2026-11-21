@@ -4486,6 +4486,8 @@ interface SubagentPromptInputs {
 	outputSchema: unknown;
 	outputSchemaOverridesAgent: boolean;
 	ircEnabled: boolean;
+	ircToolEnabled: boolean;
+	ircWriteEnabled: boolean;
 	/** Root resolved by the latest roster ensure; peer rows render scoped to it, so a session switch hides stale parked trees. */
 	ircRoot: { sessionFile?: string };
 	/** Peer roster each prompt block the live session rendered shows, keyed by that block. */
@@ -4584,6 +4586,8 @@ function buildSubagentSessionOptions(
 					ircParkedCount: ircRoster?.parkedCount ?? 0,
 					ircOmittedCount: ircRoster?.omittedCount ?? 0,
 					ircSelfId: inputs.ircEnabled ? inputs.id : "",
+					ircToolEnabled: inputs.ircToolEnabled,
+					ircWriteEnabled: inputs.ircWriteEnabled,
 				},
 				{ cwd: spec.options.cwd },
 			);
@@ -5152,11 +5156,11 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	) {
 		toolNames = [...toolNames, "wait"];
 	}
-	// Inbound steering works without messaging; outbound peer coordination requires write.
+	// Inbound steering works without an outbound messaging tool.
+	const ircToolEnabled = toolNames === undefined || toolNames.includes("irc");
+	const ircWriteEnabled = !restrictToolNames && (toolNames === undefined || toolNames.includes("write"));
 	const ircEnabled =
-		options.enableIrc !== false &&
-		isIrcEnabled(subagentSettings, childDepth) &&
-		(toolNames === undefined || toolNames.includes("write"));
+		options.enableIrc !== false && isIrcEnabled(subagentSettings, childDepth) && (ircToolEnabled || ircWriteEnabled);
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
@@ -5779,6 +5783,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					outputSchema: normalizedOutputSchema,
 					outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
 					ircEnabled,
+					ircToolEnabled,
+					ircWriteEnabled,
 					ircRoot: {},
 					ircRenders: new Map(),
 					reviving: false,
