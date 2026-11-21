@@ -15,6 +15,7 @@ import type { CollabHost } from "../collab/host";
 import type { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import type { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import type { ChainProgress } from "./progress-hud";
 import type { Settings, SettingsScope } from "../config/settings";
 import type {
 	AutocompleteProviderFactory,
@@ -208,6 +209,7 @@ export interface InteractiveModeContext {
 	/** Single-row live assistant caption, outside transcript scrollback while a voice turn streams. */
 	liveTranscriptContainer: Container;
 	statusContainer: Container;
+	setChainProgress(progress: ChainProgress | undefined): void;
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	readonly statusRowOccupied: boolean;
 	todoContainer: Container;
