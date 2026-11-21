@@ -46,12 +46,14 @@ const model = buildModel({
 
 async function harness(manager: SessionManager, root: string) {
 	let command: RegisteredCommand["handler"] | undefined;
+	let complete: RegisteredCommand["getArgumentCompletions"];
 	let tool: ToolDefinition<typeof contractRequestSchema> | undefined;
 	let active = ["read"];
 	const notifications: string[] = [];
 	const api = {
-		registerCommand(_name: string, options: { handler: RegisteredCommand["handler"] }) {
+		registerCommand(_name: string, options: Omit<RegisteredCommand, "name">) {
 			command = options.handler;
+			complete = options.getArgumentCompletions;
 		},
 		registerTool(definition: ToolDefinition<typeof contractRequestSchema>) {
 			tool = definition;
@@ -73,6 +75,7 @@ async function harness(manager: SessionManager, root: string) {
 		ui: { notify: (text: string) => notifications.push(text), editor: async () => "Edited in editor" },
 	} as unknown as ExtensionContext;
 	return {
+		complete: (prefix: string) => complete?.(prefix, manager),
 		command: async (args: string) => {
 			if (!command) throw new Error("missing command");
 			await command(args, ctx as Parameters<RegisteredCommand["handler"]>[1]);
@@ -87,6 +90,21 @@ async function harness(manager: SessionManager, root: string) {
 }
 
 describe("session work contracts", () => {
+	test("completes contract actions, live clause IDs, and fixed values without completing clause text", async () => {
+		const root = await temp();
+		const h = await harness(SessionManager.inMemory(root), root);
+		expect(h.complete("pr")?.map(item => item.value)).toEqual(["promote "]);
+		expect(h.complete("policy o")?.map(item => item.value)).toEqual(["policy on", "policy off"]);
+		expect(h.complete("show ")?.map(item => item.value) ?? []).toEqual([]);
+		await h.command("set inspect-docs Read the docs");
+		expect(h.complete("show ins")?.map(item => item.value)).toEqual(["show inspect-docs"]);
+		expect(h.complete("promote inspect-docs p")?.map(item => item.value)).toEqual(["promote inspect-docs project"]);
+		expect(h.complete("set inspect-docs Read")).toBeNull();
+		expect(h.complete('{"action":')).toBeNull();
+		await h.command("remove inspect-docs");
+		expect(h.complete("show ins")).toBeNull();
+	});
+
 	test("SDK request preparation budgets wire tool definitions, not runtime session state", async () => {
 		const root = await temp();
 		const manager = SessionManager.inMemory(root);

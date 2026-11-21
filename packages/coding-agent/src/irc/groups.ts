@@ -26,6 +26,9 @@ export interface IrcGroupResult {
 	text: string;
 	isError?: boolean;
 	receipts?: IrcDeliveryReceipt[];
+	/** Structured values backing the read-only group listing operations. */
+	groups?: string[];
+	members?: string[];
 }
 
 interface Group {
@@ -182,10 +185,13 @@ export class IrcGroups {
 		if (!isParticipant(actor)) return { text: `Unknown IRC participant ${sender}.`, isError: true };
 		if (!("group" in request)) {
 			const groups: string[] = [];
+			const rows: string[] = [];
 			for (const [name, group] of this.#groups) {
-				if (request.op === "groups" || group.members.has(sender)) groups.push(`${name} (${group.members.size})`);
+				if (request.op !== "groups" && !group.members.has(sender)) continue;
+				groups.push(name);
+				rows.push(`${name} (${group.members.size})`);
 			}
-			return { text: groups.length ? groups.join("\n") : "No IRC groups." };
+			return { text: rows.length ? rows.join("\n") : "No IRC groups.", groups };
 		}
 
 		const name = request.group.trim();
@@ -230,8 +236,10 @@ export class IrcGroups {
 					isError: delivered === 0,
 				};
 			}
-			case "members":
-				return { text: `Members of IRC group ${name}: ${[...group.members].join(", ") || "none"}.` };
+			case "members": {
+				const members = [...group.members];
+				return { text: `Members of IRC group ${name}: ${members.join(", ") || "none"}.`, members };
+			}
 			case "add":
 				return this.#add(sender, name, group, request.members, false);
 			case "remove":

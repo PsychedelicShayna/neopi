@@ -227,6 +227,7 @@
 				"language",
 				"models.defaultScope",
 				"models.sessionPicker",
+				"notifyAgent.when",
 				"settings.defaultScope",
 				"task.definitionGenerationConversationTtlMs",
 				"update.auto",

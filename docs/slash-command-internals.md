@@ -144,6 +144,7 @@ For each command:
 4. compute a display source string like `via Claude Code Project`
 5. preserve `argumentHint` from discovery, or parse `argumentHint`/`argument-hint` frontmatter for autocomplete ghost text and ACP input hints
 6. set `side` when the frontmatter has the boolean `side: true` (a quoted `"true"` does not count)
+7. opt `/pick-task` into Deck task completion with `argument-completions: deck-active-tasks`; other Markdown hints remain display-only
 
 Codex/OpenCode providers strip frontmatter before this stage. Their discovered argument hints and `side` flags survive, but the runtime description currently falls back to the body rather than using the separately discovered description.
 
@@ -178,6 +179,14 @@ Then `init()` calls `refreshSlashCommandState(...)`, reusing the session's start
 
 `refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
 Extension-registered autocomplete factories wrap this base provider in registration order; malformed or throwing factories are skipped.
+
+### Complete slash arguments
+
+Type a command and a space to see its available verbs or values. Tab inserts the highlighted value without running the command; after a verb with more arguments, completion can continue in the next slot. Esc closes suggestions without changing the draft, and Tab reopens them. On commands such as `/chron`, `/fork`, and `/autoresearch`, Enter on the untouched verb list still runs the bare command.
+
+Examples: `/settings session cl` completes to `clear`; `/model provider/model:` offers the model’s available effort levels; `/jobs kill ` offers running job IDs. `/git` offers local and remote-tracking branches, recent commit IDs, and tags at `HEAD`. Prompts, questions, new names, URLs, and numeric amounts are still entered as text.
+
+For a builtin verb, declare `subcommands[].arguments` in usage order: use `argumentValues(...)` for fixed choices, a provider for live values, and `null` for an open-text slot before a later enumerable argument. Use the verb’s `getArgumentCompletions` for grammar that is not positional, such as reorderable flags. Providers return the active value or tail, not the verb: the registry preserves the text before it. Hints remain display text and are not parsed into choices.
 
 ### Switch the interface language
 

@@ -30,6 +30,8 @@ export interface FileSlashCommand {
 	description: string;
 	/** Argument hint from `argument-hint`/`argumentHint` frontmatter, shown as inline ghost text. */
 	argumentHint?: string;
+	/** Explicit `argument-completions` frontmatter; independent of the display hint. */
+	argumentCompletions?: "deck-active-tasks";
 	content: string;
 	/**
 	 * `side: true` frontmatter: the interactive TUI answers the expanded command as a `/btw`
@@ -44,7 +46,13 @@ export interface FileSlashCommand {
 function parseCommandTemplate(
 	content: string,
 	options: { source: string; level?: "off" | "warn" | "fatal" },
-): { description: string; body: string; argumentHint?: string; side: boolean } {
+): {
+	description: string;
+	body: string;
+	argumentHint?: string;
+	argumentCompletions?: FileSlashCommand["argumentCompletions"];
+	side: boolean;
+} {
 	const { frontmatter, body } = parseFrontmatter(content, options);
 	const { description: frontmatterDesc, argumentHint } = slashCommandFrontmatterDisplay(frontmatter);
 
@@ -58,7 +66,9 @@ function parseCommandTemplate(
 		}
 	}
 
-	return { description, body, argumentHint, side: frontmatter.side === true };
+	const argumentCompletions =
+		frontmatter.argumentCompletions === "deck-active-tasks" ? "deck-active-tasks" : undefined;
+	return { description, body, argumentHint, argumentCompletions, side: frontmatter.side === true };
 }
 
 export interface LoadSlashCommandsOptions {
@@ -79,7 +89,7 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 	});
 
 	const fileCommands: FileSlashCommand[] = result.items.map(cmd => {
-		const { description, body, argumentHint, side } = parseCommandTemplate(cmd.content, {
+		const { description, body, argumentHint, argumentCompletions, side } = parseCommandTemplate(cmd.content, {
 			source: cmd.path ?? `slash-command:${cmd.name}`,
 			level: cmd.level === "native" ? "fatal" : "warn",
 		});
@@ -92,6 +102,7 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 			name: cmd.name,
 			description,
 			argumentHint: cmd.argumentHint ?? argumentHint,
+			...(argumentCompletions ? { argumentCompletions } : {}),
 			content: body,
 			source: sourceStr,
 			...(side || cmd.side === true ? { side: true } : {}),
@@ -104,7 +115,7 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 		const name = cmd.name.replace(/\.md$/, "");
 		if (seenNames.has(name)) continue;
 
-		const { description, body, argumentHint, side } = parseCommandTemplate(cmd.content, {
+		const { description, body, argumentHint, argumentCompletions, side } = parseCommandTemplate(cmd.content, {
 			source: `embedded:${cmd.name}`,
 			level: "fatal",
 		});
@@ -112,6 +123,7 @@ export async function loadSlashCommands(options: LoadSlashCommandsOptions = {}):
 			name,
 			description,
 			argumentHint,
+			...(argumentCompletions ? { argumentCompletions } : {}),
 			content: body,
 			...(side ? { side } : {}),
 			source: "bundled",

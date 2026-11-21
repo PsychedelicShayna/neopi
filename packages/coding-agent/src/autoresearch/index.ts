@@ -126,19 +126,31 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 	api.registerCommand("autoresearch", {
 		description: "Toggle builtin autoresearch mode, or pass off / clear, or a goal message.",
 		getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-			if (argumentPrefix.includes(" ")) return null;
-			const normalized = argumentPrefix.trim().toLowerCase();
-			if (normalized.length === 0) return null;
+			argumentPrefix = argumentPrefix.trimStart();
+			const match = /^(\S+)\s+(\S*)$/.exec(argumentPrefix);
+			if (match?.[1] === "clear") {
+				const query = (match[2] ?? "").toLowerCase();
+				const flags: AutocompleteItem[] = [
+					{ label: "--keep-tree", value: "clear --keep-tree", description: "Keep the current worktree" },
+					{ label: "--reset-tree", value: "clear --reset-tree", description: "Force the worktree reset" },
+				];
+				const filtered = flags.filter(item => item.label.startsWith(query));
+				if (filtered.length === 0) return null;
+				return query ? filtered : filtered.map(item => ({ ...item, preserveInputOnSubmit: true }));
+			}
+			if (/\s/.test(argumentPrefix)) return null;
+			const normalized = argumentPrefix.toLowerCase();
 			const completions: AutocompleteItem[] = [
 				{ label: "off", value: "off", description: "Leave autoresearch mode" },
 				{
 					label: "clear",
-					value: "clear",
+					value: "clear ",
 					description: "Reset worktree to baseline and close the active session",
 				},
 			];
 			const filtered = completions.filter(item => item.label.startsWith(normalized));
-			return filtered.length > 0 ? filtered : null;
+			if (filtered.length === 0) return null;
+			return normalized ? filtered : filtered.map(item => ({ ...item, preserveInputOnSubmit: true }));
 		},
 		async handler(args, ctx): Promise<void> {
 			const trimmed = args.trim();

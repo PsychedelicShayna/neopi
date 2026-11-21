@@ -23,7 +23,15 @@ import type { SessionWorktree } from "../worktree/backend";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { resolveToCwd } from "../tools/path-utils";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
-import { handleSshAcp } from "./helpers/ssh";
+import { completeSshAddArguments, completeSshRemoveArguments, handleSshAcp } from "./helpers/ssh";
+import {
+	completeAddDirectory,
+	completeCleanseArguments,
+	completeMentalModelId,
+	completeOptionalMentalModelId,
+	completeRemoveDirectory,
+	sessionArgumentCompletions,
+} from "./lifecycle-completions";
 import type {
 	ParsedSlashCommand,
 	SlashCommandResult,
@@ -272,14 +280,27 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Manage SSH hosts (add, list, remove)",
 		acpDescription: "Manage SSH connections",
 		inlineHint: "<subcommand>",
+		subcommandOptional: true,
 		subcommands: [
 			{
 				name: "add",
 				description: "Add an SSH host",
 				usage: "<name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>] [--scope project|user]",
+				getArgumentCompletions: completeSshAddArguments,
 			},
 			{ name: "list", description: "List all configured SSH hosts" },
-			{ name: "remove", description: "Remove an SSH host", usage: "<name> [--scope project|user]" },
+			{
+				name: "remove",
+				description: "Remove an SSH host",
+				usage: "<name> [--scope project|user]",
+				getArgumentCompletions: completeSshRemoveArguments,
+			},
+			{
+				name: "rm",
+				description: "Alias for remove",
+				usage: "<name> [--scope project|user]",
+				getArgumentCompletions: completeSshRemoveArguments,
+			},
 			{ name: "help", description: "Show help message" },
 		],
 		allowArgs: true,
@@ -406,6 +427,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Resume a different session",
 		inlineHint: "[session id|@claude|@codex]",
 		allowArgs: true,
+		getTuiArgumentCompletions: sessionArgumentCompletions("resume"),
 		handleTui: async (command, runtime) => {
 			const sessionArg = command.args.trim();
 			clearSubmittedText(runtime);
@@ -442,6 +464,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Pin or unpin a session at the top of the resume list",
 		inlineHint: "[session id]",
 		allowArgs: true,
+		getTuiArgumentCompletions: sessionArgumentCompletions("pin"),
 		handle: async (command, runtime) => {
 			const sessionId = await resolvePinTarget(command, runtime, "pin");
 			if (typeof sessionId !== "string") return sessionId;
@@ -457,6 +480,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Unpin a session from the top of the resume list",
 		inlineHint: "[session id]",
 		allowArgs: true,
+		getTuiArgumentCompletions: sessionArgumentCompletions("unpin"),
 		handle: async (command, runtime) => {
 			const sessionId = await resolvePinTarget(command, runtime, "unpin");
 			if (typeof sessionId !== "string") return sessionId;
@@ -526,6 +550,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Detect and fix project diagnostics with weighted parallel subagents",
 		inlineHint: "[request] [--all]",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeCleanseArguments,
 		handleTui: async (command, runtime) => {
 			if (refuseImages(command, runtime)) return;
 			const args = command.text.slice(`/${command.name}`.length).trim();
@@ -583,6 +608,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Inspect and operate memory maintenance",
 		acpDescription: "Manage memory",
 		acpInputHint: "<subcommand>",
+		subcommandOptional: true,
 		subcommands: [
 			{ name: "view", description: "Show current memory injection payload" },
 			{ name: "stats", description: "Show memory backend statistics" },
@@ -594,14 +620,22 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			{ name: "enqueue", description: "Enqueue memory consolidation maintenance" },
 			{ name: "rebuild", description: "Alias for enqueue" },
 			{ name: "mm list", description: "List mental models on the active bank" },
-			{ name: "mm show", description: "Show one mental model (id required)" },
+			{ name: "mm show", description: "Show one mental model", usage: "<id>", arguments: [completeMentalModelId] },
 			{
 				name: "mm refresh",
 				description: "Refresh auto-refresh models bank-wide, or one model by id",
+				usage: "[id]",
+				arguments: [completeOptionalMentalModelId],
 			},
-			{ name: "mm history", description: "Diff the change history of a mental model" },
+			{
+				name: "mm history",
+				description: "Diff the change history of a mental model",
+				usage: "<id>",
+				arguments: [completeMentalModelId],
+			},
 			{ name: "mm seed", description: "Create any built-in mental models that are missing" },
-			{ name: "mm delete", description: "Delete a mental model from the bank (id required)" },
+			{ name: "mm delete", description: "Delete a mental model", usage: "<id>", arguments: [completeMentalModelId] },
+			{ name: "mm remove", description: "Alias for mm delete", usage: "<id>", arguments: [completeMentalModelId] },
 			{ name: "mm reload", description: "Re-pull the cached <mental_models> block" },
 		],
 		allowArgs: true,
@@ -817,6 +851,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		acpDescription: "Add a workspace directory to this session",
 		inlineHint: "<path>",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeAddDirectory,
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot add a directory while streaming.", runtime);
 			if (!command.args) return usage(formatWorkspaceDirectories(runtime, "Usage: /add-dir <path>"), runtime);
@@ -849,6 +884,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		acpDescription: "Remove a workspace directory from this session",
 		inlineHint: "<path>",
 		allowArgs: true,
+		getTuiArgumentCompletions: completeRemoveDirectory,
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot remove a directory while streaming.", runtime);
 			if (!command.args) return usage("Usage: /remove-dir <path>", runtime);
