@@ -1801,7 +1801,7 @@ export class ExtensionUiController {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: { promptStyle?: boolean },
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
 	): Promise<string | undefined> {
 		this.#nextDialog = { family: "extension", kind: "editor", title };
 		return this.#presentDialog({ kind: "question", msg: title }, dialogOptions?.signal, settle => {

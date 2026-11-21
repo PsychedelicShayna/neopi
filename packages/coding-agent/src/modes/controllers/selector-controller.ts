@@ -145,6 +145,10 @@ import {
 import { LIVE_INGEST_DEFAULTS, liveIngestSourceFields } from "../../live/ingest-settings";
 import { createLivePersonaGeneration } from "../../live/persona-generation";
 import { createAgentsHubDeps } from "../agents-hub-deps";
+import type { AgentLauncher, SpawnDraft } from "../../neopi/agent-launcher";
+import { SpawnScreen } from "../spawn-screen";
+import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { getEditorCommand, openInEditor, openEditorOnPath, withExternalEditor } from "../../utils/external-editor";
 import { type ConfigViewTarget, resolveConfigViewFile } from "../../config/config-view-file";
 import { collapseSharedUsageReports } from "@oh-my-pi/pi-tui/overlays/usage-display";
@@ -252,6 +256,7 @@ export type MenuKind =
 	| "model-facts"
 	| "agents-dashboard"
 	| "agent-hub"
+	| "spawn"
 	| "agent-menu"
 	| "irc-viewer"
 	| "usage-dashboard"
@@ -337,6 +342,7 @@ export class SelectorController {
 	#pendingRestore: { kind: MenuKind; location: MenuLocation; snapshot: unknown } | undefined;
 	/** Closes the open IRC viewer without touching focus; see {@link showIrcViewer}. */
 	#releaseIrcViewer: (() => void) | undefined;
+	#hubRequest = 0;
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -3939,13 +3945,59 @@ export class SelectorController {
 		);
 	}
 
+	showSpawn(launcher: AgentLauncher): Promise<SpawnDraft | undefined> {
+		if (this.#focusOpenMenu("spawn")) return Promise.resolve(undefined);
+		const { promise, resolve } = Promise.withResolvers<SpawnDraft | undefined>();
+		const screen = new SpawnScreen(this.ctx.ui, {
+			launcher,
+			getAvailableModels: () => this.ctx.session.modelRegistry.getAvailable(),
+			browserSource: createModelBrowserSource(this.ctx.settings, model =>
+				this.ctx.session.effectiveServiceTier(model),
+			),
+			workspace: `Workspace: ${sanitizeDisplaySingleLine(shortenPath(this.ctx.sessionManager.getCwd()))}`,
+			externalEditor: text => {
+				const env = this.ctx.session.environment.snapshot();
+				const command = getEditorCommand(env);
+				return command ? openInEditor(command, text, { env }) : Promise.resolve(null);
+			},
+			done: draft => {
+				if (this.#openMenus.get(menu.kind) === menu) {
+					this.#releaseMenu(menu.kind, menu);
+					menu.handle?.hide();
+					this.focusActiveEditorArea();
+					this.ctx.ui.requestRender();
+				}
+				resolve(draft);
+			},
+		});
+		const menu = this.#claimMenu("spawn", () => {
+			void executeBuiltinSlashCommand("/spawn", { ctx: this.ctx, draftDetached: true }).catch((error: unknown) =>
+				this.ctx.showError(sanitizeDisplaySingleLine(error instanceof Error ? error.message : String(error))),
+			);
+		});
+		this.#mountMenu(menu, screen, () => this.#showFullscreenMenu(screen));
+		return promise;
+	}
+
 	showAgentHub(observers: SessionObserverRegistry, options?: AgentHubOpenOptions): void {
+		const request = ++this.#hubRequest;
+		const transcriptId = options?.initialTranscript;
+		const openTranscript = (hub: AgentHubOverlayComponent): void => {
+			if (!transcriptId || request !== this.#hubRequest || hub.openChat(transcriptId)) return;
+			void hub.persistedSubagentsReady.then(() => {
+				if (request !== this.#hubRequest || this.#openMenus.get("agent-hub")?.component !== hub) return;
+				if (!hub.openChat(transcriptId))
+					hub.showNotice(`No transcript for ${sanitizeDisplaySingleLine(transcriptId)} in this session.`);
+			});
+		};
 		// A repeat request reuses the open hub, still honoring its deep link (`/hub` → activity).
 		const reuseOpenHub = (): boolean => {
 			const open = this.#openMenus.get("agent-hub")?.component;
 			if (!this.#focusOpenMenu("agent-hub")) return false;
-			if (options?.initialSection && open instanceof AgentHubOverlayComponent)
-				open.showSection(options.initialSection);
+			if (open instanceof AgentHubOverlayComponent) {
+				if (options?.initialSection) open.showSection(options.initialSection);
+				openTranscript(open);
+			}
 			return true;
 		};
 		if (reuseOpenHub()) return;
@@ -4025,6 +4077,7 @@ export class SelectorController {
 			if (options?.armCloseTap) hub.armCloseTap();
 			menu = this.#claimMenu("agent-hub", () => this.showAgentHub(observers, { ...options, armCloseTap: false }));
 			this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
+			openTranscript(hub);
 		};
 
 		if (options?.requireContent && hub.isEmpty) {

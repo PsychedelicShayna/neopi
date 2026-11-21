@@ -86,6 +86,7 @@ import {
 	type EffortDecision,
 	type EffortSelection,
 } from "../config/effort-policy";
+import { capModelContextWindow } from "../config/model-patch";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelString,
@@ -628,6 +629,7 @@ export class SessionAdvisors {
 	#advisors: ActiveAdvisor[] = [];
 	#advisorConfigs: AdvisorConfig[] | undefined;
 	#launcherLegacyConfig: AdvisorConfig | undefined;
+	readonly #operatorAdvisors = new WeakMap<AdvisorConfig, number | undefined>();
 	#advisorConfigWarnings: string[];
 	#advisorStatuses = new Map<string, { name: string; status: AdvisorRuntimeStatus }>();
 	#advisorProviderSessionIds = new Map<string, string>();
@@ -1240,11 +1242,14 @@ export class SessionAdvisors {
 				slug = candidate;
 				usedSlugs.add(slug);
 			}
-			const active = selected
-				? config.id !== undefined &&
-					selected.has(config.id) &&
-					advisorVisibleToActivationSet(activation.scope, config.sourceScope)
-				: config.enabled !== false;
+			const operatorLaunched = this.#operatorAdvisors.has(config);
+			const active =
+				operatorLaunched ||
+				(selected
+					? config.id !== undefined &&
+						selected.has(config.id) &&
+						advisorVisibleToActivationSet(activation.scope, config.sourceScope)
+					: config.enabled !== false);
 			if (!active) {
 				this.#advisorStatuses.set(slug, { name: config.name, status: "paused" });
 				continue;
@@ -1323,7 +1328,12 @@ export class SessionAdvisors {
 			let decision: EffortDecision | undefined;
 			if (cfgEffortPolicyMode.get(this.#host.settings) === "replacement") {
 				try {
-					decision = resolveImplicitEffort(this.#host.settings, model, selection, "role");
+					decision = resolveImplicitEffort(
+						this.#host.settings,
+						model,
+						selection,
+						operatorLaunched ? "manual" : "role",
+					);
 				} catch (error) {
 					if (!(error instanceof EffortPolicyError)) throw error;
 					this.#advisorStatuses.set(slug, { name: config.name, status: "no_model" });
@@ -1731,7 +1741,10 @@ export class SessionAdvisors {
 				serviceTierResolver: advisorServiceTierResolver,
 			});
 			advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
-			advisorAgent.setModelResolver(model => this.#host.modelRegistry.fitContextWindow(model, this.#host.settings));
+			const contextCap = this.#operatorAdvisors.get(config);
+			advisorAgent.setModelResolver(model =>
+				capModelContextWindow(this.#host.modelRegistry.fitContextWindow(model, this.#host.settings), contextCap),
+			);
 			let advisorLoopGuardStopped = false;
 			// The advisor's own loop needs the same repeated-tool-call bound the
 			// primary gets from `LoopGuards`; nothing else stops it reissuing one
@@ -3221,7 +3234,7 @@ export class SessionAdvisors {
 	}
 
 	/** Add a session-local operator seat without replacing the configured roster. */
-	launchAdvisor(config: AdvisorConfig): void {
+	launchAdvisor(config: AdvisorConfig, contextCap?: number): void {
 		const slug = slugifyAdvisorName(config.name);
 		if (
 			this.#advisorConfigs?.some(existing => slugifyAdvisorName(existing.name) === slug) ||
@@ -3235,6 +3248,7 @@ export class SessionAdvisors {
 			: this.#launcherLegacyConfig
 				? [this.#launcherLegacyConfig]
 				: [];
+		this.#operatorAdvisors.set(config, contextCap);
 		this.#advisorConfigs = [...existing, config];
 		this.setAdvisorEnabled(true);
 	}

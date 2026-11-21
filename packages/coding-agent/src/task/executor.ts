@@ -178,7 +178,6 @@ import { type AssistantUsageSource, addAssistantUsage, emptyAgentUsage } from "@
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
-	cfgTaskAgentPrewalkAuto,
 	cfgTaskMaxEffort,
 	cfgTaskSoftRequestBudgetNotice,
 	cfgTaskSoftRequestBudget,
@@ -198,10 +197,7 @@ import {
 	cfgTierOpenai,
 	cfgRetryFallbackChains,
 	cfgDefaultThinkingLevel,
-	cfgPrewalkAutoTarget,
 } from "../session/settings";
-import { type AutoPrewalkDecision, classifyAutoPrewalk } from "../auto-prewalk/classifier";
-import { type JudgmentUsage, journalJudgmentUsage, type NativeJudgmentDeps } from "../judgment";
 import { cfgDisabledProviders } from "../config/model-settings";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import { getRetryFallbackRole, installRetryFallbackRole } from "../session/retry-fallback-chains";
@@ -662,6 +658,12 @@ export interface ExecutorOptions {
 	serviceTierOverride?: ServiceTierInheritSettingValue;
 	/** Exact-name `task.agentCompactionThresholdOverrides` pair selected by dispatch. */
 	compactionThresholdOverride?: CompactionThresholdPair;
+	/** Operator-selected primary model, with no initial auth fallback. */
+	confirmedModel?: string;
+	contextCap?: number;
+	prewalkOverride?: string;
+	prewalkContextCap?: number;
+	advisorOverride?: string;
 	/** Exact-name `task.agentAccountPools` entry selected by dispatch; see `CreateAgentSessionOptions.oauthAccountPools`. */
 	oauthAccountPools?: OAuthAccountPools;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
@@ -1516,35 +1518,6 @@ interface SubagentRunMonitor {
  */
 function isAsyncResultInjection(message: AgentMessage | undefined): boolean {
 	return message?.role === "custom" && message.customType === ASYNC_RESULT_MESSAGE_TYPE;
-}
-
-/**
- * Judges one assignment for `task.agentPrewalkAuto`. False on a non-arming or
- * failed judgment: the spawn then runs without prewalk. An abort still throws.
- */
-async function judgeSubagentAutoPrewalk(
-	request: string,
-	agentName: string,
-	deps: NativeJudgmentDeps,
-): Promise<boolean> {
-	let decision: AutoPrewalkDecision | undefined;
-	try {
-		decision = await classifyAutoPrewalk({ request, history: [] }, deps);
-	} catch (error) {
-		if (deps.signal?.aborted) throw error;
-		logger.debug("Subagent auto-prewalk judgment failed; skipping prewalk", {
-			agent: agentName,
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return false;
-	}
-	if (decision?.arm) return true;
-	logger.debug("Subagent auto-prewalk judgment did not arm; skipping prewalk", {
-		agent: agentName,
-		route: decision?.route,
-		prewalkProbability: decision?.probabilities.prewalk,
-	});
-	return false;
 }
 
 function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
@@ -5094,7 +5067,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	const settings = options.settings ?? Settings.isolated();
 	const advisorSpawn = await buildAgentAdvisorSpawnConfig({
 		advisor: agent.advisor,
-		settingsOverride: cfgTaskAgentAdvisor.get(settings)[agent.name],
+		settingsOverride: options.advisorOverride ?? cfgTaskAgentAdvisor.get(settings)[agent.name],
 		settings,
 		cwd,
 		sessionDir: options.artifactsDir,
@@ -5128,8 +5101,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 	let toolNames: string[] | undefined;
 	if (agent.tools) {
 		toolNames = structured ? agent.tools : agent.tools.filter(name => name !== "yield");
-		// Auto-include task tool if spawns defined but task not in tools
-		if (agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
+		// A restricted launch may not regain task through its spawn policy.
+		if (!restrictToolNames && agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
 			toolNames = [...toolNames, "task"];
 		}
 	}
@@ -5329,11 +5302,11 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			const ordinaryModelResolution = await awaitAbortable(
 				resolveModelOverrideWithAuthFallback(
 					modelPatterns,
-					options.parentActiveModelPattern,
+					options.confirmedModel ? undefined : options.parentActiveModelPattern,
 					modelRegistry,
 					settings,
 					id,
-					{ exactOnly: !!options.perCallModelGrants, allowedProvider },
+					{ exactOnly: !!options.perCallModelGrants || options.confirmedModel !== undefined, allowedProvider },
 				),
 			);
 			let model = ordinaryModelResolution.model;
@@ -5346,6 +5319,9 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			} = ordinaryModelResolution;
 			if (cfgOffline.get(settings) && !model) {
 				throw new Error("Offline mode: no subagent model is available on the active parent provider.");
+			}
+			if (options.confirmedModel && !model) {
+				throw new Error(`The selected model ${options.confirmedModel} is no longer available.`);
 			}
 			if (options.perCallModelGrants && !model) {
 				throw new PerCallModelError(
@@ -5368,7 +5344,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 			}
 			const perCallModelGrants = options.perCallModelGrants;
 			const agentPrewalk = resolveAgentPrewalkDefault(agent, cfgTaskPrewalk.get(settings));
-			const settingsPrewalk = cfgTaskAgentPrewalk.get(settings)[agent.name]?.trim();
+			const settingsPrewalk = options.prewalkOverride ?? cfgTaskAgentPrewalk.get(settings)[agent.name]?.trim();
 			// Approved per-call workers never switch into either prewalk crew.
 			const prewalkPattern = perCallModelGrants
 				? undefined
@@ -5388,23 +5364,36 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 						: typeof agentPrewalk === "string"
 							? agentPrewalk.trim() || undefined
 							: undefined;
-				const execution = resolvePrewalkCrewSelection(settings, modelRegistry, "execution", executionOverride);
-				const plannerConfigured = getPrewalkPatterns(settings, "planner").length > 0;
+				const explicit = options.prewalkOverride === "on" ? undefined : options.prewalkOverride;
+				const execution = explicit
+					? resolveModelOverride([explicit], modelRegistry, settings, { exactOnly: true })
+					: undefined;
+				if (explicit && (!execution?.model || !modelRegistry.hasConfiguredAuth(execution.model))) {
+					throw new Error(`The selected prewalk model ${explicit} is no longer available.`);
+				}
+				const executionCrew = execution?.model
+					? { target: execution.model, thinkingLevel: execution.thinkingLevel }
+					: resolvePrewalkCrewSelection(settings, modelRegistry, "execution", executionOverride);
+				const plannerConfigured = !options.confirmedModel && getPrewalkPatterns(settings, "planner").length > 0;
 				const resolvedPlanner = plannerConfigured
 					? resolvePrewalkCrewSelection(settings, modelRegistry, "planner")
 					: undefined;
-				if (!execution || (plannerConfigured && !resolvedPlanner)) {
+				if (!executionCrew || (plannerConfigured && !resolvedPlanner)) {
 					logger.warn("Subagent prewalk crew unavailable; keeping ordinary task model", {
 						agent: agent.name,
-						phase: !execution ? "execution" : "planner",
+						phase: !executionCrew ? "execution" : "planner",
 						pattern: prewalkPattern,
 					});
 				} else {
-					prewalk = execution;
+					prewalk = executionCrew;
 					planner = resolvedPlanner;
 					if (planner) model = planner.target;
 				}
 			}
+			const prewalkContextCap =
+				prewalk && options.prewalkContextCap !== undefined
+					? { model: formatModelStringWithRouting(prewalk.target), tokens: options.prewalkContextCap }
+					: undefined;
 			// Preflight skips these checks while the registry is cold, so hold the model
 			// a per-call child actually starts on to them before its session exists.
 			if (options.perCallModelGrants && model) {
@@ -5691,6 +5680,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					inheritedSessionAgents: options.inheritedSessionAgents,
 					advisorConfigs,
 					model,
+					contextCap: options.contextCap,
+					prewalkContextCap,
 					modelPattern: model || modelOverride === undefined ? undefined : modelPatterns,
 					modelPatternParentFallback:
 						model || modelOverride === undefined ? undefined : options.parentActiveModelPattern,
@@ -5988,6 +5979,8 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 				advisor: advisorSpawn.persistedAdvisor,
 				advisorConfigs,
 				compactionThreshold: options.compactionThresholdOverride,
+				contextCap: options.contextCap,
+				prewalkContextCap,
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
 				restrictToolNames: restrictToolNames || undefined,

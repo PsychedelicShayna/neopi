@@ -6,27 +6,40 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 
 ## Launch an agent yourself
 
-Run `/agent launch` in the TUI to choose a worker preset or discovered project
-agent, an exact `provider/model` or `@role`, a supported effort, built-in tools,
-orchestration, workspace isolation and a persistent name. The effort picker
-offers only the chosen model's supported values. Both worker presets start a
-managed background task, so a parallel worker does not block the composer.
-Independent workers cannot delegate; `may-delegate` requires the task tool.
-Isolated workers retain their changes without automatically applying them.
+`/spawn` replaces `/agent launch` ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
+Choose the invocation that matches how much you need to change:
 
-The final dialog shows the resolved model and effort, tools, name and API cost
-warning. Cancelling any dialog starts nothing. Initialization and later wake-ups
-can cost money even without useful work; the launcher does not pretend that
-an unknown idle-init price is zero. After launch, `/hub` shows the stable
-identity. Names are fixed; replacing a seat creates a separate identity rather
-than renaming its old transcript. Duplicate worker names receive a numeric suffix
-and require confirmation of that final identity.
+- `/spawn scout Inspect the source tree.` starts a background scout using its
+  definition. The text following the first token is the assignment.
+- `/spawn scout` uses the same defaults and opens only the multiline assignment
+  editor. Enter launches, Shift+Enter adds a line, and Ctrl+G opens `$VISUAL` or
+  `$EDITOR`. Esc backs out and Ctrl+C cancels.
+- `/spawn` opens one editable screen. Pick an agent type, then change only what
+  you need: model and effort, context cap, prewalk, advisor, tool checkboxes,
+  delegation, generated name, or assignment. Delegation requires the `task` tool.
+  `Esc` returns from a field editor without discarding the launch draft;
+  `Ctrl+C` cancels the launch.
 
-The advisor preset creates a session-local advisor with turn or agent-end review
-cadence. It does not replace `/advisor configure`, which still edits saved
-presets. Advisors share their owner's workspace and use advisor-supported tools.
-Routing policies and the persistent-agent lifecycle remain owned by their
-existing subsystems; the launcher does not implement another routing engine.
+The first argument can override the definition inline; keep it in one token:
+
+```text
+/spawn scout@slow:low Inspect the source tree.
+/spawn scout@anthropic/claude-opus-5-5:high Inspect the source tree.
+/spawn task:low Summarize the change.
+/spawn @scout[100k] Trace the startup path.
+/spawn task@task:high;pre=@smol[200k]:low;advisor=openai-codex/gpt-6.2-astra-fast-900k:xhigh Review the migration.
+```
+
+The `@` after the type introduces a model role or an exact `provider/model`;
+`:effort` sets the effort on that model or on the definition's model. An initial
+`@` still names the agent type (as in `@scout[100k]`). `[100k]` caps the
+context at 100,000 tokens; `;pre=` and `;advisor=` set separate selectors.
+An explicit unsupported effort is rejected rather than silently replaced.
+
+Workers retain the actual allocated name after they finish. Run the `/hub <name>`
+command printed by `/spawn` to open the worker's transcript directly. If a name
+is taken, `/spawn` reports the suffixed name it allocated. The `advisor` type
+starts a session-local advisor; `/advisor configure` still manages saved advisors.
 
 
 ## Implementation files

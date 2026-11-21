@@ -56,6 +56,8 @@ export interface AsyncJobRunResult {
 	structured?: StructuredSubagentOutput;
 	/** See {@link AsyncJob.agentOutputPublished}. */
 	agentOutputPublished?: boolean;
+	/** Opt-in result preview for a user-launched job's transcript card. */
+	transcriptPreview?: string;
 }
 
 /**
@@ -73,12 +75,14 @@ export class AsyncJobError extends Error {
 	}
 }
 
-/** Progress metadata retained for renderers and multimodal completion delivery. */
+/** Metadata retained for renderers and multimodal completion delivery. */
 export interface AsyncJobDetails extends Record<string, unknown> {
 	/** Images recovered from command output, independent of text truncation. */
 	images?: ImageContent[];
 	/** Tool output metadata needed when a completion is delivered or recovered later. */
 	meta?: OutputMeta;
+	/** See {@link AsyncJobRunResult.transcriptPreview}. */
+	transcriptPreview?: string;
 }
 
 /**
@@ -154,7 +158,7 @@ export interface AsyncJob {
 	structured?: StructuredSubagentOutput;
 	/** Latest progress text the running job reported (a bash job's output tail). */
 	progressText?: string;
-	/** Latest tool-render details reported by the running job. */
+	/** Latest tool-render details and optional completion preview. */
 	latestDetails?: AsyncJobDetails;
 	/**
 	 * Registry id of the agent that registered the job (e.g. "Main",
@@ -637,6 +641,9 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 				if (typeof outcome !== "string" && outcome.agentOutputPublished !== undefined) {
 					job.agentOutputPublished = outcome.agentOutputPublished;
 				}
+				if (typeof outcome !== "string" && outcome.transcriptPreview) {
+					job.latestDetails = { ...job.latestDetails, transcriptPreview: outcome.transcriptPreview };
+				}
 				if (job.status === "cancelled") {
 					job.resultText = text;
 				} else {
@@ -706,6 +713,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 			resultText: result.text,
 			structured: result.structured,
 			agentOutputPublished: result.agentOutputPublished,
+			...(result.transcriptPreview ? { latestDetails: { transcriptPreview: result.transcriptPreview } } : {}),
 		};
 		this.#jobs.set(id, job);
 		this.#evicted.delete(id);

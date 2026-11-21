@@ -89,6 +89,7 @@ import {
 	type EffortSelection,
 } from "./config/effort-policy";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
+import { capModelContextWindow, type ModelContextCaps } from "./config/model-patch";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
 	disabledProviderIds,
@@ -674,7 +675,7 @@ function applyMCPEnvironment(result: { exaApiKeys: string[] }): void {
 }
 
 // Types
-export interface CreateAgentSessionOptions {
+export interface CreateAgentSessionOptions extends ModelContextCaps {
 	/** Working directory for project-local discovery. Default: getProjectDir() */
 	cwd?: string;
 	/** Additional workspace directories beyond cwd (multi-root), absolute or cwd-relative. */
@@ -5806,7 +5807,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Catalog rows carry the registry settings' extended-window opt-ins; this
 		// session adopts every model with the window its own settings select (a
 		// subagent with a compaction override must not inherit the parent's).
-		agent.setModelResolver(next => modelRegistry.fitContextWindow(next, settings));
+		const { contextCap, prewalkContextCap } = options;
+		agent.setModelResolver(next => {
+			const base = modelRegistry.fitContextWindow(next, settings);
+			const cap =
+				prewalkContextCap && prewalkContextCap.model === formatModelStringWithRouting(base)
+					? Math.min(prewalkContextCap.tokens, contextCap ?? Infinity)
+					: contextCap;
+			return capModelContextWindow(base, cap);
+		});
 
 		cursorEventEmitter = event => agent.emitExternalEvent(event);
 

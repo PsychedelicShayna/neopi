@@ -661,10 +661,13 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "hub",
 		aliases: ["subagents"],
 		icon: "agents",
-		description: "Open the live Agent Hub (subagents, including finished ones)",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showAgentHub({ initialSection: "activity" });
+		description: "Open the live Agent Hub or go straight to an agent's transcript",
+		inlineHint: "[agent]",
+		allowArgs: true,
+		handleTui: (command, runtime) => {
 			clearSubmittedText(runtime);
+			const id = command.args.trim();
+			runtime.ctx.showAgentHub(id ? { initialTranscript: id } : { initialSection: "activity" });
 		},
 	},
 	{

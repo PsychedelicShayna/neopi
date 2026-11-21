@@ -158,6 +158,11 @@ export interface StructuredSubagentRequest {
 	/** Operator launcher restrictions, independent of eval-defined custom tools. */
 	tools?: string[];
 	spawns?: string[] | "*";
+	/** One-launch model window and crew overrides. */
+	contextCap?: number;
+	prewalkOverride?: string;
+	prewalkContextCap?: number;
+	advisorOverride?: string;
 	/** Refuse a spawn hook that changes the operator-confirmed model selector. */
 	confirmedModel?: string;
 	/**
@@ -286,7 +291,7 @@ export class StructuredSubagentError extends Error {
 	}
 }
 
-const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
+export const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
 /** Stands in for the assignment while the template is formatted. */
 const ASSIGNMENT_SLOT = "\u0000assignment\u0000";
@@ -905,6 +910,11 @@ function buildExecutorOptions(
 		invokedAt: request.invokedAt,
 		acquiredAt: request.acquiredAt,
 		modelOverride: policy.modelOverride,
+		confirmedModel: request.confirmedModel,
+		contextCap: request.contextCap,
+		prewalkOverride: request.prewalkOverride,
+		prewalkContextCap: request.prewalkContextCap,
+		advisorOverride: request.advisorOverride,
 		modelRole: policy.modelRole,
 		callerModelSelector: policy.callerModelSelector,
 		callerThinkingLevel: policy.callerThinkingLevel,

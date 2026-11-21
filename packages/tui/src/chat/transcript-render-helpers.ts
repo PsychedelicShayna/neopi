@@ -30,6 +30,7 @@ import {
 	formatStyledPath,
 	PREVIEW_LIMITS,
 	replaceTabs,
+	sanitizeDisplayLines,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 } from "../render/render-utils";
@@ -46,8 +47,7 @@ type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 /**
  * Render an `async-result` custom message (a completed background bash/task job,
- * or a batch of them) as a transcript block of one "Background job completed"
- * row per job.
+ * or a batch of them) as a completion row per job with opt-in output previews.
  */
 export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	const details = (
@@ -62,6 +62,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 				label?: string;
 				durationMs?: number;
 				meta?: OutputMeta;
+				transcriptPreview?: string;
 			}>;
 			meta?: OutputMeta;
 		}>
@@ -75,6 +76,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 						type: details?.type,
 						label: details?.label,
 						durationMs: details?.durationMs,
+						transcriptPreview: undefined,
 					},
 				];
 	const rows: TranscriptStatusRow[] = [];
@@ -94,6 +96,19 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 				message: [span("Background job completed"), ...facts([type, jobId, duration])],
 			},
 		});
+		if (job.transcriptPreview) {
+			const lines = sanitizeDisplayLines(job.transcriptPreview);
+			const shown = lines.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED);
+			if (lines.length > shown.length) shown.push(`… ${lines.length - shown.length} more`);
+			for (const line of shown) {
+				const output = truncateToWidth(line, TRUNCATE_LENGTHS.LINE);
+				rows.push({
+					parts: [{ text: output, color: "dim" }],
+					indent: 3,
+					native: { tone: "info", body: true, message: [span(output, "mono")] },
+				});
+			}
+		}
 		if (job.meta?.artifactError) rows.push(artifactErrorRow(job.meta.artifactError));
 		if (job.meta?.minimized) rows.push(minimizedRow(job.meta.minimized));
 	}

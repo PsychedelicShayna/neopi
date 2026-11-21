@@ -10,6 +10,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import type { StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { EffortOrigin, EffortSelection } from "../config/effort-policy";
+import type { ModelContextCaps } from "../config/model-patch";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { CompactionMethod } from "./compaction-methods";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
@@ -338,7 +339,7 @@ export interface CredentialPinEntry extends SessionEntryBase {
 }
 
 /** Session init entry - captures initial context for subagent sessions (debugging/replay). */
-export interface SessionInitEntry extends SessionEntryBase {
+export interface SessionInitEntry extends SessionEntryBase, ModelContextCaps {
 	type: "session_init";
 	/** System prompt blocks exactly as sent to the model; files written before blocks were kept store one joined string. */
 	systemPrompt: string[] | string;

@@ -867,12 +867,22 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	/** Show `section`, as a slash-command deep link into an already-open hub does. */
 	showSection(section: AgentHubSection): void {
+		this.#closeTranscriptViewer();
 		this.#switchSection(section);
 	}
 
+	/** Report a deep-link error on the hub that received the request. */
+	showNotice(message: string): void {
+		if (this.#disposed) return;
+		this.#closeTranscriptViewer();
+		this.#notice = message;
+		this.#requestRender();
+	}
+
 	/** Open an agent transcript as a nested page in this same registered overlay. */
-	openChat(id: string, entryId?: string): void {
-		if (this.#disposed || !this.#registry.get(id)) return;
+	openChat(id: string, entryId?: string): boolean {
+		const ref = this.#registry.get(id);
+		if (this.#disposed || !ref || this.#inSession?.(ref) === false) return false;
 		const previous = this.navigationSnapshot();
 		this.#closeTranscriptViewer(undefined, false);
 		this.#notice = undefined;
@@ -905,6 +915,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#transcriptViewer = viewer;
 		if (!this.#restoringNavigation) this.onNavigationVisit?.(`transcript:${id}`, previous);
 		this.#requestRender();
+		return true;
 	}
 
 	/** Dispose a transcript page and return to the retained hub view. */
