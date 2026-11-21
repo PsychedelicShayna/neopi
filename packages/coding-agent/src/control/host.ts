@@ -293,7 +293,11 @@ export class ControlHost {
 					protocolVersion: 1,
 					supportedProtocolVersions: [1, 2],
 					// Dictation records with this process's microphone: only a terminal session owns one.
-					capabilities: [...RPC_CAPABILITIES, "control_v1", ...(this.presenter ? ["dictation"] : [])],
+					capabilities: [
+						...RPC_CAPABILITIES,
+						"control_v1",
+						...(this.presenter ? ["dictation", "rich_dialog_provenance_v1"] : []),
+					],
 				});
 			},
 			onClosed: (connection: ControlConnection) => {
@@ -853,8 +857,7 @@ export class ControlHost {
 				const text = String(frame.text ?? "");
 				const images =
 					type === "input" && Array.isArray(frame.images) ? (frame.images as ImageContent[]) : undefined;
-				const submit = () => presenter!.submit(text, images);
-				const result = type === "slash" ? await runAsControlCommand(currentControlActor(), submit) : await submit();
+				const result = await presenter!.submit(text, images, type === "slash" ? currentControlActor() : undefined);
 				this.#notify(connection, type === "slash" ? text : "input");
 				this.#reply(connection, frame, { success: true, data: result });
 				return;
@@ -1536,7 +1539,7 @@ export class ControlHost {
 		}
 		// With a pane, go through /switch so the status line and title refresh as if typed.
 		if (this.presenter) {
-			await runAsControlCommand(currentControlActor(), () => this.presenter!.submit(`/switch ${selector}`));
+			await this.presenter.submit(`/switch ${selector}`, undefined, currentControlActor());
 		} else await session.setModelTemporary(resolved.model, resolved.thinkingLevel);
 		const model = session.model;
 		const applied =
