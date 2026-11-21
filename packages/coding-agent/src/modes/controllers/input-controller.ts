@@ -21,11 +21,13 @@ import { getAgentDir, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-
 import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import { currentDeferredDraft, runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/draft-scope";
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { discoverChains } from "../../chains/config";
 import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
+import type { ChainProgress } from "../progress-hud";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
@@ -2006,8 +2008,8 @@ export class InputController {
 	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
 		const control = new ChainControl();
 		let lastOutput = text;
-		let chainName = "";
-		let currentStep = "";
+		let progress: ChainProgress | undefined;
+		let skipped: string | undefined;
 		// Lock before resolving the chain: submit already emptied the buffer, and anything typed
 		// while CHAINS.yml loads or the picker is open would be overwritten. Text typed while
 		// input hooks ran is kept in local history rather than lost. The draft goes back as
@@ -2019,12 +2021,13 @@ export class InputController {
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
 			onSkip: () => {
-				// Each press skips the step in progress and passes its input on; only the interrupt
-				// binding (Ctrl+C) aborts the chain.
 				control.skipStep();
-				if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
+				if (progress && !control.signal.aborted) this.ctx.setChainProgress({ ...progress, skipping: true });
 			},
-			onCancel: () => control.abort(),
+			onCancel: () => {
+				control.abort();
+				this.ctx.setChainProgress(undefined);
+			},
 		});
 		this.ctx.ui.requestRender();
 		let resolved: ChainConfig | typeof SEND_WITHOUT_CHAIN | undefined;
@@ -2045,9 +2048,7 @@ export class InputController {
 			return { text, send };
 		}
 		const chain = resolved;
-		chainName = chain.name;
-		currentStep = enabledChainSteps(chain)[0]?.name ?? "";
-		this.ctx.ui.requestRender();
+		const startedAt = performance.now();
 		try {
 			const result = await runChain(chain, text, {
 				settings: this.ctx.settings,
@@ -2060,10 +2061,9 @@ export class InputController {
 				cwd: this.ctx.sessionManager.getCwd(),
 				control,
 				onStep: (step, index, total) => {
-					currentStep = step.name;
-					this.ctx.showStatus(
-						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (${appKey(this.ctx.keybindings, "app.chain.skipStep")} skip · ${appKey(this.ctx.keybindings, "app.interrupt")} cancel)`,
-					);
+					progress = { chain: chain.name, step: step.name, number: index + 1, total, startedAt, skipped };
+					skipped = undefined;
+					this.ctx.setChainProgress(progress);
 				},
 				onStepDone: (_step, _index, output) => {
 					lastOutput = output;
@@ -2075,9 +2075,10 @@ export class InputController {
 					else this.ctx.editor.setText(output);
 					this.ctx.ui.requestRender();
 				},
-				onStepSkipped: step => this.ctx.showStatus(`Chain ${chain.name}: skipped "${step.name}"`),
+				onStepSkipped: step => {
+					skipped = step.name;
+				},
 			});
-			this.ctx.showStatus("");
 			// Sending: the composer showed the rewrite only while the lock held it.
 			this.ctx.editor.setText("");
 			return { text: result, send: true };
@@ -2086,13 +2087,14 @@ export class InputController {
 				this.ctx.showStatus("Chain aborted; draft restored");
 				return { text, send: false };
 			}
-			this.ctx.showStatus("");
+			const failedStep = sanitizeStatusText(progress?.step ?? enabledChainSteps(chain)[0]?.name ?? "");
 			// Not showError: it clears the loading state of a primary turn that may be streaming.
 			this.ctx.showWarning(
-				`Chain ${chain.name} failed at step "${currentStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
+				`Chain ${sanitizeStatusText(chain.name)} failed at step "${failedStep}"; composer holds the last completed output: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			return { text: lastOutput, send: false };
 		} finally {
+			this.ctx.setChainProgress(undefined);
 			// Preview pastes belong to the lock; the caller restores or replaces the draft next.
 			this.ctx.editor.clearPasteState();
 			this.ctx.editor.setChainLock(undefined);

@@ -21,6 +21,7 @@ import { cfgCompactionThresholdTokens } from "../session/context-settings";
 import {
 	cfgCycleOrder,
 	cfgDisabledProviders,
+	cfgModelFolders,
 	cfgModelProviderOrder,
 	cfgModelRoleStorage,
 } from "../config/model-settings";
@@ -45,9 +46,20 @@ export function createModelBrowserSource(
 	initialEditingScope?: SettingsScope,
 ): ModelHubSource {
 	let editingScope = initialEditingScope;
+	const resolveFolders = () =>
+		settings.resolveFileScopeValue(cfgModelFolders, editingScope === "global" ? "global" : "project");
 	return {
 		get editingScope() {
 			return editingScope;
+		},
+		modelFolders: {
+			get entries() {
+				return resolveFolders().value as typeof cfgModelFolders.default;
+			},
+			save(folders) {
+				const scope = editingScope === "project" || resolveFolders().source === "project" ? "project" : "global";
+				settings.writeScopeValue(cfgModelFolders, folders, scope);
+			},
 		},
 		cycleScope: initialEditingScope
 			? () => {
