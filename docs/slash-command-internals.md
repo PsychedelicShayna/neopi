@@ -179,6 +179,16 @@ Then `init()` calls `refreshSlashCommandState(...)`, reusing the session's start
 `refreshSlashCommandState(...)` also updates `session.setSlashCommands(...)` so prompt expansion uses the same discovered file command set.
 Extension-registered autocomplete factories wrap this base provider in registration order; malformed or throwing factories are skipped.
 
+### Switch the interface language
+
+Use `/language <lang>` or `/idioma <lang>` to change the interface language without restarting. Both spellings work in either mode and Tab completes the language argument for both. The slash menu shows only `/idioma` in English and only `/language` in Spanish, so you can find the command even when you can't read the current interface.
+
+Use a code (`en`, `es`) or a name (`English`, `Inglés`, `Spanish`, `Español`). Case and accents do not matter. Run either command without an argument to see the current language and available choices.
+
+The command writes the same `language` setting as **Settings → Interaction → Language**. It saves to the global profile unless a project, config-file overlay, or session supplies the active value; in that case it saves a session override instead of editing the project or overlay.
+
+The built-in chooses a live `getAutocompleteName` instead of listing its primary name and revealing hidden aliases. This affects only command-name suggestions; dispatch and argument completion still accept both names.
+
 ### Refresh lifecycle
 
 Slash command state is refreshed:

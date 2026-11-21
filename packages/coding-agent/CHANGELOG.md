@@ -19,6 +19,7 @@
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Switch interface languages live with `/language` or `/idioma` and Tab-complete the language name. Both spellings work in either language; the slash menu shows `/idioma` in English and `/language` in Spanish.
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
 
 - Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).

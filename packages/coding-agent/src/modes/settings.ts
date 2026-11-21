@@ -2,7 +2,7 @@ import { defaultUpdateChannel } from "../cli/update-config";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
-import { setLocale } from "@oh-my-pi/pi-utils/i18n";
+import { getLocaleNames, LOCALES, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
@@ -47,17 +47,14 @@ export const cfgSetupVersion = register({ id: "setupVersion", type: "number", de
 export const cfgLanguage = register({
 	id: "language",
 	type: "enum",
-	values: ["en", "es"] as const,
+	values: LOCALES,
 	default: "en",
 	ui: {
 		tab: "interaction",
 		group: "Language",
 		label: "Language",
 		description: "Language used for translated interface text",
-		options: [
-			{ value: "en", label: "English" },
-			{ value: "es", label: "Español" },
-		],
+		options: LOCALES.map(value => ({ value, label: getLocaleNames(value).name })),
 	},
 });
 effect(cfgLanguage, setLocale);

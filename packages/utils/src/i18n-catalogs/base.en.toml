@@ -11,3 +11,8 @@ placeholder = "Write a message…"
 
 [settings.language]
 description = "Language used for translated interface text"
+
+[slash.language]
+current = "Current language: {language}. Choices: {choices}."
+unknown = "Unknown language: {input}. Choose from: {choices}."
+changed = "Language set to {language}."

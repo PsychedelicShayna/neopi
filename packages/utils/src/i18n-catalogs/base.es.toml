@@ -8,3 +8,8 @@
 
 [composer]
 placeholder = "Escribe un mensaje…"
+
+[slash.language]
+current = "Idioma actual: {language}. Opciones: {choices}."
+unknown = "Idioma desconocido: {input}. Opciones: {choices}."
+changed = "Idioma cambiado a {language}."
