@@ -4,8 +4,9 @@ import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
-import { cfgOffline } from "../config/auxiliary-model-policy";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import { cfgOffline } from "../config/auxiliary-model-policy";
+import { NEOPROXY_PROVIDER_ID } from "../config/model-discovery";
 import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
 import type { CustomMessageDelivery } from "../session/agent-session";
@@ -40,7 +41,7 @@ import {
 	type LiveServerEvent,
 } from "./protocol";
 import { OUTPUT_ACTIVE_LEVEL, OutputActivity } from "./output-activity";
-import { type LiveEndpoint, LiveTransport, resolveLiveEndpoint } from "./transport";
+import { type LiveEndpoint, type LiveProvider, LiveTransport, resolveLiveEndpoint } from "./transport";
 import { DEFAULT_LIVE_VOICE } from "./voices";
 
 const MIN_BARGE_IN_LEVEL = 0.04;
@@ -137,6 +138,7 @@ export interface LiveSessionCallbacks {
 /** Structural transport surface the controller needs (test seam). */
 export type LiveTransportLike = Pick<LiveTransport, "connect" | "send" | "close" | "setMuted" | "pushAudio"> & {
 	readonly sdpAnswer?: string;
+	readonly provider?: LiveProvider;
 	playbackQueueStats?(): { queuedMs: number; droppedMs: number };
 	setOutputSuppressed?(suppressed: boolean): void;
 };
@@ -299,7 +301,7 @@ export class LiveSessionController {
 		callback: (error: Error | null, samples: Float32Array) => void,
 	) => LiveRecorderLike;
 	#transport: LiveTransportLike | undefined;
-	/** The custom server set by `live.endpoint`, resolved at start; unset uses Codex. */
+	/** The custom server set by `live.endpoint`, resolved at start; unset uses automatic routing. */
 	#endpoint: LiveEndpoint | undefined;
 	readonly #transportAbort = new AbortController();
 	#recorder: LiveRecorderLike | undefined;
@@ -522,6 +524,8 @@ export class LiveSessionController {
 			const transport = this.#createTransport({
 				authStorage: this.#session.modelRegistry.authStorage,
 				endpoint: this.#endpoint,
+				modelRegistry: this.#session.modelRegistry,
+				canUseProvider: provider => this.#canUseProvider(provider),
 				sessionId: this.#session.sessionId,
 				instructions,
 				voice: this.#voice,
@@ -1066,12 +1070,23 @@ export class LiveSessionController {
 		this.#scheduleTranscriptKeyword();
 	}
 
+	#canUseProvider(provider: LiveProvider): boolean {
+		return !cfgOffline.get(this.#session.settings) || this.#session.model?.provider === provider;
+	}
+
 	/** Offline mode reaches only the session's provider, unless `live.endpoint` names the voice server. */
 	#assertProviderAllowed(): void {
-		if (this.#endpoint || !cfgOffline.get(this.#session.settings)) return;
-		if (this.#session.model?.provider !== "openai-codex") {
-			throw new Error("Live audio requires the openai-codex session provider or live.endpoint in offline mode.");
-		}
+		if (this.#endpoint) return;
+		const provider = this.#transport?.provider;
+		const allowed = provider
+			? this.#canUseProvider(provider)
+			: this.#canUseProvider("openai-codex") || this.#canUseProvider(NEOPROXY_PROVIDER_ID);
+		if (allowed) return;
+		throw new Error(
+			provider
+				? `Live audio cannot use ${provider} outside the active session provider in offline mode.`
+				: "Live audio requires an openai-codex or neoproxy session provider, or live.endpoint, in offline mode.",
+		);
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {

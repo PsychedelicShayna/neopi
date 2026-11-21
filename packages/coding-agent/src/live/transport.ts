@@ -1,12 +1,16 @@
 import { type AuthStorage, type OAuthAccess, withOAuthAccess } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getProxyForUrl, wrapFetchForProxy } from "@oh-my-pi/pi-ai/utils/proxy";
 import { CODEX_BASE_URL, getCodexAccountId, OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getCodexClientVersion } from "@oh-my-pi/pi-catalog/wire/codex-version";
 import { LiveWebRtcPeer } from "@oh-my-pi/pi-natives";
 import { toError } from "@oh-my-pi/pi-utils";
+import { NEOPROXY_PROVIDER_ID } from "../config/model-discovery";
+import type { ModelRegistry } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
 import { resolveConfigValue } from "../config/resolve-config-value";
 import { generateCodexAttestation } from "./attestation";
+import { type NeoProxyLiveEndpoint, resolveNeoProxyLiveEndpoint } from "./neoproxy";
 import {
 	buildLiveSessionPayload,
 	buildLiveSessionUpdate,
@@ -29,7 +33,14 @@ const MAX_ENDPOINT_REDIRECTS = 5;
 
 type Lifecycle = "idle" | "connecting" | "connected" | "closing" | "closed";
 
-/** A custom realtime server that replaces Codex for live calls (the `live.endpoint` setting). */
+export type LiveProvider = typeof LIVE_PROVIDER | typeof NEOPROXY_PROVIDER_ID;
+
+type LiveRoute =
+	| { kind: "custom"; endpoint: LiveEndpoint }
+	| { kind: typeof NEOPROXY_PROVIDER_ID; endpoint: NeoProxyLiveEndpoint }
+	| { kind: typeof LIVE_PROVIDER; access: OAuthAccess };
+
+/** A custom realtime server that overrides automatic Live routing (the `live.endpoint` setting). */
 export interface LiveEndpoint {
 	/** Base URL the OpenAI Realtime WebRTC paths hang off, e.g. `http://127.0.0.1:8080/v1`. */
 	baseUrl: string;
@@ -39,8 +50,8 @@ export interface LiveEndpoint {
 
 /**
  * The custom endpoint live calls use, with `live.apiKey` resolved like other configured secrets
- * (literal, environment variable name, or `!command`); `undefined` when `live.endpoint` is empty,
- * so calls go to Codex.
+ * (literal, environment variable name, or `!command`); `undefined` when `live.endpoint` is empty
+ * and the transport selects its route automatically.
  */
 export async function resolveLiveEndpoint(scope: ScopeLike): Promise<LiveEndpoint | undefined> {
 	const baseUrl = cfgLiveEndpoint.get(scope)?.trim();
@@ -57,6 +68,7 @@ interface LiveSideband {
 	url: string;
 	headers: Record<string, string>;
 	proxyScope: string;
+	tls?: Bun.TLSOptions;
 }
 
 interface LiveSignalingResult {
@@ -85,8 +97,11 @@ export interface LiveTransportCallbacks {
 /** Configuration required to establish a live call. */
 export interface LiveTransportOptions {
 	authStorage: AuthStorage;
-	/** Custom realtime server; unset signals Codex with the session's ChatGPT (Codex) login. */
+	/** Explicit custom realtime server; otherwise prefer Codex, then a scoped NeoProxy login. */
 	endpoint?: LiveEndpoint;
+	modelRegistry?: Pick<ModelRegistry, "getConfigFile">;
+	/** Restrict automatic routing when the session selects an offline provider. */
+	canUseProvider?(provider: LiveProvider): boolean;
 	sessionId: string;
 	instructions: string;
 	voice: string;
@@ -194,13 +209,14 @@ function abortReason(signal: AbortSignal | undefined): Error {
 }
 
 /**
- * WebRTC transport for a Frameless Bidi live session on Codex or a custom endpoint, with a native
- * or caller-owned media peer.
+ * WebRTC transport for a live session on Codex, NeoProxy, or a custom endpoint, with a native or
+ * caller-owned media peer.
  */
 export class LiveTransport {
 	readonly #options: LiveTransportOptions;
+	#provider: LiveProvider | undefined;
 	/** Prefix of user-facing errors: which server the call talks to. */
-	readonly #label: string;
+	#label: string;
 	#peer: LiveWebRtcPeer | undefined;
 	#sdpAnswer: string | undefined;
 	readonly #voiceSessionId = crypto.randomUUID();
@@ -228,6 +244,11 @@ export class LiveTransport {
 		return this.#sdpAnswer;
 	}
 
+	/** The provider selected automatically for this call; unset for an explicit endpoint. */
+	get provider(): LiveProvider | undefined {
+		return this.#provider;
+	}
+
 	/** Establish the media peer, signal the call, and wait for the data channel or sideband. */
 	connect(): Promise<void> {
 		if (this.#state === "connected") return Promise.resolve();
@@ -245,6 +266,13 @@ export class LiveTransport {
 	}
 
 	async #connect(): Promise<void> {
+		const route = await this.#resolveRoute();
+		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
+		if (route.kind !== "custom") {
+			this.#provider = route.kind;
+			if (route.kind === NEOPROXY_PROVIDER_ID) this.#label = "NeoProxy Live";
+			this.#assertProviderAllowed();
+		}
 		let offer = this.#options.sdpOffer;
 		let peer: LiveWebRtcPeer | undefined;
 		if (offer === undefined) {
@@ -256,7 +284,11 @@ export class LiveTransport {
 			offer = await peer.createOffer();
 		}
 		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
-		const signaling = await this.#signal(offer);
+		this.#assertProviderAllowed();
+		const signaling =
+			route.kind === LIVE_PROVIDER
+				? await this.#signalCodex(offer, route.access)
+				: await this.#signalEndpoint(offer, route.endpoint);
 		if (peer) {
 			await peer.acceptAnswer(signaling.answer);
 			peer.setMuted(this.#muted);
@@ -267,8 +299,8 @@ export class LiveTransport {
 		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
 		await this.#connectSideband(signaling.sideband);
 		if (this.#state !== "connecting") throw abortReason(this.#options.signal);
-		// A custom endpoint got the bare SDP: the session configuration follows on the sideband.
-		if (this.#options.endpoint) {
+		// Only an explicit custom endpoint got the bare SDP; NeoProxy received the Codex session config.
+		if (route.kind === "custom") {
 			const update = buildLiveSessionUpdate(this.#options.instructions, this.#options.voice);
 			this.#sideband?.send(JSON.stringify(update));
 		}
@@ -295,8 +327,40 @@ export class LiveTransport {
 		);
 	}
 
-	async #signal(offer: string): Promise<LiveSignalingResult> {
-		if (this.#options.endpoint) return await this.#signalEndpoint(offer, this.#options.endpoint);
+	async #resolveRoute(): Promise<LiveRoute> {
+		const { endpoint, authStorage, modelRegistry, sessionId, signal, canUseProvider } = this.#options;
+		if (endpoint) return { kind: "custom", endpoint };
+		if (canUseProvider?.(LIVE_PROVIDER) !== false) {
+			const access = await authStorage.oauth.access(LIVE_PROVIDER, sessionId, { signal });
+			signal?.throwIfAborted();
+			if (access && canUseProvider?.(LIVE_PROVIDER) !== false) return { kind: LIVE_PROVIDER, access };
+		}
+		if (modelRegistry && canUseProvider?.(NEOPROXY_PROVIDER_ID) !== false) {
+			const proxy = await resolveNeoProxyLiveEndpoint(
+				modelRegistry,
+				authStorage,
+				signal,
+				() => canUseProvider?.(NEOPROXY_PROVIDER_ID) !== false,
+			);
+			if (proxy) return { kind: NEOPROXY_PROVIDER_ID, endpoint: proxy };
+		}
+		throw new AIError.MissingApiKeyError(
+			canUseProvider?.(LIVE_PROVIDER) === false ? NEOPROXY_PROVIDER_ID : LIVE_PROVIDER,
+			canUseProvider?.(LIVE_PROVIDER) === false
+				? "No eligible NeoProxy Live key is available. Use /login neoproxy with a key that grants Live access."
+				: "No Codex OAuth credential is available for a live call. Sign in to Codex or connect to NeoProxy with a key that grants Live access.",
+		);
+	}
+
+	#assertProviderAllowed(): void {
+		if (this.#provider && this.#options.canUseProvider?.(this.#provider) === false) {
+			throw new Error(
+				`Live audio cannot use ${this.#provider} outside the active session provider in offline mode.`,
+			);
+		}
+	}
+
+	async #signalCodex(offer: string, seed: OAuthAccess): Promise<LiveSignalingResult> {
 		const attestation = await generateCodexAttestation();
 		return await withOAuthAccess(
 			this.#options.authStorage,
@@ -305,7 +369,7 @@ export class LiveTransport {
 			{
 				sessionId: this.#options.sessionId,
 				signal: this.#options.signal,
-				missingAccessMessage: "No Codex OAuth credential is available for a live call.",
+				seed,
 			},
 		);
 	}
@@ -322,6 +386,7 @@ export class LiveTransport {
 		});
 		const fetchImpl = wrapFetchForProxy(fetch, LIVE_PROVIDER);
 		this.#options.signal?.throwIfAborted();
+		this.#assertProviderAllowed();
 		const response = await fetchImpl(SIGNALING_URL, {
 			method: "POST",
 			headers,
@@ -351,27 +416,37 @@ export class LiveTransport {
 		return { answer, sideband };
 	}
 
-	/**
-	 * Signals a custom endpoint the OpenAI Realtime WebRTC way: the bare SDP offer, the endpoint's
-	 * own key, and only same-origin 307/308 redirects followed, so the key never leaves its origin.
-	 */
-	async #signalEndpoint(offer: string, endpoint: LiveEndpoint): Promise<LiveSignalingResult> {
+	/** Signal the configured custom endpoint or the scoped NeoProxy relay. */
+	async #signalEndpoint(offer: string, endpoint: LiveEndpoint | NeoProxyLiveEndpoint): Promise<LiveSignalingResult> {
 		const credentials = liveEndpointHeaders(endpoint);
+		const scoped = "fetch" in endpoint ? endpoint : undefined;
+		const proxyScope = scoped ? NEOPROXY_PROVIDER_ID : LIVE_ENDPOINT_PROXY;
+		const fetcher = scoped?.fetch ?? fetch;
+		const body = scoped
+			? JSON.stringify({
+					sdp: offer,
+					session: buildLiveSessionPayload(this.#options.instructions, this.#options.voice, this.#options.model),
+				})
+			: offer;
 		let url = new URL(liveEndpointCallsUrl(endpoint.baseUrl));
 		const origin = url.origin;
 		for (let redirects = 0; ; redirects++) {
 			this.#options.signal?.throwIfAborted();
-			const response = await fetch(url, {
+			this.#assertProviderAllowed();
+			const init: BunFetchRequestInit = {
 				method: "POST",
-				headers: { ...credentials, "Content-Type": "application/sdp" },
-				body: offer,
+				headers: { ...credentials, "Content-Type": scoped ? "application/json" : "application/sdp" },
+				body,
 				redirect: "manual",
-				proxy: getProxyForUrl(LIVE_ENDPOINT_PROXY, url),
+				proxy: getProxyForUrl(proxyScope, url),
 				signal: this.#options.signal,
-			});
+			};
+			const response = await fetcher(url, init);
 			const location = response.headers.get("location");
 			if (response.status >= 300 && response.status < 400) {
 				await response.body?.cancel();
+				// The scoped fetcher refuses redirects; never retry a scoped key at another URL.
+				if (scoped) throw new LiveSignalingError(response.status, "NeoProxy Live signaling was redirected");
 				const target = location ? new URL(location, url) : undefined;
 				const preservesPost = response.status === 307 || response.status === 308;
 				if (!target || !preservesPost || target.origin !== origin || redirects >= MAX_ENDPOINT_REDIRECTS) {
@@ -389,20 +464,21 @@ export class LiveTransport {
 				const detail = boundedErrorBody(answer, response.statusText);
 				throw new LiveSignalingError(
 					response.status,
-					`Live endpoint signaling failed (${response.status}): ${detail}`,
+					`${this.#label} signaling failed (${response.status}): ${detail}`,
 				);
 			}
 			if (!answer.trim()) {
-				throw new LiveSignalingError(response.status, "Live endpoint signaling returned an empty SDP answer");
+				throw new LiveSignalingError(response.status, `${this.#label} signaling returned an empty SDP answer`);
 			}
 			const callId = parseLiveEndpointCallId(location);
 			if (!callId) {
-				throw new LiveSignalingError(response.status, "Live endpoint signaling returned no call ID in Location");
+				throw new LiveSignalingError(response.status, `${this.#label} signaling returned no call ID in Location`);
 			}
 			const sideband = {
 				url: liveEndpointSidebandUrl(endpoint.baseUrl, callId),
 				headers: credentials,
-				proxyScope: LIVE_ENDPOINT_PROXY,
+				proxyScope,
+				tls: scoped?.tls,
 			};
 			return { answer, sideband };
 		}
@@ -412,6 +488,7 @@ export class LiveTransport {
 		let failure = new Error(`${this.#label} sideband connection failed`);
 		for (let attempt = 0; attempt < SIDEBAND_CONNECT_ATTEMPTS; attempt++) {
 			this.#options.signal?.throwIfAborted();
+			this.#assertProviderAllowed();
 			try {
 				await this.#openSideband(sideband);
 				return;
@@ -428,7 +505,9 @@ export class LiveTransport {
 		const options = {
 			headers: sideband.headers,
 			proxy: getProxyForUrl(sideband.proxyScope, new URL(sideband.url)),
+			...(sideband.tls ? { tls: sideband.tls } : {}),
 		} satisfies Bun.WebSocketOptions;
+		// Bun's native WebSocket requires a 101 upgrade, and does not follow redirects.
 		const socket: Bun.WebSocket = Reflect.construct(WebSocket, [sideband.url, options]);
 		socket.binaryType = "nodebuffer";
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
