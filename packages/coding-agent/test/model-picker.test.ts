@@ -4,9 +4,12 @@ import { beforeAll, describe, expect, type Mock, test, vi, beforeEach, afterEach
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ModelPickerComponent, type ModelPickerOptions } from "@oh-my-pi/pi-tui/overlays/model-picker";
+import {
+	ModelPickerComponent,
+	type ModelPickerOptions,
+	type ModelPickerRegistry,
+} from "@oh-my-pi/pi-tui/overlays/model-picker";
 import { resolveSegmentPalette } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import type { ResolvedRoleModel } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -41,10 +44,6 @@ function installTestTheme(): void {
 	setThemeInstance(testTheme);
 }
 
-interface RegistryOverrides {
-	refreshIfStale?: () => Promise<boolean>;
-}
-
 interface PickerHarness {
 	picker: ModelPickerComponent;
 	onPick: Mock<(model: Model, selector: string, meta: { overContext: boolean }) => void>;
@@ -56,18 +55,18 @@ function createPicker(options: {
 	models: Model[] | (() => Model[]);
 	scoped?: boolean;
 	settings?: Settings;
-	registry?: RegistryOverrides;
+	registry?: Partial<ModelPickerRegistry>;
 	picker?: ModelPickerOptions;
 }): PickerHarness {
 	installTestTheme();
 	const modelsFn = typeof options.models === "function" ? options.models : () => options.models as Model[];
 	const settings = options.settings ?? Settings.isolated({});
-	const registry = {
-		refreshIfStale: options.registry?.refreshIfStale ?? (async () => false),
+	const registry: ModelPickerRegistry = {
+		...options.registry,
 		getError: () => undefined,
 		getAvailable: modelsFn,
 		getAll: modelsFn,
-	} as unknown as ModelRegistry;
+	};
 	const ui = { requestRender: vi.fn(), terminal: { rows: 40 } } as unknown as TUI;
 	const onPick = vi.fn();
 	const onPickRole = vi.fn();
@@ -148,41 +147,45 @@ describe("ModelPicker", () => {
 		expect(onPick.mock.calls[0]?.[2]).toEqual({ overContext: false });
 	});
 
-	test("uses cached models for Enter while the catalog catch-up is still pending", () => {
+	test("uses cached models immediately without requesting a catalog refresh on open", () => {
 		const cached = makeModel("test", "cached-fast");
-		const refreshGate = Promise.withResolvers<boolean>();
-		const refreshIfStale = vi.fn(() => refreshGate.promise);
-		const { picker, onPick } = createPicker({
-			models: [cached],
-			registry: { refreshIfStale },
-		});
+		const refreshIfStale = vi.fn(async () => true);
+		const registry = { refreshIfStale, subscribeCatalogChanges: vi.fn(() => () => {}) };
+		const { picker, onPick } = createPicker({ models: [cached], registry });
 
 		picker.handleInput("\n");
 		expect(onPick).toHaveBeenCalledTimes(1);
 		expect(onPick.mock.calls[0]?.[0]).toBe(cached);
-		expect(refreshIfStale).toHaveBeenCalledTimes(1);
-		refreshGate.resolve(true);
+		expect(refreshIfStale).not.toHaveBeenCalled();
+		picker.dispose();
 	});
 
-	test("keeps the highlighted model when a background refresh reorders the list", async () => {
+	test("keeps the highlighted model when a background refresh reorders the list", () => {
 		const modelBb = makeModel("test", "bb-model");
 		const modelCc = makeModel("test", "cc-model");
 		const modelAa = makeModel("test", "aa-model");
 		let available = [modelBb, modelCc];
-		const refreshGate = Promise.withResolvers<boolean>();
+		let notify: (() => void) | undefined;
 		const { picker, onPick } = createPicker({
 			models: () => available,
-			registry: { refreshIfStale: () => refreshGate.promise },
+			registry: {
+				subscribeCatalogChanges: listener => {
+					notify = listener;
+					return () => {
+						notify = undefined;
+					};
+				},
+			},
 		});
 
 		picker.handleInput("j"); // highlight cc-model using Vim navigation
 		available = [modelAa, modelBb, modelCc];
-		refreshGate.resolve(true);
-		// Not a tuned delay: one zero-length tick drains the component's
-		// refreshIfStale().then(...) continuation chain deterministically.
-		await Bun.sleep(0);
+		notify?.();
+		expect(normalize(picker.render(220))).toContain("aa-model");
 		picker.handleInput("\n");
 		expect(onPick.mock.calls[0]?.[0]?.id).toBe("cc-model");
+		picker.dispose();
+		expect(notify).toBeUndefined();
 	});
 
 	test("highlights and preselects the session's current model", () => {

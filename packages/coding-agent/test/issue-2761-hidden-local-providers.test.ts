@@ -1,24 +1,19 @@
 import { createModelBrowserSource } from "../src/modes/model-browser-source";
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	type ModelHubCallbacks,
-	ModelHubComponent,
-	resetProviderAutoRefreshGuard,
-} from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { type ModelHubCallbacks, ModelHubComponent } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 // Issue #2761: implicit local providers (ollama, llama.cpp, lm-studio) used to
 // get a sidebar tab even when nothing was listening on their endpoint. The hub
 // must hide optional discoverable providers whose discovery is "idle" or
-// "unavailable", keep explicitly configured or authed providers visible, and
-// re-probe the hidden ones once per open so a freshly started server
-// resurfaces its tab.
+// "unavailable" and keep explicitly configured or authed providers visible.
+// Opening the hub does not probe hidden providers.
 
 function normalize(lines: readonly string[]): string {
 	return stripVTControlCharacters(lines.join("\n")).replace(/\s+/g, " ").trim();
@@ -85,7 +80,7 @@ function createHub(registry: ModelRegistry): ModelHubComponent {
 	return hub;
 }
 
-/** Flush the constructor's offline-refresh promise chain and any re-probes. */
+/** Let any queued refresh run and publish its updated snapshot. */
 async function settle(): Promise<void> {
 	for (let i = 0; i < 5; i++) {
 		await Bun.sleep(0);
@@ -100,7 +95,6 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 	});
 
 	afterEach(() => {
-		resetProviderAutoRefreshGuard();
 		for (const hub of openHubs.splice(0)) {
 			hub.dispose();
 		}
@@ -185,7 +179,7 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 		expect(normalize(hub.render(220))).toContain("lm-studio");
 	});
 
-	test("the online refresh resurfaces a hidden local when its server appears", async () => {
+	test("explicit Refresh all resurfaces a hidden local when its server appears", async () => {
 		let serving = false;
 		const probed: string[] = [];
 		const hub = createHub(
@@ -203,13 +197,23 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 			}),
 		);
 		await settle();
+		expect(probed).toEqual([]);
+		vi.useFakeTimers();
+		try {
+			hub.handleInput("\x12");
+			vi.advanceTimersByTime(1);
+			await Promise.resolve();
+			await Promise.resolve();
+		} finally {
+			vi.useRealTimers();
+		}
 		expect(probed).toEqual(["online"]);
 		const rendered = normalize(hub.render(220));
 		expect(rendered).toContain("lm-studio");
 		expect(rendered).toContain("local-model");
 	});
 
-	test("does not refresh a hidden local that stays down more than once when the hub opens", async () => {
+	test("does not refresh a hidden local when the hub opens", async () => {
 		const probed: string[] = [];
 		const hub = createHub(
 			makeRegistry({
@@ -222,7 +226,7 @@ describe("issue #2761: unconfigured local providers in the Model Hub sidebar", (
 			}),
 		);
 		await settle();
-		expect(probed).toEqual(["online"]);
+		expect(probed).toEqual([]);
 		expect(normalize(hub.render(220))).not.toContain("lm-studio");
 	});
 });

@@ -57,7 +57,7 @@ import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-refere
 import { withThinkingCapability } from "@oh-my-pi/pi-catalog/thinking-capability";
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
-import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isBunTestRuntime, logger, Serial, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
 import { redactUrlForLog } from "../mcp/json-rpc";
@@ -162,7 +162,8 @@ import {
 import { registerNeoProxyLogin } from "../neopi/neoproxy-connect";
 import { Settings, settings } from "./settings";
 
-import { cfgDisabledProviders } from "./model-settings";
+import { startCatalogRefresh } from "./catalog-refresh";
+import { cfgCatalogRefreshCycleMinutes, cfgDisabledProviders } from "./model-settings";
 import {
 	applyModelFacts,
 	DEFAULT_MODEL_FACT_CONFIG,
@@ -462,10 +463,8 @@ function selectProviderModels<T extends { provider: string }>(models: T[], provi
 
 /**
  * Extra knobs for {@link ModelRegistry.refresh} / {@link ModelRegistry.refreshProvider}.
- * Online discovery (`strategy: "online"`) is independent of credential minting:
- * opening `/models` and hovering a provider fetch catalogs without re-running
- * `!command` helpers. Pass `refreshCommandCredentials` only for explicit user
- * refresh (`npi models refresh`, TUI F5).
+ * Online discovery (`strategy: "online"`) is independent of credential minting.
+ * Pass `refreshCommandCredentials` only for an explicit user refresh.
  */
 export interface ModelRegistryRefreshOptions {
 	refreshCommandCredentials?: boolean;
@@ -563,6 +562,11 @@ export class ModelRegistry {
 	#cacheDbPath?: string;
 	#suppressedSelectors: Map<string, number> = new Map();
 	#backgroundRefresh?: Promise<void>;
+	#catalogCycleStop?: () => void;
+	#catalogRefreshQueue = new Serial();
+	#catalogProviderRefreshes = new Map<string, Promise<void>>();
+	#catalogListeners = new Set<() => void>();
+	#catalogNotificationQueued = false;
 	#discoveryRetry?: Promise<void>;
 	#lastDiscoveryRetryAt = Number.NEGATIVE_INFINITY;
 	/** Whether the first background discovery has settled; latches once so a late-armed waiter still resolves. */
@@ -881,6 +885,27 @@ export class ModelRegistry {
 		return this.#cacheDbPath;
 	}
 
+	/** Observe landed discovery and registry changes without triggering a refresh. */
+	subscribeCatalogChanges(listener: () => void): () => void {
+		this.#catalogListeners.add(listener);
+		return () => this.#catalogListeners.delete(listener);
+	}
+
+	#scheduleCatalogNotification(): void {
+		if (this.#catalogNotificationQueued || this.#catalogListeners.size === 0) return;
+		this.#catalogNotificationQueued = true;
+		setImmediate(() => {
+			this.#catalogNotificationQueued = false;
+			for (const listener of this.#catalogListeners) {
+				try {
+					listener();
+				} catch (error) {
+					logger.warn("model catalog listener failed", { error: String(error) });
+				}
+			}
+		}).unref();
+	}
+
 	/**
 	 * Follow this registry's runtime state from a mirror: `snapshot` reproduces
 	 * it now (every live runtime registration plus the discovery layer), and
@@ -923,6 +948,7 @@ export class ModelRegistry {
 		}
 		this.#mirrorSeq = Math.max(this.#mirrorSeq, batch.seq);
 		if (batch.discovery) this.#installDiscoveryLayer(batch.discovery);
+		if (batch.discovery || batch.changes.length > 0) this.#scheduleCatalogNotification();
 	}
 
 	#applyMirrorChange(change: ModelRegistryMirrorChange): void {
@@ -971,6 +997,7 @@ export class ModelRegistry {
 		const recorded: ModelRegistryMirrorChange = { ...change, seq: ++this.#mirrorSeq };
 		// After the registration ran: a source handoff inside it already dropped the provider's older entries.
 		if (recorded.kind === "register") this.#runtimeRegistrations.push(recorded);
+		this.#scheduleCatalogNotification();
 		if (this.#mirrorListeners.size === 0) return;
 		this.#pendingMirrorChanges.push(recorded);
 		this.#scheduleMirrorFlush();
@@ -1071,12 +1098,18 @@ export class ModelRegistry {
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refresh(strategy, options);
-		// Credential minting is opt-in. `strategy: "online"` only means "hit the
-		// network for catalogs" — the unscoped model hub opens with that strategy
-		// as a background reconcile, and must not spawn `!command` helpers.
+		// A live catalog fetch need not re-mint configured command credentials.
+		// On explicit all-provider refreshes, land each provider separately so
+		// the model hub does not take a single catalog-wide discovery turn.
 		this.#reloadStaticModelsForRefresh(options);
 		this.#suppressedSelectors.clear();
-		await this.#refreshRuntimeDiscoveries(strategy);
+		if (strategy === "online" && options?.refreshCommandCredentials) {
+			for (const provider of this.#catalogRefreshProviders()) {
+				await this.#enqueueCatalogProviderRefresh(provider);
+			}
+		} else {
+			await this.#refreshRuntimeDiscoveries(strategy);
+		}
 		await this.#refreshModelFacts(strategy);
 	}
 
@@ -1134,6 +1167,103 @@ export class ModelRegistry {
 		} finally {
 			this.#policyReapply = undefined;
 		}
+	}
+
+	/**
+	 * Keep the interactive catalog fresh without entering a menu. The first
+	 * provider refresh is tracked as startup discovery; later turns stand
+	 * alone and must never keep a startup waiter blocked for the whole cycle.
+	 */
+	startCatalogRefreshCycle(): () => void {
+		if (this.#catalogCycleStop) return this.#catalogCycleStop;
+		const { promise: initial, resolve: resolveInitial } = Promise.withResolvers<void>();
+		if (!this.#backgroundRefresh) this.#backgroundRefresh = initial;
+		const settle = () => {
+			if (this.#backgroundRefresh === initial) this.#backgroundRefresh = undefined;
+			this.#markInitialRefreshSettled();
+			resolveInitial();
+		};
+		const stop = startCatalogRefresh({
+			providers: () => {
+				const providers = this.#catalogRefreshProviders();
+				if (providers.length === 0) settle();
+				return providers;
+			},
+			usage: () => this.#settings?.getStorage()?.getModelUsageOrder() ?? [],
+			cycleMs: () => cfgCatalogRefreshCycleMinutes.get(this.#settings ?? settings) * 60_000,
+			modelCount: provider =>
+				this.#providerDiscoveryStates.get(provider)?.models.length ??
+				(getBundledModels(provider as Parameters<typeof getBundledModels>[0])?.length || undefined),
+			refresh: async provider => {
+				try {
+					await this.refreshCatalogProvider(provider);
+				} finally {
+					settle();
+				}
+			},
+		});
+		const dispose = () => {
+			if (this.#catalogCycleStop !== dispose) return;
+			stop();
+			settle();
+			this.#catalogCycleStop = undefined;
+		};
+		this.#catalogCycleStop = dispose;
+		return dispose;
+	}
+
+	/** Eligible providers for discovery, without opening the cache or assembling the catalog. */
+	#catalogRefreshProviders(): string[] {
+		const disabled = getDisabledProviderIdsFromSettings(this.#settings);
+		const ids = new Set(this.#discoverableProviders.map(config => config.provider));
+		for (const id of this.#runtimeModelManagers.keys()) ids.add(id);
+		for (const descriptor of PROVIDER_DESCRIPTORS) {
+			const id = descriptor.providerId;
+			if (this.hasConcreteAuth(id) || this.#canDiscoverWithoutKey(descriptor)) ids.add(id);
+		}
+		for (const id of SPECIAL_MODEL_MANAGER_PROVIDER_IDS) if (this.hasConcreteAuth(id)) ids.add(id);
+		for (const id of MODELS_DEV_CATALOG_PROVIDER_IDS) {
+			if (BUILT_IN_MODEL_MANAGER_PROVIDER_IDS[id] !== true) ids.add(id);
+		}
+		return [...ids].filter(id => !disabled.has(id));
+	}
+
+	#canDiscoverWithoutKey(descriptor: (typeof PROVIDER_DESCRIPTORS)[number]): boolean {
+		const id = descriptor.providerId;
+		return (
+			descriptor.allowUnauthenticated === true ||
+			(!descriptor.dynamicModelsAuthoritative && MODELS_DEV_CATALOG_PROVIDER_ID_LOOKUP[id] === true) ||
+			(id === "vllm" &&
+				(this.#runtimeProviderOverrides.has(id) ||
+					this.#providerOverrides.has(id) ||
+					this.#keylessProviders.has(id)))
+		);
+	}
+
+	/**
+	 * Refresh just one provider against the already loaded configuration. Used
+	 * by the timed cycle and entry into a stale provider; neither action is a
+	 * request to reload models.yml, unrelated providers, or command credentials.
+	 */
+	refreshCatalogProvider(providerId: string): Promise<void> {
+		if (this.#owner) return this.#owner.refreshCatalogProvider(providerId);
+		const existing = this.#catalogProviderRefreshes.get(providerId);
+		if (existing) return existing;
+		const pending = this.#enqueueCatalogProviderRefresh(providerId).finally(() => {
+			this.#catalogProviderRefreshes.delete(providerId);
+		});
+		this.#catalogProviderRefreshes.set(providerId, pending);
+		return pending;
+	}
+
+	#enqueueCatalogProviderRefresh(providerId: string): Promise<void> {
+		return this.#catalogRefreshQueue.run(async () => {
+			// Bound discovery work to task turns, not input's microtask queue.
+			// Bulk merges yield further within a provider.
+			await yieldMacrotask();
+			if (getDisabledProviderIdsFromSettings(this.#settings).has(providerId)) return;
+			await this.#refreshRuntimeDiscoveries("online", new Set([providerId]));
+		});
 	}
 
 	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
@@ -1258,8 +1388,7 @@ export class ModelRegistry {
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (this.#owner) return this.#owner.refreshProvider(providerId, strategy, options);
-		// Hover / auto-refresh uses `"online"` for a live catalog. Only F5 (and
-		// other explicit callers) pass refreshCommandCredentials to re-mint
+		// Only explicit callers pass refreshCommandCredentials to re-mint
 		// `!command` keys and headers for this provider.
 		this.#reloadStaticModelsForRefresh(options, providerId);
 		for (const selector of this.#suppressedSelectors.keys()) {
@@ -2047,6 +2176,7 @@ export class ModelRegistry {
 		this.#unprojectedModels = this.#projectBaseModels(this.#baseModels);
 		this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 		this.#scheduleMirrorFlush();
+		this.#scheduleCatalogNotification();
 	}
 
 	#loadModelFactSources(
@@ -2765,6 +2895,7 @@ export class ModelRegistry {
 		} finally {
 			// Mirrors follow every discovery-layer change the pass made, including failure states.
 			this.#scheduleMirrorFlush();
+			this.#scheduleCatalogNotification();
 		}
 	}
 
@@ -3205,7 +3336,7 @@ export class ModelRegistry {
 			status,
 			optional: providerConfig.optional ?? false,
 			stale: result.stale || status === "cached" || ((cacheOlderThanConfig || bypassFreshCache) && status !== "ok"),
-			fetchedAt: discoveryError ? cached?.updatedAt : Date.now(),
+			fetchedAt: result.updatedAt ?? cached?.updatedAt,
 			models: result.models.map(model => model.id),
 			error: discoveryError,
 		});
@@ -3552,19 +3683,7 @@ export class ModelRegistry {
 			const descriptor = standardProviderDescriptors[i];
 			if (this.#runtimeModelManagers.has(descriptor.providerId)) continue;
 			const apiKey = standardProviderKeys[i];
-			const hasExplicitVllmConfig =
-				descriptor.providerId === "vllm" &&
-				(this.#runtimeProviderOverrides.has(descriptor.providerId) ||
-					this.#providerOverrides.has(descriptor.providerId) ||
-					this.#keylessProviders.has(descriptor.providerId));
-			const supportsSharedCatalog = MODELS_DEV_CATALOG_PROVIDER_ID_LOOKUP[descriptor.providerId] === true;
-			const canUseSharedCatalogWithoutAuth = supportsSharedCatalog && !descriptor.dynamicModelsAuthoritative;
-			if (
-				isAuthenticated(apiKey) ||
-				descriptor.allowUnauthenticated ||
-				hasExplicitVllmConfig ||
-				canUseSharedCatalogWithoutAuth
-			) {
+			if (isAuthenticated(apiKey) || this.#canDiscoverWithoutKey(descriptor)) {
 				// Residency belongs to the token selected for discovery, not another
 				// stored account that happens to appear first in the pool.
 				const identity = getOAuthCredentialsForProvider(this.authStorage, descriptor.providerId).find(
@@ -5168,6 +5287,8 @@ export interface ModelRegistryOwner {
 		strategy: ModelRefreshStrategy,
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void>;
+	/** {@link ModelRegistry.refreshCatalogProvider} on the owner. */
+	refreshCatalogProvider(providerId: string): Promise<void>;
 	/** {@link ModelRegistry.refreshDiscoverableProviders} on the owner. */
 	refreshDiscoverableProviders(providerIds: string[], strategy: ModelRefreshStrategy): Promise<void>;
 	/** {@link ModelRegistry.refreshRuntimeProviders} on the owner. */

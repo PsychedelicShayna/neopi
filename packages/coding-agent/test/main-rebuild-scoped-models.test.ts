@@ -9,7 +9,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildSessionOptions,
 	rebuildScopedModels,
-	rebuildScopedModelsAfterDiscovery,
 	resolveScopedModels,
 	type ScopedModelSink,
 	toSessionScopedModels,
@@ -55,9 +54,6 @@ class FakeRegistry {
 		this.refreshCalls += 1;
 		this.onRefresh?.();
 	}
-	async awaitBackgroundRefresh(): Promise<void> {
-		this.onRefresh?.();
-	}
 }
 
 class FakeSession implements ScopedModelSink {
@@ -81,7 +77,7 @@ async function startupScope(
 	return toSessionScopedModels(await resolveModelScope(patterns, registry, undefined, settings), settings);
 }
 
-describe("rebuildScopedModelsAfterDiscovery", () => {
+describe("rebuildScopedModels after discovery", () => {
 	it("adds an enabledModels model that only materializes after background discovery", async () => {
 		const settings = Settings.isolated({ enabledModels: ["prov/a", "prov/b"] });
 		const registry = new FakeRegistry([model("a")]);
@@ -91,7 +87,7 @@ describe("rebuildScopedModelsAfterDiscovery", () => {
 
 		// Background discovery completes and populates the registry.
 		registry.available = [model("a"), model("b")];
-		await rebuildScopedModelsAfterDiscovery(session, parseArgs([]), registry, settings);
+		await rebuildScopedModels(session, parseArgs([]), registry, settings);
 
 		expect(session.setCalls).toBe(1);
 		expect(session.scopedModels.map(s => s.model.id)).toEqual(["a", "b"]);
@@ -105,7 +101,7 @@ describe("rebuildScopedModelsAfterDiscovery", () => {
 
 		// A later discovery pass adds an unrelated, out-of-scope model.
 		registry.available = [model("a"), model("b"), model("c")];
-		await rebuildScopedModelsAfterDiscovery(session, parseArgs([]), registry, settings);
+		await rebuildScopedModels(session, parseArgs([]), registry, settings);
 
 		expect(session.setCalls).toBe(0);
 		expect(session.scopedModels).toBe(before);
@@ -119,7 +115,7 @@ describe("rebuildScopedModelsAfterDiscovery", () => {
 		expect(session.scopedModels).toHaveLength(0);
 
 		registry.available = [model("a"), model("b")];
-		await rebuildScopedModelsAfterDiscovery(session, parseArgs([]), registry, settings);
+		await rebuildScopedModels(session, parseArgs([]), registry, settings);
 
 		expect(session.setCalls).toBe(1);
 		expect(session.scopedModels.map(s => s.model.id)).toEqual(["b"]);
@@ -132,7 +128,7 @@ describe("rebuildScopedModelsAfterDiscovery", () => {
 		expect(session.scopedModels.map(s => s.model.id)).toEqual(["a"]);
 
 		registry.available = [model("a"), model("b")];
-		await rebuildScopedModelsAfterDiscovery(session, parseArgs(["--models", "prov/a,prov/b"]), registry, settings);
+		await rebuildScopedModels(session, parseArgs(["--models", "prov/a,prov/b"]), registry, settings);
 
 		expect(session.scopedModels.map(s => s.model.id)).toEqual(["a", "b"]);
 	});
@@ -144,7 +140,7 @@ describe("rebuildScopedModelsAfterDiscovery", () => {
 		session.isDisposed = true;
 
 		registry.available = [model("a"), model("b")];
-		await rebuildScopedModelsAfterDiscovery(session, parseArgs([]), registry, settings);
+		await rebuildScopedModels(session, parseArgs([]), registry, settings);
 
 		expect(session.setCalls).toBe(0);
 		expect(session.scopedModels.map(s => s.model.id)).toEqual(["a"]);

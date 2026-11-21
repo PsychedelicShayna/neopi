@@ -1479,6 +1479,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#autolearnCaptureTask: Promise<void> | undefined;
 	#isDisposed = false;
 	#modelDiscoveryAbortController = new AbortController();
+	#startupModelForCatalogRebind?: Model;
 	/** Process-wide by default (double-spend safety across sessions); injectable for tests. */
 	#resetCoordinator: CodexAutoRedeemCoordinator;
 	/** Each turn stream may adopt a peer's confirmed reset once, not retry on it indefinitely. */
@@ -3680,8 +3681,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 		// Config-declared resolution done against the catalog as it stands at
 		// construction can be premature: background discovery is started
-		// fire-and-forget (before the session in the SDK path, right after it in
-		// the CLI path), so discovery-backed providers (e.g. GitHub Copilot, or a
+		// fire-and-forget after session construction, so discovery-backed
+		// providers (e.g. GitHub Copilot, or a
 		// models.yml LiteLLM provider with a cold cache) may not be populated yet.
 		// Reactivate a `no_model` advisor (#9010), retract stale
 		// retry.fallbackChains warnings (#10048), rebind the active model to
@@ -3690,7 +3691,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// once discovery settles.
 		void this.#retryInactiveAdvisorAfterModelDiscovery();
 		void this.#revalidateFallbackChainsAfterModelDiscovery();
-		if (config.rebindModelAfterDiscovery) void this.#rebindActiveModelAfterModelDiscovery();
+		if (config.rebindModelAfterDiscovery) {
+			this.#startupModelForCatalogRebind = this.model;
+			void this.#rebindActiveModelAfterModelDiscovery();
+		}
 		void this.#surfaceModelRegistryWarningsAfterDiscovery();
 		this.#watchWorkspaceAndPowerSettings();
 		this.#watchSessionSettings();
@@ -3702,6 +3706,26 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Registers teardown to run when this session is disposed (e.g. handle listeners bound to it). */
 	addDisposer(dispose: () => void): void {
 		this.#disposers.push(dispose);
+	}
+
+	/** Own the timed catalog refresh and reconcile late-arriving provider data. */
+	startCatalogRefreshCycle(): void {
+		this.addDisposer(
+			this.#modelRegistry.subscribeCatalogChanges(() => {
+				if (this.#isDisposed) return;
+				void this.refreshScopedModels();
+				void this.#retryInactiveAdvisorAfterModelDiscovery();
+				void this.#surfaceModelRegistryWarningsAfterDiscovery();
+				if (
+					!this.#fallbackChainValidationDeferred &&
+					this.#recovery.revalidateRetryFallbackChainsAfterDiscovery()
+				) {
+					this.#emit({ type: "config_warnings_changed" });
+				}
+				if (this.#startupModelForCatalogRebind) void this.#rebindActiveModelAfterModelDiscovery();
+			}),
+		);
+		this.addDisposer(this.#modelRegistry.startCatalogRefreshCycle());
 	}
 
 	/**
@@ -18630,7 +18654,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * subscribers. Issue #10488.
 	 */
 	async #rebindActiveModelAfterModelDiscovery(): Promise<void> {
-		const boundAtStartup = this.model;
+		const boundAtStartup = this.#startupModelForCatalogRebind;
 		if (this.#isDisposed || !boundAtStartup) return;
 		if (typeof this.#modelRegistry.awaitInitialBackgroundRefresh !== "function") return;
 		await this.#modelRegistry.awaitInitialBackgroundRefresh(this.#modelDiscoveryAbortController.signal);

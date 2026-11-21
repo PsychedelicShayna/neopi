@@ -21,6 +21,7 @@ import { cfgModelVariants, MODEL_VARIANT_FIELDS, type ModelVariantDefinition } f
 import { cfgCompactionThresholdTokens } from "../session/context-settings";
 
 import {
+	cfgCatalogProviderStalenessMinutes,
 	cfgCycleOrder,
 	cfgDisabledProviders,
 	cfgModelFolders,
@@ -120,6 +121,9 @@ export function createModelBrowserSource(
 		},
 		get disabledProviders() {
 			return cfgDisabledProviders.get(settings);
+		},
+		get providerRefreshStalenessMs() {
+			return cfgCatalogProviderStalenessMinutes.get(settings) * 60_000;
 		},
 		get fallbackChains() {
 			return cfgRetryFallbackChains.get(settings);

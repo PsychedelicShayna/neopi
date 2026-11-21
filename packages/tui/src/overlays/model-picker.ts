@@ -43,10 +43,9 @@ export interface ResolvedRoleModel {
 	explicitThinkingLevel: boolean;
 }
 
-/** Catalog refresh capability used by the session picker. */
+/** Live catalog snapshots used by the session picker. */
 export interface ModelPickerRegistry extends ModelBrowserRegistry {
-	/** Bring the catalog up to date without rebuilding a current one; `true` when the picker must re-read it. */
-	refreshIfStale(): Promise<boolean>;
+	subscribeCatalogChanges?(listener: () => void): () => void;
 }
 
 export interface ModelPickerCallbacks {
@@ -203,6 +202,7 @@ export class ModelPickerComponent implements Component {
 	#settings: ModelBrowserSource;
 	#registry: ModelPickerRegistry;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
+	#unsubscribeCatalogChanges?: () => void;
 	#browser: ModelBrowser;
 	#configError: string | undefined;
 	#currentSelector: string | undefined;
@@ -301,28 +301,25 @@ export class ModelPickerComponent implements Component {
 		};
 		this.#browser.onQueryChange = query => this.#syncItemsForQuery(query);
 
-		// Hydrate synchronously from the current registry snapshot so the first
-		// Enter after opening acts on cached models instead of being dropped
-		// while the offline refresh promise is still pending.
+		// Hydrate from the cached snapshot so Enter can act immediately.
 		this.#syncFromRegistryState();
 		if (options.currentSelector) {
 			this.#browser.selectSelector(options.currentSelector);
 		}
 
-		// Re-read only if the catalog moves (startup discovery landing, a
-		// models.yml edit): rebuilding a current catalog on every open blocks
-		// the first paint for seconds. A --models scope is registry-independent.
+		// Observe background discovery without performing any refresh on open.
+		// A --models scope is registry-independent.
 		if (this.#scopedModels.length === 0) {
-			this.#registry
-				.refreshIfStale()
-				.then(changed => {
-					if (changed) this.#syncFromRegistryState();
-				})
-				.catch(error => {
-					this.#configError = error instanceof Error ? error.message : String(error);
-				})
-				.finally(() => this.#tui.requestRender());
+			this.#unsubscribeCatalogChanges = this.#registry.subscribeCatalogChanges?.(() => {
+				this.#syncFromRegistryState();
+				this.#tui.requestRender();
+			});
 		}
+	}
+
+	dispose(): void {
+		this.#unsubscribeCatalogChanges?.();
+		this.#unsubscribeCatalogChanges = undefined;
 	}
 
 	invalidate(): void {}

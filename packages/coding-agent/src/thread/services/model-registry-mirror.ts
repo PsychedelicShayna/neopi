@@ -285,6 +285,10 @@ export class RemoteModelRegistryOwner implements ModelRegistryOwner {
 		return this.#remote.call("refreshProvider", providerId, strategy, options);
 	}
 
+	refreshCatalogProvider(providerId: string): Promise<void> {
+		return this.#remote.call("refreshCatalogProvider", providerId);
+	}
+
 	refreshDiscoverableProviders(providerIds: string[], strategy: ModelRefreshStrategy): Promise<void> {
 		return this.#remote.call("refreshDiscoverableProviders", providerIds, strategy);
 	}

@@ -6,7 +6,8 @@
 
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - Settings rows show inherited values with a source-scope icon (Nerd Font, Unicode and ASCII forms), mark rows changed by key presence instead of comparison with the default, and unset the hovered row with Backspace ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
-- Model hubs show cached catalogs without refreshing on open or highlight; entering a provider starts its once-per-process discovery, F5 refreshes that provider, and Ctrl+F5 refreshes all catalogs in place ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- `/model` and `/roles` open from cache, catch up as background model lists land, and refresh on provider entry only when that provider is stale. Use Alt+R to refresh a provider or Ctrl+R to refresh all in the fullscreen hub ([#832](https://github.com/PsychedelicShayna/neopi/issues/832)).
+- Opening a model hub or moving the sidebar highlight no longer starts a catalog refresh ([#731](https://github.com/PsychedelicShayna/neopi/pull/731), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - NeoPi provenance uses the same crescent in purple for nightly-only additions and the original green for published stable additions; gold, silver and bronze stars identify upstream additions only, with every older sync cohort retained as bronze.
 - Auxiliary UI provenance now ages against the integrated v19.0.0 cohort, in step with Settings and slash commands ([#430](https://github.com/PsychedelicShayna/neopi/issues/430)).
 - Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.

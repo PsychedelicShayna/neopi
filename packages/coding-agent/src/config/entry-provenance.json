@@ -225,6 +225,8 @@
 				"chronicler.notices",
 				"customPersonalities",
 				"language",
+				"models.catalogProviderStalenessMinutes",
+				"models.catalogRefreshCycleMinutes",
 				"models.defaultScope",
 				"models.sessionPicker",
 				"notifyAgent.when",

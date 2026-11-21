@@ -89,7 +89,7 @@ screen; `Ctrl+C` cancels the launch. See [launch an agent yourself](./task-agent
 
 Inside either session-model picker, press the configured `app.model.selectTemporary` shortcut again (normally `Alt+P`) to switch between the session model and a temporary Task-subagent override. The Task target has a red frame and a session-only cue; it does not change saved role assignments.
 
-Model hubs show cached catalogs immediately; moving the sidebar highlight does not start discovery. Entering a provider's model list refreshes it at most once per process. When provider discovery is available, `F5` forces a refresh of the current provider (including command-backed credentials), and `Ctrl+F5` refreshes all catalogs. Cached rows remain available during discovery, and the refreshed catalog replaces them in the same open menu.
+Model hubs open from cache. Moving the sidebar highlight does not start discovery; entering a provider refreshes it only when its catalog is stale. In the fullscreen hub, `Alt+R` forces a refresh of the current provider (including command-backed credentials), and `Ctrl+R` refreshes all catalogs where available. Cached rows remain usable during discovery. See [Models](./models.md#assigning-roles) for the background cadence and staleness settings.
 
 ### Agent Menu
 
