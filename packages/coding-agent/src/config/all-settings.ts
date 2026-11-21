@@ -6,6 +6,7 @@
 import { all, type AnySetting, Setting } from "./registry";
 import * as modesSettings from "../modes/settings";
 import * as sessionSettings from "../session/settings";
+import * as wakeSettings from "../session/wake-settings";
 import * as chatSettings from "../chat/settings";
 import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
@@ -70,6 +71,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	routingPolicySettings,
 	modesSettings,
 	sessionSettings,
+	wakeSettings,
 	chatSettings,
 	telemetrySettings,
 	advisorSettings,

@@ -8,13 +8,26 @@
  */
 export function parseCommandArgs(argsString: string, options?: { strict?: boolean }): string[] {
 	const args: string[] = [];
+	scanCommandArgs(argsString, args, options?.strict === true, false);
+	return args;
+}
+
+/** Keep the argument under completion raw, including an unfinished quoted value. */
+export function splitCommandCompletionArgs(text: string): { previous: string[]; start: number } {
+	const previous: string[] = [];
+	const start = scanCommandArgs(text, previous, false, true);
+	return { previous, start };
+}
+
+function scanCommandArgs(argsString: string, args: string[], strict: boolean, completing: boolean): number {
 	let current = "";
 	let inQuote: string | null = null;
 	let started = false;
+	let currentStart = 0;
 
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i];
-		if (options?.strict && char === "\\" && inQuote !== "'") {
+		if (strict && char === "\\" && inQuote !== "'") {
 			const next = argsString[i + 1];
 			if (next === undefined) throw new Error("Incomplete command escape.");
 			if (inQuote === null || next === '"' || next === "\\" || next === "$" || next === "`") {
@@ -30,32 +43,34 @@ export function parseCommandArgs(argsString: string, options?: { strict?: boolea
 			} else {
 				current += char;
 			}
-		} else if ((char === '"' || char === "'") && options?.strict) {
+		} else if ((char === '"' || char === "'") && strict) {
 			inQuote = char;
 			started = true;
 		} else if ((char === '"' || char === "'") && (!started || current.endsWith("="))) {
 			const close = findClosingQuote(argsString, i);
+			if (close === -1 && completing) return currentStart;
 			current += close === -1 ? char : argsString.slice(i + 1, close);
 			started = true;
 			if (close !== -1) i = close;
 		} else if (char === " " || char === "\t") {
-			if (current || (options?.strict && started)) {
+			if (current || (strict && started)) {
 				args.push(current);
 			}
 			current = "";
 			started = false;
+			currentStart = i + 1;
 		} else {
 			current += char;
 			started = true;
 		}
 	}
 
-	if (options?.strict && inQuote) throw new Error("Unterminated command quote.");
-	if (current || (options?.strict && started)) {
+	if (strict && inQuote) throw new Error("Unterminated command quote.");
+	if (!completing && (current || (strict && started))) {
 		args.push(current);
 	}
 
-	return args;
+	return currentStart;
 }
 
 /** Index of the quote matching `argsString[open]` that ends an argument, or -1 when none does. */

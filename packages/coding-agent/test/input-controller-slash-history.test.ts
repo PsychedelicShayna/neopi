@@ -6,11 +6,15 @@ import type { Context, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { cfgBareExitOnEmptySession, cfgBareSlashCommands } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { isQueuedMessageList, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { ChainLock } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import * as chainConfig from "../src/chains/config";
 import { cfgChainingActive } from "../src/chains/settings";
+import { ChainProgressHud } from "../src/modes/progress-hud";
 
 // Drives the real editor submit handler through the builtin slash dispatch
 // path. Before #3148 only a handful of commands recorded their text (each
@@ -134,21 +138,18 @@ function setupChainSubmit(ctx: InteractiveModeContext) {
 	let chainKey: (() => void) | undefined;
 	let submission: Promise<void> | undefined;
 	let lock: ChainLock | undefined;
+	const bindings = KeybindingsManager.inMemory({
+		"app.message.chain": "alt+c",
+		"app.chain.skipStep": "alt+j",
+		"app.interrupt": "ctrl+x",
+	});
+	const hud = new ChainProgressHud(
+		() => ctx.ui.requestRender(),
+		() => bindings,
+	);
 	Object.assign(ctx, {
-		keybindings: {
-			getKeys(action: string) {
-				switch (action) {
-					case "app.message.chain":
-						return ["alt+c"];
-					case "app.chain.skipStep":
-						return ["ctrl+alt+s"];
-					case "app.interrupt":
-						return ["ctrl+c"];
-					default:
-						return [];
-				}
-			},
-		},
+		keybindings: bindings,
+		setChainProgress: hud.update.bind(hud),
 		dictationSpaceHold: () => vi.fn(),
 	});
 	Object.assign(ctx.sessionManager, { getCwd: () => process.cwd() });
@@ -172,6 +173,7 @@ function setupChainSubmit(ctx: InteractiveModeContext) {
 	});
 	controllerFor(ctx).setupKeyHandlers();
 	return {
+		hud,
 		submit(text: string) {
 			editor.setText(text);
 			chainKey!();
@@ -394,6 +396,7 @@ describe("input controller — post-processing chain controls (#629)", () => {
 		let submission: Promise<void> | undefined;
 		try {
 			resetSettingsForTest();
+			await initTheme();
 			await Settings.init({ inMemory: true });
 			cfgChainingActive.set(Settings.instance, "rewrite");
 			registerMockApi(source);
@@ -403,6 +406,9 @@ describe("input controller — post-processing chain controls (#629)", () => {
 				modelRegistry: { getAvailable: () => stages.map(stage => stage.model), resolver: () => "test-key" },
 				agent: { state: { messages: [], tools: [] } },
 			});
+			let now = 0;
+			const clock = action === "skip first" ? vi.spyOn(performance, "now").mockImplementation(() => now) : undefined;
+			if (clock) vi.useFakeTimers();
 			const chain = setupChainSubmit(ctx);
 			const draft = "Original draft";
 			const pending = chain.submit(draft);
@@ -419,22 +425,50 @@ describe("input controller — post-processing chain controls (#629)", () => {
 				expect(chain.lock).toBeDefined();
 				return signal;
 			};
+			const cx: DescribeContext = {
+				cols: 120,
+				dark: true,
+				reduceMotion: true,
+				supports: () => true,
+				feature: () => true,
+			};
+			const ansi = (width = 120) => Bun.stripANSI(chain.hud.render(width).join(" ")).replace(/\s+/g, " ").trim();
+			const native = () => {
+				const node = chain.hud.describe(cx);
+				return node.k === "text" ? node.p?.spans?.map(span => span.t).join("") : undefined;
+			};
 
 			const firstSignal = await waitForStage(first, draft);
-			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("(Ctrl+Alt+S skip · Ctrl+C cancel)"));
+			expect(ansi()).toMatch(/^Chain rewrite · step 1\/3 "first" · \d+s \(Alt\+J skip · Ctrl\+X cancel\)$/);
+			expect(native()).toBe(ansi());
+			expect(ansi(48)).toContain("Alt+J skip");
+			expect(ansi(48)).toContain("Ctrl+X cancel");
+			if (clock) {
+				now = 3000;
+				vi.advanceTimersByTime(3000);
+				expect(ansi()).toContain(" · 3s (");
+				expect(native()).toBe(ansi());
+			}
 			if (action !== "cancel second") {
 				chain.lock!.onSkip();
 				expect(firstSignal?.aborted).toBe(true);
+				expect(ansi()).toContain('step 1/3 "first" · skipping…');
 			}
 			first.release();
 
 			const secondSignal = await waitForStage(second, action === "cancel second" ? "first rewrite" : draft);
+			expect(ansi()).toContain(
+				action === "cancel second" ? 'step 2/3 "second"' : 'skipped "first" → step 2/3 "second"',
+			);
+			expect(native()).toBe(ansi());
 			if (action === "skip both") {
 				chain.lock!.onSkip();
 				expect(secondSignal?.aborted).toBe(true);
 			} else if (action === "cancel second") {
 				chain.lock!.onCancel();
 				expect(secondSignal?.aborted).toBe(true);
+				expect(ansi()).toBe("");
+				expect(native()).toBeUndefined();
 			}
 			second.release();
 
@@ -446,6 +480,9 @@ describe("input controller — post-processing chain controls (#629)", () => {
 				expect(prompt).not.toHaveBeenCalled();
 			} else {
 				await waitForStage(third, action === "skip both" ? draft : "second rewrite");
+				expect(ansi()).toContain(
+					action === "skip both" ? 'skipped "second" → step 3/3 "third"' : 'step 3/3 "third"',
+				);
 				third.release();
 				await pending;
 				expect(onInputCallback).toHaveBeenCalledTimes(1);
@@ -453,12 +490,16 @@ describe("input controller — post-processing chain controls (#629)", () => {
 				expect(editor.getText()).toBe("");
 			}
 			expect(chain.lock).toBeUndefined();
+			expect(ansi()).toBe("");
+			expect(native()).toBeUndefined();
 		} finally {
 			for (const stage of stages) stage.release();
 			try {
 				await submission;
 			} finally {
+				if (action === "skip first") vi.useRealTimers();
 				discovery.mockRestore();
+				vi.restoreAllMocks();
 				unregisterCustomApis(source);
 				resetSettingsForTest();
 			}

@@ -7,6 +7,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionHandler,
+	RegisteredCommand,
 	SessionStartEvent,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
@@ -20,6 +21,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 interface CapturedHandlers {
 	session_start?: ExtensionHandler<SessionStartEvent>;
 	before_agent_start?: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>;
+	complete?: RegisteredCommand["getArgumentCompletions"];
 }
 
 function buildHarness(): { handlers: CapturedHandlers; activeTools: string[] } {
@@ -31,7 +33,9 @@ function buildHarness(): { handlers: CapturedHandlers; activeTools: string[] } {
 		on(event: string, handler: ExtensionHandler<unknown, unknown>): void {
 			(handlers as Record<string, ExtensionHandler<unknown, unknown>>)[event] = handler;
 		},
-		registerCommand(): void {},
+		registerCommand(_name: string, options: Omit<RegisteredCommand, "name">): void {
+			handlers.complete = options.getArgumentCompletions;
+		},
 		registerShortcut(): void {},
 		registerTool(): void {},
 		getActiveTools: (): string[] => [...activeTools],
@@ -93,6 +97,20 @@ describe("autoresearch before_agent_start handler", () => {
 		cwdDir.removeSync();
 		dbDir.removeSync();
 		vi.restoreAllMocks();
+	});
+
+	it("offers the two controls and clear flags without completing goal text", () => {
+		const { handlers } = buildHarness();
+		expect(handlers.complete?.("")?.map(item => [item.label, item.preserveInputOnSubmit])).toEqual([
+			["off", true],
+			["clear", true],
+		]);
+		expect(handlers.complete?.("clear --r")?.map(item => item.value)).toEqual(["clear --reset-tree"]);
+		expect(handlers.complete?.("clear ")?.map(item => item.value)).toEqual([
+			"clear --keep-tree",
+			"clear --reset-tree",
+		]);
+		expect(handlers.complete?.("improve performance")).toBeNull();
 	});
 
 	it("renders an autoresearch block when event.systemPrompt is undefined (issue #3665)", async () => {

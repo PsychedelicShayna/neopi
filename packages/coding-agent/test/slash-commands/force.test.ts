@@ -3,18 +3,23 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import {
+	buildTuiBuiltinSlashCommands,
+	executeBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { buildNamedToolChoice } from "@oh-my-pi/pi-coding-agent/utils/tool-choice";
+import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui";
 
 function createRuntimeHarness(overrides?: { setForcedToolChoice?: (toolName: string) => void }) {
 	const setForcedToolChoice = vi.fn(overrides?.setForcedToolChoice ?? ((_toolName: string) => {}));
+	const getActiveToolNames = vi.fn(() => ["read", "review", "write"]);
 	const setText = vi.fn();
 	const showStatus = vi.fn();
 	const showError = vi.fn();
 
 	const ctx = {
 		editor: { setText } as unknown as InteractiveModeContext["editor"],
-		session: { setForcedToolChoice } as unknown as InteractiveModeContext["session"],
+		session: { getActiveToolNames, setForcedToolChoice } as unknown as InteractiveModeContext["session"],
 		showStatus,
 		showError,
 	} as unknown as InteractiveModeContext;
@@ -23,6 +28,7 @@ function createRuntimeHarness(overrides?: { setForcedToolChoice?: (toolName: str
 		runtime: {
 			ctx,
 		},
+		getActiveToolNames,
 		setForcedToolChoice,
 		setText,
 		showStatus,
@@ -31,6 +37,29 @@ function createRuntimeHarness(overrides?: { setForcedToolChoice?: (toolName: str
 }
 
 describe("/force slash command", () => {
+	it("completes live tool names after both separators and leaves the prompt open", async () => {
+		const h = createRuntimeHarness();
+		const commands = buildTuiBuiltinSlashCommands(h.runtime).filter(command => command.name === "force");
+		const provider = new CombinedAutocompleteProvider([...commands], process.cwd());
+		for (const input of ["/force re", "/force:re"]) {
+			const suggestions = await provider.getSuggestions([input], 0, input.length);
+			expect(suggestions?.items.map(item => item.label)).toEqual(["read", "review"]);
+		}
+
+		h.getActiveToolNames.mockReturnValue(["review"]);
+		const draft = "/force:re";
+		const suggestions = await provider.getSuggestions([draft], 0, draft.length);
+		expect(suggestions?.items.map(item => item.label)).toEqual(["review"]);
+		const item = suggestions?.items[0];
+		if (!suggestions || !item) throw new Error("Missing /force tool completion");
+		expect(item.submitsCommand).toBe(false);
+		expect(provider.applyCompletion([draft], 0, draft.length, item, suggestions.prefix).lines).toEqual([
+			"/force:review ",
+		]);
+		const prompt = "/force:review finish the report";
+		expect(await provider.getSuggestions([prompt], 0, prompt.length)).toBeNull();
+	});
+
 	it("forces the next round tool with colon syntax", async () => {
 		const harness = createRuntimeHarness();
 

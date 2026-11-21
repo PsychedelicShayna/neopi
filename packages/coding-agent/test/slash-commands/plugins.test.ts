@@ -7,7 +7,10 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { writeInstalledPluginsRegistry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import {
+	buildTuiBuiltinSlashCommands,
+	executeBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -41,6 +44,8 @@ describe("/plugins live enable and disable", () => {
 		lockPath = path.join(pluginsDir, "omp-plugins.lock.json");
 		spyOn(piUtils, "getPluginsDir").mockReturnValue(pluginsDir);
 		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(lockPath);
+		spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(pluginsDir, "node_modules"));
+		spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(pluginsDir, "package.json"));
 		spyOn(piUtils, "getMarketplacesRegistryPath").mockReturnValue(path.join(root, "marketplaces.json"));
 	});
 
@@ -85,6 +90,11 @@ describe("/plugins live enable and disable", () => {
 			const { skills } = await loadSkills({ cwd: root, extensionRoots: ROOTS });
 			visibleSkills = skills.filter(skill => skill.name === "market-skill").length;
 		});
+		const marketplace = buildTuiBuiltinSlashCommands({ ctx }).find(command => command.name === "marketplace");
+		expect(
+			(await marketplace?.getArgumentCompletions?.("uninstall --scope user ex"))?.map(item => item.label),
+		).toEqual([id]);
+		expect((await marketplace?.getArgumentCompletions?.("uninstall --scope project ex")) ?? []).toEqual([]);
 		await executeBuiltinSlashCommand(`/plugins enable ${id}`, { ctx });
 		expect(visibleSkills).toBe(1);
 
@@ -114,6 +124,8 @@ describe("/plugins live enable and disable", () => {
 			const { skills } = await loadSkills({ cwd: root, extensionRoots: ROOTS });
 			visibleSkills = skills.filter(skill => skill.name === "npm-skill").length;
 		});
+		const plugins = buildTuiBuiltinSlashCommands({ ctx }).find(command => command.name === "plugins");
+		expect((await plugins?.getArgumentCompletions?.("enable example-"))?.map(item => item.label)).toEqual([name]);
 		await executeBuiltinSlashCommand(`/plugins enable ${name}`, { ctx });
 		expect(visibleSkills).toBe(1);
 

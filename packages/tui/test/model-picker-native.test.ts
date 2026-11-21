@@ -215,6 +215,44 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	expect(hub.describe(withPicker)).toBe(root);
 });
 
+test("native folder scopes browse curated models and edit membership from a provider", () => {
+	let folders: readonly { name: string; models: readonly string[] }[] = [
+		{ name: "Review", models: ["openai/gpt-5.6"] },
+	];
+	const hub = openHub({ assign: [], cancel: 0 }, MODELS, {
+		modelFolders: {
+			get entries() {
+				return folders;
+			},
+			save: value => {
+				folders = value;
+			},
+		},
+	});
+	const picker = () => props(hub.describe(withPicker));
+	const scope = (value: string) => hub.handleNativeEvent({ type: "action", key: "", act: "scope", value, mods: [] });
+	const act = (action: string) => hub.handleNativeEvent({ type: "action", key: "", act: action, mods: [] });
+
+	expect(picker().scopes).toContainEqual({
+		id: "folder:Review",
+		label: "Review",
+		group: "Folders",
+		icon: "folder",
+		count: 1,
+	});
+	scope("folder:Review");
+	expect(picker()).toMatchObject({ scope: "folder:Review", selected: "openai/gpt-5.6", total: 1 });
+
+	scope("provider:openai");
+	hub.handleNativeEvent({ type: "select", key: "", item: "openai/gpt-5.6" });
+	expect(picker().actions?.find(action => action.id === "folderMembership")?.keys).toEqual(["ctrl", "alt", "a"]);
+	act("folderMembership");
+	expect(picker().strip?.items).toEqual([{ id: "0", label: "− Review" }]);
+	act("stripApply");
+	scope("folder:Review");
+	expect(picker()).toMatchObject({ scope: "folder:Review", selected: null, total: 0 });
+});
+
 test.each(["keyboard", "native"])(
 	"session-only rich hub starts on recent models and picks without roles via %s",
 	mode => {

@@ -211,11 +211,11 @@ A chain rewrites a composer prompt through ordered model steps before it is sent
 
 Only plain prompts are chained; slash commands, skills, `!bash`, eval input, and continue shortcuts are not. Up-arrow history keeps the typed text, not the rewrite. `chaining.auto` and `chaining.active` are settings, so a project can override them in its `.omp/config.yml`.
 
-While a chain runs, the composer is locked: the draft stays visible with every line painted by the `display.shimmer` sweep (static muted text when shimmer is disabled), typing is ignored, and the status line shows the chain, the step, and `preprocessing…`. Each completed step replaces the composer text, so the rewrite is visible as it happens.
+While a chain runs, the composer is locked: the draft stays visible with every line painted by the `display.shimmer` sweep (static muted text when shimmer is disabled), and typing is ignored. A persistent row above the composer shows the chain name, current step and total, elapsed time for the run, and the configured skip and cancel keys in both ANSI terminals and Tern. Each completed step replaces the composer text, so the rewrite is visible as it happens.
 
-- **Ctrl+Alt+S** skips the step in flight; its input passes to the next step unchanged.
-- **Ctrl+C** aborts the chain and puts the typed draft back, nothing sent.
-- A failing step stops the chain and leaves the last completed output in the composer, editable and unsent.
+- **Ctrl+Alt+S** (`app.chain.skipStep` by default) skips the step in flight; its input passes to the next step unchanged, and the row names the skipped step alongside the next one.
+- **Ctrl+C** (`app.interrupt` by default) aborts the chain and puts the typed draft back, nothing sent.
+- A failing step stops the chain, names the failed step in the warning, and leaves the last completed output in the composer, editable and unsent. The progress row clears on send, cancel, or failure.
 
 Chains live in `CHAINS.yml` beside advisors' `WATCHDOG.yml`: `<agent dir>/CHAINS.yml` (global) and the project root's `CHAINS.yml`; a project chain shadows a global chain with the same name. `/chain configure` edits either scope. Each step has a name, a prompt (step instructions; the incoming text is the user message), an optional model (`provider/id`, `provider/id:level`, or `@role`), optional tools (none by default), and three optional keys:
 
