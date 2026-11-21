@@ -19,6 +19,7 @@ import { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
 import { EventBus } from "../../src/utils/event-bus";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { makeAssistantMessage } from "../session-manager/helpers";
 
 const queuedPrompt = "Open the queued author's form";
 const html = `<form><fieldset><legend>Name</legend>
@@ -33,9 +34,14 @@ test.each([
 	["before_agent_start", "follow_up", false, "reply"],
 	["before_agent_start", "follow_up", true, "reply"],
 	["before_agent_start", "steer", true, "reply"],
+	["before_agent_start after pane input", "follow_up", true, "reply"],
+	["before_agent_start after pane input", "follow_up", false, "reply"],
+	["historical error recovery", "prompt", true, "reply"],
 	["tool_call", "follow_up", true, "guest wins with an edited pane"],
 	["tool_call", "follow_up", true, "caller aborts with an edited pane"],
 ] as const)("%s Form after %s (author opted in: %p): %s", async (boundary, type, optedIn, action) => {
+	const historical = boundary === "historical error recovery";
+	const mirror = optedIn && !historical;
 	const dir = TempDir.createSync("@pi-control-form-");
 	const auth = createInMemoryAuthStorage();
 	const entered = Promise.withResolvers<void>();
@@ -52,7 +58,20 @@ test.each([
 				opened.resolve();
 				result.resolve(await answer);
 			};
-			if (boundary === "before_agent_start") {
+			if (boundary === "historical error recovery") {
+				pi.on("session_before_compact", async (event, ctx) => {
+					await openForm(ctx);
+					return {
+						compaction: {
+							summary: "Recovered the old turn.",
+							shortSummary: undefined,
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					};
+				});
+			} else if (boundary.startsWith("before_agent_start")) {
 				pi.on("before_agent_start", async (event, ctx) => {
 					if (event.prompt === queuedPrompt) await openForm(ctx);
 				});
@@ -69,22 +88,51 @@ test.each([
 	const manager = SessionManager.inMemory(dir.path());
 	const extensionRunner = new ExtensionRunner([extension], runtime, dir.path(), manager, modelRegistry);
 	const model = createMockModel({ provider: "anthropic", responses: [] });
-	model.push(async () => {
-		entered.resolve();
-		await release.promise;
-		return { content: ["First turn finished."] };
-	});
+	if (historical) {
+		const olderAnswer = { ...makeAssistantMessage(), api: model.api, model: model.id };
+		manager.appendMessage({
+			role: "user",
+			content: `Earlier turn.${" history".repeat(1_000)}`,
+			timestamp: Date.now(),
+		});
+		manager.appendMessage(olderAnswer);
+		manager.appendMessage({ role: "user", content: "The failed turn", timestamp: Date.now() });
+		manager.appendMessage({
+			...olderAnswer,
+			content: [],
+			stopReason: "error",
+			errorMessage: "prompt is too long: 300000 tokens > 200000 maximum",
+			usage: { ...olderAnswer.usage, input: 300_000 },
+		});
+	} else {
+		model.push(async () => {
+			entered.resolve();
+			await release.promise;
+			return { content: ["First turn finished."] };
+		});
+	}
 	if (boundary === "tool_call") {
 		model.push({ content: [{ type: "toolCall", id: "open-form", name: "test_trigger", arguments: {} }] });
 	}
 	model.push({ content: ["Done."] });
-	const agent = new Agent({ getApiKey: () => "test-key", initialState: { model }, streamFn: model.stream });
+	const agent = new Agent({
+		getApiKey: () => "test-key",
+		initialState: { model, messages: manager.buildSessionContext({ transcript: historical }).messages },
+		streamFn: model.stream,
+	});
 	const session = new AgentSession({
 		agent,
 		sessionManager: manager,
 		modelRegistry,
 		extensionRunner,
-		settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+		settings: Settings.isolated({
+			"compaction.enabled": historical,
+			"compaction.methodOrder": ["soft"],
+			"compaction.thresholdTokens": 20_000,
+			"compaction.keepRecentTokens": 1,
+			"compaction.autoContinue": false,
+			"retry.enabled": false,
+		}),
 	});
 	const host = new ControlHost({ session, role: "tui", dir: dir.path(), tmuxPane: null });
 	const editor = new CustomEditor(getEditorTheme());
@@ -140,15 +188,21 @@ test.each([
 		});
 		expect((await a.request({ type: "set_form_dialog", enabled: true })).success).toBe(true);
 		if (optedIn) expect((await b.request({ type: "set_form_dialog", enabled: true })).success).toBe(true);
-		expect((await a.request({ type: "prompt", message: "Start the run" })).success).toBe(true);
-		await withTimeout(entered.promise, 2_000, "The first provider request did not start");
-		expect((await b.request({ type, message: queuedPrompt })).success).toBe(true);
+		if (!historical) {
+			expect((await a.request({ type: "prompt", message: "Start the run" })).success).toBe(true);
+			await withTimeout(entered.promise, 2_000, "The first provider request did not start");
+		}
+		if (boundary === "before_agent_start after pane input") host.bumpHuman();
+		const submission = b.request({ type, message: queuedPrompt });
+		void submission.catch(() => {});
+		if (!historical) expect((await submission).success).toBe(true);
 		release.resolve();
 		await withTimeout(opened.promise, 2_000, "The extension did not open its form");
 
 		await Promise.all(clients.map(client => client.request({ type: "state" })));
-		expect(frames.map(seen => seen.length)).toEqual([0, optedIn ? 1 : 0]);
+		expect(frames.map(seen => seen.length)).toEqual([0, mirror ? 1 : 0]);
 		expect(askContainer.children).toHaveLength(1);
+		if (historical) expect(model.calls).toHaveLength(0);
 		if (action !== "reply") {
 			expect(ui.focusAsk()).toBe(true);
 			const dialog = askContainer.children[0];
@@ -162,7 +216,7 @@ test.each([
 			expect(await result.promise).toBeUndefined();
 			expect(onAbandon).toHaveBeenCalledTimes(1);
 			expect(onAbandon).toHaveBeenCalledWith({ data: { name: "Draft" }, notes: [] });
-		} else if (optedIn) {
+		} else if (mirror) {
 			const { id } = frames[1][0];
 			await a.request({ type: "extension_ui_response", id, cancelled: true });
 			expect(askContainer.children).toHaveLength(1);
@@ -173,13 +227,16 @@ test.each([
 			expect(ui.cancelAsk()).toBe(true);
 			expect(await result.promise).toBeUndefined();
 		}
+		if (historical) expect((await submission).success).toBe(true);
 		await session.waitForIdle();
-		expect(model.calls[1]?.context.messages).toContainEqual(
-			expect.objectContaining({
-				role: "user",
-				content: [expect.objectContaining({ type: "text", text: queuedPrompt })],
-			}),
-		);
+		if (!historical) {
+			expect(model.calls[1]?.context.messages).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: [expect.objectContaining({ type: "text", text: queuedPrompt })],
+				}),
+			);
+		}
 		expect(askContainer.children).toHaveLength(0);
 	} finally {
 		release.resolve();
