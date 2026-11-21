@@ -16,6 +16,7 @@
 ### Added
 
 - Start or stop `/live-transcript` to keep the live conversation together when Iris hands work to the main agent, without spoken reasoning or progress updates ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
+- RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
@@ -190,6 +191,7 @@
 
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
+- Answering an extension form from an attachment no longer sends the pane's unfinished draft to the extension ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - In `/roles`, `m` edits the selected role's token budget without changing other roles on the same model. To edit the shared compaction limit, select the model in the catalog and press `m` there ([#841](https://github.com/PsychedelicShayna/neopi/issues/841)).
 - Update Channel help now explains that only changing the persisted global channel or successfully running `npi update stable|nightly` releases a rollback hold; Project, Session and process overrides do not ([#712](https://github.com/PsychedelicShayna/neopi/issues/712)).
 - Chronicler attributes control-socket messages to their senders instead of the session owner ([#828](https://github.com/PsychedelicShayna/neopi/issues/828)).

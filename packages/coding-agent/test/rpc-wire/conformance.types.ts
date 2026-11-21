@@ -21,6 +21,7 @@ import type { RpcJobLifecycleFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/r
 import type { RpcMessagesPage } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-messages";
 import type { RpcNavigateTreeResult, RpcTreeAskReanswer } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-tree";
 import type { AskToolDetails, AskItemNote, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+import type { FormBlock, FormField, FormSection } from "@oh-my-pi/pi-tui/html-form/parse";
 import type {
 	RpcAbortAndRestoreQueueResult,
 	RpcAgentSessionEventFrame,
@@ -238,6 +239,9 @@ export type Frames = Assert<
 		askQuestion: Outbound<RpcAskDialogQuestion, Wire.AskQuestion>;
 		askOption: Outbound<RpcAskDialogQuestion["options"][number], Wire.AskOption>;
 		askAnswer: Inbound<Wire.AskAnswer, Extract<RpcExtensionUIResponse, { answers: unknown }>["answers"][number]>;
+		formSection: Outbound<FormSection, Wire.FormSection>;
+		formBlocks: Same<FormBlock, Wire.FormBlock>;
+		formFields: Same<FormField, Wire.FormField>;
 		hostToolDefinition: Inbound<Wire.HostToolDefinition, RpcHostToolDefinition>;
 		hostUriScheme: Inbound<Wire.HostUriSchemeDefinition, RpcHostUriSchemeDefinition>;
 		hostToolUpdate: Inbound<Wire.HostToolUpdate, RpcHostToolUpdate>;
@@ -248,6 +252,7 @@ export type Frames = Assert<
 		uiConfirm: Inbound<Wire.ConfirmUiResponse, Extract<RpcExtensionUIResponse, { confirmed: unknown }>>;
 		uiCancel: Inbound<Wire.CancelUiResponse, Extract<RpcExtensionUIResponse, { cancelled: unknown }>>;
 		uiAnswers: Inbound<Wire.AnswersUiResponse, Extract<RpcExtensionUIResponse, { answers: unknown }>>;
+		uiForm: Same<Wire.FormUiResponse, Extract<RpcExtensionUIResponse, { data: unknown }>>;
 		responseFailure: Outbound<Extract<RpcResponse, { success: false }>, Wire.RpcResponse>;
 	}>
 >;

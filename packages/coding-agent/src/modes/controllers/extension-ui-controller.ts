@@ -897,20 +897,22 @@ export class ExtensionUiController {
 	}
 
 	/**
-	 * An agent-written HTML form in the composer's place ({@link HtmlFormDialog}). A collab
-	 * guest answers it field by field — a select per choice group, an editor per text field —
-	 * and the first side to finish wins, as {@link showAskDialog}.
+	 * Show the form in the pane and, for an opted-in control attachment, mirror it
+	 * as one typed dialog. A collab guest still answers field by field.
 	 */
 	async showFormDialog(
 		html: string,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const form = parseHtmlForm(html);
+		const controlForm = controlHostFor(this.ctx.session)?.guestFormDialog();
 		const collab = this.ctx.collabHost;
 		return this.#raceGuestDialog(
 			dialogOptions,
-			options => this.#showLocalFormDialog(form, options),
-			collab && (options => this.#runGuestForm(collab, form, options.signal)),
+			options => this.#showLocalFormDialog(form, options, dialogOptions?.signal),
+			controlForm
+				? options => controlForm(form, options)
+				: collab && (options => this.#runGuestForm(collab, form, options.signal)),
 		);
 	}
 
@@ -1134,6 +1136,7 @@ export class ExtensionUiController {
 	#showLocalFormDialog(
 		form: HtmlForm,
 		dialogOptions: ExtensionUIDialogOptions | undefined,
+		callerSignal: AbortSignal | undefined,
 	): Promise<ExtensionFormDialogResult | undefined> {
 		const first = form.fields.find(field => field.name);
 		const prompt = { kind: "question", msg: first && fieldQuestions(form).get(first) } as const;
@@ -1167,10 +1170,10 @@ export class ExtensionUiController {
 				const unwatch = this.#watchDetach(slot, detachSignal);
 				return () => {
 					unwatch();
-					// Closed by its signal (a message sent instead, the turn aborted): what was answered goes along.
-					if (dialogOptions?.signal?.aborted) {
+					// Closing the losing pane isn't an abort by the extension caller.
+					if (callerSignal?.aborted && dialogOptions?.onAbandon) {
 						const given = dialog.givenAnswers();
-						if (given) dialogOptions.onAbandon?.(given);
+						if (given) dialogOptions.onAbandon(given);
 					}
 					slot.unmount(undefined);
 					dialog.dispose();

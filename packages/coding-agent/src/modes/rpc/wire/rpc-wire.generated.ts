@@ -2165,6 +2165,113 @@ export interface AskUiRequest {
 	timeout?: number;
 }
 
+export interface FormSpan {
+	text: string;
+	style?: "code" | "strong" | "em";
+}
+
+export interface FormChoiceOption {
+	value: string;
+	label: FormSpan[];
+	checked: boolean;
+	disabled: boolean;
+}
+
+export interface FormChoiceField {
+	kind: "choice";
+	name: string;
+	multi: boolean;
+	select: boolean;
+	other: boolean;
+	label: FormSpan[];
+	options: FormChoiceOption[];
+	required: boolean;
+}
+
+export interface FormTextField {
+	kind: "text";
+	name: string;
+	type: string;
+	multiline: boolean;
+	label: FormSpan[];
+	value: string;
+	placeholder: string;
+	required: boolean;
+	rows: number;
+	min?: number;
+	max?: number;
+	pattern?: string;
+	minLength?: number;
+	maxLength?: number;
+}
+
+export type FormField = FormChoiceField | FormTextField;
+
+export interface FormTextBlock {
+	kind: "text";
+	spans: FormSpan[];
+	heading: boolean;
+}
+
+export interface FormListBlock {
+	kind: "list";
+	items: FormSpan[][];
+	ordered: boolean;
+}
+
+export interface FormPreBlock {
+	kind: "pre";
+	text: string;
+}
+
+export interface FormTableBlock {
+	kind: "table";
+	rows: FormSpan[][][];
+	headerRows: number;
+}
+
+export interface FormImageBlock {
+	kind: "image";
+	src: string;
+	alt: string;
+}
+
+export interface FormSvgBlock {
+	kind: "svg";
+	markup: string;
+	alt: string;
+}
+
+export interface FormFieldBlock {
+	kind: "field";
+	field: FormField;
+	optionsEnd?: number;
+}
+
+export type FormBlock = FormTextBlock | FormListBlock | FormPreBlock | FormTableBlock | FormImageBlock | FormSvgBlock | FormFieldBlock;
+
+export interface FormSection {
+	title: FormSpan[];
+	blocks: FormBlock[];
+	fieldset: boolean;
+}
+
+export interface FormHiddenInput {
+	name: string;
+	value: string;
+}
+
+/** One parsed extension `ui.formDialog` call; sent only after `set_form_dialog` enables it. */
+export interface FormUiRequest {
+	type: "extension_ui_request";
+	id: string;
+	method: "form";
+	sections: FormSection[];
+	hidden: FormHiddenInput[];
+	timeout?: number;
+	acceptImages?: boolean;
+}
+
 /** Close the dialog opened by request `targetId`; a later answer to it is ignored. */
 export interface CancelUiRequest {
 	type: "extension_ui_request";
@@ -2228,7 +2335,7 @@ export interface OpenUrlUiRequest {
 }
 
 /** Extension UI request, discriminated by `method`. */
-export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
+export type ExtensionUiRequest = SelectUiRequest | ConfirmUiRequest | InputUiRequest | EditorUiRequest | AskUiRequest | FormUiRequest | CancelUiRequest | NotifyUiRequest | SetStatusUiRequest | SetWidgetUiRequest | SetTitleUiRequest | SetEditorTextUiRequest | OpenUrlUiRequest;
 
 /** Answer to one `ui.askDialog` question: exact option labels, plus optional free text. */
 export interface AskAnswer {
@@ -2266,8 +2373,34 @@ export interface AnswersUiResponse {
 	answers: AskAnswer[];
 }
 
+export type FormValue = string | number | string[];
+
+export interface FormNoteImage {
+	type: "image";
+	data: string;
+	mimeType: string;
+}
+
+export interface FormOptionNote {
+	name: string;
+	question: string;
+	option: string;
+	value: string;
+	text: string;
+	images?: FormNoteImage[];
+}
+
+/** Submits a form, keyed by field name. The server restores its own hidden input values. */
+export interface FormUiResponse {
+	type: "extension_ui_response";
+	id: string;
+	data: Record<string, FormValue>;
+	notes?: FormOptionNote[];
+	timedOut?: boolean;
+}
+
 /** Host reply to an extension UI request; variants share `type` and differ by their payload key. */
-export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse;
+export type ExtensionUiResponse = ValueUiResponse | ConfirmUiResponse | CancelUiResponse | AnswersUiResponse | FormUiResponse;
 
 export interface HostToolCallRequest {
 	type: "host_tool_call";
@@ -2623,6 +2756,14 @@ export interface SetAskDialogParams {
 }
 
 export interface SetAskDialogResult {
+	enabled: boolean;
+}
+
+export interface SetFormDialogParams {
+	enabled: boolean;
+}
+
+export interface SetFormDialogResult {
 	enabled: boolean;
 }
 
@@ -3050,6 +3191,7 @@ export interface RpcWireCommands {
 	set_slow_mode: { params: SetSlowModeParams; result: SetSlowModeResult };
 	goal: { params: GoalParams; result: GoalResult };
 	set_ask_dialog: { params: SetAskDialogParams; result: SetAskDialogResult };
+	set_form_dialog: { params: SetFormDialogParams; result: SetFormDialogResult };
 	get_available_commands: { params: undefined; result: GetAvailableCommandsResult };
 	get_entries: { params: GetEntriesParams; result: SessionEntries };
 	snapshot_session_journal: { params: undefined; result: JournalIdentity };
