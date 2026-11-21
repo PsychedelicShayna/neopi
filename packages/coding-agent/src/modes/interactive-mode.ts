@@ -10320,7 +10320,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		return undefined;
 	}
 	/** Start or stop the Codex-backed realtime voice surface. */
-	async handleLiveCommand(): Promise<void> {
+	async handleLiveCommand(mode?: "transcript"): Promise<void> {
 		if (this.localVoiceActive) {
 			this.showWarning("Turn local voice off with /voice off before starting live mode");
 			return;
@@ -10330,7 +10330,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showWarning(blocker);
 			return;
 		}
-		await this.#liveCommandController.handleCommand();
+		await this.#liveCommandController.handleCommand(mode);
 	}
 
 	async handleLiveMute(): Promise<void> {

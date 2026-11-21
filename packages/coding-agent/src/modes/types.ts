@@ -678,7 +678,7 @@ export interface InteractiveModeContext {
 	readonly localVoiceActive: boolean;
 	handleLocalVoiceCommand(args?: string): Promise<void>;
 	/** Start or stop the Codex-backed realtime voice session. */
-	handleLiveCommand(): Promise<void>;
+	handleLiveCommand(mode?: "transcript"): Promise<void>;
 	/** Mute or unmute the live voice session microphone; no-op when live mode is off. */
 	handleLiveMute(): Promise<void>;
 	/** Cycle where Enter sends composer text during a live call (primary / voice / both). */
