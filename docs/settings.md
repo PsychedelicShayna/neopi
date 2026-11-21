@@ -761,6 +761,8 @@ For the numeric sampling settings, a negative value (normally `-1`) means "use t
 | `personality`                    | string | `default` | A built-in (`default`, `friendly`, `pragmatic`, `none`) or a named custom personality. Built-in presets honor `<agent dir>/PERSONALITY.md`; `none` omits the block. See [system-prompt-customization](./system-prompt-customization.md). |
 | `customPersonalities` | record | `{}` | Named prompt text, merged across global, project and session scope. Manage entries in Settings → Model → Personality or with `/personality`. |
 
+For a relay that supports a tier but does not advertise it, `/fast force fast` sends `service_tier: "priority"` and `/fast force ultra` sends `service_tier: "ultrafast"`. The override applies only to the selected OpenAI-compatible model in the running session. `/fast off` clears it. The endpoint can still reject the requested tier.
+
 #### Role-scoped request settings
 
 Set `roleSettings.<role>` to a mapping of setting ids to values. Role names
