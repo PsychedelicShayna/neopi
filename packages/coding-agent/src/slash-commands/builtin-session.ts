@@ -21,6 +21,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
 import { markdownFenceFor } from "../utils/markdown-fence";
 import { openLocalFileInEditor } from "../modes/local-file-editor";
+import { handleIrcCommand } from "./helpers/irc";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
 	describeRedeemOutcome,
@@ -669,26 +670,10 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "irc",
 		icon: "agents",
-		description: "Open the IRC viewer, or message an agent (or all) as yourself",
-		inlineHint: "[<agent>|all <message>]",
+		description: "Open the IRC viewer, message peers, or manage groups as yourself",
+		inlineHint: "[<peer>|#<group>|all <message> | group <operation>]",
 		allowArgs: true,
-		handleTui: async (command, runtime) => {
-			const args = command.args.trim();
-			clearSubmittedText(runtime);
-			if (!args) {
-				runtime.ctx.showIrcViewer();
-				return;
-			}
-			const split = args.search(/\s/);
-			const message = split === -1 ? "" : args.slice(split + 1).trim();
-			if (!message) {
-				runtime.ctx.showStatus("Usage: /irc [<agent>|all <message>]");
-				return;
-			}
-			const result = await runtime.ctx.sendAsIrcOperator(args.slice(0, split), message);
-			if (result.isError) runtime.ctx.showWarning(result.text);
-			else runtime.ctx.showStatus(result.text);
-		},
+		handleTui: handleIrcCommand,
 	},
 	{
 		name: "branch",

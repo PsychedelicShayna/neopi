@@ -385,6 +385,7 @@ await deckB.dispose();
   `allowRestrictedCustomTools: true` and their names also appear in
   `toolNames`.
 - Hidden tools (for example `yield`) are opt-in unless required by options.
+- Grant [`irc`](./tools/irc.md) in `toolNames` to allow peer and group messaging independently of `write`, including in a restricted session. `enableIrc: false` disables it.
 
 ```ts
 const { session } = await createAgentSession({

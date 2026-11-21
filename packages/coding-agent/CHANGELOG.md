@@ -12,6 +12,7 @@
 
 ### Added
 
+- Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
 

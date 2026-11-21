@@ -5,7 +5,7 @@
  * homed on this worker.
  */
 import { MessagePort, parentPort } from "node:worker_threads";
-import { Agent, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentToolResult, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Effort } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -33,6 +33,8 @@ import { type RpcFrame, RpcLink } from "../../src/thread/rpc";
 import type { ThreadService } from "../../src/thread/services";
 import { agentsThreadService } from "../../src/thread/services/agents";
 import { identityThreadService } from "../../src/thread/services/identity";
+import { createTools } from "../../src/tools";
+import type { IrcTool } from "../../src/tools/irc";
 
 /** What a worker-side peer handle reports about a session homed elsewhere. */
 export interface PeerReport {
@@ -52,6 +54,7 @@ interface ProbeSessionOptions {
 	thinkingLevelCeiling?: Effort;
 	settings?: Parameters<typeof Settings.isolated>[0];
 	runtimeApiKeys?: Record<string, string>;
+	ircOnly?: boolean;
 }
 
 /** Operations the test drives on the worker. */
@@ -69,6 +72,8 @@ export interface AgentsProbe {
 	localCustomTypes(id: string): Promise<string[]>;
 	/** Send through the same coordination route used by worker agent:// writes. */
 	send(id: string, params: Parameters<typeof executeSend>[1]): ReturnType<typeof executeSend>;
+	ircTools(id: string): Promise<string[]>;
+	irc(id: string, params: Parameters<IrcTool["execute"]>[1]): Promise<AgentToolResult<unknown>>;
 	/** Keep the current ref object for `id`. */
 	grab(id: string): Promise<number>;
 	/** CAS `setStatus` with the grabbed ref, then with a fresh one. */
@@ -120,9 +125,28 @@ async function makeSession(id: string, gated: boolean, options: ProbeSessionOpti
 			return { content: ["Done"] };
 		},
 	});
+	const settings = Settings.isolated(options.settings);
+	const sessionManager = SessionManager.inMemory();
+	const tools = options.ircOnly
+		? await createTools(
+				{
+					cwd: sessionManager.getCwd(),
+					settings,
+					hasUI: false,
+					taskDepth: 1,
+					restrictToolNames: true,
+					skipPythonPreflight: true,
+					agentRegistry: AgentRegistry.global(),
+					getAgentId: () => id,
+					getSessionFile: () => null,
+					getSessionSpawns: () => null,
+				},
+				["irc"],
+			)
+		: [];
 	const agent = new Agent({
 		getApiKey: () => "test-key",
-		initialState: { model, systemPrompt: ["Test"], tools: [] },
+		initialState: { model, systemPrompt: ["Test"], tools },
 		convertToLlm,
 		streamFn: mock.stream,
 	});
@@ -133,8 +157,8 @@ async function makeSession(id: string, gated: boolean, options: ProbeSessionOpti
 	}
 	const session = new AgentSession({
 		agent,
-		sessionManager: SessionManager.inMemory(),
-		settings: Settings.isolated(options.settings),
+		sessionManager,
+		settings,
 		modelRegistry: new ModelRegistry(authStorage),
 		agentId: id,
 		thinkingLevelCeiling: options.thinkingLevelCeiling,
@@ -186,6 +210,12 @@ const probe: AgentsProbe = {
 	localCustomTypes: async id =>
 		local(id).messages.flatMap(message => (message.role === "custom" ? [message.customType] : [])),
 	send: (id, params) => executeSend({ registry: AgentRegistry.global(), senderId: id }, params),
+	ircTools: async id => local(id).agent.state.tools.map(tool => tool.name),
+	irc: async (id, params) => {
+		const tool = local(id).agent.state.tools.find(tool => tool.name === "irc");
+		if (!tool) throw new Error(`IRC is not granted to ${id}`);
+		return tool.execute("irc-test", params);
+	},
 	grab: async id => {
 		const ref = AgentRegistry.global().get(id);
 		if (!ref) throw new Error(`no ref ${id}`);

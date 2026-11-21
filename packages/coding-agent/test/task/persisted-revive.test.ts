@@ -457,6 +457,26 @@ describe("persisted subagent revival", () => {
 		}
 	});
 
+	it("cold-revives a restricted agent with its dedicated IRC grant and no write tool", async () => {
+		const cwd = makeTempDir("@pi-revive-irc-grant-");
+		const sessionFile = await createPersistedSession(cwd, true, "default", undefined, { tools: ["irc"] });
+		const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+		const ref = AgentRegistry.global().register(createRef(sessionFile));
+		let revived: AgentSession | undefined;
+		try {
+			const reviver = await createFactory(cwd, undefined, { authStorage, modelRegistry })(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			revived = localSession(await reviver(ref));
+			expect(revived.getActiveToolNames()).toContain("irc");
+			expect(revived.getEnabledToolNames()).not.toContain("write");
+		} finally {
+			await revived?.dispose();
+			authStorage.close();
+		}
+	});
+
 	it("anchors wake-turn artifacts to the revived ref's own dir, not the root session's (#11563)", async () => {
 		AgentRegistry.resetGlobalForTests();
 		const cwd = makeTempDir("@pi-revive-artifacts-dir-");
