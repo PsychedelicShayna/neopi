@@ -4,7 +4,9 @@
  * installs, skill optimization). Both render through
  * {@link renderHudProgressRow} so they read as one HUD.
  */
-import { type Component, renderProgressBar, visibleWidth } from "@oh-my-pi/pi-tui";
+import { type Component, renderProgressBar, Text, visibleWidth } from "@oh-my-pi/pi-tui";
+import type { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { col, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
@@ -69,6 +71,63 @@ function describeHudRow(key: string, label: string, tail: readonly TspSpan[], ba
 	if (bar !== undefined) children.push(node("progress", { value: Math.min(1, Math.max(0, bar)), max: { w: "18ch" } }));
 	children.push(text(tail, { wrap: "none" }));
 	return node("row", { justify: "end", gap: "sm", align: "center", role: "omp.hud.progress" }, children, key);
+}
+
+export interface ChainProgress {
+	readonly chain: string;
+	readonly step: string;
+	readonly number: number;
+	readonly total: number;
+	/** Monotonic start of the chain (not the step), in ms. */
+	readonly startedAt: number;
+	readonly skipped?: string;
+	readonly skipping?: boolean;
+}
+
+/** The locked composer's chain row, shared by ANSI and Tern's wrapped native text. */
+export class ChainProgressHud extends Text {
+	#progress: ChainProgress | undefined;
+	#timer: NodeJS.Timeout | undefined;
+
+	constructor(
+		private readonly requestRender: () => void,
+		private readonly keybindings: () => KeybindingsManager,
+	) {
+		super("", 1, 0);
+		this.setStyleFn(line => theme.fg("accent", line));
+	}
+
+	update(progress: ChainProgress | undefined): void {
+		this.#progress = progress;
+		if (progress) {
+			this.#timer ??= setInterval(() => this.#refresh(), 1000).unref();
+		} else {
+			clearInterval(this.#timer);
+			this.#timer = undefined;
+		}
+		this.#refresh();
+	}
+
+	#refresh(): void {
+		const progress = this.#progress;
+		if (!progress) {
+			if (this.setText("")) this.requestRender();
+			return;
+		}
+		const bindings = this.keybindings();
+		const skip = bindings.getDisplayString("app.chain.skipStep");
+		const cancel = bindings.getDisplayString("app.interrupt");
+		const controls = [skip && `${skip} skip`, cancel && `${cancel} cancel`].filter(Boolean).join(" · ");
+		const stage = `step ${progress.number}/${progress.total} "${sanitizeStatusText(progress.step)}"`;
+		const transition = progress.skipping
+			? `${stage} · skipping…`
+			: progress.skipped === undefined
+				? stage
+				: `skipped "${sanitizeStatusText(progress.skipped)}" → ${stage}`;
+		const age = formatCoarseDuration(performance.now() - progress.startedAt);
+		const label = `Chain ${sanitizeStatusText(progress.chain)} · ${transition} · ${age}`;
+		if (this.setText(controls ? `${label} (${controls})` : label)) this.requestRender();
+	}
 }
 
 /** Progress rows for concurrent judge batches. */

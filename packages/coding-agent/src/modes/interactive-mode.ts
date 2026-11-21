@@ -153,7 +153,7 @@ import {
 	type JudgmentBatchProgress,
 } from "../eval/judgment-batch-events";
 import { onDownloadActivity } from "../downloads/activity";
-import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
+import { type ChainProgress, ChainProgressHud, DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import {
 	type PlanPreviousModel,
@@ -1591,6 +1591,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#composerStatusPersistTimer: NodeJS.Timeout | undefined;
 	readonly #judgmentBatchProgressHud = new JudgmentBatchProgressHud();
 	readonly #downloadActivityHud = new DownloadActivityHud(() => this.ui.requestRender());
+	readonly #chainProgressHud = new ChainProgressHud(
+		() => this.ui.requestRender(),
+		() => this.keybindings,
+	);
 	readonly #judgmentBatchProgressClearTimers = new Map<string, NodeJS.Timeout>();
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
@@ -1691,6 +1695,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		const resolved = this.session.resolveModelMention(selector);
 		return resolved && { label: modelMentionChipLabel(resolved.name), selector: resolved.selector };
 	}
+
+	setChainProgress(progress: ChainProgress | undefined): void {
+		this.#chainProgressHud.update(progress);
+	}
+
 	/** Idle stand-in for the working row: the last tok/s reading and the
 	 * band-mode title stay readable between turns, docked where the loader's
 	 * trailer was. */
@@ -2644,6 +2653,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.progressHudContainer = new AnchoredLiveContainer();
 		this.progressHudContainer.addChild(this.#judgmentBatchProgressHud);
 		this.progressHudContainer.addChild(this.#downloadActivityHud);
+		this.progressHudContainer.addChild(this.#chainProgressHud);
 		this.#eventBusUnsubscribers.push(onDownloadActivity(activity => this.#downloadActivityHud.update(activity)));
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
@@ -3007,8 +3017,8 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.modelCycleContainer,
 				this.deferredCommandContainer,
 				this.liveTranscriptContainer,
-				// Judge batches and automatic downloads stay editor-anchored and update
-				// independently of transcript output, directly above the working/throughput/title row.
+				// Background progress and the running chain are editor-anchored, above the
+				// working/throughput/title row, and update independently of transcript output.
 				this.progressHudContainer,
 				// The ask waiting for answers, over the working row and the composer, a blank row under it
 				// (natively it flows at the transcript's end).
@@ -8740,6 +8750,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
 		this.#downloadActivityHud.dispose();
+		this.#chainProgressHud.update(undefined);
 		this.#cancelTodoAutoClearTimer();
 		this.#cancelObserverUiSyncTimer();
 		this.#cancelGoalContinuation();

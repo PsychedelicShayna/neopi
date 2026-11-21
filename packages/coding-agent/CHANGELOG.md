@@ -16,6 +16,7 @@
 ### Added
 
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.
+- The composer keeps the active chain stage, elapsed time, and bound skip/cancel keys visible throughout preprocessing in ANSI and Tern, including when a stage is skipped ([#850](https://github.com/PsychedelicShayna/neopi/issues/850)).
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
