@@ -757,7 +757,9 @@ export interface EditorTextAssistProvider {
 }
 
 type HistoryCursorAnchor = "start" | "end";
-type AutocompleteRequest = { kind: "regular"; explicitTab: boolean } | { kind: "force" };
+type AutocompleteRequest = ({ kind: "regular"; explicitTab: boolean } | { kind: "force" }) & {
+	onNoMatch?: () => boolean | void;
+};
 
 /** What the paste transport knew about the input burst before the editor inserts the payload. */
 export interface PasteOptions {
@@ -1012,10 +1014,12 @@ export class Editor implements Component, Focusable {
 	#pinnedUndo: UndoMark | null = null;
 
 	/**
-	 * ↑ on the first line, not browsing history: true when the host took the keys (to an ask waiting above
-	 * the composer); false lets ↑ recall history or move the cursor as usual.
+	 * Up (or Vim Normal `k`) on the first visual row, not browsing history:
+	 * true when the host took the keys (to an ask waiting above the composer).
 	 */
 	onUpFromTop?: () => boolean;
+	/** Tab without a completion action and with Vim disabled; true when the host took the keys. */
+	onUnclaimedTab?: () => boolean;
 	onSubmit?: (text: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
@@ -1354,6 +1358,11 @@ export class Editor implements Component, Focusable {
 		const segment = this.#cursorSegmentInLine(this.#caretRowWidth);
 		if (segment.index === -1) return this.#state.lines.length === 1 && segment.count === 1;
 		return this.#state.cursorLine === 0 && segment.index === 0;
+	}
+
+	#tryHandoffUpFromTop(): boolean {
+		if (!this.onUpFromTop || this.#historyIndex !== -1) return false;
+		return this.#isOnFirstVisualLine() && this.onUpFromTop();
 	}
 
 	#isOnLastVisualLine(): boolean {
@@ -2472,7 +2481,7 @@ export class Editor implements Component, Focusable {
 
 		// Tab key - context-aware completion (but not when already autocompleting)
 		if (kb.matchesCanonical(canonical, "tui.input.tab") && !this.#autocompleteState) {
-			void this.#handleTabCompletion();
+			this.#handleTabCompletion();
 			return;
 		}
 
@@ -2632,7 +2641,7 @@ export class Editor implements Component, Focusable {
 		// Arrow keys
 		else if (kb.matchesCanonical(canonical, "tui.editor.cursorUp")) {
 			// Up - out to what waits above (an ask), else history navigation or cursor movement
-			if (this.#historyIndex === -1 && this.#isOnFirstVisualLine() && this.onUpFromTop?.()) {
+			if (this.#tryHandoffUpFromTop()) {
 				// The host took the keys.
 			} else if (this.#isEditorEmpty()) {
 				this.#navigateHistory(-1); // Start browsing history
@@ -2717,12 +2726,21 @@ export class Editor implements Component, Focusable {
 		if (awaitingTarget && (canonical === "space" || data === " ")) return this.#runVimKey(" ", vim);
 		const mapped = canonical === undefined ? undefined : VIM_NAV_KEYS[canonical];
 		if (awaitingTarget && mapped !== undefined) return this.#runVimKey("escape", vim);
+		const printable = mapped === undefined ? extractPrintableText(data) : undefined;
+		if (
+			(mapped === "k" || printable === "k") &&
+			vim.mode === "normal" &&
+			!vim.pending &&
+			!this.isShowingAutocomplete() &&
+			this.#tryHandoffUpFromTop()
+		) {
+			return true;
+		}
 		if (mapped !== undefined) return this.#runVimKey(mapped, vim);
 
 		// Control chords, Enter, and Tab carry no printable text and stay with the host. A half-typed
 		// command (`r`, `f`, `d`) is cancelled first, like character-jump mode, so it cannot outlive a
 		// submit and swallow the first key of the next prompt.
-		const printable = extractPrintableText(data);
 		if (!printable) {
 			if (vim.pending) this.#runVimKey("escape", vim);
 			return false;
@@ -5652,7 +5670,7 @@ export class Editor implements Component, Focusable {
 		return /(?:^|[\s"'`(<=])[a-z][a-z0-9+.-]*:\/{1,2}[^\s"'`()<>]*$/i.test(textBeforeCursor);
 	}
 
-	async #tryTriggerAutocomplete(explicitTab: boolean = false): Promise<void> {
+	async #tryTriggerAutocomplete(explicitTab: boolean = false, onNoMatch?: () => boolean | void): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		if (
 			explicitTab &&
@@ -5663,9 +5681,10 @@ export class Editor implements Component, Focusable {
 				this.#state.cursorCol,
 			)
 		) {
+			onNoMatch?.();
 			return;
 		}
-		await this.#queueAutocompleteRequest({ kind: "regular", explicitTab });
+		await this.#queueAutocompleteRequest({ kind: "regular", explicitTab, onNoMatch });
 	}
 	/** Apply `selected` the way Tab does: complete it in place and chain into directories/commands. */
 	#acceptAutocompleteSelection(selected: SelectItem): void {
@@ -5715,24 +5734,29 @@ export class Editor implements Component, Focusable {
 		return list;
 	}
 
-	async #handleTabCompletion(): Promise<void> {
+	#handleTabCompletion(): void {
 		if (this.#acceptPrediction()) return;
 		if (this.#showPredictionAlternatives()) return;
 		if (this.#acceptWordCompletion({ space: true })) return;
-		if (!this.#autocompleteProvider) return;
 
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.#state.cursorCol);
+		// With no token, a forced file lookup would list the working directory.
+		// Keep that behavior when no ask claims Tab, but let a waiting ask take it first.
+		const handoff = this.#vim === null ? this.onUnclaimedTab : undefined;
+		const hasToken = beforeCursor.trim() !== "";
+		if ((!hasToken || !this.#autocompleteProvider) && handoff?.()) return;
+		if (!this.#autocompleteProvider) return;
+		const onNoMatch = handoff && hasToken ? () => this.focused && this.#vim === null && handoff() : undefined;
 
 		if (this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) {
-			await this.#handleSlashCommandCompletion();
+			void this.#tryTriggerAutocomplete(false, onNoMatch);
 		} else if (this.#isInMidPromptSkillSlashContext()) {
-			await this.#handleSlashCommandCompletion();
-			if (!this.#autocompleteState) {
-				await this.#forceFileAutocomplete();
-			}
+			void this.#tryTriggerAutocomplete(false, () => {
+				void this.#forceFileAutocomplete(onNoMatch);
+			});
 		} else {
-			await this.#forceFileAutocomplete();
+			void this.#forceFileAutocomplete(onNoMatch);
 		}
 	}
 	/**
@@ -5860,17 +5884,13 @@ export class Editor implements Component, Focusable {
 			if (index >= 0) this.onPredictionAccepted?.(index);
 		}
 	}
-	async #handleSlashCommandCompletion(): Promise<void> {
-		await this.#tryTriggerAutocomplete();
-	}
-
-	async #forceFileAutocomplete(): Promise<void> {
+	async #forceFileAutocomplete(onNoMatch?: () => boolean | void): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 		if (typeof this.#autocompleteProvider.getForceFileSuggestions !== "function") {
-			await this.#tryTriggerAutocomplete(true);
+			await this.#tryTriggerAutocomplete(true, onNoMatch);
 			return;
 		}
-		await this.#queueAutocompleteRequest({ kind: "force" });
+		await this.#queueAutocompleteRequest({ kind: "force", onNoMatch });
 	}
 
 	#cancelAutocomplete(notifyCancel: boolean = false): void {
@@ -5978,20 +5998,24 @@ export class Editor implements Component, Focusable {
 			}
 		} catch (error) {
 			if (!signal.aborted && requestId === this.#autocompleteRequestId) {
+				const canFallback = request.onNoMatch !== undefined && isCurrent();
 				logger.debug("Autocomplete provider failed", { error: String(error) });
 				this.#cancelAutocomplete();
 				this.onAutocompleteUpdate?.();
+				if (canFallback) request.onNoMatch?.();
 			}
 			return;
 		}
 		if (!isCurrent()) return;
 
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
+			if (request.kind === "force" && suggestions.prefix === "" && request.onNoMatch?.()) return;
 			this.#showAutocompleteSuggestions(suggestions, request.kind === "force" ? "force" : "regular");
 			return;
 		}
 		this.#cancelAutocomplete();
 		this.onAutocompleteUpdate?.();
+		request.onNoMatch?.();
 	}
 
 	#showAutocompleteSuggestions(

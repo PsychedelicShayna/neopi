@@ -2545,6 +2545,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.faint = () => this.#extensionUiController.askHoldsKeys();
 		this.editor.onUpFromTop = () => this.#extensionUiController.focusAsk();
+		this.editor.onUnclaimedTab = this.editor.onUpFromTop;
 		this.editor.predictions = () => this.#eventController.composerPrediction.choices;
 		this.editor.onPredictionAccepted = index => this.#eventController.composerPrediction.accepted(index);
 		this.editor.onPredictionShown = () => this.#eventController.composerPrediction.shown();
@@ -9225,6 +9226,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		nextEditor.placeholder = () => this.#composerHint();
 		nextEditor.faint = () => this.#extensionUiController.askHoldsKeys();
 		nextEditor.onUpFromTop = () => this.#extensionUiController.focusAsk();
+		nextEditor.onUnclaimedTab = nextEditor.onUpFromTop;
 		nextEditor.predictions = () => this.#eventController.composerPrediction.choices;
 		nextEditor.onPredictionAccepted = index => this.#eventController.composerPrediction.accepted(index);
 		nextEditor.onPredictionShown = () => this.#eventController.composerPrediction.shown();

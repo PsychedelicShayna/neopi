@@ -519,6 +519,80 @@ describe("Editor component", () => {
 	});
 
 	describe("autocomplete triggers", () => {
+		it("hands Tab to the host only when the pending ask beats an empty or unmatched token", async () => {
+			const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "tab-ask-"));
+			try {
+				await Bun.write(path.join(baseDir, "visible-file.ts"), "export {};\n");
+				const editor = new Editor(defaultEditorTheme);
+				editor.focused = true;
+				editor.setAutocompleteProvider(new CombinedAutocompleteProvider([], baseDir));
+				let askWaits = true;
+				let handoffs = 0;
+				editor.onUnclaimedTab = () => {
+					if (!askWaits) return false;
+					handoffs++;
+					return true;
+				};
+
+				editor.handleInput("\t");
+				expect(handoffs).toBe(1);
+				expect(editor.isShowingAutocomplete()).toBe(false);
+
+				let update = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = () => update.resolve();
+				editor.setText("unmatched-token");
+				editor.handleInput("\t");
+				await update.promise;
+				expect(handoffs).toBe(2);
+				expect(editor.getText()).toBe("unmatched-token");
+
+				update = Promise.withResolvers<void>();
+				editor.setText("visible");
+				editor.handleInput("\t");
+				await update.promise;
+				expect(editor.isShowingAutocomplete()).toBe(true);
+				editor.handleInput("\t");
+				expect(editor.getText()).toBe("visible-file.ts");
+				expect(handoffs).toBe(2);
+
+				askWaits = false;
+				update = Promise.withResolvers<void>();
+				editor.setText("");
+				editor.handleInput("\t");
+				await update.promise;
+				expect(editor.isShowingAutocomplete()).toBe(true);
+			} finally {
+				await fs.rm(baseDir, { recursive: true, force: true });
+			}
+		});
+
+		it("keeps Tab for accepting and cycling predictions while an ask waits", () => {
+			const editor = new Editor(defaultEditorTheme);
+			const handoff = vi.fn(() => true);
+			editor.onUnclaimedTab = handoff;
+			editor.predictions = () => ["run tests", "show the diff"];
+
+			editor.handleInput("\t");
+			expect(editor.getText()).toBe("run tests");
+			editor.handleInput("\t");
+			expect(editor.isShowingAutocomplete()).toBe(true);
+			editor.handleInput("\x1b[B");
+			editor.handleInput("\t");
+			expect(editor.getText()).toBe("show the diff");
+			expect(handoff).not.toHaveBeenCalled();
+		});
+
+		it("does not hand Tab to the host when Vim is enabled", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setVimMode(true);
+			const handoff = vi.fn(() => true);
+			editor.onUnclaimedTab = handoff;
+			editor.handleInput("\t");
+			editor.handleInput("\x1b");
+			editor.handleInput("\t");
+			expect(handoff).not.toHaveBeenCalled();
+		});
+
 		it("triggers slash-command autocomplete without losing the hardware cursor anchor", async () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.focused = true;
