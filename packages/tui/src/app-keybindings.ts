@@ -207,7 +207,7 @@ export const KEYBINDINGS = {
 	"app.message.chain": {
 		// Not an Enter chord: legacy terminals and tmux send Alt+Enter as ESC CR,
 		// the same bytes many terminals map Shift+Enter (newline) to.
-		defaultKeys: ["alt+c", "ctrl+alt+c"],
+		defaultKeys: "ctrl+alt+c",
 		description: "Send through the active post-processing chain",
 	},
 	"app.repl.toggle": {

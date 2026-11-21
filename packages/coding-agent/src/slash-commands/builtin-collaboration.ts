@@ -65,7 +65,7 @@ async function formatChainingStatus(cwd: string): Promise<string> {
 	const { chains, warnings } = await discoverChains(cwd, getAgentDir());
 	const active = cfgChainingActive.get(settings);
 	const lines = [
-		`Chaining: ${cfgChainingAuto.get(settings) ? "on (every prompt)" : "off (Alt+C or Ctrl+Alt+C runs it once)"}`,
+		`Chaining: ${cfgChainingAuto.get(settings) ? "on (every prompt)" : "off (Ctrl+Alt+C runs it once)"}`,
 		`Active chain: ${active || "(none; you will be asked)"}`,
 	];
 	if (chains.length === 0) {
@@ -95,7 +95,7 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 	}
 	if (verb === "off") {
 		cfgChainingAuto.set(settings, false);
-		return "Chaining off. Alt+C or Ctrl+Alt+C still runs the active chain for one prompt.";
+		return "Chaining off. Ctrl+Alt+C still runs the active chain for one prompt.";
 	}
 	if (verb === "use") {
 		const name = rest.trim();
@@ -298,7 +298,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		acpInputHint: "[on|off|status|use [name]|configure]",
 		subcommands: [
 			{ name: "on", description: "Run every prompt through the active chain" },
-			{ name: "off", description: "Stop chaining every prompt (Alt+C or Ctrl+Alt+C still chains one)" },
+			{ name: "off", description: "Stop chaining every prompt (Ctrl+Alt+C still chains one)" },
 			{ name: "status", description: "Show chaining mode, active chain, and chains" },
 			{ name: "use", description: "Set the active chain; no name clears it", usage: "[name]" },
 			{ name: "configure", description: "Open the chain configuration editor (TUI)" },

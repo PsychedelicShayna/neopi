@@ -90,7 +90,7 @@ describe("xAI main-composer destination ownership", () => {
 			return true;
 		});
 		mode.editor.setText("Original draft");
-		mode.editor.handleInput("\x1bc");
+		mode.editor.handleInput("\x1b\x03");
 		await started.promise;
 		await mode.handleSTTToggle();
 		audio[0]!(null, new Float32Array([0.5]));
@@ -190,7 +190,7 @@ describe("xAI main-composer destination ownership", () => {
 			}
 		};
 		mode.editor.setText("Original draft");
-		mode.editor.handleInput("\x1bc");
+		mode.editor.handleInput("\x1b\x03");
 		await opened.promise;
 		await mode.handleSTTToggle();
 		audio[0]!(null, new Float32Array([0.5]));
@@ -220,7 +220,7 @@ describe("xAI main-composer destination ownership", () => {
 			return true;
 		});
 		mode.editor.setText("Original draft");
-		mode.editor.handleInput("\x1bc");
+		mode.editor.handleInput("\x1b\x03");
 		await started.promise;
 		await mode.handleSTTToggle();
 		audio[0]!(null, new Float32Array([0.5]));
@@ -261,7 +261,7 @@ describe("xAI main-composer destination ownership", () => {
 			}
 		};
 		mode.editor.setText("Original draft");
-		mode.editor.handleInput("\x1bc");
+		mode.editor.handleInput("\x1b\x03");
 		await started.promise;
 		await mode.handleSTTToggle();
 		audio[0]!(null, new Float32Array([0.5]));

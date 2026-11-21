@@ -204,7 +204,7 @@ Cloud dictation keeps hold-to-talk behavior and writes audio to disk-backed WAV 
 
 A chain rewrites a composer prompt through ordered model steps before it is sent. Each step's output is the next step's input, and the last output is what gets sent. Voice input needs nothing special: Ctrl+Space puts the transcript in the composer, and chaining happens when that text is sent.
 
-- **Alt+C** or **Ctrl+Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
+- **Ctrl+Alt+C** (`app.message.chain`) sends the composer text through the active chain once.
 - **`/chain on`** runs every prompt through it; **`/chain off`** stops that (the shortcuts still work).
 - **`/chain use <name>`** sets the active chain; with no name it clears it. With no active chain, a chained send asks which chain to use (or to send unchanged), and the pick becomes active.
 - **`/chain status`** lists the mode, the active chain, and every chain's steps; **`/chain configure`** opens the editor.
