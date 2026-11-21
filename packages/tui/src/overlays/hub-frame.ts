@@ -106,7 +106,11 @@ export function describeHubSidebar<TEntry extends SidebarEntry<string>>(
 	for (let i = 0; i < entries.length; i++) {
 		const entry = entries[i]!;
 		if (entry.kind === "separator") {
-			items.push(node("rule", undefined, undefined, entry.id));
+			items.push(
+				entry.label
+					? node("text", { spans: [span(entry.label, "dim")] }, undefined, entry.id)
+					: node("rule", undefined, undefined, entry.id),
+			);
 			continue;
 		}
 		const decoration = style(entry, i);
@@ -284,7 +288,13 @@ export class HubFrame {
 			const entry = entries[i];
 			if (!entry) continue;
 			if (entry.kind === "separator") {
-				lines.push(theme.fg("border", "─".repeat(width)));
+				const label = entry.label ? `─ ${entry.label} ` : "";
+				lines.push(
+					theme.fg(
+						"border",
+						truncateToWidth(`${label}${"─".repeat(Math.max(0, width - visibleWidth(label)))}`, width),
+					),
+				);
 				continue;
 			}
 			const active = entry.id === selection.id;
