@@ -1280,6 +1280,11 @@ export class Agent {
 		return this.#turnInput.getStore()?.();
 	}
 
+	/** Attribute work preparing a new model turn to its prospective input. */
+	runWithTurnInput<T>(input: () => readonly AgentMessage[], run: () => T): T {
+		return this.#turnInput.run(input, run);
+	}
+
 	/** Run model-related work without attributing it to an ambient caller. */
 	runWithUnattributedTurn<T>(run: () => T): T {
 		return this.#turnInput.run(() => [], run);

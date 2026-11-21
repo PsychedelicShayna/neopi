@@ -21,6 +21,7 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { $env, getAgentDir, isRecord, logger, postmortem, Snowflake, toError } from "@oh-my-pi/pi-utils";
 import { EXIT_WITH_PARENT_EXIT_CODE, EXIT_WITH_PARENT_TEARDOWN_MS, tearDownExitTarget } from "../../exit-with-parent";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { controlActorForOrigin, runAsControlCommand } from "../../control/actor";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -1594,7 +1595,6 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 		reloadPluginState,
 		getAvailableCommands,
 		onPromptError,
-		origin,
 		extensionUserMessageTracker,
 		trackBackground,
 		subagentRegistry,
@@ -1652,6 +1652,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 	): Promise<OrderedInputOutcome> =>
 		inputGate.enqueue(async () => {
 			const sessionId = session.sessionId;
+			const origin = ctx.origin;
 			const isCurrent = () =>
 				inputGate.isCurrent(command) && !ctx.isShutdownRequested?.() && session.sessionId === sessionId;
 			if (!isCurrent()) return { kind: "cancelled" };
@@ -1699,35 +1700,37 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				const builtinAbort = new AbortController();
 				builtinCommandAborts.add(builtinAbort);
 				let backgroundedBuiltin = false;
-				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
-					session,
-					sessionManager: session.sessionManager,
-					settings: session.settings,
-					cwd: session.sessionManager.getCwd(),
-					output: text => output({ type: "command_output", text }),
-					refreshCommands: emitAvailableCommandsUpdate,
-					reloadPlugins: reloadPluginState,
-					mcpManager: ctx.mcpManager,
-					reconnectMcpServer: ctx.mcpManager
-						? async (name, selected) => {
-								const manager = ctx.mcpManager!;
-								const state = await reconnectMcpManagerServer(manager, name, selected);
-								if (state) await session.refreshMCPTools(manager.getTools());
-								return state;
-							}
-						: undefined,
-					signal: builtinAbort.signal,
-					runCommandInBackground: task => {
-						backgroundedBuiltin = true;
-						trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
-					},
-					notifyTitleChanged: async () => {
-						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
-					},
-					notifyConfigChanged: async () => {
-						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
-					},
-				});
+				const builtinResult = await runAsControlCommand(controlActorForOrigin(origin), () =>
+					executeAcpBuiltinSlashCommand(text, {
+						session,
+						sessionManager: session.sessionManager,
+						settings: session.settings,
+						cwd: session.sessionManager.getCwd(),
+						output: text => output({ type: "command_output", text }),
+						refreshCommands: emitAvailableCommandsUpdate,
+						reloadPlugins: reloadPluginState,
+						mcpManager: ctx.mcpManager,
+						reconnectMcpServer: ctx.mcpManager
+							? async (name, selected) => {
+									const manager = ctx.mcpManager!;
+									const state = await reconnectMcpManagerServer(manager, name, selected);
+									if (state) await session.refreshMCPTools(manager.getTools());
+									return state;
+								}
+							: undefined,
+						signal: builtinAbort.signal,
+						runCommandInBackground: task => {
+							backgroundedBuiltin = true;
+							trackBackground(() => task().finally(() => builtinCommandAborts.delete(builtinAbort)));
+						},
+						notifyTitleChanged: async () => {
+							output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
+						},
+						notifyConfigChanged: async () => {
+							output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
+						},
+					}),
+				);
 				if (!backgroundedBuiltin) builtinCommandAborts.delete(builtinAbort);
 				if (!isCurrent()) return { kind: "cancelled" };
 				if (builtinResult !== false) {

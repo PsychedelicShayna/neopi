@@ -5,7 +5,6 @@ import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire
 import type { CollabHost } from "../../collab/host";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { once } from "@oh-my-pi/pi-utils/abortable";
-import { currentControlActor } from "../../control/actor";
 import { dialogRegistry, type OpenDialog } from "../../control/dialogs";
 import { controlHostFor } from "../../control/host";
 import type {
@@ -2123,6 +2122,8 @@ export class ExtensionUiController {
 	): Promise<T | undefined> {
 		const { promise, resolve, reject } = Promise.withResolvers<T | undefined>();
 		const described = meta ?? this.#nextDialog;
+		// A queued presentation can start on the previous dialog's async stack.
+		const actor = controlHostFor(this.ctx.session)?.dialogActor();
 		this.#nextDialog = undefined;
 		let settled = false;
 		let started = false;
@@ -2169,10 +2170,10 @@ export class ExtensionUiController {
 				this.#advanceDialogQueue();
 				return;
 			}
-			const actor = currentControlActor();
 			if (actor && actor.humanNow() !== actor.humanAtAdmission) {
 				this.ctx.showStatus(`⌁ ${actor.label}#${actor.connectionId} backed off (you were interacting)`);
 				settle(undefined);
+				this.#advanceDialogQueue();
 				return;
 			}
 			started = true;

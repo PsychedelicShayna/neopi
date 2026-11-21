@@ -377,7 +377,7 @@ describe("control host", () => {
 				if (frame.type === "extension_ui_request" && frame.method === "cancel") cancels.push(frame.targetId);
 			});
 			const shown = nextAskFrame(client, "ask");
-			const completed = client.request({ type: "input", text: "Open the question" });
+			const completed = client.request({ type: "slash", text: "/open-test-ask" });
 			const request = await shown;
 			if (end === "abort") abort.abort();
 			else if (end === "pane dismissal") expect(ui.cancelAsk()).toBe(true);

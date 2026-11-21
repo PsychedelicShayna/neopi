@@ -9,7 +9,7 @@ import { TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { ControlClient } from "../../src/control/client";
-import { ControlHost } from "../../src/control/host";
+import { ControlHost, currentControlCaller } from "../../src/control/host";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
 import type {
@@ -24,6 +24,7 @@ import { cfgCompactionEnabled } from "../../src/session/context-settings";
 import { SessionManager } from "../../src/session/session-manager";
 import { EventBus } from "../../src/utils/event-bus";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { makeAssistantMessage } from "../session-manager/helpers";
 
 const queuedPrompt = "Open the queued author's Ask";
 const questions = [{ id: "pick", question: "Which one?", options: [{ label: "One" }, { label: "Two" }] }];
@@ -51,6 +52,15 @@ test.each([
 	["before_agent_start", "follow_up", "opted in", "author"],
 	["before_agent_start", "follow_up", "opted out", "pane"],
 	["before_agent_start", "steer", "opted in", "author"],
+	["before_agent_start after pane input", "follow_up", "opted in", "author"],
+	["before_agent_start after pane input", "follow_up", "opted out", "pane"],
+	["before_agent_start before pane input", "follow_up", "opted in", "back off"],
+	["delivered caller ancestry", "follow_up", "opted in", "author"],
+	["historical error recovery", "prompt", "opted in", "pane"],
+	["direct prompt preparation", "prompt", "opted in", "author"],
+	["direct prompt compaction", "prompt", "opted in", "author"],
+	["unscoped input hook", "prompt", "opted in", "pane"],
+	["direct command", "prompt", "opted in", "author"],
 	["before_agent_start", "follow_up", "disconnected", "pane"],
 	["before_agent_start", "follow_up", "mixed origins", "pane"],
 	["before_agent_start", "follow_up", "missing origin", "pane"],
@@ -75,11 +85,16 @@ test.each([
 	const preContinue = boundary === "compaction before continuation";
 	const midRun = boundary.startsWith("mid-run compaction");
 	const compact = midRun || boundary === "post-error compaction";
+	const historical = boundary === "historical error recovery";
+	const directCompaction = boundary === "direct prompt compaction";
+	const unscoped = boundary === "unscoped input hook";
+	const direct = type === "prompt";
+	const command = "/ask-test";
 	const primary = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 	const fallback = getBundledModel("openai", "gpt-4o-mini")!;
 	const opensForAuthor = target === "author";
 	const config = {
-		...(preContinue ? {} : { "compaction.enabled": compact }),
+		...(preContinue ? {} : { "compaction.enabled": compact || historical || directCompaction }),
 		"compaction.methodOrder": ["soft"],
 		"compaction.thresholdTokens": 20_000,
 		"compaction.keepRecentTokens": 1,
@@ -112,11 +127,31 @@ test.each([
 		opened.resolve();
 		result.resolve(await answer);
 	}
+	let callerChain: string[] | undefined;
 	const extension = await loadExtensionFromFactory(
 		pi => {
-			if (boundary === "before_agent_start" || boundary === "idle queue drain") {
+			if (
+				boundary.startsWith("before_agent_start") ||
+				boundary === "idle queue drain" ||
+				boundary === "direct prompt preparation"
+			) {
 				pi.on("before_agent_start", async (event, ctx) => {
 					if (event.prompt.includes(queuedPrompt) && ctx.ui.askDialog) await ask(ctx.ui.askDialog);
+				});
+			}
+			if (unscoped) {
+				pi.on("input", (event, ctx) => {
+					if (event.text !== queuedPrompt) return;
+					const open = ctx.ui.askDialog;
+					if (open) void entered.promise.then(() => ask(open)).catch(opened.reject);
+				});
+			}
+			if (boundary === "direct command") {
+				pi.registerCommand(command.slice(1), {
+					description: "Open an Ask directly",
+					handler: async (_args, ctx) => {
+						if (ctx.ui.askDialog) await ask(ctx.ui.askDialog);
+					},
 				});
 			}
 			if (boundary === "context" || boundary === "live context" || retry) {
@@ -137,7 +172,7 @@ test.each([
 				if (boundary === "turn_start") pi.on("turn_start", onTurn);
 				else pi.on("turn_end", onTurn);
 			}
-			if (compact || preContinue) {
+			if (compact || preContinue || historical || directCompaction) {
 				pi.on("session_before_compact", async (event, ctx) => {
 					if (boundary !== "mid-run compaction completion" && ctx.ui.askDialog) await ask(ctx.ui.askDialog);
 					return {
@@ -167,13 +202,15 @@ test.each([
 	const extensionRunner = new ExtensionRunner([extension], runtime, dir.path(), manager, modelRegistry);
 	const model = createMockModel({ provider: "anthropic", responses: [] });
 	if (preContinue) model.push({ content: ["Completed older turn."] });
-	model.push(async () => {
-		entered.resolve();
-		await release.promise;
-		if (preContinue) return { throw: "rate limit exceeded retry-after-ms=200" };
-		if (retry) return { throw: "503 service unavailable: overloaded_error" };
-		return { content: ["First turn finished."] };
-	});
+	if (!direct || unscoped) {
+		model.push(async () => {
+			entered.resolve();
+			await release.promise;
+			if (preContinue) return { throw: "rate limit exceeded retry-after-ms=200" };
+			if (retry) return { throw: "503 service unavailable: overloaded_error" };
+			return { content: ["First turn finished."] };
+		});
+	}
 	if (preContinue) {
 		model.push({ content: ["Recovered on the fallback."], usage: { input: 30_000 } });
 	} else if (midRun) {
@@ -185,9 +222,32 @@ test.each([
 		model.push({ stopReason: "error", errorMessage: "prompt is too long: 300000 tokens > 200000 maximum" });
 	}
 	model.push({ content: ["Done."] });
+	if (historical || directCompaction) {
+		const olderAnswer = { ...makeAssistantMessage(), api: model.api, model: model.id };
+		manager.appendMessage({
+			role: "user",
+			content: `Earlier turn.${" history".repeat(directCompaction ? 24_000 : 1_000)}`,
+			timestamp: Date.now(),
+		});
+		manager.appendMessage(olderAnswer);
+	}
+	if (historical) {
+		const olderAnswer = { ...makeAssistantMessage(), api: model.api, model: model.id };
+		manager.appendMessage({ role: "user", content: "The failed turn", timestamp: Date.now() });
+		manager.appendMessage({
+			...olderAnswer,
+			content: [],
+			stopReason: "error",
+			errorMessage: "prompt is too long: 300000 tokens > 200000 maximum",
+			usage: { ...olderAnswer.usage, input: 300_000 },
+		});
+	}
 	const agent = new Agent({
 		getApiKey: () => "test-key",
-		initialState: { model: preContinue ? primary : model },
+		initialState: {
+			model: preContinue ? primary : model,
+			messages: manager.buildSessionContext({ transcript: historical }).messages,
+		},
 		transformContext: (messages, signal) => extensionRunner.emitContext(messages, signal),
 		streamFn: async (requestedModel, context, options) => {
 			if (preContinue && model.calls.length === 3 && !opening) {
@@ -238,6 +298,7 @@ test.each([
 		syncComposerShape: () => {},
 		syncExtensionLinks: () => {},
 		showExtensionError: () => {},
+		showStatus: () => {},
 		closeLinkBrowser: () => {},
 		statusLine: { setAwaitingAnswer: () => {} },
 	} as unknown as InteractiveModeContext);
@@ -261,10 +322,29 @@ test.each([
 				if (includesQueuedPrompt(context.messages)) await ask(questions => ui.showAskDialog(questions));
 			});
 		}
+		if (boundary === "delivered caller ancestry") {
+			agent.setBeforeModelCall(async context => {
+				if (!includesQueuedPrompt(context.messages)) return;
+				callerChain = currentControlCaller()?.controlChain;
+				await ask(questions => ui.showAskDialog(questions));
+			});
+		}
 		await host.start();
 		const metadata = host.publication!.metadata();
-		const a = new ControlClient({ metadata, label: "starter", kind: "cli" });
-		const b = new ControlClient({ metadata, label: "queued author", kind: "cli" });
+		const a = new ControlClient({
+			metadata,
+			label: "starter",
+			kind: "cli",
+			allowNested: true,
+			controlChain: ["starter-ancestor"],
+		});
+		const b = new ControlClient({
+			metadata,
+			label: "queued author",
+			kind: "cli",
+			allowNested: true,
+			controlChain: ["author-ancestor"],
+		});
 		clients.push(a, b);
 		await Promise.all(clients.map(client => client.connect()));
 		const frames = clients.map(client => {
@@ -280,7 +360,7 @@ test.each([
 			await session.prompt(`Seed an earlier turn.${" historical".repeat(24_000)}`);
 			expect(model.calls).toHaveLength(1);
 		}
-		if (boundary !== "idle queue drain") {
+		if (!direct && boundary !== "idle queue drain") {
 			expect(await a.request({ type: "prompt", message: "Start the run" })).toMatchObject({ success: true });
 			await withTimeout(entered.promise, 2_000, "The first provider call did not start");
 		}
@@ -293,7 +373,13 @@ test.each([
 			expect(cfgCompactionEnabled.get(settings)).toBe(true);
 		}
 		if (opt === "mixed origins" || opt === "missing origin") session.setFollowUpMode("all", false);
-		if (type !== "no queue") expect((await b.request({ type, message: queuedPrompt })).success).toBe(true);
+		if (boundary === "before_agent_start after pane input") host.bumpHuman();
+		const submission = direct
+			? b.request({ type: "prompt", message: boundary === "direct command" ? command : queuedPrompt })
+			: undefined;
+		void submission?.catch(() => {});
+		if (!direct && type !== "no queue") expect((await b.request({ type, message: queuedPrompt })).success).toBe(true);
+		if (boundary === "before_agent_start before pane input") host.bumpHuman();
 		if (opt === "mixed origins") {
 			expect((await a.request({ type: "follow_up", message: "Also include input from A" })).success).toBe(true);
 		} else if (opt === "missing origin") {
@@ -301,7 +387,7 @@ test.each([
 		} else if (opt === "disconnected") {
 			await expect(b.request({ type: "bye" }, 1_000)).rejects.toThrow("closed");
 		}
-		release.resolve();
+		if (!unscoped) release.resolve();
 		await withTimeout(opened.promise, 3_000, "The extension did not open its Ask");
 		if (preContinue) {
 			expect(session.model?.id).toBe(primary.id);
@@ -310,6 +396,13 @@ test.each([
 		const active = opt === "disconnected" ? [a] : clients;
 		await Promise.all(active.map(client => client.request({ type: "state" })));
 		expect(frames.map(seen => seen.length)).toEqual([0, opensForAuthor ? 1 : 0]);
+		if (boundary === "delivered caller ancestry") expect(callerChain).toEqual(["author-ancestor"]);
+		if (target === "back off") {
+			expect(await withTimeout(result.promise, 1_000, "A stale dialog did not back off")).toBeUndefined();
+			expect(askContainer.children).toHaveLength(0);
+			await session.waitForIdle();
+			return;
+		}
 		expect(askContainer.children).toHaveLength(1);
 		if (opensForAuthor) {
 			expect((await b.request({ type: "extension_ui_response", id: frames[1][0].id, answers })).success).toBe(true);
@@ -318,6 +411,8 @@ test.each([
 			expect(ui.cancelAsk()).toBe(true);
 			await result.promise;
 		}
+		release.resolve();
+		if (submission) expect((await submission).success).toBe(true);
 		await session.waitForIdle();
 	} finally {
 		clock?.mockRestore();
