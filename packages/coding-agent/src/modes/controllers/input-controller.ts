@@ -25,7 +25,6 @@ import { currentDeferredDraft, runWithoutDetachedDraft } from "@oh-my-pi/pi-tui/
 import type { ChainConfig } from "@oh-my-pi/pi-tui/overlays/chain-types";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import { discoverChains } from "../../chains/config";
-import { ChainStepGesture } from "../../chains/escape-gesture";
 import { ChainControl, enabledChainSteps, runChain } from "../../chains/runner";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
@@ -1993,12 +1992,11 @@ export class InputController {
 	 * composer instead of sending: no chain, a cancelled pick, an abort (the typed
 	 * draft), or a failed step (the last completed output).
 	 *
-	 * While the chain rewrites the locked composer, two chain-control taps skip the
-	 * current step, three abort it, and the interrupt binding cancels immediately.
+	 * While the chain rewrites the locked composer, each chain-control press skips the
+	 * current step and passes its input on; the interrupt binding aborts the chain.
 	 */
 	async #applyPostProcessingChain(text: string): Promise<{ text: string; send: boolean }> {
 		const control = new ChainControl();
-		const gesture = new ChainStepGesture();
 		let lastOutput = text;
 		let chainName = "";
 		let currentStep = "";
@@ -2013,15 +2011,10 @@ export class InputController {
 		if (!this.ctx.editor.restoreSubmittedDraft()) this.ctx.editor.setCollapsedText(text);
 		this.ctx.editor.setChainLock({
 			onSkip: () => {
-				switch (gesture.press()) {
-					case "skip":
-						control.skipStep();
-						if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
-						break;
-					case "abort":
-						control.abort();
-						break;
-				}
+				// Each press skips the step in progress and passes its input on; only the interrupt
+				// binding (Ctrl+C) aborts the chain.
+				control.skipStep();
+				if (currentStep) this.ctx.showStatus(`Chain ${chainName}: skipping "${currentStep}"…`);
 			},
 			onCancel: () => control.abort(),
 		});
@@ -2061,7 +2054,7 @@ export class InputController {
 				onStep: (step, index, total) => {
 					currentStep = step.name;
 					this.ctx.showStatus(
-						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (${formatDoubleTap(this.ctx.keybindings.getKeys("app.chain.skipStep")[0] ?? "alt+s")} skip · ${appKey(this.ctx.keybindings, "app.interrupt")} cancel)`,
+						`Chain ${chain.name} · step ${index + 1}/${total} "${step.name}" · preprocessing… (${appKey(this.ctx.keybindings, "app.chain.skipStep")} skip · ${appKey(this.ctx.keybindings, "app.interrupt")} cancel)`,
 					);
 				},
 				onStepDone: (_step, _index, output) => {

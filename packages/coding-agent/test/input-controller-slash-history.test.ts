@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import * as chainConfig from "../src/chains/config";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { createMockModel, type MockResponse, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import type { Context, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { cfgBareExitOnEmptySession, cfgBareSlashCommands } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { isQueuedMessageList, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { ChainLock } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import * as chainConfig from "../src/chains/config";
+import { cfgChainingActive } from "../src/chains/settings";
 
 // Drives the real editor submit handler through the builtin slash dispatch
 // path. Before #3148 only a handful of commands recorded their text (each
@@ -123,6 +127,61 @@ function controllerFor(ctx: InteractiveModeContext) {
 	controller.setupEditorSubmitHandler();
 	ctx.handleQueueCommand = message => controller.handleQueueCommand(message);
 	return controller;
+}
+
+function setupChainSubmit(ctx: InteractiveModeContext) {
+	const { editor } = ctx;
+	let chainKey: (() => void) | undefined;
+	let submission: Promise<void> | undefined;
+	let lock: ChainLock | undefined;
+	Object.assign(ctx, {
+		keybindings: {
+			getKeys(action: string) {
+				switch (action) {
+					case "app.message.chain":
+						return ["alt+c"];
+					case "app.chain.skipStep":
+						return ["alt+s"];
+					case "app.interrupt":
+						return ["ctrl+c"];
+					default:
+						return [];
+				}
+			},
+		},
+		dictationSpaceHold: () => vi.fn(),
+	});
+	Object.assign(ctx.sessionManager, { getCwd: () => process.cwd() });
+	Object.assign(ctx.ui, { addInputListener: vi.fn(), addStartListener: vi.fn() });
+	Object.assign(editor, {
+		setActionKeys: vi.fn(),
+		clearCustomKeyHandlers: vi.fn(),
+		setCustomKeyHandler: (key: string, handler: () => void) => {
+			if (key === "alt+c") chainKey = handler;
+		},
+		spaceHold: {},
+		submit: () => {
+			const text = editor.getText();
+			editor.setText("");
+			submission = Promise.resolve(editor.onSubmit!(text));
+		},
+		clearPasteState: vi.fn(),
+		setChainLock: (next: ChainLock | undefined) => {
+			lock = next;
+		},
+	});
+	controllerFor(ctx).setupKeyHandlers();
+	return {
+		submit(text: string) {
+			editor.setText(text);
+			chainKey!();
+			if (!submission) throw new Error("Alt+C did not submit the draft");
+			return submission;
+		},
+		get lock() {
+			return lock;
+		},
+	};
 }
 
 describe("input controller — slash command history (#3148)", () => {
@@ -290,34 +349,9 @@ describe("input controller — slash command history (#3148)", () => {
 		const discovery = vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({ chains: [], warnings: [] });
 		try {
 			const { ctx, editor, prompt } = makeCtx();
-			let chainKey: (() => void) | undefined;
-			let submission: Promise<void> | undefined;
-			Object.assign(ctx, {
-				keybindings: { getKeys: (action: string) => (action === "app.message.chain" ? ["alt+c"] : []) },
-				dictationSpaceHold: () => vi.fn(),
-				sessionManager: { getCwd: () => process.cwd() },
-			});
-			Object.assign(ctx.ui, { addInputListener: vi.fn(), addStartListener: vi.fn() });
-			Object.assign(editor, {
-				setActionKeys: vi.fn(),
-				clearCustomKeyHandlers: vi.fn(),
-				setCustomKeyHandler: (key: string, handler: () => void) => {
-					if (key === "alt+c") chainKey = handler;
-				},
-				spaceHold: {},
-				submit: () => {
-					const text = editor.getText();
-					editor.setText("");
-					submission = editor.onSubmit?.(text);
-				},
-				setChainLock: vi.fn(),
-			});
-			const controller = controllerFor(ctx);
-			controller.setupKeyHandlers();
-			editor.setText("/typo");
+			const chain = setupChainSubmit(ctx);
 
-			chainKey?.();
-			await submission;
+			await chain.submit("/typo");
 			expect(ctx.showWarning).toHaveBeenCalledWith(expect.stringContaining("Unknown command /typo"));
 			expect(editor.getText()).toBe("/typo");
 
@@ -327,6 +361,107 @@ describe("input controller — slash command history (#3148)", () => {
 			expect(prompt).not.toHaveBeenCalled();
 		} finally {
 			discovery.mockRestore();
+		}
+	});
+});
+
+describe("input controller — post-processing chain controls (#629)", () => {
+	it.each(["skip first", "skip both", "cancel second"] as const)("%s in a three-step chain", async action => {
+		const source = "input-controller-chain-controls";
+		const makeStage = (name: string) => {
+			const started = Promise.withResolvers<{ context: Context; signal?: AbortSignal }>();
+			const response = Promise.withResolvers<MockResponse>();
+			const output = `${name} rewrite`;
+			const model = createMockModel({
+				id: `chain-${name}`,
+				handler: (context, options) => {
+					started.resolve({ context, signal: options?.signal });
+					return response.promise;
+				},
+			});
+			return {
+				model,
+				started: started.promise,
+				release: () => response.resolve({ content: [output] }),
+				step: { name, prompt: name, model: `${model.provider}/${model.id}` },
+			};
+		};
+		const stages = [makeStage("first"), makeStage("second"), makeStage("third")] as const;
+		const discovery = vi.spyOn(chainConfig, "discoverChains").mockResolvedValue({
+			chains: [{ name: "rewrite", steps: stages.map(stage => stage.step) }],
+			warnings: [],
+		});
+		let submission: Promise<void> | undefined;
+		try {
+			resetSettingsForTest();
+			await Settings.init({ inMemory: true });
+			cfgChainingActive.set(Settings.instance, "rewrite");
+			registerMockApi(source);
+			const { ctx, editor, onInputCallback, prompt } = makeCtx();
+			Object.assign(ctx, { settings: Settings.instance });
+			Object.assign(ctx.session, {
+				modelRegistry: { getAvailable: () => stages.map(stage => stage.model), resolver: () => "test-key" },
+				agent: { state: { messages: [], tools: [] } },
+			});
+			const chain = setupChainSubmit(ctx);
+			const draft = "Original draft";
+			const pending = chain.submit(draft);
+			submission = pending;
+			const [first, second, third] = stages;
+			const waitForStage = async (stage: typeof first, input: string) => {
+				const { context, signal } = await Promise.race([
+					stage.started,
+					pending.then(() => {
+						throw new Error(`Submission ended before stage "${stage.step.name}" started`);
+					}),
+				]);
+				expect(context.messages.at(-1)).toMatchObject({ role: "user", content: [{ type: "text", text: input }] });
+				expect(chain.lock).toBeDefined();
+				return signal;
+			};
+
+			const firstSignal = await waitForStage(first, draft);
+			expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("(Alt+S skip · Ctrl+C cancel)"));
+			if (action !== "cancel second") {
+				chain.lock!.onSkip();
+				expect(firstSignal?.aborted).toBe(true);
+			}
+			first.release();
+
+			const secondSignal = await waitForStage(second, action === "cancel second" ? "first rewrite" : draft);
+			if (action === "skip both") {
+				chain.lock!.onSkip();
+				expect(secondSignal?.aborted).toBe(true);
+			} else if (action === "cancel second") {
+				chain.lock!.onCancel();
+				expect(secondSignal?.aborted).toBe(true);
+			}
+			second.release();
+
+			if (action === "cancel second") {
+				await pending;
+				expect(editor.getText()).toBe(draft);
+				expect(third.model.calls).toHaveLength(0);
+				expect(onInputCallback).not.toHaveBeenCalled();
+				expect(prompt).not.toHaveBeenCalled();
+			} else {
+				await waitForStage(third, action === "skip both" ? draft : "second rewrite");
+				third.release();
+				await pending;
+				expect(onInputCallback).toHaveBeenCalledTimes(1);
+				expect(onInputCallback).toHaveBeenCalledWith(expect.objectContaining({ text: "third rewrite" }));
+				expect(editor.getText()).toBe("");
+			}
+			expect(chain.lock).toBeUndefined();
+		} finally {
+			for (const stage of stages) stage.release();
+			try {
+				await submission;
+			} finally {
+				discovery.mockRestore();
+				unregisterCustomApis(source);
+				resetSettingsForTest();
+			}
 		}
 	});
 });
