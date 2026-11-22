@@ -8,6 +8,7 @@ import { setUnpausedProviders } from "@oh-my-pi/pi-ai/oauth";
 import { authProviders } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { cfgDefaultThinkingLevel } from "../session/settings";
 import type { HubModelFolder } from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { validateModelFolderRules } from "@oh-my-pi/pi-tui/overlays/model-folder-rules";
 
 /** Display metadata for one model tag. */
 export interface ModelTagDef {
@@ -259,6 +260,7 @@ export const cfgModelFolders = register({
 			}
 			if (names.has(folder.name)) throw new Error(`Duplicate model folder "${folder.name}"`);
 			names.add(folder.name);
+			if (folder.rules !== undefined) validateModelFolderRules(folder.rules);
 		}
 	},
 });

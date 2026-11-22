@@ -19,6 +19,7 @@
 - See microphone and playback levels during live voice calls, and customize the Live audio meter's text in `/statusline` ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - Edit Model Variants from the model hub, including their base model and request overrides, without editing YAML ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).
 - Spanish language selection now covers supported settings labels, shared menu messages and Vim navigation help, the welcome banner, approval and Ask actions, error notices, and selected status text; terminology still under review remains in English.
+- Add models to a folder once or on every catalog refresh using editable rules, and use Force apply to keep only current matches ([#715](https://github.com/PsychedelicShayna/neopi/issues/715)).
 
 - The agent definition editor uses a field list with a live preview pane and dedicated screens per field, in the terminal and as native pickers ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 - `/advisor configure` edits role advisor activation sets in User, Project .omp, and Session scopes, with stable-ID checkboxes, inherited-set clearing, and editable override/missing-reference diagnostics ([#89](https://github.com/PsychedelicShayna/neopi/issues/89)).
