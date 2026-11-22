@@ -21,13 +21,19 @@ const ircSchema = type({
 		"my_groups",
 		"keep",
 	),
-	"to?": type("string | string[]").describe("Direct send: one or more peer IDs; mutually exclusive with group"),
-	"group?": type("string").describe("Group name, without a leading #"),
+	"to?": type("string | string[]").describe(
+		"send only: peer ID(s) for a direct message. Use either to or group, never both; omit the other (empty is ignored)",
+	),
+	"group?": type("string").describe(
+		"Group name without a leading #. send (instead of to), create, add, remove, leave, members, keep; omit otherwise",
+	),
 	"message?": type("string").describe("Text for send or broadcast"),
-	"members?": type("string[]").describe("Peer IDs for create, add, or remove"),
-	"reason?": type("string").describe("Why to keep a singleton group longer"),
-	"replyTo?": type("string").describe("Message ID for a direct reply"),
-	"progress?": type("boolean").describe("Direct message is an interim progress note, not an answer"),
+	"members?": type("string[]").describe("Peer IDs for create, add, or remove only; omit otherwise"),
+	"reason?": type("string").describe("keep only: why to keep a singleton group longer; omit otherwise"),
+	"replyTo?": type("string").describe("Direct send only: message ID being answered; omit when not replying"),
+	"progress?": type("boolean").describe(
+		"Direct send only: true marks an interim progress note, not an answer; omit (or false) otherwise",
+	),
 });
 
 type IrcParams = typeof ircSchema.infer;
