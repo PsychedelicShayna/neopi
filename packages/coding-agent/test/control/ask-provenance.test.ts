@@ -412,14 +412,15 @@ test.each(dialogCases)("%s opens %s on the %s path (%s): %s", async (boundary, d
 				const caller = currentControlCaller();
 				callerChain = caller?.controlChain;
 				if (caller && opt === "disconnected") {
+					const { instanceId, token } = caller.metadata;
 					const failure = await authenticateHello(
 						{
 							token: "test-ancestor-token",
 							client: {
 								label: "nested ctl",
 								kind: "tool",
-								callerInstanceId: caller.instanceId,
-								callerConnectionToken: callerConnectionToken(caller.token, "author-ancestor", caller.instanceId),
+								callerInstanceId: instanceId,
+								callerConnectionToken: callerConnectionToken(token, "author-ancestor", instanceId),
 								controlChain: caller.controlChain,
 							},
 							override: { allowNested: true },

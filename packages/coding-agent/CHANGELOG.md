@@ -15,6 +15,7 @@
 
 ### Added
 
+- `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
 - Use `/fast force fast` or `/fast force ultra` to request an OpenAI-compatible service tier even when the current model doesn't advertise it.
 - Start `/live-transcript` to keep the live conversation together across handoffs, without spoken reasoning or progress updates. Edit its built-in **Codex** prompt, model, and voice in `/live-persona` without changing regular `/live` ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
