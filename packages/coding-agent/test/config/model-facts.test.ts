@@ -468,9 +468,15 @@ describe("model fact settings initialization", () => {
 		const settings = await Settings.init({ cwd: temp.join("project"), agentDir: temp.join("agent") });
 		const parsed = getModelFactConfig(settings);
 		expect(parsed.enabled).toBe(false);
-		expect(parsed.sources).toEqual([]);
+		expect(parsed.sources).toEqual(["openrouter", "stencil"]);
 		expect(parsed.overrides).toEqual({});
-		expect(parsed.issues).toHaveLength(3);
+		expect(parsed.issues).toBeUndefined();
+		const configPath = temp.join("agent", "config.yml");
+		expect(settings.startupWarnings).toEqual([
+			`Settings: ${configPath}: modelFacts.enabled: expected a boolean; using the default`,
+			`Settings: ${configPath}: modelFacts.sources: expected a array; using the default`,
+			`Settings: ${configPath}: modelFacts.overrides: expected a record; using the default`,
+		]);
 	});
 
 	it("rejects invalid editor writes before changing the effective override record", () => {
