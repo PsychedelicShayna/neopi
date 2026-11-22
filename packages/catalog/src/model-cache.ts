@@ -16,6 +16,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import RULES from "./compat/rules.json" with { type: "json" };
+import { type BundledSightings, type ModelSighting, readSightings, recordSightings } from "./model-first-seen";
 import type { Api, Model } from "./types";
 
 // Rows persist fully materialized Models so compatible warm-cache reads do not
@@ -476,6 +477,30 @@ function runModelCacheDb<T>(resolvedPath: string, shared: boolean, useDb: (db: D
 function withModelCacheDb<T>(dbPath: string | undefined, useDb: (db: Database) => T): T {
 	const { resolvedPath, shared } = resolveCacheDb(dbPath);
 	return runModelCacheDb(resolvedPath, shared, useDb);
+}
+
+/** Capture the first observation of each provider/model identity, regardless of cache policy. */
+export function recordModelSightings(
+	models: readonly ModelSighting[],
+	dbPath?: string,
+	bundled?: BundledSightings,
+): boolean {
+	try {
+		withModelCacheDb(dbPath, db => recordSightings(db, models, Date.now(), bundled));
+		return true;
+	} catch (error) {
+		logger.warn("could not update model discovery history", { error: String(error) });
+		return false;
+	}
+}
+
+export function readModelSightings(newerThan: number, dbPath?: string): ReadonlyMap<string, number> {
+	try {
+		return withModelCacheDb(dbPath, db => readSightings(db, newerThan));
+	} catch (error) {
+		logger.warn("could not read model discovery history", { error: String(error) });
+		return new Map();
+	}
 }
 
 /** Secret-free identity of one probed model endpoint and request API. */
