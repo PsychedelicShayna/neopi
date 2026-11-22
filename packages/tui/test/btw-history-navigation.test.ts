@@ -144,9 +144,13 @@ describe("BTW menu navigation and safe history", () => {
 			});
 			expect(onFollowUp).not.toHaveBeenCalled();
 			reopened.handleInput("\x1b");
+			expect(state(reopened).composer).toMatchObject({ value: "jkG / a safe draft", cursor: 16 });
+			reopened.handleInput("\x1b");
+			expect(state(reopened).composer).toMatchObject({ value: "jkG / a safe draft", cursor: 16 });
+			reopened.handleInput("\t");
 			expect(state(reopened).composer).toBeUndefined();
 			expect(reopened.openFollowUp("question-1")).toBe(true);
-			expect(state(reopened).composer).toMatchObject({ value: "jkG / a safe draft", cursor: 17 });
+			expect(state(reopened).composer).toMatchObject({ value: "jkG / a safe draft", cursor: 16 });
 		} finally {
 			panel.dispose();
 			reopened.dispose();
@@ -196,6 +200,8 @@ describe("BTW menu navigation and safe history", () => {
 			accepted.resolve(false);
 			await accepted.promise;
 			panel.handleInput("\x1b");
+			expect(state(panel).composer?.value).toBe("hjklggG / ");
+			panel.handleInput("\t");
 			expect(state(panel).composer).toBeUndefined();
 			panel.openFollowUp("question-0");
 			expect(state(panel).composer?.value).toBe("hjklggG / ");

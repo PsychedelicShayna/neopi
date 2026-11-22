@@ -892,7 +892,7 @@ export interface InteractiveModeContext {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "requireText">,
 	): Promise<string | undefined>;
 	hideHookEditor(): void;
 	showHookNotify(message: string, type?: "info" | "warning" | "error"): void;

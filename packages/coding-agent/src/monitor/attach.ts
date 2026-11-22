@@ -309,7 +309,7 @@ export class MonitorAttachConnection {
 
 /**
  * Fullscreen pane: the viewer, with its first row replaced by the monitor
- * header (owner, connection state, notices). Ctrl+C exits.
+ * header (owner, connection state, notices). Ctrl+C exits when there is no draft.
  */
 class MonitorPaneComponent implements Component {
 	constructor(
@@ -344,7 +344,7 @@ class MonitorPaneComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "ctrl+c")) {
+		if (matchesKey(data, "ctrl+c") && !this.viewer.capturesInput(data)) {
 			this.exit();
 			return;
 		}

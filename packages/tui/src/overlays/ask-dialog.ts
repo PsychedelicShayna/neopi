@@ -49,7 +49,7 @@ export interface AskDialogItemNote {
 	images?: ImageContent[];
 }
 
-/** A prompt left without submitting: what it still held, offered again when the custom answer reopens. */
+/** A prompt left without submitting: what it still held, offered again when it reopens. */
 export interface AskDialogPromptDraft {
 	draft: AskDialogPromptValue;
 }
@@ -137,14 +137,12 @@ export interface AskDialogPrompt {
 	title: string;
 	/** The question being answered, verbatim. */
 	question: string;
-	/** How the host should handle Escape when the editor does not consume it. */
-	saveOnEscape?: boolean;
 }
 
 interface AskDialogCallbacks {
 	onSubmit(result: ExtensionAskDialogSubmitResult): void;
 	onCancel(): void;
-	/** Resolves the submitted text; on cancel, the editor's draft, or `undefined` when none is kept. */
+	/** Resolves submitted text, a draft when leaving, or `undefined` when explicitly discarding. */
 	onPrompt(prompt: AskDialogPrompt, prefill?: string): Promise<string | AskDialogPromptDraft | undefined>;
 	/** Prompt that accepts pasted images; without it, prompts use `onPrompt`. Resolves like `onPrompt`. */
 	onImagePrompt?(
@@ -192,9 +190,11 @@ interface QuestionState {
 	selectedOptions: Set<string>;
 	customInput: string | undefined;
 	customInputImages: ImageContent[] | undefined;
-	/** Unsubmitted custom answer left by a cancelled prompt; prefills the next one over `customInput`. */
+	/** Unsubmitted custom answer left by Escape; prefills the next edit over `customInput`. */
 	customDraft: AskDialogPromptValue | undefined;
 	notes: Map<string, AskDialogPromptValue>;
+	/** Unsubmitted option notes, kept apart from the notes that will be sent. */
+	noteDrafts: Map<string, AskDialogPromptValue>;
 	cursorIndex: number;
 	scrollOffset: number;
 	manualScroll: boolean;
@@ -650,6 +650,7 @@ export class AskDialogComponent implements Component {
 				customInputImages: undefined,
 				customDraft: undefined,
 				notes: new Map(),
+				noteDrafts: new Map(),
 				cursorIndex: clamp(recommended ?? 0, 0, maxIndex),
 				scrollOffset: 0,
 				manualScroll: false,
@@ -1711,7 +1712,7 @@ export class AskDialogComponent implements Component {
 		this.#promptActive = true;
 		this.#keys.reset();
 		try {
-			// A cancelled edit's draft wins over the submitted answer it was revising.
+			// A stashed draft wins over the submitted answer it was revising, even when blank.
 			const prefill =
 				state.customDraft ??
 				(state.customInput === undefined
@@ -1724,8 +1725,7 @@ export class AskDialogComponent implements Component {
 			if (this.#closed) return;
 			const input = promptOutcome(result);
 			if (!input.submitted) {
-				const draft = input.draft;
-				state.customDraft = draft && (draft.text.trim() !== "" || draft.images?.length) ? draft : undefined;
+				state.customDraft = input.draft;
 				return;
 			}
 			state.customDraft = undefined;
@@ -1767,12 +1767,16 @@ export class AskDialogComponent implements Component {
 				{
 					title: t("tui.ask.note_for", { option: rowItem.label }),
 					question: question.question,
-					saveOnEscape: true,
 				},
-				state.notes.get(rowItem.key),
+				state.noteDrafts.get(rowItem.key) ?? state.notes.get(rowItem.key),
 			);
 			if (this.#closed) return;
 			const note = promptOutcome(result);
+			if (!note.submitted && note.draft) {
+				state.noteDrafts.set(rowItem.key, note.draft);
+				return;
+			}
+			state.noteDrafts.delete(rowItem.key);
 			if (!note.submitted) return;
 			if (note.text.trim() === "" && !note.images?.length) state.notes.delete(rowItem.key);
 			else state.notes.set(rowItem.key, { text: note.text, images: note.images });

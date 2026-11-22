@@ -452,6 +452,7 @@ export class AnnotationOverlay implements Focusable {
 				(editor.editingAnnotationIndex ?? count) < count ? editor.editingAnnotationIndex : undefined;
 			this.#annotating = true;
 			this.#editor.setText(editor.text);
+			this.#editor.resetVimMode();
 		}
 		this.#annotationRev++;
 		this.#nativeBody = undefined;
@@ -535,10 +536,19 @@ export class AnnotationOverlay implements Focusable {
 			return;
 		}
 		if (this.#annotating) {
+			if (matchesKey(data, "ctrl+c")) {
+				this.#annotating = false;
+				this.#editingAnnotationIndex = undefined;
+				this.#editor.setText("");
+				return;
+			}
+			if (matchesKey(data, "escape") && (this.#editor.isJumpPending || this.#editor.vimConsumesEscape())) {
+				this.#editor.handleInput(data);
+				return;
+			}
 			const printable = extractPrintableText(data);
 			if (printable !== undefined) {
-				if (this.#editor.isJumpPending) this.#editor.handleInput(data);
-				else this.#editor.typeCharacter(printable);
+				this.#editor.handleInput(data, true);
 				return;
 			}
 			if (matchesAppExternalEditor(data)) {
@@ -546,7 +556,7 @@ export class AnnotationOverlay implements Focusable {
 				return;
 			}
 			// Close, keeping the unfinished note in the draft so it reopens in the editor.
-			if (this.#keybindings.matches(data, "tui.select.cancel")) {
+			if (matchesKey(data, "escape") || this.#keybindings.matches(data, "tui.select.cancel")) {
 				this.#finish(undefined);
 				return;
 			}
@@ -812,6 +822,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotating = true;
 		this.#keys.reset();
 		this.#editor.setText(existing?.annotation.note ?? "");
+		this.#editor.resetVimMode();
 	}
 
 	#startTextAnnotation(scope: TextReviewAnnotation["scope"], existingIndex?: number): void {
@@ -822,6 +833,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotating = true;
 		this.#keys.reset();
 		this.#editor.setText(existing?.annotation.note ?? "");
+		this.#editor.resetVimMode();
 	}
 
 	#commitAnnotation(value: string): void {
@@ -1324,7 +1336,8 @@ export class AnnotationOverlay implements Focusable {
 			const hints = [
 				`${editorKey("tui.input.submit")} save`,
 				`${editorKey("tui.input.newLine")} newline`,
-				`${this.#key("tui.select.cancel")} close, keep note`,
+				this.#editor.escapeHint("close, keep note"),
+				`${formatKeyHint("ctrl+c")} discard draft`,
 			];
 			hints.push(`${formatKeyHint(appExternalEditorKey())} editor`);
 			return [
@@ -1535,6 +1548,7 @@ export class AnnotationOverlay implements Focusable {
 			this.#bodyHeight,
 			this.#bodyNativeScroll?.n ?? 0,
 			this.#annotating ? `annotating:${this.#annotationScope}:${this.#editingAnnotationIndex}` : "",
+			this.#annotating ? this.#editor.escapeAction("close, keep note") : "",
 			chooser ? `chooser:${chooser.selected}:${chooser.entries.join()}` : "",
 			this.#discardArmed ? "discard-armed" : "",
 		].join("|");
@@ -1946,7 +1960,7 @@ export class AnnotationOverlay implements Focusable {
 		const hasNotes = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
 		const pasteTitle = hasNotes ? PASTE_CODE_REVIEW_ACTION : "Add a note to paste it into the prompt";
 		const buttons: NativeNode[] = [
-			actionButton("Cancel", "close", { keys: "escape" }),
+			actionButton(editing ? "Close" : "Cancel", "close", editing ? {} : { keys: "escape" }),
 			marked(
 				actionButton(this.#discardArmed ? "Confirm discard" : "Discard", "discard", {
 					title: DISCARD_ANNOTATIONS_ACTION,
@@ -1989,7 +2003,8 @@ export class AnnotationOverlay implements Focusable {
 			return [
 				this.#hint("tui.input.submit", "save"),
 				this.#hint("tui.input.newLine", "new line"),
-				this.#hint("tui.select.cancel", "close, keep note"),
+				key("escape", this.#editor.escapeAction("close, keep note")),
+				key("ctrl+c", "discard draft"),
 				this.#callbacks.onAnnotationExternalEditor ? key(appExternalEditorKey(), "editor") : undefined,
 			];
 		}

@@ -4,6 +4,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../src/chrome/overlay-box";
 import { TextFormField } from "../src/components/form";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 import type { DescribeContext, NativeNode } from "../src/native/node";
 import { type HistorySearchEntry, HistorySearchComponent } from "../src/overlays/history-search";
 import { type SessionSelectorEntry, SessionSelectorComponent } from "../src/overlays/session-selector";
@@ -138,6 +139,31 @@ describe("session selector picker", () => {
 		expect(resumed).toEqual([]);
 	});
 
+	it.each([false, true])("offers only search actions and keeps a Backed-out draft (Vim %s)", vim => {
+		const previous = getMenuSearchVimMode();
+		setMenuSearchVimMode(vim);
+		try {
+			const resumed: string[] = [];
+			const selector = make({ resumed });
+			const picker = () => props(selector.describe(withPicker));
+			const act = (action: string) => selector.handleNativeEvent({ type: "action", key: "", act: action, mods: [] });
+			selector.handleInput("/");
+			type(selector, "gam");
+			expect(picker().actions?.map(action => action.id)).toEqual(["search", "clear", "close"]);
+			expect(picker().actions?.find(action => action.id === "close")?.keys).toEqual(vim ? undefined : ["esc"]);
+			act("close");
+			expect(picker().query).toBe("");
+			selector.handleInput("/");
+			expect(picker().query).toBe("gam");
+			act("search");
+			expect(picker().query).toBe("gam");
+			expect(picker().actions?.map(action => action.id)).toContain("resume");
+			expect(resumed).toEqual([]);
+		} finally {
+			setMenuSearchVimMode(previous);
+		}
+	});
+
 	it("runs pointer events down the keys' paths", async () => {
 		const resumed: string[] = [];
 		const deleted: string[] = [];
@@ -230,16 +256,16 @@ describe("session selector rename", () => {
 		expect(props(withoutHook.selector.describe(withPicker)).actions?.some(a => a.id === "rename")).toBe(false);
 	});
 
-	it("opens the rename dialog prefilled with the current title on F2", () => {
+	it("opens the rename dialog prefilled with the current title on Ctrl+R", () => {
 		const { selector, beta } = makeRename({ calls: [] });
-		selector.handleInput("\x1bOQ");
+		selector.handleInput("\x12");
 		const opened = renameDialogOf(selector);
 		expect(opened).toBeDefined();
 		expect(opened!.field.getValue()).toBe(beta.title ?? "");
 	});
-	it("opens the rename dialog on a Kitty F2 press instead of forwarding it to search", () => {
+	it("opens the rename dialog on a Kitty Ctrl+R press instead of forwarding it to search", () => {
 		const { selector, beta } = makeRename({ calls: [] });
-		selector.handleInput("\x1b[Q");
+		selector.handleInput("\x1b[114;5u");
 		const opened = renameDialogOf(selector);
 		expect(opened?.field.getValue()).toBe(beta.title);
 	});
@@ -247,7 +273,7 @@ describe("session selector rename", () => {
 	it("commits on Enter via onRename and updates the row in place", async () => {
 		const renamed = { calls: [] as RenameCall[] };
 		const { selector, beta } = makeRename(renamed);
-		selector.handleInput("\x1bOQ");
+		selector.handleInput("\x12");
 		type(selector, " Prime");
 		const updated = renderedWhen(selector, p => p.items?.find(item => item.id === beta.path)?.label === "Beta Prime");
 		selector.handleInput("\r");
@@ -258,17 +284,28 @@ describe("session selector rename", () => {
 		expect(renameDialogOf(selector)).toBeUndefined();
 	});
 
-	it("cancels on Esc without changes", () => {
-		const renamed = { calls: [] as RenameCall[] };
-		const { selector, beta } = makeRename(renamed);
-		selector.handleInput("\x1bOQ");
-		expect(renameDialogOf(selector)).toBeDefined();
-		type(selector, " Prime");
-		selector.handleInput("\x1b");
-		expect(renameDialogOf(selector)).toBeUndefined();
-		const after = props(selector.describe(withPicker));
-		expect(after.items?.find(item => item.id === beta.path)?.label).toBe("Beta");
-		expect(after.selected).toBe(beta.path);
+	it("keeps a rename draft through Escape and discards it only on Ctrl+C", () => {
+		const previous = getMenuSearchVimMode();
+		setMenuSearchVimMode(true);
+		try {
+			const renamed = { calls: [] as RenameCall[] };
+			const { selector, beta } = makeRename(renamed);
+			selector.handleInput("\x12");
+			expect(renameDialogOf(selector)).toBeDefined();
+			type(selector, " Prime");
+			selector.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+			expect(renameDialogOf(selector)?.field.input.vimMode).toBe("normal");
+			selector.handleInput("\x1b");
+			expect(renameDialogOf(selector)?.field.getValue()).toBe("Beta Prime");
+			selector.handleInput("\x03");
+			expect(renameDialogOf(selector)).toBeUndefined();
+			expect(renamed.calls).toEqual([]);
+			const after = props(selector.describe(withPicker));
+			expect(after.items?.find(item => item.id === beta.path)?.label).toBe("Beta");
+			expect(after.selected).toBe(beta.path);
+		} finally {
+			setMenuSearchVimMode(previous);
+		}
 	});
 
 	it("renders the rename editor instead of the picker while it is open", () => {
@@ -276,7 +313,7 @@ describe("session selector rename", () => {
 		// The picker kind has no text-input affordance: while renaming, the
 		// component must describe the card path so the field is visible.
 		expect(selector.describe(withPicker).k).toBe("picker");
-		selector.handleInput("\x1bOQ");
+		selector.handleInput("\x12");
 		expect(selector.describe(withPicker).k).toBe("card");
 		expect(selector.nativeSheet(withPicker)).toBe(false);
 		expect(renameDialogOf(selector)).toBeDefined();
@@ -288,7 +325,7 @@ describe("session selector rename", () => {
 		// Search first, so the entry caches its haystack with the old title.
 		selector.handleInput("Beta");
 		expect(props(selector.describe(withPicker)).items?.some(item => item.id === beta.path)).toBe(true);
-		selector.handleInput("\x1bOQ");
+		selector.handleInput("\x12");
 		type(selector, " Prime");
 		const updated = renderedWhen(selector, p => p.items?.find(item => item.id === beta.path)?.label === "Beta Prime");
 		selector.handleInput("\r");

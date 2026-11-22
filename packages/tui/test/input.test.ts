@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
-import { SPACE_HOLD_MECHANICAL_RUN } from "@oh-my-pi/pi-tui/space-hold";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import {
 	resetHangulCompatibilityJamoWidthForTests,
@@ -9,12 +9,115 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui/utils";
 import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
+
+const CX: DescribeContext = { cols: 80, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
 function renderedWidth(input: Input, width: number): number {
 	const [line] = input.render(width);
 	// TUI strips this marker before its width verification; tests should mimic that.
 	return visibleWidth(line.replaceAll(CURSOR_MARKER, ""));
 }
+
+it("uses shared Vim motions and undo in an existing single-line field, without canceling on Escape", () => {
+	const previous = getMenuSearchVimMode();
+	try {
+		setMenuSearchVimMode(false);
+		const input = new Input();
+		let cancels = 0;
+		input.onEscape = () => cancels++;
+		input.handleInput("draft");
+		setMenuSearchVimMode(true);
+		input.handleInput("\x1b");
+		expect(input.vimMode).toBe("normal");
+		expect(input.getValue()).toBe("draft");
+		input.handleInput("0dw");
+		expect(input.getValue()).toBe("");
+		input.handleInput("u");
+		expect(input.getValue()).toBe("draft");
+		input.handleInput("\x1b");
+		expect(cancels).toBe(0);
+		input.handleInput("\x03");
+		expect(cancels).toBe(1);
+		setMenuSearchVimMode(false);
+		input.handleInput("x");
+		expect(input.getValue()).toStartWith("x");
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("yanks a Vim line deletion into a single-line field without moving the caret to another line", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		for (const key of ["abc", "\x1b", "d", "d", "i", "\x19"]) input.handleInput(key);
+		expect(input.getValue()).toBe("abc");
+		expect(input.getCursor()).toBe(3);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("cycles linewise kill-ring entries in a single-line Vim field", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		for (const key of ["first", "\x1b", "d", "d", "i", "next", "\x1b", "d", "d", "i", "[]", "\x1b[D", "\x19"]) {
+			input.handleInput(key);
+		}
+		expect(input.getValue()).toBe("[next]");
+		expect(input.getCursor()).toBe(5);
+		input.handleInput("\x1by");
+		expect(input.getValue()).toBe("[first]");
+		expect(input.getCursor()).toBe(6);
+		input.handleInput("\x1by");
+		expect(input.getValue()).toBe("[next]");
+		expect(input.getCursor()).toBe(5);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("shows the whole Visual selection in ANSI and reports masked anchor/caret offsets to native hosts", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		input.prompt = "";
+		input.setValue("a👩‍💻bc");
+		for (const key of ["\x1b", "0", "l", "l", "v", "h"]) input.handleInput(key);
+		expect(input.describe(CX).p).toMatchObject({ mode: "VISUAL", anchor: 6, cursor: 1 });
+		expect(input.render(10)[0]).toContain("\x1b[7m👩‍💻\x1b[27m\x1b[7mb\x1b[27m");
+		input.mask = true;
+		expect(input.describe(CX).p).toMatchObject({ text: "••••", mode: "VISUAL", anchor: 2, cursor: 1 });
+		expect(input.render(10)[0]).toMatch(/^•\x1b\[7m•\x1b\[27m\x1b\[7m•\x1b\[27m• +$/);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("keeps ordinary Vim undo units before a committed dictation preview", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		input.handleInput("hello");
+		input.setVolatileText(" wor");
+		input.render(40);
+		input.setVolatileText(" world");
+		input.commitVolatileText(" world");
+		expect(input.getValue()).toBe("hello world");
+		input.handleInput("\x1f");
+		expect(input.getValue()).toBe("hello");
+		input.handleInput("\x1f");
+		expect(input.getValue()).toBe("");
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
 
 describe("Input component", () => {
 	const wordLeft = "\x1bb"; // ESC-b (alt+b)

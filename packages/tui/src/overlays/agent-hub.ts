@@ -914,6 +914,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			hubKeys: this.#hubKeys,
 			requestRender: this.#requestRender,
 			onClose: () => this.#closeTranscriptViewer(viewer),
+			preservesDraftOnClose: () => this.onNavigationVisit !== undefined,
 			onHubClose: () => {
 				if (this.#disposed) return;
 				this.#closeTranscriptViewer(viewer, false);
@@ -1077,13 +1078,17 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				}
 				return;
 			case "close": {
-				const search = activity ? this.#activitySearch : this.#agentFilter;
-				this.handleInput(search.focused ? "\x03" : "\x1b");
+				this.handleInput("\x1b");
 				return;
 			}
 			case "filter":
-				if (activity) this.#activitySearch.focused = true;
-				else this.#agentFilter.focused = true;
+				if (activity) {
+					this.#activitySearch.focused = true;
+					this.#refreshActivityRows();
+				} else {
+					this.#agentFilter.focused = true;
+					this.#refreshRows();
+				}
 				this.#requestRender();
 				return;
 		}

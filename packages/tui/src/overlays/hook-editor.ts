@@ -24,14 +24,13 @@ import {
 	wrapTextWithAnsi,
 } from "../index";
 import { BracketedPasteHandler } from "../bracketed-paste";
-import { getMenuSearchVimMode } from "../components/menu-navigation";
 import { getEditorTheme, theme } from "../theme/theme";
-import { matchesAppExternalEditor, matchesAppFollowUp, matchesAppInterrupt } from "../keybinding-matchers";
+import { matchesAppExternalEditor, matchesAppFollowUp } from "../keybinding-matchers";
 import { formTheme } from "../chrome/form-theme";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { FormField } from "../components/form";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, editorKey, interruptKey } from "../chrome/keybinding-hints";
+import { boundKeys, editorKey } from "../chrome/keybinding-hints";
 import { formatTooltipKey, type KeyName } from "../key-hint-format";
 import { col, node, span } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
@@ -105,10 +104,8 @@ export interface HookEditorOptions {
 	maxHeight?: number;
 	/** Only registered configuration pages may preserve this safe text draft in menu history. */
 	menuHistory?: boolean;
-	/** Label Escape as Back when this editor is nested in another menu. */
-	escapeBack?: boolean;
-	/** Save on Escape in a prompt, after Vim has had a chance to consume it. */
-	saveOnEscape?: boolean;
+	/** Leave after Escape, preserving the draft for reopening. Omit if drafts cannot be recovered. */
+	onBack?: (draft: string, images?: ImageContent[]) => void;
 	/** Keep the editor open when submission is empty or whitespace-only. */
 	requireText?: boolean;
 }
@@ -134,8 +131,9 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 	});
 	#disposed = false;
 	readonly #menuHistory: boolean;
-	readonly #escapeBack: boolean;
-	readonly #saveOnEscape: boolean;
+	readonly #onBack: HookEditorOptions["onBack"];
+	readonly #initialText: string;
+	readonly #initialImageCount: number;
 	readonly #requireText: boolean;
 	#editingExternal = false;
 	/** Head, field and action bar; every part but the editor (which describes itself) is fixed, so it is built once. */
@@ -148,7 +146,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		title: string,
 		prefill: string | undefined,
 		onSubmit: (value: string, images?: ImageContent[]) => void,
-		/** Receives the text and images left in the editor, so a host can offer them again. */
+		/** Explicit cancellation; Escape only reaches this callback without draft changes. */
 		onCancel: (draft: string, images?: ImageContent[]) => void,
 		options?: HookEditorOptions,
 	) {
@@ -168,15 +166,13 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		this.#images = this.#acceptImages ? [...(options?.images ?? [])] : [];
 		this.#externalEditor = options?.externalEditor;
 		this.#menuHistory = options?.menuHistory === true;
-		this.#escapeBack = options?.escapeBack === true;
-		this.#saveOnEscape = this.#promptStyle && options?.saveOnEscape === true;
+		this.#onBack = options?.onBack;
 		this.#requireText = options?.requireText === true;
 		this.#onPasteImage = options?.onPasteImage;
 		this.#onPasteImagePath = options?.onPasteImagePath;
 
 		// Editor
 		this.#editor = new Editor(getEditorTheme());
-		this.#editor.setVimMode(getMenuSearchVimMode());
 		if (this.#promptStyle) {
 			this.#editor.setBorderVisible(false);
 			this.#editor.setPromptGutter("> ");
@@ -192,13 +188,19 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		if (prefill) {
 			this.#editor.setText(prefill);
 		}
+		this.#initialText = this.#editor.getExpandedText();
+		this.#initialImageCount = this.#images.length;
 		// Hint
 		const followUpKeys = boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]);
 		const [primaryFollowUpKey = "ctrl+q"] = followUpKeys;
 		const externalEditorKey = editorKey("app.editor.external") || formatKeyHint("ctrl+g");
-		const hint = this.#promptStyle
-			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${formatKeyHint("escape")} ${this.#saveOnEscape ? `save  ${interruptKey()} cancel` : "cancel"}  ${externalEditorKey} external editor`
-			: `${formatKeyHints(followUpKeys)} submit  ${this.#escapeBack ? `${formatKeyHint("escape")} back` : `${interruptKey()} cancel`}  ${externalEditorKey} external editor`;
+		const hint = () => {
+			const back = this.#onBack ? "back" : "close if unchanged";
+			const cancelHint = `${this.#editor.escapeHint(back)}  ${formatKeyHint("ctrl+c")} cancel`;
+			return this.#promptStyle
+				? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${cancelHint}  ${externalEditorKey} external editor`
+				: `${formatKeyHints(followUpKeys)} submit  ${cancelHint}  ${externalEditorKey} external editor`;
+		};
 		this.#field = new FormField(this.#editor, {
 			theme: formTheme,
 			details:
@@ -261,10 +263,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			clauses.map(([label, key]) => (key ? `${label}  ${formatTooltipKey(key)}` : label)).join(" · ");
 		const submitKey: KeyName = this.#promptStyle ? "enter" : primaryFollowUpKey;
 		const newlineKey: KeyName = this.#promptStyle ? "shift+enter" : "enter";
-		const cancelKey =
-			(this.#promptStyle && !this.#saveOnEscape) || this.#escapeBack
-				? "escape"
-				: (boundKeys("app.interrupt", ["ctrl+c"])[0] ?? "ctrl+c");
+		const cancelKey = "ctrl+c";
 		const buttons: (NativeNode | null)[] = [];
 		if (this.#externalEditor) {
 			const [externalKey] = boundKeys("app.editor.external", ["ctrl+g"]);
@@ -277,9 +276,9 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		}
 		buttons.push(
 			null,
-			actionButton(this.#escapeBack ? "Back" : "Cancel", "cancel", {
+			actionButton("Cancel", "cancel", {
 				keys: cancelKey,
-				title: tip([[this.#escapeBack ? "Back" : "Cancel", cancelKey]]),
+				title: tip([["Cancel", cancelKey]]),
 			}),
 			actionButton("Submit", "submit", {
 				keys: submitKey,
@@ -327,7 +326,6 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 
 	handleInput(keyData: string): void {
 		if (this.#disposed) return;
-		this.#editor.setVimMode(getMenuSearchVimMode());
 		const paste = this.#pasteHandler.process(keyData);
 		if (paste.handled) {
 			if (paste.pasteContent === undefined) return;
@@ -347,7 +345,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		}
 		const text = extractPrintableText(keyData);
 		const escape = matchesKey(keyData, "escape");
-		if (text === undefined && !(escape && this.#saveOnEscape) && matchesAppInterrupt(keyData)) {
+		if (matchesKey(keyData, "ctrl+c")) {
 			this.#cancel();
 			return;
 		}
@@ -355,9 +353,18 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			this.#editor.handleInput(keyData);
 			return;
 		}
+		if (escape) {
+			if (this.#pastes.pending) return;
+			if (this.#onBack) this.#cancel(this.#onBack);
+			else if (
+				this.#images.length === this.#initialImageCount &&
+				this.#editor.getExpandedText() === this.#initialText
+			)
+				this.#cancel();
+			return;
+		}
 		if (text !== undefined) {
-			if (this.#editor.vimEnabled) this.#editor.handleInput(keyData);
-			else this.#editor.typeCharacter(text);
+			this.#editor.handleInput(keyData, true);
 			return;
 		}
 		if (this.#promptStyle) {
@@ -409,11 +416,11 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		super.dispose();
 	}
 
-	#cancel(): void {
+	#cancel(callback = this.#onCancelCallback): void {
 		const { text, images } = this.#currentValue();
 		this.dispose();
-		if (images?.length) this.#onCancelCallback(text, images);
-		else this.#onCancelCallback(text);
+		if (images?.length) callback(text, images);
+		else callback(text);
 	}
 
 	/** Route non-bracketed paste transports (e.g. kitty's OSC 5522 enhanced clipboard)
@@ -446,12 +453,6 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 			return;
 		}
 
-		if (matchesKey(keyData, "escape")) {
-			if (this.#saveOnEscape) this.#submitCurrentText();
-			else this.#cancel();
-			return;
-		}
-
 		// Ctrl+G for external editor
 		if (matchesAppExternalEditor(keyData)) {
 			void this.#openExternalEditor();
@@ -481,11 +482,6 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		// Plain Enter inserts a new line in hook editor
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.#editor.handleInput("\n");
-			return;
-		}
-
-		if (matchesKey(keyData, "escape")) {
-			this.#cancel();
 			return;
 		}
 

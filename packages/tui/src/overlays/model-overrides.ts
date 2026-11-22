@@ -49,29 +49,41 @@ export class ModelOverridesPanel {
 
 	constructor(readonly host: ModelOverridesHost) {
 		this.#list.onSelect = item => this.#activate(item.value);
-		this.#list.onCancel = () => {
-			if (this.#deleting) {
-				this.#deleting = undefined;
-				this.#rebuild();
-			} else if (this.#fields?.back()) this.#rebuild();
-			else if (this.#draft) {
-				this.#draft = undefined;
-				this.#original = undefined;
-				this.#fields = undefined;
-				this.reload();
-			} else this.host.back();
-		};
+		this.#list.onCancel = () => this.#back();
 		this.reload();
 	}
 
-	get editing(): boolean {
-		return !!this.#identity || !!this.#fields?.input || this.#list.filterFocused;
+	#back(discard = false): void {
+		if (this.#deleting) {
+			this.#deleting = undefined;
+			this.#rebuild();
+		} else if (this.#fields?.back()) this.#rebuild();
+		else if (this.#draft) {
+			const original = this.#original ?? { provider: "", id: "", kind: this.#draft.kind, fields: {} };
+			if (!discard && !Bun.deepEquals(this.#draft, original)) return;
+			this.#draft = undefined;
+			this.#original = undefined;
+			this.#fields = undefined;
+			this.reload();
+		} else this.host.back();
 	}
+
+	get #input(): Input | undefined {
+		return this.#identity?.input ?? this.#fields?.input?.input;
+	}
+
+	get editing(): boolean {
+		return this.#input !== undefined || this.#list.filterFocused;
+	}
+	get busy(): boolean {
+		return !!this.#draft || this.#pending;
+	}
+
 	get hint(): string {
 		if (this.#pending) return "Saving…";
-		if (this.#identity || this.#fields?.input) return "Enter accept · Esc leave field";
+		if (this.#input) return "Enter accept · Ctrl+C cancel field";
 		return this.#draft
-			? "Enter edit · x unset/remove · t type · s save · / search · Esc back/discard · Tab pane"
+			? "Enter edit · x unset/remove · t type · s save · / search · Ctrl+C discard · Tab pane"
 			: "Enter fields · x delete · / search · Esc sidebar · Tab pane";
 	}
 
@@ -166,6 +178,27 @@ export class ModelOverridesPanel {
 			this.#fields?.activate(value);
 			this.#rebuild();
 		}
+		const input = this.#input;
+		if (input) {
+			const close = () => {
+				this.#identity = undefined;
+				if (this.#fields) this.#fields.input = undefined;
+			};
+			input.onEscape = close;
+			input.onCancel = close;
+			input.onSubmit = () => {
+				try {
+					if (this.#identity && this.#draft) {
+						this.#draft[this.#identity.key] = input.getValue().trim();
+						close();
+					} else this.#fields?.acceptInput();
+					this.#error = undefined;
+					this.#rebuild();
+				} catch (error) {
+					this.#error = shown(error instanceof Error ? error.message : error);
+				}
+			};
+		}
 	}
 
 	async #persist(remove?: HubModelConfigEntry): Promise<void> {
@@ -191,25 +224,13 @@ export class ModelOverridesPanel {
 
 	handleInput(data: string): void {
 		if (this.#pending) return;
-		const input = this.#identity?.input ?? this.#fields?.input?.input;
+		const input = this.#input;
 		if (input) {
-			if (matchesKey(data, "escape")) {
-				this.#identity = undefined;
-				if (this.#fields) this.#fields.input = undefined;
-				return;
-			}
-			if (matchesKey(data, "enter") || data === "\n") {
-				try {
-					if (this.#identity && this.#draft) {
-						this.#draft[this.#identity.key] = input.getValue().trim();
-						this.#identity = undefined;
-					} else this.#fields?.acceptInput();
-					this.#error = undefined;
-					this.#rebuild();
-				} catch (error) {
-					this.#error = shown(error instanceof Error ? error.message : error);
-				}
-			} else input.handleInput(data);
+			input.handleInput(data, true);
+			return;
+		}
+		if (!this.#list.filterFocused && matchesKey(data, "ctrl+c")) {
+			this.#back(true);
 			return;
 		}
 		if (!this.#list.filterFocused && !this.#deleting) {
@@ -237,7 +258,7 @@ export class ModelOverridesPanel {
 	render(width: number, rows: number): string[] {
 		const description = Bun.wrapAnsi(MODEL_OVERRIDES_DESCRIPTION, width).split("\n");
 		this.#descriptionRows = description.length + (this.#error ? 1 : 0) + 1;
-		const input = this.#identity?.input ?? this.#fields?.input?.input;
+		const input = this.#input;
 		this.#list.setMaxVisible(Math.max(1, rows - this.#descriptionRows - (input ? 2 : 0)));
 		return [
 			...description,
@@ -251,7 +272,7 @@ export class ModelOverridesPanel {
 	}
 
 	describe(): NativeNode {
-		const input = this.#identity?.input ?? this.#fields?.input?.input;
+		const input = this.#input;
 		return node(
 			"col",
 			{ gap: "sm", grow: 1 },
@@ -267,9 +288,13 @@ export class ModelOverridesPanel {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (!this.#pending) this.#list.handleNativeEvent(event);
+		if (this.#pending) return;
+		const input = this.#input;
+		if (input) {
+			if (event.type === "edit" || event.type === "undo") input.handleNativeEvent(event);
+		} else this.#list.handleNativeEvent(event);
 	}
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
-		if (!this.#pending) this.#list.routeMouse(event, line - this.#descriptionRows, col);
+		if (!this.#pending && !this.#input) this.#list.routeMouse(event, line - this.#descriptionRows, col);
 	}
 }

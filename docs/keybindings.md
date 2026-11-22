@@ -99,7 +99,7 @@ While `/exit` still waits for confirmation, `Ctrl+D` opens the menu normally. On
 
 ## Menu navigation
 
-Vim navigation is **off by default**. Enable **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set `tui.vimMode: true`, to use the Vim motions below across menus, pickers, lists, overlays and viewers. The same setting enables [modal composer editing](#vim-editing-mode); there is no separate menu toggle. Changes apply to open menus as well as newly opened ones.
+Vim navigation is **off by default**. Enable **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set `tui.vimMode: true`, to use the Vim motions below across menus, pickers, lists, overlays and viewers. The same setting enables [modal text editing](#vim-editing-mode); there is no separate menu toggle. Changes apply to open menus as well as newly opened ones.
 
 Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focus, context switching and menu history remain available. Printable Vim motion keys are not intercepted as navigation, and Vim-only motion hints are hidden. Surface actions such as Space activation remain available in either mode. Menus normally open in navigation, not a text field; the search-first exceptions below are unchanged.
 
@@ -114,7 +114,7 @@ Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focu
 | `Tab` / `Shift+Tab`, also `Ctrl+N` / `Ctrl+P` (`tui.select.nextContext` / `prevContext`) | Next / previous tab, section, or focus region; an existing surface-specific binding takes precedence |
 | `/` (`tui.select.search`) | Focus the search or filter field |
 
-While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
+Focused text fields own their editing keys. In Insert mode (or with Vim disabled), printable keys such as `h`, `j`, `k`, `l`, `g`, `/`, and Space type literally; in Normal mode they follow the editor, not the surrounding menu. Enter confirms a search pattern without activating a result. Esc leaves an editing mode before navigating; it does not discard the draft. Ctrl+C explicitly cancels an edit. Esc on a nested page returns to its parent; Esc at the root closes when there is no unsaved edit to protect.
 
 The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
 
@@ -136,7 +136,7 @@ Native TSP lists and pickers retain selection, filtering, and history. Their ter
 
 ### Menu search
 
-Press `/` to enter pattern mode. Results preview the last valid draft live; Enter confirms the pattern and returns to navigation without activating a result. Arrows, Tab and Ctrl-keys stay in the field while typing; they cannot switch panes or move results. Esc cancels the draft and restores the confirmed pattern. With Vim enabled, the first Esc leaves Insert mode and the next cancels editing. Ctrl+C clears the search immediately. A native Close action leaves the focused search in one action in either mode. Leaving the field without Enter discards its edits.
+Press `/` to edit the pattern. Results preview the last valid draft; Enter confirms the pattern and returns to navigation without activating a result. Arrows, Tab, and editing chords stay in the search field. With Vim enabled, Esc returns to Normal before it takes you back to the confirmed results. Press `/` to recover the draft at its previous caret. Leaving a filtered view also keeps the pattern available with `/`. Ctrl+C clears the search and the draft.
 
 In settings, Esc restores the tab, section sidebar focus, selected setting and scroll position from before `/`. After confirmation, the footer shows navigation hints instead of pattern-entry hints; Vim half-page and boundary motions appear only when Vim mode is enabled.
 
@@ -201,7 +201,7 @@ Older unqualified action names are migrated when `keybindings.yml` is loaded, bu
 
 ## Vim editing mode
 
-Off by default. Turn it on with **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set it directly. This single setting also enables the [menu and viewer Vim motions](#menu-navigation) and modal editing in search composers:
+Off by default. Turn it on with **Vim Navigation and Editing** in `/settings` (Interaction → Input), or set it directly. The setting controls both the [menu and viewer motions](#menu-navigation) and editing modes in text fields:
 
 ```yaml
 tui.vimMode: true
@@ -210,6 +210,19 @@ tui.vimMode: true
 The prompt starts in Insert mode. `Escape` switches to Normal mode; the prompt border changes color to show the mode (bash/python mode colors take precedence). The software cursor underlines the current character in Insert mode and uses a block in Normal mode; at line end Insert uses a bar, and Visual mode highlights the selection. The terminal cursor shape is set via DECSCUSR to a bar in Insert and a block in Normal/Visual, and restored on exit. This is a useful subset of Vim, not a full implementation.
 
 The status line also shows the mode, pending command, and multi-line Visual selection size. **Vim Mode Indicator** (`tui.vimModeDisplay`) selects `text` (default), `icon`, or `none` (hides the whole Vim status segment).
+
+| Modal text surface | What Esc does after reaching Normal |
+| --- | --- |
+| Main composer, including multiline prompts | Keeps the current draft; app navigation may close a popup or leave a view. |
+| Hook and extension editors, spawn prompts, transcript messages, plan review, and annotation | Leaves when the host can reopen the draft; otherwise the editor stays open until you submit or cancel. |
+| Ask option notes, Other responses, and form text and textareas | Returns to the form without submitting the draft. Reopen the same option or field to continue. |
+| Picker searches and filters, including Settings and prompt history | Restores confirmed results. `/` reopens the draft; Ctrl+C clears it. |
+| Rename fields, configuration text, paths, and credentials | Keeps a modified field open unless the surrounding form can reopen it. Unchanged fields can go back. Ctrl+C cancels explicitly. |
+| Git commit summary and description, AI staging request, prediction and stream inputs | Uses the same editing modes and retains drafts when moving between fields. |
+
+Single-line fields do not insert line breaks; `o` and `O` enter Insert mode at the end and start of the line, respectively. Draft recovery is scoped to the current editor, form, or retained view, not a persistent store.
+
+Non-TUI input, such as piped stdin or one-shot shell prompts, does not use these editing modes.
 
 | Mode        | Enter with              | Leave with                             |
 | ----------- | ----------------------- | -------------------------------------- |

@@ -147,6 +147,8 @@ describe("MoveOverlay", () => {
 		);
 		overlay.handleInput("\x1b");
 		expect(result).toBe("sentinel" as unknown as MoveOverlayResult);
+		expect(overlay.filterFocused).toBe(true);
+		overlay.handleInput("\x1b");
 		expect(overlay.filterFocused).toBe(false);
 		overlay.handleInput("\x1b");
 		expect(result).toBeUndefined();
@@ -206,6 +208,7 @@ describe("MoveOverlay", () => {
 		overlay.handleInput("jkG /");
 		overlay.handleInput("\x1b[D");
 		overlay.handleInput("\x1b");
+		overlay.handleInput("\x1b");
 		const saved = overlay.navigationSnapshot();
 		const reopened = new MoveOverlay(
 			cwd,
@@ -216,12 +219,12 @@ describe("MoveOverlay", () => {
 		);
 		reopened.restoreNavigation(saved);
 		expect(reopened.navigationSnapshot()).toMatchObject({
-			field: { value: "jkG /", cursor: 4 },
+			field: { value: "jkG /", cursor: 3 },
 			pathFocused: false,
 		});
 		reopened.handleInput("/");
 		reopened.handleInput("x");
-		expect(reopened.navigationSnapshot()).toMatchObject({ field: { value: "jkG x/" }, pathFocused: true });
+		expect(reopened.navigationSnapshot()).toMatchObject({ field: { value: "jkGx /" }, pathFocused: true });
 	});
 
 	it("moves and pages a bounded list without changing the path or confirming on Space", () => {
@@ -231,6 +234,7 @@ describe("MoveOverlay", () => {
 			label: `folder-${index}/`,
 		}));
 		const overlay = new MoveOverlay(cwd, result => results.push(result), { search: () => entries });
+		overlay.handleInput("\x1b");
 		overlay.handleInput("\x1b");
 		overlay.render(80);
 		overlay.handleInput("G");

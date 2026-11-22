@@ -186,6 +186,9 @@ describe("status-line editor list", () => {
 		expect((await h.draft()).query).toBe("");
 		h.press(ESC);
 		expect(h.closed()).toBe(true);
+		const reopened = setup({ draft: parseStatusLineEditorDraft(JSON.parse(JSON.stringify(await h.draft()))) });
+		reopened.press("/");
+		expect((await reopened.draft()).query).toBe("time");
 	});
 
 	it("lists discovered quota windows and configured ids, enabling them as ordinary widgets", () => {
@@ -428,6 +431,18 @@ describe("status-line editor templates", () => {
 		const value = h.drafts.at(-1)?.usageTemplates["usage:acme:5h"] ?? "";
 		expect(visibleWidth(value)).toBeLessThanOrEqual(80);
 		expect(h.applied).toEqual([]);
+	});
+
+	it("enters Normal without changing the template, then Ctrl+C restores its opening value", () => {
+		const h = setup({}, { ...ACTIVE, rightSegments: ["usage:acme:5h"] });
+		h.press("j", "j", "j", "\t");
+		h.press(...Array.from({ length: 30 }, () => BACKSPACE), "custom");
+		h.press(ESC, "0", "x");
+		expect(h.drafts.at(-1)?.focus).toBe("template");
+		expect(h.previews.at(-1)?.usageTemplates).toEqual({ "usage:acme:5h": "ustom" });
+		h.press("\x03");
+		expect(h.drafts.at(-1)?.focus).toBe("list");
+		expect(h.previews.at(-1)?.usageTemplates).toEqual(ACTIVE.usageTemplates);
 	});
 });
 

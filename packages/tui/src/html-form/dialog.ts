@@ -20,10 +20,11 @@
  * dropdown), ←/→ change a dropdown, Enter picks a radio (or the focused box of
  * an empty checkbox group, or leaves a field) and moves on, Enter on Submit
  * validates and submits or opens the first question to fix, PgUp/PgDn (←/→ on
- * choices) open the previous or next question. Esc (outside an open dropdown or
- * note) and Tab on Submit hand the keys to the composer under the form
- * (`releaseKeys`), where Esc keeps the composer's meaning and never cancels the ask;
- * `app.ask.cancel` cancels it from either. In rows,
+ * choices) open the previous or next question. A text control first uses Esc
+ * to leave Vim editing states; elsewhere Esc closes a dropdown, keeps a note
+ * draft, or hands the keys to the composer (`releaseKeys`). Ctrl+C discards
+ * the focused edit, or cancels the dialog when no text control is active;
+ * `app.ask.cancel` cancels the whole dialog. In rows,
  * ↑ on a question's first row first scrolls up to its head when that is cut off,
  * `app.ask.hide` collapses the form to one row (handing the keys to the composer), and the host draws
  * {@link HtmlFormDialog.keyHints} under the panel. Notes use `n` on
@@ -51,6 +52,7 @@ import { convertImageToPngShared } from "../chat/image-loading";
 import { Editor } from "../components/editor";
 import { Image, type ImageBudget, measureRender } from "../components/image";
 import { Input } from "../components/input";
+import { getMenuSearchVimMode } from "../components/menu-navigation";
 import { ScrollView } from "../components/scroll-view";
 import { renderTableRowLines, type TableColumn } from "../components/table";
 import {
@@ -261,16 +263,20 @@ interface SavedNote {
 	images: ImageContent[];
 }
 
-/** The note being edited; dropped when it closes, so nothing of it outlives the note. */
-interface OpenNote {
+/** A note draft, either open or stashed on its exact field and option. */
+interface NoteDraft {
 	field: ChoiceField;
 	option: number;
 	editor: Editor;
-	/** Saved images of the option plus those pasted since the note opened. */
+	/** Saved images of the option plus those pasted into this draft. */
 	images: ImageContent[];
 	pastes: OrderedPastes;
 	pasteHandler: BracketedPasteHandler;
+	saveRequested: boolean;
 }
+
+/** The answer to restore if the user cancels this visit to a text control. */
+type FieldEdit = { kind: "text"; value: string } | { kind: "other"; value: string; option: number | undefined };
 
 /** Strip control bytes a model could smuggle into labels (escape sequences, `\r`); keep `\n`. */
 function sanitize(text: string): string {
@@ -456,8 +462,9 @@ export class HtmlFormDialog implements Component, Focusable {
 	readonly #checked = new Map<ChoiceField, Set<number>>();
 	readonly #inputs = new Map<TextField, Input>();
 	readonly #notes = new Map<ChoiceField, Map<number, SavedNote>>();
-	#noteEditor: OpenNote | undefined;
-	#savedNoteEditor: Editor | undefined;
+	readonly #noteDrafts = new Map<ChoiceField, Map<number, NoteDraft>>();
+	#noteEditor: NoteDraft | undefined;
+	#fieldEdit: FieldEdit | undefined;
 	#useTerminalCursor = false;
 	/** The Other answer's text of each group that offers one. */
 	readonly #others = new Map<ChoiceField, Input>();
@@ -538,10 +545,7 @@ export class HtmlFormDialog implements Component, Focusable {
 					if (!option.disabled) this.#stops.push({ kind: "option", field, option: index });
 				});
 				if (field.other) {
-					const input = new Input();
-					input.prompt = "";
-					input.placeholder = OTHER_PLACEHOLDER;
-					this.#others.set(field, input);
+					this.#initOther(field);
 					this.#stops.push({ kind: "other", field });
 				}
 			}
@@ -549,6 +553,7 @@ export class HtmlFormDialog implements Component, Focusable {
 		this.#stops.push({ kind: "submit" });
 		// Open where the answer is, so Enter accepts a preselected choice instead of overwriting it.
 		this.#focus = this.#answerStop(this.#fieldOfStop(0));
+		this.#beginFieldEdit();
 		this.#panel = new OverlayPanel(options.title ?? DEFAULT_TITLE);
 		this.#panel.addChild(this.#body);
 		this.#panel.addChild(this.#notice);
@@ -567,8 +572,10 @@ export class HtmlFormDialog implements Component, Focusable {
 
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#useTerminalCursor = useTerminalCursor;
-		this.#savedNoteEditor?.setUseTerminalCursor(useTerminalCursor);
 		for (const input of this.#inputs.values()) input.setUseTerminalCursor(useTerminalCursor);
+		for (const drafts of this.#noteDrafts.values()) {
+			for (const note of drafts.values()) note.editor.setUseTerminalCursor(useTerminalCursor);
+		}
 		for (const input of this.#others.values()) input.setUseTerminalCursor(useTerminalCursor);
 		for (const editor of this.#editors.values()) editor.setUseTerminalCursor(useTerminalCursor);
 	}
@@ -660,9 +667,41 @@ export class HtmlFormDialog implements Component, Focusable {
 		};
 	}
 
+	/** Reserve modal Escape and edit cancellation before the host's global key listeners. */
+	capturesInput(data: string): boolean {
+		if (matchesKey(data, "ctrl+c")) return this.#activeTextControl() !== undefined;
+		return matchesKey(data, "escape") && (this.#activeTextControl()?.vimConsumesEscape() ?? false);
+	}
+
+	#activeTextControl(): Editor | Input | undefined {
+		if (this.#hidden) return undefined;
+		const stop = this.#stops[this.#focus];
+		if (this.#noteEditor) return this.#noteEditor.editor;
+		if (this.#guardBlocks()) return undefined;
+		if (stop?.kind === "text") return this.#editors.get(stop.field) ?? this.#inputs.get(stop.field);
+		if (stop?.kind === "other") return this.#others.get(stop.field);
+		return undefined;
+	}
+
 	handleInput(data: string): void {
 		this.#resetCountdown();
 		this.#changed();
+		const control = this.#activeTextControl();
+		if (control && matchesKey(data, "escape")) {
+			if (this.#noteEditor) {
+				this.#noteEditorInput(data);
+				return;
+			}
+			if (control.vimConsumesEscape()) {
+				control.handleInput(data);
+				return;
+			}
+		}
+		if (control && matchesKey(data, "ctrl+c")) {
+			if (this.#noteEditor) this.#finishNote(this.#noteEditor);
+			else this.#cancelFieldEdit();
+			return;
+		}
 		if (matchesAppInterrupt(data) || getKeybindings().matches(data, "app.ask.cancel")) {
 			this.#cancel();
 			return;
@@ -705,6 +744,10 @@ export class HtmlFormDialog implements Component, Focusable {
 			if (matchesSelectDown(data) || matchesKey(data, "space") || confirm) return;
 		}
 		if (matchesSelectPageDown(data) || matchesSelectPageUp(data)) {
+			if (control instanceof Editor && getMenuSearchVimMode()) {
+				control.handleInput(data);
+				return;
+			}
 			this.#jumpQuestion(matchesSelectPageDown(data) ? 1 : -1);
 			return;
 		}
@@ -789,7 +832,8 @@ export class HtmlFormDialog implements Component, Focusable {
 		this.#changed();
 		if (this.#noteEditor) {
 			if (event.type === "action" && event.act === "save-note") this.#requestSave();
-			else if (event.type === "action" && event.act === "cancel") this.#closeNote();
+			else if (event.type === "action" && event.act === "keep-note") this.#stashNote();
+			else if (event.type === "action" && event.act === "discard-note") this.#finishNote(this.#noteEditor);
 			return;
 		}
 		if (event.type === "action") {
@@ -890,10 +934,15 @@ export class HtmlFormDialog implements Component, Focusable {
 	}
 
 	dispose(): void {
-		this.#noteEditor?.pastes.clear();
+		for (const drafts of this.#noteDrafts.values()) {
+			for (const note of drafts.values()) {
+				note.pastes.clear();
+				note.editor.focused = false;
+			}
+		}
+		this.#noteDrafts.clear();
 		this.#noteEditor = undefined;
 		this.#stopCountdown();
-		if (this.#savedNoteEditor) this.#savedNoteEditor.focused = false;
 		this.#mediaAbort.abort();
 		for (const slot of this.#media.values()) {
 			if (slot.state !== "ready") continue;
@@ -989,6 +1038,7 @@ export class HtmlFormDialog implements Component, Focusable {
 
 	#initChoice(field: ChoiceField): void {
 		this.#notes.set(field, new Map());
+		this.#noteDrafts.set(field, new Map());
 		const checked = new Set<number>();
 		field.options.forEach((option, index) => {
 			if (!option.checked) return;
@@ -999,7 +1049,16 @@ export class HtmlFormDialog implements Component, Focusable {
 		this.#checked.set(field, checked);
 	}
 
-	#initText(field: TextField): void {
+	#initOther(field: ChoiceField, value = ""): void {
+		const input = new Input();
+		input.prompt = "";
+		input.placeholder = OTHER_PLACEHOLDER;
+		input.setValue(value, { cursor: "start" });
+		input.setUseTerminalCursor(this.#useTerminalCursor);
+		this.#others.set(field, input);
+	}
+
+	#initText(field: TextField, value = field.value): void {
 		if (field.multiline) {
 			const editor = new Editor(getEditorTheme());
 			editor.setBorderVisible(false);
@@ -1008,7 +1067,8 @@ export class HtmlFormDialog implements Component, Focusable {
 			editor.disableSubmit = true;
 			editor.placeholder = () => field.placeholder || undefined;
 			// Prefilled drafts (a commit message) open at their first line, not scrolled to the end.
-			editor.setText(field.value, { cursor: "start" });
+			editor.setText(value, { cursor: "start" });
+			editor.setUseTerminalCursor(this.#useTerminalCursor);
 			// Host edits (a Tern paste) reach the editor directly, past `handleNativeEvent`; they are activity too.
 			editor.onChange = () => this.#resetCountdown();
 			this.#editors.set(field, editor);
@@ -1018,7 +1078,8 @@ export class HtmlFormDialog implements Component, Focusable {
 		input.prompt = "";
 		input.mask = field.type === "password";
 		input.placeholder = field.placeholder || undefined;
-		input.setValue(field.value, { cursor: "start" });
+		input.setValue(value, { cursor: "start" });
+		input.setUseTerminalCursor(this.#useTerminalCursor);
 		input.onSubmit = () => this.#moveField(1);
 		this.#inputs.set(field, input);
 	}
@@ -1174,7 +1235,15 @@ export class HtmlFormDialog implements Component, Focusable {
 		const option =
 			target ?? (stop.kind === "option" ? stop.option : (this.#open?.highlight ?? this.#current(stop.field)));
 		if (option === undefined || stop.field.options[option]?.disabled !== false) return;
-		const editor = (this.#savedNoteEditor ??= new Editor(getEditorTheme()));
+		const drafts = this.#noteDrafts.get(stop.field)!;
+		const draft = drafts.get(option);
+		if (draft) {
+			draft.editor.resetVimMode();
+			this.#noteEditor = draft;
+			this.#syncControlFocus();
+			return;
+		}
+		const editor = new Editor(getEditorTheme());
 		editor.setBorderVisible(false);
 		editor.setMaxHeight(4);
 		editor.disableSubmit = true;
@@ -1183,19 +1252,23 @@ export class HtmlFormDialog implements Component, Focusable {
 		const saved = this.#notes.get(stop.field)?.get(option);
 		editor.setText(saved?.text ?? "", { cursor: "start" });
 		if (this.#options.acceptImages) editor.atomicTokenPattern = PLACEHOLDER_REGEX;
-		const note: OpenNote = {
+		const note: NoteDraft = {
 			field: stop.field,
 			option,
 			editor,
 			images: [...(saved?.images ?? [])],
 			pasteHandler: new BracketedPasteHandler(),
+			saveRequested: false,
 			pastes: new OrderedPastes({
 				deliver: text => editor.pasteText(text),
-				run: () => this.#saveNote(),
-				live: () => this.#noteEditor === note,
+				run: () => {
+					if (this.#noteEditor === note && note.saveRequested) this.#saveNote();
+				},
+				live: () => drafts.get(option) === note,
 				afterSettle: () => this.#changed(),
 			}),
 		};
+		drafts.set(option, note);
 		this.#noteEditor = note;
 		this.#syncControlFocus();
 	}
@@ -1215,7 +1288,7 @@ export class HtmlFormDialog implements Component, Focusable {
 	#noteEditHint(): string {
 		const active = this.#noteEditor!;
 		const unsent = this.#checked.get(active.field)!.has(active.option) ? "" : " · sent only if chosen";
-		return `enter save · blank removes · esc keep${unsent}`;
+		return `enter save · blank removes · ${active.editor.escapeHint("keep draft")} · ctrl+c discard${unsent}`;
 	}
 
 	/** Marker after a noted option: a submitted note, or a draft on an unchosen option. */
@@ -1236,12 +1309,15 @@ export class HtmlFormDialog implements Component, Focusable {
 				return;
 			}
 		}
-		if (matchesSelectCancel(data)) this.#closeNote();
+		if (matchesKey(data, "escape")) {
+			if (note.editor.vimConsumesEscape()) note.editor.handleInput(data);
+			else this.#stashNote();
+		} else if (matchesSelectCancel(data)) this.#stashNote();
 		else if (getKeybindings().matches(data, "tui.input.submit")) this.#requestSave();
-		else note.editor.handleInput(data);
+		else note.editor.handleInput(data, true);
 	}
 
-	#notePaste(note: OpenNote, content: string): void {
+	#notePaste(note: NoteDraft, content: string): void {
 		const { onPasteImage, onPasteImagePath } = this.#options;
 		const image = classifyImagePaste(content);
 		if (image.kind === "clipboard" && onPasteImage) {
@@ -1256,7 +1332,9 @@ export class HtmlFormDialog implements Component, Focusable {
 	}
 
 	#requestSave(): void {
-		if (!this.#noteEditor!.pastes.holdAction()) this.#saveNote();
+		const note = this.#noteEditor!;
+		note.saveRequested = true;
+		if (!note.pastes.holdAction()) this.#saveNote();
 	}
 
 	#saveNote(): void {
@@ -1265,17 +1343,24 @@ export class HtmlFormDialog implements Component, Focusable {
 		const notes = this.#notes.get(note.field)!;
 		if (text) notes.set(note.option, { text, images });
 		else notes.delete(note.option);
-		this.#closeNote();
+		this.#finishNote(note);
 	}
 
-	#closeNote(): void {
-		const note = this.#noteEditor;
-		if (note) {
-			note.pastes.clear();
-			// The editor is reused: a later note's literal `[Paste #1]` must not expand to this one's paste.
-			note.editor.clearPasteState();
-			note.editor.setText("");
-		}
+	/** Leave the editor without saving. Reserved pastes can still finish in this draft. */
+	#stashNote(): void {
+		const note = this.#noteEditor!;
+		note.saveRequested = false;
+		this.#leaveNote(note);
+	}
+
+	#finishNote(note: NoteDraft): void {
+		this.#noteDrafts.get(note.field)!.delete(note.option);
+		note.pastes.clear();
+		this.#leaveNote(note);
+	}
+
+	#leaveNote(note: NoteDraft): void {
+		note.editor.focused = false;
 		this.#noteEditor = undefined;
 		this.#syncControlFocus();
 		this.#changed();
@@ -1297,14 +1382,16 @@ export class HtmlFormDialog implements Component, Focusable {
 	}
 
 	/**
-	 * Adds an image to the open note; returns its `[Image #N, WxH]` marker for the caller to deliver.
-	 * Takes it while the form is hidden too: a paste reserved before Alt+H still lands in its note.
+	 * Capture before awaiting an image read. A stashed note can still accept its reserved
+	 * paste, but a finished/discarded note must not receive it or redirect it to another note.
 	 */
-	attachImage(image: ImageContent, dims?: { width: number; height: number }): string | undefined {
+	get attachImage(): (image: ImageContent, dims?: { width: number; height: number }) => string | undefined {
 		const note = this.#options.acceptImages ? this.#noteEditor : undefined;
-		if (!note) return undefined;
-		note.images.push(image);
-		return formatVisionMarker("image", note.images.length, dims);
+		return (image, dims) => {
+			if (!note || this.#noteDrafts.get(note.field)?.get(note.option) !== note) return undefined;
+			note.images.push(image);
+			return formatVisionMarker("image", note.images.length, dims);
+		};
 	}
 
 	/** Ordered delivery into the open note; refuses when {@link acceptsImages} is false. */
@@ -1352,7 +1439,7 @@ export class HtmlFormDialog implements Component, Focusable {
 		const down = matchesSelectDown(data);
 		const editor = this.#editors.get(field);
 		if (!editor) {
-			if (up || down) {
+			if (!getMenuSearchVimMode() && (up || down)) {
 				this.#moveStop(down ? 1 : -1);
 				return;
 			}
@@ -1361,26 +1448,28 @@ export class HtmlFormDialog implements Component, Focusable {
 			if (this.#textValue(field) !== before) this.#errors.delete(field);
 			return;
 		}
-		const cursor = editor.getCursor();
-		if ((up && cursor.line === 0) || (down && cursor.line === editor.getLines().length - 1)) {
-			this.#moveStop(down ? 1 : -1);
-			return;
+		if (!getMenuSearchVimMode()) {
+			const cursor = editor.getCursor();
+			if ((up && cursor.line === 0) || (down && cursor.line === editor.getLines().length - 1)) {
+				this.#moveStop(down ? 1 : -1);
+				return;
+			}
 		}
 		if (getKeybindings().matches(data, "tui.input.submit")) {
 			this.#moveField(1);
 			return;
 		}
 		const before = editor.getText();
-		editor.handleInput(data);
+		editor.handleInput(data, true);
 		if (editor.getText() !== before) this.#errors.delete(field);
 	}
 
 	/**
 	 * The Other row is a text field: keys type into it (typing in a radio group's
-	 * Other drops the picked option), ↑/↓ leave it, Enter moves to the next field.
+	 * Other drops the picked option), ↑/↓ leave it outside Vim mode, Enter moves to the next field.
 	 */
 	#otherInput(field: ChoiceField, data: string): void {
-		if (matchesSelectUp(data) || matchesSelectDown(data)) {
+		if (!getMenuSearchVimMode() && (matchesSelectUp(data) || matchesSelectDown(data))) {
 			this.#moveStop(matchesSelectDown(data) ? 1 : -1);
 			return;
 		}
@@ -1459,9 +1548,58 @@ export class HtmlFormDialog implements Component, Focusable {
 		if (match !== undefined) open.highlight = match;
 	}
 
+	#beginFieldEdit(): void {
+		const stop = this.#stops[this.#focus];
+		this.#fieldEdit = undefined;
+		if (stop?.kind === "text") {
+			this.#fieldEdit = { kind: "text", value: this.#textValue(stop.field) };
+		} else if (stop?.kind === "other") {
+			this.#otherChosen(stop.field);
+			this.#fieldEdit = {
+				kind: "other",
+				value: this.#others.get(stop.field)!.getValue(),
+				option: this.#current(stop.field),
+			};
+		}
+	}
+
+	#cancelFieldEdit(): void {
+		const stop = this.#stops[this.#focus];
+		const edit = this.#fieldEdit;
+		if (stop?.kind === "text" && edit?.kind === "text") {
+			const control = this.#editors.get(stop.field) ?? this.#inputs.get(stop.field)!;
+			control.focused = false;
+			this.#initText(stop.field, edit.value);
+			this.#errors.delete(stop.field);
+			this.#moveField(1);
+		} else if (stop?.kind === "other" && edit?.kind === "other") {
+			this.#others.get(stop.field)!.focused = false;
+			this.#initOther(stop.field, edit.value);
+			if (!stop.field.multi) {
+				this.#otherSeen.set(stop.field, edit.value);
+				const checked = this.#checked.get(stop.field)!;
+				checked.clear();
+				if (edit.option !== undefined) checked.add(edit.option);
+			}
+			this.#errors.delete(stop.field);
+			const option = this.#stops.findIndex(
+				candidate =>
+					candidate.kind === "option" &&
+					candidate.field === stop.field &&
+					(edit.option === undefined || candidate.option === edit.option),
+			);
+			if (option !== -1) this.#setFocus(option);
+			else this.#moveField(1);
+		}
+	}
+
 	#setFocus(index: number): void {
 		const group = this.#groupOfStop(this.#focus);
-		this.#focus = Math.max(0, Math.min(this.#stops.length - 1, index));
+		const target = Math.max(0, Math.min(this.#stops.length - 1, index));
+		if (target !== this.#focus) {
+			this.#focus = target;
+			this.#beginFieldEdit();
+		}
 		this.#peek = false;
 		this.#syncControlFocus();
 		if (this.#groupOfStop(this.#focus) !== group) this.#reveal++;
@@ -1522,7 +1660,7 @@ export class HtmlFormDialog implements Component, Focusable {
 		for (const [field, input] of this.#inputs) input.focused = live && field === active;
 		for (const [field, input] of this.#others) input.focused = live && field === other;
 		for (const [field, editor] of this.#editors) editor.focused = live && field === active;
-		if (this.#savedNoteEditor) this.#savedNoteEditor.focused = this.#focused && !this.#hidden && !!this.#noteEditor;
+		if (this.#noteEditor) this.#noteEditor.editor.focused = this.#focused && !this.#hidden;
 	}
 
 	// ── Native groups and hiding ─────────────────────────────────────────────
@@ -1801,7 +1939,11 @@ export class HtmlFormDialog implements Component, Focusable {
 	#keyHintText(): string {
 		if (this.#noteEditor) return this.#noteEditHint();
 		const hideKey = editorKey("app.ask.hide");
-		const composer = `${editorKey("tui.select.cancel")} composer${hideKey ? ` · ${hideKey} hide` : ""}`;
+		const control = this.#activeTextControl();
+		const dismiss = control?.vimConsumesEscape()
+			? control.escapeHint("composer")
+			: `${editorKey("tui.select.cancel")} composer`;
+		const composer = `${dismiss}${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const stop = this.#stops[this.#focus]!;
 		const [noteKey] = this.#noteKeys(stop.kind === "select");
 		const noteHint = noteKey ? ` · ${formatKeyHint(noteKey)} note` : "";
@@ -1818,12 +1960,14 @@ export class HtmlFormDialog implements Component, Focusable {
 		else if (stop.field.multi) action = `${formatKeyHint("space")} toggle · ${enter} next`;
 		else action = `${enter} choose`;
 		if (stop.kind === "option" || stop.kind === "select") action += noteHint;
-		const hints = [action, `${upDown} move`];
+		const hints = [action];
+		if (!control || !getMenuSearchVimMode()) hints.push(`${upDown} move`);
+		if (control) hints.push("ctrl+c discard edit");
 		if (stop.kind !== "submit") hints.push(`${formatKeyHint("tab")} next field`);
 		hints.push(composer);
-		if (this.#groups.length > 1) {
+		if (this.#groups.length > 1 && !(control instanceof Editor && getMenuSearchVimMode())) {
 			const keys =
-				stop.kind === "text" || stop.kind === "select"
+				control || stop.kind === "select"
 					? editorKeys("tui.select.pageUp", "tui.select.pageDown")
 					: `${formatKeyHint("left")}/${formatKeyHint("right")}`;
 			hints.push(`${keys} question`);
@@ -2265,7 +2409,8 @@ export class HtmlFormDialog implements Component, Focusable {
 		if (this.#noteEditor) {
 			return actionBar([
 				text(this.#noteEditHint(), { role: "omp.ask.note" }),
-				actionButton("Keep", "cancel", { keys: "escape" }),
+				actionButton("Keep", "keep-note"),
+				actionButton("Discard", "discard-note"),
 				actionButton("Save", "save-note", { keys: "enter" }),
 			]);
 		}

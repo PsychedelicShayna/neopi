@@ -65,7 +65,6 @@ import {
 import { getThinkingLevelMetadata, parseThinkingLevel } from "../thinking";
 import { isMenuHistoryParticipant, MenuKeyReader, type MenuNavAction } from "../components/menu-navigation";
 import type { SelectListNavigationState } from "../components/select-list";
-import { extractPrintableText } from "../keys";
 
 export const ADVISOR_REVIEW_MODES = ["turn", "agent-end"] as const;
 export const ADVISOR_SYNC_BACKLOG_MODES = ["off", "1", "3", "5", "strict"] as const;
@@ -425,7 +424,7 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 		case "generating":
 			return [actionHint("app.interrupt", "cancel generation")];
 		case "name":
-			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
+			return [actionHint("tui.input.submit", "save"), { keys: ["ctrl+c"], label: "cancel" }];
 		case "model":
 			return [
 				{ keys: ["/"], label: "search" },
@@ -437,7 +436,7 @@ function screenHints(screen: Screen): (NativeHint | undefined)[] {
 		case "sync-backlog":
 			return [actionHint("tui.select.confirm", "pick"), actionHint("tui.select.cancel", "back")];
 		case "review-interval":
-			return [actionHint("tui.input.submit", "save"), actionHint("tui.select.cancel", "cancel")];
+			return [actionHint("tui.input.submit", "save"), { keys: ["ctrl+c"], label: "cancel" }];
 		case "tools":
 			return [
 				actionHint("tui.select.confirm", "toggle"),
@@ -991,7 +990,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			input,
 			actionBar([
 				null,
-				actionButton("Cancel", "field-cancel", { keys: "escape" }),
+				actionButton("Cancel", "field-cancel", { keys: "ctrl+c" }),
 				actionButton("Save", "field-save", { keys: "enter", tone: "accent" }),
 			]),
 		]);
@@ -1010,7 +1009,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		} else if (active instanceof SelectList) {
 			// The tools list applies on cancel, like its Esc.
 			if (picked.kind === "action" && picked.act === "apply") {
-				if (active.filterFocused || active.getFilter()) active.handleInput(active.filterFocused ? "\x03" : "\x1b");
+				if (active.filterFocused || active.getFilter()) active.handleInput("\x1b");
 				else active.onCancel?.();
 			} else routeSelectListPicker(active, event);
 		}
@@ -1025,12 +1024,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		this.#keys.reset();
-		// The review-interval card's buttons, on its Enter and Esc paths.
+		// The review-interval card's buttons, on its submit and explicit cancel paths.
 		if (event.type === "action" && (event.act === "field-save" || event.act === "field-cancel")) {
 			const input = this.#active;
 			if (!(input instanceof Input)) return;
 			if (event.act === "field-save") input.onSubmit?.(input.getValue());
-			else input.onEscape?.();
+			else input.handleInput("\x03");
 			return;
 		}
 		if (event.key !== "") return;
@@ -1051,12 +1050,12 @@ export class AdvisorConfigOverlayComponent implements Component {
 				if (event.act === "close") {
 					if (
 						event.value !== undefined ||
+						this.#active instanceof Input ||
+						this.#active instanceof HookEditorComponent ||
 						("filterFocused" in this.#active && this.#active.filterFocused === true) ||
 						(this.#active instanceof SelectList && this.#active.getFilter().length > 0)
 					)
-						this.handleInput(
-							"filterFocused" in this.#active && this.#active.filterFocused === true ? "\x03" : "\x1b",
-						);
+						this.handleInput("\x1b");
 					else this.#cb.close();
 					return;
 				}
@@ -1287,8 +1286,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			("filterFocused" in active && active.filterFocused === true);
 		if (textFocused) {
 			this.#keys.reset();
-			const text = active instanceof Input ? extractPrintableText(data) : undefined;
-			if (text !== undefined && active instanceof Input) active.insertText(text);
+			if (active instanceof Input) active.handleInput(data, true);
 			else active.handleInput?.(data);
 			return;
 		}
@@ -1363,7 +1361,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 				return;
 			}
 		}
-		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		if (action && action.kind !== "cancel" && (active instanceof SelectList || active instanceof ModelBrowser))
+			active.handleNavigation(action);
 		else active.handleInput?.(data);
 	}
 
@@ -2159,7 +2158,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"name",
 			input,
-			`Type a name · ${editorKey("tui.input.submit")} save · ${editorKey("tui.select.cancel")} cancel`,
+			`Type a name · ${editorKey("tui.input.submit")} save · ${formatKeyHint("ctrl+c")} cancel`,
 		);
 	}
 
@@ -2312,7 +2311,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"review-interval",
 			input,
-			`Type a positive integer · ${editorKey("tui.input.submit")} save · ${editorKey("tui.select.cancel")} cancel`,
+			`Type a positive integer · ${editorKey("tui.input.submit")} save · ${formatKeyHint("ctrl+c")} cancel`,
 		);
 	}
 
@@ -2585,7 +2584,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 			}
 			if (this.#active instanceof Input && state.content && typeof state.content === "object") {
 				const input = state.content as { value?: string; cursor?: number };
-				if (typeof input.value === "string") this.#active.setValue(input.value);
+				if (typeof input.value === "string") this.#active.setValue(input.value, { markClean: false });
 				if (typeof input.cursor === "number") this.#active.setCursor(input.cursor);
 			} else if (this.#screen !== "delete-confirm" && isMenuHistoryParticipant(this.#active))
 				this.#active.restoreNavigation(state.content);

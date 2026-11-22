@@ -2,7 +2,6 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
 	type Focusable,
-	extractPrintableText,
 	Input,
 	Markdown,
 	matchesKey,
@@ -346,7 +345,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const draftRecord = state.composer && this.#records.find(record => record.id === state.composer?.recordId);
 		if (draftRecord && this.#options.onFollowUp) {
 			const composer = this.#openComposer(draftRecord);
-			composer.input.setValue(state.composer?.value ?? "");
+			composer.input.setValue(state.composer?.value ?? "", { markClean: false });
 			if (typeof state.composer?.cursor === "number") composer.input.setCursor(state.composer.cursor);
 			composer.notice = state.composer?.notice;
 		}
@@ -537,17 +536,23 @@ export class BtwHistoryPanel implements Component, Focusable {
 			}),
 		};
 		if (draft) {
-			input.setValue(draft.value);
+			input.setValue(draft.value, { markClean: false });
 			input.setCursor(draft.cursor);
 			composer.notice = draft.notice;
 		}
 		input.onEscape = () => {
+			if (composer.pastes.pending) return;
 			this.#drafts.set(record.id, {
 				value: input.getValue(),
 				cursor: input.getCursor(),
 				notice: composer.notice,
 				images: composer.images,
 			});
+			composer.abortController.abort();
+			this.#composer = undefined;
+		};
+		input.onCancel = () => {
+			this.#drafts.delete(record.id);
 			composer.abortController.abort();
 			this.#composer = undefined;
 		};
@@ -560,6 +565,21 @@ export class BtwHistoryPanel implements Component, Focusable {
 		this.#jumpToEnd();
 		this.#options.requestRender();
 		return composer;
+	}
+
+	#closeOrResumeDraft(): void {
+		const record = this.#records.find(candidate => {
+			const draft = this.#drafts.get(candidate.id);
+			return draft && (draft.value.length > 0 || draft.images.length > 0);
+		});
+		if (!record) {
+			this.#options.onClose();
+			return;
+		}
+		this.#selectedId = record.id;
+		this.#selection.setSelectedKey(record.id);
+		const composer = this.#openComposer(record);
+		composer.notice = "Send this draft or press Ctrl+C to discard it before closing.";
 	}
 
 	async #submitFollowUp(composer: FollowUpComposer, value: string): Promise<void> {
@@ -668,22 +688,18 @@ export class BtwHistoryPanel implements Component, Focusable {
 				this.#options.requestRender();
 				return;
 			}
-			const printable = extractPrintableText(data);
-			if (printable !== undefined && !matchesKey(data, "space")) {
-				// Draft text wins over remapped menu bindings.
-				const input = this.#composer.input;
-				input.spaceHold.process(false);
-				input.insertText(printable);
+			const input = this.#composer.input;
+			// A single-line field has no vertical movement in Insert; the arrows scroll the answer.
+			const readerArrow = (matchesKey(data, "up") || matchesKey(data, "down")) && input.vimMode === "insert";
+			if (matchesKey(data, "escape") && !input.vimConsumesEscape()) {
+				if (!input.dirty && !this.#composer.images.length) input.onEscape?.();
 				this.#keys.reset();
-				this.#options.requestRender();
-				return;
-			}
-			if (!this.#composer.input.handleInput(data)) {
+			} else if (readerArrow || !input.handleInput(data, true)) {
 				const action = this.#keys.read(data);
 				if (action && action !== "pending") {
 					if (action.kind === "context") {
 						this.#composer.input.onEscape?.();
-						if (this.#records.length > 1) this.#focus = "list";
+						if (!this.#composer && this.#records.length > 1) this.#focus = "list";
 					} else this.#scrollDetail(action);
 				}
 			}
@@ -710,7 +726,10 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		const record = this.#selected();
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running" ? record : undefined;
-		if (matchesAppInterrupt(data) || (this.#options.cancelWithX && matchesKey(data, "x"))) {
+		if (
+			(!matchesKey(data, "escape") && matchesAppInterrupt(data)) ||
+			(this.#options.cancelWithX && matchesKey(data, "x"))
+		) {
 			if (running) this.#options.onCancel(running);
 			return;
 		}
@@ -739,7 +758,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "cancel") {
-			this.#options.onClose();
+			this.#closeOrResumeDraft();
 			return;
 		}
 		if (action.kind === "search") {
@@ -901,8 +920,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 			const record = this.#selected();
 			switch (event.act) {
 				case "close":
-					if (!this.#composer && (this.#search.focused || this.#search.value)) this.handleInput("\x1b");
-					else this.#options.onClose();
+					if (this.#composer || this.#search.focused || this.#search.value) this.handleInput("\x1b");
+					else this.#closeOrResumeDraft();
 					return;
 				case "copy-answer":
 					if (record && getBtwCopyText(record) !== undefined) this.#options.onCopy(record);
@@ -926,11 +945,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 					this.#composer?.input.onEscape?.();
 					break;
 				case "discard":
-					if (this.#composer) {
-						this.#drafts.delete(this.#composer.recordId);
-						this.#composer.abortController.abort();
-						this.#composer = undefined;
-					}
+					this.#composer?.input.onCancel?.();
 					break;
 				default:
 					return;
@@ -1105,8 +1120,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		if (this.#composer) {
 			return actionBar([
 				null,
-				actionButton(this.#followUpPending ? "Cancel send" : "Back", "back", { keys: "escape" }),
-				actionButton("Discard draft", "discard"),
+				actionButton(this.#followUpPending ? "Cancel send" : "Back", "back"),
+				actionButton("Discard draft", "discard", { keys: "ctrl+c" }),
 				actionButton(this.#followUpPending ? "Sending…" : "Send", "send", { keys: "enter", tone: "accent" }),
 			]);
 		}
@@ -1331,7 +1346,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const actions = composer
 			? [
 					keyHint("tui.input.submit", this.#followUpPending ? "starting…" : "send"),
-					keyHint("tui.select.cancel", this.#followUpPending ? "cancel send (keep draft)" : "back (keep draft)"),
+					rawKeyHint(["tab"], "back (keep draft)"),
+					rawKeyHint(["ctrl+c"], "discard draft"),
 				]
 			: [
 					keyHint("app.navigation.dismiss", "close"),

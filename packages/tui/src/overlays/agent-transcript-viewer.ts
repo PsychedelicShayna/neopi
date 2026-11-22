@@ -89,6 +89,8 @@ export interface AgentTranscriptViewerDeps {
 	requestRender: () => void;
 	/** Close just this viewer (Esc), returning to the hub table. */
 	onClose: () => void;
+	/** Whether onClose retains the transcript snapshot so an unsent draft can be recovered. */
+	preservesDraftOnClose?: () => boolean;
 	/** Close this viewer AND the hub (hub-toggle keys). */
 	onHubClose: () => void;
 	/**
@@ -576,6 +578,11 @@ export class AgentTranscriptViewer implements Component {
 	// Input
 	// ========================================================================
 
+	/** A focused host must not intercept explicit cancellation of a draft. */
+	capturesInput(data: string): boolean {
+		return matchesKey(data, "ctrl+c") && !!this.#editor?.getText();
+	}
+
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
@@ -587,14 +594,23 @@ export class AgentTranscriptViewer implements Component {
 			});
 			return;
 		}
+		if (this.#editor && this.capturesInput(data)) {
+			this.#editor.setText("");
+			this.#editor.resetVimMode();
+			this.#setFocus("view");
+			return;
+		}
 		if (this.#focus === "editor" && this.#editor) {
 			this.#keys.reset();
 			const text = extractPrintableText(data);
-			if (this.#editor.isJumpPending) this.#editor.handleInput(data);
-			else if (text !== undefined) this.#editor.typeCharacter(text);
-			else {
+			if (this.#editor.isJumpPending || (matchesKey(data, "escape") && this.#editor.vimConsumesEscape())) {
+				this.#editor.handleInput(data);
+			} else if (text !== undefined) {
+				this.#editor.handleInput(data, true);
+			} else {
 				const kb = getKeybindings();
 				if (
+					matchesKey(data, "escape") ||
 					kb.matches(data, "tui.select.cancel") ||
 					kb.matches(data, "tui.select.nextContext") ||
 					kb.matches(data, "tui.select.prevContext")
@@ -612,7 +628,7 @@ export class AgentTranscriptViewer implements Component {
 		}
 		for (const key of this.#deps.hubKeys) {
 			if (matchesKey(data, key)) {
-				this.#deps.onHubClose();
+				if (!this.#editor?.getText()) this.#deps.onHubClose();
 				return;
 			}
 		}
@@ -625,7 +641,7 @@ export class AgentTranscriptViewer implements Component {
 		const action = this.#keys.read(data);
 		if (action === undefined || action === "pending") return;
 		if (action.kind === "cancel" || (action.kind === "horizontal" && action.delta === -1)) {
-			this.#deps.onClose();
+			this.#escape();
 			return;
 		}
 		if (action.kind === "context") {
@@ -709,10 +725,10 @@ export class AgentTranscriptViewer implements Component {
 		if (event.type === "action" && event.act === "close") this.#escape();
 	}
 
-	/** Esc leaves the focused field without discarding its draft, then returns to the hub. */
+	/** Escape can leave the field; the view stays open while it holds an unsent draft. */
 	#escape(): void {
 		if (this.#focus === "editor") this.#setFocus("view");
-		else this.#deps.onClose();
+		else if (!this.#editor?.getText() || this.#deps.preservesDraftOnClose?.()) this.#deps.onClose();
 	}
 
 	/**
@@ -898,8 +914,8 @@ export class AgentTranscriptViewer implements Component {
 		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand`;
 		const hint =
 			this.#focus === "editor"
-				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view`
-				: `${keys}${this.#editor ? " · Tab message" : ""} · ? help`;
+				? `${editorKey("tui.input.submit")}:send · Tab back to view · ${this.#editor?.escapeHint("back to view") ?? "Esc back to view"} · Ctrl+C discard`
+				: `${keys}${this.#editor ? " · Tab message · Ctrl+C discard draft" : ""} · ? help`;
 		lines.push(
 			...menuHintLines(hint, width, this.#focus === "editor" ? "" : "jk gg/G C-u d e y").map(line =>
 				theme.fg("dim", line),

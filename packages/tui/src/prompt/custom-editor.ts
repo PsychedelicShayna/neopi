@@ -1818,7 +1818,11 @@ export class CustomEditor extends Editor {
 	}
 
 	#matchesAction(canonical: string | undefined, action: ConfigurableEditorAction): boolean {
-		return canonical !== undefined && (this.#actionMatchKeys.get(action)?.has(canonical) ?? false);
+		return (
+			canonical !== undefined &&
+			(canonical !== "escape" || action !== "app.interrupt") &&
+			(this.#actionMatchKeys.get(action)?.has(canonical) ?? false)
+		);
 	}
 
 	/** Whether `data` is exactly one keypress the base editor would treat as submit. */
@@ -1886,11 +1890,6 @@ export class CustomEditor extends Editor {
 		return this.#pasteInFlight > 0;
 	}
 
-	/** The fork's Space-hold gesture is handled inside {@link handleInput}; nothing is pre-claimed. */
-	capturesInput(_data: string): boolean {
-		return false;
-	}
-
 	/** The fork-owned xAI shortcut bypasses normal input locks and focused modal bindings.
 	 *  Called by the app's global listener too, so its target is always the main composer.
 	 *  Enhanced repeats never toggle; modifier-release repeats cannot become a configured hold. */
@@ -1932,7 +1931,9 @@ export class CustomEditor extends Editor {
 		if (this.#chainLock) {
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
-			if (canonical !== undefined) {
+			if (canonical === "escape") {
+				if (this.vimConsumesEscape()) super.handleInput(data);
+			} else if (canonical !== undefined) {
 				if (this.#matchesAction(canonical, "app.interrupt")) this.#chainLock.onCancel();
 				else if (this.#matchesAction(canonical, "app.chain.skipStep")) this.#chainLock.onSkip();
 			}

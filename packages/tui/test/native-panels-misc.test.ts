@@ -54,6 +54,34 @@ describe("MoveOverlay native events", () => {
 		{ value: "/work/gamma", label: "gamma/" },
 	];
 
+	for (const vim of [false, true]) {
+		it(`keeps a Tab-completed path through Escape (Vim ${vim ? "on" : "off"})`, () => {
+			const previous = getMenuSearchVimMode();
+			setMenuSearchVimMode(vim);
+			try {
+				const results: (MoveOverlayResult | undefined)[] = [];
+				const overlay = new MoveOverlay("/work", result => results.push(result), {
+					search: prefix => entries.filter(entry => entry.value.startsWith(prefix)),
+				});
+				overlay.handleInput("/work/al");
+				overlay.handleInput("\t");
+				overlay.handleInput("\x1b");
+				if (vim) {
+					expect(overlay.filterFocused).toBe(true);
+					overlay.handleInput("\x1b");
+				}
+				expect(overlay.filterFocused).toBe(false);
+				overlay.handleInput("\x1b");
+				expect(results).toEqual([]);
+				expect(listOf(overlay.describe()).p?.selected).toBe("/work/alpha");
+				overlay.handleInput("\r");
+				expect(results).toEqual([{ directory: "/work/alpha" }]);
+			} finally {
+				setMenuSearchVimMode(previous);
+			}
+		});
+	}
+
 	it("mirrors a selected suggestion and confirms the activated one", () => {
 		const results: (MoveOverlayResult | undefined)[] = [];
 		const overlay = new MoveOverlay("/work", result => results.push(result), { search: () => entries });
@@ -113,7 +141,7 @@ describe("AnnotationOverlay native esc", () => {
 });
 
 describe("AgentTranscriptViewer native esc", () => {
-	it("leaves a focused message field without discarding its draft, then returns to the hub", () => {
+	it("lets Escape leave Insert and blur without dropping a message; Ctrl+C clears the draft", () => {
 		const onClose = vi.fn();
 		const previous = getKeybindings();
 		const missing = (): never => {
@@ -166,9 +194,16 @@ describe("AgentTranscriptViewer native esc", () => {
 			} finally {
 				restored.dispose();
 			}
+			viewer.handleInput("\x1b");
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft" } });
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).not.toHaveBeenCalled();
 			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "hjkl / draft" } });
+			viewer.handleNativeEvent(CLOSE_CLICK);
+			expect(onClose).not.toHaveBeenCalled();
+			expect(viewer.capturesInput("\x03")).toBe(true);
+			viewer.handleInput("\x03");
+			expect(viewer.navigationSnapshot()).toMatchObject({ focus: "view", editor: { text: "" } });
 			viewer.handleNativeEvent(CLOSE_CLICK);
 			expect(onClose).toHaveBeenCalledTimes(1);
 		} finally {
@@ -308,6 +343,38 @@ describe("BtwHistoryPanel native events", () => {
 		expect(find("details")?.scroll?.by).toBe("line-up");
 		const input = find("composer")?.c?.[0];
 		expect(input instanceof Input ? input.getValue() : undefined).toBe("draft");
+	});
+
+	it("keeps follow-up text through Escape and Tab, requiring Ctrl+C to discard before close", () => {
+		const onClose = vi.fn();
+		const onFollowUp = vi.fn(async () => true);
+		const history = new BtwHistoryPanel({
+			records: [record("a", "first question"), record("b", "second question")],
+			onClose,
+			onCopy: () => {},
+			onCancel: () => {},
+			canFollowUp: () => true,
+			onFollowUp,
+			requestRender: () => {},
+			getHeight: () => 30,
+		});
+		history.openFollowUp("a");
+		history.handleInput("draft");
+		history.handleInput("\x1b");
+		history.handleInput("0");
+		history.handleInput("x");
+		expect(history.navigationSnapshot()).toMatchObject({ composer: { value: "raft" } });
+		history.handleInput("\x1b");
+		expect(history.navigationSnapshot()).toMatchObject({ composer: { value: "raft" } });
+		history.handleInput("\t");
+		expect(findNode(history.describe(), node => node.key === "composer")).toBeUndefined();
+		history.handleNativeEvent(CLOSE_CLICK);
+		expect(onClose).not.toHaveBeenCalled();
+		expect(history.navigationSnapshot()).toMatchObject({ composer: { value: "raft" } });
+		history.handleInput("\x03");
+		history.handleNativeEvent(CLOSE_CLICK);
+		expect(onFollowUp).not.toHaveBeenCalled();
+		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
 	it("routes the footer buttons to the same paths as their keys", async () => {

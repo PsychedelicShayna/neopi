@@ -56,7 +56,9 @@ describe("AdvisorConfigOverlayComponent", () => {
 		overlay.handleInput("\r");
 		overlay.handleInput("\x7f"); // Inside the editor: ordinary deletion, not reset.
 		overlay.handleInput("\x1b");
-		overlay.handleInput("\x1b"); // Vim leaves Insert first; the next Escape backs out of the editor.
+		overlay.handleInput("\x1b"); // Normal-mode Escape keeps the changed draft open.
+		expect(overlay.navigationSnapshot().content).toMatchObject({ text: "X" });
+		overlay.handleInput("\x03");
 		expect(doc.advisors[0].systemPrompt).toBe("XY");
 		expect(strip(overlay.render(200))).not.toContain("● unsaved");
 

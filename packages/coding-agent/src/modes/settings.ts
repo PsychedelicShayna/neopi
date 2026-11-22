@@ -1226,7 +1226,7 @@ export const cfgTuiVimMode = register({
 		group: "Input",
 		label: "Vim Navigation and Editing",
 		get description() {
-			return `Opt in to Vim navigation across menus, pickers, lists and viewers, plus modal prompt and search editing. ${formatKeyHint("escape")} leaves Insert mode; Normal mode has hjkl, 0, $, ^, w, b, e, gg, G, counts, x/D/C, dd/yy, p and u; operators take motions or text objects (diw, ca(, dap); v/V start a Visual selection that y copies and d deletes. Off by default; ordinary navigation and text editing remain available`;
+			return `Opt in to Vim navigation across menus, pickers, lists and viewers, plus modal editing in text fields. ${formatKeyHint("escape")} leaves Insert mode; Normal mode has hjkl, 0, $, ^, w, b, e, gg, G, counts, x/D/C, dd/yy, p and u; operators take motions or text objects (diw, ca(, dap); v/V start a Visual selection that y copies and d deletes. Off by default; ordinary navigation and text editing remain available`;
 		},
 	},
 });

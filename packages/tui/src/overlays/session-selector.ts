@@ -21,6 +21,7 @@ import {
 	picker,
 	pickerAction,
 	pickerAge,
+	pickerBackAction,
 	pickerDate,
 	type PickerEvent,
 	pickerEvent,
@@ -78,7 +79,7 @@ import { bottomBorder, OverlayPanel, row, topBorder } from "../chrome/overlay-bo
 import { TextFormField } from "../components/form";
 import { MenuSelection } from "../components/menu-selection";
 import { formatKeyHint } from "../app-keybindings";
-import { boundKeys, dismissKey } from "../chrome/keybinding-hints";
+import { boundKeys, dismissKey, editorKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 
 /**
@@ -725,13 +726,16 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		this.#keys.reset();
 	}
 
-	escape(): void {
-		if (this.#search.focused || this.#search.value) {
-			this.#search.setValue("");
-			this.#search.focused = false;
-			this.#filterSessions("");
-		} else this.onCancel?.();
-		this.#keys.reset();
+	back(): void {
+		const before = this.#search.query;
+		if (!this.#search.back()) this.onCancel?.();
+		else {
+			this.#keys.reset();
+			if (this.#search.query !== before) {
+				this.#restoredSelected = undefined;
+				this.#filterSessions(this.#search.query);
+			}
+		}
 	}
 
 	/**
@@ -1053,7 +1057,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		if (selected) this.onDeleteRequest?.(selected);
 	}
 
-	/** F2: ask the parent to rename the selected session. */
+	/** Ask the parent to rename the selected session. */
 	requestRename(): void {
 		const selected = this.#menu.selectedItem;
 		if (selected) this.onRenameRequest?.(selected);
@@ -1527,7 +1531,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			}
 			return;
 		}
-		if (matchesKey(data, "f2")) {
+		if (getKeybindings().matches(data, "app.session.rename")) {
 			this.requestRename();
 			return;
 		}
@@ -1546,11 +1550,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
-		if (matchesAppDismiss(data)) return this.escape();
+		if (matchesAppDismiss(data)) return this.onCancel?.();
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "search") {
 			this.#search.focused = true;
+			if (this.#search.query !== before) this.#filterSessions(this.#search.query);
 			return;
 		}
 		// Leaving the session list follows the app navigation binding.
@@ -1718,6 +1723,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				errorOpen: boolean;
 				choice: DeleteChoice<T> | null;
 				focused: boolean;
+				modalEscape: boolean;
 				rename: OverlayPanel | null;
 				node: NativeNode;
 		  }
@@ -1868,7 +1874,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#inputLocked || this.#deleting;
+		return this.#inputLocked || this.#deleting || this.#renameDialog !== null;
 	}
 
 	navigationSnapshot(): unknown {
@@ -2109,7 +2115,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const submit = async (value: string) => {
 			if (pending) return;
 			const title = value.trim();
-			// Empty treated as cancel: Esc and a blank submit both leave the title.
+			// A blank submit leaves the current session title unchanged.
 			if (title.length === 0) {
 				this.#closeRenameDialog();
 				return;
@@ -2130,6 +2136,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 					this.#sessionList.renameSessionTitle(session.path, stored);
 					this.#syncScopeTitles(session.path, stored);
 					if (this.#preview?.session === session) this.#preview = undefined;
+					if (this.#renameDialog === owner) this.#closeRenameDialog();
 				} else {
 					this.#showError("Failed to rename session.");
 				}
@@ -2138,7 +2145,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			} finally {
 				pending = false;
 			}
-			if (this.#renameDialog === owner) this.#closeRenameDialog();
 		};
 		const field = new TextFormField({
 			theme: formTheme,
@@ -2234,7 +2240,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const cancel = dismissKey();
 		const pin = this.#pinAction();
 		const pinKey = pin && getKeybindings().getKeys(pin.binding)[0];
-		const hint = `/ search · ${this.#onDelete ? `${formatKeyHint("delete")} delete (list) · ` : ""}${this.#onRename ? `${formatKeyHint("f2")} rename · ` : ""}${pinKey ? `${formatKeyHint(pinKey)} ${pin.label} · ` : ""}Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close · ? help`;
+		const renameKey = editorKey("app.session.rename");
+		const hint = `/ search · ${this.#onDelete ? `${formatKeyHint("delete")} delete (list) · ` : ""}${this.#onRename && renameKey ? `${renameKey} rename · ` : ""}${pinKey ? `${formatKeyHint(pinKey)} ${pin.label} · ` : ""}Enter/Space select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} list/close · ? help`;
 		return [
 			row("", width),
 			...menuHintLines(hint, Math.max(1, width - 4), "jk gg/G C-u d e y").map(line =>
@@ -2300,7 +2307,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const hints: (NativeHint | undefined)[] = [];
 		if (this.#onDelete) hints.push({ keys: ["delete"], label: "delete (list)" });
-		if (this.#onRename) hints.push({ keys: ["f2"], label: "rename" });
+		if (this.#onRename) hints.push(actionHint("app.session.rename", "rename"));
 		const pin = this.#pinAction();
 		if (pin) hints.push(actionHint(pin.binding, pin.label));
 		hints.push({ keys: ["enter"], label: "select" }, { keys: ["/"], label: "search" });
@@ -2330,7 +2337,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	 * `lg` cards sheet (`screen` for the standalone app): sessions grouped by
 	 * day (ranked flat while searching), the selected session's preview, the
 	 * delete confirm strip, and the actions of the keys Enter, Delete,
-	 * F2 (rename), the pin keys (Pin / Unpin, whichever applies to the selected
+	 * rename, the pin keys (Pin / Unpin, whichever applies to the selected
 	 * session), Tab (the scope toggle, labelled with the scope it switches
 	 * to) and Esc. Untitled unless the caller named it; the placeholder says the scope.
 	 */
@@ -2342,6 +2349,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const errorOpen = this.#pickerErrorOpen && message?.kind === "error";
 		const choice = this.#deleteChoice;
 		const rename = this.#renameDialog;
+		const modalEscape = list.filterFocused && list.searchInput.vimConsumesEscape();
 		const memo = this.#pickerMemo;
 		if (
 			memo?.view === view &&
@@ -2351,28 +2359,32 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			memo.errorOpen === errorOpen &&
 			memo.choice === choice &&
 			memo.focused === list.filterFocused &&
+			memo.modalEscape === modalEscape &&
 			memo.rename === rename
 		) {
 			return memo.node;
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", "Resume", "enter", { primary: true })];
-		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "delete"));
-		if (this.#onRename) actions.push(pickerAction("rename", "Rename", "f2"));
-		const pin = this.#pinAction();
-		if (pin) actions.push(pickerAction("pin", pin.label === "pin" ? "Pin" : "Unpin", bindingKeys(pin.binding)));
-		if (toggle) {
-			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
+		const actions = list.filterFocused
+			? [
+					pickerAction("search", "Search", "enter", { primary: true }),
+					pickerAction("clear", "Clear search", "ctrl+c"),
+					pickerBackAction(modalEscape),
+				]
+			: [pickerAction("resume", "Resume", "enter", { primary: true })];
+		if (!list.filterFocused) {
+			if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "delete"));
+			if (this.#onRename) actions.push(pickerAction("rename", "Rename", bindingKeys("app.session.rename")));
+			const pin = this.#pinAction();
+			if (pin) actions.push(pickerAction("pin", pin.label === "pin" ? "Pin" : "Unpin", bindingKeys(pin.binding)));
+			if (toggle) {
+				actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
+			}
+			actions.push(
+				pickerAction("close", "Close", boundKeys("app.navigation.dismiss", ["escape"])[0], { end: true }),
+			);
 		}
-		actions.push(
-			pickerAction(
-				"close",
-				list.filterFocused ? "Back to list" : "Close",
-				boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape",
-				{ end: true },
-			),
-		);
 		const folder = this.#scopeLabel === false ? undefined : (this.#scopeLabel ?? path.basename(getProjectDir()));
 		const title = this.#pickerTitle;
 		const placeholder =
@@ -2427,6 +2439,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			choice,
 			rename,
 			focused: list.filterFocused,
+			modalEscape,
 			node: result,
 		};
 		return result;
@@ -2465,12 +2478,18 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	/**
 	 * Picker pointer events run the keys' paths: a row click selects (arrows),
 	 * a second click or `Resume` resumes (Enter), `Delete` asks (Delete),
-	 * `Rename` renames (F2), `Pin` / `Unpin` flips the pin, the tab or `All projects` toggles scope (Tab),
+	 * `Rename` renames, `Pin` / `Unpin` flips the pin, the tab or `All projects` toggles scope (Tab),
 	 * `Close` cancels (Esc), and the confirm strip answers the delete dialog (Yes / Esc).
 	 */
 	#handlePickerEvent(ev: PickerEvent): void {
 		const list = this.#sessionList;
 		const choice = this.#deleteChoice;
+		if (!choice && !this.#renameDialog && list.filterFocused) {
+			if (ev.kind === "activate" || (ev.kind === "action" && ev.act === "search")) list.handleInput("\r");
+			else if (ev.kind === "action" && ev.act === "close") list.back();
+			else if (ev.kind === "action" && (ev.act === "cancel" || ev.act === "clear")) list.handleInput("\x03");
+			return;
+		}
 		if (ev.kind !== "action") {
 			if (choice || this.#renameDialog) return;
 			if (ev.kind === "select") list.selectSession(ev.item);
@@ -2480,12 +2499,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (ev.act === "delete-confirm") choice?.confirm();
 		else if (ev.act === "cancel") {
 			if (choice) choice.cancel();
-			else if (this.#renameDialog) this.#closeRenameDialog();
-			else list.escape();
+			else if (this.#renameDialog) this.#renameField?.handleInput("\x03");
+			else list.back();
 		} else if (ev.act === "close") {
 			if (choice) choice.cancel();
-			else if (this.#renameDialog) this.#closeRenameDialog();
-			else list.escape();
+			else if (this.#renameDialog) this.#renameField?.handleInput("\x1b");
+			else list.back();
 		} else if (choice || this.#renameDialog) return;
 		else if (ev.act === "resume") list.resumeSelected();
 		else if (ev.act === "delete") list.requestDelete();

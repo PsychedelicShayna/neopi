@@ -4,7 +4,6 @@ import { OverlayPanel, PanelRows } from "../chrome/overlay-box";
 import { col, keyed, span, text } from "../native/describe";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
-import { extractPrintableText, matchesKey } from "../keys";
 
 /** A confirmed destination chosen from {@link PlanSaveOverlay}. */
 export interface PlanSaveOverlayResult {
@@ -27,7 +26,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 		this.#done = done;
 		this.#input.prompt = theme.fg("dim", "Path: ");
 		this.#input.onSubmit = value => this.#done({ path: value.trim() || this.#suggestedPath });
-		this.#input.onEscape = () => this.#done(undefined);
+		this.#input.onCancel = this.#input.onEscape = () => this.#done(undefined);
 		this.#panel = new OverlayPanel("Save plan");
 		this.#body = new PanelRows();
 		this.#body.setHeight(2);
@@ -48,11 +47,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		const printable = extractPrintableText(data);
-		if (printable !== undefined) this.#input.insertText(printable);
-		else if (matchesKey(data, "escape")) this.#input.onEscape?.();
-		else if (matchesKey(data, "enter") || data === "\n") this.#input.onSubmit?.(this.#input.getValue());
-		else this.#input.handleInput(data);
+		this.#input.handleInput(data, true);
 	}
 
 	/** Routes enhanced clipboard pastes into the path input. */
@@ -68,7 +63,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const innerWidth = Math.max(0, width - 4);
 		this.#input.focused = this.#focused;
-		const hint = "Enter save and quit · Esc cancel";
+		const hint = "Enter save and quit · Ctrl+C cancel";
 		this.#body.setLines([this.#renderInput(innerWidth), theme.fg("dim", hint)]);
 		return this.#panel.render(width);
 	}
@@ -93,7 +88,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 		children.push(
 			actionBar([
 				null,
-				actionButton("Cancel", "cancel", { keys: "escape" }),
+				actionButton("Cancel", "cancel", { keys: "ctrl+c" }),
 				actionButton("Save and quit", "save", { tone: "accent", keys: "enter" }),
 			]),
 		);
@@ -106,7 +101,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type !== "action") return;
 		if (event.act === "save") this.#input.onSubmit?.(this.#input.getValue());
-		else if (event.act === "cancel") this.#input.onEscape?.();
+		else if (event.act === "cancel") this.#input.onCancel?.();
 	}
 
 	#renderInput(width: number): string {

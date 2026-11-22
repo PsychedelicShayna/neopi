@@ -471,6 +471,13 @@ describe("Composer prepaint", () => {
 			expect(mode.ui.getFocused()).toBe(mode.editor);
 			terminal.sendInput("\x1b[A");
 			expect(mode.ui.getFocused()).toBe(ask);
+			terminal.sendInput("n");
+			expect(mode.ui.getFocused()).not.toBe(ask);
+			expect(mode.ui.getFocused()).not.toBe(mode.editor);
+			terminal.sendInput("discard this note");
+			terminal.sendInput("\x03");
+			await Promise.resolve();
+			expect(mode.ui.getFocused()).toBe(ask);
 			expect(mode.cancelAsk()).toBe(true);
 			expect(await pending).toBeUndefined();
 			expect(mode.ui.getFocused()).toBe(mode.editor);
@@ -565,7 +572,7 @@ describe("Composer prepaint", () => {
 		const terminal = new CountingTerminal(120, 24);
 		const composer = new Composer({ preferences: config, terminal });
 		const testSession = await createTestSession({ inMemory: true });
-		cfgTuiVimMode.override(settings, true);
+		cfgTuiVimMode.override(testSession.session.settings, true);
 		const mode = new InteractiveMode(
 			testSession.session,
 			"test",
@@ -581,6 +588,15 @@ describe("Composer prepaint", () => {
 			composer.start();
 			await mode.init({ suppressWelcomeIntro: true });
 			expect(getMenuSearchVimMode()).toBe(true);
+			expect(mode.editor.vimEnabled).toBe(true);
+			cfgTuiVimMode.override(testSession.session.settings, false);
+			await Promise.resolve();
+			expect(getMenuSearchVimMode()).toBe(false);
+			expect(mode.editor.vimEnabled).toBe(false);
+			cfgTuiVimMode.override(testSession.session.settings, true);
+			await Promise.resolve();
+			expect(getMenuSearchVimMode()).toBe(true);
+			expect(mode.editor.vimEnabled).toBe(true);
 
 			const opened = Promise.withResolvers<SettingsSelectorComponent>();
 			const setFocus = mode.ui.setFocus.bind(mode.ui);

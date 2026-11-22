@@ -21,7 +21,7 @@ import {
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { col, compact, keyed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import { Memo } from "@oh-my-pi/pi-tui/native/memo";
-import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { actionBar, actionButton, iconButton } from "@oh-my-pi/pi-tui/native/overlay";
 import {
 	type WordCompletionEngine,
@@ -137,7 +137,12 @@ class PredictCompareComponent implements Component, Focusable {
 	constructor(ui: TUI) {
 		this.#ui = ui;
 		this.#input.prompt = "> ";
+		this.#input.placeholder = "Type to compare engines";
 		this.#input.onSubmit = () => this.#input.setValue("");
+		this.#input.onEscape = () => {
+			if (!this.#input.getValue()) this.#done.resolve();
+		};
+		this.#input.onCancel = () => this.#cancel();
 		const repaint = (): void => ui.requestRender();
 		this.#lanes = ENGINES.map(engine => new Lane(engine, repaint));
 	}
@@ -160,16 +165,17 @@ class PredictCompareComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
-			this.#done.resolve();
-			return;
-		}
 		if (matchesKey(data, "tab")) {
 			this.#accept();
 		} else {
 			this.#input.handleInput(data);
 		}
 		this.#ui.requestRender();
+	}
+
+	#cancel(): void {
+		if (this.#input.getValue()) this.#input.setValue("");
+		else this.#done.resolve();
 	}
 
 	/** Accept the first lane's ghost word (Tab). */
@@ -180,9 +186,8 @@ class PredictCompareComponent implements Component, Focusable {
 	}
 
 	/**
-	 * Pointer paths: the action bar accepts (Tab), clears (Enter) or quits
-	 * (Esc) through the key code; terminal-side edits on the field apply to
-	 * the input.
+	 * Pointer paths: the action bar accepts, clears or quits; terminal-side
+	 * edits on the field apply to the input.
 	 */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "edit" || event.type === "undo") {
@@ -198,8 +203,8 @@ class PredictCompareComponent implements Component, Focusable {
 				this.#input.submit();
 				break;
 			case "quit":
-				this.#done.resolve();
-				return;
+				this.#cancel();
+				break;
 			default:
 				return;
 		}
@@ -212,36 +217,25 @@ class PredictCompareComponent implements Component, Focusable {
 	 * one row per engine (its ghost after the typed text, confidence and
 	 * latency), and an action bar mirroring the keys.
 	 */
-	describe(): NativeNode {
+	describe(cx: DescribeContext): NativeNode {
+		const input = this.#input.describe(cx);
 		const value = this.#input.getValue();
-		const cursor = this.#input.getCursor();
 		const ghosts = this.#lanes.map(lane => lane.provider.getWordCompletion([value], 0, value.length) ?? "");
-		return this.#native.get(
-			[value, cursor, ...ghosts, ...this.#lanes.flatMap(lane => [lane.answer, lane.pending])],
-			() =>
-				col(
-					[
-						this.#describeHead(),
-						keyed(
-							node("input", {
-								text: value,
-								cursor,
-								prompt: this.#input.prompt,
-								placeholder: "Type to compare engines",
-								ghost: ghosts[0] || undefined,
-							}),
-							"input",
-						),
-						this.#describeLanes(value, ghosts),
-						actionBar([
-							actionButton(`Accept ${ENGINES[0]}`, "accept", { keys: "tab", tone: "accent" }),
-							actionButton("Clear", "clear", { keys: "enter" }),
-							null,
-							actionButton("Quit", "quit", { keys: "escape" }),
-						]),
-					],
-					{ role: "omp.app.predict", gap: "md", grow: 1 },
-				),
+		return this.#native.get([input, ...ghosts, ...this.#lanes.flatMap(lane => [lane.answer, lane.pending])], () =>
+			col(
+				[
+					this.#describeHead(),
+					keyed(node("input", { ...(input.k === "input" && input.p), ghost: ghosts[0] || undefined }), "input"),
+					this.#describeLanes(value, ghosts),
+					actionBar([
+						actionButton(`Accept ${ENGINES[0]}`, "accept", { keys: "tab", tone: "accent" }),
+						actionButton("Clear", "clear", { keys: "enter" }),
+						null,
+						actionButton(value ? "Discard draft" : "Quit", "quit", { keys: "ctrl+c" }),
+					]),
+				],
+				{ role: "omp.app.predict", gap: "md", grow: 1 },
+			),
 		);
 	}
 
@@ -267,7 +261,7 @@ class PredictCompareComponent implements Component, Focusable {
 									align: "center",
 									role: "omp.app.fresh",
 								}),
-							iconButton("x", "quit", "Quit  esc", { aria: "Quit" }),
+							iconButton("x", "quit", "Discard draft or quit when empty"),
 						]),
 						{ gap: "md", align: "center", role: "omp.app.tools" },
 					),
@@ -307,7 +301,7 @@ class PredictCompareComponent implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const value = this.#input.getValue();
 		const header = `${chalk.bold("omp predict")} ${chalk.dim(
-			`· type to compare engines · ${formatKeyHint("tab")} accepts ${ENGINES[0]} · ${formatKeyHint("enter")} clears · ${formatKeyHint("escape")} quits`,
+			`· type to compare engines · ${formatKeyHint("tab")} accepts ${ENGINES[0]} · ${formatKeyHint("enter")} clears · ${formatKeyHint("ctrl+c")} discards draft or quits when empty`,
 		)}`;
 		const textWidth = Math.max(8, width - LABEL_WIDTH - STATS_WIDTH - 2);
 		const rows = this.#lanes.map(lane => {

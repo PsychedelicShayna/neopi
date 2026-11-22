@@ -6,6 +6,7 @@
  */
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";
+import { Input } from "../components/input";
 import { MenuKeyReader, MenuSearchField, type MenuSearchState } from "../components/menu-navigation";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { compileMenuRegex } from "../menu-search";
@@ -58,7 +59,7 @@ export interface IrcViewerNavigation {
 	follow: boolean;
 	expanded: string[];
 	filter: MenuSearchState;
-	draft: MenuSearchState;
+	draft: { value: string; cursor: number; focused: boolean };
 	compose: { to: string; replyTo: string } | undefined;
 }
 
@@ -88,7 +89,7 @@ export class IrcViewerComponent implements Component {
 	readonly #expanded = new Set<string>();
 	/** The reply being written, and to whom. */
 	#compose: { to: string; replyTo: string } | undefined;
-	readonly #draft = new MenuSearchField();
+	readonly #draft = new Input();
 	#sending = false;
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	/** Outcome of the last reply, shown in the status row until the next key. */
@@ -96,6 +97,7 @@ export class IrcViewerComponent implements Component {
 
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
+		this.#draft.prompt = "";
 		this.#unsubscribe = options.source.subscribe(() => {
 			const visible = this.#visible();
 			this.#syncSelection(visible);
@@ -122,7 +124,7 @@ export class IrcViewerComponent implements Component {
 			follow: this.#follow,
 			expanded: [...this.#expanded],
 			filter: this.#filter.navigationSnapshot(),
-			draft: this.#draft.navigationSnapshot(),
+			draft: { value: this.#draft.getValue(), cursor: this.#draft.getCursor(), focused: this.#draft.focused },
 			compose: this.#compose ? { ...this.#compose } : undefined,
 		};
 	}
@@ -131,7 +133,8 @@ export class IrcViewerComponent implements Component {
 		if (typeof snapshot !== "object" || snapshot === null) return;
 		const state = snapshot as Partial<IrcViewerNavigation>;
 		this.#filter.restoreNavigation(state.filter);
-		this.#draft.restoreNavigation(state.draft);
+		this.#draft.setValue(state.draft?.value ?? "");
+		this.#draft.setCursor(state.draft?.cursor ?? this.#draft.getValue().length);
 		const entries = this.#visible();
 		const selected = entries.findIndex(entry => entry.message.id === state.selected);
 		this.#selected = selected >= 0 ? selected : Math.max(0, Math.min(entries.length - 1, state.selectedIndex ?? 0));
@@ -140,7 +143,7 @@ export class IrcViewerComponent implements Component {
 		this.#expanded.clear();
 		for (const id of state.expanded ?? []) this.#expanded.add(id);
 		this.#compose = state.compose && this.#options.reply ? { ...state.compose } : undefined;
-		if (!this.#compose) this.#draft.focused = false;
+		this.#draft.focused = this.#compose !== undefined && state.draft?.focused === true;
 		this.#revealSelection = false;
 		this.#keys.reset();
 		this.#options.requestRender();
@@ -225,11 +228,11 @@ export class IrcViewerComponent implements Component {
 		const editing = this.#filter.focused || (this.#compose && this.#draft.focused);
 		const hints = menuHintLines(
 			this.#filter.focused
-				? "enter apply · esc clear"
+				? `Enter apply · ${this.#filter.input.escapeHint("back")} · Ctrl+C clear`
 				: this.#compose
 					? this.#draft.focused
-						? "enter send · Tab view · esc leave field"
-						: "Tab edit reply · esc cancel reply · ? help"
+						? `Enter send · Tab view · ${this.#draft.escapeHint("leave field")} · Ctrl+C discard`
+						: "Tab edit reply · Ctrl+C discard · ? help"
 					: `enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
 							"esc",
 							...this.#options.viewerKeys.map(key => formatKeyHint(key)),
@@ -289,7 +292,7 @@ export class IrcViewerComponent implements Component {
 		const counts = `${all.length} ${all.length === 1 ? "message" : "messages"} · ${broadcasts} broadcast · ${participants} ${participants === 1 ? "participant" : "participants"}`;
 		const query = this.#filter.value;
 		const draft = this.#compose
-			? (this.#draft.input.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? "")
+			? (this.#draft.render(Math.max(0, inner - 12 - this.#compose.to.length))[0] ?? "")
 			: "";
 		const filter = this.#filter.render(Math.max(0, inner - 8), { muted: text => theme.fg("dim", text) });
 		const status = this.#filter.focused
@@ -387,15 +390,13 @@ export class IrcViewerComponent implements Component {
 	}
 
 	#blurDraft(): void {
-		const cursor = this.#draft.cursor;
-		this.#draft.setValue(this.#draft.value);
-		this.#draft.input.setCursor(cursor);
 		this.#draft.focused = false;
 	}
 
 	#leaveReply(): void {
 		this.#compose = undefined;
 		this.#blurDraft();
+		this.#draft.setValue("");
 		this.#keys.reset();
 		this.#options.requestRender();
 	}
@@ -405,26 +406,28 @@ export class IrcViewerComponent implements Component {
 		const reply = this.#options.reply;
 		if (!compose || !reply || !this.#draft.focused) return false;
 		const kb = getKeybindings();
+		const printable = extractPrintableText(data);
+		const escape = matchesKey(data, "escape");
 		if (
-			extractPrintableText(data) === undefined &&
+			!escape &&
+			printable === undefined &&
 			(kb.matches(data, "tui.select.prevContext") || kb.matches(data, "tui.select.nextContext"))
 		)
 			return false;
 		if (!matchesKey(data, "enter") && data !== "\n") {
-			// Esc leaves the composer field without discarding its draft.
+			// Escape can blur the reply after Vim has left its editing mode.
 			if (
-				matchesKey(data, "escape") ||
-				(extractPrintableText(data) === undefined && getKeybindings().matches(data, "tui.select.cancel"))
+				escape ? !this.#draft.vimConsumesEscape() : printable === undefined && kb.matches(data, "tui.select.cancel")
 			) {
 				this.#blurDraft();
-			} else if (this.#draft.handleInput(data) === "pass") {
+			} else if (!this.#draft.handleInput(data, true)) {
 				return false;
 			}
 			this.#keys.reset();
 			this.#options.requestRender();
 			return true;
 		}
-		const body = this.#draft.value.trim();
+		const body = this.#draft.getValue().trim();
 		if (!body) return true;
 		this.#leaveReply();
 		this.#sending = true;
@@ -462,10 +465,14 @@ export class IrcViewerComponent implements Component {
 		) {
 			return;
 		}
+		if (this.#compose && !this.#filter.focused && matchesKey(data, "ctrl+c")) {
+			this.#leaveReply();
+			return;
+		}
 		if (this.#handleComposeInput(data)) return;
 		this.#notice = undefined;
 		if (
-			(this.#filter.focused || (!this.#compose && this.#filter.value && matchesKey(data, "escape"))) &&
+			(this.#filter.focused || (!this.#compose && (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")))) &&
 			this.#handleFilterInput(data)
 		)
 			return;
@@ -477,10 +484,10 @@ export class IrcViewerComponent implements Component {
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {
-			if (this.#compose) this.#leaveReply();
-			else this.#options.onClose();
+			if (!this.#compose) this.#options.onClose();
+			else if (!this.#draft.getValue()) this.#leaveReply();
 		} else if (this.#options.viewerKeys.some(key => matchesKey(data, key))) {
-			this.#options.onClose();
+			if (!this.#compose || !this.#draft.getValue()) this.#options.onClose();
 		} else if (action?.kind === "context") {
 			if (this.#compose) {
 				if (this.#draft.focused) this.#blurDraft();

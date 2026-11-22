@@ -459,8 +459,9 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput("e");
 		overlay.handleInput("\x15");
 		overlay.handleInput("discarded");
-		overlay.handleInput(CANCEL);
+		overlay.handleInput("\x03");
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["saved"]);
+		expect(overlay.getDraft()).not.toHaveProperty("editor");
 	});
 
 	it("undoes the latest change instead of dropping the newest note", () => {
@@ -598,6 +599,9 @@ describe("AnnotationOverlay", () => {
 		first.handleInput("e");
 		first.handleInput(CTRL_U);
 		first.handleInput("rewritten");
+		first.handleInput(CANCEL);
+		expect(closed).toBeNull();
+		expect(first.getDraft()).toMatchObject({ editor: { text: "rewritten" } });
 		first.handleInput(CANCEL);
 		expect(closed).toBeUndefined();
 		const draft = first.getDraft();

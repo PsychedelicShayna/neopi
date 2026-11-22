@@ -6,7 +6,6 @@
  * `x` kill, `r` restart, `a` toggle all scopes, `q`/`esc`/`ctrl+c` quit.
  * Sub-views (info, logs): `esc`/`q` back.
  */
-import { formatKeyHint } from "../app-keybindings";
 import { KeyValueList, type KeyValueRow } from "../components/key-value-list";
 import { ScrollView } from "../components/scroll-view";
 import { MenuKeyReader, MenuSearchField, menuScrollBy } from "../components/menu-navigation";
@@ -337,6 +336,7 @@ export class PsTopComponent implements Component {
 		if (action?.kind === "search") {
 			if (this.#view !== "table") this.#closeView();
 			this.#search.focused = true;
+			if (this.#search.query !== before) this.#applyFilter();
 			this.#ui.requestRender();
 			return;
 		}

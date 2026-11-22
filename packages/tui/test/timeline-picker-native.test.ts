@@ -474,7 +474,7 @@ describe("session tree picker", () => {
 		selector.handleInput("\x1b");
 		expect(treeProps(selector).query).toBe("");
 		selector.handleInput("/");
-		typeText(selector, "explain");
+		expect(treeProps(selector).query).toBe("explain");
 		selector.handleInput("\r");
 		expect(treeProps(selector).query).toBe("explain");
 		expect(treeProps(selector).order).toEqual(["u3"]);

@@ -20,7 +20,6 @@ import { interruptKey } from "../chrome/keybinding-hints";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import {
 	type Component,
-	extractPrintableText,
 	Input,
 	matchesKey,
 	replaceTabs,
@@ -307,7 +306,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			active instanceof HookEditorComponent ||
 			("filterFocused" in active && active.filterFocused === true);
 		const footerLines = menuHintLines(
-			this.#footerNote?.text ?? `${this.#footerHint}${textFocused ? "" : " · ? help"}`,
+			this.#footerNote?.text ??
+				`${this.#footerHint}${this.#screen === "description" && this.#active instanceof Input ? ` · ${this.#active.escapeHint("references")}` : ""}${textFocused ? "" : " · ? help"}`,
 			Math.max(1, width - 4),
 			textFocused ? "" : undefined,
 		);
@@ -356,7 +356,12 @@ export class PersonaConfigOverlayComponent implements Component {
 			return;
 		}
 		if (this.#saving) return;
-		if (matchesKey(data, "ctrl+s") && this.#cb.cycleScope) {
+		if (
+			matchesKey(data, "ctrl+s") &&
+			this.#cb.cycleScope &&
+			!(this.#active instanceof Input || this.#active instanceof HookEditorComponent) &&
+			!("filterFocused" in this.#active && this.#active.filterFocused === true)
+		) {
 			if (this.#dirty) {
 				this.#flash("Save your changes before switching scope.");
 				return;
@@ -388,9 +393,11 @@ export class PersonaConfigOverlayComponent implements Component {
 			("filterFocused" in active && active.filterFocused === true)
 		) {
 			this.#keys.reset();
-			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
-			if (active instanceof Input && printable !== undefined) active.insertText(printable);
-			else active.handleInput?.(data);
+			if (active instanceof Input) {
+				if (this.#screen === "description" && matchesKey(data, "escape") && !active.vimConsumesEscape()) {
+					active.onEscape?.();
+				} else active.handleInput(data, true);
+			} else active.handleInput?.(data);
 			return;
 		}
 		if (this.#help.handleInput(data)) {
@@ -557,7 +564,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				}
 			}
 		}
-		if (action && active instanceof SelectList) active.handleNavigation(action);
+		if (action && action.kind !== "cancel" && active instanceof SelectList) active.handleNavigation(action);
 		else active.handleInput?.(data);
 	}
 
@@ -955,7 +962,6 @@ export class PersonaConfigOverlayComponent implements Component {
 	#onListSelect(value: string): void {
 		if (value === "generate") {
 			this.#generationSelected.clear();
-			this.#generationDescription = "";
 			this.#showGenerator();
 			return;
 		}
@@ -1042,7 +1048,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(this.#doc.entries.length - 1);
 		};
 		input.onEscape = () => this.#showList("add");
-		this.#setScreen("name", input, `Name the new ${this.#noun} · Enter create · Esc cancel`);
+		this.#setScreen("name", input, `Name the new ${this.#noun} · Enter create · Ctrl+C cancel`);
 	}
 
 	#showGenerator(): void {
@@ -1108,6 +1114,10 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#generationDescription = input.getValue();
 			this.#showReferences("continue");
 		};
+		input.onCancel = () => {
+			this.#generationDescription = "";
+			this.#showReferences("continue");
+		};
 		input.onSubmit = description => {
 			this.#generationDescription = description;
 			const deps = this.#deps.generation;
@@ -1145,6 +1155,7 @@ export class PersonaConfigOverlayComponent implements Component {
 						sourcesRaw: fresh?.raw,
 					});
 					this.#dirty = true;
+					this.#generationDescription = "";
 					this.#showDetail(this.#doc.entries.length - 1, "name");
 				})
 				.catch(error => {
@@ -1153,7 +1164,7 @@ export class PersonaConfigOverlayComponent implements Component {
 					this.#flash(error instanceof Error ? error.message : String(error));
 				});
 		};
-		this.#setScreen("description", input, "Describe Persona · Enter generate · Esc references");
+		this.#setScreen("description", input, "Describe Persona · Enter generate · Ctrl+C discard");
 	}
 
 	// ───────────────────────────── detail ────────────────────────────
@@ -1434,7 +1445,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(index, "name");
 		};
 		input.onEscape = () => this.#showDetail(index, "name");
-		this.#setScreen("name", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("name", input, "Type a name · Enter save · Ctrl+C cancel");
 	}
 
 	#showFieldEditor(index: number, field: "path" | "literal" | "liveModel" | "liveVoice", hint: string): void {
@@ -1448,7 +1459,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(index, field);
 		};
 		input.onEscape = () => this.#showDetail(index, field);
-		this.#setScreen(field, input, `${hint} · Enter save · Esc cancel`);
+		this.#setScreen(field, input, `${hint} · Enter save · Ctrl+C cancel`);
 	}
 
 	#showModePicker(index: number): void {
@@ -1604,7 +1615,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			}
 			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
 				const field = state.content as { value?: string; cursor?: number };
-				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.value === "string") this.#active.setValue(field.value, { markClean: false });
 				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;

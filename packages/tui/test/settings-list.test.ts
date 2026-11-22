@@ -853,6 +853,9 @@ describe("SettingsList", () => {
 		list.handleInput("\x1b");
 		expect(output()).toContain("Count 1000");
 		list.handleInput("/");
+		expect(list.getSearchQuery()).toBe(".{1000}");
+		list.handleInput("\x03");
+		list.handleInput("/");
 		for (const key of "/^claude/") list.handleInput(key);
 		expect(output()).not.toContain("GPT model");
 		list.handleInput("\r");

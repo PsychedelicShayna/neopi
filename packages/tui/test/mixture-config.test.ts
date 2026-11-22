@@ -459,7 +459,12 @@ describe("mixture menu navigation and history", () => {
 				context: { page: "field", key: "name" },
 				content: { value: "draft-then-edithjkl/ " },
 			});
-			h.press(ESC);
+			h.press(ESC, ESC);
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { page: "field", key: "name" },
+				content: { value: "draft-then-edithjkl/ " },
+			});
+			h.press("\x03");
 			expect(h.overlay.navigationSnapshot().context.page).toBe("mixture");
 			expect(h.actions).toEqual([]);
 		} finally {

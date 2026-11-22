@@ -85,7 +85,7 @@ export interface ExtensionDashboardOptions {
 }
 
 function extFooter(pane: "list" | "inspector", filtering: boolean): string {
-	if (filtering) return "Search extensions · Enter confirm · Esc clear";
+	if (filtering) return "Search extensions · Enter confirm · Ctrl+C clear";
 	return `Tab focus · / search · ${pane === "list" ? "Space toggle · " : ""}${expandKeyHint()} expand · Esc close · ? help`;
 }
 
@@ -622,15 +622,6 @@ export class ExtensionDashboard implements Component {
 		this.#requestRender();
 	}
 
-	#cancel(): void {
-		if (this.#mainList.filterFocused || this.#mainList.getSearchQuery()) {
-			this.#clearSearch();
-			this.#mainList.focusFilter(false);
-			this.#keys.reset();
-			this.#requestRender();
-		} else this.#close();
-	}
-
 	#syncSearch(): void {
 		const query = this.#mainList.getSearchQuery();
 		if (query === this.#state.searchQuery) return;
@@ -657,7 +648,7 @@ export class ExtensionDashboard implements Component {
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {
-			this.#cancel();
+			this.#close();
 			return;
 		}
 		if (matchesAppToolsExpand(data)) {
@@ -673,6 +664,7 @@ export class ExtensionDashboard implements Component {
 		else if (action.kind === "search") {
 			this.#setPane("list");
 			this.#mainList.focusFilter();
+			this.#syncSearch();
 		} else if (this.#pane === "list") this.#mainList.handleNavigation(action);
 		else if (this.#body.navigateInspector(action)) {
 			const by = menuScrollBy(action);
@@ -874,7 +866,7 @@ export class ExtensionDashboard implements Component {
 		}
 		switch (pick.act) {
 			case "close":
-				this.#cancel();
+				this.handleInput("\x1b");
 				return;
 			case "clear":
 				this.#clearSearch();

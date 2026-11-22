@@ -529,10 +529,15 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
-	// Native Close clears the search without activating a model or closing the hub.
+	// Native Back skips the modal transition, leaving the draft ready to reopen.
 	act("scope", "all");
 	hub.handleInput("/");
 	hub.handleInput("x");
+	act("close");
+	expect(hub.navigationSnapshot().filterFocused).toBe(false);
+	hub.handleInput("/");
+	expect(hub.navigationSnapshot().filterFocused).toBe(true);
+	expect(props(hub.describe(withPicker)).query).toBe("x");
 	act("close");
 	expect(hub.navigationSnapshot().filterFocused).toBe(false);
 	expect(props(hub.describe(withPicker)).query).toBe("");
@@ -1325,6 +1330,7 @@ test("native model hub exposes effort rules above providers and navigates its ed
 	let pattern = hub.navigationSnapshot().strip;
 	if (pattern?.kind !== "pattern") throw new Error("expected parent pattern editor");
 	expect(pattern.input.getValue()).toBe("re:demo/.*");
+	hub.handleInput("\x1b"); // Insert → Normal keeps the field focused.
 	hub.handleInput("\x1b"); // Field focus leaves before the page.
 	pattern = hub.navigationSnapshot().strip;
 	if (pattern?.kind !== "pattern") throw new Error("expected defocused pattern editor");
@@ -1336,6 +1342,8 @@ test("native model hub exposes effort rules above providers and navigates its ed
 	expect(pattern.input.getValue()).toBe("re:demo/.*");
 	hub.handleInput("\x1b");
 	hub.handleInput("\x1b");
+	expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+	hub.handleInput("\x03");
 	expect(hub.navigationSnapshot().strip).toBeNull();
 	expect(hub.navigationSnapshot().entry).toBe("effort");
 	hub.restoreNavigation(draft);
@@ -1598,17 +1606,27 @@ test("native Close leaves each model-hub search field before closing", () => {
 		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: scope, mods: [] });
 		hub.handleInput("/");
 		for (const char of "jkl") hub.handleInput(char);
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot().filterFocused).toBe(true);
+		expect(calls.cancel).toBe(0);
+		hub.handleInput("i");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(hub.navigationSnapshot().filterFocused).toBe(false);
 		expect(calls.cancel).toBe(0);
 		expect(props(hub.describe(withPicker)).query).toBe(scope === "roles" ? null : "");
+		hub.handleInput("/");
+		const reopened = hub.navigationSnapshot();
+		const value =
+			scope === "roles" ? reopened.rolesValue : scope === "effort" ? reopened.effortValue : reopened.browser.value;
+		expect(value).toBe("jkl");
+		hub.handleInput("\x03");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(calls.cancel).toBe(1);
 		expect(calls.assign).toEqual([]);
 	}
 });
 
-test("native Close leaves a text field before returning to its immediate strip parent", () => {
+test("native Close leaves the model-hub strip draft recoverable until explicit cancellation", () => {
 	const calls = { assign: [] as string[], cancel: 0 };
 	const hub = openHub(calls);
 	hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "effort", mods: [] });
@@ -1620,12 +1638,23 @@ test("native Close leaves a text field before returning to its immediate strip p
 	expect(hub.navigationSnapshot().strip?.kind).toBe("effortLevels");
 	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+	hub.handleInput("\x1b");
+	const normal = hub.navigationSnapshot().strip;
+	if (normal?.kind !== "pattern") throw new Error("expected focused pattern");
+	expect(normal.input.focused).toBe(true);
+	hub.handleInput("i");
 	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	const pattern = hub.navigationSnapshot().strip;
 	if (pattern?.kind !== "pattern") throw new Error("expected defocused pattern");
 	expect(pattern.input.focused).toBe(false);
 	expect(pattern.input.getValue()).toBe("re:demo/.*");
 	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+	hub.handleInput("/");
+	const resumed = hub.navigationSnapshot().strip;
+	if (resumed?.kind !== "pattern") throw new Error("expected resumed pattern");
+	expect(resumed.input.getValue()).toBe("re:demo/.*");
+	hub.handleNativeEvent({ type: "action", key: "", act: "cancel", mods: [] });
 	expect(hub.navigationSnapshot().strip).toBeNull();
 	expect(hub.navigationSnapshot().entry).toBe("effort");
 	expect(calls.cancel).toBe(0);
@@ -1657,6 +1686,10 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(renders).toBeGreaterThan(before);
 	expect(closes).toBe(0);
+	expect(props(picker.describe(withPicker)).query).toBe("");
+	picker.handleInput("/");
+	expect(props(picker.describe(withPicker)).query).toBe("demo");
+	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(props(picker.describe(withPicker)).query).toBe("");
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(closes).toBe(1);
@@ -1781,7 +1814,7 @@ test("Model Variants creates, validates, inherits, renames and deletes through t
 	expect(screen()).toContain("+ New variant");
 });
 
-test("the model hub keyboard skips the Variants divider and Escape unwinds an unsaved draft", () => {
+test("the model hub skips the Variants divider and keeps dirty fields until Ctrl+C", () => {
 	const calls = { assign: [], cancel: 0 };
 	const hub = openHub(calls, MODELS, { modelVariants: [], modelVariantFields: [] });
 	hub.handleInput("\x1b[B");
@@ -1795,6 +1828,10 @@ test("the model hub keyboard skips the Variants divider and Escape unwinds an un
 	const screen = () => plainText(hub.render(120).join("\n"));
 	expect(screen()).toContain("Variant name");
 	hub.handleInput("\x1b");
+	expect(screen()).toContain("Variant name");
+	hub.handleInput("\x1b");
+	expect(screen()).toContain("Variant name");
+	hub.handleInput("\x03");
 	expect(screen()).toContain("New variant");
 	expect(screen()).toContain("Required");
 	hub.handleInput("\x1b");

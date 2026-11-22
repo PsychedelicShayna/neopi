@@ -118,6 +118,9 @@ describe("hook callback prompt navigation", () => {
 		expect(prop(picker(selector), "cursor")).toBe(1);
 		close(selector);
 		expect(cancelled).toBe(0);
+		expect(prop(picker(selector), "query")).toBe("xhjklggG / ");
+		close(selector);
+		expect(cancelled).toBe(0);
 		expect(prop(picker(selector), "query")).toBeNull();
 		close(selector);
 		expect(cancelled).toBe(1);

@@ -119,13 +119,13 @@ export class ModelVariantsPanel {
 			case "list":
 				return "Enter edit/create · x delete · / search · Esc sidebar · Tab pane";
 			case "editor":
-				return "Enter edit · x inherit · s save · Esc discard · Tab pane";
+				return "Enter edit · x inherit · s save · Ctrl+C discard · Tab pane";
 			case "base":
 				return "Enter choose base · / search · Esc back";
 			case "choice":
 				return "Enter choose value · Esc back";
 			case "text":
-				return "Enter apply · Esc cancel";
+				return "Enter apply · Ctrl+C cancel field";
 			case "delete":
 				return "Enter confirm · Esc keep variant";
 		}
@@ -226,7 +226,7 @@ export class ModelVariantsPanel {
 		this.#list.setItems(items);
 	}
 
-	#back(): void {
+	#back(discard = false): void {
 		const view = this.#view;
 		switch (view.kind) {
 			case "list":
@@ -234,6 +234,8 @@ export class ModelVariantsPanel {
 				return;
 			case "editor": {
 				const id = this.#draft?.id;
+				const original = this.#entries.find(entry => entry.id === id) ?? { name: "", baseModel: "", overrides: {} };
+				if (!discard && !Bun.deepEquals(this.#draft, original)) return;
 				this.#draft = undefined;
 				this.#enter({ kind: "list" }, id === undefined ? "new" : variantId(id));
 				this.reload();
@@ -263,6 +265,10 @@ export class ModelVariantsPanel {
 		input.setValue(value === undefined ? "" : typeof value === "string" ? value : (JSON.stringify(value) ?? ""));
 		if (field?.kind === "number-list") input.placeholder = "[1, 2]";
 		else if (field?.kind === "string-list") input.placeholder = '["first", "second"]';
+		const close = () => this.#back();
+		input.onEscape = close;
+		input.onCancel = close;
+		input.onSubmit = () => this.#activate("apply");
 		this.#enter({ kind: "text", input, field }, "apply");
 	}
 
@@ -410,9 +416,11 @@ export class ModelVariantsPanel {
 		if (this.#pending) return;
 		const view = this.#view;
 		if (view.kind === "text") {
-			if (matchesKey(data, "escape")) this.#back();
-			else if (matchesKey(data, "enter") || data === "\n") this.#activate("apply");
-			else view.input.handleInput(data);
+			view.input.handleInput(data, true);
+			return;
+		}
+		if (!this.#list.filterFocused && matchesKey(data, "ctrl+c")) {
+			this.#back(true);
 			return;
 		}
 		if (!this.#list.filterFocused) {

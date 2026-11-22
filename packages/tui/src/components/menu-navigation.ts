@@ -6,9 +6,10 @@ import { compileMenuRegex } from "../menu-search";
 import { getMenuWindow, type MenuWindow } from "./menu-selection";
 import { Input } from "./input";
 import { replaceTabs, truncateToWidth, visibleWidth } from "../utils";
-import { Editor } from "./editor";
-import { getEditorTheme } from "../theme/tui-adapters";
 import type { VimMode } from "../vim";
+import { getMenuSearchVimMode } from "../vim-preference";
+
+export { getMenuSearchVimMode, setMenuSearchVimMode } from "../vim-preference";
 
 /**
  * A normal-navigation intent resolved from one key. Hosts apply motions with
@@ -127,33 +128,24 @@ export interface MenuSearchState {
 	focused: boolean;
 	cursor: number;
 	query?: string;
+	draft?: { value: string; cursor: number };
 }
 
 export interface MenuSearchTheme {
 	muted(text: string): string;
 }
 
-let menuSearchVimMode = false;
-
-/** Follow the host's shared Vim preference for navigation and editing, including live changes. */
-export function setMenuSearchVimMode(enabled: boolean): void {
-	menuSearchVimMode = enabled;
-}
-
-export function getMenuSearchVimMode(): boolean {
-	return menuSearchVimMode;
-}
-
 /**
  * Transactional search composer shared by menus. `query` is the last valid
- * live preview; `confirmedQuery` changes only on Enter. Blur or Normal-mode
- * Escape restores the confirmed pattern. The main Editor owns Vim editing.
+ * live preview; `confirmedQuery` changes only on Enter or explicit clear. Blur
+ * and Escape leave the last confirmed pattern active and keep the unconfirmed
+ * draft for the next `/`. The shared Input owns Vim editing.
  */
 export class MenuSearchField {
-	readonly #input = new Input();
+	readonly #input = new Input({ coalesceTypingUndo: false });
 	#query = "";
 	#preview = "";
-	#editor: Editor | undefined;
+	#draft: MenuSearchState["draft"];
 	readonly #cancel: "clear" | "retain";
 
 	constructor(value = "", focused = false, cancel: "clear" | "retain" = "clear") {
@@ -175,11 +167,19 @@ export class MenuSearchField {
 	}
 
 	set focused(value: boolean) {
-		if (!value && this.#input.focused) {
-			if (this.value !== this.#query) this.#input.setValue(this.#query);
-			this.#preview = this.#query;
+		if (value === this.#input.focused) return;
+		if (value) {
+			if (this.#draft) {
+				this.#input.setValue(this.#draft.value, { markClean: false });
+				this.#input.setCursor(this.#draft.cursor);
+				this.#draft = undefined;
+			}
+		} else if (this.value !== this.#query) {
+			this.#draft = { value: this.value, cursor: this.cursor };
+			this.#input.setValue(this.#query);
 		}
-		if (value && !this.#input.focused) this.#editor = undefined;
+		this.#preview = this.#query;
+		this.#input.resetVimMode();
 		this.#input.focused = value;
 	}
 
@@ -198,7 +198,7 @@ export class MenuSearchField {
 	}
 
 	get vimMode(): VimMode {
-		return this.#editor?.vimMode ?? "insert";
+		return this.#input.vimMode;
 	}
 
 	get cursor(): number {
@@ -208,27 +208,51 @@ export class MenuSearchField {
 	setValue(value: string): void {
 		this.#input.setValue(value);
 		this.#query = value;
-		if (!compileMenuRegex(value)?.error) this.#preview = value;
-		this.#editor = undefined;
+		this.#preview = compileMenuRegex(value)?.error ? "" : value;
+		this.#draft = undefined;
+	}
+
+	/** Navigate back without interpreting the gesture as an editing key. */
+	back(): boolean {
+		if (this.focused) {
+			this.focused = false;
+			return true;
+		}
+		if (this.#cancel === "retain" || !this.value) return false;
+		// Leave the filtered view, without losing what `/` should reopen.
+		this.#draft ??= { value: this.value, cursor: this.cursor };
+		this.#input.setValue("");
+		this.#query = "";
+		this.#preview = "";
+		return true;
+	}
+
+	/** Escape's current action, for structured key hints as well as text footers. */
+	get escapeAction(): "normal" | "clear pending command" | "back" {
+		return this.#input.escapeAction("back");
 	}
 
 	handleInput(data: string): "edited" | "exited" | "pass" {
+		const escape = matchesKey(data, "escape");
+		const text = extractPrintableText(data);
+		const kb = getKeybindings();
+		const cancel =
+			matchesKey(data, "ctrl+c") || (!escape && text === undefined && kb.matches(data, "tui.select.cancel"));
 		if (!this.focused) {
 			if (this.#cancel === "retain") return "pass";
-			if (!this.value || extractPrintableText(data) !== undefined) return "pass";
-			if (!matchesKey(data, "escape") && !getKeybindings().matches(data, "tui.select.cancel")) return "pass";
-			this.setValue("");
-			return "exited";
+			if (cancel && (this.value || this.#draft)) {
+				this.setValue("");
+				return "exited";
+			}
+			return escape && this.back() ? "exited" : "pass";
 		}
 		// Remember the last valid preview even when no paint occurred between keys.
 		void this.query;
-		if (matchesKey(data, "ctrl+c")) {
+		if (cancel) {
 			this.setValue("");
 			this.focused = false;
 			return "exited";
 		}
-		const text = extractPrintableText(data);
-		const kb = getKeybindings();
 		if (
 			text === undefined &&
 			(matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n")
@@ -238,53 +262,54 @@ export class MenuSearchField {
 			this.focused = false;
 			return "exited";
 		}
-		const editor = (this.#editor ??= new Editor(getEditorTheme()));
-		editor.setVimMode(menuSearchVimMode);
-		// Input is the native picker transport; native edits/caret changes are
-		// imported before the shared Editor interprets the next key.
-		if (editor.getText() !== this.value || editor.getCursor().col !== this.cursor)
-			editor.setState({ text: this.value, cursor: { line: 0, col: this.cursor }, scrollTop: 0 });
-		if (matchesKey(data, "escape") && (!menuSearchVimMode || editor.vimMode === "normal")) {
-			this.focused = false;
+		if (escape && !this.#input.vimConsumesEscape()) {
+			this.back();
 			return "exited";
 		}
-		if (text !== undefined && editor.vimMode === "insert") editor.insertText(text);
-		else editor.handleInput(data);
-		// Search is single-line even for paste or Vim's open-line commands.
-		const value = editor.getText().replace(/[\r\n]/g, "");
-		this.#input.setValue(value);
-		this.#input.setCursor(editor.getCursor().col);
+		this.#input.handleInput(data, true);
 		void this.query;
 		return "edited";
 	}
 
-	render(width: number, theme: MenuSearchTheme): string {
+	render(width: number, theme: MenuSearchTheme, showHint = true): string {
 		const columns = Math.max(0, Math.trunc(width));
 		if (!this.focused && this.value.length === 0)
 			return theme.muted(truncateToWidth(t("tui.components.search.placeholder"), columns));
 		const prefix = t("tui.components.search.prefix");
 		const error = compileMenuRegex(this.value)?.error;
+		const escape = this.focused && showHint ? this.escapeAction : undefined;
 		const hint = error
 			? ` · ${t("tui.components.search.invalid_regex", { error })}`
-			: this.focused
+			: escape
 				? t("tui.components.search.focused_hint", {
-						vim: menuSearchVimMode ? `${this.vimMode === "insert" ? "I" : "N"} · ` : "",
-						escape: t(
-							menuSearchVimMode && this.vimMode === "insert"
-								? "tui.components.search.normal"
-								: "tui.components.search.cancel",
-						),
+						vim: getMenuSearchVimMode() ? `${this.vimMode.toUpperCase()} · ` : "",
+						escape:
+							escape === "clear pending command"
+								? escape
+								: t(escape === "normal" ? "tui.components.search.normal" : "tui.components.search.back"),
 					})
-				: t("tui.components.search.idle_hint");
-		const fieldWidth = Math.max(0, columns - visibleWidth(prefix) - visibleWidth(hint));
+				: this.focused || !showHint
+					? ""
+					: t("tui.components.search.idle_hint");
+		const remaining = Math.max(0, columns - visibleWidth(prefix));
+		// In a narrow footer the query matters more than its editing legend.
+		const hintWidth = visibleWidth(hint);
+		const fitsHint = hintWidth + visibleWidth(replaceTabs(this.value)) + Number(this.focused) <= remaining;
+		const fieldWidth = remaining - (fitsHint ? hintWidth : 0);
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")
 			: truncateToWidth(replaceTabs(this.value), fieldWidth);
-		return theme.muted(truncateToWidth(`${prefix}${replaceTabs(value)}${hint}`, columns));
+		return theme.muted(truncateToWidth(`${prefix}${replaceTabs(value)}${fitsHint ? hint : ""}`, columns));
 	}
 
 	navigationSnapshot(): MenuSearchState {
-		return { value: this.value, query: this.confirmedQuery, focused: this.focused, cursor: this.cursor };
+		return {
+			value: this.value,
+			query: this.confirmedQuery,
+			focused: this.focused,
+			cursor: this.cursor,
+			...(this.#draft && { draft: this.#draft }),
+		};
 	}
 
 	restoreNavigation(snapshot: unknown): void {
@@ -295,6 +320,13 @@ export class MenuSearchField {
 		this.focused = state.focused === true;
 		if (this.focused) this.#input.setValue(state.value);
 		if (typeof state.cursor === "number") this.#input.setCursor(state.cursor);
+		if (
+			!this.focused &&
+			state.draft &&
+			typeof state.draft.value === "string" &&
+			typeof state.draft.cursor === "number"
+		)
+			this.#draft = { value: state.draft.value, cursor: state.draft.cursor };
 	}
 }
 

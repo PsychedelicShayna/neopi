@@ -12,6 +12,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import { APP_NAME, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { monitorHelp as commandHelp } from "../cli/command-help";
 import { resolveCtlTarget } from "../cli/ctl-cli";
@@ -19,7 +20,7 @@ import { Settings, settings } from "../config/settings";
 import { ControlClient } from "../control/client";
 import type { MonitorGrantInfo } from "../control/monitor-service";
 import { type ControlMetadata, findControlMetadata, publicationProcessGone } from "../control/registry";
-import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight } from "../modes/settings";
+import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight, cfgTuiVimMode } from "../modes/settings";
 import { runMonitorAttach } from "../monitor/attach";
 import { paneClosedMarker } from "../monitor/tmux-manager";
 
@@ -72,6 +73,7 @@ export default class Monitor extends Command {
 			? await readCapabilityFile(capabilityFile)
 			: await mintCapability(metadata, flags.agent ?? "");
 		await Settings.init({ cwd: getProjectDir() });
+		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 		await initTheme(
 			false,
 			cfgSymbolPreset.get(settings),
@@ -79,8 +81,8 @@ export default class Monitor extends Command {
 			cfgThemeDark.get(settings),
 			cfgThemeLight.get(settings),
 		);
-		// Esc, Ctrl+C, or tmux killing the pane (SIGHUP) mark the pane as closed on purpose, so
-		// the monitor does not reopen it. A crash or a failed attach leaves no marker.
+		// Closing the pane with the keys or through tmux (SIGHUP) marks it closed
+		// on purpose. A crash or a failed attach leaves no marker.
 		const markClosed = (): void => {
 			if (!capabilityFile) return;
 			try {

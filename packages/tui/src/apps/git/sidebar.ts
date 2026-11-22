@@ -783,14 +783,15 @@ export class Sidebar {
 	/** Open the AI staging textbox under the unstaged header and focus it. */
 	#openAiPrompt(): void {
 		this.#aiPromptOpen = true;
+		this.aiInput.input.resetVimMode();
 		this.#treeVersion++;
 		this.#rebuildTargets();
 		this.#select({ kind: "stage-ai-input" });
 	}
 
-	#closeAiPrompt(): void {
+	#closeAiPrompt(keepDraft = false): void {
 		this.#aiPromptOpen = false;
-		this.aiInput.setValue("");
+		if (!keepDraft) this.aiInput.setValue("");
 		this.#treeVersion++;
 		this.#requestRender();
 	}
@@ -837,18 +838,36 @@ export class Sidebar {
 		this.#requestRender();
 	}
 	/** Escape while the sidebar has focus: blur a text input first. True when consumed. */
-	handleEscape(): boolean {
+	handleEscape(data: string): boolean {
 		const target = this.selected;
 		if (target?.kind === "stage-ai-input") {
-			this.#closeAiPrompt();
+			if (this.aiInput.input.vimConsumesEscape()) {
+				this.handleInput(data);
+				return true;
+			}
+			this.#closeAiPrompt(true);
 			this.#select({ kind: "section", area: "unstaged" });
 			return true;
 		}
 		if (target?.kind === "summary" || target?.kind === "description") {
+			const editor = target.kind === "summary" ? this.summary.input : this.description;
+			if (editor.vimConsumesEscape()) {
+				this.handleInput(data);
+				return true;
+			}
 			this.#select({ kind: "commit-button" });
 			return true;
 		}
 		return false;
+	}
+
+	get hasDraft(): boolean {
+		return this.aiInput.input.dirty || this.summary.input.dirty || this.description.getText() !== "";
+	}
+
+	cancelField(data: string): void {
+		if (this.selected?.kind === "stage-ai-input") this.aiInput.handleInput(data);
+		else this.#select({ kind: "commit-button" });
 	}
 	/** True while a commit-form text input is capturing letter keys. */
 	get editing(): boolean {

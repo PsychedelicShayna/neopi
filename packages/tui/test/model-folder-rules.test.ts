@@ -1,11 +1,24 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
+import { ModelFolderRulesPanel } from "../src/overlays/model-folder-rules-panel";
 import {
 	compileModelFolderRules,
 	createModelFolderMatcher,
 	type ModelFolderCondition,
 	type ModelFolderFacts,
 } from "../src/overlays/model-folder-rules";
+import { initTheme } from "../src/theme";
+
+let previousVimMode: boolean;
+beforeAll(async () => {
+	await initTheme(false);
+});
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => setMenuSearchVimMode(previousVimMode));
 
 const facts: ModelFolderFacts = {
 	slug: "openai-codex/gpt-test",
@@ -134,4 +147,28 @@ describe("model folder rules", () => {
 			),
 		).toEqual(["fixture/reported"]);
 	});
+});
+
+test("a folder rule's typed value survives Escape and a staged expression closes only on Ctrl+C", () => {
+	let applied = 0;
+	let closed = 0;
+	const panel = new ModelFolderRulesPanel(
+		"Filter",
+		undefined,
+		() => {
+			applied++;
+			return "saved";
+		},
+		() => closed++,
+	);
+	for (const key of ["\r", "\r", "\r", "demo", "\x1b", "0", "x", "\x1b"]) panel.handleInput(key);
+	expect(panel.editing).toBe(true);
+	expect(Bun.stripANSI(panel.render(80, 20).join("\n"))).toContain("emo");
+	panel.handleInput("\r");
+	expect(panel.editing).toBe(false);
+	panel.handleInput("\x1b");
+	expect(closed).toBe(0);
+	expect(applied).toBe(0);
+	panel.handleInput("\x03");
+	expect(closed).toBe(1);
 });

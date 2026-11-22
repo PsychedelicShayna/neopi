@@ -272,15 +272,17 @@ describe("IrcViewerComponent", () => {
 		expect(visits).toEqual([]);
 		expect(sent).toEqual([]);
 		view.viewer.handleInput("\x1b");
+		expect(view.viewer.navigationSnapshot().draft).toMatchObject({ value: saved.draft.value, focused: true });
+		view.viewer.handleInput("\x1b"); // Normal -> blurred.
 		expect(view.viewer.navigationSnapshot().compose).toBeDefined();
-		expect(view.viewer.navigationSnapshot().draft.focused).toBe(false);
+		const blurred = view.viewer.navigationSnapshot().draft;
+		expect(blurred).toMatchObject({ value: saved.draft.value, focused: false });
 		view.viewer.handleInput("\x1b");
+		expect(view.viewer.navigationSnapshot().compose).toEqual(saved.compose);
+		expect(view.viewer.navigationSnapshot().draft).toEqual(blurred);
+		view.viewer.handleInput("\x03");
 		expect(view.viewer.navigationSnapshot().compose).toBeUndefined();
-		expect(view.viewer.navigationSnapshot().draft).toEqual({
-			...saved.draft,
-			query: saved.draft.value,
-			focused: false,
-		});
+		expect(view.viewer.navigationSnapshot().draft).toEqual({ value: "", cursor: 0, focused: false });
 		expect(visits).toEqual([]);
 		expect(view.closed()).toBe(0);
 		expect(sent).toEqual([]);

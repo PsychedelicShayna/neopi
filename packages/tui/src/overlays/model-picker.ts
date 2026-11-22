@@ -512,6 +512,10 @@ export class ModelPickerComponent implements Component {
 			this.#tui.requestRender();
 			return;
 		}
+		if (matchesKey(data, "ctrl+c")) {
+			this.#browser.handleInput(data);
+			return;
+		}
 		if (this.#taskMatchKeys.size > 0 && !this.#roleMode) {
 			const parsed = parseKey(data);
 			const canonical = parsed !== undefined ? canonicalKeyId(parsed) : undefined;
@@ -579,7 +583,7 @@ export class ModelPickerComponent implements Component {
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#mode(), this.#thinkingLevelFor !== undefined);
-		if (this.#browser.filterFocused) footer = "Search · Enter confirm · Esc clear";
+		if (this.#browser.filterFocused) footer = "Search · Enter confirm · Ctrl+C clear";
 		if (this.#taskModeKey !== undefined && !this.#roleMode && !this.#browser.filterFocused) {
 			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
 		}

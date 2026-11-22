@@ -646,7 +646,12 @@ describe("ChainConfigOverlayComponent", () => {
 			content: { value: "hjklggG / " },
 		});
 		expect(saved).toEqual([]);
-		press(ESC, ENTER, "\x15", "hjkl", ENTER);
+		press(ESC, ESC);
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "chainName" },
+			content: { value: "hjklggG / " },
+		});
+		press("\x03", ENTER, "\x15", "hjkl", ENTER);
 		expect(overlay.navigationSnapshot()).toMatchObject({
 			context: { screen: "chain" },
 			doc: { chains: [{ name: "hjkl" }] },

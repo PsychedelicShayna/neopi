@@ -1,6 +1,6 @@
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Component, Focusable } from "@oh-my-pi/pi-tui";
-import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { matchesKey, replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formTheme } from "@oh-my-pi/pi-tui/chrome/form-theme";
 import { bottomBorder, row, topBorder } from "@oh-my-pi/pi-tui/chrome/overlay-box";
 import { SelectFormField, TextFormField } from "@oh-my-pi/pi-tui/components/form";
@@ -132,7 +132,11 @@ export class ModelFactEditorComponent implements Component, Focusable {
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#saving;
+		return this.#saving || this.#field instanceof TextFormField;
+	}
+
+	capturesInput(data: string): boolean {
+		return this.#field instanceof TextFormField && matchesKey(data, "ctrl+c");
 	}
 
 	setUseTerminalCursor(value: boolean): void {
@@ -167,6 +171,8 @@ export class ModelFactEditorComponent implements Component, Focusable {
 		if (event.type === "action") {
 			if (event.act === "close") this.handleInput("\x1b");
 			else if (event.act === "submit-field" && this.#field instanceof TextFormField) this.#field.submit();
+			else if (event.act === "discard-field" && this.#field instanceof TextFormField)
+				this.#field.handleInput("\x03");
 			else if (!this.#field && !this.#saving) this.#menu.items.find(item => item.id === event.act)?.activate();
 			return;
 		}
@@ -210,10 +216,14 @@ export class ModelFactEditorComponent implements Component, Focusable {
 		if (this.#field) {
 			children.push(this.#field);
 			children.push(
-				actionBar([
-					...(this.#field instanceof TextFormField ? [actionButton("Apply", "submit-field")] : []),
-					actionButton("Back", "close", { keys: "escape" }),
-				]),
+				actionBar(
+					this.#field instanceof TextFormField
+						? [
+								actionButton("Apply", "submit-field"),
+								actionButton("Discard edit", "discard-field", { keys: "ctrl+c" }),
+							]
+						: [actionButton("Back", "close", { keys: "escape" })],
+				),
 			);
 		} else {
 			for (const item of this.#menu.items) children.push(actionButton(safe(item.label, 240), item.id));
@@ -268,7 +278,7 @@ export class ModelFactEditorComponent implements Component, Focusable {
 				label,
 				description,
 				initialValue,
-				hint: "Enter apply · Esc back without applying",
+				hint: input => `Enter apply · ${input.escapeHint("back if unchanged")} · Ctrl+C discard edit`,
 				onSubmit,
 				onCancel: () => this.#back(),
 				requestRender: this.#options.requestRender,

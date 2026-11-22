@@ -40,6 +40,7 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
+import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
@@ -454,6 +455,13 @@ export class InputController {
 		if (!this.#askCancelListenerInstalled) {
 			this.#askCancelListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {
+				// Escape is navigation, even if an interrupt was mapped to it. A
+				// nested ask editor's Ctrl+C discards that edit, not the entire ask.
+				if (matchesKey(data, "escape")) return undefined;
+				const focused = this.ctx.ui.getFocused();
+				if (focused instanceof HookEditorComponent || focused instanceof HookInputComponent) {
+					return undefined;
+				}
 				if (
 					this.ctx.keybindings.matches(data, "app.interrupt") &&
 					((this.ctx.isShuttingDown && this.ctx.cancelPendingClose()) || this.ctx.cancelAsk())
@@ -3216,11 +3224,11 @@ export class InputController {
 	 */
 	async #attachPromptImage(
 		target: Component & PasteTarget,
+		attachImage: NonNullable<PasteTarget["attachImage"]>,
 		image: ImageContent,
 		unsupportedMessage: string,
 		sourcePath?: string,
 	): Promise<string | undefined> {
-		if (!target.attachImage) return undefined;
 		const prepared = await this.#preparePastedImage(image, unsupportedMessage, sourcePath);
 		if (!prepared) return undefined;
 		const dims = await this.#imageDimensions(prepared.image);
@@ -3228,7 +3236,7 @@ export class InputController {
 		const attachment = prepared.source
 			? tagImageAttachmentSource(prepared.image, prepared.source.path, prepared.source.kind)
 			: prepared.image;
-		return target.attachImage(attachment, dims);
+		return attachImage(attachment, dims);
 	}
 
 	async #normalizePastedImage(image: ImageContent, unsupportedMessage: string): Promise<ImageContent | null> {
@@ -3421,12 +3429,16 @@ export class InputController {
 	 * await so a following Enter waits; `finish` delivers the collected text once.
 	 */
 	#beginPromptImagePaste(target: Component & PasteTarget): PromptImagePaste {
+		// An HTML form can reuse the same component for a different note.
+		// Bind the active note before awaiting the clipboard or image normalization.
+		const attachImage = target.attachImage?.bind(target);
 		const finishPaste = target.beginPaste?.();
 		const pasted: string[] = [];
 		return {
 			sink: {
 				attach: async (image, unsupportedMessage, sourcePath) => {
-					const marker = await this.#attachPromptImage(target, image, unsupportedMessage, sourcePath);
+					if (!attachImage) return false;
+					const marker = await this.#attachPromptImage(target, attachImage, image, unsupportedMessage, sourcePath);
 					if (marker === undefined) return false;
 					pasted.push(marker);
 					return true;

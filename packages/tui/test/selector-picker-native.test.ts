@@ -114,6 +114,12 @@ describe("short-list native picker search", () => {
 		const focused = selector.describe(pickerCx);
 		expect(sheet(focused).props.query).toBe("");
 		selector.getSelectList().handleInput("h");
+		if (vim) {
+			selector.getSelectList().handleInput("\x1b");
+			expect(sheet(selector.describe(pickerCx)).props.query).toBe("h");
+			expect(log).not.toContain("cancel");
+			selector.getSelectList().handleInput("i");
+		}
 		selector.handleNativeEvent(act("close"));
 		expect(sheet(selector.describe(pickerCx)).props.query).toBeNull();
 		expect(log).not.toContain("cancel");

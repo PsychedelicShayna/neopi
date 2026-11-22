@@ -304,6 +304,19 @@ describe("Editor vim mode", () => {
 			expect(editor.getText()).toBe("second line");
 		});
 
+		it("preserves line breaks when yanking and cycling Vim line deletions in a multiline editor", () => {
+			const editor = vimEditor("first\nnext\ntail");
+			for (const key of ["d", "d", "d", "d", "i", "\x19"]) editor.handleInput(key);
+			expect(editor.getText()).toBe("next\ntail");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+			editor.handleInput("\x1by");
+			expect(editor.getText()).toBe("first\ntail");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+			editor.handleInput("\x1by");
+			expect(editor.getText()).toBe("next\ntail");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+		});
+
 		it("cw changes to the end of the word and enters insert mode", () => {
 			const editor = vimEditor("alfa beta");
 			editor.handleInput("c");

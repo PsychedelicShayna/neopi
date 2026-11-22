@@ -78,6 +78,11 @@ export function pickerAction(
 /** The right-aligned `Close esc` every picker ends with; Tern's backdrop and head `esc` send it too. */
 export const CLOSE_ACTION: TspPickerAction = { id: "close", label: "Close", keys: ["esc"], end: true };
 
+/** Pointer Back always navigates; show the Esc keycap only when it does the same. */
+export function pickerBackAction(modalEscape: boolean, label = "Back to list"): TspPickerAction {
+	return pickerAction(CLOSE_ACTION.id, label, modalEscape ? undefined : "escape", { end: true });
+}
+
 /** A `time` fact: the compact age of `at` (`now`, `5m`, `2h`, `3d`, `2w`, `6mo`, `1y`). */
 export function pickerAge(at: Date | number, now = Date.now()): string {
 	const seconds = Math.max(0, Math.floor((now - (typeof at === "number" ? at : at.getTime())) / 1000));
@@ -237,14 +242,9 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 		...(o.columns ? { columns: o.columns } : {}),
 		actions: [
 			pickerAction("confirm", o.confirm ?? t("tui.picker.select"), "enter", { primary: true }),
-			{
-				...CLOSE_ACTION,
-				label: list.filterFocused
-					? t("tui.picker.back_to_list")
-					: view.query
-						? t("tui.picker.clear_search")
-						: t("tui.picker.close"),
-			},
+			list.filterFocused
+				? pickerBackAction(list.filterConsumesEscape, t("tui.picker.back_to_list"))
+				: { ...CLOSE_ACTION, label: t(view.query ? "tui.picker.clear_search" : "tui.picker.close") },
 		],
 		confirm:
 			pending?.confirmation !== undefined
@@ -256,7 +256,7 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 /**
  * Routes a picker event to a {@link SelectList}: a row click selects (and
  * previews, through `onSelectionChange`), a second click or `confirm`
- * activates; `close`/`cancel` clears a focused or retained filter before canceling the list.
+ * activates; `close`/`cancel` follows Escape's navigation through the search.
  * Returns whether it handled the event.
  */
 export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, key = ""): boolean {
@@ -265,9 +265,7 @@ export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, ke
 	const view = list.pickerView();
 	if (ev.kind === "action") {
 		if (ev.act === "close" || ev.act === "cancel") {
-			// Native Close clears the field; it is not Vim's Insert-to-Normal Escape.
-			if (list.filterFocused || view.query) list.handleInput(list.filterFocused ? "\x03" : "\x1b");
-			else list.onCancel?.();
+			if (!list.backFromFilter()) list.onCancel?.();
 			return true;
 		}
 		if (ev.act === "confirm" && view.selected !== null) {
@@ -304,6 +302,7 @@ export class SelectListSheet {
 				readonly query: string;
 				readonly cursor: number;
 				readonly focused: boolean;
+				readonly modalEscape: boolean;
 				readonly locale: Locale;
 				readonly node: NativeNode;
 		  }
@@ -330,6 +329,7 @@ export class SelectListSheet {
 	describe(): NativeNode {
 		const view = this.list.pickerView();
 		const memo = this.#memo;
+		const modalEscape = this.list.filterConsumesEscape;
 		if (
 			memo !== undefined &&
 			memo.items === view.items &&
@@ -338,13 +338,14 @@ export class SelectListSheet {
 			memo.query === view.query &&
 			memo.cursor === view.cursor &&
 			memo.locale === getLocale() &&
+			memo.modalEscape === modalEscape &&
 			memo.focused === this.list.filterFocused
 		) {
 			return memo.node;
 		}
 		const props = selectListPicker(this.list, this.#options());
 		const result = this.#docked ? dockedPicker(props) : picker(props);
-		this.#memo = { ...view, focused: this.list.filterFocused, locale: getLocale(), node: result };
+		this.#memo = { ...view, focused: this.list.filterFocused, modalEscape, locale: getLocale(), node: result };
 		return result;
 	}
 

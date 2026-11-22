@@ -494,7 +494,12 @@ describe("PersonaConfigOverlayComponent", () => {
 			content: { value: "hjklggG / " },
 		});
 		expect(saved).toEqual([]);
-		press(ESC, ENTER, "\x15", "hjkl", ENTER);
+		press(ESC, ESC);
+		expect(overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "name" },
+			content: { value: "hjklggG / " },
+		});
+		press("\x03", ENTER, "\x15", "hjkl", ENTER);
 		expect(overlay.navigationSnapshot()).toMatchObject({
 			context: { screen: "detail" },
 			doc: { entries: [{ name: "hjkl" }] },
@@ -684,7 +689,14 @@ describe("live persona generation", () => {
 		h.press("\x1b[H", SPACE, "G", ENTER, "Keep my words");
 		const snapshot = h.overlay.navigationSnapshot();
 		h.press(ESC);
+		expect(h.overlay.navigationSnapshot()).toMatchObject({
+			context: { screen: "description" },
+			content: { value: "Keep my words" },
+		});
+		h.press(ESC);
 		expect(h.frame()).toContain("☑");
+		h.press(ENTER);
+		expect(h.frame()).toContain("Keep my words");
 		h.overlay.restoreNavigation(snapshot);
 		expect(h.frame()).toContain("Keep my words");
 	});

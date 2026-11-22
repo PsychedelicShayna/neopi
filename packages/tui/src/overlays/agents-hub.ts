@@ -31,7 +31,7 @@ import {
 import { code, col, md, node, row, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, type NativeHint, hintsRow } from "../native/overlay";
-import { CLOSE_ACTION, type PickerEvent, picker, pickerEvent, pickerQuery } from "../native/picker";
+import { CLOSE_ACTION, type PickerEvent, picker, pickerBackAction, pickerEvent, pickerQuery } from "../native/picker";
 import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
@@ -622,6 +622,8 @@ export class AgentsHubComponent implements Component {
 		const current = this.#overrideFor(agent, property);
 		if (current) input.setValue(current);
 		this.#strip = { kind: "pattern", agent, property, input };
+		input.onSubmit = () => this.#submitPattern();
+		input.onEscape = () => this.#openPropertyStrip(agent, property);
 	}
 
 	#closeStrip(): void {
@@ -842,7 +844,7 @@ export class AgentsHubComponent implements Component {
 				const action = this.#keys.read(data);
 				if (action !== "pending") {
 					if (action?.kind === "horizontal" && action.delta < 0) this.#cancelAssign();
-					else if (action) this.#browser.handleNavigation(action);
+					else if (action && action.kind !== "cancel") this.#browser.handleNavigation(action);
 					else this.#browser.handleInput(data);
 				}
 			}
@@ -955,16 +957,12 @@ export class AgentsHubComponent implements Component {
 	#handleStripInput(data: string): void {
 		const strip = this.#strip;
 		if (!strip) return;
-		if (matchesSelectCancel(data)) {
-			this.#stripBack(strip);
+		if (strip.kind === "pattern") {
+			strip.input.handleInput(data, true);
 			return;
 		}
-		if (strip.kind === "pattern") {
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-				this.#submitPattern();
-				return;
-			}
-			strip.input.handleInput(data);
+		if (matchesSelectCancel(data)) {
+			this.#stripBack(strip);
 			return;
 		}
 		const action = this.#keys.read(data);
@@ -1205,11 +1203,11 @@ export class AgentsHubComponent implements Component {
 			if (this.#strip.kind === "pattern") {
 				const property = this.#strip.property;
 				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
-				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
+				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · Ctrl+C cancel`;
 			}
 			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
-		if (this.#search.focused) return "Search · type to filter · Esc back to list";
+		if (this.#search.focused) return `Search · type to filter · ${this.#search.input.escapeHint("back to list")}`;
 		if (this.#assigning) {
 			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
@@ -1519,10 +1517,14 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			const searching = this.#assigning
-				? this.#browser.filterFocused
-				: !this.#strip && !this.#createActive && this.#search.focused;
-			this.handleInput(searching ? "\x03" : "\x1b");
+			if (this.#search.focused) {
+				this.#search.back();
+				this.#keys.reset();
+				this.#focus = "list";
+				this.#buildRows();
+				this.#rowIndex = 0;
+				this.#viewport.reveal();
+			} else this.handleInput("\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1617,7 +1619,7 @@ export class AgentsHubComponent implements Component {
 					disabled: canOpenFile ? undefined : agent?.source === "bundled" ? BUNDLED_FILE_HINT : "No editable file",
 				},
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				this.#search.focused ? pickerBackAction(this.#search.input.vimConsumesEscape()) : CLOSE_ACTION,
 			];
 		}
 		const selectedRow = this.#rows[this.#rowIndex];
@@ -1953,7 +1955,7 @@ export class AgentsHubComponent implements Component {
 				const values = strip.property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
 				return [
 					{ keys: ["enter"], label: `${values} (role aliases like @smol and :level suffixes work; empty clears)` },
-					cancel("back"),
+					{ keys: ["ctrl+c"], label: "cancel" },
 				];
 			}
 			return [
@@ -2037,7 +2039,7 @@ export class AgentsHubComponent implements Component {
 			this.#openPatternStrip(agent, state.property);
 			const strip = this.#strip;
 			if (strip?.kind === "pattern") {
-				strip.input.setValue(state.value);
+				strip.input.setValue(state.value, { markClean: false });
 				strip.input.setCursor(state.cursor);
 			}
 		} else {

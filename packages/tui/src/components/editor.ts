@@ -59,6 +59,7 @@ import {
 	VimState,
 	visualRange,
 } from "../vim";
+import { getMenuSearchVimMode } from "../vim-preference";
 import { scrollbarThumbRange } from "./scroll-viewport";
 import {
 	borderlessComposerStyle,
@@ -927,6 +928,7 @@ export class Editor implements Component, Focusable {
 	/** Vim-style modal editing (opt-in, see the `tui.vimMode` setting). `null` when disabled, in
 	 *  which case every code path below behaves exactly as it did before the mode existed. */
 	#vim: VimState | null = null;
+	#vimOverride: boolean | undefined;
 	/** Called with the selected text when Visual mode yanks, so hosts can reach the system
 	 *  clipboard — `packages/tui` deliberately has no clipboard dependency of its own. */
 	onYank?: (text: string) => void;
@@ -1077,7 +1079,10 @@ export class Editor implements Component, Focusable {
 	#topBorderProvider?: (availableWidth: number) => EditorTopBorder | undefined;
 	#borderVisible = true;
 	#borderStyle: EditorBorderStyle = "box";
-	constructor(theme: EditorTheme) {
+	constructor(
+		theme: EditorTheme,
+		private readonly singleLine?: { normalize(text: string): string; coalesceTypingUndo?: boolean },
+	) {
 		this.#theme = theme;
 		this.borderColor = theme.borderColor;
 	}
@@ -1205,7 +1210,18 @@ export class Editor implements Component, Focusable {
 	/** Enable Vim-style modal editing. Toggling always drops back to Insert mode so the editor is
 	 *  never left in a state where ordinary typing does nothing. */
 	setVimMode(enabled: boolean): void {
-		if (enabled === (this.#vim !== null)) return;
+		this.#vimOverride = enabled;
+		this.#syncVimMode();
+	}
+
+	/** Start a fresh Insert session without changing the live setting or an explicit override. */
+	resetVimMode(): void {
+		this.#syncVimMode(true);
+	}
+
+	#syncVimMode(reset = false): void {
+		const enabled = this.#vimOverride ?? getMenuSearchVimMode();
+		if (!reset && enabled === (this.#vim !== null)) return;
 		this.#vimSession = null;
 		this.#pinnedUndo = null;
 		this.#vim = enabled ? new VimState() : null;
@@ -1220,11 +1236,18 @@ export class Editor implements Component, Focusable {
 
 	/** Current modal state; always `"insert"` when Vim mode is off. */
 	get vimMode(): VimMode {
+		this.#syncVimMode();
 		return this.#vim?.mode ?? "insert";
+	}
+
+	/** The wire mode label also tells the terminal when keystrokes belong to Vim. */
+	get nativeVimMode(): string | undefined {
+		return VIM_MODE_LABELS[this.vimMode];
 	}
 
 	/** True when modal editing is active, regardless of which mode is current. */
 	get vimEnabled(): boolean {
+		this.#syncVimMode();
 		return this.#vim !== null;
 	}
 
@@ -1239,15 +1262,39 @@ export class Editor implements Component, Focusable {
 		return selection === null ? 0 : selection.to.line - selection.from.line + 1;
 	}
 
+	/** Active Visual selection, with an exclusive end, for embedded renderers. */
+	get vimSelection() {
+		return this.#vimSelection();
+	}
+
+	get vimVisualAnchor(): VimPosition | null {
+		return this.#vim?.visual ? this.#vim.anchor : null;
+	}
+
+	escapeAction<Back extends string>(back: Back): Back | "normal" | "clear pending command" {
+		if (!this.vimConsumesEscape()) return back;
+		return this.vimMode === "normal" ? "clear pending command" : "normal";
+	}
+
+	/** Describe what the next physical Escape will do in this field. */
+	escapeHint(back: string): string {
+		return `Esc ${this.escapeAction(back)}`;
+	}
+
 	/**
 	 * Whether Escape belongs to the editor right now rather than to the app.
 	 *
 	 * Escape leaves Insert mode or cancels a half-typed operator before app navigation.
 	 */
 	vimConsumesEscape(): boolean {
+		this.#syncVimMode();
 		const vim = this.#vim;
 		if (vim === null) return false;
 		return vim.mode !== "normal" || vim.pending;
+	}
+
+	capturesInput(data: string): boolean {
+		return matchesKey(data, "escape") && this.vimConsumesEscape();
 	}
 
 	getUseTerminalCursor(): boolean {
@@ -1425,7 +1472,7 @@ export class Editor implements Component, Focusable {
 		this.#endVimSession();
 		this.#undoStack.length = 0;
 		this.#redoStack.length = 0;
-		const lines = sanitizeLoadedText(text).split("\n");
+		const lines = this.singleLine ? [text] : sanitizeLoadedText(text).split("\n");
 		this.#state.lines = lines.length === 0 ? [""] : lines;
 		// A single-row entry's top and bottom are the same row, so the directional
 		// anchor degenerates to a bare column choice: the caret would sit at the start
@@ -1685,6 +1732,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): readonly string[] {
+		this.#syncVimMode();
 		const style = this.#effectiveStyle();
 		const paddingX = this.#getEditorPaddingX();
 		const isSideBordered = style.sideBorders;
@@ -1999,6 +2047,7 @@ export class Editor implements Component, Focusable {
 	 * caret moves change only `text` and `cursor` on the same node.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		this.#syncVimMode();
 		// The terminal owns the wrap: the surface width only estimates whether a
 		// recalled history entry spans rows, and caret rows are logical lines.
 		this.#lastLayoutWidth = Math.max(1, cx.cols);
@@ -2059,7 +2108,7 @@ export class Editor implements Component, Focusable {
 			decor: decor.decor,
 			ghost: ghost ? plainText(ghost) : undefined,
 			placeholder: nativePlaceholder || undefined,
-			mode: this.nativeKeyPassthrough ? "PTY" : vim ? VIM_MODE_LABELS[vim.mode] : undefined,
+			mode: this.nativeKeyPassthrough ? "PTY" : this.nativeVimMode,
 			lang: this.describeLanguage?.(),
 			maxLines: this.#maxHeight,
 			typeahead: this.nativeTypeahead || undefined,
@@ -2125,7 +2174,8 @@ export class Editor implements Component, Focusable {
 		return typed.slice(typed.lastIndexOf("/") + 1);
 	}
 
-	handleInput(data: string): void {
+	handleInput(data: string, literalPrintable = false): void {
+		this.#syncVimMode();
 		// Iterative, not recursive: the bytes trailing a completed bracketed
 		// paste (which may themselves contain further pastes) loop back here,
 		// so a fragmented paste stream can never grow the call stack.
@@ -2138,7 +2188,7 @@ export class Editor implements Component, Focusable {
 			// A line-array copy is pointer-sized per line; the edit diff below skips unchanged lines whole.
 			const linesBefore =
 				session !== null && session.tracked && !session.replace ? this.#state.lines.slice() : undefined;
-			next = this.#handleInputChunk(next);
+			next = this.#handleInputChunk(next, literalPrintable);
 			// A bare cursor move inside one Insert/Replace session splits it, like Vim's arrow keys.
 			if (
 				session !== null &&
@@ -2190,7 +2240,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Process one input chunk. Returns the unconsumed tail of a completed paste, if any. */
-	#handleInputChunk(data: string): string | undefined {
+	#handleInputChunk(data: string, literalPrintable: boolean): string | undefined {
 		const kb = getKeybindings();
 		// Parse the sequence once; every binding probe below is then a set
 		// lookup instead of re-parsing `data` per probe (~35 probes per key).
@@ -2242,6 +2292,14 @@ export class Editor implements Component, Focusable {
 		// of commands, not something to insert.
 		if (this.#vim !== null && this.#handleVimInput(data, canonical)) {
 			return;
+		}
+		// Forms own printable keys in Insert mode, including keys remapped to surrounding actions.
+		if (literalPrintable) {
+			const printable = extractPrintableText(data);
+			if (printable) {
+				this.#insertCharacter(printable);
+				return;
+			}
 		}
 
 		// Bulk printable fast path: a multi-scalar run of plain text (paste
@@ -3192,6 +3250,11 @@ export class Editor implements Component, Focusable {
 	}
 
 	#openVimLine(below: boolean): void {
+		if (this.singleLine) {
+			if (below) this.#moveToLineEnd();
+			else this.#moveToLineStart();
+			return;
+		}
 		this.#recordUndoState();
 		const at = below ? this.#state.cursorLine + 1 : this.#state.cursorLine;
 		this.#state.lines.splice(at, 0, "");
@@ -3201,7 +3264,9 @@ export class Editor implements Component, Focusable {
 	}
 
 	#pasteVimRegister(after: boolean, count: number): void {
-		const entry = this.#killRing.peek();
+		const register = this.#killRing.peek();
+		if (!register) return;
+		const entry = this.singleLine ? register.replace(/\n/g, "") : register;
 		if (!entry) return;
 		this.#recordUndoState();
 		const linewise = entry.endsWith("\n");
@@ -3784,7 +3849,7 @@ export class Editor implements Component, Focusable {
 			if (this.#vimSession) this.#vimSession.tracked = false;
 			this.#historyIndex = -1;
 			this.#recordUndoState();
-			this.#state.lines = resolved.text.split("\n");
+			this.#state.lines = this.singleLine ? [resolved.text] : resolved.text.split("\n");
 		}
 		const lines = this.#state.lines;
 		const priorLine = this.#state.cursorLine;
@@ -4283,7 +4348,9 @@ export class Editor implements Component, Focusable {
 		this.#exitHistoryForEditing();
 		// Undo coalescing: consecutive word typing collapses into one undo unit
 		// (mirrors Input); any other action resets the run via #lastAction.
-		const isWordChunk = [...segmenter.segment(char)].every(seg => getWordNavKind(seg.segment) !== "whitespace");
+		const isWordChunk =
+			this.singleLine?.coalesceTypingUndo !== false &&
+			[...segmenter.segment(char)].every(seg => getWordNavKind(seg.segment) !== "whitespace");
 		let line = this.#state.lines[this.#state.cursorLine] || "";
 		// The space a Tab word accept added is provisional until the next keystroke:
 		// a typed space is swallowed, closing punctuation or a hyphen replaces it,
@@ -4418,6 +4485,10 @@ export class Editor implements Component, Focusable {
 
 	#handlePaste(pastedText: string, options: PasteOptions = {}): void {
 		let filteredText = this.#sanitizePastedText(pastedText);
+		if (this.singleLine) {
+			if (filteredText) this.insertText(filteredText);
+			return;
+		}
 
 		// If pasting a file path (starts with /, ~, or .) and the character before
 		// the cursor is a word character, prepend a space for better readability.
@@ -4470,6 +4541,7 @@ export class Editor implements Component, Focusable {
 	 *  normalize CRLF and
 	 *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
 	#sanitizePastedText(pastedText: string): string {
+		if (this.singleLine) return this.singleLine.normalize(pastedText);
 		// Decode tmux's re-encoded control bytes (both extended-keys formats) back to
 		// their literal byte so the per-char filter below preserves newlines instead of
 		// stripping ESC and leaking the printable tail into the editor. See the decoder.
@@ -4527,6 +4599,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#addNewLine(): void {
+		if (this.singleLine) return;
 		// A provisional space from a Tab word accept would become trailing whitespace.
 		// Read before #resetKillSequence clears the accept marker.
 		const dropSpace = this.#hasProvisionalSpace();
@@ -5030,10 +5103,15 @@ export class Editor implements Component, Focusable {
 		this.#retriggerAutocompleteAtCursor();
 	}
 
-	#yankFromKillRing(): void {
+	#killRingTextForInsertion(): string | undefined {
 		const text = this.#killRing.peek();
-		if (!text) return;
-		this.#insertTextAtCursor(text);
+		return text === undefined || !this.singleLine ? text : this.singleLine.normalize(text);
+	}
+
+	#yankFromKillRing(): void {
+		const text = this.#killRingTextForInsertion();
+		if (text === undefined) return;
+		if (text) this.#insertTextAtCursor(text);
 		this.#lastAction = "yank";
 	}
 
@@ -5047,10 +5125,8 @@ export class Editor implements Component, Focusable {
 		this.#withUndoSuspended(() => {
 			if (!this.#deleteYankedText()) return;
 			this.#killRing.rotate();
-			const text = this.#killRing.peek();
-			if (text) {
-				this.#insertTextAtCursor(text);
-			}
+			const text = this.#killRingTextForInsertion();
+			if (text !== undefined) this.#insertTextAtCursor(text);
 		});
 
 		this.#lastAction = "yank";
@@ -5063,8 +5139,9 @@ export class Editor implements Component, Focusable {
 	 * at the end of the yanked text.
 	 */
 	#deleteYankedText(): boolean {
-		const yankedText = this.#killRing.peek();
-		if (!yankedText) return false;
+		const yankedText = this.#killRingTextForInsertion();
+		if (yankedText === undefined) return false;
+		if (!yankedText) return true;
 
 		const yankLines = yankedText.split("\n");
 		const endLine = this.#state.cursorLine;

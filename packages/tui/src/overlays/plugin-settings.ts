@@ -984,7 +984,7 @@ function createConfigInputPanel(
 		secret: schema.secret,
 		initialValue: !schema.secret ? currentValue : undefined,
 		empty: "cancel",
-		hint: `${editorKey("tui.input.submit")} to save · ${editorKey("tui.select.cancel")} to cancel`,
+		hint: `${editorKey("tui.input.submit")} to save · Ctrl+C to cancel`,
 		onSubmit,
 		onCancel,
 		requestRender,
