@@ -4,7 +4,7 @@ import { getProxyForUrl, wrapFetchForProxy } from "@oh-my-pi/pi-ai/utils/proxy";
 import { CODEX_BASE_URL, getCodexAccountId, OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getCodexClientVersion } from "@oh-my-pi/pi-catalog/wire/codex-version";
 import { LiveWebRtcPeer } from "@oh-my-pi/pi-natives";
-import { toError } from "@oh-my-pi/pi-utils";
+import { logger, toError } from "@oh-my-pi/pi-utils";
 import { NEOPROXY_PROVIDER_ID } from "../config/model-discovery";
 import type { ModelRegistry } from "../config/model-registry";
 import type { ScopeLike } from "../config/registry";
@@ -330,10 +330,22 @@ export class LiveTransport {
 	async #resolveRoute(): Promise<LiveRoute> {
 		const { endpoint, authStorage, modelRegistry, sessionId, signal, canUseProvider } = this.#options;
 		if (endpoint) return { kind: "custom", endpoint };
+		let refreshFailure: AIError.OAuthRefreshUnavailableError | undefined;
 		if (canUseProvider?.(LIVE_PROVIDER) !== false) {
-			const access = await authStorage.oauth.access(LIVE_PROVIDER, sessionId, { signal });
+			let access: OAuthAccess | undefined;
+			try {
+				access = await authStorage.oauth.access(LIVE_PROVIDER, sessionId, { signal });
+			} catch (error) {
+				if (!(error instanceof AIError.OAuthRefreshUnavailableError)) throw error;
+				refreshFailure = error;
+			}
 			signal?.throwIfAborted();
 			if (access && canUseProvider?.(LIVE_PROVIDER) !== false) return { kind: LIVE_PROVIDER, access };
+			if (refreshFailure) {
+				logger.debug("Codex Live routing skipped transient OAuth refresh failure", {
+					error: refreshFailure.message,
+				});
+			}
 		}
 		if (modelRegistry && canUseProvider?.(NEOPROXY_PROVIDER_ID) !== false) {
 			const proxy = await resolveNeoProxyLiveEndpoint(
@@ -344,6 +356,7 @@ export class LiveTransport {
 			);
 			if (proxy) return { kind: NEOPROXY_PROVIDER_ID, endpoint: proxy };
 		}
+		if (refreshFailure) throw refreshFailure;
 		throw new AIError.MissingApiKeyError(
 			canUseProvider?.(LIVE_PROVIDER) === false ? NEOPROXY_PROVIDER_ID : LIVE_PROVIDER,
 			canUseProvider?.(LIVE_PROVIDER) === false

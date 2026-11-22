@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import { X509Certificate } from "node:crypto";
 import type { AuthStorage, OAuthAccess } from "@oh-my-pi/pi-ai";
 import type { ApiKeyCredential } from "@oh-my-pi/pi-ai/auth-storage";
+import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
 import { OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { LiveSessionController, type LiveSessionControllerOptions } from "@oh-my-pi/pi-coding-agent/live/controller";
@@ -40,7 +41,7 @@ const noCodexLogin = {
 const callbacks = { onEvent: () => {}, onOutputLevel: () => {} };
 
 /** A local OpenAI Realtime WebRTC-shaped server recording what it receives. */
-function realtimeServer() {
+function realtimeServer(liveApiKey?: string) {
 	const calls: Request[] = [];
 	const offers: string[] = [];
 	const upgrades: Request[] = [];
@@ -51,6 +52,9 @@ function realtimeServer() {
 		port: 0,
 		async fetch(request, srv) {
 			const url = new URL(request.url);
+			if (liveApiKey && request.method === "GET" && url.pathname === "/v1/live") {
+				return Response.json({ available: request.headers.get("authorization") === `Bearer ${liveApiKey}` });
+			}
 			if (request.method === "POST" && url.pathname === "/v1/realtime/calls") {
 				calls.push(request);
 				offers.push(await request.text());
@@ -340,6 +344,63 @@ describe("live transport on NeoProxy", () => {
 			await transport.close();
 			server.stop(true);
 		}
+	});
+
+	test("falls back to an eligible NeoProxy key when the Codex OAuth refresh is unavailable", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { server, calls, upgrades } = realtimeServer("eligible");
+		const origin = server.url.origin;
+		const { transport, access } = await configuredProxy(temp, `${origin}/v1`, [
+			{ type: "api_key", key: "eligible", requestOrigin: origin },
+		]);
+		access.mockRejectedValue(new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline")));
+		try {
+			await transport.connect();
+			expect(transport.provider).toBe("neoproxy");
+			expect(transport.sdpAnswer).toBe("v=0 answer");
+			expect(calls[0]?.headers.get("authorization")).toBe("Bearer eligible");
+			expect(upgrades[0]?.headers.get("authorization")).toBe("Bearer eligible");
+		} finally {
+			await transport.close();
+			server.stop(true);
+		}
+	});
+
+	test("preserves the Codex refresh error when no eligible NeoProxy key is available", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { transport, access, list } = await configuredProxy(temp, "http://127.0.0.1:1/v1", []);
+		const error = new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline"));
+		access.mockRejectedValue(error);
+		await expect(transport.connect()).rejects.toBe(error);
+		expect(list).toHaveBeenCalledWith("neoproxy");
+	});
+
+	test("aborts rather than falling back if cancellation coincides with a Codex refresh failure", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const origin = "http://127.0.0.1:1";
+		const abort = new AbortController();
+		const cancelled = new Error("Cancel live startup");
+		const { transport, access, list } = await configuredProxy(
+			temp,
+			`${origin}/v1`,
+			[{ type: "api_key", key: "eligible", requestOrigin: origin }],
+			{ signal: abort.signal },
+		);
+		access.mockImplementation(async () => {
+			abort.abort(cancelled);
+			throw new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline"));
+		});
+		await expect(transport.connect()).rejects.toBe(cancelled);
+		expect(list).not.toHaveBeenCalled();
+	});
+
+	test("propagates other Codex OAuth errors without probing NeoProxy", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { transport, access, list } = await configuredProxy(temp, "http://127.0.0.1:1/v1", []);
+		const error = new Error("Cannot read Codex credentials");
+		access.mockRejectedValue(error);
+		await expect(transport.connect()).rejects.toBe(error);
+		expect(list).not.toHaveBeenCalled();
 	});
 
 	test("uses Codex first and never falls back after direct signaling begins", async () => {

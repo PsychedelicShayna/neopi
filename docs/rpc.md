@@ -2598,11 +2598,13 @@ process exits.
 ### Custom live endpoint
 
 By default, live sessions use a usable ChatGPT (Codex) sign-in. If none is
-available, NeoPi can use a stored, scoped `/login neoproxy` key that has been
-granted Codex Live access. NeoPi checks `GET {NeoProxy base}/live` before
-signaling and uses the same key and credential-local TLS trust for both call
-legs. NeoProxy relays the Codex live session; no direct Codex sign-in is sent
-to the relay. In offline mode (`models.offline`), automatic routing is limited
+available or the pre-call OAuth refresh fails temporarily, NeoPi can use a
+stored, scoped `/login neoproxy` key that has been granted Codex Live access.
+NeoPi checks `GET {NeoProxy base}/live` before signaling and uses the same key
+and credential-local TLS trust for both call legs. If no eligible NeoProxy key
+is available after a refresh failure, NeoPi reports that failure. NeoProxy
+relays the Codex live session; no direct Codex sign-in is sent to the relay.
+In offline mode (`models.offline`), automatic routing is limited
 to the active session provider: `openai-codex` or `neoproxy`.
 
 Set `live.endpoint` to a server's base URL (for example `http://127.0.0.1:8080/v1`)

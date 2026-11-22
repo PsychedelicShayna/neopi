@@ -15,7 +15,7 @@
 
 ### Added
 
-- `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available; `live.endpoint` still overrides automatic routing.
+- `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
 - Use `/fast force fast` or `/fast force ultra` to request an OpenAI-compatible service tier even when the current model doesn't advertise it.
 - Start `/live-transcript` to keep the live conversation together across handoffs, without spoken reasoning or progress updates. Edit its built-in **Codex** prompt, model, and voice in `/live-persona` without changing regular `/live` ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
