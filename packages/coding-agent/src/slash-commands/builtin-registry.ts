@@ -4,6 +4,7 @@ import { type ControlActor, runAsControlCommand } from "../control/actor";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
+import type { AgentSession } from "../session/agent-session";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
 import { CHRONICLER_SLASH_COMMAND } from "./builtin-chronicler";
@@ -41,7 +42,10 @@ export type { BuiltinSlashCommand, SubcommandDef } from "./types";
 export type BuiltinSlashCommandRuntime = TuiSlashCommandRuntime;
 
 export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
-	getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
+	getArgumentCompletions?: (
+		prefix: string,
+		session?: AgentSession,
+	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	getInlineHint?: (argumentText: string) => string | null;
 	getAutocompleteDescription?: () => string | undefined;
 }
@@ -237,13 +241,13 @@ export interface SlashCommandCompletion {
 
 /**
  * Argument completions of a builtin for hosts without a terminal (RPC `get_command_completions`),
- * the ones the TUI offers where they need no terminal state: settings-backed names, then the command's
- * static completer, then its declarative subcommands. Empty for an unknown command or one with none.
+ * the ones the TUI offers where they need no terminal state: custom headless or static completion,
+ * then declarative subcommands. Empty for an unknown command or one with none.
  */
 export async function getBuiltinCommandCompletions(
 	commandName: string,
 	argumentPrefix: string,
-	runtime: { settings: Settings },
+	runtime: { settings: Settings; session?: AgentSession },
 ): Promise<SlashCommandCompletion[]> {
 	const spec = BUILTIN_SLASH_COMMAND_LOOKUP.get(commandName);
 	if (!spec) return [];
@@ -251,6 +255,7 @@ export async function getBuiltinCommandCompletions(
 		? await spec.getHeadlessCompletions(argumentPrefix, runtime)
 		: await BUILTIN_SLASH_COMMANDS.find(command => command.name === spec.name)?.getArgumentCompletions?.(
 				argumentPrefix,
+				runtime.session,
 			);
 	return (items ?? []).map(item => ({
 		value: item.value,

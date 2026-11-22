@@ -77,6 +77,10 @@ export interface PersonaConfigEntry {
 	definitionScope?: string;
 	/** Immutable bundled entry (the live `default`); may be cloned, never edited. */
 	builtin?: boolean;
+	/** A bundled entry whose identity is permanent but whose fields can be edited. */
+	editableBuiltin?: boolean;
+	liveModel?: string;
+	liveVoice?: string;
 	/** `persona` variant only. */
 	mode: PersonaConfigMode;
 	/** `persona` variant only; live personas are always inline. */
@@ -171,6 +175,8 @@ type Screen =
 	| "content"
 	| "path"
 	| "literal"
+	| "liveModel"
+	| "liveVoice"
 	| "mode"
 	| "generator"
 	| "references"
@@ -472,7 +478,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				this.#showNewEntryEditor(entry.content, entry.name, index);
 				return;
 			}
-			if (entry && matchesKey(data, "e") && !entry.builtin) {
+			if (entry && matchesKey(data, "e") && (!entry.builtin || entry.editableBuiltin)) {
 				this.#showContentEditor(index!);
 				return;
 			}
@@ -513,7 +519,12 @@ export class PersonaConfigOverlayComponent implements Component {
 				if (action.delta < 0) active.onCancel?.();
 				else if (this.#screen === "detail") {
 					const item = active.getSelectedItem();
-					if (item && ["name", "mode", "path", "literal", "content", "view", "sources"].includes(item.value)) {
+					if (
+						item &&
+						["name", "mode", "path", "literal", "liveModel", "liveVoice", "content", "view", "sources"].includes(
+							item.value,
+						)
+					) {
 						active.onSelect?.(item);
 					}
 				}
@@ -689,6 +700,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			lines.push(theme.fg("dim", `Source: ${entry.sourceKind === "file" ? `file ${entry.path}` : "inline"}`));
 			if (entry.mode === "literal-substitute") lines.push(theme.fg("dim", `Literal: ${entry.literal || "(none)"}`));
 			lines.push(theme.fg("dim", `Inherit to tasks: ${entry.inheritToTasks ? "yes" : "no"}`), "");
+		} else if (entry.editableBuiltin) {
+			lines.push(theme.fg("dim", "Default for /live-transcript · editable"), "");
 		} else if (entry.builtin) {
 			lines.push(
 				theme.fg(
@@ -763,7 +776,8 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#isActive(entry: PersonaConfigEntry): boolean {
-		if (this.#doc.active === undefined) return this.#deps.variant === "live" && entry.builtin === true;
+		if (this.#doc.active === undefined)
+			return this.#deps.variant === "live" && entry.builtin === true && !entry.editableBuiltin;
 		return this.#doc.active === entry.name;
 	}
 
@@ -772,13 +786,14 @@ export class PersonaConfigOverlayComponent implements Component {
 		this.#doc.active =
 			this.#deps.variant === "personality"
 				? entry.name
-				: this.#isActive(entry) || entry.builtin
+				: this.#isActive(entry) || (entry.builtin && !entry.editableBuiltin)
 					? undefined
 					: entry.name;
 		this.#dirty = true;
 	}
 
 	#entrySummary(entry: PersonaConfigEntry): string {
+		if (entry.editableBuiltin) return "default for /live-transcript";
 		if (entry.builtin) return "built-in default";
 		if (this.#deps.variant === "personality")
 			return entry.builtin ? "Built-in preset" : `${entry.definitionScope ?? "new"} · ${entry.content.length} chars`;
@@ -809,7 +824,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				return `"${entry.name}": names may contain only letters, numbers, '.', '_' or '-'.`;
 			if (seen.has(entry.name)) return `Two ${this.#noun}s are named "${entry.name}".`;
 			seen.add(entry.name);
-			if (entry.builtin) continue;
+			if (entry.builtin && !entry.editableBuiltin) continue;
 			if (this.#deps.variant === "live" || entry.sourceKind === "inline") {
 				if (!entry.content.trim()) return `"${entry.name}" has empty content.`;
 			} else if (!entry.path.trim()) {
@@ -1162,7 +1177,20 @@ export class PersonaConfigOverlayComponent implements Component {
 		this.#entryIndex = index;
 		this.#creation = undefined;
 		const items: SelectItem[] = [];
-		if (entry.builtin) {
+		if (entry.editableBuiltin) {
+			items.push(
+				{
+					value: "active",
+					label: "Use prompt for regular /live",
+					description: this.#isActive(entry) ? "● on" : "○ off",
+				},
+				{ value: "content", label: "System prompt", description: previewLineOrNone(entry.content) },
+				{ value: "liveModel", label: "Requested model", description: entry.liveModel || "Codex default" },
+				{ value: "liveVoice", label: "Voice", description: entry.liveVoice || "Codex default" },
+				{ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) },
+				{ value: "back", label: "Back" },
+			);
+		} else if (entry.builtin) {
 			items.push(
 				{ value: "active", label: "Active", description: this.#isActive(entry) ? "● on" : "○ off" },
 				{ value: "view", label: "Instructions", description: "read-only · Enter to view" },
@@ -1300,6 +1328,10 @@ export class PersonaConfigOverlayComponent implements Component {
 			case "path":
 				this.#showFieldEditor(index, "path", "Path relative to the agent directory");
 				return;
+			case "liveModel":
+			case "liveVoice":
+				this.#showFieldEditor(index, field, "Blank restores the Codex default");
+				return;
 			case "literal":
 				this.#showFieldEditor(index, "literal", "Literal text in the system prompt to replace");
 				return;
@@ -1415,13 +1447,13 @@ export class PersonaConfigOverlayComponent implements Component {
 		this.#setScreen("name", input, "Type a name · Enter save · Ctrl+C cancel");
 	}
 
-	#showFieldEditor(index: number, field: "path" | "literal", hint: string): void {
+	#showFieldEditor(index: number, field: "path" | "literal" | "liveModel" | "liveVoice", hint: string): void {
 		const entry = this.#doc.entries[index];
 		if (!entry) return this.#showList();
 		const input = new Input();
-		input.setValue(entry[field]);
+		input.setValue(entry[field] ?? "");
 		input.onSubmit = value => {
-			entry[field] = field === "path" ? value.trim() : value;
+			entry[field] = field === "literal" ? value : value.trim();
 			this.#dirty = true;
 			this.#showDetail(index, field);
 		};
@@ -1553,6 +1585,8 @@ export class PersonaConfigOverlayComponent implements Component {
 					if (index !== undefined) this.#showModePicker(index);
 					else this.#showList();
 					break;
+				case "liveModel":
+				case "liveVoice":
 				case "path":
 				case "literal":
 					if (index !== undefined)
@@ -1561,12 +1595,18 @@ export class PersonaConfigOverlayComponent implements Component {
 							state.context.screen,
 							state.context.screen === "path"
 								? "Path relative to the agent directory"
-								: "Literal text in the system prompt to replace",
+								: state.context.screen === "literal"
+									? "Literal text in the system prompt to replace"
+									: "Blank restores the Codex default",
 						);
 					else this.#showList();
 					break;
 				case "content":
-					if (index !== undefined) this.#showContentEditor(index, this.#doc.entries[index]?.builtin);
+					if (index !== undefined)
+						this.#showContentEditor(
+							index,
+							this.#doc.entries[index]?.builtin && !this.#doc.entries[index]?.editableBuiltin,
+						);
 					else this.#showList();
 					break;
 				default:

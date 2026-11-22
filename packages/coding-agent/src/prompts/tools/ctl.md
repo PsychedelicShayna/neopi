@@ -1,7 +1,14 @@
-Drive another running npi session over its control socket. The pane updates as if the human typed it.
+Inspect or control a running npi session without shelling out to `npi ctl`.
 
-`op` is list, state, send, steer, follow_up, abort, slash, action, keys, dialogs, dialog_answer, settings, or rpc.
-`target` is an instance id, a prefix of one, a tmux pane id (`%3`), or a title.
+Omit `target` or pass `"self"` for the calling session. For another session, use `list` to find an instance id, or pass its id prefix, session id, tmux pane (`%3`), or title.
+
+- `{"op":"state","target":"%3"}` shows `session.model` (provider/id), `thinkingLevel`, `fastModeEnabled`, `fastModeActive`, `sessionName`, and `sessionFile`.
+- `{"op":"rpc","target":"%3","rpcType":"get_last_assistant_text"}` reads the last visible reply. For the transcript, use `get_messages` or `read` on `sessionFile` when present. `get_state` returns full session state.
+- `{"op":"rpc","rpcType":"set_model","params":{"provider":"anthropic","modelId":"claude-sonnet-4-5"}}` sets your own model. Set effort with `set_thinking_level` and `params.level`, or fast mode with `set_fast_mode` and `params.enabled`.
+- Run a slash command with `op:"slash"` and `text`. Read settings with `op:"settings"` and an optional path in `text`; write with RPC `settings_set` (`path`, `value`, `scope`) or `settings_unset` (`path`, `scope`).
+
+Use `op:"rpc"` with `rpcType` and `params` for other control commands. Use `abort` to cancel work; `esc` navigates.
+For your own session, `abort`, `esc`, `input`, `slash`, and `send` report when the request is dispatched, not when it completes. This lets a command that needs the current turn to yield proceed without waiting on itself.
 `text` is the prompt, slash command, or settings path.
 `actionId` is a keybinding id (`app.model.select`, `tui.select.confirm`).
 `dialogId` plus `answer` settles the open dialog (`{index:0}`, a string, or `"cancel"`).

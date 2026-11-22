@@ -3,7 +3,10 @@
  * speaks the control protocol. Never spawns a session.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { logger } from "@oh-my-pi/pi-utils";
+import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import { ControlClient, ControlClientError } from "../control/client";
+import type { ControlCallerIdentity } from "../control/host";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
 
@@ -61,44 +64,57 @@ export async function resolveCtlTarget(selector: string, options?: ControlRegist
 	throw new ControlClientError("not_found", `no control session matches ${wanted}`);
 }
 
-const callerBinding = new AsyncLocalStorage<true>();
+const callerBinding = new AsyncLocalStorage<ControlCallerIdentity | null>();
 
 /** The ctl tool sets this so the connection carries the caller's publication. */
-export function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
-	return callerBinding.run(true, fn);
+export function withCtlCaller<T>(caller: ControlCallerIdentity | null, fn: () => Promise<T>): Promise<T> {
+	return callerBinding.run(caller, fn);
 }
 
-async function connect(selector: string, label: string): Promise<ControlClient> {
-	const metadata = await resolveCtlTarget(selector);
-	const caller = callerBinding.getStore() ? (await import("../control/host")).currentControlCaller() : null;
+async function connect(selector: string, label: string, signal?: AbortSignal): Promise<ControlClient> {
+	const caller = callerBinding.getStore();
+	const self = selector === "self" && caller !== undefined;
+	if (self && !caller) {
+		throw new ControlClientError("no_caller", "the calling session has no published control endpoint");
+	}
+	const metadata = self && caller ? caller.metadata : await untilAborted(signal, () => resolveCtlTarget(selector));
 	const client = new ControlClient({
 		metadata,
 		label,
 		kind: caller ? "tool" : "cli",
-		caller: caller ? { instanceId: caller.instanceId, token: caller.token } : null,
+		caller: caller ? { instanceId: caller.metadata.instanceId, token: caller.metadata.token } : null,
 		controlChain: caller?.controlChain ?? [],
+		allowSelf: self,
+		allowNested: self,
 	});
-	await client.connect();
+	try {
+		await untilAborted(signal, () => client.connect());
+	} catch (error) {
+		client.close();
+		throw error;
+	}
 	return client;
 }
 
-export async function ctlList(json: boolean): Promise<number> {
-	const entries = await readControlEntries();
+export async function ctlList(json: boolean, signal?: AbortSignal): Promise<number> {
+	const entries = await untilAborted(signal, () => readControlEntries());
 	const rows = [];
 	for (const entry of entries) {
+		const client = new ControlClient({
+			metadata: entry.meta,
+			label: "ctl-list",
+			kind: "cli",
+			probe: true,
+			timeoutMs: 750,
+		});
 		try {
-			const client = new ControlClient({
-				metadata: entry.meta,
-				label: "ctl-list",
-				kind: "cli",
-				probe: true,
-				timeoutMs: 750,
-			});
-			const snapshot = await client.connect();
-			client.close();
+			const snapshot = await untilAborted(signal, () => client.connect());
 			rows.push({ meta: publicMeta(entry.meta), snapshot });
-		} catch {
+		} catch (error) {
+			if (signal?.aborted) throw error;
 			rows.push({ meta: publicMeta(entry.meta), snapshot: null, state: "unresponsive" });
+		} finally {
+			client.close();
 		}
 	}
 	if (json) {
@@ -121,10 +137,10 @@ function publicMeta(meta: ControlMetadata): Omit<ControlMetadata, "token"> {
 	return rest;
 }
 
-export async function ctlState(selector: string, json: boolean): Promise<number> {
-	const client = await connect(selector, "ctl");
+export async function ctlState(selector: string, json: boolean, signal?: AbortSignal): Promise<number> {
+	const client = await connect(selector, "ctl", signal);
 	try {
-		const response = await client.request({ type: "get_status" });
+		const response = await untilAborted(signal, () => client.request({ type: "get_status" }));
 		if (!response.success) return fail(response.error, response.code);
 		const snapshot = response.data as ControlSnapshot;
 		io.stdout(json ? `${JSON.stringify(snapshot, null, 2)}\n` : formatSnapshot(snapshot));
@@ -134,44 +150,84 @@ export async function ctlState(selector: string, json: boolean): Promise<number>
 	}
 }
 
-export async function ctlSend(
+export function ctlSend(
 	selector: string,
 	text: string,
 	mode: "prompt" | "steer" | "follow_up" | "input" | "slash",
 	json: boolean,
+	signal?: AbortSignal,
 ): Promise<number> {
-	const client = await connect(selector, "ctl");
-	try {
-		const command = mode === "input" || mode === "slash" ? { type: mode, text } : { type: mode, message: text };
-		const response = await client.request(command, 120_000);
-		io.stdout(`${JSON.stringify(response, null, json ? 2 : 0)}\n`);
-		return response.success ? 0 : 1;
-	} finally {
-		client.close();
-	}
+	const params = mode === "input" || mode === "slash" ? { text } : { message: text };
+	return ctlRpc(selector, mode, params, json, signal);
 }
+
+// These commands can run a slash/extension handler or interrupt the issuing
+// turn. Their final reply must not keep that turn's own ctl call pending.
+const selfDispatchedCommands: Record<string, true> = {
+	abort: true,
+	abort_and_restore_queue: true,
+	abort_and_prompt: true,
+	esc: true,
+	input: true,
+	slash: true,
+	prompt: true,
+};
 
 export async function ctlRpc(
 	selector: string,
 	type: string,
 	params: Record<string, unknown>,
 	json: boolean,
+	signal?: AbortSignal,
 ): Promise<number> {
-	const client = await connect(selector, "ctl");
+	const client = await connect(selector, "ctl", signal);
+	let dispatched = false;
 	try {
-		const response = await client.request({ type, ...params }, 120_000);
+		const command = { type, ...params };
+		signal?.throwIfAborted();
+		const request = client.request(command, 120_000);
+		let response;
+		// Only the self selector can authenticate to the caller's own host.
+		if (selector === "self" && callerBinding.getStore() && Object.hasOwn(selfDispatchedCommands, command.type)) {
+			dispatched = true;
+			void request
+				.then(
+					reply => {
+						if (!reply.success) {
+							logger.warn("Self ctl command failed", { type: command.type, error: reply.error });
+						}
+					},
+					(error: unknown) => logger.warn("Self ctl command failed", { type: command.type, error: String(error) }),
+				)
+				.finally(() => client.close());
+			response = { command: command.type, success: true, data: { dispatched: true } };
+		} else {
+			response = await untilAborted(signal, request);
+		}
 		io.stdout(`${JSON.stringify(response, null, json ? 2 : 0)}\n`);
 		return response.success ? 0 : 1;
 	} finally {
-		client.close();
+		if (!dispatched) client.close();
 	}
 }
 
 function formatSnapshot(snapshot: ControlSnapshot): string {
+	const session = snapshot.session;
+	const model = session?.model;
+	const fast = session?.fastModeActive
+		? "active"
+		: session?.fastModeEnabled
+			? "on (inactive)"
+			: session
+				? "off"
+				: "unknown";
 	return [
 		`${snapshot.instanceId}  ${snapshot.role}  pid=${snapshot.pid}  ready=${snapshot.ready}`,
 		`cwd=${snapshot.cwd}`,
 		`busy streaming=${snapshot.busy.streaming} pending(steer+follow-up)=${snapshot.busy.pendingSteerAndFollowUp}`,
+		`model=${model ? `${model.provider}/${model.id}` : "-"}  effort=${session?.thinkingLevel ?? "-"}  fast=${fast}`,
+		`sessionName=${session?.sessionName ? JSON.stringify(session.sessionName) : "-"}`,
+		`sessionFile=${session?.sessionFile ?? "-"}`,
 		`build ${snapshot.build.gitSha ?? "unknown"}`,
 		"",
 	].join("\n");

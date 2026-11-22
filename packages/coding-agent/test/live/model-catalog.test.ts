@@ -104,6 +104,31 @@ describe("live model catalog", () => {
 		loader.dispose();
 	});
 
+	test("warns once per catalogue outage and alerts again after recovery", async () => {
+		const warnings: string[] = [];
+		let missing = true;
+		const loader = new LiveModelCatalogLoader({
+			io: {
+				stat: async path => {
+					if (missing) throw new Error(`ENOENT: ${path}`);
+					return { mtimeMs: 1, size: 42 };
+				},
+				readFile: async () => fixture(),
+			},
+			onWarning: warning => warnings.push(warning),
+		});
+		await loader.setPath("/catalog.json");
+		await loader.refresh(true);
+		expect(warnings).toHaveLength(1);
+		missing = false;
+		await loader.refresh(true);
+		expect(loader.lookup(slug, "max")).toEqual({ status: "present", recommendation: "never" });
+		missing = true;
+		await loader.refresh(true);
+		expect(warnings).toHaveLength(2);
+		loader.dispose();
+	});
+
 	test("expands only a leading home component and exposes the Providers/Services setting", () => {
 		expect(expandCatalogPath("~/catalog.json")).toBe(`${homedir()}/catalog.json`);
 		expect(expandCatalogPath("~")).toBe(homedir());

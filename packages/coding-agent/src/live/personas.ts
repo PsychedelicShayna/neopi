@@ -17,11 +17,19 @@ import * as nodePath from "node:path";
 import { getAgentDir, logger } from "@oh-my-pi/pi-utils";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { isRecord, JsonStateStore } from "../neopi/json-state";
-import { normalizeLiveIngestSettings, type LiveIngestPersonaSettings } from "./ingest-settings";
+import { codexLiveIngest, normalizeLiveIngestSettings, type LiveIngestPersonaSettings } from "./ingest-settings";
+import codexInstructionsTemplate from "./prompts/codex-backend.md" with { type: "text" };
+import { DEFAULT_LIVE_MODEL } from "./protocol";
 import liveInstructionsTemplate from "./prompts/live-instructions.md" with { type: "text" };
 
 /** Reserved name of the immutable bundled persona. */
 export const DEFAULT_LIVE_PERSONA = "default";
+export const CODEX_LIVE_PERSONA = "Codex";
+const codexDefaults: LivePersonaDefinition = {
+	instructions: codexInstructionsTemplate.trimEnd(),
+	model: DEFAULT_LIVE_MODEL,
+	voice: "maple",
+};
 
 /** Bundled default instruction template (raw, template variables intact). */
 export const defaultLiveInstructions: string = liveInstructionsTemplate;
@@ -30,6 +38,8 @@ export interface LivePersonaDefinition {
 	/** Raw live-model instructions; may reference {{firstName}}/{{username}} for prompt.render. */
 	instructions: string;
 	ingest?: LiveIngestPersonaSettings;
+	model?: string;
+	voice?: string;
 }
 
 export interface LivePersonaState {
@@ -38,13 +48,18 @@ export interface LivePersonaState {
 	personas: Record<string, LivePersonaDefinition>;
 	/** Resolved settings for the bundled default, whose instruction text remains immutable. */
 	defaultIngest?: LiveIngestPersonaSettings;
+	codex?: LivePersonaDefinition;
 	/** Selected persona name; absent means the bundled default. */
 	active?: string;
 }
 
 export const emptyLivePersonaState = (): LivePersonaState => ({ schemaVersion: 1, personas: {} });
 
-const isDefinition = (v: unknown): v is LivePersonaDefinition => isRecord(v) && typeof v.instructions === "string";
+const isDefinition = (v: unknown): v is LivePersonaDefinition =>
+	isRecord(v) &&
+	typeof v.instructions === "string" &&
+	(v.model === undefined || typeof v.model === "string") &&
+	(v.voice === undefined || typeof v.voice === "string");
 
 export function validateLivePersonaState(v: unknown): LivePersonaState {
 	if (
@@ -57,6 +72,7 @@ export function validateLivePersonaState(v: unknown): LivePersonaState {
 		throw new Error("Invalid schema-v1 neopi-live-personas.json");
 	}
 	const state = v as unknown as LivePersonaState;
+	if (state.codex !== undefined && !isDefinition(state.codex)) throw new Error("Invalid Codex live persona");
 	const validateIngest = (value: unknown, field: string): void => {
 		if (value === undefined) return;
 		try {
@@ -68,6 +84,7 @@ export function validateLivePersonaState(v: unknown): LivePersonaState {
 		}
 	};
 	validateIngest(state.defaultIngest, "defaultIngest");
+	validateIngest(state.codex?.ingest, "codex.ingest");
 	for (const [name, persona] of Object.entries(state.personas))
 		validateIngest(persona.ingest, `personas.${name}.ingest`);
 	return v as unknown as LivePersonaState;
@@ -89,6 +106,9 @@ export interface LivePersonaItem {
 	active: boolean;
 	/** True only for the immutable bundled default. */
 	builtin: boolean;
+	editableBuiltin?: boolean;
+	model?: string;
+	voice?: string;
 	ingest: LiveIngestPersonaSettings;
 }
 
@@ -114,6 +134,7 @@ export interface LivePersonaFeature {
 		personas: Record<string, LivePersonaDefinition>,
 		active: string | undefined,
 		defaultIngest?: LiveIngestPersonaSettings,
+		codex?: LivePersonaDefinition,
 	): Promise<string>;
 }
 
@@ -153,17 +174,43 @@ function assertMutable(name: string): void {
 	}
 }
 
+function codexDefinition(state: LivePersonaState): LivePersonaDefinition {
+	const override = state.codex ?? state.personas[CODEX_LIVE_PERSONA];
+	return {
+		instructions: override?.instructions.trim() ? override.instructions : codexDefaults.instructions,
+		model: override?.model?.trim() || codexDefaults.model,
+		voice: override?.voice?.trim() || codexDefaults.voice,
+		...(override?.ingest === undefined ? {} : { ingest: override.ingest }),
+	};
+}
+
+export async function resolveCodexLivePersona(statePath?: string): Promise<LivePersonaDefinition> {
+	const store = new LivePersonaStore(statePath);
+	try {
+		return codexDefinition(await store.read());
+	} catch (error) {
+		logger.warn("Codex live persona state unreadable; using bundled settings", { error: String(error) });
+		return { ...codexDefaults };
+	}
+}
+
 export function createLivePersonaFeature(store: LivePersonaStore = new LivePersonaStore()): LivePersonaFeature {
 	function instructionsOf(state: LivePersonaState, name: string): string {
 		if (name === DEFAULT_LIVE_PERSONA) return liveInstructionsTemplate;
+		if (name === CODEX_LIVE_PERSONA) return codexDefinition(state).instructions;
 		const definition = state.personas[name];
 		if (!definition) throw new Error(`Unknown live persona: ${name}`);
 		return definition.instructions;
 	}
 	async function data(): Promise<LivePersonaData> {
 		const state = await store.read();
-		const active = state.active && state.personas[state.active] ? state.active : DEFAULT_LIVE_PERSONA;
+		const active =
+			state.active && (state.active === CODEX_LIVE_PERSONA || state.personas[state.active])
+				? state.active
+				: DEFAULT_LIVE_PERSONA;
+		const codex = codexDefinition(state);
 		const customs = Object.entries(state.personas)
+			.filter(([name]) => name !== CODEX_LIVE_PERSONA)
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([name, definition]) => ({
 				name,
@@ -181,6 +228,14 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 					active: active === DEFAULT_LIVE_PERSONA,
 					builtin: true,
 					ingest: normalizeLiveIngestSettings(state.defaultIngest),
+				},
+				{
+					...codex,
+					name: CODEX_LIVE_PERSONA,
+					active: active === CODEX_LIVE_PERSONA,
+					builtin: true,
+					editableBuiltin: true,
+					ingest: codexLiveIngest(codex.ingest),
 				},
 				...customs,
 			],
@@ -210,6 +265,7 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 		async clone(source, name) {
 			validName(name);
 			assertMutable(name);
+			if (name === CODEX_LIVE_PERSONA) throw new Error("Codex is a reserved live persona");
 			const state = await store.read();
 			if (state.personas[name]) throw new Error(`Live persona already exists: ${name}`);
 			state.personas[name] = {
@@ -217,7 +273,9 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 				ingest:
 					source === DEFAULT_LIVE_PERSONA
 						? state.defaultIngest && normalizeLiveIngestSettings(state.defaultIngest)
-						: state.personas[source]?.ingest && normalizeLiveIngestSettings(state.personas[source]?.ingest),
+						: source === CODEX_LIVE_PERSONA
+							? codexLiveIngest(codexDefinition(state).ingest)
+							: state.personas[source]?.ingest && normalizeLiveIngestSettings(state.personas[source]?.ingest),
 			};
 			await store.write(state);
 			notifyLivePersonaStateChanged();
@@ -227,14 +285,16 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 			validName(name);
 			assertMutable(name);
 			const state = await store.read();
-			if (!state.personas[name]) throw new Error(`Unknown live persona: ${name}`);
+			if (name !== CODEX_LIVE_PERSONA && !state.personas[name]) throw new Error(`Unknown live persona: ${name}`);
 			if (!instructions.trim()) throw new Error("live persona instructions are empty");
-			state.personas[name] = { ...state.personas[name], instructions };
+			if (name === CODEX_LIVE_PERSONA) state.codex = { ...codexDefinition(state), instructions };
+			else state.personas[name] = { ...state.personas[name], instructions };
 			await store.write(state);
 			notifyLivePersonaStateChanged();
 			return `Updated live persona '${name}'.`;
 		},
 		async delete(name) {
+			if (name === CODEX_LIVE_PERSONA) throw new Error("Codex is a permanent live persona");
 			assertMutable(name);
 			const state = await store.read();
 			if (!state.personas[name]) throw new Error(`Unknown live persona: ${name}`);
@@ -244,16 +304,22 @@ export function createLivePersonaFeature(store: LivePersonaStore = new LivePerso
 			notifyLivePersonaStateChanged();
 			return `Deleted live persona '${name}'.`;
 		},
-		async saveAll(personas, active, defaultIngest) {
+		async saveAll(personas, active, defaultIngest, codex) {
 			for (const [name, definition] of Object.entries(personas)) {
 				validName(name);
 				assertMutable(name);
+				if (name === CODEX_LIVE_PERSONA) throw new Error("Codex is a reserved live persona");
 				if (!definition.instructions.trim()) throw new Error(`${name}: live persona instructions are empty`);
 			}
 			const selected = active === DEFAULT_LIVE_PERSONA ? undefined : active;
-			if (selected !== undefined && !personas[selected]) throw new Error(`Unknown live persona: ${selected}`);
+			if (selected !== undefined && selected !== CODEX_LIVE_PERSONA && !personas[selected])
+				throw new Error(`Unknown live persona: ${selected}`);
 			const state = await store.read();
 			state.personas = personas;
+			if (codex) {
+				if (!codex.instructions.trim()) throw new Error("Codex live persona instructions are empty");
+				state.codex = codex;
+			}
 			if (selected === undefined) delete state.active;
 			else state.active = selected;
 			if (defaultIngest === undefined) delete state.defaultIngest;
@@ -290,6 +356,7 @@ export async function resolveLiveInstructions(statePath?: string, cwd?: string):
 		return resolvePromptAsset("live/live-instructions.md", liveInstructionsTemplate, { cwd }).text;
 	}
 	const active = state.active;
+	if (active === CODEX_LIVE_PERSONA) return codexDefinition(state).instructions;
 	if (!active || active === DEFAULT_LIVE_PERSONA) {
 		return resolvePromptAsset("live/live-instructions.md", liveInstructionsTemplate, { cwd }).text;
 	}

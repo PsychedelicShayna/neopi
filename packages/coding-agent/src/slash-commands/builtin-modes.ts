@@ -627,10 +627,14 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description:
 			"Toggle fast service (OpenAI service_tier=priority or ultrafast, Anthropic speed=fast, Google priority)",
 		acpDescription: "Toggle fast mode",
-		acpInputHint: "[on|ultra|off|status]",
+		acpInputHint: "[on|ultra|off|status|force fast|force ultra]",
 		subcommands: [
 			{ name: "on", description: "Enable fast mode (priority tier)" },
 			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex and relay models that offer it)" },
+			{
+				name: "force",
+				description: "Send a tier for the current OpenAI-compatible model: force fast or force ultra",
+			},
 			{ name: "off", description: "Disable fast mode" },
 			{ name: "status", description: "Show fast mode status" },
 			{ name: "toggle", description: "Toggle fast mode" },

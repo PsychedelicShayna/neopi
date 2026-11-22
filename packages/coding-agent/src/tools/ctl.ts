@@ -8,10 +8,11 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ctlDescription from "../prompts/tools/ctl.md" with { type: "text" };
 import { ctlList, ctlRpc, ctlSend, ctlState, withCtlCaller, withCtlIo } from "../cli/ctl-cli";
+import { currentControlCaller } from "../control/host";
 
 const ctlSchema = type({
 	op: type(
-		"'list' | 'state' | 'send' | 'steer' | 'follow_up' | 'abort' | 'slash' | 'action' | 'keys' | 'dialogs' | 'dialog_answer' | 'settings' | 'rpc'",
+		"'list' | 'state' | 'send' | 'input' | 'steer' | 'follow_up' | 'abort' | 'esc' | 'slash' | 'action' | 'keys' | 'dialogs' | 'dialog_answer' | 'settings' | 'rpc'",
 	),
 	"target?": "string",
 	"text?": "string",
@@ -30,21 +31,23 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 	}
 	readonly parameters = ctlSchema;
 
-	async execute(_toolCallId: string, raw: typeof ctlSchema.infer): Promise<AgentToolResult<undefined>> {
-		const params = raw as unknown as {
-			op: string;
-			target?: string;
-			text?: string;
-			rpcType?: string;
-			actionId?: string;
-			dialogId?: string;
-			answer?: unknown;
-			params?: Record<string, unknown>;
-		};
+	constructor(private readonly getSessionId?: () => string | null) {}
+
+	async execute(
+		_toolCallId: string,
+		raw: typeof ctlSchema.infer,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<undefined>> {
+		signal?.throwIfAborted();
+		const params = { ...raw, target: raw.target ?? "self" };
 		const sendMode =
-			params.op === "slash" || params.op === "steer" || params.op === "follow_up" ? params.op : "prompt";
+			params.op === "input" || params.op === "slash" || params.op === "steer" || params.op === "follow_up"
+				? params.op
+				: "prompt";
 		const chunks: string[] = [];
-		await withCtlCaller(() =>
+		const sessionId = this.getSessionId?.();
+		const caller = sessionId ? currentControlCaller(sessionId) : null;
+		await withCtlCaller(caller, () =>
 			withCtlIo(
 				{
 					stdout: text => chunks.push(text),
@@ -52,31 +55,33 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 				},
 				async () => {
 					if (params.op === "list") {
-						await ctlList(true);
-						return;
-					}
-					if (!params.target) {
-						chunks.push("target is required\n");
+						await ctlList(true, signal);
 						return;
 					}
 					if (params.op === "state") {
-						await ctlState(params.target, true);
+						await ctlState(params.target, true, signal);
 						return;
 					}
-					if (params.op === "abort") {
-						await ctlRpc(params.target, "abort", {}, true);
+					if (params.op === "abort" || params.op === "esc") {
+						await ctlRpc(params.target, params.op, {}, true, signal);
 						return;
 					}
 					if (params.op === "action") {
-						await ctlRpc(params.target, "action", { actionId: params.actionId ?? params.text ?? "" }, true);
+						await ctlRpc(
+							params.target,
+							"action",
+							{ actionId: params.actionId ?? params.text ?? "" },
+							true,
+							signal,
+						);
 						return;
 					}
 					if (params.op === "keys") {
-						await ctlRpc(params.target, "keys", { keys: [{ key: params.text ?? "" }] }, true);
+						await ctlRpc(params.target, "keys", { keys: [{ key: params.text ?? "" }] }, true, signal);
 						return;
 					}
 					if (params.op === "dialogs") {
-						await ctlRpc(params.target, "dialogs", {}, true);
+						await ctlRpc(params.target, "dialogs", {}, true, signal);
 						return;
 					}
 					if (params.op === "dialog_answer") {
@@ -85,18 +90,25 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 							"dialog_answer",
 							{ dialogId: params.dialogId ?? "", answer: params.answer },
 							true,
+							signal,
 						);
 						return;
 					}
 					if (params.op === "settings") {
-						await ctlRpc(params.target, "settings_get", { path: params.text }, true);
+						await ctlRpc(params.target, "settings_get", { path: params.text }, true, signal);
 						return;
 					}
 					if (params.op === "rpc") {
-						await ctlRpc(params.target, params.rpcType ?? "get_state", params.params ?? {}, true);
+						await ctlRpc(
+							params.target,
+							params.rpcType ?? "get_state",
+							(params.params ?? {}) as Record<string, unknown>,
+							true,
+							signal,
+						);
 						return;
 					}
-					await ctlSend(params.target, params.text ?? "", sendMode, true);
+					await ctlSend(params.target, params.text ?? "", sendMode, true, signal);
 				},
 			),
 		);

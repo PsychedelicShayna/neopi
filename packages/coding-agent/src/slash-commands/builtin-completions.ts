@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { provenanceSuffix } from "@oh-my-pi/pi-tui/theme/provenance";
 import { getMCPConfigPath, getProjectDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { readMCPConfigFile } from "../mcp/config-writer";
 import { collectMcpServerNames } from "../modes/controllers/mcp-command-controller";
@@ -10,6 +11,7 @@ import { replaceTabs } from "@oh-my-pi/pi-tui/render/render-utils";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { encodeLocalPath } from "../modes/local-file-editor";
 import { getConfiguredThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
+import type { AgentSession } from "../session/agent-session";
 import { expandTilde } from "../tools/path-utils";
 import { parseCommandArgs, splitCommandCompletionArgs } from "../utils/command-args";
 import type { ArgumentValueProvider, SubcommandDef, TuiSlashCommandRuntime } from "./types";
@@ -80,7 +82,7 @@ export function completeCurrentArgument(
 export function buildArgumentCompletions(
 	subcommands: readonly SubcommandDef[],
 	options: SubcommandCompletionOptions = {},
-): (prefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null> {
+): (prefix: string, session?: AgentSession) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null> {
 	// Match the longest complete verb before looking at the argument tail.
 	// Nested verbs must win over a shorter verb sharing the same first word.
 	const byLength = [...subcommands]
@@ -89,7 +91,7 @@ export function buildArgumentCompletions(
 			sub,
 			verb: new RegExp(`^${sub.name.split(" ").map(RegExp.escape).join("[ \\t]+")}[ \\t]+`, "i"),
 		}));
-	return argumentPrefix => {
+	return (argumentPrefix, session) => {
 		const trimmed = argumentPrefix.trimStart();
 		const leading = argumentPrefix.slice(0, argumentPrefix.length - trimmed.length);
 		for (const { sub, verb } of byLength) {
@@ -107,7 +109,7 @@ export function buildArgumentCompletions(
 						}))
 					: null;
 			const items = sub.getArgumentCompletions
-				? sub.getArgumentCompletions(tail, options.runtime)
+				? sub.getArgumentCompletions(tail, options.runtime, options.runtime?.ctx.session ?? session)
 				: completeArguments(tail, options.runtime, ...(sub.arguments ?? []));
 			return items instanceof Promise ? items.then(insert) : insert(items);
 		}
@@ -116,7 +118,7 @@ export function buildArgumentCompletions(
 			.filter(sub => sub.name.startsWith(lower))
 			.map(sub => ({
 				value: `${leading}${sub.name} `,
-				label: sub.name,
+				label: sub.name + (options.runtime ? provenanceSuffix(sub.provenance) : ""),
 				description: sub.description,
 				hint: subcommandRemainderHint(sub, lower),
 				submitsCommand: sub.usage === undefined,

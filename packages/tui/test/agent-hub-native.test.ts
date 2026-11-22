@@ -52,7 +52,7 @@ function createHub(
 	agents: AgentRecordLike[],
 	focused: string[] = [],
 	observers = new SessionObserverRegistry(),
-	options: Partial<Pick<AgentHubDeps, "ui" | "onDone" | "inSession">> = {},
+	options: Pick<Partial<AgentHubDeps>, "ui" | "onDone" | "inSession" | "advisorRestart" | "remote"> = {},
 ): AgentHubOverlayComponent {
 	return new AgentHubOverlayComponent({
 		observers,
@@ -126,6 +126,74 @@ test("picker select and the Open transcript action take Enter's path on the chos
 		expect(focused).toEqual(["beta"]);
 		hub.handleNativeEvent({ type: "activate", key: "", item: "gamma" });
 		expect(focused).toEqual(["beta", "gamma"]);
+	} finally {
+		hub.dispose();
+	}
+});
+
+test("the roster restarts only the selected live advisor and keeps its transcript read-only", () => {
+	const primary = agent("Main/advisor", 3_000, { kind: "advisor" });
+	const nested = agent("worker/advisor:critic", 2_000, { kind: "advisor", parentId: "worker" });
+	const parked = agent("worker/advisor:old", 1_000, { kind: "advisor", status: "parked" });
+	const restarted: string[] = [];
+	let restartSucceeds = true;
+	const hub = createHub([primary, nested, parked], [], undefined, {
+		advisorRestart: ref => () => {
+			restarted.push(ref.id);
+			return restartSucceeds;
+		},
+	});
+	const restartAction = () => pickerProps(hub).actions?.find(action => action.id === "restart-advisor");
+	try {
+		expect(hub.nativeSheet(pickerCx)).toBe(true);
+		hub.handleNativeEvent({ type: "select", key: "", item: nested.id });
+		expect(restartAction()).toMatchObject({ label: "Restart advisor", keys: ["shift+r"] });
+		expect(restartAction()?.disabled).toBeUndefined();
+		for (const id of ["revive", "kill"]) {
+			expect(pickerProps(hub).actions?.find(action => action.id === id)?.disabled).toBe("Read-only transcript");
+		}
+		hub.handleInput("?");
+		expect(hub.render(120).join("\n")).toContain("Shift+R: restart the selected live local advisor");
+		hub.handleInput("\x1b");
+		expect(hub.render(120).join("\n")).toContain("restart advisor");
+
+		hub.handleInput("r");
+		hub.handleInput("x");
+		expect(restarted).toEqual([]);
+		hub.handleInput("R");
+		expect(restarted).toEqual([nested.id]);
+		expect(hub.render(120).join("\n")).toContain(`Restarted ${nested.id}.`);
+		expect(pickerProps(hub).selected).toBe(nested.id);
+
+		restartSucceeds = false;
+		hub.handleNativeEvent({ type: "action", key: "", act: "restart-advisor", mods: [] });
+		expect(restarted).toEqual([nested.id, nested.id]);
+		expect(hub.render(120).join("\n")).toContain(`Could not restart ${nested.id} right now.`);
+
+		hub.handleNativeEvent({ type: "select", key: "", item: parked.id });
+		expect(restartAction()?.disabled).toBeTruthy();
+		hub.handleInput("R");
+		hub.handleNativeEvent({ type: "action", key: "", act: "restart-advisor", mods: [] });
+		expect(restarted).toEqual([nested.id, nested.id]);
+		expect(hub.render(120).join("\n")).toContain("Select a live local advisor to restart.");
+	} finally {
+		hub.dispose();
+	}
+});
+
+test("a collab guest cannot restart a mirrored advisor even with an injected action and a local match", () => {
+	const advisor = agent("Main/advisor", 1_000, { kind: "advisor" });
+	const restart = vi.fn(() => true);
+	const hub = createHub([advisor], [], undefined, {
+		advisorRestart: () => restart,
+		remote: { chat: () => {}, kill: () => {}, revive: () => {}, readTranscript: async () => null },
+	});
+	try {
+		expect(hub.nativeSheet(pickerCx)).toBe(true);
+		expect(pickerProps(hub).actions?.some(action => action.id === "restart-advisor")).toBe(false);
+		hub.handleInput("R");
+		hub.handleNativeEvent({ type: "action", key: "", act: "restart-advisor", mods: [] });
+		expect(restart).not.toHaveBeenCalled();
 	} finally {
 		hub.dispose();
 	}

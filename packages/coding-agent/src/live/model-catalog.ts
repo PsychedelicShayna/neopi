@@ -112,6 +112,7 @@ export class LiveModelCatalogLoader {
 	#now: () => number;
 	#onChange?: (previous: CatalogSnapshot, current: CatalogSnapshot) => void;
 	#onWarning: (message: string) => void;
+	#lastWarning: string | undefined;
 	#path: string | undefined;
 	#statKey: { mtimeMs: number; size: number } | undefined;
 	#catalog: ModelCatalog | undefined;
@@ -162,6 +163,7 @@ export class LiveModelCatalogLoader {
 		if (expanded === this.#path) return this.refresh();
 		const previous = this.snapshot;
 		this.#path = expanded;
+		this.#lastWarning = undefined;
 		this.#generation++;
 		this.#sequence++;
 		this.#statKey = undefined;
@@ -194,6 +196,7 @@ export class LiveModelCatalogLoader {
 				if (!current()) return;
 				const catalog = parseModelCatalog(text);
 				if (!current()) return;
+				this.#lastWarning = undefined;
 				const previous = this.snapshot;
 				this.#catalog = catalog;
 				this.#statKey = { mtimeMs: statKey.mtimeMs, size: statKey.size };
@@ -210,7 +213,11 @@ export class LiveModelCatalogLoader {
 					this.#revision++;
 					this.#onChange?.(previous, this.snapshot);
 				}
-				this.#onWarning(`Live ingest: model catalog unavailable at ${path}: ${String(error)}`);
+				const warning = `Live ingest: model catalog unavailable at ${path}: ${String(error)}`;
+				if (warning !== this.#lastWarning) {
+					this.#lastWarning = warning;
+					this.#onWarning(warning);
+				}
 			}
 		};
 		const pending = work();

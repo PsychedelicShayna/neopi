@@ -2,7 +2,7 @@
  * `get_command_completions` gives hosts without a terminal the argument completions the TUI offers where
  * they need no terminal state.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -73,6 +73,28 @@ describe("get_command_completions", () => {
 		const sounds = await complete("/sounds", "st");
 		expect(sounds).toEqual([expect.objectContaining({ value: "status ", label: "status", submitsCommand: true })]);
 		expect((await complete("sounds", "")).map(item => item.label)).toEqual(["on", "off", "reload", "status"]);
+	});
+
+	test("discovers the advisor restart verb and completes targets from the addressed live session", async () => {
+		expect(await complete("/advisor", "rest")).toEqual([
+			expect.objectContaining({ label: "restart", value: "restart " }),
+		]);
+		expect(await complete("advisor", "restart ")).toEqual([]);
+		const roster = spyOn(session, "liveAdvisors").mockReturnValue([
+			{
+				slug: "review-2",
+				name: "Code Review",
+				agent: session.agent,
+				transcriptFile: undefined,
+			},
+		]);
+		try {
+			expect(await complete("advisor", "restart code re")).toEqual([
+				expect.objectContaining({ value: "restart review-2 ", description: "Code Review", submitsCommand: true }),
+			]);
+		} finally {
+			roster.mockRestore();
+		}
 	});
 
 	test("is empty for a command with no completions, an unknown command, or a prefix past the first argument", async () => {

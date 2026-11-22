@@ -8,6 +8,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { runFastCommand } from "@oh-my-pi/pi-coding-agent/session/fast-command";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { withOfficialAnthropicEndpoint } from "./helpers/anthropic-endpoint";
@@ -58,6 +59,46 @@ describe("/fast targets the current model's service-tier family", () => {
 		session.subscribe(() => {});
 		return session;
 	}
+
+	it("sends an explicitly forced tier for an unadvertised relay and clears it with /fast off", async () => {
+		const requests: unknown[] = [];
+		using server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const body = (await request.json()) as { service_tier?: unknown };
+				requests.push(body.service_tier);
+				return Response.json({ error: { message: "verification endpoint" } }, { status: 400 });
+			},
+		});
+		const model = buildModel({
+			id: "codex/gpt-example",
+			name: "Opaque relay selector",
+			api: "openai-completions",
+			provider: "neoproxy",
+			baseUrl: new URL("/v1", server.url).href,
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 10_000,
+			maxTokens: 1_000,
+		});
+		const session = await createSessionForModel(model);
+		const send = async (requestModel = model) => {
+			const stream = await session.agent.streamFn(requestModel, { messages: [] }, { apiKey: "token" });
+			await stream.result();
+		};
+		expect(runFastCommand("ultra", session)?.success).toBe(false);
+		expect(runFastCommand("force ultra", session)?.success).toBe(true);
+		expect(runFastCommand("status", session)?.message).toBe("Fast mode is forced ultra.");
+		await send();
+		await send({ ...model, id: "codex/other-model" });
+		expect(runFastCommand("force fast", session)?.success).toBe(true);
+		await send();
+		expect(runFastCommand("off", session)?.success).toBe(true);
+		await send();
+		expect(requests).toEqual(["ultrafast", undefined, "priority", undefined]);
+	});
 
 	it("enables priority on the Anthropic family for a Claude model", async () => {
 		const session = await createSession("anthropic", "claude-sonnet-4-5");

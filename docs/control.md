@@ -16,6 +16,11 @@ npi ctl %3 rpc set_subagent_thinking_level '{"subagentId":"Worker","level":"high
 npi ctl %3 rpc set_subagent_fast '{"subagentId":"Worker","enabled":true}'
 ```
 
+`npi ctl <target> state` shows the current model as `provider/id`, effort, fast
+mode (`off`, `on (inactive)`, or `active`), session name and transcript file.
+With `--json`, those fields are under `session`. In the [ctl tool](./tools/ctl.md),
+omit the target or pass `self` to read or change your own session.
+
 Read `state` before a write. Pass `if` revisions on draft and surface commands. A stale revision is `conflict` and the pane shows `⌁ <label> backed off`. Retry only after re-reading state. Do not use `tmux send-keys` on npi panes.
 
 `app.suspend`, `app.exit` (which would close the socket before replying), external `$EDITOR`, and `/todo edit` are exempt and return an explicit `exempt_*` error. `app.clear` clears the composer without entering the human Ctrl-C double-press shutdown path. Everything else a human can do from the keyboard is reachable by `input`, `keys`, `action`, or a structured twin (`set_model`, `settings_set`, `dialog_answer`).

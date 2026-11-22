@@ -24,6 +24,7 @@ import { RpcSessionEventForwarder } from "../../src/modes/rpc/rpc-session-events
 import { RpcHostToolBridge } from "../../src/modes/rpc/host-tools";
 import type { RpcProjectedSessionEventFrame } from "../../src/modes/rpc/rpc-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -31,13 +32,14 @@ import { ctlList, ctlState, withCtlCaller, withCtlIo } from "../../src/cli/ctl-c
 import { runAsControlCommand } from "../../src/control/actor";
 import { ControlClient } from "../../src/control/client";
 import type { ControlPresenter } from "../../src/control/presenter";
-import { ControlHost } from "../../src/control/host";
+import { ControlHost, currentControlCaller } from "../../src/control/host";
 import { type ControlMetadata, readControlEntries } from "../../src/control/registry";
 import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
 import type { CustomMessage } from "../../src/session/messages";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
+import { CtlTool } from "../../src/tools/ctl";
 import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
@@ -1289,13 +1291,261 @@ describe("control host", () => {
 		expect(seen.injected).toHaveLength(1);
 	});
 
+	test("ctl state and transcript RPCs report the target without shelling out", async () => {
+		const manager = SessionManager.create(tempDir.path(), tempDir.join("ctl-state-journal"));
+		await manager.ensureOnDisk();
+		session = createSession({}, manager);
+		await session.setSessionName("Named target", "user");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await session.setModelTemporary(model, ThinkingLevel.Low);
+		session.agent.appendMessage({
+			...makeAssistantMessage(),
+			content: [{ type: "text", text: "Latest visible reply" }],
+		});
+		dir = tempDir.join("ctl-state-registry");
+		host = new ControlHost({ session, role: "rpc", dir });
+		await host.start();
+
+		const previous = process.env.PI_CONTROL_DIR;
+		process.env.PI_CONTROL_DIR = dir;
+		try {
+			const target = host.instanceId;
+			const tool = new CtlTool(() => "a different session");
+			const state = await tool.execute("state", { op: "state", target });
+			expect(JSON.parse(state.content[0]!.type === "text" ? state.content[0]!.text : "")).toMatchObject({
+				session: {
+					model: { provider: model.provider, id: model.id },
+					thinkingLevel: ThinkingLevel.Low,
+					fastModeEnabled: false,
+					fastModeActive: false,
+					sessionName: "Named target",
+					sessionFile: manager.getSessionFile(),
+				},
+			});
+			const reply = await tool.execute("last", { op: "rpc", target, rpcType: "get_last_assistant_text" });
+			expect(JSON.parse(reply.content[0]!.type === "text" ? reply.content[0]!.text : "")).toMatchObject({
+				success: true,
+				data: { text: "Latest visible reply" },
+			});
+			const lines: string[] = [];
+			await withCtlIo({ stdout: line => lines.push(line), stderr: () => {} }, () => ctlState(target, false));
+			expect(lines.join("")).toContain(`model=${model.provider}/${model.id}  effort=low  fast=off`);
+			expect(lines.join("")).toContain(`sessionName="Named target"\nsessionFile=${manager.getSessionFile()}\n`);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CONTROL_DIR;
+			else process.env.PI_CONTROL_DIR = previous;
+		}
+	});
+
+	test("ctl self reads and changes the caller's own state even in a controlled turn", async () => {
+		const { host } = await start();
+		const caller = session!;
+		const tool = new CtlTool(() => caller.sessionId);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await runAsControlCommand(
+			{
+				connectionId: "upstream",
+				label: "upstream",
+				hostInstanceId: host.instanceId,
+				controlChain: ["upstream-instance"],
+				humanAtAdmission: 0,
+				humanNow: () => 0,
+			},
+			async () => {
+				const execute = async (args: Parameters<CtlTool["execute"]>[1]) => {
+					const { content } = await tool.execute("self", args);
+					return JSON.parse(content[0]!.type === "text" ? content[0]!.text : "");
+				};
+				expect(await execute({ op: "state" })).toMatchObject({ session: { sessionId: caller.sessionId } });
+				expect(
+					await execute({
+						op: "rpc",
+						target: "self",
+						rpcType: "set_model",
+						params: { provider: model.provider, modelId: model.id },
+					}),
+				).toMatchObject({ success: true });
+				expect(
+					await execute({
+						op: "rpc",
+						rpcType: "set_thinking_level",
+						params: { level: ThinkingLevel.High },
+					}),
+				).toMatchObject({ success: true });
+				expect(await execute({ op: "state", target: "self" })).toMatchObject({
+					session: { model: { provider: model.provider, id: model.id }, thinkingLevel: ThinkingLevel.High },
+				});
+			},
+		);
+
+		const unpublished = new CtlTool(() => "unpublished-session");
+		await expect(unpublished.execute("unpublished", { op: "state" })).rejects.toMatchObject({
+			code: "no_caller",
+		});
+	});
+
+	test.each(["default target", "raw RPC"] as const)("ctl self abort unwinds its own turn (%s)", async mode => {
+		const { host } = await start();
+		const caller = session!;
+		const model = caller.model;
+		if (!model || !isMockModel(model)) throw new Error("Expected scripted model");
+		const ctl = new CtlTool(() => caller.sessionId);
+		const toolFinished = Promise.withResolvers<string>();
+		const releaseTool = Promise.withResolvers<void>();
+		model.push({ content: [{ type: "toolCall", id: "stop-self", name: "stop_self", arguments: {} }] });
+		caller.agent.setTools([
+			{
+				name: "stop_self",
+				label: "Stop self",
+				description: "Abort the running turn through ctl",
+				parameters: { type: "object", properties: {} },
+				execute: async (_id, _params, signal) => {
+					try {
+						const result = await ctl.execute(
+							"abort",
+							mode === "raw RPC" ? { op: "rpc", target: "self", rpcType: "abort" } : { op: "abort" },
+							signal,
+						);
+						const content = result.content[0];
+						toolFinished.resolve(content?.type === "text" ? content.text : "");
+						// Keep the turn alive until the actual abort arrives, without deadlocking teardown on failure.
+						await untilAborted(signal, releaseTool.promise);
+						return result;
+					} catch (error) {
+						toolFinished.reject(error);
+						throw error;
+					}
+				},
+			},
+		]);
+		const turn = caller.prompt("Abort this turn");
+		try {
+			const receipt = await untilAborted(AbortSignal.timeout(2_000), toolFinished.promise);
+			expect(JSON.parse(receipt)).toMatchObject({ command: "abort", data: { dispatched: true } });
+			await untilAborted(AbortSignal.timeout(2_000), caller.agent.waitForIdle());
+			expect(caller.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+		} catch (error) {
+			await host.close();
+			throw error;
+		} finally {
+			releaseTool.resolve();
+			await turn;
+		}
+	});
+
+	test.each(["input", "slash"] as const)("ctl self %s does not wait for the TUI to finish submitting", async op => {
+		const { host } = await start({}, { role: "tui" });
+		const ctl = new CtlTool(() => session!.sessionId);
+		const submitted = Promise.withResolvers<string>();
+		const release = Promise.withResolvers<void>();
+		const { presenter } = stubPresenter({ approvalOpen: false });
+		host.presenter = {
+			...presenter,
+			async submit(text) {
+				submitted.resolve(text);
+				await release.promise;
+				return { delivery: "started" };
+			},
+		};
+		try {
+			const result = await ctl.execute("submit", { op, text: "/test" }, AbortSignal.timeout(2_000));
+			const content = result.content[0];
+			expect(JSON.parse(content?.type === "text" ? content.text : "")).toMatchObject({
+				command: op,
+				data: { dispatched: true },
+			});
+			expect(await untilAborted(AbortSignal.timeout(2_000), submitted.promise)).toBe("/test");
+		} finally {
+			release.resolve();
+		}
+	});
+
+	test.each([false, true])(
+		"ctl abort on another session respects completion and cancellation (cancel: %s)",
+		async cancel => {
+			const { host } = await start();
+			const target = session!;
+			const caller = createSession();
+			extraSessions.push(caller);
+			const callerHost = new ControlHost({ session: caller, role: "rpc", dir });
+			const ctl = new CtlTool(() => caller.sessionId);
+			const model = target.model;
+			if (!model || !isMockModel(model)) throw new Error("Expected scripted model");
+			const toolStarted = Promise.withResolvers<void>();
+			const abortArrived = Promise.withResolvers<void>();
+			const releaseTool = Promise.withResolvers<void>();
+			model.push({ content: [{ type: "toolCall", id: "hold", name: "hold_turn", arguments: {} }] });
+			target.agent.setTools([
+				{
+					name: "hold_turn",
+					label: "Hold turn",
+					description: "Hold the turn open while its abort reply is pending",
+					parameters: { type: "object", properties: {} },
+					execute: async (_id, _params, signal) => {
+						signal?.addEventListener("abort", () => abortArrived.resolve(), { once: true });
+						toolStarted.resolve();
+						await releaseTool.promise;
+						return { content: [] };
+					},
+				},
+			]);
+			const previous = process.env.PI_CONTROL_DIR;
+			process.env.PI_CONTROL_DIR = dir;
+			const controller = new AbortController();
+			const deadline = AbortSignal.timeout(2_000);
+			let turn: Promise<boolean> | undefined;
+			try {
+				await callerHost.start();
+				turn = target.prompt("Hold until aborted");
+				await untilAborted(deadline, toolStarted.promise);
+				let settled = false;
+				const result = ctl.execute("other-abort", { op: "abort", target: host.instanceId }, controller.signal);
+				void result.then(
+					() => {
+						settled = true;
+					},
+					() => {
+						settled = true;
+					},
+				);
+				await untilAborted(deadline, abortArrived.promise);
+				expect(settled).toBe(false);
+				if (cancel) {
+					controller.abort(new Error("stop waiting for the other session"));
+					await expect(untilAborted(deadline, result)).rejects.toThrow("stop waiting for the other session");
+					releaseTool.resolve();
+				} else {
+					releaseTool.resolve();
+					const content = (await untilAborted(deadline, result)).content[0];
+					expect(JSON.parse(content?.type === "text" ? content.text : "")).toMatchObject({
+						type: "response",
+						command: "abort",
+						success: true,
+					});
+				}
+				await untilAborted(deadline, target.agent.waitForIdle());
+				expect(target.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+			} finally {
+				controller.abort();
+				releaseTool.resolve();
+				await turn;
+				await callerHost.close();
+				if (previous === undefined) delete process.env.PI_CONTROL_DIR;
+				else process.env.PI_CONTROL_DIR = previous;
+			}
+		},
+	);
+
 	test("a ctl tool call stays bound to its caller while an overlapping call finishes", async () => {
 		const { host } = await start();
 		const previous = process.env.PI_CONTROL_DIR;
 		process.env.PI_CONTROL_DIR = dir;
 		try {
-			const quick = withCtlCaller(async () => {});
-			const slow = withCtlCaller(async () => {
+			const caller = currentControlCaller(session!.sessionId);
+			const quick = withCtlCaller(caller, async () => {});
+			const slow = withCtlCaller(caller, async () => {
 				await Bun.sleep(20);
 				return withCtlIo({ stdout: () => {}, stderr: () => {} }, () => ctlState(host.instanceId, true));
 			});
