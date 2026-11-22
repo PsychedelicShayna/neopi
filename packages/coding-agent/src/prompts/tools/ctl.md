@@ -8,6 +8,7 @@ Omit `target` or pass `"self"` for the calling session. For another session, use
 - Run a slash command with `op:"slash"` and `text`. Read settings with `op:"settings"` and an optional path in `text`; write with RPC `settings_set` (`path`, `value`, `scope`) or `settings_unset` (`path`, `scope`).
 
 Use `op:"rpc"` with `rpcType` and `params` for other control commands. Use `abort` to cancel work; `esc` navigates.
+For your own session, `abort`, `esc`, `input`, `slash`, and `send` report when the request is dispatched, not when it completes. This lets a command that needs the current turn to yield proceed without waiting on itself.
 `text` is the prompt, slash command, or settings path.
 `actionId` is a keybinding id (`app.model.select`, `tui.select.confirm`).
 `dialogId` plus `answer` settles the open dialog (`{index:0}`, a string, or `"cancel"`).

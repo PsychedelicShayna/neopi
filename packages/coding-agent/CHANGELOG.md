@@ -15,7 +15,7 @@
 
 ### Added
 
-- `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
+- `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - Start or stop `/live-transcript` to keep the live conversation together when Iris hands work to the main agent, without spoken reasoning or progress updates ([#816](https://github.com/PsychedelicShayna/neopi/issues/816)).
 - RPC hosts and terminal attachments can opt in to render an extension's entire form in one typed dialog ([#857](https://github.com/PsychedelicShayna/neopi/issues/857)).
 - Create named Model Variants in `/models`, choose their base model and per-model request settings, and use them in model selections and roles ([#759](https://github.com/PsychedelicShayna/neopi/issues/759)).

@@ -33,7 +33,12 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 
 	constructor(private readonly getSessionId?: () => string | null) {}
 
-	async execute(_toolCallId: string, raw: typeof ctlSchema.infer): Promise<AgentToolResult<undefined>> {
+	async execute(
+		_toolCallId: string,
+		raw: typeof ctlSchema.infer,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<undefined>> {
+		signal?.throwIfAborted();
 		const params = { ...raw, target: raw.target ?? "self" };
 		const sendMode =
 			params.op === "input" || params.op === "slash" || params.op === "steer" || params.op === "follow_up"
@@ -50,27 +55,33 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 				},
 				async () => {
 					if (params.op === "list") {
-						await ctlList(true);
+						await ctlList(true, signal);
 						return;
 					}
 					if (params.op === "state") {
-						await ctlState(params.target, true);
+						await ctlState(params.target, true, signal);
 						return;
 					}
 					if (params.op === "abort" || params.op === "esc") {
-						await ctlRpc(params.target, params.op, {}, true);
+						await ctlRpc(params.target, params.op, {}, true, signal);
 						return;
 					}
 					if (params.op === "action") {
-						await ctlRpc(params.target, "action", { actionId: params.actionId ?? params.text ?? "" }, true);
+						await ctlRpc(
+							params.target,
+							"action",
+							{ actionId: params.actionId ?? params.text ?? "" },
+							true,
+							signal,
+						);
 						return;
 					}
 					if (params.op === "keys") {
-						await ctlRpc(params.target, "keys", { keys: [{ key: params.text ?? "" }] }, true);
+						await ctlRpc(params.target, "keys", { keys: [{ key: params.text ?? "" }] }, true, signal);
 						return;
 					}
 					if (params.op === "dialogs") {
-						await ctlRpc(params.target, "dialogs", {}, true);
+						await ctlRpc(params.target, "dialogs", {}, true, signal);
 						return;
 					}
 					if (params.op === "dialog_answer") {
@@ -79,11 +90,12 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 							"dialog_answer",
 							{ dialogId: params.dialogId ?? "", answer: params.answer },
 							true,
+							signal,
 						);
 						return;
 					}
 					if (params.op === "settings") {
-						await ctlRpc(params.target, "settings_get", { path: params.text }, true);
+						await ctlRpc(params.target, "settings_get", { path: params.text }, true, signal);
 						return;
 					}
 					if (params.op === "rpc") {
@@ -92,10 +104,11 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 							params.rpcType ?? "get_state",
 							(params.params ?? {}) as Record<string, unknown>,
 							true,
+							signal,
 						);
 						return;
 					}
-					await ctlSend(params.target, params.text ?? "", sendMode, true);
+					await ctlSend(params.target, params.text ?? "", sendMode, true, signal);
 				},
 			),
 		);
