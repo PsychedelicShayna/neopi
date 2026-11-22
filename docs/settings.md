@@ -761,6 +761,8 @@ For the numeric sampling settings, a negative value (normally `-1`) means "use t
 | `personality`                    | string | `default` | A built-in (`default`, `friendly`, `pragmatic`, `none`) or a named custom personality. Built-in presets honor `<agent dir>/PERSONALITY.md`; `none` omits the block. See [system-prompt-customization](./system-prompt-customization.md). |
 | `customPersonalities` | record | `{}` | Named prompt text, merged across global, project and session scope. Manage entries in Settings → Model → Personality or with `/personality`. |
 
+For a relay that supports a tier but does not advertise it, `/fast force fast` sends `service_tier: "priority"` and `/fast force ultra` sends `service_tier: "ultrafast"`. The override applies only to the selected OpenAI-compatible model in the running session. `/fast off` clears it. The endpoint can still reject the requested tier.
+
 #### Role-scoped request settings
 
 Set `roleSettings.<role>` to a mapping of setting ids to values. Role names
@@ -1375,7 +1377,7 @@ searxng:
 | `stt.language`                      | string  | `en`      | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
 | `live.apiKey` | string | _(unset)_ | Bearer key sent only to `live.endpoint`: a literal, an environment variable name, or `!command`. Credential. |
-| `live.endpoint` | string | _(unset)_ | Base URL of an OpenAI Realtime WebRTC-compatible server (e.g. `http://127.0.0.1:8080/v1`) that runs live voice instead of Codex, without a Codex sign-in; see [Custom live endpoint](./rpc.md#custom-live-endpoint). Empty uses Codex. |
+| `live.endpoint` | string | _(unset)_ | Base URL of an OpenAI Realtime WebRTC-compatible server (e.g. `http://127.0.0.1:8080/v1`) that overrides automatic live routing. Empty prefers Codex sign-in, then an eligible scoped NeoProxy login; see [Custom live endpoint](./rpc.md#custom-live-endpoint). |
 | `live.voice` | string | `sol` | Voice of live voice sessions; Codex offers `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, `vale`, a custom `live.endpoint` takes its own names. |
 | `stt.wake.enabled` | boolean | `false` | Listen locally for "computer", chirp, record a complete request, then submit through the dictation role. Toggle under `/settings` → Interaction → Speech. Independent of manual `stt.enabled`; off never opens the wake microphone. |
 | `stt.wake.silenceMs` | number | `2000` | Silence ending a request, clamped to 200–30000 ms. |

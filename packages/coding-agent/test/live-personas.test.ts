@@ -7,6 +7,7 @@ import {
 	defaultLiveInstructions,
 	type LivePersonaFeature,
 	LivePersonaStore,
+	resolveCodexLivePersona,
 	resolveLiveInstructions,
 } from "@oh-my-pi/pi-coding-agent/live/personas";
 
@@ -23,6 +24,29 @@ describe("live personas", () => {
 
 	afterEach(async () => {
 		await fs.rm(dir, { recursive: true, force: true });
+	});
+
+	test("keeps a permanent editable Codex profile independent of the regular live selection", async () => {
+		const baseline = await resolveCodexLivePersona(statePath);
+		expect(baseline.instructions).toContain("You are Codex");
+		expect(baseline.model).toBe("gpt-live-1.1-codex");
+		expect((await personas.data()).active).toBe("default");
+		await personas.clone("default", "iris");
+		await personas.use("iris");
+		const data = await personas.data();
+		expect(data.items.find(item => item.name === "Codex")?.editableBuiltin).toBe(true);
+		await personas.saveAll({ iris: { instructions: "Regular live prompt" } }, "iris", undefined, {
+			instructions: "Edited Codex prompt",
+			model: "gpt-live-1-codex",
+			voice: "sol",
+		});
+		expect(await resolveLiveInstructions(statePath)).toBe("Regular live prompt");
+		expect(await resolveCodexLivePersona(statePath)).toEqual({
+			instructions: "Edited Codex prompt",
+			model: "gpt-live-1-codex",
+			voice: "sol",
+		});
+		await expect(personas.delete("Codex")).rejects.toThrow(/permanent/);
 	});
 
 	test("adopts legacy persona state without losing the selected instructions", async () => {

@@ -11,7 +11,13 @@ import {
 	liveIngestSourceFields,
 	type LiveIngestPersonaSettings,
 } from "../live/ingest-settings";
-import { createLivePersonaFeature, DEFAULT_LIVE_PERSONA, defaultLiveInstructions } from "../live/personas";
+import {
+	CODEX_LIVE_PERSONA,
+	createLivePersonaFeature,
+	DEFAULT_LIVE_PERSONA,
+	defaultLiveInstructions,
+	type LivePersonaDefinition,
+} from "../live/personas";
 import type { AgentSession } from "../session/agent-session";
 import {
 	type PersonaDefinition,
@@ -55,7 +61,11 @@ export async function personaNameItems(scope: PersonaScope, sessionId: string | 
 		const data = await liveFeature().data();
 		return data.items.map(item => ({
 			name: item.name,
-			description: item.builtin ? "built-in default" : firstLine(item.instructions),
+			description: item.editableBuiltin
+				? "default for /live-transcript"
+				: item.builtin
+					? "built-in default"
+					: firstLine(item.instructions),
 			active: item.active,
 		}));
 	}
@@ -154,6 +164,9 @@ export async function loadPersonaConfigDoc(scope: PersonaScope, sessionId: strin
 					name: item.name,
 					originalName: item.builtin ? undefined : item.name,
 					builtin: item.builtin || undefined,
+					editableBuiltin: item.editableBuiltin,
+					liveModel: item.model,
+					liveVoice: item.voice,
 					content: item.instructions,
 					sources: liveIngestSourceFields(item.ingest),
 					sourcesRaw: structuredClone(item.ingest),
@@ -189,12 +202,17 @@ export async function savePersonaConfigDoc(
 	if (scope === "live") {
 		const personas: Record<string, { instructions: string; ingest: LiveIngestPersonaSettings }> = {};
 		let defaultIngest: LiveIngestPersonaSettings | undefined;
+		let codex: LivePersonaDefinition | undefined;
 		for (const item of doc.entries) {
 			const ingest = liveIngestSettingsFromFields(item.sources, item.sourcesRaw);
-			if (item.builtin) defaultIngest = ingest;
+			if (item.name === CODEX_LIVE_PERSONA && item.editableBuiltin) {
+				codex = { instructions: item.content, ingest };
+				if (item.liveModel?.trim()) codex.model = item.liveModel.trim();
+				if (item.liveVoice?.trim()) codex.voice = item.liveVoice.trim();
+			} else if (item.builtin) defaultIngest = ingest;
 			else personas[item.name] = { instructions: item.content, ingest };
 		}
-		return liveFeature().saveAll(personas, doc.active, defaultIngest);
+		return liveFeature().saveAll(personas, doc.active, defaultIngest, codex);
 	}
 	const personas: Record<string, PersonaDefinition> = {};
 	const renames = new Map<string, string>();

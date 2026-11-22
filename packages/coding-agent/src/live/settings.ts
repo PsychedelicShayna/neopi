@@ -212,7 +212,7 @@ export const cfgLiveEndpoint = register({
 		group: "Services",
 		label: "Live Endpoint",
 		description:
-			"Base URL of an OpenAI Realtime WebRTC-compatible server (e.g. http://127.0.0.1:8080/v1) used for live voice instead of Codex; empty uses Codex",
+			"Overrides automatic live voice routing with an OpenAI Realtime WebRTC-compatible server; empty prefers Codex, then an eligible NeoProxy login",
 	},
 });
 

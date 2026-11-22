@@ -2178,6 +2178,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				}
 				const items = await getBuiltinCommandCompletions(command.command.replace(/^\//, ""), command.prefix, {
 					settings: session.settings,
+					session,
 				});
 				return success(id, command.type, { items });
 			}

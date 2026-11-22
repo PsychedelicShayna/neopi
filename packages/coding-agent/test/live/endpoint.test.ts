@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
-import type { AuthStorage } from "@oh-my-pi/pi-ai";
+import { X509Certificate } from "node:crypto";
+import type { AuthStorage, OAuthAccess } from "@oh-my-pi/pi-ai";
+import type { ApiKeyCredential } from "@oh-my-pi/pi-ai/auth-storage";
+import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
 import { OPENAI_HEADERS } from "@oh-my-pi/pi-catalog/wire/codex";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { LiveSessionController, type LiveSessionControllerOptions } from "@oh-my-pi/pi-coding-agent/live/controller";
-import { buildLiveSessionUpdate } from "@oh-my-pi/pi-coding-agent/live/protocol";
+import {
+	buildLiveSessionPayload,
+	buildLiveSessionUpdate,
+	DEFAULT_LIVE_MODEL,
+} from "@oh-my-pi/pi-coding-agent/live/protocol";
 import * as liveTransport from "@oh-my-pi/pi-coding-agent/live/transport";
 import {
 	buildLiveSidebandUrl,
@@ -16,6 +23,8 @@ import {
 	parseLiveEndpointCallId,
 	resolveLiveEndpoint,
 } from "@oh-my-pi/pi-coding-agent/live/transport";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { asGlobalFetch } from "../helpers/fetch-mock";
 
 /** Headers only Codex calls carry besides {@link OPENAI_HEADERS}; a custom endpoint must never see any. */
 const CODEX_ONLY_HEADERS = ["x-oai-attestation", "openai-alpha", "x-session-id"];
@@ -32,7 +41,7 @@ const noCodexLogin = {
 const callbacks = { onEvent: () => {}, onOutputLevel: () => {} };
 
 /** A local OpenAI Realtime WebRTC-shaped server recording what it receives. */
-function realtimeServer() {
+function realtimeServer(liveApiKey?: string) {
 	const calls: Request[] = [];
 	const offers: string[] = [];
 	const upgrades: Request[] = [];
@@ -43,14 +52,20 @@ function realtimeServer() {
 		port: 0,
 		async fetch(request, srv) {
 			const url = new URL(request.url);
+			if (liveApiKey && request.method === "GET" && url.pathname === "/v1/live") {
+				return Response.json({ available: request.headers.get("authorization") === `Bearer ${liveApiKey}` });
+			}
 			if (request.method === "POST" && url.pathname === "/v1/realtime/calls") {
 				calls.push(request);
 				offers.push(await request.text());
 				return new Response("v=0 answer", { status: 201, headers: { Location: "/v1/realtime/calls/rtc_local" } });
 			}
-			if (url.pathname === "/v1/realtime" && srv.upgrade(request)) {
-				upgrades.push(request);
-				return undefined;
+			if (url.pathname === "/v1/realtime") {
+				const snapshot = new Request(request.url, { headers: request.headers });
+				if (srv.upgrade(request)) {
+					upgrades.push(snapshot);
+					return undefined;
+				}
 			}
 			return new Response("not found", { status: 404 });
 		},
@@ -236,15 +251,217 @@ describe("live transport without an endpoint", () => {
 	});
 });
 
+describe("live transport on NeoProxy", () => {
+	async function configuredProxy(
+		temp: TempDir,
+		baseUrl: string,
+		keys: ApiKeyCredential[],
+		options: Partial<LiveTransportOptions> = {},
+	) {
+		const configFile = temp.join("models.yml");
+		await Bun.write(configFile, JSON.stringify({ providers: { neoproxy: { baseUrl, auth: "apiKey" } } }));
+		const access = vi.fn(async (): Promise<OAuthAccess | undefined> => undefined);
+		const list = vi.fn(() => keys.map(credential => ({ credential })));
+		const transport = new LiveTransport({
+			authStorage: { oauth: { access }, credentials: { list } } as unknown as AuthStorage,
+			modelRegistry: { getConfigFile: () => configFile },
+			sessionId: "s1",
+			instructions: "Be brief.",
+			voice: "sol",
+			model: DEFAULT_LIVE_MODEL,
+			sdpOffer: "v=0 offer",
+			callbacks,
+			...options,
+		});
+		return { transport, access, list };
+	}
+
+	test("probes only origin-bound keys and uses the same eligible key and CA for both call legs", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const tlsDir = new URL("../fixtures/neoproxy-tls/", import.meta.url);
+		const [ca, leaf, key] = await Promise.all([
+			Bun.file(new URL("ca.pem", tlsDir)).text(),
+			Bun.file(new URL("server.pem", tlsDir)).text(),
+			Bun.file(new URL("server-key.pem", tlsDir)).text(),
+		]);
+		const requests: Request[] = [];
+		let offer: unknown;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			tls: { cert: leaf + ca, key },
+			async fetch(request, srv) {
+				requests.push(request);
+				const { pathname } = new URL(request.url);
+				const eligible = request.headers.get("authorization") === "Bearer eligible";
+				if (pathname === "/gateway/v1/live") {
+					// A truthy non-boolean is not an eligibility grant.
+					return Response.json({ available: eligible ? true : "true" });
+				}
+				if (!eligible) return new Response(null, { status: 403 });
+				if (pathname === "/gateway/v1/realtime/calls") {
+					offer = await request.json();
+					// Location names the call; it must not choose a destination.
+					return new Response("v=0 answer", {
+						status: 201,
+						headers: { Location: "https://elsewhere.invalid/rtc_proxy" },
+					});
+				}
+				if (pathname === "/gateway/v1/realtime" && srv.upgrade(request)) return undefined;
+				return new Response(null, { status: 404 });
+			},
+			websocket: { message() {} },
+		});
+		const origin = `https://127.0.0.1:${server.port}`;
+		const tlsTrust = { origin, caPem: ca, caFingerprint256: new X509Certificate(ca).fingerprint256 };
+		const { transport, access } = await configuredProxy(temp, `${origin}/gateway/v1/`, [
+			{ type: "api_key", key: "wrong-origin", requestOrigin: "https://elsewhere.invalid", tlsTrust },
+			{ type: "api_key", key: "unbound" },
+			{ type: "api_key", key: "not-eligible", requestOrigin: origin, tlsTrust },
+			{ type: "api_key", key: "eligible", requestOrigin: origin, tlsTrust },
+		]);
+		try {
+			await transport.connect();
+			expect(access).toHaveBeenCalledTimes(1);
+			expect(transport.provider).toBe("neoproxy");
+			expect(transport.sdpAnswer).toBe("v=0 answer");
+			expect(offer).toEqual({
+				sdp: "v=0 offer",
+				session: buildLiveSessionPayload("Be brief.", "sol", DEFAULT_LIVE_MODEL),
+			});
+			const routes = requests.map(request => {
+				const url = new URL(request.url);
+				return [request.method, url.pathname + url.search, request.headers.get("authorization")];
+			});
+			expect(routes).toEqual([
+				["GET", "/gateway/v1/live", "Bearer not-eligible"],
+				["GET", "/gateway/v1/live", "Bearer eligible"],
+				["POST", "/gateway/v1/realtime/calls", "Bearer eligible"],
+				["GET", "/gateway/v1/realtime?call_id=rtc_proxy", "Bearer eligible"],
+			]);
+			for (const request of requests) expectNoCodexHeaders(request);
+		} finally {
+			await transport.close();
+			server.stop(true);
+		}
+	});
+
+	test("falls back to an eligible NeoProxy key when the Codex OAuth refresh is unavailable", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { server, calls, upgrades } = realtimeServer("eligible");
+		const origin = server.url.origin;
+		const { transport, access } = await configuredProxy(temp, `${origin}/v1`, [
+			{ type: "api_key", key: "eligible", requestOrigin: origin },
+		]);
+		access.mockRejectedValue(new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline")));
+		try {
+			await transport.connect();
+			expect(transport.provider).toBe("neoproxy");
+			expect(transport.sdpAnswer).toBe("v=0 answer");
+			expect(calls[0]?.headers.get("authorization")).toBe("Bearer eligible");
+			expect(upgrades[0]?.headers.get("authorization")).toBe("Bearer eligible");
+		} finally {
+			await transport.close();
+			server.stop(true);
+		}
+	});
+
+	test("preserves the Codex refresh error when no eligible NeoProxy key is available", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { transport, access, list } = await configuredProxy(temp, "http://127.0.0.1:1/v1", []);
+		const error = new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline"));
+		access.mockRejectedValue(error);
+		await expect(transport.connect()).rejects.toBe(error);
+		expect(list).toHaveBeenCalledWith("neoproxy");
+	});
+
+	test("aborts rather than falling back if cancellation coincides with a Codex refresh failure", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const origin = "http://127.0.0.1:1";
+		const abort = new AbortController();
+		const cancelled = new Error("Cancel live startup");
+		const { transport, access, list } = await configuredProxy(
+			temp,
+			`${origin}/v1`,
+			[{ type: "api_key", key: "eligible", requestOrigin: origin }],
+			{ signal: abort.signal },
+		);
+		access.mockImplementation(async () => {
+			abort.abort(cancelled);
+			throw new OAuthRefreshUnavailableError("openai-codex", new Error("refresh offline"));
+		});
+		await expect(transport.connect()).rejects.toBe(cancelled);
+		expect(list).not.toHaveBeenCalled();
+	});
+
+	test("propagates other Codex OAuth errors without probing NeoProxy", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const { transport, access, list } = await configuredProxy(temp, "http://127.0.0.1:1/v1", []);
+		const error = new Error("Cannot read Codex credentials");
+		access.mockRejectedValue(error);
+		await expect(transport.connect()).rejects.toBe(error);
+		expect(list).not.toHaveBeenCalled();
+	});
+
+	test("uses Codex first and never falls back after direct signaling begins", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(asGlobalFetch(() => new Response(null, { status: 418 })));
+		const { transport, access, list } = await configuredProxy(temp, "http://127.0.0.1:1/v1", []);
+		access.mockResolvedValue({ accessToken: "codex-oauth", accountId: "account" });
+		await expect(transport.connect()).rejects.toThrow(/Codex live signaling failed \(418\)/);
+		expect(transport.provider).toBe("openai-codex");
+		expect(list).not.toHaveBeenCalled();
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(new Headers(fetchSpy.mock.calls[0]![1]?.headers).get("authorization")).toBe("Bearer codex-oauth");
+	});
+
+	test("cancels an in-flight NeoProxy probe and does not try the next key", async () => {
+		using temp = TempDir.createSync("@neoproxy-live-");
+		const origin = "http://127.0.0.1:1";
+		const abort = new AbortController();
+		const entered = Promise.withResolvers<void>();
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch((_input, init) => {
+				const result = Promise.withResolvers<Response>();
+				init?.signal?.addEventListener("abort", () => result.reject(init.signal?.reason), { once: true });
+				entered.resolve();
+				return result.promise;
+			}),
+		);
+		const { transport, access } = await configuredProxy(
+			temp,
+			`${origin}/v1`,
+			["first", "second"].map(key => ({ type: "api_key", key, requestOrigin: origin })),
+			{ signal: abort.signal, canUseProvider: provider => provider === "neoproxy" },
+		);
+		const cancelled = new Error("Cancel live startup");
+		const settled = transport.connect().catch((error: unknown) => error);
+		try {
+			await Promise.race([entered.promise, settled]);
+			abort.abort(cancelled);
+			expect(await settled).toBe(cancelled);
+			expect(fetchSpy).toHaveBeenCalledTimes(1);
+			expect(access).not.toHaveBeenCalled();
+		} finally {
+			abort.abort();
+			await transport.close();
+		}
+	});
+});
+
 describe("live session offline mode", () => {
-	function controllerFor(settings: Settings): { controller: LiveSessionController; endpoints: unknown[] } {
+	function controllerFor(settings: Settings, provider = "anthropic") {
 		const endpoints: unknown[] = [];
+		const optionsSeen: LiveTransportOptions[] = [];
 		// bun's spyOn types a class export's implementation as `never`; a plain constructible function suffices.
 		const transportSpy = vi.spyOn(liveTransport, "LiveTransport") as unknown as {
 			mockImplementation(implementation: (options: LiveTransportOptions) => object): void;
 		};
 		transportSpy.mockImplementation(function (options: LiveTransportOptions) {
 			endpoints.push(options.endpoint);
+			optionsSeen.push(options);
 			return {
 				connect: async () => {},
 				setMuted: async () => {},
@@ -255,7 +472,7 @@ describe("live session offline mode", () => {
 		});
 		const session = {
 			modelRegistry: { authStorage: noCodexLogin },
-			model: { provider: "anthropic" },
+			model: { provider },
 			messages: [],
 			sessionManager: { getCwd: () => process.cwd() },
 			settings,
@@ -269,7 +486,7 @@ describe("live session offline mode", () => {
 			sdpOffer: "v=0 offer",
 			callbacks: { onPhase: () => {}, onLevels: () => {}, onTranscript: () => {}, onTerminal: () => {} },
 		});
-		return { controller, endpoints };
+		return { controller, endpoints, optionsSeen };
 	}
 
 	test("allows an explicitly configured live endpoint", async () => {
@@ -280,9 +497,20 @@ describe("live session offline mode", () => {
 		await controller.stop();
 	});
 
-	test("still requires the openai-codex provider without one", async () => {
+	test("rejects automatic routing outside the active provider in offline mode", async () => {
 		const { controller, endpoints } = controllerFor(Settings.isolated({ "models.offline": true }));
-		await expect(controller.start()).rejects.toThrow("openai-codex session provider or live.endpoint");
+		await expect(controller.start()).rejects.toThrow("openai-codex or neoproxy session provider");
 		expect(endpoints).toEqual([]);
+	});
+
+	test("allows automatic routing only through the active NeoProxy provider", async () => {
+		const { controller, optionsSeen } = controllerFor(Settings.isolated({ "models.offline": true }), "neoproxy");
+		await controller.start();
+		try {
+			expect(optionsSeen[0]?.canUseProvider?.("neoproxy")).toBe(true);
+			expect(optionsSeen[0]?.canUseProvider?.("openai-codex")).toBe(false);
+		} finally {
+			await controller.stop();
+		}
 	});
 });

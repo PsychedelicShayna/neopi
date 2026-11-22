@@ -160,11 +160,16 @@ Slash commands:
 | `/advisor on`        | Enable the configured/default advisor runtimes for this session. Session-scoped; not persisted to config.                             |
 | `/advisor off`       | Disable the advisor subsystem for this session and stop its runtimes. Session-scoped; not persisted to config.                        |
 | `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                       |
+| `/advisor restart [slug\|name]` | Restart one live advisor without losing its conversation. Omit the target only when exactly one advisor is live. |
 | `/advisor dump`      | In the TUI, copy the compact transcript (all active advisors when a roster is present) to the clipboard; other hosts return the text. |
 | `/advisor dump raw`  | Copy/return the full dump, including system prompt, tools, thinking, and calls.                                                      |
 | `/advisor configure` | List every discovered advisor file, then edit the selected file's advisors. Non-TUI command hosts report that the editor is TUI-only. |
 
 Enabling advisors (including a toggle to on) names the runtimes that started; paused and unresolved entries are not announced as running.
+
+To recover one advisor after a failure, run `/advisor restart [slug|name]` or select its live row and press `Shift+R` in the [Agent Hub roster](./agent-hub.md#roster-controls). Slash-command targets match the full slug or display name, case-insensitively. Tab offers live targets; a missing or ambiguous match does not restart anything.
+
+Restart creates a fresh runtime for that advisor, keeping its model-visible conversation and the state it needs to continue. It clears transient failures and re-attempts queued or unfinished reviews, but does not replay reviews the old runtime already dropped. The provider may still reuse its cache; a cache hit is not guaranteed. Other advisors and the saved configuration are unchanged.
 
 If the subsystem is enabled but no legacy/default or roster model resolves, status reports the configured advisors as inactive/`no_model`.
 

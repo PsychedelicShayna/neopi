@@ -20,7 +20,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { chipLabel, chipLabelKind, COMPOSER_TOKEN_REGEX } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { InteractiveModeContext } from "../types";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
-import { createLivePersonaFeature } from "../../live/personas";
+import { createLivePersonaFeature, type LivePersonaDefinition, resolveCodexLivePersona } from "../../live/personas";
 import type { RpcLiveStartOptions } from "../rpc/rpc-live";
 
 import {
@@ -137,11 +137,12 @@ export class LiveCommandController {
 			await this.stop();
 			return;
 		}
+		const codex = mode === "transcript" ? await resolveCodexLivePersona() : undefined;
 		while (this.#settling) await this.#settling;
 		// Another start may have claimed the slot while the previous session finished closing.
 		if (this.#session) return;
 		// A connect failure was already shown; anything else (factory, mounting) propagates.
-		await this.#start(resolveLiveVoice(this.#ctx.settings), undefined, mode);
+		await this.#start(codex?.voice || resolveLiveVoice(this.#ctx.settings), undefined, codex);
 	}
 
 	/**
@@ -297,10 +298,10 @@ export class LiveCommandController {
 	async #start(
 		voice: string = cfgLiveVoice.get(this.#ctx.settings),
 		remote?: ExtensionLiveStartOptions,
-		mode?: "transcript",
+		codex?: LivePersonaDefinition,
 	): Promise<LiveStartOutcome> {
 		if (this.#session) throw new Error("A live session is already active");
-		this.#model = cfgLiveModel.get(this.#ctx.settings);
+		this.#model = codex?.model || cfgLiveModel.get(this.#ctx.settings);
 		this.#assistantTranscriptTurn = 0;
 		this.#assistantTranscriptStartedAt = 0;
 		this.#destination = "primary";
@@ -311,11 +312,12 @@ export class LiveCommandController {
 		this.#assistantCaption = undefined;
 		this.#resumeVocalizer = vocalizer.suspend();
 
-		const settingsSource = new LiveIngestSettingsSource(LIVE_INGEST_DEFAULTS);
+		const settingsSource = new LiveIngestSettingsSource(LIVE_INGEST_DEFAULTS, undefined, codex !== undefined);
 		const ingestRef: { current?: LiveIngest } = {};
 		const options: LiveSessionControllerOptions = {
 			session: this.#ctx.session,
-			transcriptHandoffs: mode === "transcript",
+			transcriptHandoffs: codex !== undefined,
+			codexInstructions: codex?.instructions,
 			extractAssistantText: message => this.#ctx.extractAssistantText(message),
 			ircRelayTransform: (message, body) => ingestRef.current?.ircRelayTransform(message, body) ?? body,
 			ircRelayAllowed: message => {
@@ -375,8 +377,8 @@ export class LiveCommandController {
 			relayGates: () => {
 				const settings = settingsSource.get();
 				return {
-					reasoning: mode !== "transcript" && settings.relayReasoning,
-					progress: mode !== "transcript" && settings.relayProgress,
+					reasoning: codex === undefined && settings.relayReasoning,
+					progress: codex === undefined && settings.relayProgress,
 					finalAnswers: settings.relayFinalAnswers,
 				};
 			},
@@ -485,7 +487,7 @@ export class LiveCommandController {
 		try {
 			await settingsSource.refresh();
 			if (this.#session !== session) return { error: new Error("Live session stopped during startup") };
-			await this.#maybeNoticeProtocolLines(session);
+			if (!codex) await this.#maybeNoticeProtocolLines(session);
 			if (this.#session !== session) return { error: new Error("Live session stopped during startup") };
 			await session.start();
 			if (this.#session === session) ingest.attach();

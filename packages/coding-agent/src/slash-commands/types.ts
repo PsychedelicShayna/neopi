@@ -20,6 +20,7 @@ export type ArgumentValueProvider = (
 export interface SubcommandDef {
 	name: string;
 	description: string;
+	provenance?: EntryProvenance;
 	/** Usage hint shown as dim ghost text, e.g. "<name> [--scope project|user]". */
 	usage?: string;
 	/** Positional completion sources in usage order; use `null` for an open-text slot. */
@@ -28,6 +29,7 @@ export interface SubcommandDef {
 	getArgumentCompletions?: (
 		tail: string,
 		runtime?: TuiSlashCommandRuntime,
+		session?: AgentSession,
 	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 }
 
@@ -68,13 +70,13 @@ export interface BuiltinSlashCommand {
 	/** TUI inline hint replacing the declarative `subcommands` hint. */
 	getTuiInlineHint?: (argumentText: string) => string | null;
 	/**
-	 * Argument completion for hosts without a terminal (RPC `get_command_completions`), for commands whose
-	 * names come from settings. It takes precedence over the TUI completer; without it, headless hosts get
+	 * Argument completion for hosts without a terminal (RPC `get_command_completions`).
+	 * It takes precedence over the TUI completer; without it, headless hosts get
 	 * the static completer and, failing that, the declarative `subcommands`.
 	 */
 	getHeadlessCompletions?: (
 		argumentPrefix: string,
-		runtime: { settings: Settings },
+		runtime: { settings: Settings; session?: AgentSession },
 	) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 }
 

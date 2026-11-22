@@ -1,13 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { AgentRegistry, type AgentRef } from "../../src/registry/agent-registry";
-import { advisorAgentId, liveAdvisorAgent, trackLiveAdvisors } from "../../src/registry/live-advisors";
+import {
+	advisorAgentId,
+	liveAdvisorAgent,
+	liveAdvisorRestart,
+	trackLiveAdvisors,
+} from "../../src/registry/live-advisors";
 import type { AgentSession } from "../../src/session/agent-session";
 import type { LiveAdvisor } from "../../src/session/session-advisors";
 
-class AdvisorFeed implements Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange"> {
+class AdvisorFeed implements Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange" | "restartAdvisor"> {
 	#advisors: LiveAdvisor[] = [];
 	readonly #listeners = new Set<() => void>();
+	readonly restarts: string[] = [];
+	restartAdvisor(slug: string): boolean {
+		this.restarts.push(slug);
+		return true;
+	}
 	liveAdvisors(): LiveAdvisor[] {
 		return this.#advisors;
 	}
@@ -83,6 +93,52 @@ describe("live advisor registry tracking", () => {
 			expect(ref?.history?.readOnly).toBe(true);
 			expect(liveAdvisorAgent(registry, id)).toBe(runtime.agent);
 		}
+	});
+
+	test("restart routes the exact slug to the selected advisor's owner, including nested owners", () => {
+		const { registry, owner, feed } = fixture([advisor(), advisor("critic")]);
+		const worker = registry.register({
+			id: "owner.worker",
+			displayName: "worker",
+			kind: "sub",
+			parentId: owner.id,
+			session: null,
+		});
+		const workerFeed = new AdvisorFeed();
+		workerFeed.set([advisor("critic", "/tmp/worker/__advisor.critic.jsonl")]);
+		const stop = trackLiveAdvisors({ registry, ownerId: worker.id, session: workerFeed });
+		cleanups.push(() => {
+			stop();
+			registry.unregister(worker.id, worker);
+		});
+		const nested = registry.get(advisorAgentId(worker.id, "critic"))!;
+		const implicit = registry.get(advisorAgentId(owner.id, ""))!;
+
+		expect(liveAdvisorRestart(registry, nested)?.()).toBe(true);
+		expect(workerFeed.restarts).toEqual(["critic"]);
+		expect(feed.restarts).toEqual([]);
+		expect(liveAdvisorRestart(registry, implicit)?.()).toBe(true);
+		expect(feed.restarts).toEqual([""]);
+	});
+
+	test("restart refuses parked advisors and stale refs after the same id is retargeted", () => {
+		const original = advisor();
+		const { registry, feed } = fixture([original]);
+		const old = registry.get("owner/advisor")!;
+		const staleRestart = liveAdvisorRestart(registry, old);
+		expect(staleRestart).toBeDefined();
+		feed.set([]);
+		expect(liveAdvisorRestart(registry, old)).toBeUndefined();
+		expect(staleRestart?.()).toBe(false);
+
+		feed.set([advisor("", "/tmp/next/__advisor.jsonl")]);
+		const next = registry.get(old.id)!;
+		expect(next).not.toBe(old);
+		expect(liveAdvisorRestart(registry, old)).toBeUndefined();
+		expect(staleRestart?.()).toBe(false);
+		expect(feed.restarts).toEqual([]);
+		expect(liveAdvisorRestart(registry, next)?.()).toBe(true);
+		expect(feed.restarts).toEqual([""]);
 	});
 
 	test("runtime start/end events update running/idle without focus or session attachment", () => {

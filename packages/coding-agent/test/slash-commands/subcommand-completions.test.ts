@@ -78,7 +78,7 @@ describe("declarative subcommand completion", () => {
 
 	it("keeps live choices wired where the hint names a collection rather than literal values", () => {
 		const collections = {
-			advisor: ["dump"],
+			advisor: ["dump", "restart"],
 			chain: ["use"],
 			jobs: ["kill"],
 			live: ["model"],
