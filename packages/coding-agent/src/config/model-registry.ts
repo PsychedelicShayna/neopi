@@ -32,7 +32,13 @@ import {
 	resolveMaxContextWindow,
 } from "@oh-my-pi/pi-catalog/compat/context-window";
 import { applyCatalogMetrics, CatalogMetricsIndex, catalogMetricsOf } from "@oh-my-pi/pi-catalog/identity/metrics";
-import { getModelCacheWriteStats, readModelCache, retainModelCacheConnection } from "@oh-my-pi/pi-catalog/model-cache";
+import {
+	getModelCacheWriteStats,
+	readModelCache,
+	readModelSightings,
+	recordModelSightings,
+	retainModelCacheConnection,
+} from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	createModelManager,
 	fingerprintStaticModels,
@@ -40,7 +46,12 @@ import {
 	type ModelRefreshStrategy,
 } from "@oh-my-pi/pi-catalog/model-manager";
 import { expandCodexVariants } from "@oh-my-pi/pi-catalog/model-variants";
-import { getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
+import {
+	bundledModelIdentityFingerprint,
+	bundledModelSightings,
+	getBundledModels,
+	getBundledProviders,
+} from "@oh-my-pi/pi-catalog/models";
 import {
 	googleAntigravityModelManagerOptions,
 	googleGeminiCliModelManagerOptions,
@@ -560,6 +571,8 @@ export class ModelRegistry {
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
+	#trackModelSightings = false;
+	#seedModelSightings?: () => void;
 	#suppressedSelectors: Map<string, number> = new Map();
 	#backgroundRefresh?: Promise<void>;
 	#catalogCycleStop?: () => void;
@@ -865,9 +878,27 @@ export class ModelRegistry {
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
+		this.#trackModelSightings = !this.#owner && (!isBunTestRuntime() || this.#cacheDbPath !== undefined);
 		if (!this.#owner) this.authStorage.keys.setResolver(resolveConfigValue);
 		// Load config and cache-backed layers synchronously in the constructor.
 		this.#loadModels();
+		if (this.#trackModelSightings) {
+			const custom = this.#customModelOverlays;
+			const cached = this.#cachedDiscoverableModels;
+			this.#seedModelSightings = () => {
+				if (
+					recordModelSightings(
+						[...custom, ...cached, ...this.#runtimeModelOverlays, ...this.#runtimeDiscoveredModels],
+						this.#cacheDbPath,
+						{ fingerprint: bundledModelIdentityFingerprint(), models: bundledModelSightings() },
+					)
+				) {
+					this.#seedModelSightings = undefined;
+				}
+			};
+			// Do not put the one-time SQLite baseline on the synchronous startup path.
+			setImmediate(() => this.#seedModelSightings?.());
+		}
 		// Setup, /login, RPC hosts and the CLI share one built-in connection hook.
 		registerNeoProxyLogin(this);
 	}
@@ -883,6 +914,13 @@ export class ModelRegistry {
 	/** Database shared by model discovery and request-time thinking capability probes. */
 	get modelsDbPath(): string | undefined {
 		return this.#cacheDbPath;
+	}
+
+	/** First discovery timestamps, independent of model-cache freshness and usage. */
+	getModelSightings(newerThan: number): ReadonlyMap<string, number> {
+		if (!this.#trackModelSightings && !this.#owner) return new Map();
+		this.#seedModelSightings?.();
+		return readModelSightings(newerThan, this.#cacheDbPath);
 	}
 
 	/** Observe landed discovery and registry changes without triggering a refresh. */
@@ -1673,6 +1711,10 @@ export class ModelRegistry {
 		this.#configError = undefined;
 		this.#providerDiscoveryStates.clear();
 		this.#loadModels();
+		if (this.#trackModelSightings && this.#customModelOverlays.length > 0) {
+			this.#seedModelSightings?.();
+			if (!this.#seedModelSightings) recordModelSightings(this.#customModelOverlays, this.#cacheDbPath);
+		}
 		if (!preservedRuntimeState) return;
 
 		const preservedProviderIds = preservedRuntimeState.runtimeProviderIds;
@@ -2890,6 +2932,9 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
+		// Local-only startup hydration sees cache rows the deferred baseline already covers.
+		// Live refresh must seed first, before a fetch writes a new identity into the cache.
+		if (strategy !== "offline") this.#seedModelSightings?.();
 		try {
 			await this.#runRuntimeDiscoveries(strategy, providerFilter);
 		} finally {
@@ -3101,6 +3146,9 @@ export class ModelRegistry {
 			model => !touchedProviders.has(model.provider),
 		);
 		this.#runtimeDiscoveredModels.push(...discoveredModels);
+		if (this.#trackModelSightings && !this.#seedModelSightings && discoveredModels.length > 0) {
+			recordModelSightings(discoveredModels, this.#cacheDbPath);
+		}
 		for (const provider of touchedProviders) {
 			if (authoritativeProviders.has(provider)) {
 				this.#runtimeAuthoritativeProviders.add(provider);
@@ -5079,6 +5127,9 @@ export class ModelRegistry {
 			// Store as runtime overlays so they survive #reloadStaticModels()
 			this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(m => m.provider !== providerName);
 			this.#runtimeModelOverlays.push(...newOverlays);
+			if (this.#trackModelSightings && !this.#seedModelSightings && newOverlays.length > 0) {
+				recordModelSightings(newOverlays, this.#cacheDbPath);
+			}
 
 			// A modifier is explicitly a whole-catalog transform and may throw
 			// based on another provider's models. Preserve registration-time

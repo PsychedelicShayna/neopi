@@ -1106,6 +1106,19 @@ context:
 ```
 
 
+### New models
+
+The fullscreen `/model` and `/roles` pickers pin **New models** first under
+**Folders**. It cannot be renamed or removed. Newly discovered provider/model
+IDs appear newest first; **Discovered** shows the local date and time.
+
+Set **Settings → Model → Model Catalog → New models tier (days)**
+(`models.newModelTierDays`) to change the length of each tier. By default a
+model is gold for its first 14 days, silver for the next 14, and bronze for
+the final 14. At 42 days it leaves the folder. Models already known when
+tracking starts are not filed. Neither a refreshed catalog nor a model's
+return after disappearing restarts its clock.
+
 ### Model Variants
 
 The **Model Variants** section under effort policy in `/models` lets you save

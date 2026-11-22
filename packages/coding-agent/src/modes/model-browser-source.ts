@@ -26,6 +26,7 @@ import {
 	cfgDisabledProviders,
 	cfgModelFolders,
 	cfgModelProviderOrder,
+	cfgNewModelTierDays,
 	cfgModelRoleStorage,
 } from "../config/model-settings";
 import {
@@ -72,6 +73,9 @@ export function createModelBrowserSource(
 				const scope = editingScope === "project" || resolveFolders().source === "project" ? "project" : "global";
 				settings.writeScopeValue(cfgModelFolders, folders, scope);
 			},
+		},
+		get newModelTierDays() {
+			return cfgNewModelTierDays.get(settings);
 		},
 		cycleScope: initialEditingScope
 			? () => {

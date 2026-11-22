@@ -1081,12 +1081,12 @@ describe("ModelHub", () => {
 				});
 				installTestTheme();
 
-				// Sidebar order: Roles, All models, Effort rules, alpha, beta, delta-local, gamma.
 				// Highlight the keyless provider, then enter to schedule its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
 				hub.handleInput(DOWN); // Effort rules → Context rules
 				hub.handleInput(DOWN); // Context rules → Model overrides
-				hub.handleInput(DOWN); // all → alpha
+				hub.handleInput(DOWN); // Model overrides → New models
+				hub.handleInput(DOWN); // New models → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
 				hub.handleInput("\r");
@@ -1166,10 +1166,12 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → locked anthropic
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → locked anthropic
 			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
 
-			hub.handleInput(UP); // locked provider → Effort rules
+			hub.handleInput(UP); // locked provider → New models
+			hub.handleInput(UP); // New models → Model overrides
 			hub.handleInput(UP); // Model overrides → Context rules
 			hub.handleInput(UP); // Context rules → Effort rules
 			hub.handleInput(UP); // Effort rules → All models
@@ -2934,10 +2936,10 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
 			installTestTheme();
 
-			// All models → Effort rules → custom-provider → openrouter.
-			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -2974,6 +2976,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
@@ -2998,6 +3001,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
@@ -3060,6 +3064,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 		});
@@ -3134,6 +3139,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN); // highlight prov-a without fetching
 			await flushRefresh();
 			expect(refreshCatalogProvider).not.toHaveBeenCalled();
@@ -3172,6 +3178,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			hub.handleInput("\x1br");
@@ -3195,6 +3202,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			await flushRefresh();
@@ -3224,7 +3232,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → prov-a
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → prov-a
 			hub.handleInput("\r");
 			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -3253,6 +3262,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			await flushRefresh();
@@ -3322,7 +3332,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → locked anthropic (separator skipped)
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("anthropic has no credentials configured");
 			expect(rendered).toContain("claude-locked-test");

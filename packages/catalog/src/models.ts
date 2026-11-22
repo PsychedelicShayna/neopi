@@ -25,6 +25,7 @@ import type {
 const catalog = openModelCatalog(modelsData);
 const bundledProviders: readonly KnownProvider[] = Object.freeze(getCatalogProviders(catalog) as KnownProvider[]);
 const bundledProviderSet = new Set<string>(bundledProviders);
+let bundledSightingsFingerprint: string | undefined;
 const modelRegistry = new Map<string, Map<string, Model<Api>>>();
 
 /** Return one provider's bundled models, materialized by the generator. */
@@ -63,6 +64,26 @@ export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvi
 /** List providers with bundled rows; the array is shared and frozen. */
 export function getBundledProviders(): readonly KnownProvider[] {
 	return bundledProviders;
+}
+
+/** Enumerate bundled identities without materializing provider lookups. */
+export function* bundledModelSightings(): Iterable<Pick<Model, "provider" | "id">> {
+	for (const [provider, , rows] of catalog.data.providers) {
+		for (const row of rows) yield { provider, id: row[0] };
+	}
+}
+
+/** Identity-only changes matter; model facts and cache policy do not change this key. */
+export function bundledModelIdentityFingerprint(): string {
+	if (bundledSightingsFingerprint === undefined) {
+		let hash: number | bigint = 0n;
+		for (const [provider, , rows] of catalog.data.providers) {
+			hash = Bun.hash(`${rows.length}:${provider}`, hash);
+			for (const row of rows) hash = Bun.hash(row[0], hash);
+		}
+		bundledSightingsFingerprint = hash.toString(36);
+	}
+	return bundledSightingsFingerprint;
 }
 
 /** List a provider's bundled models; nested catalog values are shared and must not be mutated. */

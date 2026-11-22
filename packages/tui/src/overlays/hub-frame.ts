@@ -2,7 +2,7 @@ import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../c
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { matchesKey } from "../keys";
-import { theme } from "../theme/theme";
+import { type ThemeColor, theme } from "../theme/theme";
 import { truncateToWidth, visibleWidth } from "../utils";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import { node, span, text } from "../native/describe";
@@ -45,6 +45,8 @@ export interface SidebarStyle {
 	muted?: boolean;
 	hovered?: boolean;
 	padTruncated?: boolean;
+	labelColor?: ThemeColor;
+	labelSuffix?: string;
 }
 
 /** Cycle a strip's selection for directional and tab input, returning whether it handled the key. */
@@ -99,7 +101,10 @@ export function renderHubChips(
 export function describeHubSidebar<TEntry extends SidebarEntry<string>>(
 	entries: readonly TEntry[],
 	selectedId: string,
-	style: (entry: TEntry, index: number) => Pick<SidebarStyle, "icon" | "annotation" | "muted">,
+	style: (
+		entry: TEntry,
+		index: number,
+	) => Pick<SidebarStyle, "icon" | "annotation" | "muted" | "labelColor" | "labelSuffix">,
 	key = "sidebar",
 ): NativeNode {
 	const items: NativeNode[] = [];
@@ -114,16 +119,15 @@ export function describeHubSidebar<TEntry extends SidebarEntry<string>>(
 			continue;
 		}
 		const decoration = style(entry, i);
+		const label = entry.label + (decoration.labelSuffix ?? "");
+		const labelColor = decoration.muted ? "dim" : decoration.labelColor;
 		items.push(
 			node(
 				"item",
 				{
 					label: decoration.icon
-						? [
-								span(`${plainText(decoration.icon)} `, "muted"),
-								span(entry.label, decoration.muted ? "dim" : undefined),
-							]
-						: [span(entry.label, decoration.muted ? "dim" : undefined)],
+						? [span(`${plainText(decoration.icon)} `, "muted"), span(label, labelColor)]
+						: [span(label, labelColor)],
 					value: decoration.annotation ? plainText(decoration.annotation) : undefined,
 				},
 				undefined,
@@ -300,11 +304,10 @@ export class HubFrame {
 			const active = entry.id === selection.id;
 			const cursor = active && selection.focused ? theme.fg("accent", theme.nav.cursor) : " ";
 			const decoration = style(entry, i);
-			const label = decoration.muted
-				? theme.fg("dim", entry.label)
-				: active
-					? theme.bold(theme.fg("accent", entry.label))
-					: entry.label;
+			const name = entry.label + (decoration.labelSuffix ?? "");
+			const color = decoration.muted ? "dim" : (decoration.labelColor ?? (active ? "accent" : undefined));
+			const painted = color ? theme.fg(color, name) : name;
+			const label = active && !decoration.muted ? theme.bold(painted) : painted;
 			const left = `${cursor} ${decoration.icon} ${label}`;
 			const leftWidth = visibleWidth(left);
 			const annWidth = visibleWidth(decoration.annotation);

@@ -67,6 +67,7 @@ import { matchesSelectCancel } from "../keybinding-matchers";
 import {
 	buildBrowserItems,
 	MODEL_PICKER_COLUMNS,
+	NEW_MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelBrowserNavigation,
@@ -112,6 +113,12 @@ export interface HubModelFolder {
 	readonly name: string;
 	readonly models: readonly string[];
 }
+
+const NEW_MODELS_ID = "newModels";
+const NEW_MODELS_LABEL = "New models";
+const DAY_MS = 86_400_000;
+const DISCOVERY_TIERS = ["provenanceGold", "provenanceSilver", "provenanceBronze"] as const;
+const DISCOVERY_DATE = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "short" });
 
 const FOLDER_ACTIONS = [
 	{ id: "folderNew", key: "ctrl+alt+n", label: "New folder" },
@@ -283,6 +290,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 		readonly entries: readonly HubModelFolder[];
 		save(folders: readonly HubModelFolder[]): void;
 	};
+	readonly newModelTierDays?: number;
 	/** The policy resolver supplies actual supported levels intersected with the winning global rule. */
 	permittedEfforts(model: Model): readonly ThinkingEffort[];
 	getProjectRoleEffortSelection(role: string): HubEffortSelection | undefined;
@@ -304,6 +312,7 @@ export interface ModelHubSource extends ModelBrowserSource {
 export interface ModelHubRegistry extends ModelBrowserRegistry {
 	readonly authStorage: { readonly keys: Pick<KeysApi, "source"> };
 	readonly modelConfig?: Pick<ModelOverridesHost, "list" | "schema" | "save" | "remove">;
+	getModelSightings?(newerThan: number): ReadonlyMap<string, number>;
 	getDiscoverableProviders(): string[];
 	getProviderDiscoveryState(provider: string):
 		| {
@@ -432,7 +441,7 @@ export interface ModelHubOptions {
 }
 
 interface SidebarEntry extends HubSidebarEntry<
-	"recent" | "roles" | "effort" | "variants" | "overrides" | "all" | "separator" | "provider" | "folder"
+	"recent" | "roles" | "effort" | "variants" | "overrides" | "all" | "separator" | "provider" | "folder" | "newModels"
 > {
 	providerId?: string;
 	locked?: boolean;
@@ -728,6 +737,8 @@ export class ModelHubComponent implements Component {
 	#roles: RoleAssignments = {};
 	#availableItems: ModelBrowserItem[] = [];
 	#recentItems: ModelBrowserItem[] = [];
+	#newModelItems: ModelBrowserItem[] = [];
+	#newModelTimer?: NodeJS.Timeout;
 	/** Selectors of {@link #recentItems}, rebuilt with it, for search hit counts. */
 	#recentSelectors: ReadonlySet<string> = new Set();
 	#candidateItems: ModelBrowserItem[] = [];
@@ -1226,6 +1237,7 @@ export class ModelHubComponent implements Component {
 		this.#scheduledProviderRefreshes.clear();
 		clearTimeout(this.#scheduledCatalogRefresh);
 		this.#scheduledCatalogRefresh = undefined;
+		clearTimeout(this.#newModelTimer);
 		this.#refreshingProviders.clear();
 		this.#pendingCredentialRefreshProviders.clear();
 		if (this.#refreshSpinnerInterval) {
@@ -1313,10 +1325,48 @@ export class ModelHubComponent implements Component {
 			if (this.#recentItems.length >= RECENT_LIMIT) break;
 		}
 		this.#recentSelectors = new Set(this.#recentItems.map(item => item.selector));
+		this.#updateNewModels(allModels, bySelector);
 
 		this.#buildSidebar(allModels, availableModels, bySelector);
 		this.#restoreSidebarAnchor(anchor);
 		this.#applyScope();
+	}
+
+	#updateNewModels(allModels: readonly Model[], bySelector: ReadonlyMap<string, ModelBrowserItem>): void {
+		clearTimeout(this.#newModelTimer);
+		const now = Date.now();
+		const tierMs = (this.#settings.newModelTierDays ?? 14) * DAY_MS;
+		const sightings = this.#registry.getModelSightings?.(now - DISCOVERY_TIERS.length * tierMs);
+		let next = Infinity;
+		this.#newModelItems = [];
+		if (!sightings?.size) return;
+		for (const model of allModels) {
+			const selector = `${model.provider}/${model.id}`;
+			const timestamp = sightings.get(selector);
+			if (timestamp === undefined) continue;
+			const item = bySelector.get(selector);
+			const age = Math.max(0, now - timestamp);
+			const tier = Math.floor(age / tierMs);
+			const color = DISCOVERY_TIERS[tier];
+			if (!color) continue;
+			this.#newModelItems.push({
+				...(item ?? { provider: model.provider, id: model.id, model, selector }),
+				discovery: { timestamp, date: DISCOVERY_DATE.format(timestamp), color, unavailable: !item },
+			});
+			next = Math.min(next, timestamp + (tier + 1) * tierMs);
+		}
+		this.#newModelItems.sort((a, b) => b.discovery!.timestamp - a.discovery!.timestamp);
+		const delay = next - now;
+		if (Number.isFinite(delay)) {
+			this.#newModelTimer = setTimeout(
+				() => {
+					if (this.#disposed) return;
+					this.#syncFromRegistryState();
+					this.#requestRender();
+				},
+				Math.min(delay, 2_147_483_647),
+			).unref();
+		}
 	}
 
 	#buildSidebar(
@@ -1480,9 +1530,16 @@ export class ModelHubComponent implements Component {
 				{ id: "overrides", kind: "overrides", label: "Model overrides" },
 			);
 		}
-		if (this.#settings.modelFolders) {
-			entries.push({ id: "sep:folders", kind: "separator", label: "Folders" }, ...this.#folderEntries);
-		}
+		entries.push(
+			{ id: "sep:folders", kind: "separator", label: "Folders" },
+			{
+				id: NEW_MODELS_ID,
+				kind: "newModels",
+				label: NEW_MODELS_LABEL,
+				annotation: String(this.#newModelItems.length),
+			},
+			...this.#folderEntries,
+		);
 		if (providers.length > 0) {
 			entries.push({ id: "sep:providers", kind: "separator", label: "" }, ...providers);
 		}
@@ -1580,6 +1637,10 @@ export class ModelHubComponent implements Component {
 	#applyScope(): void {
 		const entry = this.#activeEntry();
 		switch (entry.kind) {
+			case "newModels":
+				this.#browser.setShowProvider(true);
+				this.#setCandidateItems(this.#newModelItems);
+				break;
 			case "recent":
 				this.#browser.setShowProvider(true);
 				this.#setCandidateItems(this.#recentItems);
@@ -1990,6 +2051,9 @@ export class ModelHubComponent implements Component {
 		if (this.#configError) return `  ${this.#configError}`;
 		const entry = this.#activeEntry();
 		if (entry.kind === "recent") return "  No recently used models yet";
+		if (entry.kind === "newModels" && !this.#browser.query.trim()) {
+			return "  No newly discovered models in this view.";
+		}
 		if (entry.kind === "folder" && !this.#browser.query.trim()) {
 			return entry.folder?.models.length
 				? "  No models in this folder are available in this view."
@@ -2034,6 +2098,13 @@ export class ModelHubComponent implements Component {
 	#activateItem(item: ModelBrowserItem): void {
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
+		if (item.discovery?.unavailable) {
+			const provider = this.#lockedProviderEntries.find(entry => entry.providerId === item.provider);
+			if (provider?.oauth && this.#callbacks.onLoginRequest) this.#requestLogin(provider);
+			else this.#configError = `${item.provider} is not configured for this model.`;
+			this.#requestRender();
+			return;
+		}
 		if (this.#sessionOnly) {
 			const result = this.#taskMode
 				? this.#callbacks.onPickTask?.(item.model, item.selector)
@@ -3292,7 +3363,10 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		const previous = strip.action === "folderRename" ? strip.name : undefined;
-		if (folders.some(folder => folder.name === name && folder.name !== previous)) {
+		if (
+			(name === NEW_MODELS_LABEL && name !== previous) ||
+			folders.some(folder => folder.name === name && folder.name !== previous)
+		) {
 			strip.error = "A folder with that name already exists.";
 			return;
 		}
@@ -3945,6 +4019,7 @@ export class ModelHubComponent implements Component {
 			entry.kind === "recent" ||
 			entry.kind === "all" ||
 			entry.kind === "folder" ||
+			entry.kind === "newModels" ||
 			(entry.kind === "provider" && !entry.locked)
 		);
 	}
@@ -4430,15 +4505,19 @@ export class ModelHubComponent implements Component {
 			icon = theme.icon.extensionSkill;
 		} else if (entry.kind === "all") {
 			icon = theme.icon.model;
-		} else if (entry.kind === "folder") {
+		} else if (entry.kind === "folder" || entry.kind === "newModels") {
 			icon = theme.icon.folder;
 		} else {
 			icon = muted ? theme.status.shadowed : theme.status.enabled;
 		}
 		const refreshing = entry.providerId ? this.#refreshingProviders.has(entry.providerId) : false;
 		const annotationText = matchCount !== undefined ? String(matchCount) : (entry.annotation ?? "");
+		const pinnedColor =
+			entry.kind === "newModels" ? provenanceColor(uiProvenance("features", "new-models")) : undefined;
 		return {
-			icon: theme.fg(muted ? "dim" : entry.kind === "provider" ? "success" : "accent", icon),
+			icon: theme.fg(pinnedColor ?? (muted ? "dim" : entry.kind === "provider" ? "success" : "accent"), icon),
+			labelColor: pinnedColor,
+			labelSuffix: entry.kind === "newModels" ? uiProvenanceSuffix("features", "new-models") : undefined,
 			annotation: refreshing
 				? theme.fg("warning", theme.spinnerFrames[this.#refreshSpinnerFrame % theme.spinnerFrames.length] ?? "")
 				: theme.fg("dim", annotationText),
@@ -4545,6 +4624,7 @@ export class ModelHubComponent implements Component {
 					text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
 				}
 				break;
+			case "newModels":
 			case "folder":
 				text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
 				break;
@@ -5296,7 +5376,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	/** Sidebar decoration for the native list: refreshing providers show an ellipsis, the status row spins. */
-	#nativeSidebarStyle = (entry: SidebarEntry, index: number): Pick<SidebarStyle, "icon" | "annotation" | "muted"> => {
+	#nativeSidebarStyle = (entry: SidebarEntry, index: number): SidebarStyle => {
 		const style = this.#sidebarStyle(entry, index);
 		const refreshing = entry.providerId !== undefined && this.#refreshingProviders.has(entry.providerId);
 		return { ...style, annotation: refreshing ? "…" : plainText(style.annotation) };
@@ -5411,6 +5491,7 @@ export class ModelHubComponent implements Component {
 					spans = [span(`${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`, "muted")];
 				}
 				break;
+			case "newModels":
 			case "folder":
 				spans = [span(`${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`, "muted")];
 				break;
@@ -5735,7 +5816,9 @@ export class ModelHubComponent implements Component {
 				this.#rolePreview(row),
 			);
 		}
-		const catalogue = this.#browser.pickerItems(this.#availableItems);
+		const catalogue = this.#browser.pickerItems(
+			entry.kind === "newModels" ? this.#candidateItems : this.#availableItems,
+		);
 		const currentSelector = this.#taskMode ? this.#taskSelector : this.#currentSelector;
 		const current = currentSelector ? [currentSelector] : undefined;
 		if (lockedView) {
@@ -5756,7 +5839,14 @@ export class ModelHubComponent implements Component {
 		const query = this.#browser.query.trim();
 		const view = this.#browser.pickerOrder({
 			providers: entry.kind === "all" && query.length === 0,
-			rest: entry.kind === "provider" || entry.kind === "folder" ? entry.label : query ? "Matches" : "All models",
+			rest:
+				entry.kind === "newModels"
+					? null
+					: entry.kind === "provider" || entry.kind === "folder"
+						? entry.label
+						: query
+							? "Matches"
+							: "All models",
 		});
 		const refreshing = entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? "");
 		const state =
@@ -5773,6 +5863,7 @@ export class ModelHubComponent implements Component {
 				tabs: this.#pickerKindTabs(),
 				tab: this.#modelKindTab,
 				...this.#browser.pickerRows(catalogue, view, currentSelector),
+				...(entry.kind === "newModels" ? { columns: NEW_MODEL_PICKER_COLUMNS } : {}),
 				state,
 				...(state === "error" && this.#configError ? { message: this.#configError } : {}),
 				empty:
@@ -5888,10 +5979,19 @@ export class ModelHubComponent implements Component {
 						count: counts ? this.#recentSearchCount : this.#recentItems.length,
 					});
 					break;
+				case "newModels":
 				case "folder":
 					scopes.push({
 						id: entry.id,
-						label: entry.label,
+						label:
+							entry.kind === "newModels"
+								? [
+										span(
+											entry.label + uiProvenanceSuffix("features", "new-models"),
+											provenanceColor(uiProvenance("features", "new-models")),
+										),
+									]
+								: entry.label,
 						icon: "folder",
 						group: "Folders",
 						count: Number(entry.annotation),
