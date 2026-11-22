@@ -5103,10 +5103,15 @@ export class Editor implements Component, Focusable {
 		this.#retriggerAutocompleteAtCursor();
 	}
 
-	#yankFromKillRing(): void {
+	#killRingTextForInsertion(): string | undefined {
 		const text = this.#killRing.peek();
-		if (!text) return;
-		this.#insertTextAtCursor(text);
+		return text === undefined || !this.singleLine ? text : this.singleLine.normalize(text);
+	}
+
+	#yankFromKillRing(): void {
+		const text = this.#killRingTextForInsertion();
+		if (text === undefined) return;
+		if (text) this.#insertTextAtCursor(text);
 		this.#lastAction = "yank";
 	}
 
@@ -5120,10 +5125,8 @@ export class Editor implements Component, Focusable {
 		this.#withUndoSuspended(() => {
 			if (!this.#deleteYankedText()) return;
 			this.#killRing.rotate();
-			const text = this.#killRing.peek();
-			if (text) {
-				this.#insertTextAtCursor(text);
-			}
+			const text = this.#killRingTextForInsertion();
+			if (text !== undefined) this.#insertTextAtCursor(text);
 		});
 
 		this.#lastAction = "yank";
@@ -5136,8 +5139,9 @@ export class Editor implements Component, Focusable {
 	 * at the end of the yanked text.
 	 */
 	#deleteYankedText(): boolean {
-		const yankedText = this.#killRing.peek();
-		if (!yankedText) return false;
+		const yankedText = this.#killRingTextForInsertion();
+		if (yankedText === undefined) return false;
+		if (!yankedText) return true;
 
 		const yankLines = yankedText.split("\n");
 		const endLine = this.#state.cursorLine;

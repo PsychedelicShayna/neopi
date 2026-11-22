@@ -47,6 +47,40 @@ it("uses shared Vim motions and undo in an existing single-line field, without c
 	}
 });
 
+it("yanks a Vim line deletion into a single-line field without moving the caret to another line", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		for (const key of ["abc", "\x1b", "d", "d", "i", "\x19"]) input.handleInput(key);
+		expect(input.getValue()).toBe("abc");
+		expect(input.getCursor()).toBe(3);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("cycles linewise kill-ring entries in a single-line Vim field", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		for (const key of ["first", "\x1b", "d", "d", "i", "next", "\x1b", "d", "d", "i", "[]", "\x1b[D", "\x19"]) {
+			input.handleInput(key);
+		}
+		expect(input.getValue()).toBe("[next]");
+		expect(input.getCursor()).toBe(5);
+		input.handleInput("\x1by");
+		expect(input.getValue()).toBe("[first]");
+		expect(input.getCursor()).toBe(6);
+		input.handleInput("\x1by");
+		expect(input.getValue()).toBe("[next]");
+		expect(input.getCursor()).toBe(5);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
 it("shows the whole Visual selection in ANSI and reports masked anchor/caret offsets to native hosts", () => {
 	const previous = getMenuSearchVimMode();
 	setMenuSearchVimMode(true);

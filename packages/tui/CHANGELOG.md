@@ -71,6 +71,7 @@
 
 ### Fixed
 
+- Yank and yank-pop keep Vim single-line fields on one line, even when restoring a whole-line deletion ([#837](https://github.com/PsychedelicShayna/neopi/issues/837)).
 - The exact and pattern fallback effort editors no longer offer Auto for `@effort`; other roles still offer it ([#690](https://github.com/PsychedelicShayna/neopi/issues/690)).
 - The Interaction settings tab shows Language immediately after Input.
 - Untranslated settings retain their current host-provided labels and descriptions in Spanish mode.
