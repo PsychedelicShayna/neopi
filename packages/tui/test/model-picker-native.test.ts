@@ -529,11 +529,13 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
-	// Native Close enters Normal, then backs out without activating a model or closing the hub.
+	// Native Back skips the modal transition, leaving the draft ready to reopen.
 	act("scope", "all");
 	hub.handleInput("/");
 	hub.handleInput("x");
 	act("close");
+	expect(hub.navigationSnapshot().filterFocused).toBe(false);
+	hub.handleInput("/");
 	expect(hub.navigationSnapshot().filterFocused).toBe(true);
 	expect(props(hub.describe(withPicker)).query).toBe("x");
 	act("close");
@@ -1604,9 +1606,10 @@ test("native Close leaves each model-hub search field before closing", () => {
 		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: scope, mods: [] });
 		hub.handleInput("/");
 		for (const char of "jkl") hub.handleInput(char);
-		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		hub.handleInput("\x1b");
 		expect(hub.navigationSnapshot().filterFocused).toBe(true);
 		expect(calls.cancel).toBe(0);
+		hub.handleInput("i");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(hub.navigationSnapshot().filterFocused).toBe(false);
 		expect(calls.cancel).toBe(0);
@@ -1635,10 +1638,11 @@ test("native Close leaves the model-hub strip draft recoverable until explicit c
 	expect(hub.navigationSnapshot().strip?.kind).toBe("effortLevels");
 	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
-	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	hub.handleInput("\x1b");
 	const normal = hub.navigationSnapshot().strip;
 	if (normal?.kind !== "pattern") throw new Error("expected focused pattern");
 	expect(normal.input.focused).toBe(true);
+	hub.handleInput("i");
 	hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	const pattern = hub.navigationSnapshot().strip;
 	if (pattern?.kind !== "pattern") throw new Error("expected defocused pattern");
@@ -1682,6 +1686,8 @@ test("quick picker native Close leaves literal search, repaints and closes only 
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(renders).toBeGreaterThan(before);
 	expect(closes).toBe(0);
+	expect(props(picker.describe(withPicker)).query).toBe("");
+	picker.handleInput("/");
 	expect(props(picker.describe(withPicker)).query).toBe("demo");
 	picker.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 	expect(props(picker.describe(withPicker)).query).toBe("");

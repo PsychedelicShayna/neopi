@@ -242,6 +242,18 @@ export class SelectList implements Component, MouseRoutable {
 		return this.#search.focused;
 	}
 
+	get filterConsumesEscape(): boolean {
+		return this.filterFocused && this.#search.input.vimConsumesEscape();
+	}
+
+	backFromFilter(): boolean {
+		const before = this.#search.query;
+		if (!this.#search.back()) return false;
+		this.#keys.reset();
+		if (this.#search.query !== before) this.#setFilter(this.#search.query, true);
+		return true;
+	}
+
 	/** Selection, filter, and scroll position, for menu history and drafts to restore. */
 	navigationState(): SelectListNavigationState {
 		const search = this.#search.navigationSnapshot();

@@ -295,10 +295,12 @@ describe("HookEditorComponent prompt-style mode", () => {
 		});
 		try {
 			for (const char of "keep this") note.handleInput(char);
+			expect(renderText(note)).toContain(vim ? "Esc normal" : "Esc back");
 			note.handleInput("\x1b");
 			if (vim) {
 				expect(onBack).not.toHaveBeenCalled();
 				expect(renderText(note)).toContain("keep this");
+				expect(renderText(note)).toContain("Esc back");
 				note.handleInput("\x1b");
 			}
 			expect(onBack).toHaveBeenCalledTimes(1);

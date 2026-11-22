@@ -106,9 +106,10 @@ describe("session selector Vim navigation and safe history", () => {
 			selector.handleInput("\x1b[H");
 			expect(snapshot(selector).list.search).toMatchObject({ value: "jkgG/ ", cursor: 0, focused: true });
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
-			selector.handleNativeEvent({ ...close, mods: [] });
+			selector.handleInput("\x1b");
 			expect(snapshot(selector).list.search).toMatchObject({ value: "jkgG/ ", focused: true });
 			expect(cancelled).not.toHaveBeenCalled();
+			selector.handleInput("i");
 			selector.handleNativeEvent({ ...close, mods: [] });
 			expect(snapshot(selector).list.search).toMatchObject({
 				value: "",

@@ -744,7 +744,7 @@ export class HtmlFormDialog implements Component, Focusable {
 			if (matchesSelectDown(data) || matchesKey(data, "space") || confirm) return;
 		}
 		if (matchesSelectPageDown(data) || matchesSelectPageUp(data)) {
-			if (control && getMenuSearchVimMode()) {
+			if (control instanceof Editor && getMenuSearchVimMode()) {
 				control.handleInput(data);
 				return;
 			}
@@ -1288,8 +1288,7 @@ export class HtmlFormDialog implements Component, Focusable {
 	#noteEditHint(): string {
 		const active = this.#noteEditor!;
 		const unsent = this.#checked.get(active.field)!.has(active.option) ? "" : " · sent only if chosen";
-		const escape = active.editor.vimConsumesEscape() ? "normal" : "keep draft";
-		return `enter save · blank removes · esc ${escape} · ctrl+c discard${unsent}`;
+		return `enter save · blank removes · ${active.editor.escapeHint("keep draft")} · ctrl+c discard${unsent}`;
 	}
 
 	/** Marker after a noted option: a submitted note, or a draft on an unchosen option. */
@@ -1941,7 +1940,9 @@ export class HtmlFormDialog implements Component, Focusable {
 		if (this.#noteEditor) return this.#noteEditHint();
 		const hideKey = editorKey("app.ask.hide");
 		const control = this.#activeTextControl();
-		const dismiss = control?.vimConsumesEscape() ? "esc normal" : `${editorKey("tui.select.cancel")} composer`;
+		const dismiss = control?.vimConsumesEscape()
+			? control.escapeHint("composer")
+			: `${editorKey("tui.select.cancel")} composer`;
 		const composer = `${dismiss}${hideKey ? ` · ${hideKey} hide` : ""}`;
 		const stop = this.#stops[this.#focus]!;
 		const [noteKey] = this.#noteKeys(stop.kind === "select");
@@ -1964,9 +1965,9 @@ export class HtmlFormDialog implements Component, Focusable {
 		if (control) hints.push("ctrl+c discard edit");
 		if (stop.kind !== "submit") hints.push(`${formatKeyHint("tab")} next field`);
 		hints.push(composer);
-		if (this.#groups.length > 1 && !(control && getMenuSearchVimMode())) {
+		if (this.#groups.length > 1 && !(control instanceof Editor && getMenuSearchVimMode())) {
 			const keys =
-				stop.kind === "text" || stop.kind === "select"
+				control || stop.kind === "select"
 					? editorKeys("tui.select.pageUp", "tui.select.pageDown")
 					: `${formatKeyHint("left")}/${formatKeyHint("right")}`;
 			hints.push(`${keys} question`);

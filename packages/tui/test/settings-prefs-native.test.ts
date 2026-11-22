@@ -410,6 +410,35 @@ describe("settings as a native prefs page", () => {
 		expect(unsets).toEqual([]);
 	});
 
+	it.each([false, true])("only describes the active field's actions (Vim %s)", vim => {
+		setMenuSearchVimMode(vim);
+		const { selector } = scopedSettings({}, { "shell.path": "ab" });
+		const card = () => selector.describe({ ...PREFS, supports: kind => kind !== "prefs" });
+		const ansi = () => Bun.stripANSI(selector.render(180).join("\n"));
+		selector.handleInput("/");
+		selector.handleInput("Shell path");
+		const search = ansi();
+		expect(search).toContain(`Esc ${vim ? "normal" : "back"}`);
+		expect(search).toMatch(/Ctrl[+-]C clear search/i);
+		expect(search).not.toContain("jump tabs");
+		expect(JSON.stringify(card())).toContain('"t":"confirm search"');
+		expect(JSON.stringify(card())).not.toContain('"t":"jump tabs"');
+		selector.handleInput(ENTER);
+		expect(JSON.stringify(card())).toContain('"t":"jump tabs"');
+		send(selector, { type: "activate", key: "", item: "shell.path" });
+		const editing = ansi();
+		expect(editing).toContain(`Esc ${vim ? "normal" : "back"}`);
+		expect(editing).toContain("to save");
+		expect(editing).not.toContain("/ search");
+		expect(editing).not.toContain("Backspace unset");
+		expect(editing).not.toContain("jump tabs");
+		expect(JSON.stringify(card())).not.toContain('"t":"jump tabs"');
+		if (vim) {
+			selector.handleInput("\x1b");
+			expect(ansi()).toContain("Esc back");
+		}
+	});
+
 	it("native Reset clears an own file value even when it matches the default", () => {
 		const { selector, unsets } = scopedSettings({}, { [COLOR_BLIND]: false });
 		send(selector, { type: "change", key: "", item: COLOR_BLIND, value: null });

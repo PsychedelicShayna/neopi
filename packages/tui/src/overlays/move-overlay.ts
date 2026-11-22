@@ -18,7 +18,6 @@ import { formTheme } from "../chrome/form-theme";
 import { bottomBorder, row, topBorder } from "../chrome/overlay-box";
 import { TextFormField } from "../components/form";
 import { formatKeyHint } from "../app-keybindings";
-import { editorKey } from "../chrome/keybinding-hints";
 import type { NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { node, span } from "../native/describe";
 import { actionBar, actionButton, overlayCard, statusHintsRow } from "../native/overlay";
@@ -225,8 +224,8 @@ export class MoveOverlay implements Component, Focusable {
 		}
 		lines.push(row("", width));
 		const hint = this.#pathFocused
-			? `Type path · ${formatKeyHint("tab")} complete · Enter confirm · Esc back to list`
-			: `/ or Tab edit · Enter confirm · ${editorKey("tui.select.cancel")} cancel · ? help`;
+			? `Type path · ${formatKeyHint("tab")} complete · Enter confirm · ${this.#field.input.escapeHint("back to list")} · Ctrl+C cancel`
+			: `/ or Tab edit · Enter confirm · ${this.#field.input.dirty ? "" : "Esc closes · "}Ctrl+C cancel · ? help`;
 		for (const line of menuHintLines(hint, innerWidth, this.#pathFocused ? "" : "jk gg/G C-u d e y")) {
 			lines.push(row(theme.fg("dim", line), width));
 		}
@@ -257,12 +256,23 @@ export class MoveOverlay implements Component, Focusable {
 			scroll: this.#nativeScroll,
 		};
 		const hints = statusHintsRow(
-			[span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "/ or Tab edit · ? help", "dim")],
+			[
+				span(
+					this.#pathFocused
+						? `Type path · Tab complete · ${this.#field.input.escapeHint("back to list")}`
+						: "/ or Tab edit · ? help",
+					"dim",
+				),
+			],
 			[],
 		);
 		const actions = actionBar([
 			actionButton("Accept", "accept", { keys: this.#pathFocused ? "tab" : undefined }),
-			this.#pathFocused ? actionButton("Back to list", "back", { keys: "escape" }) : null,
+			this.#pathFocused
+				? actionButton("Back to list", "back", {
+						keys: this.#field.input.vimConsumesEscape() ? undefined : "escape",
+					})
+				: null,
 			actionButton("Cancel", "cancel", {
 				keys: "ctrl+c",
 			}),
@@ -282,8 +292,10 @@ export class MoveOverlay implements Component, Focusable {
 		if (event.type === "action") {
 			if (event.act === "accept") this.#accept();
 			else if (event.act === "confirm") this.#confirm();
-			else if (event.act === "back" || event.act === "close") this.handleInput("\x1b");
-			else if (event.act === "cancel") this.#done(undefined);
+			else if (event.act === "back" || event.act === "close") {
+				if (this.#pathFocused) this.#setPathFocus(false);
+				else if (!this.#field.input.dirty) this.#done(undefined);
+			} else if (event.act === "cancel") this.#done(undefined);
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
@@ -307,7 +319,7 @@ export class MoveOverlay implements Component, Focusable {
 	#accept(): void {
 		const selected = this.#menu.selectedItem;
 		if (!selected) return;
-		this.#field.setValue(selected.value);
+		this.#field.setValue(selected.value, { markClean: false });
 		this.#setPathFocus(true);
 		this.#updateResults();
 	}

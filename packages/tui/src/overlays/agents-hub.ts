@@ -31,7 +31,7 @@ import {
 import { code, col, md, node, row, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, type NativeHint, hintsRow } from "../native/overlay";
-import { CLOSE_ACTION, type PickerEvent, picker, pickerEvent, pickerQuery } from "../native/picker";
+import { CLOSE_ACTION, type PickerEvent, picker, pickerBackAction, pickerEvent, pickerQuery } from "../native/picker";
 import type { AgentSource } from "../tools/task";
 import { shortenPath } from "../render/render-utils";
 import { sanitizeDisplaySingleLine } from "./extensions/display-text";
@@ -1207,7 +1207,7 @@ export class AgentsHubComponent implements Component {
 			}
 			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
-		if (this.#search.focused) return "Search · type to filter · Esc back to list";
+		if (this.#search.focused) return `Search · type to filter · ${this.#search.input.escapeHint("back to list")}`;
 		if (this.#assigning) {
 			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
@@ -1517,7 +1517,14 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			this.handleInput("\x1b");
+			if (this.#search.focused) {
+				this.#search.back();
+				this.#keys.reset();
+				this.#focus = "list";
+				this.#buildRows();
+				this.#rowIndex = 0;
+				this.#viewport.reveal();
+			} else this.handleInput("\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1612,7 +1619,7 @@ export class AgentsHubComponent implements Component {
 					disabled: canOpenFile ? undefined : agent?.source === "bundled" ? BUNDLED_FILE_HINT : "No editable file",
 				},
 				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				this.#search.focused ? pickerBackAction(this.#search.input.vimConsumesEscape()) : CLOSE_ACTION,
 			];
 		}
 		const selectedRow = this.#rows[this.#rowIndex];

@@ -766,15 +766,16 @@ describe("AgentsHub navigation history", () => {
 		}
 	});
 
-	test("native close leaves Insert before blurring and preserves an unconfirmed search", async () => {
+	test("native Back blurs search even in Insert and preserves the unconfirmed query", async () => {
 		const { hub, type, cancelled } = await createHub(new TestSettings());
 		try {
 			hub.handleInput("/");
 			type("dev");
 			const close = { type: "action", key: "", act: "close", mods: [] } as const;
-			hub.handleNativeEvent(close);
+			hub.handleInput("\x1b");
 			expect(cancelled()).toBe(false);
 			expect(hub.navigationSnapshot().search).toMatchObject({ value: "dev", focused: true });
+			hub.handleInput("i");
 			hub.handleNativeEvent(close);
 			expect(cancelled()).toBe(false);
 			expect(hub.navigationSnapshot().search).toMatchObject({ value: "", focused: false, draft: { value: "dev" } });

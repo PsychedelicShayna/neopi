@@ -1,10 +1,50 @@
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { afterEach, beforeAll, describe, expect, it, vi, beforeEach } from "bun:test";
+import type { DescribeContext } from "../src/native/node";
 import { TreeSelectorComponent, type TreeSelectorNode } from "../src/overlays/tree-selector";
 import { initTheme } from "../src/theme";
 
 beforeAll(async () => {
 	await initTheme();
+});
+
+const PICKER_CX: DescribeContext = {
+	cols: 100,
+	reduceMotion: false,
+	dark: true,
+	supports: () => true,
+	feature: () => true,
+};
+
+describe("native tree search", () => {
+	it.each([false, true])("offers only search actions and keeps a Backed-out draft (Vim %s)", vim => {
+		setMenuSearchVimMode(vim);
+		const switched = vi.fn();
+		const selector = new TreeSelectorComponent(flat(), "row-0", 24, switched, () => {});
+		const actions = () => {
+			const child = selector.describe(PICKER_CX).c?.[0];
+			if (!child || !("k" in child) || child.k !== "picker") throw new Error("expected native picker");
+			return child.p?.actions ?? [];
+		};
+		const act = (action: string) =>
+			selector.handleNativeEvent({ type: "action", key: "^picker", act: action, mods: [] });
+		try {
+			selector.handleInput("/");
+			selector.handleInput("row-1");
+			expect(actions().map(action => action.id)).toEqual(["search", "clear", "close"]);
+			expect(actions().find(action => action.id === "close")?.keys).toEqual(vim ? undefined : ["esc"]);
+			act("close");
+			expect(state(selector).tree.search).toMatchObject({ value: "", focused: false });
+			selector.handleInput("/");
+			expect(state(selector).tree.search).toMatchObject({ value: "row-1", focused: true });
+			act("search");
+			expect(state(selector).tree.search).toMatchObject({ value: "row-1", focused: false });
+			expect(actions().map(action => action.id)).toContain("switch");
+			expect(switched).not.toHaveBeenCalled();
+		} finally {
+			selector.dispose();
+		}
+	});
 });
 afterEach(() => {
 	vi.useRealTimers();

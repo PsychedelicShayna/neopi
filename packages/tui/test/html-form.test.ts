@@ -176,6 +176,16 @@ describe("html form", () => {
 			form.dispose();
 		});
 
+		it("keeps ordinary question paging in single-line fields", () => {
+			const { form } = dialog("<form><input name='alpha'><input name='beta'></form>");
+			expect(form.debugState().focus).toBe("alpha");
+			form.handleInput("\x1b[6~");
+			expect(form.debugState().focus).toBe("beta");
+			form.handleInput("\x1b[5~");
+			expect(form.debugState().focus).toBe("alpha");
+			form.dispose();
+		});
+
 		it("preserves the Other draft on Escape and restores the radio choice on Ctrl+C", () => {
 			const releaseKeys = vi.fn();
 			const { form, onCancel } = dialog(DB_FORM, { releaseKeys });

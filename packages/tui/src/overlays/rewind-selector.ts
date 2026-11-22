@@ -1101,7 +1101,8 @@ export class RewindSelectorComponent implements Component {
 		if (this.#help.open) return this.#help.describe();
 		const filter = this.#filter;
 		const columns = filter === undefined ? this.#stripColumns() : [];
-		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}`;
+		const escapeAction = this.#search.focused ? this.#search.escapeAction : undefined;
+		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}|${escapeAction}`;
 		if (this.#bar?.memo === memo && this.#bar.targets === this.#targets) return this.#bar.node;
 
 		const title = text([span(`${theme.icon.rewind} `, "accent"), span("Rewind", "strong")], { wrap: "none" });
@@ -1145,7 +1146,9 @@ export class RewindSelectorComponent implements Component {
 					this.#search.focused
 						? [
 								{ keys: ["enter"], label: "confirm search" },
-								{ keys: ["escape"], label: "back to list" },
+								escapeAction !== undefined && escapeAction !== "back"
+									? { keys: ["escape"], label: escapeAction }
+									: undefined,
 								{ keys: ["ctrl+c"], label: "clear search" },
 							]
 						: [
@@ -1157,7 +1160,9 @@ export class RewindSelectorComponent implements Component {
 				),
 				actionBar([
 					actionButton("Show all", "clear-filter"),
-					actionButton(this.#search.focused ? "Back to list" : "Close", "cancel", { keys: "escape" }),
+					actionButton(this.#search.focused ? "Back to list" : "Show all (keep draft)", "cancel", {
+						keys: escapeAction === undefined || escapeAction === "back" ? "escape" : undefined,
+					}),
 					this.#search.focused ? actionButton("Search", "search", { keys: "enter" }) : rewind,
 				]),
 			];
@@ -1182,7 +1187,13 @@ export class RewindSelectorComponent implements Component {
 			if (filtering) this.#selectFiltered();
 			else this.#selectOutlined();
 		} else if (event.act === "cancel") {
-			this.handleInput("\x1b");
+			const before = this.#search.query;
+			if (!this.#search.back()) this.deps.onCancel();
+			else {
+				this.#keys.reset();
+				if (before !== this.#search.query) this.#filterChanged();
+				else this.deps.requestRender();
+			}
 		} else if (event.act === "clear-filter") {
 			this.#search.setValue("");
 			this.#search.focused = false;
@@ -1275,9 +1286,7 @@ export class RewindSelectorComponent implements Component {
 				? theme.fg("error", "no matches")
 				: theme.fg("dim", `${selected >= 0 ? selected + 1 : "-"}/${matches.length}`);
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
-		const keys = this.#search.focused
-			? "Enter confirm search · Esc back · Ctrl+C clear"
-			: `${upDown} step · ←/→ user turns · / or f search · Enter rewind · ${editorKey("tui.select.cancel")} close · ? help`;
+		const keys = `${upDown} step · ←/→ user turns · / or f search · Enter rewind · ${editorKey("tui.select.cancel")} close · ? help`;
 		return {
 			header: [this.#header()],
 			body: {
@@ -1293,9 +1302,9 @@ export class RewindSelectorComponent implements Component {
 			},
 			footer: [
 				this.#search.render(chromeWidth, { muted: text => theme.fg("dim", text) }),
-				...menuHintLines(`${count} · ${keys}`, chromeWidth, this.#search.focused ? "" : undefined).map(line =>
-					theme.fg("dim", line),
-				),
+				...(this.#search.focused
+					? [count]
+					: menuHintLines(`${count} · ${keys}`, chromeWidth).map(line => theme.fg("dim", line))),
 			],
 		};
 	}

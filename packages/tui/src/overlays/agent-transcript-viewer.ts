@@ -914,7 +914,7 @@ export class AgentTranscriptViewer implements Component {
 		const keys = `${formatKeyHint("escape")}/h:hub  ${formatKeyHint(this.#deps.expandKeys[0] ?? "alt+e")}/Space:expand`;
 		const hint =
 			this.#focus === "editor"
-				? `${editorKey("tui.input.submit")}:send · Tab/Esc back to view · Ctrl+C discard`
+				? `${editorKey("tui.input.submit")}:send · Tab back to view · ${this.#editor?.escapeHint("back to view") ?? "Esc back to view"} · Ctrl+C discard`
 				: `${keys}${this.#editor ? " · Tab message · Ctrl+C discard draft" : ""} · ? help`;
 		lines.push(
 			...menuHintLines(hint, width, this.#focus === "editor" ? "" : "jk gg/G C-u d e y").map(line =>

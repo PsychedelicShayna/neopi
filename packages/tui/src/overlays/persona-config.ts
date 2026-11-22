@@ -306,7 +306,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			active instanceof HookEditorComponent ||
 			("filterFocused" in active && active.filterFocused === true);
 		const footerLines = menuHintLines(
-			this.#footerNote?.text ?? `${this.#footerHint}${textFocused ? "" : " · ? help"}`,
+			this.#footerNote?.text ??
+				`${this.#footerHint}${this.#screen === "description" && this.#active instanceof Input ? ` · ${this.#active.escapeHint("references")}` : ""}${textFocused ? "" : " · ? help"}`,
 			Math.max(1, width - 4),
 			textFocused ? "" : undefined,
 		);
@@ -1163,7 +1164,7 @@ export class PersonaConfigOverlayComponent implements Component {
 					this.#flash(error instanceof Error ? error.message : String(error));
 				});
 		};
-		this.#setScreen("description", input, "Describe Persona · Enter generate · Esc references · Ctrl+C discard");
+		this.#setScreen("description", input, "Describe Persona · Enter generate · Ctrl+C discard");
 	}
 
 	// ───────────────────────────── detail ────────────────────────────

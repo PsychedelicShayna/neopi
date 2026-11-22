@@ -1336,7 +1336,7 @@ export class AnnotationOverlay implements Focusable {
 			const hints = [
 				`${editorKey("tui.input.submit")} save`,
 				`${editorKey("tui.input.newLine")} newline`,
-				`${formatKeyHint("escape")} close, keep note`,
+				this.#editor.escapeHint("close, keep note"),
 				`${formatKeyHint("ctrl+c")} discard draft`,
 			];
 			hints.push(`${formatKeyHint(appExternalEditorKey())} editor`);
@@ -1548,6 +1548,7 @@ export class AnnotationOverlay implements Focusable {
 			this.#bodyHeight,
 			this.#bodyNativeScroll?.n ?? 0,
 			this.#annotating ? `annotating:${this.#annotationScope}:${this.#editingAnnotationIndex}` : "",
+			this.#annotating ? this.#editor.escapeAction("close, keep note") : "",
 			chooser ? `chooser:${chooser.selected}:${chooser.entries.join()}` : "",
 			this.#discardArmed ? "discard-armed" : "",
 		].join("|");
@@ -2002,7 +2003,7 @@ export class AnnotationOverlay implements Focusable {
 			return [
 				this.#hint("tui.input.submit", "save"),
 				this.#hint("tui.input.newLine", "new line"),
-				key("escape", "close, keep note"),
+				key("escape", this.#editor.escapeAction("close, keep note")),
 				key("ctrl+c", "discard draft"),
 				this.#callbacks.onAnnotationExternalEditor ? key(appExternalEditorKey(), "editor") : undefined,
 			];

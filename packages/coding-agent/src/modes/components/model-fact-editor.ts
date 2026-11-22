@@ -278,7 +278,7 @@ export class ModelFactEditorComponent implements Component, Focusable {
 				label,
 				description,
 				initialValue,
-				hint: "Enter apply · Esc back if unchanged · Ctrl+C discard edit",
+				hint: input => `Enter apply · ${input.escapeHint("back if unchanged")} · Ctrl+C discard edit`,
 				onSubmit,
 				onCancel: () => this.#back(),
 				requestRender: this.#options.requestRender,

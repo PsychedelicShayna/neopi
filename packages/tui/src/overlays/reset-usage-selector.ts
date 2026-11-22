@@ -18,7 +18,7 @@ import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { node, span, text } from "../native/describe";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
-import { CLOSE_ACTION, dockedPicker, PICKER_KEY, pickerAction, pickerEvent } from "../native/picker";
+import { CLOSE_ACTION, dockedPicker, PICKER_KEY, pickerAction, pickerBackAction, pickerEvent } from "../native/picker";
 import type { TspPickerItem, TspPickerProps, TspSpan } from "@oh-my-pi/pi-wire";
 
 const RESET_SELECTOR_MAX_VISIBLE = 10;
@@ -416,7 +416,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				this.#search.focused
 					? pickerAction("search", "Search", "enter", { primary: true })
 					: pickerAction("confirm", "Spend reset", "enter", { primary: true }),
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				this.#search.focused ? pickerBackAction(this.#search.input.vimConsumesEscape()) : CLOSE_ACTION,
 			],
 			confirm,
 		});
@@ -450,8 +450,13 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (this.#search.focused) {
 			if (ev?.kind === "action") {
-				if (ev.act === "close") this.handleInput("\x1b");
-				else if (ev.act === "search") this.handleInput("\r");
+				if (ev.act === "close") {
+					const before = this.#search.query;
+					this.#search.back();
+					this.#keys.reset();
+					if (this.#search.query !== before) this.#applySearchQuery(this.#search.query);
+					this.#updateList();
+				} else if (ev.act === "search") this.handleInput("\r");
 			}
 			return;
 		}

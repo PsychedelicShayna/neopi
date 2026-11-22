@@ -475,7 +475,7 @@ export class SpawnScreen implements Component {
 		this.#listRows = body.length;
 		const hint =
 			editor?.kind === "input"
-				? "Enter apply  ·  Esc back if unchanged  ·  Ctrl+C discard edit"
+				? `Enter apply  ·  ${editor.input.escapeHint("back if unchanged")}  ·  Ctrl+C discard edit`
 				: editor
 					? `Esc back  ·  ${interruptKey()} cancel spawn`
 					: `Enter edit  ·  ${editorKey("tui.select.toggle")} toggle tool  ·  ${editorKey("app.message.followUp")} launch  ·  Ctrl+C cancel spawn`;

@@ -42,14 +42,22 @@ import { resolveAssistantErrorPresentation } from "../chat/transcript-render-hel
 import { OverlayPanel, PanelDivider } from "../chrome/overlay-box";
 import { TreeView, type TreeAncestor, type TreeRow } from "../components/tree-view";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
-import { boundKeys, dismissKey, editorKey } from "../chrome/keybinding-hints";
+import { editorKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
 import type { TspPickerItem, TspPickerProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { ThemeColor } from "../theme/schema";
 import { col, keyed, node, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
-import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent, pickerQuery } from "../native/picker";
+import {
+	CLOSE_ACTION,
+	type PickerEvent,
+	picker,
+	pickerAction,
+	pickerBackAction,
+	pickerEvent,
+	pickerQuery,
+} from "../native/picker";
 import { plainText } from "../native/spans";
 import type { OutlineTarget } from "../chat/transcript-outline";
 import { collectBlocks, targetCopy, turnPreview } from "./copy-selector";
@@ -1453,13 +1461,19 @@ class TreeList implements Component {
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize });
 	}
 
-	/** Native Close follows Escape through the search field. */
-	escape(): void {
-		this.handleInput("\x1b");
+	/** Native Back leaves the search without passing a key through the field. */
+	back(): void {
+		const before = this.getSearchQuery();
+		if (!this.#search.back()) this.onCancel?.();
+		else {
+			this.#keys.reset();
+			if (this.getSearchQuery() !== before) this.#applyFilter();
+		}
 	}
 
 	clearSearch(): void {
 		this.#search.setValue("");
+		this.#search.focused = false;
 		this.#applyFilter();
 	}
 
@@ -1575,7 +1589,7 @@ class LabelInput implements Component {
 	onCancel?: () => void;
 	onDiscard?: () => void;
 
-	#native: NativeNode | undefined;
+	#native: { escapeHint: string; node: NativeNode } | undefined;
 	#preview: readonly NativeChild[] | undefined;
 
 	constructor(
@@ -1604,16 +1618,19 @@ class LabelInput implements Component {
 
 	/** Prompt, the label `Input`, and save/cancel hints; the Input describes its own edits. */
 	describe(_cx: DescribeContext): NativeNode {
-		this.#native ??= node("col", { gap: "xs" }, [
+		const escapeHint = this.#input.escapeHint("back (keep draft)");
+		if (this.#native?.escapeHint === escapeHint) return this.#native.node;
+		const described = node("col", { gap: "xs" }, [
 			text([span("Label (empty to remove):", "muted")]),
 			this.#input,
 			hintsRow([
 				{ keys: ["enter"], label: "save" },
-				{ keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
+				{ keys: ["escape"], label: escapeHint.slice("Esc ".length) },
 				{ keys: ["ctrl+c"], label: "discard draft" },
 			]),
 		]);
-		return this.#native;
+		this.#native = { escapeHint, node: described };
+		return described;
 	}
 
 	/** The picker preview while editing: the prompt and the label `Input` (save/cancel sit in the action bar). */
@@ -1632,17 +1649,16 @@ class LabelInput implements Component {
 		this.onSubmit?.(this.entryId, value || undefined);
 	}
 
+	get modalEscape(): boolean {
+		return this.#input.vimConsumesEscape();
+	}
+
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
 		lines.push(truncateToWidth(theme.fg("muted", "Label (empty to remove):"), width));
 		lines.push(...this.#input.render(width));
-		const cancel = dismissKey();
-		lines.push(
-			truncateToWidth(
-				theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)  Ctrl+C: discard`),
-				width,
-			),
-		);
+		const back = this.#input.escapeHint("back (keep draft)");
+		lines.push(truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${back}  Ctrl+C: discard`), width));
 		return lines;
 	}
 
@@ -1688,6 +1704,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				preview: readonly NativeChild[];
 				label: LabelInput | null;
 				focused: boolean;
+				modalEscape: boolean;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -1812,6 +1829,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 		const view = this.#treeList.pickerView();
 		const label = this.#labelInput;
 		const preview = label ? label.preview : this.#treeList.pickerPreview();
+		const modalEscape =
+			label?.modalEscape ?? (this.#treeList.filterFocused && this.#treeList.searchInput.vimConsumesEscape());
 		const memo = this.#pickerMemo;
 		if (
 			memo?.label === label &&
@@ -1822,7 +1841,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 			memo.view.query === view.query &&
 			memo.view.cursor === view.cursor &&
 			memo.view.filterMode === view.filterMode &&
-			memo.focused === this.filterFocused
+			memo.focused === this.filterFocused &&
+			memo.modalEscape === modalEscape
 		) {
 			return memo.node;
 		}
@@ -1848,20 +1868,26 @@ export class TreeSelectorComponent extends OverlayPanel {
 			actions: label
 				? [
 						pickerAction("label-save", "Save label", "enter", { primary: true }),
-						{ ...CLOSE_ACTION, label: "Back (keep draft)" },
+						pickerBackAction(modalEscape, "Back (keep draft)"),
 						pickerAction("label-discard", "Discard draft", "ctrl+c"),
 					]
-				: [
-						pickerAction("switch", "Switch", "enter", { primary: true }),
-						pickerAction("summarize", "Summarize & switch", "shift+enter"),
-						pickerAction("label", "Label", "e"),
-						pickerAction("expand", "Expand/collapse", "space"),
-						pickerAction("filter", "Next filter", "tab"),
-						{ ...CLOSE_ACTION, label: this.#treeList.filterFocused ? "Back to list" : "Close" },
-					],
+				: this.#treeList.filterFocused
+					? [
+							pickerAction("search", "Search", "enter", { primary: true }),
+							pickerAction("clear", "Clear search", "ctrl+c"),
+							pickerBackAction(modalEscape),
+						]
+					: [
+							pickerAction("switch", "Switch", "enter", { primary: true }),
+							pickerAction("summarize", "Summarize & switch", "shift+enter"),
+							pickerAction("label", "Label", "e"),
+							pickerAction("expand", "Expand/collapse", "space"),
+							pickerAction("filter", "Next filter", "tab"),
+							CLOSE_ACTION,
+						],
 		};
 		const result = col([keyed(picker(props, preview), "picker")]);
-		this.#pickerMemo = { view, preview, label, focused: this.filterFocused, node: result };
+		this.#pickerMemo = { view, preview, label, focused: this.filterFocused, modalEscape, node: result };
 		return result;
 	}
 
@@ -1871,15 +1897,15 @@ export class TreeSelectorComponent extends OverlayPanel {
 		if (label) {
 			if (event.kind !== "action") return;
 			if (event.act === "label-save") label.submit();
-			else if (event.act === "close") label.handleInput("\x1b");
-			else if (event.act === "label-discard") label.handleInput("\x03");
+			else if (event.act === "close") label.onCancel?.();
+			else if (event.act === "label-discard") label.onDiscard?.();
 			return;
 		}
 		const list = this.#treeList;
 		if (list.filterFocused) {
-			if (event.kind === "activate" || (event.kind === "action" && event.act === "switch")) list.handleInput("\r");
-			else if (event.kind === "action" && event.act === "close") list.escape();
-			else if (event.kind === "action" && event.act === "clear") list.handleInput("\x03");
+			if (event.kind === "activate" || (event.kind === "action" && event.act === "search")) list.handleInput("\r");
+			else if (event.kind === "action" && event.act === "close") list.back();
+			else if (event.kind === "action" && event.act === "clear") list.clearSearch();
 			return;
 		}
 		if (event.kind !== "action") {
@@ -1907,7 +1933,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				list.cycleFilter(1);
 				return;
 			case "close":
-				list.escape();
+				list.back();
 				return;
 			case "clear":
 				list.clearSearch();

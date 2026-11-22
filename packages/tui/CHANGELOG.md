@@ -5,6 +5,7 @@
 ### Changed
 
 - Search, rename, forms, Ask notes, and multiline editors all honor the live Vim setting. Escape changes mode or navigates without discarding a draft; Ctrl+C explicitly cancels ([#837](https://github.com/PsychedelicShayna/neopi/issues/837)).
+- Directory completion keeps the path draft on Escape, native Back returns to the list without discarding edits, and field hints follow what Escape will actually do. Single-line Vim fields show visual selections and keep undo across dictation; Ask keeps question paging ([#837](https://github.com/PsychedelicShayna/neopi/issues/837)).
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - Settings rows show inherited values with a source-scope icon (Nerd Font, Unicode and ASCII forms), mark rows changed by key presence instead of comparison with the default, and unset the hovered row with Backspace ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
 - `/model` and `/roles` open from cache, catch up as background model lists land, and refresh on provider entry only when that provider is stale. Use Alt+R to refresh a provider or Ctrl+R to refresh all in the fullscreen hub ([#832](https://github.com/PsychedelicShayna/neopi/issues/832)).

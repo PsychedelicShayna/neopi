@@ -128,7 +128,6 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 const LIST_HINTS =
 	"←/→ move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close · ? help";
 const TEMPLATE_HINTS = "Enter/Tab back to list · Ctrl+C cancel template edit";
-const SEARCH_HINTS = "Enter confirm · Esc back · Ctrl+C clear";
 const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
 const RESET_HINTS = "Reset the draft to the active layout?  y reset · n/Esc keep the draft";
 
@@ -1014,7 +1013,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		}
 		if (this.#focus === "search" || this.#search.value) {
 			lines.push("", theme.fg(this.#focus === "search" ? "accent" : "muted", "Search"));
-			lines.push(this.#search.render(Math.max(1, width), { muted: text => theme.fg("muted", text) }));
+			lines.push(this.#search.render(Math.max(1, width), { muted: text => theme.fg("muted", text) }, false));
 		}
 		lines.push(
 			"",
@@ -1030,7 +1029,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		if (this.#prompt === "exit") return PROMPT_HINTS;
 		if (this.#prompt === "reset") return RESET_HINTS;
 		if (this.#focus === "template") return TEMPLATE_HINTS;
-		if (this.#focus === "search") return SEARCH_HINTS;
+		if (this.#focus === "search") return `Enter confirm · ${this.#search.input.escapeHint("back")} · Ctrl+C clear`;
 		const query = sanitizeStatusText(this.#search.value);
 		return query ? `filter "${query}" · ${LIST_HINTS}` : LIST_HINTS;
 	}

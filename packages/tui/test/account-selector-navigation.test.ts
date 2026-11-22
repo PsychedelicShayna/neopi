@@ -118,7 +118,7 @@ it.each([
 				cancel,
 			),
 	],
-] as const)("%s native close enters Normal, then leaves search without discarding its draft", (_name, make) => {
+] as const)("%s leaves search without discarding its draft", (name, make) => {
 	let closed = 0;
 	const selector = make(() => {
 		closed++;
@@ -126,9 +126,11 @@ it.each([
 	selector.handleInput("/");
 	selector.handleInput("hjkl/ g");
 	const close = { type: "action", key: PICKER_KEY, act: "close", mods: [] } as const;
-	selector.handleNativeEvent(close);
+	if (name === "reset") selector.handleInput("\x1b");
+	else selector.handleNativeEvent(close);
 	expect(closed).toBe(0);
 	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "hjkl/ g", query: "", focused: true } });
+	if (name === "reset") selector.handleInput("i");
 	selector.handleNativeEvent(close);
 	expect(closed).toBe(0);
 	expect(selector.navigationSnapshot()).toMatchObject({ search: { value: "", query: "", focused: false } });

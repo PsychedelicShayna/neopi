@@ -763,6 +763,8 @@ describe("advisor menu navigation and history", () => {
 				else sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 				expect(h.closed()).toBe(0);
 				if (mode === "focused picker") {
+					expect(h.overlay.navigationSnapshot().content).toMatchObject({ filterFocused: false });
+					h.overlay.handleInput("/");
 					expect(h.overlay.navigationSnapshot().content).toMatchObject({
 						filter: "",
 						filterDraft: "Reviewer",

@@ -1394,9 +1394,17 @@ export class ModelBrowser implements Component {
 		return this.#search.focused;
 	}
 
+	get searchInput() {
+		return this.#search.input;
+	}
+
 	focusFilter(focused = true): void {
 		const before = this.query;
 		this.#search.focused = focused;
+		this.#refreshSearch(before);
+	}
+
+	#refreshSearch(before: string): void {
 		if (this.query !== before) {
 			this.#applyQuery("reset-changed-prefix");
 			this.onQueryChange?.(this.query);
@@ -1634,11 +1642,7 @@ export class ModelBrowser implements Component {
 	#handleSearchInput(data: string): boolean {
 		const before = this.query;
 		if (this.#search.handleInput(data) === "pass") return false;
-		if (this.query !== before) {
-			this.#applyQuery("reset-changed-prefix");
-			this.onQueryChange?.(this.query);
-		}
-		this.#keys.reset();
+		this.#refreshSearch(before);
 		return true;
 	}
 
@@ -1676,7 +1680,9 @@ export class ModelBrowser implements Component {
 	}
 
 	handleCancel(): void {
-		if (!this.#handleSearchInput("\x1b")) this.onCancel?.();
+		const before = this.query;
+		if (this.#search.back()) this.#refreshSearch(before);
+		else this.onCancel?.();
 	}
 
 	/**

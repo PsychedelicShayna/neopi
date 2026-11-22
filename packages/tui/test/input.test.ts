@@ -9,6 +9,9 @@ import {
 	visibleWidth,
 } from "@oh-my-pi/pi-tui/utils";
 import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
+
+const CX: DescribeContext = { cols: 80, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
 function renderedWidth(input: Input, width: number): number {
 	const [line] = input.render(width);
@@ -39,6 +42,44 @@ it("uses shared Vim motions and undo in an existing single-line field, without c
 		setMenuSearchVimMode(false);
 		input.handleInput("x");
 		expect(input.getValue()).toStartWith("x");
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("shows the whole Visual selection in ANSI and reports masked anchor/caret offsets to native hosts", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		input.prompt = "";
+		input.setValue("a👩‍💻bc");
+		for (const key of ["\x1b", "0", "l", "l", "v", "h"]) input.handleInput(key);
+		expect(input.describe(CX).p).toMatchObject({ mode: "VISUAL", anchor: 6, cursor: 1 });
+		expect(input.render(10)[0]).toContain("\x1b[7m👩‍💻\x1b[27m\x1b[7mb\x1b[27m");
+		input.mask = true;
+		expect(input.describe(CX).p).toMatchObject({ text: "••••", mode: "VISUAL", anchor: 2, cursor: 1 });
+		expect(input.render(10)[0]).toMatch(/^•\x1b\[7m•\x1b\[27m\x1b\[7m•\x1b\[27m• +$/);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
+
+it("keeps ordinary Vim undo units before a committed dictation preview", () => {
+	const previous = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+	try {
+		const input = new Input();
+		input.handleInput("hello");
+		input.setVolatileText(" wor");
+		input.render(40);
+		input.setVolatileText(" world");
+		input.commitVolatileText(" world");
+		expect(input.getValue()).toBe("hello world");
+		input.handleInput("\x1f");
+		expect(input.getValue()).toBe("hello");
+		input.handleInput("\x1f");
+		expect(input.getValue()).toBe("");
 	} finally {
 		setMenuSearchVimMode(previous);
 	}

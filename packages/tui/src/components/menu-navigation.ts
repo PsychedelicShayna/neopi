@@ -170,7 +170,7 @@ export class MenuSearchField {
 		if (value === this.#input.focused) return;
 		if (value) {
 			if (this.#draft) {
-				this.#input.setValue(this.#draft.value);
+				this.#input.setValue(this.#draft.value, { markClean: false });
 				this.#input.setCursor(this.#draft.cursor);
 				this.#draft = undefined;
 			}
@@ -212,30 +212,47 @@ export class MenuSearchField {
 		this.#draft = undefined;
 	}
 
+	/** Navigate back without interpreting the gesture as an editing key. */
+	back(): boolean {
+		if (this.focused) {
+			this.focused = false;
+			return true;
+		}
+		if (this.#cancel === "retain" || !this.value) return false;
+		// Leave the filtered view, without losing what `/` should reopen.
+		this.#draft ??= { value: this.value, cursor: this.cursor };
+		this.#input.setValue("");
+		this.#query = "";
+		this.#preview = "";
+		return true;
+	}
+
+	/** Escape's current action, for structured key hints as well as text footers. */
+	get escapeAction(): "normal" | "clear pending command" | "back" {
+		return this.#input.escapeAction("back");
+	}
+
 	handleInput(data: string): "edited" | "exited" | "pass" {
+		const escape = matchesKey(data, "escape");
+		const text = extractPrintableText(data);
+		const kb = getKeybindings();
+		const cancel =
+			matchesKey(data, "ctrl+c") || (!escape && text === undefined && kb.matches(data, "tui.select.cancel"));
 		if (!this.focused) {
 			if (this.#cancel === "retain") return "pass";
-			if (matchesKey(data, "ctrl+c") && (this.value || this.#draft)) {
+			if (cancel && (this.value || this.#draft)) {
 				this.setValue("");
 				return "exited";
 			}
-			if (!this.value || !matchesKey(data, "escape")) return "pass";
-			// Leave the filtered view, without losing what `/` should reopen.
-			this.#draft ??= { value: this.value, cursor: this.cursor };
-			this.#input.setValue("");
-			this.#query = "";
-			this.#preview = "";
-			return "exited";
+			return escape && this.back() ? "exited" : "pass";
 		}
 		// Remember the last valid preview even when no paint occurred between keys.
 		void this.query;
-		if (matchesKey(data, "ctrl+c")) {
+		if (cancel) {
 			this.setValue("");
 			this.focused = false;
 			return "exited";
 		}
-		const text = extractPrintableText(data);
-		const kb = getKeybindings();
 		if (
 			text === undefined &&
 			(matchesKey(data, "enter") || kb.matches(data, "tui.select.confirm") || data === "\n")
@@ -245,8 +262,8 @@ export class MenuSearchField {
 			this.focused = false;
 			return "exited";
 		}
-		if (matchesKey(data, "escape") && !this.#input.vimConsumesEscape()) {
-			this.focused = false;
+		if (escape && !this.#input.vimConsumesEscape()) {
+			this.back();
 			return "exited";
 		}
 		this.#input.handleInput(data, true);
@@ -254,31 +271,35 @@ export class MenuSearchField {
 		return "edited";
 	}
 
-	render(width: number, theme: MenuSearchTheme): string {
+	render(width: number, theme: MenuSearchTheme, showHint = true): string {
 		const columns = Math.max(0, Math.trunc(width));
 		if (!this.focused && this.value.length === 0)
 			return theme.muted(truncateToWidth(t("tui.components.search.placeholder"), columns));
 		const prefix = t("tui.components.search.prefix");
 		const error = compileMenuRegex(this.value)?.error;
+		const escape = this.focused && showHint ? this.escapeAction : undefined;
 		const hint = error
 			? ` · ${t("tui.components.search.invalid_regex", { error })}`
-			: this.focused
+			: escape
 				? t("tui.components.search.focused_hint", {
 						vim: getMenuSearchVimMode() ? `${this.vimMode.toUpperCase()} · ` : "",
-						escape: t(
-							this.#input.vimConsumesEscape() ? "tui.components.search.normal" : "tui.components.search.back",
-						),
+						escape:
+							escape === "clear pending command"
+								? escape
+								: t(escape === "normal" ? "tui.components.search.normal" : "tui.components.search.back"),
 					})
-				: t("tui.components.search.idle_hint");
+				: this.focused || !showHint
+					? ""
+					: t("tui.components.search.idle_hint");
 		const remaining = Math.max(0, columns - visibleWidth(prefix));
 		// In a narrow footer the query matters more than its editing legend.
 		const hintWidth = visibleWidth(hint);
-		const showHint = hintWidth + visibleWidth(replaceTabs(this.value)) + Number(this.focused) <= remaining;
-		const fieldWidth = remaining - (showHint ? hintWidth : 0);
+		const fitsHint = hintWidth + visibleWidth(replaceTabs(this.value)) + Number(this.focused) <= remaining;
+		const fieldWidth = remaining - (fitsHint ? hintWidth : 0);
 		const value = this.focused
 			? (this.#input.render(fieldWidth)[0] ?? "")
 			: truncateToWidth(replaceTabs(this.value), fieldWidth);
-		return theme.muted(truncateToWidth(`${prefix}${replaceTabs(value)}${showHint ? hint : ""}`, columns));
+		return theme.muted(truncateToWidth(`${prefix}${replaceTabs(value)}${fitsHint ? hint : ""}`, columns));
 	}
 
 	navigationSnapshot(): MenuSearchState {

@@ -96,7 +96,7 @@ const PREVIEWED_SETTINGS = new Set([
 const ESCAPE = "\x1b";
 
 /** Footer hint set of the settings overlay, by what currently owns the keys. */
-type SettingsHintMode = "search" | "search-results" | "plugins" | "sections" | "rows" | "rows-sections";
+type SettingsHintMode = "search-results" | "plugins" | "sections" | "rows" | "rows-sections";
 
 /** The settings tab strip; muted tabs (no search matches) keep their place, dimmed. */
 function settingsTabsNode(tabs: readonly Tab[], active: string | undefined): NativeNode {
@@ -121,13 +121,12 @@ function settingsHintsNode(mode: SettingsHintMode, scoped: boolean): NativeNode 
 		: undefined;
 	let hints: (NativeHint | undefined)[];
 	switch (mode) {
-		case "search":
 		case "search-results":
 			hints = [
 				actionHint("tui.select.confirm", t("settings.selector.change")),
-				mode === "search-results" ? unset : undefined,
+				unset,
 				{ keys: ["tab"], label: t("settings.selector.jump_tabs") },
-				actionHint("tui.select.cancel", t("settings.selector.exit_search")),
+				{ keys: ["escape"], label: t("settings.selector.exit_search") },
 			];
 			break;
 		case "plugins":
@@ -163,6 +162,7 @@ interface SettingsNativeMemo {
 	prefsPreview?: { source: string; node: NativeNode };
 	tabs?: { tabs: readonly Tab[]; active: string | undefined; node: NativeNode };
 	search?: { input: Input; count: number; locale: Locale; node: NativeNode };
+	searchHints?: { escape: string; node: NativeNode };
 	preview?: { source: string; node: NativeNode };
 	hints: Partial<Record<SettingsHintMode, NativeNode>>;
 	root?: { children: readonly NativeChild[]; node: NativeNode };
@@ -189,14 +189,19 @@ function createSettingsTextField(
 		secret,
 		initialValue: currentValue || undefined,
 		empty: "submit",
-		hint: t("settings.selector.text_hint", {
-			submit_key: editorKey("tui.input.submit"),
-			cancel_key: formatKeyHint("ctrl+c"),
-		}),
+		hint: settingsTextHint,
 		onSubmit,
 		onCancel,
 		requestRender,
 	});
+}
+
+function settingsTextHint(input: Input): string {
+	const hint = t("settings.selector.text_hint", {
+		submit_key: editorKey("tui.input.submit"),
+		cancel_key: formatKeyHint("ctrl+c"),
+	});
+	return input.vimConsumesEscape() || !input.dirty ? `${hint} · ${input.escapeHint("back")}` : hint;
 }
 
 const CUSTOM_NUMBER_OPTION = "__custom_number__";
@@ -666,10 +671,7 @@ class ProviderLimitsSubmenu extends Container {
 					: "Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
 				initialValue: limits[provider]?.toString() ?? undefined,
 				empty: "submit",
-				hint: t("settings.selector.text_hint", {
-					submit_key: editorKey("tui.input.submit"),
-					cancel_key: formatKeyHint("ctrl+c"),
-				}),
+				hint: settingsTextHint,
 				validate: value => {
 					if (value.trim() === "") return undefined;
 					const limit = Number(value.trim());
@@ -1025,6 +1027,14 @@ export class SettingsSelectorComponent implements Component {
 		});
 	}
 
+	#searchEditingHint(): string {
+		return t("settings.selector.search_focused_hint", {
+			confirm: editorKey("tui.select.confirm"),
+			escape: this.#search.input.escapeHint("back"),
+			cancel: formatKeyHint("ctrl+c"),
+		});
+	}
+
 	#footerHintText(): string {
 		const confirm = editorKey("tui.select.confirm");
 		const cancel = editorKey("tui.select.cancel");
@@ -1032,11 +1042,8 @@ export class SettingsSelectorComponent implements Component {
 		const unset = this.#context.settings.resolve
 			? ` · ${formatKeyHint("backspace")} ${t("settings.selector.unset")}`
 			: "";
-		if (this.#searchList) {
-			return this.#search.focused
-				? t("settings.selector.search_focused_hint", { confirm, cancel })
-				: t("settings.selector.search_hint", { tab, cancel, unset });
-		}
+		if (this.#search.focused) return this.#searchEditingHint();
+		if (this.#searchList) return t("settings.selector.search_hint", { tab, cancel: formatKeyHint("escape"), unset });
 		if (this.#currentTabId === "plugins") {
 			return t(
 				this.#pluginComponent?.atRoot
@@ -1084,7 +1091,7 @@ export class SettingsSelectorComponent implements Component {
 		const prefix = ` ${theme.fg("accent", icon)} `;
 		// The input pads itself to exactly this width and keeps the cursor in view.
 		const inputWidth = Math.max(4, width - visibleWidth(prefix) - rightWidth - 1);
-		const inputLine = this.#search.render(inputWidth, { muted: text => theme.fg("muted", text) });
+		const inputLine = this.#search.render(inputWidth, { muted: text => theme.fg("muted", text) }, false);
 		const count = theme.fg(this.#searchMatchCount > 0 ? "dim" : "warning", countText);
 		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
 	}
@@ -1105,11 +1112,15 @@ export class SettingsSelectorComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
-		const hints = menuHintLines(
-			this.#getReloadConflict() ?? this.#footerHintText(),
-			innerWidth,
-			this.#search.focused || this.#editingText ? "" : undefined,
-		);
+		const conflict = this.#getReloadConflict();
+		const hints =
+			this.#editingText && !conflict
+				? []
+				: menuHintLines(
+						conflict ?? this.#footerHintText(),
+						innerWidth,
+						this.#search.focused || this.#editingText ? "" : undefined,
+					);
 
 		const tabLines = this.#tabBar.render(innerWidth);
 		const searching = this.#hasSearchResults;
@@ -1630,19 +1641,32 @@ export class SettingsSelectorComponent implements Component {
 			children.push(memo.preview.node);
 		}
 
-		const mode: SettingsHintMode = searching
-			? this.#search.focused
-				? "search"
-				: "search-results"
-			: this.#currentTabId === "plugins"
-				? "plugins"
-				: this.#currentList?.sectionFocused
-					? "sections"
-					: this.#hasSectionJump
-						? "rows-sections"
-						: "rows";
-		memo.hints[mode] ??= settingsHintsNode(mode, this.#context.settings.resolve !== undefined);
-		children.push(memo.hints[mode]);
+		if (this.#search.focused && !this.#editingText) {
+			const escape = this.#search.escapeAction;
+			if (memo.searchHints?.escape !== escape) {
+				memo.searchHints = {
+					escape,
+					node: hintsRow([
+						actionHint("tui.select.confirm", t("settings.selector.confirm_search")),
+						{ keys: ["escape"], label: escape },
+						{ keys: ["ctrl+c"], label: t("settings.selector.clear_search") },
+					]),
+				};
+			}
+			children.push(memo.searchHints.node);
+		} else if (!this.#editingText) {
+			const mode: SettingsHintMode = searching
+				? "search-results"
+				: this.#currentTabId === "plugins"
+					? "plugins"
+					: this.#currentList?.sectionFocused
+						? "sections"
+						: this.#hasSectionJump
+							? "rows-sections"
+							: "rows";
+			memo.hints[mode] ??= settingsHintsNode(mode, this.#context.settings.resolve !== undefined);
+			children.push(memo.hints[mode]);
+		}
 
 		if (memo.root && sameItems(memo.root.children, children)) return memo.root.node;
 		const root = overlayCard("omp.overlay.settings", "Settings", children);

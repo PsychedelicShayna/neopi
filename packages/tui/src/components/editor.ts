@@ -1262,6 +1262,25 @@ export class Editor implements Component, Focusable {
 		return selection === null ? 0 : selection.to.line - selection.from.line + 1;
 	}
 
+	/** Active Visual selection, with an exclusive end, for embedded renderers. */
+	get vimSelection() {
+		return this.#vimSelection();
+	}
+
+	get vimVisualAnchor(): VimPosition | null {
+		return this.#vim?.visual ? this.#vim.anchor : null;
+	}
+
+	escapeAction<Back extends string>(back: Back): Back | "normal" | "clear pending command" {
+		if (!this.vimConsumesEscape()) return back;
+		return this.vimMode === "normal" ? "clear pending command" : "normal";
+	}
+
+	/** Describe what the next physical Escape will do in this field. */
+	escapeHint(back: string): string {
+		return `Esc ${this.escapeAction(back)}`;
+	}
+
 	/**
 	 * Whether Escape belongs to the editor right now rather than to the app.
 	 *

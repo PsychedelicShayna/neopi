@@ -228,10 +228,10 @@ export class IrcViewerComponent implements Component {
 		const editing = this.#filter.focused || (this.#compose && this.#draft.focused);
 		const hints = menuHintLines(
 			this.#filter.focused
-				? "enter apply · esc clear"
+				? `Enter apply · ${this.#filter.input.escapeHint("back")} · Ctrl+C clear`
 				: this.#compose
 					? this.#draft.focused
-						? "enter send · Tab view · esc leave field · Ctrl+C discard"
+						? `Enter send · Tab view · ${this.#draft.escapeHint("leave field")} · Ctrl+C discard`
 						: "Tab edit reply · Ctrl+C discard · ? help"
 					: `enter/space expand${this.#options.reply ? " · r reply" : ""} · / filter · G follow · ${[
 							"esc",

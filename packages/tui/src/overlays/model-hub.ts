@@ -35,7 +35,7 @@ import { FuzzyCorpus } from "../fuzzy";
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { col, compact, kbd, md, node, row, span, text } from "../native/describe";
-import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
+import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerBackAction, pickerEvent } from "../native/picker";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint } from "../native/overlay";
 import { plainText } from "../native/spans";
@@ -475,7 +475,7 @@ interface StripChip extends HubStripChip<
 	folderMembership?: { name: string; add: boolean };
 }
 
-type StripInput = { input: Input; initialText: string };
+type StripInput = { input: Input };
 
 type StripState =
 	| (HubStripState<StripChip> & {
@@ -506,7 +506,6 @@ type StripState =
 			purpose: "folder";
 			action: "folderNew" | "folderRename" | "folderClear" | "folderDelete";
 			name?: string;
-			initialText: string;
 			input: Input;
 			error?: string;
 	  }
@@ -515,21 +514,18 @@ type StripState =
 			kind: "name";
 			purpose: "role" | "preset";
 			input: Input;
-			initialText: string;
 	  }
 	| {
 			kind: "name";
 			purpose: "contextRule";
 			selector: string;
 			input: Input;
-			initialText: string;
 	  }
 	| {
 			kind: "name";
 			purpose: "description" | "roleBudget";
 			role: string;
 			input: Input;
-			initialText: string;
 	  }
 	| {
 			kind: "effortLevels";
@@ -547,7 +543,6 @@ type StripState =
 	| {
 			kind: "pattern";
 			input: Input;
-			initialText: string;
 			target: "rule" | "fallback" | "role" | "fallbackKey";
 			role?: string;
 			fallbackTarget?: { role: string; index: number | null };
@@ -579,7 +574,6 @@ type StripState =
 			purpose: "compaction";
 			model: Model;
 			input: Input;
-			initialText: string;
 			error?: string;
 			confirm?: { value: string; message: string };
 			preview?: { value: string; text: string | undefined };
@@ -834,6 +828,15 @@ export class ModelHubComponent implements Component {
 		this.#browser.focusFilter(focused && kind !== "roles" && kind !== "effort");
 	}
 
+	get #activeSearchInput(): Input {
+		if (this.#assigning === null) {
+			const kind = this.#activeEntry().kind;
+			if (kind === "roles") return this.#rolesSearch.input;
+			if (kind === "effort") return this.#effortSearch.input;
+		}
+		return this.#browser.searchInput;
+	}
+
 	#rolesRows: RolesRow[] = [];
 	#roleIndex = 0;
 	/** In-hub yank register: selectors and sparse effort selections are immutable snapshots. */
@@ -1066,13 +1069,7 @@ export class ModelHubComponent implements Component {
 
 	#copyStrip(strip: StripState | null): StripState | null {
 		if (!strip) return null;
-		if (strip.kind === "name" || strip.kind === "pattern") {
-			const input = new Input();
-			input.setValue(strip.input.getValue());
-			input.setCursor(strip.input.getCursor());
-			input.focused = strip.input.focused;
-			return { ...strip, input };
-		}
+		if (strip.kind === "name" || strip.kind === "pattern") return { ...strip, input: strip.input.copyDraft() };
 		if (strip.kind === "effortLevels")
 			return {
 				...strip,
@@ -2410,7 +2407,7 @@ export class ModelHubComponent implements Component {
 		const input = new Input();
 		input.setValue(initialText);
 		input.focused = true;
-		return { input, initialText };
+		return { input };
 	}
 
 	#openSelectorPattern(
@@ -3782,18 +3779,7 @@ export class ModelHubComponent implements Component {
 			const search = rolesSearching ? this.#rolesSearch : this.#effortSearch;
 			const before = search.query;
 			if (search.handleInput(rawData) !== "pass") {
-				if (before !== search.query) {
-					if (rolesSearching) {
-						this.#roleIndex = 0;
-						this.#roleViewport.setTop(0);
-						this.#buildRolesRows();
-					} else {
-						this.#effortIndex = -1;
-						this.#effortViewport.setTop(0);
-						this.#syncEffortSelection();
-					}
-				}
-				this.#keys.reset();
+				this.#localSearchChanged(before, rolesSearching);
 				return;
 			}
 		}
@@ -3974,6 +3960,21 @@ export class ModelHubComponent implements Component {
 		if (action) this.#browser.handleNavigation(action);
 	}
 
+	#localSearchChanged(before: string, roles: boolean): void {
+		if (before !== (roles ? this.#rolesSearch : this.#effortSearch).query) {
+			if (roles) {
+				this.#roleIndex = 0;
+				this.#roleViewport.setTop(0);
+				this.#buildRolesRows();
+			} else {
+				this.#effortIndex = -1;
+				this.#effortViewport.setTop(0);
+				this.#syncEffortSelection();
+			}
+		}
+		this.#keys.reset();
+	}
+
 	#editFacts(): void {
 		if (this.#sessionOnly || this.#strip || this.#filterEditing || this.#assigning !== null) return;
 		const entry = this.#activeEntry();
@@ -4054,7 +4055,7 @@ export class ModelHubComponent implements Component {
 				strip.input.focused = false;
 				return;
 			}
-			if (!discard && strip.input.getValue() !== strip.initialText) return;
+			if (!discard && strip.input.dirty) return;
 		}
 		if (strip?.kind === "folderChoice" || (strip?.kind === "name" && strip.purpose === "folder")) {
 			this.#closeStrip();
@@ -4118,7 +4119,7 @@ export class ModelHubComponent implements Component {
 					if (strip.kind === "name") this.#submitNameStrip();
 					else this.#submitSelectorPattern(strip);
 				} else if (action.kind === "horizontal" || action.kind === "context") {
-					if (strip.input.getValue() !== strip.initialText) return;
+					if (strip.input.dirty) return;
 					const focus =
 						action.kind === "horizontal"
 							? action.delta < 0
@@ -4521,7 +4522,7 @@ export class ModelHubComponent implements Component {
 	#chooseSidebarEntry(clicked: SidebarEntry | undefined, activate = true): void {
 		if (!clicked || clicked.kind === "separator") return;
 		const strip = this.#strip;
-		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.getValue() !== strip.initialText) return;
+		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.dirty) return;
 		this.#filterEditing = false;
 		if (this.#strip) this.#closeStrip();
 		const already = clicked.id === this.#activeEntryId;
@@ -5052,7 +5053,8 @@ export class ModelHubComponent implements Component {
 				return `${upDown} save scope · ${enter}/Space set · Tab context · ${cancel} cancel`;
 			return `${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
-		if (this.#filterEditing) return "Search · Enter confirm · Esc back · Ctrl+C clear";
+		if (this.#filterEditing)
+			return `Search · Enter confirm · ${this.#activeSearchInput.escapeHint("back")} · Ctrl+C clear`;
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
 			const toggle = this.#taskModeKey
 				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "Task model"}`
@@ -6162,10 +6164,8 @@ export class ModelHubComponent implements Component {
 		if (this.#assignmentPending) return CLOSE_ACTION;
 		const strip = this.#strip;
 		if (strip?.kind === "name" || strip?.kind === "pattern") return pickerAction("cancel", "Cancel field", "ctrl+c");
-		return {
-			...CLOSE_ACTION,
-			label: this.#filterEditing ? "Back to list" : strip || this.#assigning ? "Back" : "Close",
-		};
+		if (this.#filterEditing) return pickerBackAction(this.#activeSearchInput.vimConsumesEscape());
+		return { ...CLOSE_ACTION, label: strip || this.#assigning ? "Back" : "Close" };
 	}
 
 	/** The action bar for the current view; every button runs the path of the key it shows. */
@@ -6184,7 +6184,9 @@ export class ModelHubComponent implements Component {
 						{ primary: true },
 					),
 					cancel,
-					...(strip.kind === "name" ? [{ ...CLOSE_ACTION, label: "Back (keep draft)" }] : []),
+					...(strip.kind === "name" && strip.input.focused
+						? [pickerBackAction(strip.input.vimConsumesEscape(), "Back (keep draft)")]
+						: []),
 				];
 			}
 			const apply =
@@ -6230,8 +6232,8 @@ export class ModelHubComponent implements Component {
 							"enter",
 							{ primary: true },
 						);
-			return strip.kind === "name" || strip.kind === "pattern"
-				? [apply, cancel, { ...CLOSE_ACTION, label: "Back (keep draft)" }]
+			return (strip.kind === "name" || strip.kind === "pattern") && strip.input.focused
+				? [apply, cancel, pickerBackAction(strip.input.vimConsumesEscape(), "Back (keep draft)")]
 				: [apply, cancel];
 		}
 		const facts =
@@ -6703,7 +6705,23 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			this.#handleInput("\x1b");
+			const entry = this.#activeEntry();
+			const search =
+				this.#assigning === null
+					? entry.kind === "roles"
+						? this.#rolesSearch
+						: entry.kind === "effort"
+							? this.#effortSearch
+							: undefined
+					: undefined;
+			if (this.#strip || this.#assignmentPending) this.#cancel();
+			else if (search) {
+				const before = search.query;
+				if (search.back()) this.#localSearchChanged(before, search === this.#rolesSearch);
+				else this.#cancel();
+			} else if (this.#isBrowserView(entry) || this.#browser.filterFocused || this.#browser.query) {
+				this.#browser.handleCancel();
+			} else this.#cancel();
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.

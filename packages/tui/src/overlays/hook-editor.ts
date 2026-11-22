@@ -194,10 +194,13 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		const followUpKeys = boundKeys("app.message.followUp", ["ctrl+q", "ctrl+enter"]);
 		const [primaryFollowUpKey = "ctrl+q"] = followUpKeys;
 		const externalEditorKey = editorKey("app.editor.external") || formatKeyHint("ctrl+g");
-		const cancelHint = `${this.#onBack ? `${formatKeyHint("escape")} back  ` : ""}${formatKeyHint("ctrl+c")} cancel`;
-		const hint = this.#promptStyle
-			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${cancelHint}  ${externalEditorKey} external editor`
-			: `${formatKeyHints(followUpKeys)} submit  ${cancelHint}  ${externalEditorKey} external editor`;
+		const hint = () => {
+			const back = this.#onBack ? "back" : "close if unchanged";
+			const cancelHint = `${this.#editor.escapeHint(back)}  ${formatKeyHint("ctrl+c")} cancel`;
+			return this.#promptStyle
+				? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${cancelHint}  ${externalEditorKey} external editor`
+				: `${formatKeyHints(followUpKeys)} submit  ${cancelHint}  ${externalEditorKey} external editor`;
+		};
 		this.#field = new FormField(this.#editor, {
 			theme: formTheme,
 			details:

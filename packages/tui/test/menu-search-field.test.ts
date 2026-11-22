@@ -128,6 +128,25 @@ describe("transactional Vim menu search", () => {
 		}
 	});
 
+	it.each([false, true])("honors a nonprintable cancel alias on a retained query (Vim %s)", vim => {
+		const previous = getKeybindings();
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "alt+x" }));
+		setMenuSearchVimMode(vim);
+		try {
+			const field = new MenuSearchField("old");
+			expect(field.handleInput("\x1bx")).toBe("exited");
+			expect(field.confirmedQuery).toBe("");
+			field.focused = true;
+			field.handleInput("draft");
+			expect(field.handleInput("\x1bx")).toBe("exited");
+			expect(field.focused).toBe(false);
+			field.focused = true;
+			expect(field.value).toBe("");
+		} finally {
+			setKeybindings(previous);
+		}
+	});
+
 	it("keeps previous preview results for invalid regex and refuses invalid confirmation", () => {
 		const field = new MenuSearchField("", true);
 		field.handleInput("/voice");

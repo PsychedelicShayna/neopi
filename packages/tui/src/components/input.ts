@@ -151,6 +151,16 @@ export class Input implements Component, Focusable {
 		return this.#value !== this.#initialValue;
 	}
 
+	/** Copy the editable draft and its clean baseline for a navigation snapshot. */
+	copyDraft(): Input {
+		const copy = new Input(this.options);
+		copy.#initialValue = this.#initialValue;
+		copy.#value = this.#value;
+		copy.#cursor = this.#cursor;
+		copy.focused = this.focused;
+		return copy;
+	}
+
 	/** Replace the value; the caret lands at the end unless `cursor: "start"`. */
 	setValue(value: string, options: { cursor?: "start" | "end"; markClean?: boolean } = {}): void {
 		if (options.markClean !== false) this.#initialValue = value;
@@ -178,6 +188,14 @@ export class Input implements Component, Focusable {
 
 	vimConsumesEscape(): boolean {
 		return this.#modalEditor()?.vimConsumesEscape() ?? false;
+	}
+
+	escapeAction<Back extends string>(back: Back): Back | "normal" | "clear pending command" {
+		return this.#modalEditor()?.escapeAction(back) ?? back;
+	}
+
+	escapeHint(back: string): string {
+		return `Esc ${this.escapeAction(back)}`;
 	}
 
 	resetVimMode(): void {
@@ -472,6 +490,18 @@ export class Input implements Component, Focusable {
 	deleteBeforeCursor(count: number): void {
 		const removable = Math.min(count, this.#cursor);
 		if (removable <= 0) return;
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.applyHostEdit({
+				from: this.#cursor - removable,
+				to: this.#cursor,
+				text: "",
+				cursor: this.#cursor - removable,
+				len: this.#value.length,
+			});
+			this.#readModalEditor(editor);
+			return;
+		}
 		this.#lastAction = null;
 		this.#pushUndo();
 		this.#replaceBeforeCursor(removable, "");
@@ -481,17 +511,35 @@ export class Input implements Component, Focusable {
 	 *  Finalize it with {@link commitVolatileText} or drop it with {@link clearVolatileText}. */
 	setVolatileText(text: string): void {
 		const clean = toSingleLine(text);
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.setVolatileText(clean);
+			this.#readModalEditor(editor);
+			return;
+		}
 		this.#replaceBeforeCursor(this.#volatileTextLen, clean);
 		this.#volatileTextLen = clean.length;
 	}
 
 	/** Remove the current volatile preview without committing it. */
 	clearVolatileText(): void {
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.clearVolatileText();
+			this.#readModalEditor(editor);
+			return;
+		}
 		this.setVolatileText("");
 	}
 
 	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
 	commitVolatileText(text: string): void {
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.commitVolatileText(toSingleLine(text));
+			this.#readModalEditor(editor);
+			return;
+		}
 		this.clearVolatileText();
 		const clean = toSingleLine(text);
 		if (!clean) return;
@@ -708,20 +756,46 @@ export class Input implements Component, Focusable {
 	 * A masked input sends one bullet per grapheme, with the caret mapped onto
 	 * them, so the secret never leaves the process.
 	 */
-	describe(_cx: DescribeContext): NativeNode {
-		let value = this.#value;
-		let cursor = this.#cursor;
-		if (this.mask) {
-			const graphemes = [...segmenter.segment(this.#value)];
-			value = "•".repeat(graphemes.length);
-			cursor = graphemes.filter(grapheme => grapheme.index < this.#cursor).length;
+	#display(anchor?: number, start?: number, end?: number) {
+		if (!this.mask) return { value: this.#value, cursor: this.#cursor, anchor, start, end };
+		let cursor = 0;
+		let bulletAnchor = 0;
+		let bulletStart = 0;
+		let bulletEnd = 0;
+		let count = 0;
+		for (const { index } of segmenter.segment(this.#value)) {
+			count++;
+			if (index < this.#cursor) cursor++;
+			if (anchor !== undefined && index < anchor) bulletAnchor++;
+			if (start !== undefined && index < start) bulletStart++;
+			if (end !== undefined && index < end) bulletEnd++;
 		}
+		return {
+			value: "•".repeat(count),
+			cursor,
+			anchor: anchor === undefined ? undefined : bulletAnchor,
+			start: start === undefined ? undefined : bulletStart,
+			end: end === undefined ? undefined : bulletEnd,
+		};
+	}
+
+	describe(_cx: DescribeContext): NativeNode {
+		const editor = this.#vimEditor && this.#modalEditor();
+		const position = editor?.vimVisualAnchor;
+		const anchorOffset =
+			position && editor?.vimMode === "visual-line"
+				? position.col <= this.#cursor
+					? 0
+					: this.#value.length
+				: position?.col;
+		const { value, cursor, anchor } = this.#display(anchorOffset);
 		const prompt = plainText(this.prompt);
 		const props: TspInputProps = {
 			text: value,
 			cursor,
+			anchor,
 			sendable: false,
-			mode: this.#vimEditor && this.#modalEditor()?.nativeVimMode,
+			mode: editor?.nativeVimMode,
 			prompt: prompt || undefined,
 			placeholder: this.placeholder,
 		};
@@ -741,14 +815,13 @@ export class Input implements Component, Focusable {
 			return [sliceWithWidth(prompt, 0, width, true).text];
 		}
 
-		let cursorIndex = this.#cursor;
-		// Ensure we always have a grapheme to invert at the cursor (space at end).
-		let visibleValue = this.#value;
-		if (this.mask) {
-			const graphemes = [...segmenter.segment(this.#value)];
-			visibleValue = "•".repeat(graphemes.length);
-			cursorIndex = graphemes.filter(grapheme => grapheme.index < this.#cursor).length;
-		}
+		const selection = this.#vimEditor && this.#modalEditor()?.vimSelection;
+		const {
+			value: visibleValue,
+			cursor: cursorIndex,
+			start,
+			end,
+		} = this.#display(undefined, selection?.from.col, selection?.to.col);
 		// At end of text the cursor sits on trailing padding, sized to fit a (possibly wide) cursor override.
 		const atEnd = this.#cursor >= this.#value.length;
 		const override =
@@ -762,8 +835,7 @@ export class Input implements Component, Focusable {
 		const cursorDisplay = window.cursorIndex;
 
 		// Build the visible line and insert the cursor marker at the buffer cursor.
-		const graphemes = [...segmenter.segment(visibleText.slice(cursorDisplay))];
-		const cursorGrapheme = graphemes[0];
+		const cursorGrapheme = segmenter.segment(visibleText.slice(cursorDisplay))[Symbol.iterator]().next().value;
 
 		const beforeCursor = visibleText.slice(0, cursorDisplay);
 		const atCursor = cursorGrapheme?.segment ?? "";
@@ -777,10 +849,22 @@ export class Input implements Component, Focusable {
 		const beforeWidth = visibleWidth(beforeCursor);
 		const remainingAfterWidth = Math.max(0, availableWidth - beforeWidth - cursorWidth);
 		const clampedAfterCursor = sliceWithWidth(afterCursor, 0, remainingAfterWidth, true).text;
-		const renderedNoMarker = beforeCursor + cursorChar + clampedAfterCursor;
-		const textWithCursor = beforeCursor + marker + cursorChar + clampedAfterCursor;
+		const visibleStart = cursorIndex - cursorDisplay;
+		const selectionStart = start === undefined ? 0 : start - visibleStart;
+		const selectionEnd = end === undefined ? 0 : end - visibleStart;
+		const highlight = (text: string, offset: number) => {
+			const from = Math.max(0, selectionStart - offset);
+			const to = Math.min(text.length, selectionEnd - offset);
+			return from < to ? `${text.slice(0, from)}\x1b[7m${text.slice(from, to)}\x1b[27m${text.slice(to)}` : text;
+		};
+		const renderedCursor = this.#useTerminalCursor && !override ? highlight(cursorChar, cursorDisplay) : cursorChar;
+		const textWithCursor =
+			highlight(beforeCursor, 0) +
+			marker +
+			renderedCursor +
+			highlight(clampedAfterCursor, cursorDisplay + atCursor.length);
 
-		const visualLength = visibleWidth(renderedNoMarker);
+		const visualLength = beforeWidth + cursorWidth + visibleWidth(clampedAfterCursor);
 		const pad = padding(Math.max(0, availableWidth - visualLength));
 		const line = prompt + textWithCursor + pad;
 		return [line];

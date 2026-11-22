@@ -54,6 +54,34 @@ describe("MoveOverlay native events", () => {
 		{ value: "/work/gamma", label: "gamma/" },
 	];
 
+	for (const vim of [false, true]) {
+		it(`keeps a Tab-completed path through Escape (Vim ${vim ? "on" : "off"})`, () => {
+			const previous = getMenuSearchVimMode();
+			setMenuSearchVimMode(vim);
+			try {
+				const results: (MoveOverlayResult | undefined)[] = [];
+				const overlay = new MoveOverlay("/work", result => results.push(result), {
+					search: prefix => entries.filter(entry => entry.value.startsWith(prefix)),
+				});
+				overlay.handleInput("/work/al");
+				overlay.handleInput("\t");
+				overlay.handleInput("\x1b");
+				if (vim) {
+					expect(overlay.filterFocused).toBe(true);
+					overlay.handleInput("\x1b");
+				}
+				expect(overlay.filterFocused).toBe(false);
+				overlay.handleInput("\x1b");
+				expect(results).toEqual([]);
+				expect(listOf(overlay.describe()).p?.selected).toBe("/work/alpha");
+				overlay.handleInput("\r");
+				expect(results).toEqual([{ directory: "/work/alpha" }]);
+			} finally {
+				setMenuSearchVimMode(previous);
+			}
+		});
+	}
+
 	it("mirrors a selected suggestion and confirms the activated one", () => {
 		const results: (MoveOverlayResult | undefined)[] = [];
 		const overlay = new MoveOverlay("/work", result => results.push(result), { search: () => entries });
