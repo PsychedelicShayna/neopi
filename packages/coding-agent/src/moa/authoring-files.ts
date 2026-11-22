@@ -1,7 +1,6 @@
 /**
- * The MIXTURES.toml files NeoPi reads for a workspace, and link-safe IO on
- * them. The editor names a file only by an id from `mixtureSources`; the
- * server recomputes the list and never accepts a path from a client.
+ * The MIXTURES.toml files NeoPi reads for a workspace, and link-safe I/O
+ * shared by its browser editors. Callers select only server-known sources.
  *
  * Writes never follow links: a MIXTURES.toml that is a symlink (dangling or
  * not) or any non-regular file is refused, the containing directory must
@@ -9,11 +8,12 @@
  * O_EXCL temp file in that directory that is fsynced and renamed over the
  * target (rename replaces the directory entry; it does not follow it).
  */
-import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { MixtureScope } from "@npi-deck/protocol";
+import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import { configCandidatePaths } from "../advisor/watchdog";
+import { MIXTURES_FILE_NAME } from "./config";
 
 export const ABSENT = "absent";
 const OPEN_READ = constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0);
@@ -23,21 +23,21 @@ export interface MixtureSource {
 	/** Opaque: a digest of the path, so clients never send paths. */
 	id: string;
 	path: string;
-	kind: MixtureScope;
+	kind: MixtureConfigScope;
 	/** Position in NeoPi's discovery order (user, then project ancestor → cwd). */
 	order: number;
-	/** Why the deck will not write this file; undefined when editable. */
+	/** Why the editor will not write this file; undefined when editable. */
 	readOnly?: string;
 	/** The directory the file must live in, canonicalized, when it is editable. */
 	expectedDir?: string;
 }
 
 export function sourceId(file: string): string {
-	return createHash("sha256").update(path.resolve(file)).digest("hex").slice(0, 16);
+	return digest(path.resolve(file)).slice(0, 16);
 }
 
-export function digest(text: string | null): string {
-	return text === null ? ABSENT : createHash("sha256").update(text).digest("hex");
+export function digest(bytes: string | Uint8Array): string {
+	return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
 async function realpathOrNull(target: string): Promise<string | null> {
@@ -60,16 +60,15 @@ async function exists(target: string): Promise<boolean> {
 /**
  * NeoPi's search path in its precedence order, restricted to files that
  * exist plus the two files the editor may create (the user file and the
- * project root's). `candidates` is `configCandidatePaths(cwd, agentDir,
- * ["MIXTURES.toml"])`, `projectDir` the workspace root the deck edits within.
+ * project root's).
  */
 export async function mixtureSources(
 	cwd: string,
-	candidates: { candidates: readonly string[]; userPaths: ReadonlySet<string> },
 	dirs: { projectDir: string; agentDir: string },
 ): Promise<MixtureSource[]> {
-	const userFile = path.resolve(dirs.agentDir, "MIXTURES.toml");
-	const rootFile = path.resolve(dirs.projectDir, "MIXTURES.toml");
+	const candidates = configCandidatePaths(cwd, dirs.agentDir, [MIXTURES_FILE_NAME]);
+	const userFile = path.resolve(dirs.agentDir, MIXTURES_FILE_NAME);
+	const rootFile = path.resolve(dirs.projectDir, MIXTURES_FILE_NAME);
 	const [realAgent, realRoot] = await Promise.all([realpathOrNull(dirs.agentDir), realpathOrNull(dirs.projectDir)]);
 	const listed: Array<MixtureSource & { depth: number; probe: number }> = [];
 	for (const [probe, candidate] of candidates.candidates.entries()) {
@@ -90,11 +89,21 @@ export async function mixtureSources(
 			else readOnly = "the agent directory does not exist";
 		} else {
 			const inside = path.relative(dirs.projectDir, parent);
-			if (inside.startsWith("..") || path.isAbsolute(inside)) readOnly = `outside the workspace root ${dirs.projectDir}`;
+			if (inside.startsWith("..") || path.isAbsolute(inside))
+				readOnly = `outside the workspace root ${dirs.projectDir}`;
 			else if (realRoot) expectedDir = path.join(realRoot, inside);
 			else readOnly = "the workspace root does not exist";
 		}
-		listed.push({ id: sourceId(file), path: file, kind: isUser ? "user" : "project", order: 0, readOnly, expectedDir, depth, probe });
+		listed.push({
+			id: sourceId(file),
+			path: file,
+			kind: isUser ? "user" : "project",
+			order: 0,
+			readOnly,
+			expectedDir,
+			depth,
+			probe,
+		});
 	}
 	// NeoPi: user first, then project levels by depth descending (ancestors first); ties keep probe order.
 	listed.sort((a, b) => (a.kind !== b.kind ? (a.kind === "user" ? -1 : 1) : b.depth - a.depth || a.probe - b.probe));
@@ -103,7 +112,7 @@ export async function mixtureSources(
 
 export type SourceRead =
 	| { state: "absent" }
-	| { state: "file"; text: string; mode: number }
+	| { state: "file"; text: string; hash: string; mode: number }
 	/** A link or special file: never read through for editing, never written. */
 	| { state: "refused"; reason: string };
 
@@ -112,14 +121,15 @@ export type SourceRead =
  * refused, not absent, so it cannot pass as a new file.
  */
 export async function readSource(file: string, maxBytes: number): Promise<SourceRead> {
-	let info: Awaited<ReturnType<typeof fs.lstat>>;
+	let info: Stats;
 	try {
 		info = await fs.lstat(file);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
 		return { state: "refused", reason: `cannot inspect (${(error as NodeJS.ErrnoException).code ?? "error"})` };
 	}
-	if (info.isSymbolicLink()) return { state: "refused", reason: "is a symbolic link; the deck does not edit through links" };
+	if (info.isSymbolicLink())
+		return { state: "refused", reason: "is a symbolic link; the editor does not edit through links" };
 	if (!info.isFile()) return { state: "refused", reason: "is not a regular file" };
 	let handle: fs.FileHandle;
 	try {
@@ -131,31 +141,41 @@ export async function readSource(file: string, maxBytes: number): Promise<Source
 		const stat = await handle.stat();
 		if (!stat.isFile()) return { state: "refused", reason: "is not a regular file" };
 		if (stat.size > maxBytes) return { state: "refused", reason: `is ${stat.size} bytes; the cap is ${maxBytes}` };
-		const buffer = Buffer.alloc(maxBytes + 1);
+		let buffer = Buffer.allocUnsafe(stat.size + 1);
 		let total = 0;
 		while (total <= maxBytes) {
+			if (total === buffer.length) {
+				const grown = Buffer.allocUnsafe(Math.min(buffer.length * 2, maxBytes + 1));
+				buffer.copy(grown);
+				buffer = grown;
+			}
 			const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
 			if (bytesRead === 0) break;
 			total += bytesRead;
 		}
 		if (total > maxBytes) return { state: "refused", reason: `grew past the ${maxBytes}-byte cap` };
-		return { state: "file", text: buffer.subarray(0, total).toString("utf8"), mode: stat.mode & 0o777 };
+		const bytes = buffer.subarray(0, total);
+		return { state: "file", text: bytes.toString("utf8"), hash: digest(bytes), mode: stat.mode & 0o777 };
 	} finally {
 		await handle.close();
 	}
 }
 
 export function readHash(read: SourceRead): string | null {
-	return read.state === "absent" ? ABSENT : read.state === "file" ? digest(read.text) : null;
+	return read.state === "absent" ? ABSENT : read.state === "file" ? read.hash : null;
 }
 
 export class SourceConflictError extends Error {}
 
 async function assertDirectory(source: MixtureSource): Promise<string> {
 	const dir = path.dirname(source.path);
-	if (source.readOnly || !source.expectedDir) throw new SourceConflictError(`${source.path} is not editable: ${source.readOnly ?? "no expected directory"}`);
+	if (source.readOnly || !source.expectedDir)
+		throw new SourceConflictError(`${source.path} is not editable: ${source.readOnly ?? "no expected directory"}`);
 	const real = await realpathOrNull(dir);
-	if (real !== source.expectedDir) throw new SourceConflictError(`${dir} does not resolve to ${source.expectedDir}; refusing to write through a linked directory`);
+	if (real !== source.expectedDir)
+		throw new SourceConflictError(
+			`${dir} does not resolve to ${source.expectedDir}; refusing to write through a linked directory`,
+		);
 	return dir;
 }
 
@@ -177,12 +197,18 @@ async function fsyncDir(dir: string): Promise<void> {
  * rechecks the target right before the rename, which narrows but cannot close
  * the window against a writer that does not take that lock.
  */
-export async function writeSource(source: MixtureSource, content: string | null, expectedHash: string, maxBytes: number): Promise<void> {
+export async function writeSource(
+	source: MixtureSource,
+	content: string | null,
+	expectedHash: string,
+	maxBytes: number,
+): Promise<void> {
 	const dir = await assertDirectory(source);
 	const recheck = async () => {
 		const now = await readSource(source.path, maxBytes);
 		if (now.state === "refused") throw new SourceConflictError(`${source.path} ${now.reason}`);
-		if (readHash(now) !== expectedHash) throw new SourceConflictError(`${source.path} changed while saving; reload before saving`);
+		if (readHash(now) !== expectedHash)
+			throw new SourceConflictError(`${source.path} changed while saving; reload before saving`);
 		return now;
 	};
 	const before = await recheck();
@@ -195,8 +221,12 @@ export async function writeSource(source: MixtureSource, content: string | null,
 		}
 		return;
 	}
-	const temp = path.join(dir, `.MIXTURES.toml.${randomUUID()}.tmp`);
-	const handle = await fs.open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+	const temp = path.join(dir, `.${MIXTURES_FILE_NAME}.${crypto.randomUUID()}.tmp`);
+	const handle = await fs.open(
+		temp,
+		constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+		0o600,
+	);
 	let renamed = false;
 	try {
 		try {

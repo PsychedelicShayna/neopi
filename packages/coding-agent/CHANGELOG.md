@@ -15,6 +15,7 @@
 
 ### Added
 
+- Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
 - `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
 - Use `/fast force fast` or `/fast force ultra` to request an OpenAI-compatible service tier even when the current model doesn't advertise it.

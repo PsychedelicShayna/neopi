@@ -62,11 +62,14 @@ export type ModuleTypes = {
 	"@oh-my-pi/pi-coding-agent/modes/components/extensions/mcp-runtime": typeof import("@oh-my-pi/pi-coding-agent/modes/components/extensions/mcp-runtime");
 	"@oh-my-pi/pi-utils/file-lock": typeof import("@oh-my-pi/pi-utils/file-lock");
 	"@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents": typeof import("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents");
+	"@oh-my-pi/pi-coding-agent/moa/authoring": typeof import("@oh-my-pi/pi-coding-agent/moa/authoring");
+	"@oh-my-pi/pi-coding-agent/moa/authoring-files": typeof import("@oh-my-pi/pi-coding-agent/moa/authoring-files");
 	"@oh-my-pi/pi-coding-agent/moa/config": typeof import("@oh-my-pi/pi-coding-agent/moa/config");
 	"@oh-my-pi/pi-coding-agent/moa/registration": typeof import("@oh-my-pi/pi-coding-agent/moa/registration");
 	"@oh-my-pi/pi-coding-agent/moa/resolve": typeof import("@oh-my-pi/pi-coding-agent/moa/resolve");
 	"@oh-my-pi/pi-coding-agent/moa/toml": typeof import("@oh-my-pi/pi-coding-agent/moa/toml");
 	"@oh-my-pi/pi-coding-agent/moa/validate": typeof import("@oh-my-pi/pi-coding-agent/moa/validate");
+	"@oh-my-pi/pi-coding-agent/moa/web-server": typeof import("@oh-my-pi/pi-coding-agent/moa/web-server");
 	"@oh-my-pi/pi-coding-agent/plan-mode/approved-plan": typeof import("@oh-my-pi/pi-coding-agent/plan-mode/approved-plan");
 	"@oh-my-pi/pi-coding-agent/registry/agent-lifecycle": typeof import("@oh-my-pi/pi-coding-agent/registry/agent-lifecycle");
 	"@oh-my-pi/pi-coding-agent/registry/agent-registry": typeof import("@oh-my-pi/pi-coding-agent/registry/agent-registry");
@@ -215,16 +218,10 @@ export const MANIFEST = {
 			MixtureWorkspace: op("@oh-my-pi/pi-coding-agent/moa/registration", "MixtureWorkspace"),
 		},
 	},
-	/**
-	 * #80: author MIXTURES.toml in the Mixtures view. NeoPi supplies the search
-	 * path, parsing, serialization, resolution and validation (including its
-	 * milestone capability gate); the deck writes the file itself so it never
-	 * follows links, under NeoPi's cross-process file lock, and re-discovers
-	 * the picker roster after a save.
-	 */
+	/** Mixture discovery and validation, also used when opening a chat on an older backend. */
 	"mixture-config": {
 		tier: "optional-feature",
-		consumers: ["mixtures-service.ts", "bridge/in-process.ts (roster refresh, run-settings check)"],
+		consumers: ["bridge/in-process.ts (roster refresh, run-settings check)", "backend/contract.ts"],
 		exports: {
 			configCandidatePaths: op("@oh-my-pi/pi-coding-agent/advisor/watchdog", "configCandidatePaths"),
 			parseMixturesDoc: op("@oh-my-pi/pi-coding-agent/moa/config", "parseMixturesDoc"),
@@ -234,6 +231,20 @@ export const MANIFEST = {
 			validateMixture: op("@oh-my-pi/pi-coding-agent/moa/validate", "validateMixture"),
 			discoverRegistrableMixtures: op("@oh-my-pi/pi-coding-agent/moa/registration", "discoverRegistrableMixtures"),
 			withFileLock: op("@oh-my-pi/pi-utils", "withFileLock"),
+		},
+	},
+	/** Shared MIXTURES.toml editor contract, available on backends that export it. */
+	"mixture-authoring": {
+		tier: "optional-feature",
+		consumers: ["mixtures-service.ts"],
+		exports: {
+			MixtureAuthoringError: op("@oh-my-pi/pi-coding-agent/moa/authoring", "MixtureAuthoringError"),
+			draftMixtureSource: op("@oh-my-pi/pi-coding-agent/moa/authoring", "draftMixtureSource"),
+			loadMixtureSource: op("@oh-my-pi/pi-coding-agent/moa/authoring", "loadMixtureSource"),
+			saveMixtureSource: op("@oh-my-pi/pi-coding-agent/moa/authoring", "saveMixtureSource"),
+			validateMixtureDraft: op("@oh-my-pi/pi-coding-agent/moa/authoring", "validateMixtureDraft"),
+			mixtureSources: op("@oh-my-pi/pi-coding-agent/moa/authoring-files", "mixtureSources"),
+			sourceId: op("@oh-my-pi/pi-coding-agent/moa/authoring-files", "sourceId"),
 		},
 	},
 	/** #91: validate models.yml with NeoPi's own schema and provider checks before the deck writes it. */

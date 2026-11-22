@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Mixture editor · NeoPi</title>
+		<link rel="icon" href="data:," />
+		<style>
+			:root {
+				color-scheme: dark;
+				--canvas: #120d19;
+				--bg: #0d0912;
+				--panel: #1b1424;
+				--line: #382e44;
+				--text: #f4edf8;
+				--muted: #b9aec4;
+				--flow: #83dfec;
+				--selection: #f4a3dd;
+				--nightly: #bc9af7;
+				--mono: ui-monospace, monospace;
+				font:
+					14px/1.5 system-ui,
+					sans-serif;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				min-width: 310px;
+			}
+			button,
+			input,
+			select,
+			textarea {
+				font: inherit;
+				color: inherit;
+				background: var(--canvas);
+				border: 1px solid var(--line);
+				border-radius: 6px;
+				padding: 0.45rem 0.7rem;
+			}
+			button {
+				cursor: pointer;
+			}
+			button:disabled {
+				cursor: default;
+				opacity: 0.5;
+			}
+			button:not(:disabled):hover,
+			button[aria-pressed="true"] {
+				border-color: var(--flow);
+			}
+			button:focus-visible,
+			input:focus-visible,
+			select:focus-visible,
+			textarea:focus-visible,
+			summary:focus-visible {
+				outline: 2px solid var(--flow);
+				outline-offset: 2px;
+			}
+			button.primary {
+				background: var(--flow);
+				color: #10232a;
+				font-weight: 700;
+				border-color: transparent;
+			}
+			textarea {
+				resize: vertical;
+				min-height: 5rem;
+			}
+			h1,
+			h2,
+			h3,
+			p {
+				margin: 0;
+			}
+			h1 {
+				font-size: 1.15rem;
+			}
+			h2 {
+				font-size: 1.1rem;
+			}
+			h3 {
+				font-size: 1rem;
+			}
+			.note,
+			small,
+			summary,
+			label {
+				color: var(--muted);
+			}
+			code,
+			pre {
+				font-family: var(--mono);
+			}
+			header {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.75rem;
+				padding: 0.75rem 1rem;
+				border-bottom: 1px solid var(--line);
+			}
+			.brand {
+				font-weight: 700;
+			}
+			.nightly {
+				color: var(--nightly);
+				font-size: 1.2em;
+			}
+			.path {
+				flex: 1;
+				min-width: 12ch;
+				overflow-wrap: anywhere;
+				color: var(--muted);
+				font-size: 0.82rem;
+			}
+			.shell {
+				display: grid;
+				grid-template-columns: minmax(150px, 185px) minmax(280px, 1fr) minmax(265px, 335px);
+				height: calc(100dvh - 120px);
+				min-height: 480px;
+			}
+			.rail,
+			.inspector {
+				padding: 1rem;
+				overflow: auto;
+			}
+			.rail {
+				border-right: 1px solid var(--line);
+			}
+			.rail h2 {
+				margin-bottom: 0.65rem;
+			}
+			.rail button {
+				width: 100%;
+				text-align: left;
+				margin-bottom: 0.4rem;
+				overflow-wrap: anywhere;
+			}
+			.rail button[aria-pressed="true"] {
+				color: var(--flow);
+				background: var(--panel);
+			}
+			.rail .new {
+				margin-top: 0.65rem;
+			}
+			.inspector {
+				background: var(--panel);
+				border-left: 1px solid var(--line);
+			}
+			.inspector h2 {
+				overflow-wrap: anywhere;
+			}
+			.inspector label {
+				display: grid;
+				gap: 0.25rem;
+				margin: 0.65rem 0;
+			}
+			.inspector label.check {
+				display: flex;
+				align-items: center;
+			}
+			.inspector label input:not([type="checkbox"]),
+			.inspector label textarea,
+			.inspector label select {
+				width: 100%;
+				min-width: 0;
+			}
+			.inspector p {
+				margin: 0.45rem 0;
+			}
+			.inspector fieldset {
+				padding: 0.3rem 0.6rem;
+				border: 1px solid var(--line);
+				margin: 0.7rem 0;
+				min-width: 0;
+			}
+			.inspector fieldset legend {
+				color: var(--muted);
+			}
+			.danger {
+				color: #ffb3b6;
+			}
+			.gate {
+				font-size: 0.82rem;
+				color: var(--muted);
+				border-top: 1px solid var(--line);
+				padding-top: 0.65rem;
+			}
+			.gate button {
+				margin: 0.2rem 0.2rem 0.2rem 0;
+			}
+			.gate label {
+				margin: 0.35rem 0;
+			}
+			details {
+				margin-top: 0.65rem;
+				padding-top: 0.65rem;
+				border-top: 1px solid var(--line);
+			}
+			summary {
+				cursor: pointer;
+			}
+			ul {
+				padding-left: 1.4rem;
+				margin: 0.45rem 0;
+			}
+			li {
+				overflow-wrap: anywhere;
+			}
+			.presets {
+				border: 1px solid var(--line);
+				padding: 0.5rem;
+				margin: 0.45rem 0;
+				border-radius: 6px;
+			}
+			.stage {
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+			}
+			.toolbar {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+				padding: 0.6rem;
+				background: var(--canvas);
+				border-bottom: 1px solid var(--line);
+			}
+			.toolbar .spacer {
+				flex: 1;
+			}
+			.surface {
+				flex: 1;
+				min-height: 300px;
+				overflow: auto;
+				background: radial-gradient(circle, #514161 1px, transparent 1px) 0 0/20px 20px var(--canvas);
+			}
+			.board {
+				min-height: 100%;
+				min-width: 100%;
+				position: relative;
+			}
+			.board svg {
+				position: absolute;
+				inset: 0;
+				pointer-events: none;
+			}
+			.tile,
+			.edge {
+				position: absolute;
+			}
+			.tile {
+				width: 158px;
+				height: 64px;
+				background: var(--panel);
+				display: grid;
+				grid-template-columns: 1fr;
+				align-content: center;
+				text-align: left;
+			}
+			.tile[data-kind="verdict"] {
+				border-radius: 17px;
+				border-style: dashed;
+			}
+			.tile[data-entry] {
+				border-color: var(--flow);
+			}
+			.tile[aria-pressed="true"],
+			.edge[aria-pressed="true"] {
+				border-color: var(--selection);
+			}
+			.tile strong,
+			.tile small,
+			.edge {
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+			.tile small {
+				font-family: var(--mono);
+				font-size: 0.76rem;
+			}
+			.tile[data-entry] small {
+				color: var(--flow);
+			}
+			.edge {
+				transform: translate(-50%, -50%);
+				font: 11px var(--mono);
+				max-width: 185px;
+				padding: 0.25rem 0.45rem;
+				background: var(--canvas);
+			}
+			.edge[data-gated] {
+				border-style: dashed;
+			}
+			.empty {
+				padding: 2rem;
+				max-width: 45ch;
+				color: var(--muted);
+			}
+			.stage-note {
+				font-size: 0.85rem;
+				min-height: 2.25rem;
+				padding: 0.45rem 0.7rem;
+				border-top: 1px solid var(--line);
+				color: var(--muted);
+			}
+			.feedback {
+				padding: 0.6rem 1rem;
+				border-top: 1px solid var(--line);
+				max-height: 27vh;
+				overflow: auto;
+			}
+			.feedback[data-error] #status,
+			.errors {
+				color: #ffb3b6;
+			}
+			.warnings {
+				color: #ffdc9d;
+			}
+			#findings:empty,
+			#preview[hidden] {
+				display: none;
+			}
+			#preview pre {
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+			}
+			button + button {
+				margin-left: 0.25rem;
+			}
+			.toolbar button + button,
+			.rail button + button {
+				margin-left: 0;
+			}
+			@media (max-width: 1000px) {
+				.shell {
+					grid-template-columns: 135px minmax(240px, 1fr) minmax(245px, 290px);
+				}
+			}
+			@media (max-width: 720px) {
+				.shell {
+					display: block;
+					height: auto;
+				}
+				.rail {
+					border-right: 0;
+					display: flex;
+					align-items: center;
+					gap: 0.35rem;
+					overflow-x: auto;
+				}
+				.rail h2 {
+					display: none;
+				}
+				.rail #mixtures {
+					display: flex;
+					gap: 0.35rem;
+				}
+				.rail button,
+				.rail .new {
+					width: max-content;
+					max-width: 165px;
+					margin: 0;
+				}
+				.stage .surface {
+					height: 50vh;
+				}
+				.inspector {
+					border-left: 0;
+					border-top: 1px solid var(--line);
+				}
+				.feedback {
+					max-height: none;
+				}
+				.path {
+					flex-basis: 100%;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<span class="brand">NeoPi</span
+			><span class="nightly" title="New in nightly" aria-label="New in nightly">☾</span>
+			<h1>Mixture editor</h1>
+			<label for="scope">Scope</label>
+			<select id="scope" disabled>
+				<option value="project">Project</option>
+				<option value="user">User</option>
+			</select>
+			<code id="source" class="path" title="MIXTURES.toml destination"></code>
+			<button id="reload" type="button">Reload</button>
+			<button id="validate" type="button" disabled>Validate</button>
+			<button id="save" type="button" class="primary" disabled>Save</button>
+		</header>
+		<div class="shell">
+			<nav class="rail" aria-label="Mixtures">
+				<h2>Mixtures</h2>
+				<div id="mixtures"></div>
+				<button id="add-mixture" class="new" type="button" disabled>+ Mixture</button>
+				<button id="document" type="button" disabled>File presets</button>
+			</nav>
+			<main class="stage" aria-label="Mixture flow graph">
+				<div class="toolbar" aria-label="Graph controls">
+					<button id="add-model" type="button" disabled>+ Model</button>
+					<button id="add-verdict" type="button" disabled>+ Verdict</button>
+					<button id="connect" type="button" disabled>Connect</button>
+					<span class="spacer"></span>
+					<button id="mixture-settings" type="button" disabled>Mixture settings</button>
+				</div>
+				<div class="surface" id="surface"><div class="board" id="board"></div></div>
+				<p class="stage-note" id="graph-note" aria-live="polite">Loading mixture graph…</p>
+			</main>
+			<aside id="inspector" class="inspector" aria-label="Graph inspector"></aside>
+		</div>
+		<section class="feedback" id="feedback" aria-label="Validation and save status">
+			<p id="status" role="status">Opening the workspace…</p>
+			<div id="findings"></div>
+			<details id="preview" hidden>
+				<summary>Canonical TOML preview</summary>
+				<pre></pre>
+			</details>
+		</section>
+		<datalist id="models"></datalist>
+		<script src="editor.js" defer></script>
+	</body>
+</html>
