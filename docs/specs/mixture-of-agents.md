@@ -2518,8 +2518,9 @@ and callbacks:
 
 Slash command `/moa` (renamed from `/mixture`, Amendment 6.16) in
 `packages/coding-agent/src/slash-commands/builtin-collaboration.ts` beside
-`chain`: `/moa configure` opens the overlay, `/moa list` prints discovered
-definitions with their validation state, `/moa use <name>` is
+`chain`: `/moa configure` opens the overlay; `/moa web [project|user]`
+opens the browser editor. `/moa list` prints discovered definitions with their
+validation state, and `/moa use <name>` is
 `/model mixture/<name>`, `/moa reset` drops the current run (§6.3) and
 appends a `run_reset` lifecycle record (§4.8) so the dropped run cannot be
 restored or re-hydrated, `/moa status` prints the active run's hop, member,
@@ -2546,6 +2547,31 @@ saved mixture in the list activates it. During a run,
 Opening or navigating a persisted session restores the latest committed,
 unfinished checkpoint on the active branch; a completed or reset run does
 not resume.
+
+#### Browser editor
+
+Run `/moa web` in the interactive session whose workspace you want to edit.
+NeoPi opens the graph editor in Tern or your system browser and prints its local
+URL. Use `/moa web user` to open the user scope first; the editor can switch
+between the two scopes. Project scope edits the invoking workspace's VCS root
+(or its working directory outside a repository). User scope edits the invoking
+session's agent directory and is shared by workspaces using that directory.
+The editor displays the exact destination before you save.
+
+Use the graph inspector to select the entry model, configure members and
+verdicts, and connect them with directed handoffs. Routing conditions are
+judge rubrics when multiple outgoing edges are eligible, not Boolean filters.
+Tools, steering, fan-out, and gateway serving are shown but unavailable in M2.
+**Validate** checks the draft with the same settings and model registry as the
+invoking session. **Save** writes canonical `MIXTURES.toml` (comments and
+formatting are not kept), checks for intervening changes, and immediately
+refreshes that workspace's model roster. Running mixtures keep their pinned
+revision. A higher-priority source can still shadow a saved definition.
+
+The server binds only to `127.0.0.1` on an available port. The URL contains a
+private launch token: don't share it. A new launch from the same session
+replaces the previous URL. Moving or replacing the invoking session invalidates
+the editor rather than redirecting its writes to another workspace.
 
 ## 11. Validation rules
 

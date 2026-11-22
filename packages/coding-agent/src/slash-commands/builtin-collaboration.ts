@@ -30,6 +30,7 @@ import {
 } from "./builtin-completions";
 import { refreshStatusLine } from "./builtin-modes";
 import { CollabQrCodeComponent, collabBrowserLink } from "@oh-my-pi/pi-tui/chrome/collab-qrcode";
+import { launchMixtureWebEditor } from "./helpers/moa-web";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import { formatDumpArchiveReport } from "../session/session-dump-format";
 import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
@@ -185,7 +186,7 @@ async function applyChainingVerb(verb: string, rest: string, cwd: string): Promi
 
 const CHAINING_USAGE = "Usage: /chain [on|off|status|use [name]|configure]";
 
-const MIXTURE_USAGE = "Usage: /moa [configure|list|use <name>|reset|status]";
+const MIXTURE_USAGE = "Usage: /moa [configure [name]|web [project|user]|list|use <name>|reset|status]";
 
 async function chainArgumentValues(tail: string, runtime?: TuiSlashCommandRuntime) {
 	if (!runtime) return null;
@@ -495,13 +496,20 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "advisor",
 		description: "Configure, select, reset, and inspect Mixture of Agents models and runs",
 		acpDescription: "Manage Mixture of Agents models and runs",
-		acpInputHint: "[list|use <name>|configure [name]|reset|status]",
+		acpInputHint: "[list|use <name>|configure [name]|web [project|user]|reset|status]",
 		subcommands: [
 			{
 				name: "configure",
 				description: "Open the fullscreen graph configurator (TUI)",
 				usage: "[name]",
 				getArgumentCompletions: (tail, runtime) => mixtureArgumentValues(tail, runtime, false),
+			},
+			{
+				name: "web",
+				description: "Open the workspace's visual mixture editor in a browser (TUI)",
+				provenance: entryProvenance("commands", "moa web"),
+				usage: "[project|user]",
+				arguments: [argumentValues("project", "user")],
 			},
 			{ name: "list", description: "List discovered mixtures and validation state" },
 			{
@@ -524,8 +532,8 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				await runtime.output(formatMixtureStatus(runtime.session.mixtureRuns(), runtime.settings));
 				return commandConsumed();
 			}
-			if (verb === "configure") {
-				await runtime.output("/moa configure requires the interactive TUI.");
+			if (verb === "configure" || verb === "web") {
+				await runtime.output(`/moa ${verb} requires the interactive TUI.`);
 				return commandConsumed();
 			}
 			const message =
@@ -541,6 +549,19 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			runtime.ctx.editor.setText("");
+			if (verb === "web") {
+				const scope = rest.trim() || "project";
+				if (scope !== "project" && scope !== "user") {
+					runtime.ctx.showStatus("Usage: /moa web [project|user]");
+					return;
+				}
+				try {
+					runtime.ctx.showStatus(await launchMixtureWebEditor(runtime.ctx, scope));
+				} catch (error) {
+					runtime.ctx.showError(`Could not start mixture editor: ${errorMessage(error)}`);
+				}
+				return;
+			}
 			if (verb === "reset") {
 				runtime.ctx.showStatus(formatMixtureReset(runtime.ctx.session.resetMixtureRuns()));
 				return;
