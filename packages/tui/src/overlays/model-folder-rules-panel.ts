@@ -39,6 +39,7 @@ export class ModelFolderRulesPanel {
 	#view: View = "rules";
 	#draft?: ConditionDraft;
 	#input = new Input();
+	#savedRules: ModelFolderRules;
 	#listTop = 0;
 	#error?: string;
 	#notice?: string;
@@ -51,6 +52,9 @@ export class ModelFolderRulesPanel {
 	) {
 		this.#clauses = rules?.clauses.map(clause => [...clause]) ?? [];
 		this.#ingest = rules?.ingest ?? false;
+		this.#savedRules = { clauses: rules?.clauses ?? [], ingest: this.#ingest };
+		this.#input.onEscape = () => this.#back();
+		this.#input.onSubmit = () => this.#activate("applyValue");
 		this.#list.onSelect = item => this.#activate(item.value);
 		this.#list.onCancel = () => this.#back();
 		this.#rebuild();
@@ -61,7 +65,7 @@ export class ModelFolderRulesPanel {
 	}
 
 	get hint(): string {
-		if (this.#view === "value") return "Enter add to expression · Esc back · Ctrl+C cancel editor";
+		if (this.#view === "value") return "Enter apply value · Ctrl+C cancel editor";
 		return "Enter select · Space toggle · Esc back · Ctrl+C cancel editor";
 	}
 
@@ -159,7 +163,7 @@ export class ModelFolderRulesPanel {
 		const draft = this.#draft;
 		switch (this.#view) {
 			case "rules":
-				this.close();
+				if (Bun.deepEquals(this.#savedRules, { clauses: this.#clauses, ingest: this.#ingest })) this.close();
 				break;
 			case "condition":
 				this.#leaveCondition();
@@ -216,6 +220,7 @@ export class ModelFolderRulesPanel {
 				} else if (row === "save" || row === "run" || row === "force") {
 					const rules = { clauses: this.#clauses.map(clause => [...clause]), ingest: this.#ingest };
 					this.#notice = this.apply(rules, row);
+					this.#savedRules = rules;
 				} else if (row === "or") this.#editCondition(this.#clauses.length, 0);
 				else if (row.startsWith("and:")) {
 					const clause = Number(row.slice(4));
@@ -272,9 +277,7 @@ export class ModelFolderRulesPanel {
 			return;
 		}
 		if (this.#view === "value") {
-			if (matchesKey(data, "escape")) this.#back();
-			else if (matchesKey(data, "enter") || data === "\n") this.#activate("applyValue");
-			else this.#input.handleInput(data);
+			this.#input.handleInput(data, true);
 			return;
 		}
 		if (!this.#list.filterFocused && matchesKey(data, "space")) {
@@ -342,9 +345,11 @@ export class ModelFolderRulesPanel {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#view === "value" && (event.type === "edit" || event.type === "undo"))
-			this.#input.handleNativeEvent(event);
-		else this.#list.handleNativeEvent(event);
+		if (this.#view === "value") {
+			if (event.type === "edit" || event.type === "undo") this.#input.handleNativeEvent(event);
+			else if ((event.type === "select" || event.type === "activate") && event.item === "applyValue")
+				this.#activate(event.item);
+		} else this.#list.handleNativeEvent(event);
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {

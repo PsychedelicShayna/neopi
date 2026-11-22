@@ -1453,14 +1453,9 @@ class TreeList implements Component {
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize });
 	}
 
-	/** Escape clears search before closing the picker. */
+	/** Native Close follows Escape through the search field. */
 	escape(): void {
-		if (this.#search.focused || this.#search.value) {
-			this.#search.setValue("");
-			this.#search.focused = false;
-			this.#applyFilter();
-		} else this.onCancel?.();
-		this.#keys.reset();
+		this.handleInput("\x1b");
 	}
 
 	clearSearch(): void {
@@ -1539,8 +1534,10 @@ class TreeList implements Component {
 		}
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
-		if (action.kind === "search") this.#search.focused = true;
-		else if (action.kind === "cancel") this.escape();
+		if (action.kind === "search") {
+			this.#search.focused = true;
+			if (this.getSearchQuery() !== before) this.#applyFilter();
+		} else if (action.kind === "cancel") this.onCancel?.();
 		else if (action.kind === "context") this.cycleFilter(action.delta);
 		else if (action.kind === "horizontal") {
 			if (action.delta < 0) this.#collapseOrParent();
@@ -1576,6 +1573,7 @@ class LabelInput implements Component {
 	#input: Input;
 	onSubmit?: (entryId: string, label: string | undefined) => void;
 	onCancel?: () => void;
+	onDiscard?: () => void;
 
 	#native: NativeNode | undefined;
 	#preview: readonly NativeChild[] | undefined;
@@ -1586,7 +1584,6 @@ class LabelInput implements Component {
 	) {
 		this.#input = new Input();
 		this.#input.focused = true;
-		this.#input.onEscape = () => this.onCancel?.();
 		if (currentLabel) {
 			this.#input.setValue(currentLabel);
 		}
@@ -1613,6 +1610,7 @@ class LabelInput implements Component {
 			hintsRow([
 				{ keys: ["enter"], label: "save" },
 				{ keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
+				{ keys: ["ctrl+c"], label: "discard draft" },
 			]),
 		]);
 		return this.#native;
@@ -1640,18 +1638,25 @@ class LabelInput implements Component {
 		lines.push(...this.#input.render(width));
 		const cancel = dismissKey();
 		lines.push(
-			truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width),
+			truncateToWidth(
+				theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)  Ctrl+C: discard`),
+				width,
+			),
 		);
 		return lines;
 	}
 
 	handleInput(keyData: string): void {
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
+		if (matchesKey(keyData, "ctrl+c")) {
+			this.onDiscard?.();
+		} else if (matchesKey(keyData, "escape") && this.#input.vimConsumesEscape()) {
+			this.#input.handleInput(keyData, true);
+		} else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			this.submit();
-		} else if (matchesAppDismiss(keyData)) {
+		} else if (matchesKey(keyData, "escape") || matchesAppDismiss(keyData)) {
 			this.onCancel?.();
 		} else {
-			this.#input.handleInput(keyData);
+			this.#input.handleInput(keyData, true);
 		}
 	}
 }
@@ -1844,6 +1849,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				? [
 						pickerAction("label-save", "Save label", "enter", { primary: true }),
 						{ ...CLOSE_ACTION, label: "Back (keep draft)" },
+						pickerAction("label-discard", "Discard draft", "ctrl+c"),
 					]
 				: [
 						pickerAction("switch", "Switch", "enter", { primary: true }),
@@ -1865,10 +1871,17 @@ export class TreeSelectorComponent extends OverlayPanel {
 		if (label) {
 			if (event.kind !== "action") return;
 			if (event.act === "label-save") label.submit();
-			else if (event.act === "close") label.onCancel?.();
+			else if (event.act === "close") label.handleInput("\x1b");
+			else if (event.act === "label-discard") label.handleInput("\x03");
 			return;
 		}
 		const list = this.#treeList;
+		if (list.filterFocused) {
+			if (event.kind === "activate" || (event.kind === "action" && event.act === "switch")) list.handleInput("\r");
+			else if (event.kind === "action" && event.act === "close") list.escape();
+			else if (event.kind === "action" && event.act === "clear") list.handleInput("\x03");
+			return;
+		}
 		if (event.kind !== "action") {
 			if (event.kind === "select") list.selectEntry(event.item);
 			else list.activateEntry(event.item);
@@ -1980,6 +1993,11 @@ export class TreeSelectorComponent extends OverlayPanel {
 		};
 		input.onCancel = () => {
 			this.#labelDrafts.set(entryId, input.navigationSnapshot());
+			this.#hideLabelInput();
+		};
+		input.onDiscard = () => {
+			this.#labelDrafts.delete(entryId);
+			input.restoreNavigation({ value: currentLabel ?? "" });
 			this.#hideLabelInput();
 		};
 		this.#treeContainer.clear();

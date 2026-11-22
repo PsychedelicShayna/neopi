@@ -107,7 +107,13 @@ class StreamConsoleComponent implements Component, Focusable {
 
 	handleInput(data: string): void {
 		if (matchesKey(data, "ctrl+c")) {
-			this.#quit();
+			if (!this.#input.getValue()) this.#quit();
+			else {
+				this.#input.setValue("");
+				this.#historyIndex = this.#history.length;
+				this.#historyDraft = "";
+				this.#ui.requestRender();
+			}
 			return;
 		}
 		if (matchesKey(data, "up")) {
@@ -159,8 +165,8 @@ class StreamConsoleComponent implements Component, Focusable {
 				kbd("up", "up"),
 				kbd("down", "down"),
 				text([span("history ·", "dim")]),
-				kbd("ctrl+c", "quit"),
-				text([span("quit", "dim")]),
+				kbd("ctrl+c", "discard draft"),
+				text([span("discard draft or quit when empty", "dim")]),
 			],
 			{ gap: "xs", align: "center", role: "omp.hint" },
 		);
@@ -203,7 +209,7 @@ class StreamConsoleComponent implements Component, Focusable {
 		const viewerUrl = this.#viewerUrl ? safeInline(this.#viewerUrl) : chalk.dim("waiting for stream server");
 		const details = `${viewerUrl} ${chalk.dim("·")} 👁 ${this.#viewers} watching ${chalk.dim("·")} panes: ${paneList}`;
 		const hint = chalk.dim(
-			`/title <text> · /quit · ${formatKeyHints(["up", "down"])} history · ${formatKeyHint("ctrl+c")} quit`,
+			`/title <text> · /quit · ${formatKeyHints(["up", "down"])} history · ${formatKeyHint("ctrl+c")} discard draft or quit when empty`,
 		);
 
 		if (width !== this.#logWidth) {

@@ -21,7 +21,6 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
-	extractPrintableText,
 	Input,
 	matchesKey,
 	routeSgrMouseInput,
@@ -283,8 +282,7 @@ export class ChainConfigOverlayComponent implements Component {
 			("filterFocused" in active && active.filterFocused === true)
 		) {
 			this.#keys.reset();
-			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
-			if (active instanceof Input && printable !== undefined) active.insertText(printable);
+			if (active instanceof Input) active.handleInput(data, true);
 			else active.handleInput?.(data);
 			return;
 		}
@@ -324,7 +322,7 @@ export class ChainConfigOverlayComponent implements Component {
 				const navigable =
 					item &&
 					((this.#screen === "chain" &&
-						(/^step:/.test(item.value) || ["name", "description"].includes(item.value))) ||
+						(item.value.startsWith("step:") || ["name", "description"].includes(item.value))) ||
 						(this.#screen === "step" &&
 							["name", "model", "tools", "systemPrompt", "prompt"].includes(item.value)));
 				if (navigable && item) active.onSelect?.(item);
@@ -357,7 +355,8 @@ export class ChainConfigOverlayComponent implements Component {
 				return;
 			}
 		}
-		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		if (action && action.kind !== "cancel" && (active instanceof SelectList || active instanceof ModelBrowser))
+			active.handleNavigation(action);
 		else active.handleInput?.(data);
 	}
 
@@ -730,7 +729,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(this.#doc.chains.length - 1);
 		};
 		input.onEscape = () => this.#showList();
-		this.#setScreen("chainName", input, "Name the new chain · Enter create · Esc cancel");
+		this.#setScreen("chainName", input, "Name the new chain · Enter create · Ctrl+C cancel");
 	}
 
 	// ───────────────────────────── chain detail ──────────────────────
@@ -866,7 +865,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(index, "name");
 		};
 		input.onEscape = () => this.#showChain(index, "name");
-		this.#setScreen("chainName", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("chainName", input, "Type a name · Enter save · Ctrl+C cancel");
 	}
 
 	#showDescriptionEditor(index: number): void {
@@ -884,7 +883,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(index, "description");
 		};
 		input.onEscape = () => this.#showChain(index, "description");
-		this.#setScreen("description", input, "Describe this chain · Enter save · Esc cancel");
+		this.#setScreen("description", input, "Describe this chain · Enter save · Ctrl+C cancel");
 	}
 
 	#showNewStepEditor(chainIndex: number): void {
@@ -908,7 +907,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showStep(chainIndex, chain.steps.length - 1);
 		};
 		input.onEscape = () => this.#showChain(chainIndex, "addStep");
-		this.#setScreen("stepName", input, "Name the new step · Enter create · Esc cancel");
+		this.#setScreen("stepName", input, "Name the new step · Enter create · Ctrl+C cancel");
 	}
 
 	// ───────────────────────────── step detail ───────────────────────
@@ -1041,7 +1040,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showStep(chainIndex, stepIndex, "name");
 		};
 		input.onEscape = () => this.#showStep(chainIndex, stepIndex, "name");
-		this.#setScreen("stepName", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("stepName", input, "Type a name · Enter save · Ctrl+C cancel");
 	}
 
 	#showModelPicker(chainIndex: number, stepIndex: number): void {
@@ -1263,7 +1262,7 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
 				const field = state.content as { value?: string; cursor?: number };
-				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.value === "string") this.#active.setValue(field.value, { markClean: false });
 				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;

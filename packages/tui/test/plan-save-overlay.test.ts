@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { getKeybindings, setKeybindings } from "../src/keybindings";
 import { KeybindingsManager } from "../src/app-keybindings";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 import { PlanSaveOverlay, type PlanSaveOverlayResult } from "../src/overlays/plan-save-overlay";
 import { initTheme } from "../src/theme";
 
@@ -37,11 +38,13 @@ test("Space never saves and explicit submit retains the suggested-path fallback"
 	expect(results).toEqual([{ path: "/tmp/default.md" }]);
 });
 
-test("Escape cancels the one-shot path prompt without adding menu navigation", () => {
+test("Escape keeps a typed path; Ctrl+C explicitly cancels", () => {
 	const results: (PlanSaveOverlayResult | undefined)[] = [];
 	const overlay = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
 	overlay.handleInput("draft");
 	overlay.handleInput("\x1b");
+	expect(results).toEqual([]);
+	overlay.handleInput("\x03");
 	expect(results).toEqual([undefined]);
 });
 
@@ -55,7 +58,7 @@ test("typed words remain one undo unit rather than one paste per character", () 
 	expect(results).toEqual([{ path: "/tmp/default.md" }]);
 });
 
-test("literal binding overrides do not remove explicit Enter and Escape exits", () => {
+test("literal binding overrides do not remove explicit Enter and Ctrl+C exits", () => {
 	setKeybindings(KeybindingsManager.inMemory({ "tui.input.submit": "j", "tui.select.cancel": "k" }));
 	const results: (PlanSaveOverlayResult | undefined)[] = [];
 	const first = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
@@ -63,6 +66,27 @@ test("literal binding overrides do not remove explicit Enter and Escape exits", 
 	first.handleInput("\r");
 	const second = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
 	second.handleInput("kj");
-	second.handleInput("\x1b");
+	second.handleInput("\x03");
 	expect(results).toEqual([{ path: "jk" }, undefined]);
+});
+
+test("an open path prompt follows the live Vim setting", () => {
+	const previous = getMenuSearchVimMode();
+	try {
+		setMenuSearchVimMode(false);
+		const results: (PlanSaveOverlayResult | undefined)[] = [];
+		const overlay = new PlanSaveOverlay("/tmp/default.md", result => results.push(result));
+		overlay.handleInput("draft.md");
+		setMenuSearchVimMode(true);
+		overlay.handleInput("\x1b");
+		overlay.handleInput("0");
+		overlay.handleInput("x");
+		expect(results).toEqual([]);
+		setMenuSearchVimMode(false);
+		overlay.handleInput("j");
+		overlay.handleInput("\r");
+		expect(results).toEqual([{ path: "jraft.md" }]);
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
 });

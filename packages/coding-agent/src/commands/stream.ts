@@ -2,8 +2,10 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import * as path from "node:path";
 import { STREAM_TITLE_MAX } from "@oh-my-pi/pi-wire";
 import { CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { streamHelp as commandHelp } from "../cli/command-help";
 import { Settings } from "../config/settings";
+import { cfgTuiVimMode } from "../modes/settings";
 import { StencilCredential } from "../stencil/credential";
 import { resolveStreamUrls, runStreamConsole, type StreamUrls } from "../stream/streamer";
 
@@ -45,6 +47,7 @@ export default class Stream extends Command {
 				process.exitCode = 1;
 				return;
 			}
+			setMenuSearchVimMode(cfgTuiVimMode.get(settings));
 			const exitCode = await runStreamConsole({
 				projectDir: cwd,
 				title,

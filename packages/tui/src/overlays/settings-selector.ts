@@ -82,8 +82,6 @@ const PREFS_STATUS_ROLE = "omp.prefs.preview.status";
 const PREFS_EDITOR_ROLE = "omp.prefs.editor";
 /** Most choices a native popup menu lists; larger submenus open as a picker over the page. */
 const PREFS_MENU_MAX = 12;
-/** Text settings whose values are paths, ids or commands (drawn in mono). */
-const MONO_TEXT_SETTING = /(path|dir|url|endpoint|host|command|model|id)$/i;
 /** Submenus whose choices preview live while highlighted (the branches of `#createSubmenu`). */
 const PREVIEWED_SETTINGS = new Set([
 	"theme.dark",
@@ -193,7 +191,7 @@ function createSettingsTextField(
 		empty: "submit",
 		hint: t("settings.selector.text_hint", {
 			submit_key: editorKey("tui.input.submit"),
-			cancel_key: editorKey("tui.select.cancel"),
+			cancel_key: formatKeyHint("ctrl+c"),
 		}),
 		onSubmit,
 		onCancel,
@@ -255,6 +253,10 @@ class NumericSettingsField extends Container {
 	select(value: string): void {
 		if (this.#field instanceof SelectFormField)
 			this.#field.selectList.handleNativeEvent({ type: "activate", key: "", item: value });
+	}
+
+	get editingText(): boolean {
+		return this.#field instanceof TextFormField;
 	}
 
 	handleInput(data: string): void {
@@ -666,7 +668,7 @@ class ProviderLimitsSubmenu extends Container {
 				empty: "submit",
 				hint: t("settings.selector.text_hint", {
 					submit_key: editorKey("tui.input.submit"),
-					cancel_key: editorKey("tui.select.cancel"),
+					cancel_key: formatKeyHint("ctrl+c"),
 				}),
 				validate: value => {
 					if (value.trim() === "") return undefined;
@@ -733,6 +735,10 @@ class ProviderLimitsSubmenu extends Container {
 	get filterFocused(): boolean {
 		const child = this.children[0];
 		return child instanceof FormField ? child.filterFocused : false;
+	}
+
+	get editingText(): boolean {
+		return this.#editingProvider !== undefined;
 	}
 
 	navigationSnapshot(): unknown {
@@ -881,7 +887,6 @@ export class SettingsSelectorComponent implements Component {
 	 * (`#refreshItems`, `#onSearchSettingChange`); rebuilt lazily by `#setSearchQuery`.
 	 */
 	#searchCorpora: { tab: SettingTab; corpus: FuzzyCorpus<SettingItem> }[] | null = null;
-	#textInputActive = false;
 	#restoringNavigation = false;
 	#externalEditPending = false;
 	#applyPending = false;
@@ -889,6 +894,14 @@ export class SettingsSelectorComponent implements Component {
 	#stopReload?: () => void;
 	#editingSetting?: { path: string; baseline: string | undefined; changedElsewhere: boolean };
 	readonly #menuKeys = new MenuKeyReader();
+
+	get #editingText(): boolean {
+		const field = (this.#searchList ?? this.#currentList)?.openSubmenu?.component;
+		return (
+			field instanceof TextFormField ||
+			((field instanceof NumericSettingsField || field instanceof ProviderLimitsSubmenu) && field.editingText)
+		);
+	}
 	readonly #help = new MenuHelp();
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#hasSectionJump = false;
@@ -1095,7 +1108,7 @@ export class SettingsSelectorComponent implements Component {
 		const hints = menuHintLines(
 			this.#getReloadConflict() ?? this.#footerHintText(),
 			innerWidth,
-			this.#search.focused || this.#textInputActive ? "" : undefined,
+			this.#search.focused || this.#editingText ? "" : undefined,
 		);
 
 		const tabLines = this.#tabBar.render(innerWidth);
@@ -1217,7 +1230,7 @@ export class SettingsSelectorComponent implements Component {
 			focus =
 				at.row ??
 				(at.section ? (searching && focusedDef ? `${focusedDef.tab}/${focusedGroup}` : focusedGroup) : null);
-			editing = list.prefsEditing(id => this.#inlineMenu(id));
+			editing = this.#editingText ? null : list.prefsEditing(id => this.#inlineMenu(id));
 			const open = list.openSubmenu;
 			if (open && !editing) {
 				// Pickers describe themselves as a sheet; anything else sits in a card over the page.
@@ -1335,12 +1348,7 @@ export class SettingsSelectorComponent implements Component {
 				};
 			}
 			case "text":
-				return {
-					k: "text",
-					value: shown,
-					secret: def.secret || undefined,
-					mono: !def.secret && MONO_TEXT_SETTING.test(def.path) ? true : undefined,
-				};
+				return { k: "action", label: shown || "Edit…", act: "edit" };
 			case "providerLimits":
 				return { k: "action", label: "Edit…", act: "edit" };
 			case "multiselect":
@@ -1381,6 +1389,10 @@ export class SettingsSelectorComponent implements Component {
 	 */
 	#handlePrefsEvent(event: NativeUiEvent): void {
 		this.#menuKeys.reset();
+		if (this.#editingText) {
+			if (event.type === "action" && event.act === "close") this.handleInput(ESCAPE);
+			return;
+		}
 		if (event.type === "action" && event.act === "close" && event.value === undefined) {
 			const list = this.#searchList ?? this.#currentList;
 			if (
@@ -1388,6 +1400,7 @@ export class SettingsSelectorComponent implements Component {
 				list?.filterFocused ||
 				list?.hasSearchQuery() ||
 				this.#pluginComponent?.filterFocused ||
+				this.#pluginComponent?.hasOpenSubmenu ||
 				this.#pluginComponent?.prefsPage()?.query
 			) {
 				this.handleInput(ESCAPE);
@@ -1495,15 +1508,8 @@ export class SettingsSelectorComponent implements Component {
 				}
 				return;
 			}
-			case "text": {
-				if (typeof value !== "string") return;
-				const field = list.openSubmenuFor(id);
-				if (field instanceof TextFormField) {
-					field.setValue(value);
-					field.submit();
-				}
+			case "text":
 				return;
-			}
 			case "multiselect": {
 				if (!Array.isArray(value)) return;
 				const open = list.openSubmenu;
@@ -1729,11 +1735,11 @@ export class SettingsSelectorComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	/** Swap the tab content for the global search result list. */
-	#startSearch(initialQuery: string): void {
+	#startSearch(initialQuery?: string): void {
 		this.#preSearchTabId = this.#currentTabId;
 		this.#preSearchList = this.#currentList?.navigationSnapshot();
 		this.#searchCorpora = null;
-		this.#search.setValue(initialQuery);
+		if (initialQuery !== undefined) this.#search.setValue(initialQuery);
 		this.#search.focused = true;
 		const list = new SettingsList(
 			[],
@@ -1756,7 +1762,7 @@ export class SettingsSelectorComponent implements Component {
 			this.#currentList = currentList;
 			this.#searchList = list;
 		});
-		this.#setSearchQuery(initialQuery);
+		this.#setSearchQuery(this.#search.query);
 	}
 
 	/**
@@ -1839,7 +1845,6 @@ export class SettingsSelectorComponent implements Component {
 		this.#preSearchList = undefined;
 
 		this.#searchQuery = "";
-		this.#search.setValue("");
 		this.#search.focused = false;
 		this.#searchCorpora = null;
 		this.#searchFirstMatch.clear();
@@ -2162,11 +2167,6 @@ export class SettingsSelectorComponent implements Component {
 	 * Create a text input submenu for a string or structured setting.
 	 */
 	#createTextInput(def: SettingDef & { type: "text" }, done: (value?: string) => void): Component {
-		this.#textInputActive = true;
-		const wrappedDone = (value?: string) => {
-			this.#textInputActive = false;
-			done(value);
-		};
 		return createSettingsTextField(
 			def.label,
 			def.description,
@@ -2177,9 +2177,9 @@ export class SettingsSelectorComponent implements Component {
 				if (value === "") this.#context.settings.unset(def.path);
 				else this.#setSettingValue(def.path, value);
 				this.#callbacks.onChange(def.path, this.#context.settings.get(def.path));
-				wrappedDone(this.#formatTextInputValue(def, this.#context.settings.get(def.path)));
+				done(this.#formatTextInputValue(def, this.#context.settings.get(def.path)));
 			},
-			() => wrappedDone(),
+			() => done(),
 			this.#context.requestRender,
 		);
 	}
@@ -2405,6 +2405,11 @@ export class SettingsSelectorComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#editingText && !data.startsWith("\x1b[<")) {
+			this.#menuKeys.reset();
+			(this.#searchList ?? this.#currentList)?.handleInput(data);
+			return;
+		}
 		// Nested managers own scope and external-editor shortcuts while open.
 		const nested = (this.#searchList ?? this.#currentList)?.openSubmenu?.component;
 		if (
@@ -2418,14 +2423,11 @@ export class SettingsSelectorComponent implements Component {
 		}
 		if (
 			(this.#help.open ||
-				(!this.#search.focused &&
-					!this.#textInputActive &&
-					!this.#pluginComponent?.filterFocused &&
-					!this.#displayList?.filterFocused)) &&
+				(!this.#search.focused && !this.#pluginComponent?.filterFocused && !this.#displayList?.filterFocused)) &&
 			this.#help.handleInput(data)
 		)
 			return;
-		if (matchesKey(data, "ctrl+s") && !this.#textInputActive) {
+		if (matchesKey(data, "ctrl+s")) {
 			this.#context.settings.cycleScope?.();
 			this.#refreshItems();
 			this.#context.requestRender?.();
@@ -2449,16 +2451,13 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 
-		if (this.#searchList && this.#search.focused) {
+		if (
+			this.#searchList &&
+			(this.#search.focused || matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) &&
+			!this.#searchList.hasOpenSubmenu()
+		) {
 			this.#menuKeys.reset();
 			this.#handleSearchModeInput(data, this.#searchList);
-			return;
-		}
-		// Text-input submenus take every byte: arrow keys must reach the
-		// cursor and Tab must not switch tabs.
-		if (this.#textInputActive) {
-			this.#menuKeys.reset();
-			(this.#searchList ?? this.#currentList)?.handleInput(data);
 			return;
 		}
 
@@ -2480,6 +2479,7 @@ export class SettingsSelectorComponent implements Component {
 			activeList.handleInput(data);
 			return;
 		}
+		if (!this.#searchList && matchesKey(data, "ctrl+c") && this.#search.handleInput(data) !== "pass") return;
 		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
 			if (!this.#applyPending) {
 				this.#applyPending = true;
@@ -2526,8 +2526,10 @@ export class SettingsSelectorComponent implements Component {
 			return;
 		}
 		if (action?.kind === "search" && this.#currentTabId !== "plugins") {
-			if (this.#searchList) this.#search.focused = true;
-			else this.#startSearch(this.#searchQuery);
+			if (this.#searchList) {
+				this.#search.focused = true;
+				this.#setSearchQuery(this.#search.query);
+			} else this.#startSearch();
 			return;
 		}
 		if (activeList) {
@@ -2648,6 +2650,8 @@ export class SettingsSelectorComponent implements Component {
 				this.#search.focused = state.searchFocused === true;
 				if (typeof state.searchCursor === "number") this.#search.input.setCursor(state.searchCursor);
 				if (state.search !== undefined) this.#search.restoreNavigation(state.search);
+			} else if (state.search !== undefined) {
+				this.#search.restoreNavigation(state.search);
 			}
 			(this.#searchList ?? this.#currentList)?.restoreNavigation(state.list);
 			if (isMenuHistoryParticipant(this.#pluginComponent)) this.#pluginComponent.restoreNavigation(state.plugin);

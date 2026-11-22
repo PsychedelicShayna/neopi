@@ -92,6 +92,9 @@ describe("MCP wizard prompt navigation", () => {
 		wizard.handleInput("\x1b[H");
 		expect(input(wizard).getCursor()).toBe(0);
 		wizard.handleInput("\x1b");
+		expect(input(wizard).vimMode).toBe("normal");
+		expect(input(wizard).getValue()).toBe("hjkl ggG / data");
+		wizard.handleInput("\x1b");
 		expect(selected(wizard)).toBe("0");
 		wizard.handleInput("\r");
 		expect(input(wizard).getValue()).toBe("hjkl ggG / data");

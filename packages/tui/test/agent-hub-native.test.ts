@@ -355,8 +355,12 @@ test("hub transcript stays in the same overlay and restores its unsent editor dr
 		expect(nested.transcript?.state).toMatchObject({ focus: "editor", editor: { text: "hjkl / draft" } });
 		hub.handleInput("\x1b");
 		expect(visits).toHaveLength(1);
+		expect(hub.navigationSnapshot().transcript?.state).toMatchObject({ focus: "editor" });
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot().transcript?.state).toMatchObject({ focus: "view" });
 		hub.handleInput("h");
 		expect(visits.map(([page]) => page)).toEqual(["transcript:beta", ""]);
+		expect(visits[1]?.[1]).toMatchObject({ transcript: { state: { editor: { text: "hjkl / draft" } } } });
 		expect(hub.navigationSnapshot().selectedAgentId).toBe("beta");
 		expect(hub.nativeSheet(pickerCx)).toBe(true);
 		restored.restoreNavigation(nested);
@@ -442,7 +446,12 @@ test("hub native close respects focused search before closing its root", () => {
 		hub.handleInput("alpha");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).not.toHaveBeenCalled();
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "alpha", query: "", focused: true });
+		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
+		hub.handleInput("/");
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "alpha", focused: true });
+		hub.handleInput("\x03");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).toHaveBeenCalledTimes(1);
 	} finally {

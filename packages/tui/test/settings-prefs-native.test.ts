@@ -14,6 +14,7 @@ import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-se
 import { getCurrentThemeName, getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 import { getKeybindings, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { TextFormField } from "../src/components/form";
 import type { SelectListNavigationState } from "../src/components/select-list";
 import { getMenuSearchVimMode, isMenuHistoryLeaver, setMenuSearchVimMode } from "../src/components/menu-navigation";
 import { loadThemeSync } from "../src/theme/loader";
@@ -235,6 +236,17 @@ function prefs(selector: SettingsSelectorComponent): { node: NativeNode; props: 
 	return { node: described, props: described.p };
 }
 
+function prefsText(selector: SettingsSelectorComponent) {
+	for (const child of prefs(selector).node.c ?? []) {
+		if (!("k" in child) || child.k !== "col") continue;
+		const field = child.c?.find(candidate => candidate instanceof TextFormField);
+		if (!(field instanceof TextFormField)) continue;
+		const input = field.input.describe(PREFS);
+		if (input.k === "input") return input.p;
+	}
+	return undefined;
+}
+
 function row(props: TspPrefsProps, id: string) {
 	for (const section of props.sections) for (const r of section.rows) if (r.id === id) return r;
 	throw new Error(`no row ${id}`);
@@ -394,7 +406,7 @@ describe("settings as a native prefs page", () => {
 		send(selector, { type: "activate", key: "", item: "shell.path" });
 		selector.handleInput(BACKSPACE);
 		selector.handleInput(ENTER);
-		expect(row(prefs(selector).props, "shell.path").control).toMatchObject({ k: "text", value: "a" });
+		expect(row(prefs(selector).props, "shell.path").control).toMatchObject({ k: "action", label: "a", act: "edit" });
 		expect(unsets).toEqual([]);
 	});
 
@@ -442,9 +454,9 @@ describe("settings as a native prefs page", () => {
 			{ [path]: { day: 0.25 } },
 		);
 		send(selector, { type: "action", key: "", act: "page", value: "chronicler", mods: [] });
-		expect(row(prefs(selector).props, path).control).toMatchObject({ value: '{"year":0.8,"day":0.25}' });
+		expect(row(prefs(selector).props, path).control).toMatchObject({ label: '{"year":0.8,"day":0.25}' });
 		send(selector, { type: "activate", key: "", item: path });
-		expect(prefs(selector).props.editing?.draft).toBe('{"day":0.25}');
+		expect(prefsText(selector)?.text).toBe('{"day":0.25}');
 		for (const key of ["\x01", "\x0b", '{"day":0.5}']) selector.handleInput(key);
 		global.set(path, { year: 0.9 });
 		reload();
@@ -452,10 +464,10 @@ describe("settings as a native prefs page", () => {
 		project.set(path, { day: 0.4 });
 		reload();
 		expect(prefs(selector).props.lead).toContain("changed elsewhere");
-		expect(prefs(selector).props.editing?.draft).toBe('{"day":0.5}');
+		expect(prefsText(selector)?.text).toBe('{"day":0.5}');
 		selector.handleInput(ENTER);
 		expect(writes).toEqual([[path, { day: 0.5 }]]);
-		expect(row(prefs(selector).props, path).control).toMatchObject({ value: '{"year":0.9,"day":0.5}' });
+		expect(row(prefs(selector).props, path).control).toMatchObject({ label: '{"year":0.9,"day":0.5}' });
 	});
 
 	it("falls back to the overlay card when the terminal lacks prefs", () => {
@@ -690,6 +702,8 @@ describe("settings as a native prefs page", () => {
 			expect(values.get(path)).toBe(100000);
 			send(selector, { type: "change", key: "", item: path, value: "__custom_number__" });
 			selector.handleInput("\x1b");
+			expect(selector.render(120).join("\n")).toContain("Token budget");
+			selector.handleInput("\x1b");
 			expect(values.get(path)).toBe(100000);
 			send(selector, { type: "change", key: "", item: path, value: "default" });
 			expect(values.get(path)).toBe(-1);
@@ -731,18 +745,19 @@ describe("settings as a native prefs page", () => {
 		}
 	});
 
-	it("shows the text editor's draft and cursor while the keys edit it, and submits a pointer change", () => {
+	it("opens the shared text editor from native prefs and submits its draft", () => {
 		const { selector, values } = harness();
 		send(selector, { type: "action", key: "", act: "page", value: "shell", mods: [] });
-		send(selector, { type: "activate", key: "", item: "shell.path" });
+		send(selector, { type: "action", key: "", act: "edit", value: "shell.path", mods: [] });
 		for (const ch of "/bin/zsh") selector.handleInput(ch);
-		expect(prefs(selector).props.editing).toEqual({ row: "shell.path", draft: "/bin/zsh", cursor: 8 });
+		expect(prefsText(selector)).toMatchObject({ text: "/bin/zsh", cursor: 8 });
 		selector.handleInput(ENTER);
 		expect(values.get("shell.path")).toBe("/bin/zsh");
 
-		send(selector, { type: "change", key: "", item: "shell.path", value: "/bin/fish" });
+		send(selector, { type: "action", key: "", act: "edit", value: "shell.path", mods: [] });
+		for (const key of ["\x01", "\x0b", "/bin/fish", ENTER]) selector.handleInput(key);
 		expect(values.get("shell.path")).toBe("/bin/fish");
-		expect(prefs(selector).props.editing).toBeNull();
+		expect(prefsText(selector)).toBeUndefined();
 	});
 
 	it("masks credential arrays in rows and drafts without saving mask glyphs", () => {
@@ -753,12 +768,12 @@ describe("settings as a native prefs page", () => {
 		expect(Bun.stripANSI(selector.render(120).join("\n"))).not.toContain("private-token");
 
 		send(selector, { type: "activate", key: "", item: "providers.tokens" });
-		expect(prefs(selector).props.editing?.draft).toMatch(/^•+$/);
+		expect(prefsText(selector)?.text).toMatch(/^•+$/);
 		expect(Bun.stripANSI(selector.render(120).join("\n"))).not.toContain("private-token");
 		selector.handleInput("\x01");
 		selector.handleInput("\x0b");
 		for (const character of '["replacement-token"]') selector.handleInput(character);
-		expect(prefs(selector).props.editing?.draft).toMatch(/^•+$/);
+		expect(prefsText(selector)?.text).toMatch(/^•+$/);
 		expect(Bun.stripANSI(selector.render(120).join("\n"))).not.toContain("replacement-token");
 		selector.handleInput(ENTER);
 		expect(values.get("providers.tokens")).toEqual(["replacement-token"]);
@@ -943,6 +958,7 @@ describe("settings as a native prefs page", () => {
 		selector.handleInput("\x1b");
 		expect(prefs(selector).props.query).toBeUndefined();
 		expect(prefs(selector).props.page).toBe("appearance");
+		selector.handleInput("\x03"); // Explicitly discard the backed-out draft before starting a different search.
 		selector.handleInput("/");
 		for (const key of "/^dark/") selector.handleInput(key);
 		expect(prefs(selector).props.sections.flatMap(section => section.rows.map(row => row.id))).toEqual([
@@ -1227,7 +1243,7 @@ describe("settings as a native prefs page", () => {
 		expect(visits).toEqual([""]);
 	});
 
-	it("exits text fields and native enum menus with printable cancel and submit remaps", () => {
+	it("lets native Escape enter Normal without discarding text even with printable remaps", () => {
 		const previous = getKeybindings();
 		setKeybindings(
 			KeybindingsManager.inMemory({
@@ -1250,9 +1266,15 @@ describe("settings as a native prefs page", () => {
 			send(h.selector, { type: "activate", key: "", item: "shell.path" });
 			const literal = "j/k h l gg G / note s";
 			for (const char of literal) h.selector.handleInput(char);
-			expect(prefs(h.selector).props.editing?.draft).toBe(literal);
+			expect(prefsText(h.selector)?.text).toBe(literal);
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
-			expect(prefs(h.selector).props.editing).toBeNull();
+			expect(prefsText(h.selector)?.text).toBe(literal);
+			h.selector.handleInput("0");
+			expect(prefsText(h.selector)?.cursor).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(prefsText(h.selector)?.text).toBe(literal);
+			h.selector.handleInput("\x03");
+			expect(prefsText(h.selector)).toBeUndefined();
 			expect(h.values.get("shell.path")).toBe("");
 			expect(closed).toBe(0);
 			send(h.selector, { type: "action", key: "", act: "page", value: "appearance", mods: [] });
@@ -1300,6 +1322,15 @@ describe("settings as a native prefs page", () => {
 				plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } },
 			});
 			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
+				plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } },
+			});
+			expect(closed).toBe(0);
+			send(h.selector, { type: "action", key: "", act: "close", mods: [] });
+			expect(h.selector.navigationSnapshot()).toMatchObject({
+				plugin: { content: { submenuId: "config:message", submenu: { value: "j/k h l gg G / note s" } } },
+			});
+			h.selector.handleInput("\x03");
 			expect(h.selector.navigationSnapshot()).toMatchObject({ plugin: { content: { submenuId: null } } });
 			expect(closed).toBe(0);
 			send(h.selector, { type: "action", key: "", act: "edit", value: "config:mode", mods: [] });
@@ -1386,6 +1417,8 @@ describe("settings as a native prefs page", () => {
 		for (const key of ["/", "ze", "\x01", "\x1b[C", ENTER]) h.selector.handleInput(key);
 		const parent = h.selector.navigationSnapshot();
 		h.selector.handleInput("l");
+		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { provider: "zeta" } } });
+		h.selector.handleInput("\x1b");
 		expect(h.selector.navigationSnapshot()).toMatchObject({ list: { submenu: { provider: "zeta" } } });
 		h.selector.handleInput("\x1b");
 		expect(h.selector.navigationSnapshot()).toEqual(parent);

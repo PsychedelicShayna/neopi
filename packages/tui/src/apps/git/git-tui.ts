@@ -29,7 +29,7 @@
  */
 
 import type { TspSpan } from "@oh-my-pi/pi-wire";
-import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
+import { formatKeyHint, formatTooltipKey } from "../../app-keybindings";
 import { SplitPane } from "../../components/layout/split-pane";
 import { Stack } from "../../components/layout/stack";
 import { MenuKeyReader, menuScrollBy } from "../../components/menu-navigation";
@@ -711,12 +711,25 @@ export class GitTuiComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (
+			matchesKey(data, "ctrl+c") &&
+			this.#focus === "sidebar" &&
+			this.#sidebar.editing &&
+			!this.#sidebar.search.focused
+		) {
+			this.#sidebar.cancelField(data);
+			return;
+		}
+		if (this.#handleMouse(data)) return;
+		if (
+			(this.#sidebar.search.focused || this.#focus !== "sidebar" || !this.#sidebar.editing) &&
+			this.#sidebar.handleSearchInput(data)
+		)
+			return;
 		if (matchesKey(data, "ctrl+c")) {
 			this.#done.resolve();
 			return;
 		}
-		if (this.#handleMouse(data)) return;
-		if (this.#sidebar.handleSearchInput(data)) return;
 		if (
 			this.#focus === "sidebar" &&
 			this.#sidebar.editing &&
@@ -745,11 +758,12 @@ export class GitTuiComponent implements Component {
 			return;
 		}
 		if (matchesKey(data, "escape")) {
-			if (this.#focus === "sidebar" && this.#sidebar.handleEscape()) return;
+			if (this.#focus === "sidebar" && this.#sidebar.handleEscape(data)) return;
 			if (this.#focus === "diff" && this.#pane.clearSelection()) {
 				this.#ui.requestRender();
 				return;
 			}
+			if (this.#sidebar.hasDraft) return;
 			this.#done.resolve();
 			return;
 		}

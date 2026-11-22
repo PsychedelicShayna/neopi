@@ -153,6 +153,7 @@ export interface SelectListNavigationState {
 	filterFocused?: boolean;
 	filterCursor?: number;
 	filterDraft?: string;
+	filterDraftCursor?: number;
 }
 
 type SelectItemLayout =
@@ -243,13 +244,16 @@ export class SelectList implements Component, MouseRoutable {
 
 	/** Selection, filter, and scroll position, for menu history and drafts to restore. */
 	navigationState(): SelectListNavigationState {
+		const search = this.#search.navigationSnapshot();
 		return {
 			selectedValue: this.#selection.selectedKey,
 			filter: this.#search.confirmedQuery,
 			viewportTop: this.#viewport.top,
 			filterFocused: this.#search.focused,
-			filterCursor: this.#search.cursor,
-			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
+			filterCursor: search.cursor,
+			...(search.focused
+				? { filterDraft: search.value }
+				: search.draft && { filterDraft: search.draft.value, filterDraftCursor: search.draft.cursor }),
 		};
 	}
 
@@ -257,10 +261,14 @@ export class SelectList implements Component, MouseRoutable {
 	restoreNavigationState(state: SelectListNavigationState): void {
 		this.#keys.reset();
 		this.#search.restoreNavigation({
-			value: state.filterDraft ?? state.filter,
+			value: state.filterFocused ? (state.filterDraft ?? state.filter) : state.filter,
 			query: state.filter,
 			focused: state.filterFocused === true,
 			cursor: state.filterCursor ?? state.filter.length,
+			draft:
+				!state.filterFocused && state.filterDraft !== undefined
+					? { value: state.filterDraft, cursor: state.filterDraftCursor ?? state.filterDraft.length }
+					: undefined,
 		});
 		this.#setFilter(this.#search.query, false);
 		if (state.selectedValue !== undefined) this.#selection.setSelectedKey(state.selectedValue);
@@ -282,6 +290,7 @@ export class SelectList implements Component, MouseRoutable {
 			viewportTop: state.viewportTop,
 			filterFocused: state.filterFocused === true,
 			filterCursor: typeof state.filterCursor === "number" ? state.filterCursor : undefined,
+			filterDraftCursor: typeof state.filterDraftCursor === "number" ? state.filterDraftCursor : undefined,
 			filterDraft: typeof state.filterDraft === "string" ? state.filterDraft : undefined,
 		});
 	}
@@ -565,10 +574,7 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	handleInput(rawData: string): void {
-		if (this.#search.focused) {
-			this.#handleFilterInput(rawData);
-			return;
-		}
+		if (this.#handleFilterInput(rawData)) return;
 		const action = this.#keys.read(rawData);
 		if (action === undefined || action === "pending") return;
 		this.handleNavigation(action);
@@ -579,11 +585,13 @@ export class SelectList implements Component, MouseRoutable {
 		this.#keys.reset();
 		switch (action.kind) {
 			case "search":
-				if (this.#canEditSearch()) this.#search.focused = true;
+				if (this.#canEditSearch()) {
+					this.#search.focused = true;
+					if (this.#search.query !== this.#selection.query) this.#setFilter(this.#search.query, true);
+				}
 				return;
 			case "cancel":
-				if (this.#selection.query) this.setFilter("");
-				else if (!this.#selection.cancelConfirmation()) this.onCancel?.();
+				if (!this.#handleFilterInput("\x1b") && !this.#selection.cancelConfirmation()) this.onCancel?.();
 				return;
 			case "toggle":
 				if (this.layout.activateOnSpace === false) return;
@@ -606,10 +614,11 @@ export class SelectList implements Component, MouseRoutable {
 	}
 
 	/** The shared composer owns every key while focused, including modal Escape. */
-	#handleFilterInput(rawData: string): void {
+	#handleFilterInput(rawData: string): boolean {
 		const before = this.#search.query;
-		this.#search.handleInput(rawData);
+		if (this.#search.handleInput(rawData) === "pass") return false;
 		if (this.#search.query !== before) this.#setFilter(this.#search.query, true);
+		return true;
 	}
 
 	#renderItem(

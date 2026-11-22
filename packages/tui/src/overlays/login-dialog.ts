@@ -558,21 +558,19 @@ export class LoginDialogComponent extends OverlayPanel {
 			void this.#copyAuthLink();
 			return;
 		}
-		const printable = extractPrintableText(data);
-		if (printable !== undefined) {
-			this.#input.input.insertText(printable);
+		if (extractPrintableText(data) !== undefined) {
+			this.#input.handleInput(data);
 			return;
 		}
-
+		if (matchesKey(data, "escape")) {
+			if (this.#input.input.vimConsumesEscape()) this.#input.handleInput(data);
+			return;
+		}
 		if (matchesAppInterrupt(data)) {
 			this.#cancel();
 			return;
 		}
-		// Do not let navigation keys reach the field's generic cancel action.
-		if (matchesAppDismiss(data) || matchesKey(data, "escape") || getKeybindings().matches(data, "tui.select.cancel"))
-			return;
-
-		if (matchesKey(data, "enter") || data === "\n") this.#input.submit();
-		else this.#input.handleInput(data);
+		if (matchesAppDismiss(data)) return;
+		this.#input.handleInput(data);
 	}
 }

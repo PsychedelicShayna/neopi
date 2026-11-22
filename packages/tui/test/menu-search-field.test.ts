@@ -83,7 +83,7 @@ describe("transactional Vim menu search", () => {
 		expect(field.focused).toBe(true);
 	});
 
-	it("uses Escape for Insert to Normal, then cancels back to the confirmed pattern", () => {
+	it("uses Escape for Insert to Normal, then leaves a reopenable search draft", () => {
 		const field = new MenuSearchField("voice", true);
 		field.handleInput(" draft");
 		expect(field.query).toBe("voice draft");
@@ -95,6 +95,10 @@ describe("transactional Vim menu search", () => {
 		expect(field.value).toBe("voice");
 		expect(field.query).toBe("voice");
 		expect(field.focused).toBe(false);
+		field.focused = true;
+		expect(field.value).toBe("voice draft");
+		expect(field.vimMode).toBe("insert");
+		expect(field.confirmedQuery).toBe("voice");
 	});
 
 	it("reuses Vim line operators and confirms empty from Normal mode", () => {
@@ -146,7 +150,7 @@ describe("transactional Vim menu search", () => {
 		expect(restored.cursor).toBe(4);
 	});
 
-	it("keeps draft and confirmed patterns separate and discards edits on blur", () => {
+	it("keeps the draft on blur and can reopen it after leaving the filtered view", () => {
 		const field = new MenuSearchField("old");
 		field.focused = true;
 		field.handleInput(" draft");
@@ -158,9 +162,14 @@ describe("transactional Vim menu search", () => {
 		field.focused = true;
 		field.handleInput(" confirmed");
 		field.handleInput("\r");
-		expect(field.query).toBe("old confirmed");
+		expect(field.query).toBe("old draft confirmed");
 		field.handleInput("\x1b");
 		expect(field.query).toBe("");
+		field.focused = true;
+		expect(field.value).toBe("old draft confirmed");
+		expect(field.handleInput("\x03")).toBe("exited");
+		field.focused = true;
+		expect(field.value).toBe("");
 	});
 
 	it("renders only the search hint when its empty field is not focused", () => {

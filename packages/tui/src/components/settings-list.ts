@@ -1187,6 +1187,7 @@ export class SettingsList implements Component {
 		if (action.kind === "search") {
 			if (this.#options.typeToSearch !== false) {
 				this.#search.focused = true;
+				if (this.#search.query !== this.#filterQuery) this.#setFilter(this.#search.query);
 			}
 			return;
 		}

@@ -256,7 +256,7 @@ export function selectListPicker(list: SelectList, o: SelectPickerOptions): TspP
 /**
  * Routes a picker event to a {@link SelectList}: a row click selects (and
  * previews, through `onSelectionChange`), a second click or `confirm`
- * activates; `close`/`cancel` clears a focused or retained filter before canceling the list.
+ * activates; `close`/`cancel` follows Escape's navigation through the search.
  * Returns whether it handled the event.
  */
 export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, key = ""): boolean {
@@ -265,8 +265,7 @@ export function routeSelectListPicker(list: SelectList, event: NativeUiEvent, ke
 	const view = list.pickerView();
 	if (ev.kind === "action") {
 		if (ev.act === "close" || ev.act === "cancel") {
-			// Native Close clears the field; it is not Vim's Insert-to-Normal Escape.
-			if (list.filterFocused || view.query) list.handleInput(list.filterFocused ? "\x03" : "\x1b");
+			if (list.filterFocused || view.query) list.handleInput("\x1b");
 			else list.onCancel?.();
 			return true;
 		}

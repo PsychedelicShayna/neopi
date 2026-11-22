@@ -501,6 +501,12 @@ describe("advisor menu navigation and history", () => {
 			expect(restored.overlay.navigationSnapshot().content).toEqual(snapshot.content);
 			expect(restoredVisits).toEqual([]);
 			restored.overlay.handleInput("\x1b");
+			restored.overlay.handleInput("\x1b");
+			expect(restored.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "name" },
+				content: { value: "Reviewerhjkl / draft" },
+			});
+			restored.overlay.handleInput("\x03");
 			expect(restored.overlay.navigationSnapshot()).toMatchObject({
 				context: { screen: "detail" },
 				content: { filter: "Name", selectedValue: "name" },
@@ -533,6 +539,12 @@ describe("advisor menu navigation and history", () => {
 			});
 			expect(h.events).toEqual([]);
 			h.overlay.handleInput("\x1b");
+			h.overlay.handleInput("\x1b");
+			expect(h.overlay.navigationSnapshot()).toMatchObject({
+				context: { screen: "name" },
+				content: { value: "Reviewerhjkl/ " },
+			});
+			h.overlay.handleInput("\x03");
 			expect(h.overlay.navigationSnapshot().context.screen).toBe("detail");
 		} finally {
 			setKeybindings(previous);
@@ -750,6 +762,15 @@ describe("advisor menu navigation and history", () => {
 					h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 				else sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 				expect(h.closed()).toBe(0);
+				if (mode === "focused picker") {
+					expect(h.overlay.navigationSnapshot().content).toMatchObject({
+						filter: "",
+						filterDraft: "Reviewer",
+						filterFocused: true,
+					});
+					sheet().component.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+					expect(h.closed()).toBe(0);
+				}
 				expect(h.overlay.navigationSnapshot().content).toMatchObject({ filter: "", filterFocused: false });
 				expect(h.overlay.describe(cx).c).toEqual([]);
 				h.overlay.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });

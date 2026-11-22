@@ -15,6 +15,7 @@ import { formatKeyHint } from "../app-keybindings";
 import { boundKeys, dismissKey, editorKey, interruptKey } from "../chrome/keybinding-hints";
 import type { KeyName } from "../key-hint-format";
 import { getKeybindings } from "../keybindings";
+import { matchesKey } from "../keys";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { TextFormField, type FormFieldTheme } from "../components/form";
 import { SelectList } from "../components/select-list";
@@ -181,9 +182,9 @@ function nativeErrorText(error: unknown): string {
 	return plainText(error instanceof Error ? error.message : String(error));
 }
 
-/** Footer for text steps; the field submits on `tui.input.submit` and cancels on `tui.select.cancel`. */
+/** Footer for text steps; backing out is navigation and cancellation is explicit. */
 function inputHint(escapeAction: string): string {
-	return `[${editorKey("tui.input.submit")} to continue, ${editorKey("tui.select.cancel")} to ${escapeAction}]`;
+	return `[${editorKey("tui.input.submit")} to continue · ${escapeAction === "cancel" ? interruptKey() : dismissKey()} to ${escapeAction}]`;
 }
 
 /** Choice rows own their viewport; submit and back remain explicit wizard actions. */
@@ -492,7 +493,7 @@ export class MCPAddWizard extends OverlayPanel {
 			: options.note
 				? text(options.note, { role: "omp.mcpAdd.note", wrap: "word" })
 				: undefined;
-		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape";
+		const cancelKey = this.#currentStep === "name" ? "ctrl+c" : "escape";
 		this.#show(
 			new WizardStep({ kind: "input", heading: ansiHeading(options.title, "accent", phase), content: field }),
 			{
@@ -732,7 +733,7 @@ export class MCPAddWizard extends OverlayPanel {
 				return;
 			case "back":
 				if (this.#oauthAbort) this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
-				else if (this.#inputField) this.#cancelInputStep();
+				else if (this.#inputField) this.handleInput("\x1b");
 				else if (this.#currentStep === "name") this.#onCancelCallback();
 				else this.#goBack();
 				break;
@@ -1029,21 +1030,32 @@ export class MCPAddWizard extends OverlayPanel {
 	}
 
 	handleInput(keyData: string): void {
+		const escape = matchesKey(keyData, "escape");
 		// While authorizing, only the interrupt binding may cancel the OAuth wait.
-		if (this.#oauthAbort && matchesAppInterrupt(keyData)) {
+		if (!escape && this.#oauthAbort && matchesAppInterrupt(keyData)) {
 			this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
 			return;
 		}
 
 		// Outside OAuth, Cancel closes the wizard.
-		if (!this.#oauthAbort && matchesAppInterrupt(keyData)) {
+		if (!escape && !this.#oauthAbort && matchesAppInterrupt(keyData)) {
 			this.#onCancelCallback();
 			return;
 		}
 
-		// Input steps own Enter/Escape through the field (submit/back or cancel).
+		// Enter submits; Escape first belongs to Vim, then backs out only if the draft survives.
 		if (this.#inputField) {
+			if (escape && !this.#inputField.input.vimConsumesEscape()) {
+				const recoverable =
+					this.#currentStep !== "name" &&
+					this.#currentStep !== "apikey" &&
+					!this.#currentStep.startsWith("oauth-");
+				if (recoverable || !this.#inputField.input.dirty) this.#cancelInputStep();
+				this.#requestRender();
+				return;
+			}
 			this.#step?.handleInput(keyData);
+			this.#requestRender();
 			return;
 		}
 		if (this.#stepKind === "choice" && this.#help.handleInput(keyData)) {

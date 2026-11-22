@@ -568,6 +568,52 @@ describe("AskDialogComponent", () => {
 		});
 	});
 
+	it("reopens each option's note draft with its images and discards it separately from the saved note", async () => {
+		const image: ImageContent = { type: "image", data: "draft-image", mimeType: "image/png" };
+		const onCancel = vi.fn();
+		const onImagePrompt = vi
+			.fn()
+			.mockResolvedValueOnce({ text: "saved" })
+			.mockResolvedValueOnce({ draft: { text: "[Image #1]", images: [image] } })
+			.mockResolvedValueOnce({ draft: { text: "second" } })
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce({ draft: { text: "" } })
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce(undefined);
+		const onSubmit = vi.fn();
+		const component = new AskDialogComponent(
+			[{ id: "q", question: "Choose?", options: [{ label: "A" }, { label: "B" }] }],
+			{ onSubmit, onCancel, onPrompt: vi.fn(), onImagePrompt },
+		);
+		const note = async () => {
+			component.handleInput("n");
+			await Promise.resolve();
+		};
+		await note(); // Save A.
+		await note(); // Stash A's revision.
+		component.handleInput(DOWN);
+		await note(); // Stash B's separate draft.
+		component.handleInput(UP);
+		await note(); // Discard A's revision.
+		await note(); // Stash A's blank revision.
+		await note(); // Discard A's blank revision.
+		component.handleInput(DOWN);
+		await note(); // Discard B's draft.
+		expect(onImagePrompt.mock.calls.map(call => call[1])).toEqual([
+			undefined,
+			{ text: "saved", images: undefined },
+			undefined,
+			{ text: "[Image #1]", images: [image] },
+			{ text: "saved", images: undefined },
+			{ text: "" },
+			{ text: "second" },
+		]);
+		component.handleInput(UP);
+		component.handleInput(ENTER);
+		expect(onSubmit.mock.calls[0][0].results[0].notes).toEqual([{ option: "A", note: "saved" }]);
+		expect(onCancel).not.toHaveBeenCalled();
+	});
+
 	it("n on an option calls onPrompt and stores note with marker", async () => {
 		const onPrompt = vi.fn().mockReturnValue(Promise.resolve("My Custom Note"));
 		const onSubmit = vi.fn();
@@ -596,7 +642,6 @@ describe("AskDialogComponent", () => {
 		expect(onPrompt.mock.calls[0][0]).toEqual({
 			title: "Note for Option A",
 			question: "Choose one?",
-			saveOnEscape: true,
 		});
 
 		// Verify note is saved by submitting
@@ -713,7 +758,7 @@ describe("AskDialogComponent", () => {
 			component.handleInput(ENTER); // Beta, on to Q2
 			component.handleInput("n");
 			await flush();
-			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Gamma", question: "Q2?", saveOnEscape: true });
+			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Gamma", question: "Q2?" });
 
 			component.handleInput(ENTER); // Gamma, on to Q3
 			component.handleInput(ENTER); // Epsilon, on to Review
@@ -736,8 +781,8 @@ describe("AskDialogComponent", () => {
 			component.handleInput("n");
 			await flush();
 
-			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Epsilon", question: "Q3?", saveOnEscape: true });
-			expect(onPrompt.mock.calls[1][0]).toEqual({ title: "Note for Gamma", question: "Q2?", saveOnEscape: true });
+			expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Epsilon", question: "Q3?" });
+			expect(onPrompt.mock.calls[1][0]).toEqual({ title: "Note for Gamma", question: "Q2?" });
 
 			component.handleInput(TAB); // Q3
 			component.handleInput(ENTER); // Epsilon, on to Review
@@ -850,7 +895,6 @@ describe("AskDialogComponent", () => {
 		expect(onPrompt.mock.calls[0][0]).toEqual({
 			title: "Note for Option A",
 			question: "Choose one?",
-			saveOnEscape: true,
 		});
 		// No prior note → prefill is undefined.
 		expect(onPrompt.mock.calls[0][1]).toBeUndefined();
@@ -1951,7 +1995,7 @@ describe("AskDialogComponent", () => {
 		});
 	});
 
-	it("reopens a cancelled Other prompt with its draft, leaving the submitted answer unchanged (#18211)", async () => {
+	it("reopens Other with its draft, including blank edits, without changing its submitted answer (#18211)", async () => {
 		const onPrompt = vi
 			.fn()
 			.mockResolvedValueOnce("first")
@@ -1972,11 +2016,11 @@ describe("AskDialogComponent", () => {
 		component.handleInput(DOWN); // Other
 		await openOther();
 		component.handleInput(SHIFT_TAB);
-		await openOther(); // cancelled with a draft
-		await openOther(); // cancelled after blanking it
-		await openOther();
+		await openOther(); // left with a draft
+		await openOther(); // left after blanking it
+		await openOther(); // explicitly discarded
 
-		expect(onPrompt.mock.calls.map(call => call[1])).toEqual([undefined, "first", "first, then more", "first"]);
+		expect(onPrompt.mock.calls.map(call => call[1])).toEqual([undefined, "first", "first, then more", "  "]);
 		component.handleInput(TAB);
 		component.handleInput(ENTER);
 		expect(onSubmit.mock.calls[0][0].results[0].customInput).toBe("first");

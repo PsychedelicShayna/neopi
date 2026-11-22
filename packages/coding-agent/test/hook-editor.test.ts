@@ -113,6 +113,8 @@ describe("HookEditorComponent literal text ownership", () => {
 				expect(onCancel).not.toHaveBeenCalled();
 				expect(externalEditor).not.toHaveBeenCalled();
 				component.handleInput("\x1b");
+				expect(onCancel).not.toHaveBeenCalled();
+				component.handleInput("\x03");
 				expect(onCancel).toHaveBeenCalledTimes(1);
 			} finally {
 				component.dispose();
@@ -258,26 +260,50 @@ describe("HookEditorComponent default (hook) mode", () => {
 	});
 });
 
+it("updates an already-open hook editor when the Vim setting changes", () => {
+	const previous = getMenuSearchVimMode();
+	const onSubmit = vi.fn();
+	const onCancel = vi.fn();
+	setMenuSearchVimMode(false);
+	const component = new HookEditorComponent(createTui(), "Draft", "draft", onSubmit, onCancel);
+	try {
+		setMenuSearchVimMode(true);
+		component.handleInput("\x1b");
+		component.handleInput("0");
+		component.handleInput("x");
+		setMenuSearchVimMode(false);
+		component.handleInput("j");
+		component.handleInput("\x11");
+		expect(onSubmit).toHaveBeenCalledWith("jraft");
+		expect(onCancel).not.toHaveBeenCalled();
+	} finally {
+		component.dispose();
+		setMenuSearchVimMode(previous);
+	}
+});
+
 describe("HookEditorComponent prompt-style mode", () => {
-	it.each([false, true])("saves note drafts on Escape (Vim: %s)", vim => {
+	it.each([false, true])("returns recoverable note drafts without submitting on Escape (Vim: %s)", vim => {
 		const previous = getMenuSearchVimMode();
 		setMenuSearchVimMode(vim);
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
+		const onBack = vi.fn();
 		const note = new HookEditorComponent(createTui(), "Note for A", undefined, onSubmit, onCancel, {
 			promptStyle: true,
-			saveOnEscape: true,
+			onBack,
 		});
 		try {
 			for (const char of "keep this") note.handleInput(char);
 			note.handleInput("\x1b");
 			if (vim) {
-				expect(onSubmit).not.toHaveBeenCalled();
+				expect(onBack).not.toHaveBeenCalled();
 				expect(renderText(note)).toContain("keep this");
 				note.handleInput("\x1b");
 			}
-			expect(onSubmit).toHaveBeenCalledTimes(1);
-			expect(onSubmit).toHaveBeenCalledWith("keep this");
+			expect(onBack).toHaveBeenCalledTimes(1);
+			expect(onBack).toHaveBeenCalledWith("keep this");
+			expect(onSubmit).not.toHaveBeenCalled();
 			expect(onCancel).not.toHaveBeenCalled();
 		} finally {
 			note.dispose();
@@ -290,7 +316,7 @@ describe("HookEditorComponent prompt-style mode", () => {
 		const onCancel = vi.fn();
 		const note = new HookEditorComponent(createTui(), "Note for A", "existing", onSubmit, onCancel, {
 			promptStyle: true,
-			saveOnEscape: true,
+			onBack: vi.fn(),
 		});
 		note.handleInput("\x03");
 		expect(onCancel).toHaveBeenCalledWith("existing");
@@ -610,21 +636,24 @@ describe("HookEditorComponent prompt-style mode", () => {
 		expect(onCancel).not.toHaveBeenCalled();
 	});
 
-	it("hands the draft and its images to onCancel on Escape (#18211)", () => {
+	it("hands the recoverable draft and its images to onBack on Escape (#18211)", () => {
 		const image: ImageContent = { type: "image", data: "image", mimeType: "image/png" };
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
+		const onBack = vi.fn();
 		const component = new HookEditorComponent(createTui(), "Prompt", "see [Image #1]", onSubmit, onCancel, {
 			promptStyle: true,
 			acceptImages: true,
 			images: [image],
+			onBack,
 		});
 
 		component.handleInput(" ");
 		component.handleInput("x");
 		component.handleInput("\x1b");
 
-		expect(onCancel).toHaveBeenCalledWith("see [Image #1] x", [image]);
+		expect(onBack).toHaveBeenCalledWith("see [Image #1] x", [image]);
+		expect(onCancel).not.toHaveBeenCalled();
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 

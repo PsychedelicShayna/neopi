@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { loadMedia } from "@oh-my-pi/pi-tui/media";
 import { getNativeBlob } from "@oh-my-pi/pi-tui/native/blobs";
 import { ASK_RESERVED_ROWS } from "@oh-my-pi/pi-tui/chrome/ask-fold";
@@ -33,6 +34,7 @@ const TAB = "\t";
 const DOWN = "\x1b[B";
 const RIGHT = "\x1b[C";
 const ESC = "\x1b";
+const CTRL_C = "\x03";
 
 const CX: DescribeContext = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 
@@ -126,6 +128,8 @@ function dialog(html: string, overrides: Partial<ConstructorParameters<typeof Ht
 }
 
 describe("html form", () => {
+	let previousVimMode: boolean;
+
 	beforeAll(async () => {
 		const dark = await getThemeByName("dark");
 		if (!dark) throw new Error("dark theme unavailable");
@@ -133,12 +137,143 @@ describe("html form", () => {
 	});
 
 	beforeEach(() => {
+		previousVimMode = getMenuSearchVimMode();
+		setMenuSearchVimMode(false);
 		setKeybindings(KeybindingsManager.inMemory({ "tui.select.cancel": "escape" }));
 	});
 
 	afterEach(() => {
+		setMenuSearchVimMode(previousVimMode);
 		vi.useRealTimers();
 		setKeybindings(KeybindingsManager.inMemory());
+	});
+
+	describe("modal text controls", () => {
+		beforeEach(() => setMenuSearchVimMode(true));
+
+		it.each([
+			["single-line", `<input name="answer">`],
+			["multiline", `<textarea name="answer"></textarea>`],
+		])("%s: Escape leaves Vim editing first and preserves the answer; Ctrl+C reverts the edit", (_, field) => {
+			const releaseKeys = vi.fn();
+			const { form, onCancel } = dialog(`<form>${field}</form>`, { releaseKeys });
+			form.handleInput("abc");
+			form.handleInput(DOWN);
+			expect(form.debugState().focus).toBe("answer");
+			form.handleInput(ESC);
+			expect(releaseKeys).not.toHaveBeenCalled();
+			form.handleInput("x");
+			expect(form.data()).toEqual({ answer: "ab" });
+			form.handleInput(ESC);
+			expect(releaseKeys).toHaveBeenCalledTimes(1);
+			expect(form.data()).toEqual({ answer: "ab" });
+			form.engage();
+			form.handleInput(CTRL_C);
+			expect(form.data()).toEqual({ answer: "" });
+			expect(onCancel).not.toHaveBeenCalled();
+			form.handleInput(CTRL_C);
+			expect(onCancel).toHaveBeenCalledTimes(1);
+			form.dispose();
+		});
+
+		it("preserves the Other draft on Escape and restores the radio choice on Ctrl+C", () => {
+			const releaseKeys = vi.fn();
+			const { form, onCancel } = dialog(DB_FORM, { releaseKeys });
+			form.handleInput(DOWN);
+			form.handleInput(DOWN);
+			form.handleInput("mysql");
+			form.handleInput(ESC);
+			expect(releaseKeys).not.toHaveBeenCalled();
+			form.handleInput("x");
+			expect(form.data().db).toBe("mysq");
+			form.handleInput(ESC);
+			expect(releaseKeys).toHaveBeenCalledTimes(1);
+			expect(form.data().db).toBe("mysq");
+			form.engage();
+			form.handleInput(CTRL_C);
+			expect(form.data().db).toBe("sqlite");
+			expect(onCancel).not.toHaveBeenCalled();
+			form.dispose();
+		});
+
+		it("keeps a normal-mode note draft separate from the saved note until Enter", () => {
+			const { form, onCancel } = dialog(DB_FORM);
+			form.handleInput("n");
+			form.handleInput("abcdef");
+			form.handleInput(ESC);
+			expect(form.debugState().noteEdit).toBe("db=sqlite");
+			form.handleInput("x");
+			form.handleInput(ESC);
+			expect(form.debugState().noteEdit).toBeUndefined();
+			expect(form.optionNotes()).toEqual([]);
+			form.handleInput(DOWN);
+			form.handleInput("n");
+			expect(liveControls(form.describe(CX), Editor)[0]?.getText()).toBe("");
+			form.handleInput(CTRL_C);
+			form.handleInput("\x1b[A");
+			form.handleInput("n");
+			expect(liveControls(form.describe(CX), Editor)[0]?.getText()).toBe("abcde");
+			form.handleInput(ENTER);
+			expect(form.optionNotes()).toMatchObject([{ text: "abcde" }]);
+			expect(onCancel).not.toHaveBeenCalled();
+			form.dispose();
+		});
+
+		it("routes native Escape to the live note control and Ctrl+C ahead of global cancellation", async () => {
+			const { form, onCancel } = dialog(DB_FORM);
+			const globalCancel = vi.fn();
+			const provider: TerminalFrameProvider & NativeSurfaceProvider = {
+				renderFrame: () => ({ viewport: [] }),
+				acknowledgeHistory: () => {},
+				describeSurface: () => ({ main: [], dock: [form] }),
+			};
+			const harness = await TspHarness.start(tui => {
+				tui.setFrameProvider(provider);
+				tui.setFocus(form);
+				tui.addInputListener(data => {
+					if (data !== CTRL_C) return;
+					globalCancel();
+					return { consume: true };
+				});
+			});
+			try {
+				harness.terminal.send("n");
+				await harness.render();
+				const editor = harness.find(node => node.k === "editor")!;
+				harness.event({
+					ev: "edit",
+					sf: harness.terminal.surface!,
+					id: editor.id,
+					from: 0,
+					to: 0,
+					text: "native draft",
+					cursor: 12,
+					len: 0,
+				});
+				harness.terminal.send(ESC);
+				harness.flush(100);
+				expect(harness.find(node => node.k === "editor")?.p).toMatchObject({
+					mode: "NORMAL",
+					text: "native draft",
+				});
+				harness.terminal.send(ESC);
+				harness.flush(100);
+				expect(harness.findAll(node => node.k === "editor")).toEqual([]);
+				harness.terminal.send("n");
+				harness.flush(100);
+				expect(harness.find(node => node.k === "editor")?.p).toMatchObject({ text: "native draft" });
+				harness.terminal.send(CTRL_C);
+				harness.flush(100);
+				expect(harness.findAll(node => node.k === "editor")).toEqual([]);
+				expect(form.optionNotes()).toEqual([]);
+				expect(globalCancel).not.toHaveBeenCalled();
+				expect(onCancel).not.toHaveBeenCalled();
+				expect(harness.errors).toEqual([]);
+			} finally {
+				harness.stop();
+				form.dispose();
+			}
+		});
 	});
 
 	describe("option notes", () => {
@@ -160,6 +295,7 @@ describe("html form", () => {
 			expect(form.optionNotes()).toEqual([]);
 			form.handleInput(ENTER);
 			expect(form.data()).toEqual({ region: "eu" });
+			expect(form.optionNotes()).toMatchObject([{ text: "data residency" }]);
 			expect(form.render(100).join("\n")).toContain("✎ note");
 			expect(form.render(100).join("\n")).not.toContain("✎ draft");
 			form.handleInput("\x1bn");
@@ -167,7 +303,7 @@ describe("html form", () => {
 			form.handleInput(" edited");
 			form.handleInput(ENTER);
 			expect(form.optionNotes()).toEqual([
-				{ name: "region", question: "Region", option: "EU", value: "eu", text: "data residency edited" },
+				{ name: "region", question: "Region", option: "EU", value: "eu", text: "data residency changed edited" },
 			]);
 			expect(onSubmit).not.toHaveBeenCalled();
 			expect(onCancel).not.toHaveBeenCalled();
@@ -454,7 +590,7 @@ describe("html form", () => {
 				).toContain("host reason");
 				harness.event({ ev: "action", sf: harness.terminal.surface!, id: target.id, act: "note" });
 				form.handleInput(" discarded");
-				form.handleNativeEvent({ type: "action", key: "", act: "cancel", mods: [] });
+				form.handleNativeEvent({ type: "action", key: "", act: "discard-note", mods: [] });
 				expect(form.debugState().noteEdit).toBeUndefined();
 				expect(form.debugState().notes).toMatchObject({ db: { 1: "host reason" } });
 				expect(onCancel).not.toHaveBeenCalled();
@@ -502,7 +638,7 @@ describe("html form", () => {
 			expect(form.attachImage(IMAGE, DIMS)).toBe("[Image #2, 1x1]");
 		});
 
-		it("discards images added since the note opened when Esc closes it", () => {
+		it("stashes images with the edited draft without changing the saved note", () => {
 			const { form } = imageDialog();
 			form.handleInput(NOTE_KEY);
 			form.handleInput("kept");
@@ -513,7 +649,35 @@ describe("html form", () => {
 			expect(form.optionNotes()).toMatchObject([{ text: "kept" }]);
 			expect(form.optionNotes()[0]?.images).toBeUndefined();
 			form.handleInput(NOTE_KEY);
-			expect(form.attachImage(IMAGE, DIMS)).toBe("[Image #1, 1x1]");
+			expect(form.attachImage(IMAGE, DIMS)).toBe("[Image #2, 1x1]");
+			form.handleInput(ENTER);
+			expect(form.optionNotes()).toMatchObject([{ text: "kept[Image #1, 1x1]", images: [IMAGE] }]);
+		});
+
+		it("delivers a reserved paste to the stashed note, never another option or a discarded note", () => {
+			const { form } = imageDialog();
+			const longPaste = Array.from({ length: 12 }, (_, line) => `line ${line}`).join("\n");
+			form.handleInput(NOTE_KEY);
+			form.handleInput(paste(longPaste));
+			const settle = form.beginPaste();
+			const attach = form.attachImage;
+			form.handleInput(ENTER); // save waits for the pending paste
+			form.handleInput(ESC); // stash instead of saving
+			form.handleInput(DOWN);
+			form.handleInput(NOTE_KEY);
+			expect(settle(attach(IMAGE, DIMS))).toBe(true);
+			form.handleInput("second option");
+			const discarded = form.beginPaste();
+			const attachDiscarded = form.attachImage;
+			form.handleInput(CTRL_C);
+			form.handleInput("\x1b[A");
+			form.handleInput(NOTE_KEY);
+			expect(attachDiscarded(IMAGE, DIMS)).toBeUndefined();
+			expect(discarded("late paste")).toBe(false);
+			expect(form.optionNotes()).toEqual([]);
+			form.handleInput(ENTER);
+			expect(form.optionNotes()).toMatchObject([{ text: `${longPaste}[Image #1, 1x1]`, images: [IMAGE] }]);
+			form.dispose();
 		});
 
 		it("restores a saved note's images on reopening and numbers a new paste after them", () => {

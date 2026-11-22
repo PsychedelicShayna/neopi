@@ -143,15 +143,33 @@ describe("session tree shared menu navigation", () => {
 			expect(state(reopened).label).toMatchObject({ entryId: "row-0", value: "draft j/k", cursor: 8 });
 			expect(savedLabel).not.toHaveBeenCalled();
 			selector.handleInput("\x1b");
+			const normalDraft = state(selector).label;
+			expect(normalDraft).toMatchObject({ value: "draft j/k" });
+			expect(visits.map(visit => visit.page)).toEqual(["label:row-0"]);
+			selector.handleInput("\x1b");
 			expect(visits.map(visit => visit.page)).toEqual(["label:row-0", ""]);
 			selector.handleInput("e");
-			expect(state(selector).label).toMatchObject({ value: "draft j/k", cursor: 8 });
+			expect(state(selector).label).toEqual(normalDraft);
 			selector.restoreNavigation(visits[0]!.previous);
 			expect(visits).toHaveLength(3);
 			expect(state(selector).label).toBeUndefined();
 		} finally {
 			selector.dispose();
 			reopened.dispose();
+		}
+	});
+
+	it("Ctrl+C discards a label draft instead of stashing it when returning to the tree", () => {
+		const selector = create();
+		try {
+			selector.handleInput("e");
+			selector.handleInput("draft");
+			selector.handleInput("\x03");
+			expect(state(selector).label).toBeUndefined();
+			selector.handleInput("e");
+			expect(state(selector).label).toMatchObject({ value: "" });
+		} finally {
+			selector.dispose();
 		}
 	});
 

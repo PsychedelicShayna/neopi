@@ -4,6 +4,7 @@ import {
 	type Component,
 	extractPrintableText,
 	Input,
+	matchesKey,
 	routeSgrMouseInput,
 	type SelectItem,
 	SelectList,
@@ -66,6 +67,7 @@ function item(value: string, label: string, description?: string): SelectItem {
 /** One draft and one launch surface. Opening a picker never commits an unrelated field. */
 export class SpawnScreen implements Component {
 	readonly #root: SelectList;
+	readonly #initial: SpawnDraft;
 	#draft: SpawnDraft;
 	#defaults: SpawnDraft;
 	#tools: Checklist;
@@ -81,17 +83,25 @@ export class SpawnScreen implements Component {
 	) {
 		const first = deps.launcher.presets[0];
 		if (!first) throw new Error("No agent types are available.");
-		this.#defaults = deps.launcher.resolveSpec(first.type);
+		this.#initial = deps.launcher.resolveSpec(first.type);
+		this.#defaults = this.#initial;
 		this.#draft = { ...this.#defaults };
 		this.#tools = this.#buildTools();
 		this.#root = new SelectList([], 12, getSelectListTheme(), { activateOnSpace: false });
 		this.#root.onSelect = entry => this.#activate(entry.value);
-		this.#root.onCancel = () => this.#finish();
+		this.#root.onCancel = () => {
+			if (Bun.deepEquals(this.#draft, this.#initial)) this.#finish();
+			else this.#notice = "This spawn has edits. Press Ctrl+C to discard it.";
+		};
 		this.#refresh();
 	}
 
 	get blocksMenuHistory(): boolean {
 		return this.#editor?.kind === "input" || this.#editor?.kind === "assignment";
+	}
+
+	capturesInput(data: string): boolean {
+		return matchesKey(data, "ctrl+c");
 	}
 
 	navigationSnapshot(): unknown {
@@ -273,6 +283,7 @@ export class SpawnScreen implements Component {
 			}
 		};
 		input.onEscape = back;
+		input.onCancel = back;
 		this.#editor = { kind: "input", title, input };
 	}
 
@@ -281,10 +292,14 @@ export class SpawnScreen implements Component {
 			this.#draft.assignment = value;
 			this.#back();
 		};
-		const editor = new HookEditorComponent(this.tui, "Spawn assignment", this.#draft.assignment, save, save, {
-			escapeBack: true,
-			externalEditor: this.deps.externalEditor,
-		});
+		const editor = new HookEditorComponent(
+			this.tui,
+			"Spawn assignment",
+			this.#draft.assignment,
+			save,
+			() => this.#back(),
+			{ onBack: save, externalEditor: this.deps.externalEditor },
+		);
 		editor.focused = true;
 		editor.setUseTerminalCursor(this.#useTerminalCursor);
 		this.#editor = { kind: "assignment", editor };
@@ -458,9 +473,12 @@ export class SpawnScreen implements Component {
 		if (!(active instanceof Input)) active.setMaxVisible(this.tui.terminal.rows - 8);
 		const body = active.render(inner);
 		this.#listRows = body.length;
-		const hint = editor
-			? `Esc back  ·  ${interruptKey()} cancel spawn`
-			: `Enter edit  ·  ${editorKey("tui.select.toggle")} toggle tool  ·  ${editorKey("app.message.followUp")} launch  ·  Esc close`;
+		const hint =
+			editor?.kind === "input"
+				? "Enter apply  ·  Esc back if unchanged  ·  Ctrl+C discard edit"
+				: editor
+					? `Esc back  ·  ${interruptKey()} cancel spawn`
+					: `Enter edit  ·  ${editorKey("tui.select.toggle")} toggle tool  ·  ${editorKey("app.message.followUp")} launch  ·  Ctrl+C cancel spawn`;
 		const fit = (value: string) => row(truncateToWidth(value, inner), width);
 		return [
 			topBorder(width, this.#title()),
@@ -477,12 +495,19 @@ export class SpawnScreen implements Component {
 		if (this.#finished) return;
 		const editor = this.#editor;
 		const editingText = editor?.kind === "assignment" || editor?.kind === "input";
-		if ((!editingText || extractPrintableText(data) === undefined) && matchesAppInterrupt(data)) {
+		const explicitCancel = matchesKey(data, "ctrl+c");
+		if (
+			explicitCancel
+				? !editingText
+				: !matchesKey(data, "escape") &&
+					(!editingText || extractPrintableText(data) === undefined) &&
+					matchesAppInterrupt(data)
+		) {
 			this.#finish();
 			return;
 		}
 		if (editor?.kind === "assignment") editor.editor.handleInput(data);
-		else if (editor?.kind === "input") editor.input.handleInput(data);
+		else if (editor?.kind === "input") editor.input.handleInput(data, true);
 		else {
 			const active = editor?.kind === "model" ? editor.browser : (editor?.list ?? this.#root);
 			if (
@@ -554,6 +579,7 @@ export class SpawnScreen implements Component {
 		);
 		if (!editor) {
 			actions.splice(1, 0, pickerAction("launch", "Launch", bindingKeys("app.message.followUp"), { primary: true }));
+			actions.push(pickerAction("discard-spawn", "Cancel spawn", "ctrl+c"));
 		}
 		return picker({ ...props, actions, size: "lg", preview: this.#notice ? "below" : "none" }, notices);
 	}
@@ -571,6 +597,7 @@ export class SpawnScreen implements Component {
 					editor.browser.routePickerItem(editor.browser.pickerSelected, true);
 			} else if (picked) editor.browser.routePickerItem(picked.item, picked.kind === "activate");
 		} else if (!editor && event.type === "action" && event.act === "launch") this.#launch();
+		else if (!editor && event.type === "action" && event.act === "discard-spawn") this.#finish();
 		else routeSelectListPicker(editor?.list ?? this.#root, event);
 		this.tui.requestRender();
 	}

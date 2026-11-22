@@ -1398,10 +1398,10 @@ export class ExtensionUiController {
 						prompt.title,
 						prefill,
 						(text, images) => finishPrompt({ text, images }),
-						(text, images) => finishPrompt({ draft: { text, images } }),
+						() => finishPrompt(undefined),
 						{
 							promptStyle: true,
-							saveOnEscape: prompt.saveOnEscape,
+							onBack: (text, images) => finishPrompt({ draft: { text, images } }),
 							externalEditor: text => editDialogExternally(text, this.ctx.session.environment.snapshot()),
 							question: prompt.question,
 							...options,
@@ -1812,7 +1812,7 @@ export class ExtensionUiController {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "requireText">,
 	): Promise<string | undefined> {
 		this.#nextDialog = { family: "extension", kind: "editor", title };
 		return this.#presentDialog({ kind: "question", msg: title }, dialogOptions?.signal, settle => {

@@ -130,6 +130,28 @@ describe("model override configuration UI", () => {
 		expect(saved).toEqual(expected);
 	});
 
+	test("leaves the typed override field recoverable until Ctrl+C", async () => {
+		const editor = await setup(originalConfig());
+		const { panel } = panelFor(editor);
+		panel.handleInput("\r");
+		panel.handleInput("\r");
+		panel.handleInput("\x15");
+		panel.handleInput("Draft");
+		panel.handleInput("\x1b");
+		panel.handleInput("0");
+		panel.handleInput("x");
+		expect(view(panel)).toContain("raft");
+		panel.handleInput("\x1b");
+		panel.handleNativeEvent({ type: "select", key: "modelOverrides/list", item: "save" });
+		expect(panel.editing).toBe(true);
+		expect(view(panel)).toContain("raft");
+		expect(editor.list()[0]?.fields.name).toBe("Before");
+		panel.handleInput("\x03");
+		expect(panel.editing).toBe(false);
+		panel.handleInput("\r");
+		expect(view(panel)).toContain("Before");
+	});
+
 	test("adds and deletes an override from an initially absent file through the panel", async () => {
 		const editor = await setup();
 		const { panel, settled } = panelFor(editor);

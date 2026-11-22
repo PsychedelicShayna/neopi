@@ -656,12 +656,14 @@ export class RewindSelectorComponent implements Component {
 	/** `/` or the existing `f`: focus the retained filter over the whole branch. */
 	#openFilter(): void {
 		this.#loadFullHistory();
+		const before = this.#search.query;
 		this.#search.focused = true;
 		this.#keys.reset();
 		this.#activeVariant = 0;
 		this.#siblingSelected = 0;
 		this.#stopSlide();
-		this.deps.requestRender();
+		if (this.#search.query !== before) this.#filterChanged();
+		else this.deps.requestRender();
 	}
 
 	/** Left: the previous branch at a fork, else the previous user turn. */
@@ -1143,7 +1145,8 @@ export class RewindSelectorComponent implements Component {
 					this.#search.focused
 						? [
 								{ keys: ["enter"], label: "confirm search" },
-								{ keys: ["escape"], label: "clear search" },
+								{ keys: ["escape"], label: "back to list" },
+								{ keys: ["ctrl+c"], label: "clear search" },
 							]
 						: [
 								upDown,
@@ -1155,7 +1158,7 @@ export class RewindSelectorComponent implements Component {
 				actionBar([
 					actionButton("Show all", "clear-filter"),
 					actionButton(this.#search.focused ? "Back to list" : "Close", "cancel", { keys: "escape" }),
-					rewind,
+					this.#search.focused ? actionButton("Search", "search", { keys: "enter" }) : rewind,
 				]),
 			];
 		}
@@ -1173,15 +1176,13 @@ export class RewindSelectorComponent implements Component {
 		}
 		if (event.type !== "action") return;
 		const filtering = this.#filter !== undefined;
-		if (event.act === "rewind") {
+		if (event.act === "search") {
+			if (this.#search.focused) this.handleInput("\r");
+		} else if (event.act === "rewind" && !this.#search.focused) {
 			if (filtering) this.#selectFiltered();
 			else this.#selectOutlined();
 		} else if (event.act === "cancel") {
-			if (this.#search.focused || this.#search.value) {
-				this.#search.setValue("");
-				this.#search.focused = false;
-				this.#filterChanged();
-			} else this.deps.onCancel();
+			this.handleInput("\x1b");
 		} else if (event.act === "clear-filter") {
 			this.#search.setValue("");
 			this.#search.focused = false;
@@ -1275,7 +1276,7 @@ export class RewindSelectorComponent implements Component {
 				: theme.fg("dim", `${selected >= 0 ? selected + 1 : "-"}/${matches.length}`);
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const keys = this.#search.focused
-			? "Enter confirm search · Esc clear search"
+			? "Enter confirm search · Esc back · Ctrl+C clear"
 			: `${upDown} step · ←/→ user turns · / or f search · Enter rewind · ${editorKey("tui.select.cancel")} close · ? help`;
 		return {
 			header: [this.#header()],

@@ -248,6 +248,22 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("draft");
 	});
 
+	it("keeps Escape modal and non-destructive even if an old interrupt binding includes it", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		const cancel = vi.fn();
+		editor.setVimMode(true);
+		editor.setText("draft");
+		editor.onCancel = cancel;
+		editor.setActionKeys("app.interrupt", ["escape", "ctrl+c"]);
+		editor.handleDraftEdit("\x1b");
+		expect(editor.vimMode).toBe("normal");
+		editor.handleInput("\x1b");
+		expect(editor.getText()).toBe("draft");
+		expect(cancel).not.toHaveBeenCalled();
+		editor.handleInput("\x03");
+		expect(cancel).toHaveBeenCalledTimes(1);
+	});
+
 	it("redoes a Vim change with Alt+U, but not after a different edit", () => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setVimMode(true);

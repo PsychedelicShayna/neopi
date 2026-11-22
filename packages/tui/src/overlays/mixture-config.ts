@@ -33,7 +33,6 @@ import {
 	type SequentialEdge,
 	type TransitPartName,
 } from "./mixture-types";
-import { extractPrintableText } from "../keys";
 import { isMenuHistoryParticipant, MenuKeyReader, type MenuNavAction } from "../components/menu-navigation";
 import type { SelectListNavigationState } from "../components/select-list";
 
@@ -238,8 +237,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			((active instanceof SelectList || active instanceof ModelBrowser) && active.filterFocused)
 		) {
 			this.#keys.reset();
-			const text = active instanceof Input ? extractPrintableText(data) : undefined;
-			if (text !== undefined && active instanceof Input) active.insertText(text);
+			if (active instanceof Input) active.handleInput(data, true);
 			else active.handleInput?.(data);
 			return;
 		}
@@ -303,7 +301,8 @@ export class MixtureConfigOverlayComponent implements Component {
 			)
 				return;
 		}
-		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		if (action && action.kind !== "cancel" && (active instanceof SelectList || active instanceof ModelBrowser))
+			active.handleNavigation(action);
 		else active.handleInput?.(data);
 	}
 
@@ -707,7 +706,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			if (accepted !== false && this.#active === input) cancel();
 		};
 		input.onEscape = cancel;
-		this.#setScreen("input", input, `${label} · Enter save · Esc cancel`);
+		this.#setScreen("input", input, `${label} · Enter save · Ctrl+C cancel`);
 	}
 
 	#editLong(label: string, current: string, save: (value: string) => void, back: () => void): void {
@@ -722,7 +721,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			back,
 			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
-		this.#setScreen("editor", editor, "Ctrl+Q save · Ctrl+G external editor · Esc cancel");
+		this.#setScreen("editor", editor, "Ctrl+Q save · Ctrl+G external editor · Ctrl+C cancel");
 	}
 
 	#choose(
@@ -2270,7 +2269,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			} else this.#buildPage(state.context);
 			if (this.#active instanceof Input && typeof state.content === "object" && state.content !== null) {
 				const field = state.content as { value?: string; cursor?: number };
-				if (typeof field.value === "string") this.#active.setValue(field.value);
+				if (typeof field.value === "string") this.#active.setValue(field.value, { markClean: false });
 				if (typeof field.cursor === "number") this.#active.setCursor(field.cursor);
 			} else if (isMenuHistoryParticipant(this.#active)) this.#active.restoreNavigation(state.content);
 			this.#previewScroll = state.previewScroll;

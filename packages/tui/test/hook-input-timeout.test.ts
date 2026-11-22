@@ -226,6 +226,8 @@ describe("HookInputComponent literal text", () => {
 			expect(onSubmit).toHaveBeenCalledTimes(1);
 			expect(onSubmit).toHaveBeenCalledWith(`${value}j`);
 			component.handleInput("\x1b");
+			expect(onCancel).not.toHaveBeenCalled();
+			component.handleInput("\x03");
 			expect(onCancel).toHaveBeenCalledTimes(1);
 		} finally {
 			component.dispose();

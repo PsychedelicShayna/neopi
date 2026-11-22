@@ -7116,8 +7116,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Apply the `tui.vimMode` setting to an editor and route Visual-mode yanks to the clipboard. */
 	#applyVimMode(editor: CustomEditor): void {
-		editor.setVimMode(cfgTuiVimMode.get(settings));
-		setMenuSearchVimMode(cfgTuiVimMode.get(settings));
+		const enabled = cfgTuiVimMode.get(this.settings);
+		setMenuSearchVimMode(enabled);
+		editor.setVimMode(enabled);
 		editor.onYank = text => {
 			void this.#copyYankToClipboard(text);
 		};
@@ -7150,7 +7151,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						mode: editor.vimMode,
 						pending: editor.vimPending,
 						selectedLines: editor.vimSelectedLines,
-						display: cfgTuiVimModeDisplay.get(settings),
+						display: cfgTuiVimModeDisplay.get(this.settings),
 					}
 				: undefined,
 		);
@@ -10393,7 +10394,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		return (
 			await this.showHookEditor("Spawn assignment", undefined, undefined, {
 				promptStyle: true,
-				escapeBack: true,
 				requireText: true,
 			})
 		)?.trim();
@@ -10958,7 +10958,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		title: string,
 		prefill?: string,
 		dialogOptions?: ExtensionUIDialogOptions,
-		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "escapeBack" | "requireText">,
+		editorOptions?: Pick<HookEditorOptions, "promptStyle" | "requireText">,
 	): Promise<string | undefined> {
 		return this.#extensionUiController.showHookEditor(title, prefill, dialogOptions, editorOptions);
 	}

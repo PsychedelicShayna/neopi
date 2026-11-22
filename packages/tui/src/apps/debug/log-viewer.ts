@@ -1,5 +1,4 @@
 import type { TspPickerGroup, TspPickerItem, TspTone } from "@oh-my-pi/pi-wire";
-import { formatKeyHint } from "../../app-keybindings";
 import type { Component } from "../../tui";
 import { code } from "../../native/describe";
 import { Memo } from "../../native/memo";
@@ -806,6 +805,7 @@ export class DebugLogViewerComponent implements Component {
 					return this.#onExit();
 				case "search":
 					this.#search.focused = true;
+					if (this.#search.query !== before) this.#model.setFilterQuery(this.#search.query);
 					return;
 				case "move":
 					if (action.delta < 0) void this.#handleMoveUp(false);

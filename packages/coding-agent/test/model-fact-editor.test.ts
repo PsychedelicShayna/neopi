@@ -238,7 +238,7 @@ describe("model fact editor", () => {
 		expect(saved[0]!.sources).toEqual(["extension-only", "public-source"]);
 	});
 
-	test("Escape leaves text editing first, then closes without persisting drafts", () => {
+	test("Escape enters Normal mode and preserves dirty text until Ctrl+C discards it", () => {
 		let saves = 0;
 		let closes = 0;
 		const editor = create({
@@ -253,6 +253,12 @@ describe("model fact editor", () => {
 		editor.handleInput("hjklggG / ");
 		editor.handleInput("\x1b");
 		expect(closes).toBe(0);
+		editor.handleInput("0");
+		editor.handleInput("\x1b");
+		expect(editor.filterFocused).toBe(true);
+		expect(text(editor)).toContain("hjklggG /");
+		editor.handleInput("\x03");
+		expect(editor.filterFocused).toBe(false);
 		expect(text(editor)).toContain("first → second");
 		editor.handleInput("\x1b");
 		expect(closes).toBe(1);

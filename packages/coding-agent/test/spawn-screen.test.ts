@@ -177,6 +177,14 @@ test("assignment uses Vim when enabled; Escape navigates, app.interrupt cancels 
 	screen.handleInput("\x1b");
 	expect(rows(screen).map(row => row.id)).toContain("assignment");
 	expect(Bun.stripANSI(screen.render(120).join("\n"))).toContain("Keep this");
+	screen.handleInput("\x1b");
+	expect(Bun.stripANSI(screen.render(120).join("\n"))).toContain("Keep this");
+	expect(done).not.toHaveBeenCalled();
+	activate(screen, "assignment");
+	screen.handleInput("discard me");
+	screen.handleInput("\x03");
+	expect(rows(screen).map(row => row.id)).toContain("assignment");
+	expect(Bun.stripANSI(screen.render(120).join("\n"))).not.toContain("discard me");
 	expect(done).not.toHaveBeenCalled();
 	activate(screen, "assignment");
 	screen.handleInput("\x18");
@@ -184,11 +192,27 @@ test("assignment uses Vim when enabled; Escape navigates, app.interrupt cancels 
 	expect(done).toHaveBeenCalledWith(undefined);
 });
 
+test("Escape preserves a dirty name across Vim mode changes; Ctrl+C cancels only the field", () => {
+	const { screen, done } = createScreen();
+	setMenuSearchVimMode(true);
+	setKeybindings(KeybindingsManager.inMemory({ "app.interrupt": "escape" }));
+	activate(screen, "name");
+	screen.handleInput("Changed");
+	screen.handleInput("\x1b");
+	screen.handleInput("0");
+	screen.handleInput("\x1b");
+	expect(screen.nativeSheet(cx)).toBe(false);
+	expect(Bun.stripANSI(screen.render(120).join("\n"))).toContain("AmberChanged");
+	screen.handleInput("\x03");
+	expect(rows(screen).find(row => row.id === "name")?.detail).toBe("Amber");
+	expect(done).not.toHaveBeenCalled();
+});
+
 test.each([
-	["\r", "Inspect the source."],
-	["\x1b", undefined],
-	["\x03", undefined],
-] as const)("the assignment-only command handles %j in the shared editor", async (key, expected) => {
+	[["\r"], "Inspect the source."],
+	[["\x1b", "\r"], "Inspect the source."],
+	[["\x03"], undefined],
+] as const)("the assignment-only command handles %j in the shared editor", async (keys, expected) => {
 	const tui = { terminal: { rows: 40, columns: 120 }, requestRender: vi.fn() } as unknown as TUI;
 	let editor!: HookEditorComponent;
 	const mode = {
@@ -200,6 +224,6 @@ test.each([
 	} as unknown as InteractiveMode;
 	const result = InteractiveMode.prototype.showSpawnAssignment.call(mode);
 	editor.handleInput("Inspect the source.");
-	editor.handleInput(key);
+	for (const key of keys) editor.handleInput(key);
 	expect(await result).toBe(expected);
 });

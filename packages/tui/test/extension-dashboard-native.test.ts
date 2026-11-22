@@ -239,9 +239,12 @@ describe("ExtensionDashboard menu navigation", () => {
 		expect(describedPicker(dashboard).actions?.find(action => action.id === "toggle")?.keys).toBeUndefined();
 		dashboard.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(closes).toBe(0);
+		expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "alpha h/l", focused: true });
+		dashboard.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "", focused: false });
 		expect(describedPicker(dashboard).actions?.find(action => action.id === "close")?.label).toBe("Close");
 		dashboard.handleInput("/");
+		expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "alpha h/l", focused: true });
 		dashboard.handleInput("\t");
 		expect(dashboard.navigationSnapshot().pane).toBe("list");
 		expect(dashboard.navigationSnapshot().list.search.focused).toBe(true);
@@ -249,6 +252,8 @@ describe("ExtensionDashboard menu navigation", () => {
 		dashboard.handleInput("\t");
 		expect(dashboard.navigationSnapshot().pane).toBe("inspector");
 		expect(dashboard.navigationSnapshot().list.search.focused).toBe(false);
+		dashboard.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+		expect(closes).toBe(0);
 		dashboard.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(closes).toBe(1);
 		expect(fx.disabled).toEqual([]);
@@ -265,6 +270,9 @@ describe("ExtensionDashboard menu navigation", () => {
 			dashboard.handleInput("\x1b");
 			expect(describedPicker(dashboard).items.map(item => item.label)).toEqual(["alpha", "beta"]);
 			expect(dashboard.navigationSnapshot().list.search).toMatchObject({ value: "", focused: false });
+			dashboard.handleInput("/");
+			expect(dashboard.navigationSnapshot().list.search.value).toBe("alpha");
+			dashboard.handleInput("\x03");
 
 			for (const char of "//beta") dashboard.handleInput(char);
 			dashboard.handleInput("\r");

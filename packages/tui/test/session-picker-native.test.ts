@@ -4,6 +4,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import { OverlayPanel } from "../src/chrome/overlay-box";
 import { TextFormField } from "../src/components/form";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "../src/components/menu-navigation";
 import type { DescribeContext, NativeNode } from "../src/native/node";
 import { type HistorySearchEntry, HistorySearchComponent } from "../src/overlays/history-search";
 import { type SessionSelectorEntry, SessionSelectorComponent } from "../src/overlays/session-selector";
@@ -258,17 +259,28 @@ describe("session selector rename", () => {
 		expect(renameDialogOf(selector)).toBeUndefined();
 	});
 
-	it("cancels on Esc without changes", () => {
-		const renamed = { calls: [] as RenameCall[] };
-		const { selector, beta } = makeRename(renamed);
-		selector.handleInput("\x1bOQ");
-		expect(renameDialogOf(selector)).toBeDefined();
-		type(selector, " Prime");
-		selector.handleInput("\x1b");
-		expect(renameDialogOf(selector)).toBeUndefined();
-		const after = props(selector.describe(withPicker));
-		expect(after.items?.find(item => item.id === beta.path)?.label).toBe("Beta");
-		expect(after.selected).toBe(beta.path);
+	it("keeps a rename draft through Escape and discards it only on Ctrl+C", () => {
+		const previous = getMenuSearchVimMode();
+		setMenuSearchVimMode(true);
+		try {
+			const renamed = { calls: [] as RenameCall[] };
+			const { selector, beta } = makeRename(renamed);
+			selector.handleInput("\x1bOQ");
+			expect(renameDialogOf(selector)).toBeDefined();
+			type(selector, " Prime");
+			selector.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+			expect(renameDialogOf(selector)?.field.input.vimMode).toBe("normal");
+			selector.handleInput("\x1b");
+			expect(renameDialogOf(selector)?.field.getValue()).toBe("Beta Prime");
+			selector.handleInput("\x03");
+			expect(renameDialogOf(selector)).toBeUndefined();
+			expect(renamed.calls).toEqual([]);
+			const after = props(selector.describe(withPicker));
+			expect(after.items?.find(item => item.id === beta.path)?.label).toBe("Beta");
+			expect(after.selected).toBe(beta.path);
+		} finally {
+			setMenuSearchVimMode(previous);
+		}
 	});
 
 	it("renders the rename editor instead of the picker while it is open", () => {

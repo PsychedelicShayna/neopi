@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
-import { SPACE_HOLD_MECHANICAL_RUN } from "@oh-my-pi/pi-tui/space-hold";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import {
 	resetHangulCompatibilityJamoWidthForTests,
@@ -15,6 +15,34 @@ function renderedWidth(input: Input, width: number): number {
 	// TUI strips this marker before its width verification; tests should mimic that.
 	return visibleWidth(line.replaceAll(CURSOR_MARKER, ""));
 }
+
+it("uses shared Vim motions and undo in an existing single-line field, without canceling on Escape", () => {
+	const previous = getMenuSearchVimMode();
+	try {
+		setMenuSearchVimMode(false);
+		const input = new Input();
+		let cancels = 0;
+		input.onEscape = () => cancels++;
+		input.handleInput("draft");
+		setMenuSearchVimMode(true);
+		input.handleInput("\x1b");
+		expect(input.vimMode).toBe("normal");
+		expect(input.getValue()).toBe("draft");
+		input.handleInput("0dw");
+		expect(input.getValue()).toBe("");
+		input.handleInput("u");
+		expect(input.getValue()).toBe("draft");
+		input.handleInput("\x1b");
+		expect(cancels).toBe(0);
+		input.handleInput("\x03");
+		expect(cancels).toBe(1);
+		setMenuSearchVimMode(false);
+		input.handleInput("x");
+		expect(input.getValue()).toStartWith("x");
+	} finally {
+		setMenuSearchVimMode(previous);
+	}
+});
 
 describe("Input component", () => {
 	const wordLeft = "\x1bb"; // ESC-b (alt+b)

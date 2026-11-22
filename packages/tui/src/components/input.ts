@@ -14,8 +14,12 @@ import {
 	type NativeUiEvent,
 	resolveTextEdit,
 } from "../native/node";
+import { getEditorTheme } from "../theme/tui-adapters";
 import { SpaceHoldGesture } from "../space-hold";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
+import type { VimMode } from "../vim";
+import { getMenuSearchVimMode } from "../vim-preference";
+import { Editor } from "./editor";
 import { cursorColumnWindow } from "./scroll-viewport";
 import {
 	getSegmenter,
@@ -64,6 +68,8 @@ interface InputState {
  */
 export class Input implements Component, Focusable {
 	#value: string = "";
+	#initialValue = "";
+	#vimEditor: Editor | undefined;
 	#cursor: number = 0; // Cursor position in the value
 	#useTerminalCursor = false;
 	/** Rendered before the editable area; set to "" for chrome-less embedding. */
@@ -74,8 +80,13 @@ export class Input implements Component, Focusable {
 	placeholder: string | undefined;
 	onSubmit?: (value: string) => void;
 	onEscape?: () => void;
+	/** Explicit cancellation may discard the draft. Escape may only leave an unchanged field. */
+	onCancel?: () => void;
 	/** Space-bar push-to-talk; set its `handler` to enable it. */
-	readonly spaceHold = new SpaceHoldGesture(count => this.deleteBeforeCursor(count));
+	readonly spaceHold = new SpaceHoldGesture(
+		count => this.deleteBeforeCursor(count),
+		() => this.vimMode === "insert",
+	);
 	/** When set, replaces the cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
 
@@ -96,6 +107,8 @@ export class Input implements Component, Focusable {
 	#volatileTextLen = 0;
 
 	#native?: { props: TspInputProps; node: NativeNode };
+
+	constructor(private readonly options?: { coalesceTypingUndo?: boolean }) {}
 
 	getValue(): string {
 		return this.#value;
@@ -134,8 +147,14 @@ export class Input implements Component, Focusable {
 		};
 	}
 
+	get dirty(): boolean {
+		return this.#value !== this.#initialValue;
+	}
+
 	/** Replace the value; the caret lands at the end unless `cursor: "start"`. */
-	setValue(value: string, options: { cursor?: "start" | "end" } = {}): void {
+	setValue(value: string, options: { cursor?: "start" | "end"; markClean?: boolean } = {}): void {
+		if (options.markClean !== false) this.#initialValue = value;
+		this.resetVimMode();
 		this.#value = value;
 		this.#cursor = options.cursor === "start" ? 0 : value.length;
 	}
@@ -148,9 +167,44 @@ export class Input implements Component, Focusable {
 		return this.#useTerminalCursor;
 	}
 
-	/** The fork's Space-hold gesture is handled inside {@link handleInput}; nothing is pre-claimed. */
-	capturesInput(_data: string): boolean {
-		return false;
+	/** Give modal Escape priority over app-wide navigation when this field owns focus. */
+	capturesInput(data: string): boolean {
+		return matchesKey(data, "escape") && this.vimConsumesEscape();
+	}
+
+	get vimMode(): VimMode {
+		return this.#modalEditor()?.vimMode ?? "insert";
+	}
+
+	vimConsumesEscape(): boolean {
+		return this.#modalEditor()?.vimConsumesEscape() ?? false;
+	}
+
+	resetVimMode(): void {
+		this.#vimEditor = undefined;
+	}
+
+	#modalEditor(): Editor | undefined {
+		if (!getMenuSearchVimMode()) {
+			this.resetVimMode();
+			return undefined;
+		}
+		const editor = (this.#vimEditor ??= new Editor(getEditorTheme(), {
+			normalize: toSingleLine,
+			coalesceTypingUndo: this.options?.coalesceTypingUndo,
+		}));
+		editor.disableSubmit = true;
+		if (editor.getText() !== this.#value) {
+			editor.setState({ text: this.#value, cursor: { line: 0, col: this.#cursor }, scrollTop: 0 });
+		} else if (editor.getCursor().col !== this.#cursor) {
+			editor.applyHostEdit({ from: 0, to: 0, text: "", cursor: this.#cursor, len: this.#value.length });
+		}
+		return editor;
+	}
+
+	#readModalEditor(editor: Editor): void {
+		this.#value = editor.getText();
+		this.#cursor = editor.getCursor().col;
 	}
 
 	/**
@@ -160,14 +214,14 @@ export class Input implements Component, Focusable {
 	 * without an `onEscape`/`onSubmit`, so a host (a list's search field) can
 	 * route everything else on.
 	 */
-	handleInput(data: string): boolean {
+	handleInput(data: string, literalPrintable = false): boolean {
 		// Handle bracketed paste mode
 		const paste = this.#pasteHandler.process(data);
 		if (paste.handled) {
 			if (paste.pasteContent !== undefined) {
 				this.#handlePaste(paste.pasteContent);
 				if (paste.remaining.length > 0) {
-					this.handleInput(paste.remaining);
+					this.handleInput(paste.remaining, literalPrintable);
 				}
 			}
 			return true;
@@ -176,31 +230,63 @@ export class Input implements Component, Focusable {
 		// Space-hold push-to-talk: a sustained space bar starts/stops STT instead of typing spaces.
 		switch (this.spaceHold.process(matchesKey(data, "space"), matchesKey(data, "backspace"))) {
 			case "type":
-				this.#insertCharacter(" ");
+				this.insertText(" ");
 				return true;
 			case "swallow":
 				return true;
 		}
 
 		const kb = getKeybindings();
-
-		// Escape/Cancel
-		if (kb.matches(data, "tui.select.cancel")) {
-			if (!this.onEscape) return false;
-			this.onEscape();
+		const printable = extractPrintableText(data);
+		const editor = this.#modalEditor();
+		if (printable !== undefined && (editor || literalPrintable)) {
+			if (editor) {
+				editor.handleInput(data, true);
+				this.#readModalEditor(editor);
+			} else this.#insertCharacter(printable);
 			return true;
 		}
 
-		// Undo
+		// In an active modal state Escape belongs to Vim before any host navigation.
+		if (matchesKey(data, "escape") && editor?.vimConsumesEscape()) {
+			editor.handleInput(data);
+			this.#readModalEditor(editor);
+			return true;
+		}
+		const escape = matchesKey(data, "escape");
+		if (!escape && (matchesKey(data, "ctrl+c") || kb.matches(data, "tui.select.cancel"))) {
+			if (this.onCancel) this.onCancel();
+			else if (this.onEscape) this.onEscape();
+			else return false;
+			return true;
+		}
+
+		if (escape) {
+			if (!this.onEscape && !this.onCancel) return false;
+			if (!this.dirty) this.onEscape?.();
+			return true;
+		}
+
+		if (matchesKey(data, "enter") || kb.matches(data, "tui.input.submit") || data === "\n") {
+			if (!this.onSubmit) return false;
+			this.submit();
+			return true;
+		}
+
+		if (editor) {
+			const mode = editor.vimMode;
+			const value = this.#value;
+			const cursor = this.#cursor;
+			const pending = editor.vimPending;
+			editor.handleInput(data, true);
+			this.#readModalEditor(editor);
+			return (
+				value !== this.#value || cursor !== this.#cursor || mode !== editor.vimMode || pending !== editor.vimPending
+			);
+		}
+
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.#undo();
-			return true;
-		}
-
-		// Submit
-		if (kb.matches(data, "tui.input.submit") || data === "\n") {
-			if (!this.onSubmit) return false;
-			this.onSubmit(this.#value);
 			return true;
 		}
 
@@ -291,15 +377,20 @@ export class Input implements Component, Focusable {
 		}
 
 		// Regular character input, including Kitty CSI-u text-producing sequences.
-		const printableText = extractPrintableText(data);
-		if (!printableText) return false;
-		this.#insertCharacter(printableText);
+		if (!printable) return false;
+		this.#insertCharacter(printable);
 		return true;
 	}
 
 	/** Insert decoded printable text with ordinary typing undo groups, without keybinding dispatch. */
 	insertText(text: string): void {
-		this.#insertCharacter(text);
+		const editor = this.#modalEditor();
+		if (!editor) {
+			this.#insertCharacter(text);
+			return;
+		}
+		editor.insertText(toSingleLine(text));
+		this.#readModalEditor(editor);
 	}
 
 	/** Apply terminal paste semantics to text from non-bracketed paste transports
@@ -311,7 +402,13 @@ export class Input implements Component, Focusable {
 	/** Terminal-side selection edits and undo on the `input` node (see {@link applyHostEdit}). */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "edit") this.applyHostEdit(event);
-		else if (event.type === "undo") this.#undo();
+		else if (event.type === "undo") {
+			const editor = this.#modalEditor();
+			if (editor) {
+				editor.handleNativeEvent(event);
+				this.#readModalEditor(editor);
+			} else this.#undo();
+		}
 	}
 
 	/**
@@ -348,6 +445,12 @@ export class Input implements Component, Focusable {
 				len: this.#value.length,
 			};
 		}
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.applyHostEdit(valueEdit);
+			this.#readModalEditor(editor);
+			return;
+		}
 		const resolved = resolveTextEdit(this.#value, valueEdit, toSingleLine);
 		if (!resolved) return;
 		this.#lastAction = null;
@@ -360,6 +463,8 @@ export class Input implements Component, Focusable {
 
 	/** Programmatically trigger submission (e.g. for voice submit). */
 	submit(): void {
+		const editor = this.#vimEditor;
+		if (editor?.vimPending) editor.handleInput("\x1b");
 		this.onSubmit?.(this.#value);
 	}
 
@@ -405,7 +510,9 @@ export class Input implements Component, Focusable {
 	}
 
 	#insertCharacter(text: string): void {
-		const isWordChunk = [...segmenter.segment(text)].every(seg => getWordNavKind(seg.segment) !== "whitespace");
+		const isWordChunk =
+			this.options?.coalesceTypingUndo !== false &&
+			[...segmenter.segment(text)].every(seg => getWordNavKind(seg.segment) !== "whitespace");
 		// Undo coalescing: consecutive word typing coalesces into one undo unit.
 		if (!isWordChunk || this.#lastAction !== "type-word") {
 			this.#pushUndo();
@@ -580,6 +687,12 @@ export class Input implements Component, Focusable {
 	}
 
 	#handlePaste(pastedText: string): void {
+		const editor = this.#modalEditor();
+		if (editor) {
+			editor.pasteText(pastedText);
+			this.#readModalEditor(editor);
+			return;
+		}
 		this.#lastAction = null;
 		this.#pushUndo();
 		this.#replaceBeforeCursor(0, toSingleLine(pastedText));
@@ -608,6 +721,7 @@ export class Input implements Component, Focusable {
 			text: value,
 			cursor,
 			sendable: false,
+			mode: this.#vimEditor && this.#modalEditor()?.nativeVimMode,
 			prompt: prompt || undefined,
 			placeholder: this.placeholder,
 		};
@@ -675,6 +789,8 @@ export class Input implements Component, Focusable {
 	/** The rendered cursor cell: the grapheme under the cursor, inverted unless the terminal draws its own cursor. */
 	#cursorCell(atCursor: string): { text: string; width: number } {
 		if (this.#useTerminalCursor) return { text: atCursor, width: visibleWidth(atCursor) };
+		if (getMenuSearchVimMode() && (!this.#vimEditor || this.#vimEditor.vimMode === "insert"))
+			return { text: `\x1b[4m${atCursor || " "}\x1b[24m`, width: visibleWidth(atCursor || " ") };
 		return { text: `\x1b[7m${atCursor || " "}\x1b[27m`, width: visibleWidth(atCursor || " ") };
 	}
 }

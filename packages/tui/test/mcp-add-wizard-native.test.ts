@@ -95,8 +95,8 @@ describe("MCP add wizard under a native surface", () => {
 		const wizard = new MCPAddWizard(deps, vi.fn(), vi.fn());
 		expect(title(wizard)).toBe("Name the server");
 		expect(phases(wizard)).toEqual(["accent", "muted", "muted", "muted", "muted", "muted"]);
-		// The first step has no Back: Esc cancels, so Cancel carries it.
-		expect(buttons(wizard)).toEqual(["Cancel  esc", "Continue  ⏎"]);
+		// The first step has no Back; Ctrl+C explicitly cancels.
+		expect(buttons(wizard)).toEqual(["Cancel  ⌃C", "Continue  ⏎"]);
 		for (const button of byRole(wizard, "omp.btn")) {
 			expect((button.c ?? []).filter(isNode).map(child => child.k)).toEqual(["text", "kbd"]);
 		}

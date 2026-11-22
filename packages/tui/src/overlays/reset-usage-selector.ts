@@ -272,16 +272,18 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		return this.#help.render(super.render(width), width);
 	}
 
+	#applySearchQuery(query: string): void {
+		this.#menu.setQuery(query);
+		this.#viewport.reveal();
+		this.#nativeItems = undefined;
+		this.#pickerItems = undefined;
+	}
+
 	handleInput(data: string): void {
 		const before = this.#search.query;
 		const field = this.#search.handleInput(data);
 		if (field !== "pass") {
-			if (this.#search.query !== before) {
-				this.#menu.setQuery(this.#search.query);
-				this.#viewport.reveal();
-				this.#nativeItems = undefined;
-				this.#pickerItems = undefined;
-			}
+			if (this.#search.query !== before) this.#applySearchQuery(this.#search.query);
 			this.#updateList();
 			return;
 		}
@@ -295,6 +297,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			this.#updateList();
 		} else if (action.kind === "search") {
 			this.#search.focused = true;
+			if (this.#search.query !== before) this.#applySearchQuery(this.#search.query);
 			this.#menu.cancelConfirmation();
 			this.#updateList();
 		} else if (action.kind === "cancel") {
@@ -410,7 +413,9 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			selected: this.#menu.selectedKey ?? null,
 			empty: "No provider accounts with saved resets",
 			actions: [
-				pickerAction("confirm", "Spend reset", "enter", { primary: true }),
+				this.#search.focused
+					? pickerAction("search", "Search", "enter", { primary: true })
+					: pickerAction("confirm", "Spend reset", "enter", { primary: true }),
 				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
 			],
 			confirm,
@@ -443,12 +448,19 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 			return;
 		}
 		const ev = pickerEvent(event, PICKER_KEY);
+		if (this.#search.focused) {
+			if (ev?.kind === "action") {
+				if (ev.act === "close") this.handleInput("\x1b");
+				else if (ev.act === "search") this.handleInput("\r");
+			}
+			return;
+		}
 		if (ev?.kind === "action") {
 			if (ev.act === "confirm") this.#activateSelection();
 			else if (ev.act === "cancel" && this.#menu.cancelConfirmation()) {
 				this.#statusMessage = undefined;
 				this.#updateList();
-			} else if (ev.act === "close" || ev.act === "cancel") this.handleInput(this.#search.focused ? "\x03" : "\x1b");
+			} else if (ev.act === "close" || ev.act === "cancel") this.handleInput("\x1b");
 			return;
 		}
 		if (ev) {

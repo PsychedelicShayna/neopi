@@ -622,6 +622,8 @@ export class AgentsHubComponent implements Component {
 		const current = this.#overrideFor(agent, property);
 		if (current) input.setValue(current);
 		this.#strip = { kind: "pattern", agent, property, input };
+		input.onSubmit = () => this.#submitPattern();
+		input.onEscape = () => this.#openPropertyStrip(agent, property);
 	}
 
 	#closeStrip(): void {
@@ -842,7 +844,7 @@ export class AgentsHubComponent implements Component {
 				const action = this.#keys.read(data);
 				if (action !== "pending") {
 					if (action?.kind === "horizontal" && action.delta < 0) this.#cancelAssign();
-					else if (action) this.#browser.handleNavigation(action);
+					else if (action && action.kind !== "cancel") this.#browser.handleNavigation(action);
 					else this.#browser.handleInput(data);
 				}
 			}
@@ -955,16 +957,12 @@ export class AgentsHubComponent implements Component {
 	#handleStripInput(data: string): void {
 		const strip = this.#strip;
 		if (!strip) return;
-		if (matchesSelectCancel(data)) {
-			this.#stripBack(strip);
+		if (strip.kind === "pattern") {
+			strip.input.handleInput(data, true);
 			return;
 		}
-		if (strip.kind === "pattern") {
-			if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-				this.#submitPattern();
-				return;
-			}
-			strip.input.handleInput(data);
+		if (matchesSelectCancel(data)) {
+			this.#stripBack(strip);
 			return;
 		}
 		const action = this.#keys.read(data);
@@ -1205,7 +1203,7 @@ export class AgentsHubComponent implements Component {
 			if (this.#strip.kind === "pattern") {
 				const property = this.#strip.property;
 				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
-				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
+				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · Ctrl+C cancel`;
 			}
 			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
@@ -1519,10 +1517,7 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			const searching = this.#assigning
-				? this.#browser.filterFocused
-				: !this.#strip && !this.#createActive && this.#search.focused;
-			this.handleInput(searching ? "\x03" : "\x1b");
+			this.handleInput("\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1953,7 +1948,7 @@ export class AgentsHubComponent implements Component {
 				const values = strip.property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
 				return [
 					{ keys: ["enter"], label: `${values} (role aliases like @smol and :level suffixes work; empty clears)` },
-					cancel("back"),
+					{ keys: ["ctrl+c"], label: "cancel" },
 				];
 			}
 			return [
@@ -2037,7 +2032,7 @@ export class AgentsHubComponent implements Component {
 			this.#openPatternStrip(agent, state.property);
 			const strip = this.#strip;
 			if (strip?.kind === "pattern") {
-				strip.input.setValue(state.value);
+				strip.input.setValue(state.value, { markClean: false });
 				strip.input.setCursor(state.cursor);
 			}
 		} else {

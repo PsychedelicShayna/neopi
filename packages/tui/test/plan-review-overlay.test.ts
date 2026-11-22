@@ -5,7 +5,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { PlanReviewOverlay, type PlanReviewOverlayChoice } from "@oh-my-pi/pi-tui/overlays/plan-review-overlay";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
-import { setKeybindings } from "@oh-my-pi/pi-tui";
+import { CURSOR_MARKER, setKeybindings } from "@oh-my-pi/pi-tui";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -19,7 +19,7 @@ const CANCEL = "\x07"; // ctrl+g, remapped to tui.select.cancel below
 let darkTheme = await getThemeByName("dark");
 
 function render(component: PlanReviewOverlay): string {
-	return stripVTControlCharacters(component.render(80).join("\n"));
+	return stripVTControlCharacters(component.render(80).join("\n").replaceAll(CURSOR_MARKER, ""));
 }
 
 const APPROVAL_LABELS = [
@@ -663,6 +663,11 @@ describe("PlanReviewOverlay", () => {
 		for (const ch of "discarded edit") overlay.handleInput(ch);
 		expect(render(overlay)).toContain("discarded edit");
 		overlay.handleInput(CANCEL);
+		expect(render(overlay)).toContain("discarded edit");
+		overlay.handleInput("\x1b");
+		overlay.handleInput("\x1b");
+		expect(render(overlay)).toContain("discarded edit");
+		overlay.handleInput("\x03");
 		expect(render(overlay)).toContain("second note");
 		expect(render(overlay)).not.toContain("discarded edit");
 

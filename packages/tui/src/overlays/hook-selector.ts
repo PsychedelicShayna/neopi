@@ -851,11 +851,7 @@ export class HookSelectorComponent extends OverlayPanel {
 			this.#resetCountdown();
 			this.#keys.reset();
 			if (ev.act === "close" || ev.act === "cancel") {
-				if (this.#search.focused || this.#search.value) {
-					this.#search.setValue("");
-					this.#search.focused = false;
-					this.#syncSearchQuery();
-				} else this.#onCancelCallback();
+				this.handleInput("\x1b");
 			} else if (ev.act === "clear") {
 				this.#search.setValue("");
 				this.#syncSearchQuery();

@@ -102,6 +102,12 @@ describe("form menu history", () => {
 		form.handleInput("\r");
 		expect(submitted).toBe(1);
 		form.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(first.input.vimMode).toBe("normal");
+		form.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(first.getValue()).toBe("hjklggG / ");
+		form.handleInput("\x03");
 		expect(cancelled).toBe(1);
 	});
 
@@ -130,6 +136,12 @@ describe("form menu history", () => {
 		text.handleInput("\r");
 		expect(submitted).toEqual(["jk"]);
 		text.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(text.input.vimMode).toBe("normal");
+		text.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(text.getValue()).toBe("jk");
+		text.handleInput("\x03");
 		expect(cancelled).toBe(1);
 	});
 

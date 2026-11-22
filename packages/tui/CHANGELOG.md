@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Search, rename, forms, Ask notes, and multiline editors all honor the live Vim setting. Escape changes mode or navigates without discarding a draft; Ctrl+C explicitly cancels ([#837](https://github.com/PsychedelicShayna/neopi/issues/837)).
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - Settings rows show inherited values with a source-scope icon (Nerd Font, Unicode and ASCII forms), mark rows changed by key presence instead of comparison with the default, and unset the hovered row with Backspace ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
 - `/model` and `/roles` open from cache, catch up as background model lists land, and refresh on provider entry only when that provider is stale. Use Alt+R to refresh a provider or Ctrl+R to refresh all in the fullscreen hub ([#832](https://github.com/PsychedelicShayna/neopi/issues/832)).
@@ -11,7 +12,7 @@
 - NeoPi provenance uses the same crescent in purple for nightly-only additions and the original green for published stable additions; gold, silver and bronze stars identify upstream additions only, with every older sync cohort retained as bronze.
 - Auxiliary UI provenance now ages against the integrated v19.0.0 cohort, in step with Settings and slash commands ([#430](https://github.com/PsychedelicShayna/neopi/issues/430)).
 - Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.
-- Ask uses `n` to add or edit one note per highlighted item, selected or not. Save an empty note to remove it; Escape saves after Vim leaves Insert, and Ctrl+C discards the edit. The result carries one `notes` list instead of separate note fields ([#838](https://github.com/PsychedelicShayna/neopi/issues/838)).
+- Ask uses `n` to add or edit one note per highlighted item, selected or not. Save an empty note to remove it; Escape leaves an unsaved draft you can reopen, and Ctrl+C discards the edit. The result carries one `notes` list instead of separate note fields ([#838](https://github.com/PsychedelicShayna/neopi/issues/838)).
 - `/agents` opens directly into a roster and editable properties, opens editable backing files with Ctrl+G (and explains how to copy bundled definitions), and can generate from agents, advisors, personalities, personas, prompt files, skills, and other harness definitions ([#331](https://github.com/PsychedelicShayna/neopi/issues/331)).
 
 ### Added

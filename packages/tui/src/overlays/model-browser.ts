@@ -39,6 +39,7 @@ import {
 	MenuKeyReader,
 	type MenuNavAction,
 	MenuSearchField,
+	type MenuSearchState,
 	MenuViewport,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
@@ -1115,6 +1116,7 @@ export interface ModelBrowserNavigation {
 	value: string;
 	cursor: number;
 	filterFocused: boolean;
+	draft?: MenuSearchState["draft"];
 	selected: string | undefined;
 	top: MenuViewportPosition | undefined;
 }
@@ -1393,7 +1395,12 @@ export class ModelBrowser implements Component {
 	}
 
 	focusFilter(focused = true): void {
+		const before = this.query;
 		this.#search.focused = focused;
+		if (this.query !== before) {
+			this.#applyQuery("reset-changed-prefix");
+			this.onQueryChange?.(this.query);
+		}
 		this.#keys.reset();
 	}
 
@@ -1403,6 +1410,7 @@ export class ModelBrowser implements Component {
 			value: this.value,
 			cursor: this.cursor,
 			filterFocused: this.#search.focused,
+			draft: this.#search.navigationSnapshot().draft,
 			selected: this.getSelected()?.selector,
 			top: this.#viewport.top ? { ...this.#viewport.top } : undefined,
 		};
@@ -1417,6 +1425,7 @@ export class ModelBrowser implements Component {
 			query: state.query,
 			cursor: state.cursor,
 			focused: state.filterFocused,
+			draft: state.draft,
 		});
 		this.#applyQuery("reset-changed-prefix");
 		this.onQueryChange?.(state.query);
@@ -1622,17 +1631,19 @@ export class ModelBrowser implements Component {
 		this.onSelectionChange?.(this.getSelected());
 	}
 
-	handleInput(data: string): void {
-		if (this.#search.focused) {
-			const before = this.query;
-			this.#search.handleInput(data);
-			if (this.query !== before) {
-				this.#applyQuery("reset-changed-prefix");
-				this.onQueryChange?.(this.query);
-			}
-			this.#keys.reset();
-			return;
+	#handleSearchInput(data: string): boolean {
+		const before = this.query;
+		if (this.#search.handleInput(data) === "pass") return false;
+		if (this.query !== before) {
+			this.#applyQuery("reset-changed-prefix");
+			this.onQueryChange?.(this.query);
 		}
+		this.#keys.reset();
+		return true;
+	}
+
+	handleInput(data: string): void {
+		if (this.#handleSearchInput(data)) return;
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		this.handleNavigation(action);
@@ -1665,11 +1676,7 @@ export class ModelBrowser implements Component {
 	}
 
 	handleCancel(): void {
-		if (this.query || this.#search.focused) {
-			this.setQuery("");
-			this.focusFilter(false);
-			this.onQueryChange?.("");
-		} else this.onCancel?.();
+		if (!this.#handleSearchInput("\x1b")) this.onCancel?.();
 	}
 
 	/**

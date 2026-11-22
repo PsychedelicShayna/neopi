@@ -286,15 +286,6 @@ export class HistorySearchComponent extends OverlayPanel {
 		this.#cancelPendingSearch();
 	}
 
-	#escape(): void {
-		if (this.#search.focused || this.#search.value) {
-			this.#search.setValue("");
-			this.#search.focused = false;
-			this.#updateResults();
-		} else this.#onCancel();
-		this.#keys.reset();
-	}
-
 	/**
 	 * Repaint hook for debounced result updates. Once set, query edits search
 	 * storage after a {@link SEARCH_DEBOUNCE_MS} quiet period instead of on
@@ -344,14 +335,16 @@ export class HistorySearchComponent extends OverlayPanel {
 		if (!action || action === "pending") return;
 		if (action.kind === "search") {
 			this.#search.focused = true;
+			if (this.#search.query !== before) this.#scheduleResults();
 			return;
 		}
 		if (action.kind === "context") {
 			this.#search.focused = !this.#search.focused;
+			if (this.#search.query !== before) this.#scheduleResults();
 			return;
 		}
 		if (action.kind === "cancel") {
-			this.#escape();
+			this.#onCancel();
 			return;
 		}
 		if (action.kind === "confirm" || action.kind === "toggle") {
@@ -512,7 +505,7 @@ export class HistorySearchComponent extends OverlayPanel {
 		const ev = pickerEvent(event, PICKER_KEY);
 		if (ev) {
 			if (ev.kind === "action") {
-				if (ev.act === "close") this.#escape();
+				if (ev.act === "close") this.handleInput("\x1b");
 				else if (ev.act === "insert") this.handleInput("\r");
 				else if (ev.act === "clear") {
 					this.#search.setValue("");

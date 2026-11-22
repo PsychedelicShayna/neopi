@@ -8,6 +8,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { type SelectPickerOptions, SelectListSheet } from "../native/picker";
 import { Container, type Component, type Focusable } from "../tui";
 import { replaceTabs, truncateToWidth } from "../utils";
+import { Editor } from "./editor";
 import { Input } from "./input";
 import { isMenuHistoryParticipant, MenuKeyReader } from "./menu-navigation";
 import { type SelectItem, SelectList, type SelectListTheme } from "./select-list";
@@ -206,7 +207,11 @@ export class FormField implements Component, Focusable, MouseRoutable {
 	}
 
 	get filterFocused(): boolean {
-		return this.control instanceof Input || (this.control instanceof SelectList && this.control.filterFocused);
+		return (
+			this.control instanceof Input ||
+			this.control instanceof Editor ||
+			(this.control instanceof SelectList && this.control.filterFocused)
+		);
 	}
 
 	get blocksMenuHistory(): boolean {
@@ -252,22 +257,8 @@ export class FormField implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
-		if (this.control instanceof Input) {
-			const printable = extractPrintableText(data);
-			if (printable !== undefined) {
-				this.control.insertText(printable);
-				return;
-			}
-			if (matchesKey(data, "escape")) {
-				this.control.onEscape?.();
-				return;
-			}
-			if (matchesKey(data, "enter") || data === "\n") {
-				this.control.onSubmit?.(this.control.getValue());
-				return;
-			}
-		}
-		this.control.handleInput(data);
+		if (this.control instanceof Input || this.control instanceof Editor) this.control.handleInput(data, true);
+		else this.control.handleInput(data);
 	}
 
 	pasteText(text: string): void {
@@ -370,6 +361,7 @@ export class TextFormField extends FormField {
 		this.#options = options;
 		input.onSubmit = () => this.submit();
 		input.onEscape = options.onCancel;
+		input.onCancel = options.onCancel;
 	}
 
 	getValue(): string {
@@ -393,7 +385,8 @@ export class TextFormField extends FormField {
 		if (this.input.mask || !snapshot || typeof snapshot !== "object") return;
 		const state = snapshot as { value?: string; cursor?: number };
 		if (typeof state.value !== "string") return;
-		this.setValue(state.value);
+		this.input.setValue(state.value, { markClean: false });
+		this.setError(undefined);
 		if (typeof state.cursor === "number") this.input.setCursor(state.cursor);
 	}
 
@@ -676,13 +669,24 @@ export class Form implements Component, Focusable, MouseRoutable {
 		this.#fields[this.#activeIndex]?.setUseTerminalCursor(useTerminalCursor);
 	}
 
+	capturesInput(data: string): boolean {
+		return this.#fields[this.#activeIndex]?.control.capturesInput?.(data) ?? false;
+	}
+
 	handleInput(data: string): void {
 		const field = this.#fields[this.#activeIndex];
+		const escape = matchesKey(data, "escape");
+		const control = field?.control;
+		if (escape && (control instanceof Input || control instanceof Editor) && control.vimConsumesEscape()) {
+			field?.handleInput(data);
+			return;
+		}
 		if (field?.filterFocused && extractPrintableText(data) !== undefined) {
 			field.handleInput(data);
 			return;
 		}
 		const isCancel =
+			matchesKey(data, "ctrl+c") ||
 			(field?.filterFocused && matchesKey(data, "escape")) ||
 			(this.#options.isCancel?.(data) ?? getKeybindings().matches(data, "tui.select.cancel"));
 		if (isCancel && field instanceof SelectFormField && field.filterFocused) {
@@ -690,6 +694,13 @@ export class Form implements Component, Focusable, MouseRoutable {
 			return;
 		}
 		if (isCancel) {
+			if (
+				escape &&
+				this.#fields.some(({ control }) =>
+					control instanceof Input ? control.dirty : control instanceof Editor && control.getText() !== "",
+				)
+			)
+				return;
 			this.#options.onCancel();
 			return;
 		}

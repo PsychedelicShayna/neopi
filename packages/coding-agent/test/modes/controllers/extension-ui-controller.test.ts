@@ -315,7 +315,7 @@ describe("ExtensionUiController Ask dialog input", () => {
 		});
 	});
 
-	it("leaves Vim Insert before saving the item note on Escape; Ctrl+C discards an edit", async () => {
+	it("leaves Vim Insert before preserving an unsubmitted item note on Escape; Ctrl+C discards the edit", async () => {
 		const previousVim = getMenuSearchVimMode();
 		setMenuSearchVimMode(true);
 		try {
@@ -338,7 +338,7 @@ describe("ExtensionUiController Ask dialog input", () => {
 			harness.handleInput("\r");
 			expect(await pending).toMatchObject({
 				kind: "submit",
-				results: [{ selectedOptions: ["Default"], notes: [{ option: "Default", note: "keep" }] }],
+				results: [{ selectedOptions: ["Default"], notes: undefined }],
 			});
 		} finally {
 			setMenuSearchVimMode(previousVim);
@@ -356,7 +356,9 @@ describe("ExtensionUiController Ask dialog input", () => {
 		const paste = input.handleImagePaste();
 		harness.handleInput("\r");
 		harness.handleInput("\x1b");
-		harness.handleInput("\x1b"); // Leave Vim Insert mode, then back out of the editor.
+		harness.handleInput("\x1b");
+		expect(harness.getFocused()).toBe(cancelledPrompt);
+		harness.handleInput("\x03");
 		await Promise.resolve();
 		await Promise.resolve();
 
@@ -1331,7 +1333,7 @@ describe("ExtensionUiController OSC 7501 run status", () => {
 			blocked("question", "Deployment reason?"),
 		]);
 
-		harness.handleInput("\x1b");
+		harness.handleInput("\x03");
 		expect(await second).toBeUndefined();
 		expect(writes.at(-1)).toBe(report("state=done:app=npi"));
 	});

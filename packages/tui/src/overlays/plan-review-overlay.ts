@@ -455,6 +455,7 @@ export class PlanReviewOverlay implements Component {
 	#committedLabel: string | undefined;
 	#annotating = false;
 	#editor: Editor;
+	#initialAnnotationText = "";
 	#annotationTarget: BodyRowAnchor | { sectionIndex: number; row: null; context: null } | undefined;
 	#editingAnnotation: AnnotationSelection | undefined;
 	#annotationChooser: AnnotationChooser | undefined;
@@ -1014,21 +1015,25 @@ export class PlanReviewOverlay implements Component {
 			return;
 		}
 		if (this.#annotating) {
+			if (matchesKey(keyData, "ctrl+c")) {
+				this.#exitAnnotate();
+				return;
+			}
+			if (matchesKey(keyData, "escape")) {
+				if (this.#editor.isJumpPending || this.#editor.vimConsumesEscape()) this.#editor.handleInput(keyData);
+				else if (this.#editor.getExpandedText() === this.#initialAnnotationText) this.#exitAnnotate();
+				return;
+			}
 			// Printable text types into the note before any printable shortcut binding can claim it.
 			const printable = extractPrintableText(keyData);
 			if (printable !== undefined) {
-				if (this.#editor.isJumpPending) this.#editor.handleInput(keyData);
-				else this.#editor.typeCharacter(printable);
+				this.#editor.handleInput(keyData, true);
 				return;
 			}
 			if (this.callbacks.onAnnotationExternalEditor && matchesAppExternalEditor(keyData)) {
 				this.callbacks.onAnnotationExternalEditor(this.#editor.getExpandedText(), text => {
 					if (text !== null && this.#annotating) this.#editor.setText(text);
 				});
-				return;
-			}
-			if (matchesSelectCancel(keyData)) {
-				this.#exitAnnotate();
 				return;
 			}
 			this.#editor.handleInput(keyData);
@@ -1443,6 +1448,8 @@ export class PlanReviewOverlay implements Component {
 		this.#editingAnnotation = undefined;
 		this.#annotating = true;
 		this.#editor.setText("");
+		this.#initialAnnotationText = "";
+		this.#editor.resetVimMode();
 	}
 
 	#startExistingAnnotation(selection: AnnotationSelection): void {
@@ -1462,6 +1469,8 @@ export class PlanReviewOverlay implements Component {
 				: { sectionIndex: selection.sectionIndex, row: null, context: null };
 		this.#annotating = true;
 		this.#editor.setText(annotation.note);
+		this.#initialAnnotationText = this.#editor.getExpandedText();
+		this.#editor.resetVimMode();
 	}
 
 	#annotationMatchesBodyAnchor(annotation: OverlayAnnotation, anchor: BodyRowAnchor): boolean {
@@ -1958,7 +1967,7 @@ export class PlanReviewOverlay implements Component {
 			const hintParts = [
 				`${editorKey("tui.input.submit")} save`,
 				`${editorKey("tui.input.newLine")} newline`,
-				`${editorKey("tui.select.cancel")} cancel`,
+				`${formatKeyHint("ctrl+c")} discard draft`,
 			];
 			if (this.#editingAnnotation) hintParts.push("empty deletes");
 			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
@@ -2453,7 +2462,7 @@ export class PlanReviewOverlay implements Component {
 			const hints: (NativeHint | undefined)[] = [
 				actionHint("tui.input.submit", "save"),
 				actionHint("tui.input.newLine", "newline"),
-				actionHint("tui.select.cancel", "cancel"),
+				{ keys: ["ctrl+c"], label: "discard draft" },
 			];
 			if (this.#editingAnnotation) hints.push({ keys: [], label: "empty deletes" });
 			if (this.#externalEditorLabel) hints.push({ keys: [], label: `${this.#externalEditorLabel} editor` });

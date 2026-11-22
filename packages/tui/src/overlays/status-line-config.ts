@@ -4,7 +4,7 @@ import { bottomBorder, dividerSplit, PanelRows, row, topBorderSplit } from "../c
 import { sanitizeStatusText } from "../chrome/shared";
 import { Input } from "../components/input";
 import { compileMenuRegex } from "../menu-search";
-import { MenuKeyReader, MenuSearchField, MenuViewport } from "../components/menu-navigation";
+import { MenuKeyReader, MenuSearchField, type MenuSearchState, MenuViewport } from "../components/menu-navigation";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import type { MenuWindow } from "../components/menu-selection";
 import { SplitPane } from "../components/layout/split-pane";
@@ -67,6 +67,7 @@ export interface StatusLineEditorDraft {
 	top: number;
 	focus: StatusLineEditorFocus;
 	query: string;
+	searchDraft?: MenuSearchState["draft"];
 }
 
 /** Persistence and live preview belong to the host, never to the overlay. */
@@ -126,8 +127,8 @@ const SEGMENT_DESCRIPTIONS: Record<BuiltinStatusLineSegmentId, string> = {
 };
 const LIST_HINTS =
 	"←/→ move · Space toggle · </> composer · Tab template · / search · s apply · R reset · Esc close · ? help";
-const TEMPLATE_HINTS = "Type the template · Enter/Tab/Esc back to the list";
-const SEARCH_HINTS = "Type to filter · Enter apply · Esc clear and return to the list";
+const TEMPLATE_HINTS = "Enter/Tab back to list · Ctrl+C cancel template edit";
+const SEARCH_HINTS = "Enter confirm · Esc back · Ctrl+C clear";
 const PROMPT_HINTS = "Apply pending changes?  y apply · n keep draft, close · Esc/c stay";
 const RESET_HINTS = "Reset the draft to the active layout?  y reset · n/Esc keep the draft";
 
@@ -258,6 +259,17 @@ export function parseStatusLineEditorDraft(value: unknown): StatusLineEditorDraf
 	const left = normalizeRows(record.left, seen);
 	const right = normalizeRows(record.right, seen);
 	const focus = record.focus === "template" || record.focus === "search" ? record.focus : "list";
+	const savedSearch = record.searchDraft;
+	const searchDraft =
+		typeof savedSearch === "object" &&
+		savedSearch !== null &&
+		"value" in savedSearch &&
+		typeof savedSearch.value === "string" &&
+		"cursor" in savedSearch &&
+		typeof savedSearch.cursor === "number" &&
+		Number.isInteger(savedSearch.cursor)
+			? { value: sanitizeDisplaySingleLine(savedSearch.value), cursor: savedSearch.cursor }
+			: undefined;
 	return {
 		version: 1,
 		base,
@@ -269,6 +281,7 @@ export function parseStatusLineEditorDraft(value: unknown): StatusLineEditorDraf
 		top: typeof record.top === "number" && Number.isInteger(record.top) && record.top > 0 ? record.top : 0,
 		focus,
 		query: typeof record.query === "string" ? sanitizeDisplaySingleLine(record.query) : "",
+		searchDraft,
 	};
 }
 
@@ -316,6 +329,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	#focus: StatusLineEditorFocus;
 	readonly #search = new MenuSearchField();
 	readonly #template = new Input();
+	#templateInitialValue = "";
 	#prompt: "exit" | "reset" | undefined;
 	/** Latest editor message; host statuses render behind the fullscreen editor, so the footer repeats it until the next key. */
 	#notice: { text: string; warning: boolean } | undefined;
@@ -375,11 +389,17 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#selected = draft?.selected ?? COMPOSER_ROW;
 		this.#viewport.setTop(draft?.top ?? 0);
 		this.#focus = draft?.focus ?? "list";
-		this.#search.setValue(draft?.query ?? "");
+		this.#search.restoreNavigation({
+			value: draft?.query ?? "",
+			query: draft?.query ?? "",
+			focused: this.#focus === "search",
+			draft: draft?.searchDraft,
+		});
 		this.#template.prompt = "";
 		if (!this.#keys().includes(this.#selected)) this.#selected = COMPOSER_ROW;
 		if (this.#focus === "template" && !defaultWidgetTemplate(this.#selected)) this.#focus = "list";
 		this.#syncTemplateField();
+		this.#templateInitialValue = this.#template.getValue();
 		this.#syncFocusFlags();
 		if (draft && holdsEdits && this.#pending) {
 			this.#notify("Restored the unapplied status-line draft. s applies it; R resets to the active layout.");
@@ -438,6 +458,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 			top: this.#viewport.top?.item ?? 0,
 			focus: this.#focus,
 			query: this.#search.query,
+			searchDraft: this.#search.navigationSnapshot().draft,
 		};
 	}
 
@@ -635,6 +656,10 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#setFocus(focus: StatusLineEditorFocus): void {
+		if (focus === "template" && this.#focus !== "template") {
+			this.#templateInitialValue = this.#template.getValue();
+			this.#template.resetVimMode();
+		}
 		if (this.#focus === "template" && focus !== "template") this.#syncTemplateField();
 		this.#focus = focus;
 		this.#syncFocusFlags();
@@ -767,15 +792,11 @@ export class StatusLineConfigOverlayComponent implements Component {
 			this.#cb.requestRender();
 			return;
 		}
+		if (this.#handleSearchInput(data)) return;
 		const action = this.#reader.read(data);
 		if (action === "pending") return;
 		switch (action?.kind) {
 			case "cancel":
-				if (this.#search.value) {
-					this.#search.setValue("");
-					this.#moved();
-					return;
-				}
 				this.#requestClose();
 				return;
 			case "move":
@@ -845,38 +866,41 @@ export class StatusLineConfigOverlayComponent implements Component {
 	}
 
 	#handleTemplateInput(data: string): void {
-		if (
-			matchesKey(data, "escape") ||
-			matchesKey(data, "enter") ||
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab")
-		) {
+		if (matchesKey(data, "ctrl+c")) {
+			if (this.#template.getValue() !== this.#templateInitialValue)
+				this.#setTemplate(this.#selected, this.#templateInitialValue);
+			this.#setFocus("list");
+			return;
+		}
+		if (matchesKey(data, "escape")) {
+			if (this.#template.vimConsumesEscape()) {
+				this.#template.handleInput(data, true);
+				this.#cb.requestRender();
+			} else if (this.#template.getValue().trim()) this.#setFocus("list");
+			return;
+		}
+		if (matchesKey(data, "enter") || matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
 			this.#setFocus("list");
 			return;
 		}
 		const before = this.#template.getValue();
-		const printable = extractPrintableText(data);
-		if (printable !== undefined) this.#template.insertText(printable);
-		else if (!this.#template.handleInput(data)) return;
+		if (!this.#template.handleInput(data, true)) return;
 		const value = limitUsageBarTemplate(this.#template.getValue());
 		if (this.#template.getValue() !== value) this.#template.setValue(value);
 		if (value !== before) this.#setTemplate(this.#selected, value);
 		else this.#cb.requestRender();
 	}
 
-	#handleSearchInput(data: string): void {
+	#handleSearchInput(data: string): boolean {
 		const before = this.#search.query;
 		const result = this.#search.handleInput(data);
-		if (result === "pass") return;
+		if (result === "pass") return false;
 		const draft = sanitizeDisplaySingleLine(this.#search.value);
 		if (draft !== this.#search.value) this.#search.input.setValue(draft);
-		if (result === "exited") {
-			this.#search.setValue(draft);
-			this.#setFocus("list");
-		}
+		if (result === "exited" && this.#focus === "search") this.#setFocus("list");
 		if (this.#search.query === before) {
 			this.#cb.requestRender();
-			return;
+			return true;
 		}
 		// A changed filter always lands on its first widget match, never Composer/Reset.
 		const first = this.#lines().find(line => line.kind === "widget");
@@ -886,6 +910,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 		this.#viewport.reveal();
 		this.#window();
 		this.#moved();
+		return true;
 	}
 
 	#handleMouse(data: string): void {

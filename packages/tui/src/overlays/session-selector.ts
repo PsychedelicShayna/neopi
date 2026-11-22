@@ -726,12 +726,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	}
 
 	escape(): void {
-		if (this.#search.focused || this.#search.value) {
-			this.#search.setValue("");
-			this.#search.focused = false;
-			this.#filterSessions("");
-		} else this.onCancel?.();
-		this.#keys.reset();
+		this.handleInput("\x1b");
 	}
 
 	/**
@@ -1546,11 +1541,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (isDelete && !this.#search.query && sinceLastErase >= SESSION_DELETE_REARM_MS) this.requestDelete();
 			return;
 		}
-		if (matchesAppDismiss(data)) return this.escape();
+		if (matchesAppDismiss(data)) return this.onCancel?.();
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "search") {
 			this.#search.focused = true;
+			if (this.#search.query !== before) this.#filterSessions(this.#search.query);
 			return;
 		}
 		// Leaving the session list follows the app navigation binding.
@@ -1868,7 +1864,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#inputLocked || this.#deleting;
+		return this.#inputLocked || this.#deleting || this.#renameDialog !== null;
 	}
 
 	navigationSnapshot(): unknown {
@@ -2109,7 +2105,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const submit = async (value: string) => {
 			if (pending) return;
 			const title = value.trim();
-			// Empty treated as cancel: Esc and a blank submit both leave the title.
+			// A blank submit leaves the current session title unchanged.
 			if (title.length === 0) {
 				this.#closeRenameDialog();
 				return;
@@ -2130,6 +2126,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 					this.#sessionList.renameSessionTitle(session.path, stored);
 					this.#syncScopeTitles(session.path, stored);
 					if (this.#preview?.session === session) this.#preview = undefined;
+					if (this.#renameDialog === owner) this.#closeRenameDialog();
 				} else {
 					this.#showError("Failed to rename session.");
 				}
@@ -2138,7 +2135,6 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			} finally {
 				pending = false;
 			}
-			if (this.#renameDialog === owner) this.#closeRenameDialog();
 		};
 		const field = new TextFormField({
 			theme: formTheme,
@@ -2471,6 +2467,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	#handlePickerEvent(ev: PickerEvent): void {
 		const list = this.#sessionList;
 		const choice = this.#deleteChoice;
+		if (!choice && !this.#renameDialog && list.filterFocused) {
+			if (ev.kind === "activate" || (ev.kind === "action" && ev.act === "resume")) list.handleInput("\r");
+			else if (ev.kind === "action" && ev.act === "close") list.escape();
+			else if (ev.kind === "action" && (ev.act === "cancel" || ev.act === "clear")) list.handleInput("\x03");
+			return;
+		}
 		if (ev.kind !== "action") {
 			if (choice || this.#renameDialog) return;
 			if (ev.kind === "select") list.selectSession(ev.item);
@@ -2480,11 +2482,11 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		if (ev.act === "delete-confirm") choice?.confirm();
 		else if (ev.act === "cancel") {
 			if (choice) choice.cancel();
-			else if (this.#renameDialog) this.#closeRenameDialog();
+			else if (this.#renameDialog) this.#renameField?.handleInput("\x03");
 			else list.escape();
 		} else if (ev.act === "close") {
 			if (choice) choice.cancel();
-			else if (this.#renameDialog) this.#closeRenameDialog();
+			else if (this.#renameDialog) this.#renameField?.handleInput("\x1b");
 			else list.escape();
 		} else if (choice || this.#renameDialog) return;
 		else if (ev.act === "resume") list.resumeSelected();

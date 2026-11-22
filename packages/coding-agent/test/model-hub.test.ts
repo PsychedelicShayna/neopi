@@ -1460,12 +1460,16 @@ describe("ModelHub", () => {
 				hub.handleInput("s");
 				for (const char of "jsk-draft") hub.handleInput(char);
 				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip).toMatchObject({ kind: "name", input: { focused: true } });
+				hub.handleInput(ESC);
 				const defocused = hub.navigationSnapshot().strip;
 				if (defocused?.kind !== "name") throw new Error("Expected Escape to retain the name strip");
 				expect(defocused.input.getValue()).toBe("jsk-draft");
 				expect(defocused.input.focused).toBe(false);
 				expect(onCancel).not.toHaveBeenCalled();
 				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip?.kind).toBe("name");
+				hub.handleInput("\x03");
 				expect(hub.navigationSnapshot().strip).toBeNull();
 				expect(onCancel).not.toHaveBeenCalled();
 				expect(onSavePreset).toHaveBeenCalledTimes(1);
@@ -2266,6 +2270,8 @@ describe("ModelHub", () => {
 				expect(typed.input.focused).toBe(true);
 				expect(onFallbackChainChange).not.toHaveBeenCalled();
 				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip).toMatchObject({ kind: "pattern", input: { focused: true } });
+				hub.handleInput(ESC);
 				const defocused = hub.navigationSnapshot().strip;
 				if (defocused?.kind !== "pattern") throw new Error("Expected Escape to retain the pattern strip");
 				expect(defocused.input.getValue()).toBe("test/jsk*");
@@ -2284,6 +2290,8 @@ describe("ModelHub", () => {
 				for (const char of "test/jsk*") hub.handleInput(char);
 				hub.handleInput(ESC);
 				hub.handleInput(ESC);
+				expect(hub.navigationSnapshot().strip?.kind).toBe("pattern");
+				hub.handleInput("\x03");
 				expect(hub.navigationSnapshot().strip?.kind).toBe("selectorChoice");
 				expect(onFallbackChainChange).toHaveBeenCalledTimes(1);
 				expect(onCancel).not.toHaveBeenCalled();

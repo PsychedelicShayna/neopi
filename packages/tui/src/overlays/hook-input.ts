@@ -9,7 +9,6 @@ import { OverlayPanel } from "../chrome/overlay-box";
 import { Form, TextFormField } from "../components/form";
 import { boundKeys, editorKey, interruptKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
-import { extractPrintableText, matchesKey } from "../keys";
 import { col, node, span } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionBar, actionButton } from "../native/overlay";
@@ -103,14 +102,14 @@ export class HookInputComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 	}
 
+	capturesInput(data: string): boolean {
+		return this.#form.capturesInput(data);
+	}
+
 	handleInput(keyData: string): void {
 		// Reset countdown on any interaction
 		this.#countdown?.reset();
-		const printable = extractPrintableText(keyData);
-		if (printable !== undefined) this.#field.input.insertText(printable);
-		else if (matchesKey(keyData, "escape")) this.#onCancelCallback();
-		else if (matchesKey(keyData, "enter") || keyData === "\n") this.#field.submit();
-		else this.#form.handleInput(keyData);
+		this.#form.handleInput(keyData);
 	}
 
 	/** Route non-bracketed paste transports (e.g. kitty's OSC 5522 enhanced clipboard)

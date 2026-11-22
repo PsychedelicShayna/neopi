@@ -318,7 +318,7 @@ describe("git tui sidebar staging", () => {
 		});
 	});
 
-	test("escape closes the AI textbox without raising an action and clears the draft", async () => {
+	test("escape keeps the AI textbox draft; Ctrl+C discards without raising an action", async () => {
 		await withDirtyRepo(async ({ sidebar, actions }) => {
 			sidebar.setFocused(true);
 			const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
@@ -327,10 +327,15 @@ describe("git tui sidebar staging", () => {
 			sidebar.handleClick(headerRow, strip(lines[headerRow] ?? "").indexOf("✦"));
 			for (const ch of "abc") sidebar.handleInput(ch);
 
-			expect(sidebar.handleEscape()).toBe(true);
+			expect(sidebar.handleEscape("\x1b")).toBe(true);
+			expect(sidebar.aiInput.input.vimMode).toBe("normal");
+			expect(sidebar.handleEscape("\x1b")).toBe(true);
 			expect(actions).toEqual([]);
+			expect(sidebar.aiInput.getValue()).toBe("abc");
+			sidebar.handleClick(headerRow, strip(lines[headerRow] ?? "").indexOf("✦"));
+			expect(sidebar.aiInput.getValue()).toBe("abc");
+			sidebar.cancelField("\x03");
 			expect(sidebar.aiInput.getValue()).toBe("");
-			// Empty prompt + enter must not raise an action either.
 			sidebar.handleClick(headerRow, strip(lines[headerRow] ?? "").indexOf("✦"));
 			sidebar.handleInput("\r");
 			expect(actions).toEqual([]);

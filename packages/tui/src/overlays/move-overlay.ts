@@ -22,7 +22,6 @@ import { editorKey } from "../chrome/keybinding-hints";
 import type { NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { node, span } from "../native/describe";
 import { actionBar, actionButton, overlayCard, statusHintsRow } from "../native/overlay";
-import { getKeybindings } from "../keybindings";
 import { MenuSelection } from "../components/menu-selection";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { contentRowWidth, renderScrollableList } from "../chrome/selector-helpers";
@@ -145,6 +144,10 @@ export class MoveOverlay implements Component, Focusable {
 			return;
 		}
 		if (this.#pathFocused) {
+			if (matchesKey(data, "escape") && !this.#field.input.vimConsumesEscape()) {
+				this.#setPathFocus(false);
+				return;
+			}
 			// Tab is the path field's existing nondestructive completion action.
 			if (matchesKey(data, Key.tab)) {
 				this.#accept();
@@ -153,6 +156,7 @@ export class MoveOverlay implements Component, Focusable {
 			const before = this.#field.getValue();
 			if (this.#field.input.handleInput(data)) {
 				this.#keys.reset();
+				this.#revision++;
 				if (this.#field.getValue() !== before) this.#updateResults();
 				return;
 			}
@@ -164,7 +168,7 @@ export class MoveOverlay implements Component, Focusable {
 		const action = this.#keys.read(data);
 		if (!action || action === "pending") return;
 		if (action.kind === "cancel") {
-			this.#done(undefined);
+			if (!this.#field.input.dirty) this.#done(undefined);
 			return;
 		}
 		if (action.kind === "search") {
@@ -260,7 +264,7 @@ export class MoveOverlay implements Component, Focusable {
 			actionButton("Accept", "accept", { keys: this.#pathFocused ? "tab" : undefined }),
 			this.#pathFocused ? actionButton("Back to list", "back", { keys: "escape" }) : null,
 			actionButton("Cancel", "cancel", {
-				keys: this.#pathFocused ? undefined : (getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape"),
+				keys: "ctrl+c",
 			}),
 			actionButton("Confirm", "confirm", { keys: "enter", tone: "accent" }),
 		]);
@@ -278,8 +282,8 @@ export class MoveOverlay implements Component, Focusable {
 		if (event.type === "action") {
 			if (event.act === "accept") this.#accept();
 			else if (event.act === "confirm") this.#confirm();
-			else if (event.act === "back") this.#setPathFocus(false);
-			else if (event.act === "cancel" || event.act === "close") this.#done(undefined);
+			else if (event.act === "back" || event.act === "close") this.handleInput("\x1b");
+			else if (event.act === "cancel") this.#done(undefined);
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
@@ -292,6 +296,7 @@ export class MoveOverlay implements Component, Focusable {
 	}
 
 	#setPathFocus(focused: boolean): void {
+		if (focused && !this.#pathFocused) this.#field.input.resetVimMode();
 		this.#pathFocused = focused;
 		this.#field.focused = this.#focused && focused;
 		this.#keys.reset();

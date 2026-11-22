@@ -48,6 +48,7 @@ import {
 	MenuKeyReader,
 	type MenuNavAction,
 	MenuSearchField,
+	type MenuSearchState,
 	MenuViewport,
 	type MenuViewportPosition,
 } from "../components/menu-navigation";
@@ -474,6 +475,8 @@ interface StripChip extends HubStripChip<
 	folderMembership?: { name: string; add: boolean };
 }
 
+type StripInput = { input: Input; initialText: string };
+
 type StripState =
 	| (HubStripState<StripChip> & {
 			kind: "role" | "scope" | "thinking";
@@ -503,6 +506,7 @@ type StripState =
 			purpose: "folder";
 			action: "folderNew" | "folderRename" | "folderClear" | "folderDelete";
 			name?: string;
+			initialText: string;
 			input: Input;
 			error?: string;
 	  }
@@ -511,18 +515,21 @@ type StripState =
 			kind: "name";
 			purpose: "role" | "preset";
 			input: Input;
+			initialText: string;
 	  }
 	| {
 			kind: "name";
 			purpose: "contextRule";
 			selector: string;
 			input: Input;
+			initialText: string;
 	  }
 	| {
 			kind: "name";
 			purpose: "description" | "roleBudget";
 			role: string;
 			input: Input;
+			initialText: string;
 	  }
 	| {
 			kind: "effortLevels";
@@ -540,6 +547,7 @@ type StripState =
 	| {
 			kind: "pattern";
 			input: Input;
+			initialText: string;
 			target: "rule" | "fallback" | "role" | "fallbackKey";
 			role?: string;
 			fallbackTarget?: { role: string; index: number | null };
@@ -571,6 +579,7 @@ type StripState =
 			purpose: "compaction";
 			model: Model;
 			input: Input;
+			initialText: string;
 			error?: string;
 			confirm?: { value: string; message: string };
 			preview?: { value: string; text: string | undefined };
@@ -586,9 +595,11 @@ interface ModelHubPageNavigation {
 	rolesQuery: string;
 	rolesValue: string;
 	rolesCursor: number;
+	rolesSearch: MenuSearchState;
 	effortQuery: string;
 	effortValue: string;
 	effortCursor: number;
+	effortSearch: MenuSearchState;
 	roleKey: string | undefined;
 	roleTop: MenuViewportPosition | undefined;
 	effortIndex: number;
@@ -1091,7 +1102,12 @@ export class ModelHubComponent implements Component {
 	}
 
 	get blocksMenuHistory(): boolean {
-		return this.#externalEditPending;
+		return (
+			this.#externalEditPending ||
+			this.#folderRulesPanel !== undefined ||
+			this.#overridesPanel?.busy === true ||
+			this.#variantsPanel?.busy === true
+		);
 	}
 
 	navigationSnapshot(): ModelHubNavigation {
@@ -1106,9 +1122,11 @@ export class ModelHubComponent implements Component {
 			rolesQuery: this.#rolesSearch.query,
 			rolesValue: this.#rolesSearch.value,
 			rolesCursor: this.#rolesSearch.cursor,
+			rolesSearch: this.#rolesSearch.navigationSnapshot(),
 			effortQuery: this.#effortSearch.query,
 			effortValue: this.#effortSearch.value,
 			effortCursor: this.#effortSearch.cursor,
+			effortSearch: this.#effortSearch.navigationSnapshot(),
 			roleKey: row ? rolesRowKey(row, this.#roleIndex) : undefined,
 			roleTop: this.#roleViewport.top ? { ...this.#roleViewport.top } : undefined,
 			effortIndex: this.#effortIndex,
@@ -1134,18 +1152,8 @@ export class ModelHubComponent implements Component {
 		this.#modelKindTab = MODEL_KIND_TABS.includes(state.modelKind ?? "all") ? (state.modelKind ?? "all") : "all";
 		this.#roleTab = state.roleTab && ROLE_TABS.includes(state.roleTab) ? state.roleTab : "all";
 		this.#assigning = state.assigning ? { ...state.assigning } : null;
-		this.#rolesSearch.restoreNavigation({
-			value: state.rolesValue ?? state.rolesQuery ?? "",
-			query: state.rolesQuery ?? "",
-			cursor: state.rolesCursor,
-			focused: state.filterFocused === true && state.entry === "roles" && !state.assigning,
-		});
-		this.#effortSearch.restoreNavigation({
-			value: state.effortValue ?? state.effortQuery ?? "",
-			query: state.effortQuery ?? "",
-			cursor: state.effortCursor,
-			focused: state.filterFocused === true && state.entry === "effort" && !state.assigning,
-		});
+		this.#rolesSearch.restoreNavigation(state.rolesSearch);
+		this.#effortSearch.restoreNavigation(state.effortSearch);
 		this.#buildRolesRows();
 		this.#setActiveEntry(state.entry);
 		this.#browser.restoreNavigation(state.browser);
@@ -2398,19 +2406,23 @@ export class ModelHubComponent implements Component {
 		return level === ThinkingLevel.Inherit ? { mode: "inherit" } : { mode: "fixed", level: level as ThinkingLevel };
 	}
 
+	#newStripInput(initialText = ""): StripInput {
+		const input = new Input();
+		input.setValue(initialText);
+		input.focused = true;
+		return { input, initialText };
+	}
+
 	#openSelectorPattern(
 		target: "rule" | "fallback" | "role" | "fallbackKey",
 		fallbackTarget?: { role: string; index: number | null },
 		role?: string,
 	): void {
-		const input = new Input();
-		input.focused = true;
-		if (target === "fallbackKey" && role) input.setValue(role);
+		let initialText = target === "fallbackKey" ? (role ?? "") : "";
 		if (fallbackTarget?.index !== null && fallbackTarget?.index !== undefined) {
-			const previous = this.#fallbackChains()[fallbackTarget.role]?.[fallbackTarget.index];
-			if (previous) input.setValue(previous);
+			initialText = this.#fallbackChains()[fallbackTarget.role]?.[fallbackTarget.index] || initialText;
 		}
-		this.#strip = { kind: "pattern", input, target, fallbackTarget, role };
+		this.#strip = { kind: "pattern", ...this.#newStripInput(initialText), target, fallbackTarget, role };
 		this.#configError = undefined;
 	}
 
@@ -2563,11 +2575,13 @@ export class ModelHubComponent implements Component {
 	}
 
 	#openContextLimit(selector: string): void {
-		const input = new Input();
 		const previous = this.#settings.contextRules?.find(rule => rule.selector === selector);
-		if (previous) input.setValue(String(previous.limit));
-		input.focused = true;
-		this.#strip = { kind: "name", purpose: "contextRule", selector, input };
+		this.#strip = {
+			kind: "name",
+			purpose: "contextRule",
+			selector,
+			...this.#newStripInput(previous ? String(previous.limit) : ""),
+		};
 	}
 
 	#ruleValue(rule: HubEffortRule | HubContextRule): string {
@@ -3240,26 +3254,24 @@ export class ModelHubComponent implements Component {
 
 	/** Open the footer name input: a new custom role, or saving the current setup as a model preset. */
 	#openNameStrip(purpose: "role" | "preset"): void {
-		const input = new Input();
-		input.focused = true;
-		this.#strip = { kind: "name", purpose, input };
+		this.#strip = { kind: "name", purpose, ...this.#newStripInput() };
 	}
 
 	#openDescriptionStrip(role: string): void {
 		if (!this.#callbacks.onRoleDescriptionChange) return;
-		const input = new Input();
-		input.focused = true;
-		input.setValue(this.#settings.getRoleInfo(role).description ?? "");
-		this.#strip = { kind: "name", purpose: "description", role, input };
+		const value = this.#settings.getRoleInfo(role).description ?? "";
+		this.#strip = { kind: "name", purpose: "description", role, ...this.#newStripInput(value) };
 	}
 
 	#openRoleBudgetStrip(role: string): void {
 		if (!this.#callbacks.onRoleTokenBudgetChange) return;
-		const input = new Input();
-		input.focused = true;
 		const value = this.#settings.getRoleTokenBudget?.(role);
-		input.setValue(value === undefined ? "" : String(value));
-		this.#strip = { kind: "name", purpose: "roleBudget", role, input };
+		this.#strip = {
+			kind: "name",
+			purpose: "roleBudget",
+			role,
+			...this.#newStripInput(value === undefined ? "" : String(value)),
+		};
 	}
 
 	/** The model a Roles row resolves to, for the model facts inspector. */
@@ -3285,10 +3297,8 @@ export class ModelHubComponent implements Component {
 
 	/** Open the model row's compaction editor, prefilled with its own entry. */
 	#openCompactionStrip(model: Model): void {
-		const input = new Input();
-		input.focused = true;
-		input.setValue(this.#settings.compactionPointFor?.(model)?.draft ?? "");
-		this.#strip = { kind: "name", purpose: "compaction", model, input };
+		const value = this.#settings.compactionPointFor?.(model)?.draft ?? "";
+		this.#strip = { kind: "name", purpose: "compaction", model, ...this.#newStripInput(value) };
 	}
 
 	#availableFolderActions(): (typeof FOLDER_ACTIONS)[number][] {
@@ -3350,10 +3360,13 @@ export class ModelHubComponent implements Component {
 			if (folder && selector) this.#setFolderMembership(folder.name, selector, false);
 			return;
 		}
-		const input = new Input();
-		if (action === "folderRename" && folder) input.setValue(folder.name);
-		input.focused = true;
-		this.#strip = { kind: "name", purpose: "folder", action, name: folder?.name, input };
+		this.#strip = {
+			kind: "name",
+			purpose: "folder",
+			action,
+			name: folder?.name,
+			...this.#newStripInput(action === "folderRename" ? folder?.name : undefined),
+		};
 	}
 
 	#applyFolderRules(name: string, rules: ModelFolderRules, action: FolderRulesAction): string {
@@ -3628,7 +3641,8 @@ export class ModelHubComponent implements Component {
 			!this.#externalEditPending &&
 			this.#assigning === null &&
 			!this.#activeConfigPanel()?.editing &&
-			!(this.#activeEntry().kind === "variants" && this.#variants().busy)
+			!this.#overridesPanel?.busy &&
+			!this.#variantsPanel?.busy
 		);
 	}
 
@@ -3652,7 +3666,9 @@ export class ModelHubComponent implements Component {
 		}
 		const strip = this.#strip;
 		const fieldFocused =
-			this.#filterEditing || ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
+			this.#filterEditing ||
+			this.#folderRulesPanel?.editing ||
+			((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused);
 		if (this.#filterEditing || (fieldFocused && extractPrintableText(rawData) !== undefined)) {
 			this.#handleInput(rawData);
 			return;
@@ -3670,14 +3686,16 @@ export class ModelHubComponent implements Component {
 			this.#folderRulesPanel.handleInput(rawData);
 			return;
 		}
-		if (this.#taskMatchKeys.size > 0 && !this.#filterEditing) {
+		const strip = this.#strip;
+		const textEditing = strip?.kind === "name" || strip?.kind === "pattern" || this.#activeConfigPanel()?.editing;
+		if (this.#taskMatchKeys.size > 0 && !this.#filterEditing && !textEditing) {
 			const parsed = parseKey(rawData);
 			if (parsed !== undefined && this.#taskMatchKeys.has(canonicalKeyId(parsed))) {
 				this.#toggleTaskMode();
 				return;
 			}
 		}
-		if (matchesKey(rawData, "ctrl+s") && this.#canCycleScope && !this.#keys.read(rawData)) {
+		if (matchesKey(rawData, "ctrl+s") && this.#canCycleScope && !textEditing && !this.#keys.read(rawData)) {
 			this.#cycleScope();
 			return;
 		}
@@ -3755,35 +3773,37 @@ export class ModelHubComponent implements Component {
 		}
 		const rolesSearching = this.#activeEntry().kind === "roles" && this.#assigning === null;
 		const effortSearching = this.#activeEntry().kind === "effort" && this.#assigning === null;
-		if (this.#filterEditing) {
-			// Shared field ownership keeps literal text and editing keys out of navigation.
-			if (!rolesSearching && !effortSearching) {
-				this.#browser.handleInput(rawData);
-				if (!this.#browser.filterFocused) this.#keys.reset();
-				return;
-			}
+		if (this.#filterEditing && !rolesSearching && !effortSearching) {
+			this.#browser.handleInput(rawData);
+			if (!this.#browser.filterFocused) this.#keys.reset();
+			return;
+		}
+		if (rolesSearching || effortSearching) {
 			const search = rolesSearching ? this.#rolesSearch : this.#effortSearch;
 			const before = search.query;
-			search.handleInput(rawData);
-			if (before !== search.query) {
-				if (rolesSearching) {
-					this.#roleIndex = 0;
-					this.#roleViewport.setTop(0);
-					this.#buildRolesRows();
-				} else {
-					this.#effortIndex = -1;
-					this.#effortViewport.setTop(0);
-					this.#syncEffortSelection();
+			if (search.handleInput(rawData) !== "pass") {
+				if (before !== search.query) {
+					if (rolesSearching) {
+						this.#roleIndex = 0;
+						this.#roleViewport.setTop(0);
+						this.#buildRolesRows();
+					} else {
+						this.#effortIndex = -1;
+						this.#effortViewport.setTop(0);
+						this.#syncEffortSelection();
+					}
 				}
+				this.#keys.reset();
+				return;
 			}
-			this.#keys.reset();
-			return;
 		}
 		const data = rawData;
 		const action = this.#keys.read(data);
 		if (action === "pending") return;
 		if (action?.kind === "cancel") {
-			this.#cancel();
+			if (!rolesSearching && !effortSearching && (this.#isBrowserView(this.#activeEntry()) || this.#browser.query))
+				this.#browser.handleInput(data);
+			else this.#cancel();
 			return;
 		}
 
@@ -3826,10 +3846,15 @@ export class ModelHubComponent implements Component {
 
 		if (action?.kind === "search") {
 			if (rolesView || effortView || this.#isBrowserView(entry)) {
+				const search = rolesView ? this.#rolesSearch : effortView ? this.#effortSearch : undefined;
+				const before = search?.query;
 				this.#filterEditing = true;
 				this.#focus = "list";
 				this.#keys.reset();
-				if (!rolesView && !effortView) this.#browser.focusFilter();
+				if (search?.query !== before) {
+					if (rolesView) this.#buildRolesRows();
+					else this.#syncEffortSelection();
+				}
 			}
 			return;
 		}
@@ -4017,37 +4042,19 @@ export class ModelHubComponent implements Component {
 		return true;
 	}
 
-	/** Esc leaves the focused field, then a nested strip/assignment, then the hub. */
-	#cancel(): void {
+	/** Escape leaves a focused field, then a clean nested strip or assignment, then the hub. */
+	#cancel(discard = false): void {
 		if (this.#assignmentPending) {
 			this.#callbacks.onCancel();
 			return;
 		}
-		if (this.#filterEditing) {
-			this.#handleInput("\x1b");
-			return;
-		}
-		if (!this.#strip) {
-			const kind = this.#assigning === null ? this.#activeEntry().kind : undefined;
-			const search = kind === "roles" ? this.#rolesSearch : kind === "effort" ? this.#effortSearch : undefined;
-			if (search?.query) {
-				search.setValue("");
-				search.focused = false;
-				if (kind === "roles") this.#buildRolesRows();
-				else this.#syncEffortSelection();
-				return;
-			}
-			if (!search && this.#browser.query) {
-				this.#browser.setQuery("");
-				this.#browser.focusFilter(false);
-				this.#onQueryChanged("");
-				return;
-			}
-		}
 		const strip = this.#strip;
-		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) {
-			strip.input.focused = false;
-			return;
+		if (strip?.kind === "name" || strip?.kind === "pattern") {
+			if (!discard && strip.input.focused) {
+				strip.input.focused = false;
+				return;
+			}
+			if (!discard && strip.input.getValue() !== strip.initialText) return;
 		}
 		if (strip?.kind === "folderChoice" || (strip?.kind === "name" && strip.purpose === "folder")) {
 			this.#closeStrip();
@@ -4060,6 +4067,11 @@ export class ModelHubComponent implements Component {
 		}
 		if (this.#assigning !== null) {
 			this.#cancelAssign();
+			return;
+		}
+		if (this.#overridesPanel?.busy || this.#variantsPanel?.busy) {
+			this.#setActiveEntry(this.#overridesPanel?.busy ? "overrides" : "variants");
+			this.#focus = "list";
 			return;
 		}
 		this.#callbacks.onCancel();
@@ -4081,9 +4093,16 @@ export class ModelHubComponent implements Component {
 		if (!strip) return;
 		const textInput = strip.kind === "name" || strip.kind === "pattern" ? strip.input : undefined;
 		const textFocused = textInput?.focused === true;
+		if (textInput && matchesKey(data, "ctrl+c")) {
+			this.#cancel(true);
+			return;
+		}
+		if (textInput?.focused && matchesKey(data, "escape") && textInput.vimConsumesEscape()) {
+			textInput.handleInput(data, true);
+			return;
+		}
 		const printable = textFocused ? extractPrintableText(data) : undefined;
-		const cancel = matchesSelectCancel(data) || (textInput !== undefined && matchesKey(data, "escape"));
-		if (cancel && (!textFocused || printable === undefined)) {
+		if ((matchesSelectCancel(data) || (textInput && matchesKey(data, "escape"))) && printable === undefined) {
 			this.#cancel();
 			return;
 		}
@@ -4093,11 +4112,13 @@ export class ModelHubComponent implements Component {
 				if (!action || action === "pending") return;
 				if (action.kind === "search") {
 					strip.input.focused = true;
+					strip.input.resetVimMode();
 					this.#keys.reset();
 				} else if (action.kind === "confirm") {
 					if (strip.kind === "name") this.#submitNameStrip();
 					else this.#submitSelectorPattern(strip);
 				} else if (action.kind === "horizontal" || action.kind === "context") {
+					if (strip.input.getValue() !== strip.initialText) return;
 					const focus =
 						action.kind === "horizontal"
 							? action.delta < 0
@@ -4116,8 +4137,7 @@ export class ModelHubComponent implements Component {
 				else this.#submitSelectorPattern(strip);
 				return;
 			}
-			if (printable !== undefined) strip.input.insertText(printable);
-			else strip.input.handleInput(data);
+			strip.input.handleInput(data, true);
 			if (strip.kind === "name" && (strip.purpose === "compaction" || strip.purpose === "folder"))
 				strip.error = undefined;
 			return;
@@ -4441,6 +4461,8 @@ export class ModelHubComponent implements Component {
 		}
 
 		if (!event.leftClick) return true;
+		const strip = this.#strip;
+		if (strip?.kind === "name" || strip?.kind === "pattern") return true;
 
 		if (overSidebar) {
 			const index = this.#sidebarEntryIndexAt(contentLine);
@@ -4498,6 +4520,8 @@ export class ModelHubComponent implements Component {
 	/** Pick a sidebar scope; activating an already-selected locked provider logs in. */
 	#chooseSidebarEntry(clicked: SidebarEntry | undefined, activate = true): void {
 		if (!clicked || clicked.kind === "separator") return;
+		const strip = this.#strip;
+		if ((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.getValue() !== strip.initialText) return;
 		this.#filterEditing = false;
 		if (this.#strip) this.#closeStrip();
 		const already = clicked.id === this.#activeEntryId;
@@ -4995,27 +5019,26 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "name") {
-				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
+				if (!strip.input.focused) return `/ edit · ${enter} set · Ctrl+C cancel`;
 				if (strip.purpose === "folder") {
 					const error = strip.error ? `${strip.error} · ` : "";
-					return `${error}${enter} confirm · ${cancel} leave field`;
+					return `${error}${enter} confirm · Ctrl+C cancel`;
 				}
-				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
-				if (strip.purpose === "roleBudget")
-					return `${enter} save token budget · empty inherits · ${cancel} leave field`;
+				if (strip.purpose === "description") return `${enter} save description · Ctrl+C cancel`;
+				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · Ctrl+C cancel`;
 				if (strip.purpose === "compaction") {
-					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
+					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · Ctrl+C cancel`;
 				}
-				if (strip.purpose === "contextRule") return `${enter} save context limit · ${cancel} leave field`;
+				if (strip.purpose === "contextRule") return `${enter} save context limit · Ctrl+C cancel`;
 				if (strip.purpose === "preset") {
-					return `${enter} save preset · ${cancel} leave field`;
+					return `${enter} save preset · Ctrl+C cancel`;
 				}
-				return `${enter} create + pick model · ${cancel} leave field`;
+				return `${enter} create + pick model · Ctrl+C cancel`;
 			}
 			if (strip.kind === "pattern")
 				return strip.input.focused
-					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · ${cancel} leave field`
-					: `/ edit · ${enter} continue · ${cancel} parent`;
+					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · Ctrl+C cancel`
+					: `/ edit · ${enter} continue · Ctrl+C cancel`;
 			if (strip.kind === "folderChoice") {
 				const error = strip.error ? `${strip.error} · ` : "";
 				return `${error}${leftRight} choose folder · ${enter} add/remove · ${cancel} cancel`;
@@ -5029,7 +5052,7 @@ export class ModelHubComponent implements Component {
 				return `${upDown} save scope · ${enter}/Space set · Tab context · ${cancel} cancel`;
 			return `${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
 		}
-		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
+		if (this.#filterEditing) return "Search · Enter confirm · Esc back · Ctrl+C clear";
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
 			const toggle = this.#taskModeKey
 				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "Task model"}`
@@ -5119,8 +5142,8 @@ export class ModelHubComponent implements Component {
 						const label =
 							strip.kind === "name" || strip.kind === "pattern"
 								? strip.input.focused
-									? "Enter set · Esc leave field"
-									: "/ edit · Esc parent"
+									? "Enter set · Ctrl+C cancel"
+									: "/ edit · Ctrl+C cancel"
 								: strip.kind === "effortLevels"
 									? "←/→ effort · Space toggle"
 									: strip.kind === "folderChoice"
@@ -5332,7 +5355,16 @@ export class ModelHubComponent implements Component {
 		// Same gate as the mouse router: nothing is interactive while an assignment applies.
 		if (this.#assignmentPending) return;
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
-		if (this.#folderRulesPanel && event.key.replaceAll("^", "").split("/").includes("modelFolderRules")) {
+		const strip = this.#strip;
+		if (strip?.kind === "name" || strip?.kind === "pattern") {
+			if (strip.input.focused && (event.type === "edit" || event.type === "undo")) {
+				strip.input.handleNativeEvent(event);
+				this.#requestRender();
+			}
+			return;
+		}
+		if (this.#folderRulesPanel) {
+			if (!event.key.replaceAll("^", "").split("/").includes("modelFolderRules")) return;
 			this.#folderRulesPanel.handleNativeEvent(event);
 			this.#requestRender();
 			return;
@@ -6129,16 +6161,10 @@ export class ModelHubComponent implements Component {
 	#pickerCancelAction(): TspPickerAction {
 		if (this.#assignmentPending) return CLOSE_ACTION;
 		const strip = this.#strip;
-		const textFocused = (strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused;
+		if (strip?.kind === "name" || strip?.kind === "pattern") return pickerAction("cancel", "Cancel field", "ctrl+c");
 		return {
 			...CLOSE_ACTION,
-			label: this.#filterEditing
-				? "Clear search"
-				: textFocused
-					? "Leave field"
-					: strip || this.#assigning
-						? "Back"
-						: "Close",
+			label: this.#filterEditing ? "Back to list" : strip || this.#assigning ? "Back" : "Close",
 		};
 	}
 
@@ -6158,6 +6184,7 @@ export class ModelHubComponent implements Component {
 						{ primary: true },
 					),
 					cancel,
+					...(strip.kind === "name" ? [{ ...CLOSE_ACTION, label: "Back (keep draft)" }] : []),
 				];
 			}
 			const apply =
@@ -6203,7 +6230,9 @@ export class ModelHubComponent implements Component {
 							"enter",
 							{ primary: true },
 						);
-			return [apply, cancel];
+			return strip.kind === "name" || strip.kind === "pattern"
+				? [apply, cancel, { ...CLOSE_ACTION, label: "Back (keep draft)" }]
+				: [apply, cancel];
 		}
 		const facts =
 			!this.#sessionOnly && !this.#filterEditing && this.#callbacks.onEditFacts
@@ -6674,8 +6703,7 @@ export class ModelHubComponent implements Component {
 	/** Picker pointer events, each on the path of the key it stands for. */
 	#handlePickerEvent(event: PickerEvent): void {
 		if (event.kind === "action" && event.act === CLOSE_ACTION.id) {
-			if (this.#filterEditing) this.#handleInput("\x03");
-			else this.#cancel();
+			this.#handleInput("\x1b");
 			return;
 		}
 		// Same gate as the keys: only cancel works while an assignment applies.
@@ -6687,6 +6715,18 @@ export class ModelHubComponent implements Component {
 			) {
 				this.#handleInput("\r");
 			}
+			return;
+		}
+		const textStrip = this.#strip;
+		if (textStrip?.kind === "name" || textStrip?.kind === "pattern") {
+			if (event.kind !== "action") return;
+			if (event.act === "cancel") this.#cancel(true);
+			else if (
+				["stripApply", "folderName", "roleName", "presetName", "roleDescription", "compactionPoint"].includes(
+					event.act,
+				)
+			)
+				this.#handleStripInput("\r");
 			return;
 		}
 		const entry = this.#activeEntry();
@@ -6788,35 +6828,16 @@ export class ModelHubComponent implements Component {
 			}
 			case "stripApply": {
 				const strip = this.#strip;
-				if (strip?.kind === "pattern") this.#submitSelectorPattern(strip);
-				else if (strip?.kind === "effortLevels") this.#confirmEffortLevels(strip);
+				if (strip?.kind === "effortLevels") this.#confirmEffortLevels(strip);
 				else if (strip?.kind === "selectorChoice") this.#activateSelectorChoice(strip);
 				else this.#activateStripChip();
 				return;
 			}
-			case "folderName":
-				this.#submitNameStrip();
-				return;
-			case "roleName":
-				this.#submitRoleName();
-				return;
-			case "presetName":
-				this.#submitPresetName();
-				return;
-			case "roleDescription":
-				this.#submitNameStrip();
-				return;
 			case "editCompaction": {
 				const model = this.#modelCompactionTarget();
 				if (!this.#strip && model) this.#openCompactionStrip(model);
 				return;
 			}
-			case "compactionPoint":
-				this.#submitNameStrip();
-				return;
-			case "cancel":
-				if (this.#strip) this.#cancel();
-				return;
 			case "clear":
 				if (entry.kind === "roles" && this.#assigning === null) {
 					this.#rolesSearch.setValue("");

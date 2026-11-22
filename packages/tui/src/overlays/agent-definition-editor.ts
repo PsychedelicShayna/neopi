@@ -28,7 +28,6 @@ import { isLayoutMouseRoutable } from "../components/layout/geometry";
 import { SplitPane } from "../components/layout/split-pane";
 import { Stack } from "../components/layout/stack";
 import { bottomBorder, divider, dividerSplit, PanelRows, row, topBorder, topBorderSplit } from "../chrome/overlay-box";
-import { extractPrintableText } from "../keys";
 import { interruptKey } from "../chrome/keybinding-hints";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import { col, node, span, text } from "../native/describe";
@@ -728,7 +727,7 @@ export class AgentDefinitionEditor implements Component {
 			}
 		};
 		input.onEscape = back;
-		this.#setScreen("input", input, `${title} · Enter save · Esc cancel`, { field, preview: true });
+		this.#setScreen("input", input, `${title} · Enter save · Ctrl+C cancel`, { field, preview: true });
 	}
 
 	#showText(
@@ -2358,8 +2357,7 @@ export class AgentDefinitionEditor implements Component {
 		const active = this.#active;
 		if (this.#textFocused()) {
 			this.#keys.reset();
-			const printable = active instanceof Input ? extractPrintableText(data) : undefined;
-			if (printable !== undefined && active instanceof Input) active.insertText(printable);
+			if (active instanceof Input) active.handleInput(data, true);
 			else active.handleInput?.(data);
 			this.#render();
 			return;
@@ -2439,7 +2437,8 @@ export class AgentDefinitionEditor implements Component {
 			this.#render();
 			return;
 		}
-		if (action && (active instanceof SelectList || active instanceof ModelBrowser)) active.handleNavigation(action);
+		if (action && action.kind !== "cancel" && (active instanceof SelectList || active instanceof ModelBrowser))
+			active.handleNavigation(action);
 		else active.handleInput?.(data);
 		this.#render();
 	}
