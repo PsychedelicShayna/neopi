@@ -55,7 +55,13 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	}
 
 	async execute(_toolCallId: string, params: IrcParams): Promise<AgentToolResult<IrcDetails>> {
-		const { op, group, members, message, to, reason, replyTo, progress } = params;
+		const { op, message } = params;
+		const to = (typeof params.to === "string" ? params.to.trim() : params.to?.length) ? params.to : undefined;
+		const group = params.group?.trim() || undefined;
+		const members = params.members?.length ? params.members : undefined;
+		const reason = params.reason?.trim() || undefined;
+		const replyTo = params.replyTo?.trim() ? params.replyTo : undefined;
+		const progress = params.progress === true || undefined;
 		const result = (text: string, isError = false, receipts?: IrcDeliveryReceipt[]): AgentToolResult<IrcDetails> => ({
 			content: [{ type: "text", text }],
 			details: { op, receipts },
@@ -97,17 +103,16 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			case "create":
 			case "add":
 			case "remove":
-				if (!group?.trim() || !members?.length)
-					return result(`Specify a group and one or more members for ${op}.`, true);
+				if (!group || !members) return result(`Specify a group and one or more members for ${op}.`, true);
 				request = { op, group, members };
 				break;
 			case "leave":
 			case "members":
-				if (!group?.trim()) return result(`Specify a group for ${op}.`, true);
+				if (!group) return result(`Specify a group for ${op}.`, true);
 				request = { op, group };
 				break;
 			case "keep":
-				if (!group?.trim() || !reason?.trim()) return result("Specify a group and a reason to keep it.", true);
+				if (!group || !reason) return result("Specify a group and a reason to keep it.", true);
 				request = { op, group, reason };
 				break;
 			case "groups":

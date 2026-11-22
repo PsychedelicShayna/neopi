@@ -27,6 +27,7 @@ export async function executeSend(
 	const { registry, senderId, sessionFileHint } = deps;
 	const to = params.to.trim();
 	const message = params.message;
+	const replyTo = params.replyTo?.trim() ? params.replyTo : undefined;
 	if (!to) return coordinationErrorResult("A recipient is required.", { op: "send", from: senderId });
 	if (!message.trim())
 		return coordinationErrorResult("A non-empty message is required.", { op: "send", from: senderId });
@@ -57,10 +58,10 @@ export async function executeSend(
 					from: senderId,
 					to: target,
 					body: message,
-					replyTo: params.replyTo,
+					replyTo,
 					localOnly: !params.remote,
 					...(isBroadcast ? { broadcast: true } : {}),
-					...(params.progress ? { progress: true } : {}),
+					...(params.progress === true ? { progress: true } : {}),
 				},
 				{ suppressRelay, broadcast: isBroadcast },
 			),
