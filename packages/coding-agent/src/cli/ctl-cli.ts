@@ -4,6 +4,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { ControlClient, ControlClientError } from "../control/client";
+import type { ControlCallerIdentity } from "../control/host";
 import { readControlEntries, type ControlMetadata, type ControlRegistryOptions } from "../control/registry";
 import type { ControlSnapshot } from "../control/types";
 
@@ -61,22 +62,28 @@ export async function resolveCtlTarget(selector: string, options?: ControlRegist
 	throw new ControlClientError("not_found", `no control session matches ${wanted}`);
 }
 
-const callerBinding = new AsyncLocalStorage<true>();
+const callerBinding = new AsyncLocalStorage<ControlCallerIdentity | null>();
 
 /** The ctl tool sets this so the connection carries the caller's publication. */
-export function withCtlCaller<T>(fn: () => Promise<T>): Promise<T> {
-	return callerBinding.run(true, fn);
+export function withCtlCaller<T>(caller: ControlCallerIdentity | null, fn: () => Promise<T>): Promise<T> {
+	return callerBinding.run(caller, fn);
 }
 
 async function connect(selector: string, label: string): Promise<ControlClient> {
-	const metadata = await resolveCtlTarget(selector);
-	const caller = callerBinding.getStore() ? (await import("../control/host")).currentControlCaller() : null;
+	const caller = callerBinding.getStore();
+	const self = selector === "self" && caller !== undefined;
+	if (self && !caller) {
+		throw new ControlClientError("no_caller", "the calling session has no published control endpoint");
+	}
+	const metadata = self && caller ? caller.metadata : await resolveCtlTarget(selector);
 	const client = new ControlClient({
 		metadata,
 		label,
 		kind: caller ? "tool" : "cli",
-		caller: caller ? { instanceId: caller.instanceId, token: caller.token } : null,
+		caller: caller ? { instanceId: caller.metadata.instanceId, token: caller.metadata.token } : null,
 		controlChain: caller?.controlChain ?? [],
+		allowSelf: self,
+		allowNested: self,
 	});
 	await client.connect();
 	return client;
@@ -168,10 +175,22 @@ export async function ctlRpc(
 }
 
 function formatSnapshot(snapshot: ControlSnapshot): string {
+	const session = snapshot.session;
+	const model = session?.model;
+	const fast = session?.fastModeActive
+		? "active"
+		: session?.fastModeEnabled
+			? "on (inactive)"
+			: session
+				? "off"
+				: "unknown";
 	return [
 		`${snapshot.instanceId}  ${snapshot.role}  pid=${snapshot.pid}  ready=${snapshot.ready}`,
 		`cwd=${snapshot.cwd}`,
 		`busy streaming=${snapshot.busy.streaming} pending(steer+follow-up)=${snapshot.busy.pendingSteerAndFollowUp}`,
+		`model=${model ? `${model.provider}/${model.id}` : "-"}  effort=${session?.thinkingLevel ?? "-"}  fast=${fast}`,
+		`sessionName=${session?.sessionName ? JSON.stringify(session.sessionName) : "-"}`,
+		`sessionFile=${session?.sessionFile ?? "-"}`,
 		`build ${snapshot.build.gitSha ?? "unknown"}`,
 		"",
 	].join("\n");

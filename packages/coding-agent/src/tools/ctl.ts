@@ -8,10 +8,11 @@ import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import ctlDescription from "../prompts/tools/ctl.md" with { type: "text" };
 import { ctlList, ctlRpc, ctlSend, ctlState, withCtlCaller, withCtlIo } from "../cli/ctl-cli";
+import { currentControlCaller } from "../control/host";
 
 const ctlSchema = type({
 	op: type(
-		"'list' | 'state' | 'send' | 'steer' | 'follow_up' | 'abort' | 'slash' | 'action' | 'keys' | 'dialogs' | 'dialog_answer' | 'settings' | 'rpc'",
+		"'list' | 'state' | 'send' | 'input' | 'steer' | 'follow_up' | 'abort' | 'esc' | 'slash' | 'action' | 'keys' | 'dialogs' | 'dialog_answer' | 'settings' | 'rpc'",
 	),
 	"target?": "string",
 	"text?": "string",
@@ -30,21 +31,18 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 	}
 	readonly parameters = ctlSchema;
 
+	constructor(private readonly getSessionId?: () => string | null) {}
+
 	async execute(_toolCallId: string, raw: typeof ctlSchema.infer): Promise<AgentToolResult<undefined>> {
-		const params = raw as unknown as {
-			op: string;
-			target?: string;
-			text?: string;
-			rpcType?: string;
-			actionId?: string;
-			dialogId?: string;
-			answer?: unknown;
-			params?: Record<string, unknown>;
-		};
+		const params = { ...raw, target: raw.target ?? "self" };
 		const sendMode =
-			params.op === "slash" || params.op === "steer" || params.op === "follow_up" ? params.op : "prompt";
+			params.op === "input" || params.op === "slash" || params.op === "steer" || params.op === "follow_up"
+				? params.op
+				: "prompt";
 		const chunks: string[] = [];
-		await withCtlCaller(() =>
+		const sessionId = this.getSessionId?.();
+		const caller = sessionId ? currentControlCaller(sessionId) : null;
+		await withCtlCaller(caller, () =>
 			withCtlIo(
 				{
 					stdout: text => chunks.push(text),
@@ -55,16 +53,12 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 						await ctlList(true);
 						return;
 					}
-					if (!params.target) {
-						chunks.push("target is required\n");
-						return;
-					}
 					if (params.op === "state") {
 						await ctlState(params.target, true);
 						return;
 					}
-					if (params.op === "abort") {
-						await ctlRpc(params.target, "abort", {}, true);
+					if (params.op === "abort" || params.op === "esc") {
+						await ctlRpc(params.target, params.op, {}, true);
 						return;
 					}
 					if (params.op === "action") {
@@ -93,7 +87,12 @@ export class CtlTool implements AgentTool<typeof ctlSchema> {
 						return;
 					}
 					if (params.op === "rpc") {
-						await ctlRpc(params.target, params.rpcType ?? "get_state", params.params ?? {}, true);
+						await ctlRpc(
+							params.target,
+							params.rpcType ?? "get_state",
+							(params.params ?? {}) as Record<string, unknown>,
+							true,
+						);
 						return;
 					}
 					await ctlSend(params.target, params.text ?? "", sendMode, true);

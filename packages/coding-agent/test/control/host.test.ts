@@ -31,13 +31,14 @@ import { ctlList, ctlState, withCtlCaller, withCtlIo } from "../../src/cli/ctl-c
 import { runAsControlCommand } from "../../src/control/actor";
 import { ControlClient } from "../../src/control/client";
 import type { ControlPresenter } from "../../src/control/presenter";
-import { ControlHost } from "../../src/control/host";
+import { ControlHost, currentControlCaller } from "../../src/control/host";
 import { type ControlMetadata, readControlEntries } from "../../src/control/registry";
 import { InternalUrlRouter } from "../../src/internal-urls/router";
 import { AgentSession } from "../../src/session/agent-session";
 import type { CustomMessage } from "../../src/session/messages";
 import type { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
+import { CtlTool } from "../../src/tools/ctl";
 import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../src/task/types";
 import { EventBus } from "../../src/utils/event-bus";
 import type { ControlSnapshot } from "../../src/control/types";
@@ -1289,13 +1290,109 @@ describe("control host", () => {
 		expect(seen.injected).toHaveLength(1);
 	});
 
+	test("ctl state and transcript RPCs report the target without shelling out", async () => {
+		const manager = SessionManager.create(tempDir.path(), tempDir.join("ctl-state-journal"));
+		await manager.ensureOnDisk();
+		session = createSession({}, manager);
+		await session.setSessionName("Named target", "user");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await session.setModelTemporary(model, ThinkingLevel.Low);
+		session.agent.appendMessage({
+			...makeAssistantMessage(),
+			content: [{ type: "text", text: "Latest visible reply" }],
+		});
+		dir = tempDir.join("ctl-state-registry");
+		host = new ControlHost({ session, role: "rpc", dir });
+		await host.start();
+
+		const previous = process.env.PI_CONTROL_DIR;
+		process.env.PI_CONTROL_DIR = dir;
+		try {
+			const target = host.instanceId;
+			const tool = new CtlTool(() => "a different session");
+			const state = await tool.execute("state", { op: "state", target });
+			expect(JSON.parse(state.content[0]!.type === "text" ? state.content[0]!.text : "")).toMatchObject({
+				session: {
+					model: { provider: model.provider, id: model.id },
+					thinkingLevel: ThinkingLevel.Low,
+					fastModeEnabled: false,
+					fastModeActive: false,
+					sessionName: "Named target",
+					sessionFile: manager.getSessionFile(),
+				},
+			});
+			const reply = await tool.execute("last", { op: "rpc", target, rpcType: "get_last_assistant_text" });
+			expect(JSON.parse(reply.content[0]!.type === "text" ? reply.content[0]!.text : "")).toMatchObject({
+				success: true,
+				data: { text: "Latest visible reply" },
+			});
+			const lines: string[] = [];
+			await withCtlIo({ stdout: line => lines.push(line), stderr: () => {} }, () => ctlState(target, false));
+			expect(lines.join("")).toContain(`model=${model.provider}/${model.id}  effort=low  fast=off`);
+			expect(lines.join("")).toContain(`sessionName="Named target"\nsessionFile=${manager.getSessionFile()}\n`);
+		} finally {
+			if (previous === undefined) delete process.env.PI_CONTROL_DIR;
+			else process.env.PI_CONTROL_DIR = previous;
+		}
+	});
+
+	test("ctl self reads and changes the caller's own state even in a controlled turn", async () => {
+		const { host } = await start();
+		const caller = session!;
+		const tool = new CtlTool(() => caller.sessionId);
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled test model");
+		await runAsControlCommand(
+			{
+				connectionId: "upstream",
+				label: "upstream",
+				hostInstanceId: host.instanceId,
+				controlChain: ["upstream-instance"],
+				humanAtAdmission: 0,
+				humanNow: () => 0,
+			},
+			async () => {
+				const execute = async (args: Parameters<CtlTool["execute"]>[1]) => {
+					const { content } = await tool.execute("self", args);
+					return JSON.parse(content[0]!.type === "text" ? content[0]!.text : "");
+				};
+				expect(await execute({ op: "state" })).toMatchObject({ session: { sessionId: caller.sessionId } });
+				expect(
+					await execute({
+						op: "rpc",
+						target: "self",
+						rpcType: "set_model",
+						params: { provider: model.provider, modelId: model.id },
+					}),
+				).toMatchObject({ success: true });
+				expect(
+					await execute({
+						op: "rpc",
+						rpcType: "set_thinking_level",
+						params: { level: ThinkingLevel.High },
+					}),
+				).toMatchObject({ success: true });
+				expect(await execute({ op: "state", target: "self" })).toMatchObject({
+					session: { model: { provider: model.provider, id: model.id }, thinkingLevel: ThinkingLevel.High },
+				});
+			},
+		);
+
+		const unpublished = new CtlTool(() => "unpublished-session");
+		await expect(unpublished.execute("unpublished", { op: "state" })).rejects.toMatchObject({
+			code: "no_caller",
+		});
+	});
+
 	test("a ctl tool call stays bound to its caller while an overlapping call finishes", async () => {
 		const { host } = await start();
 		const previous = process.env.PI_CONTROL_DIR;
 		process.env.PI_CONTROL_DIR = dir;
 		try {
-			const quick = withCtlCaller(async () => {});
-			const slow = withCtlCaller(async () => {
+			const caller = currentControlCaller(session!.sessionId);
+			const quick = withCtlCaller(caller, async () => {});
+			const slow = withCtlCaller(caller, async () => {
 				await Bun.sleep(20);
 				return withCtlIo({ stdout: () => {}, stderr: () => {} }, () => ctlState(host.instanceId, true));
 			});

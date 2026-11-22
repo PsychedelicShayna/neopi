@@ -49,7 +49,12 @@ import { RPC_COMMAND_TYPES } from "./parity";
 import { encodeKeyId, encodeSgrMouse } from "./keys";
 import { ControlMonitorService, type MonitorGrantInfo } from "./monitor-service";
 import type { ControlPresenter, RewindOutcome } from "./presenter";
-import { newControlInstanceId, publishControlEndpoint, type ControlPublication } from "./registry";
+import {
+	type ControlMetadata,
+	type ControlPublication,
+	newControlInstanceId,
+	publishControlEndpoint,
+} from "./registry";
 import { ControlServer, type ControlConnection } from "./server";
 import { APPROVAL_GATED_SETTINGS, cfgControlApprovals, cfgControlSecretInput } from "./settings";
 import { settingsProjectPath } from "./settings-reload";
@@ -113,32 +118,24 @@ const hosts = new WeakMap<AgentSession, ControlHost>();
 const liveHosts = new Set<ControlHost>();
 
 export interface ControlCallerIdentity {
-	instanceId: string;
-	token: string;
+	metadata: ControlMetadata;
 	controlChain: string[];
 }
 
 /** Publication of the in-process host, so the ctl tool can bind its caller. */
-export function currentControlCaller(): ControlCallerIdentity | null {
-	let activeHost: ControlHost | undefined;
+export function currentControlCaller(sessionId?: string): ControlCallerIdentity | null {
+	let fallback: ControlCallerIdentity | null = null;
 	for (const host of liveHosts) {
-		const token = host.publication?.token;
-		if (!token) continue;
-		if (host.hasTurnInput()) activeHost = host;
+		const metadata = host.publication?.metadata();
+		if (!metadata || (sessionId !== undefined && metadata.sessionId !== sessionId)) continue;
 		const actor = host.dialogActor();
 		if (actor?.hostInstanceId === host.instanceId) {
-			return { instanceId: host.instanceId, token, controlChain: actor.controlChain?.slice() ?? [] };
+			return { metadata, controlChain: actor.controlChain?.slice() ?? [] };
 		}
+		if (sessionId !== undefined) return { metadata, controlChain: [] };
+		if (!fallback || host.hasTurnInput()) fallback = { metadata, controlChain: [] };
 	}
-	if (activeHost?.publication) {
-		return { instanceId: activeHost.instanceId, token: activeHost.publication.token, controlChain: [] };
-	}
-	for (const host of liveHosts) {
-		const token = host.publication?.token;
-		if (!token) continue;
-		return { instanceId: host.instanceId, token, controlChain: [] };
-	}
-	return null;
+	return fallback;
 }
 
 type GuestAskDialog = (
@@ -513,7 +510,9 @@ export class ControlHost {
 				label: connection.label || "ctl",
 				hostInstanceId: this.instanceId,
 				controlChain:
-					connection.callerInstanceId || connection.controlChain.length > 0 ? connection.propagatedChain : undefined,
+					connection.callerInstanceId || connection.controlChain.length > 0
+						? connection.propagatedChain
+						: undefined,
 				...(type === "prompt" || type === "steer" || type === "follow_up" || type === "abort_and_prompt"
 					? { origin: connection.origin }
 					: {}),

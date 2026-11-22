@@ -727,7 +727,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	chronicle_recall: ChronicleRecallTool.createIf,
 	learn: LearnTool.createIf,
 	manage_skill: ManageSkillTool.createIf,
-	ctl: () => new CtlTool(),
+	ctl: session => new CtlTool(session.getSessionId),
 };
 
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
