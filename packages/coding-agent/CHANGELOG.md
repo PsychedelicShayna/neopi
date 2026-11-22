@@ -23,6 +23,7 @@
 - Tab completes slash arguments beyond the first verb, including live session, account, model, tool, job, and configuration choices. `/chron`, `/fork`, and `/autoresearch` show verbs before typing a prefix and still run bare on Enter ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - **Settings → Interaction → Notifications → Notify Agent When...** lets you choose which background events start an idle turn, independently before and after Ctrl+C. Disabled events still reach the transcript; advisor timing and severity still apply. By default, only incoming IRC can wake a run you just stopped ([#797](https://github.com/PsychedelicShayna/neopi/issues/797)).
 - Create named model folders in the fullscreen `/model` and `/roles` pickers to switch and assign models without scrolling through providers. Folders persist across sessions and can be edited per project.
+- Find newly discovered models in the pinned **New models** folder in `/model` and `/roles`, with discovery dates and configurable gold, silver and bronze age stars ([#715](https://github.com/PsychedelicShayna/neopi/issues/715)).
 - Press Alt+S to open Settings without clearing the composer draft or moving its cursor. Ctrl+Alt+S skips the current preprocessing step; Ctrl+Alt+C (no longer Alt+C) sends through the active chain.
 - Interactive sessions refresh provider catalogs one at a time in the background, prioritizing recently used models. Configure the two-hour refresh cycle and four-hour provider-entry staleness threshold in Settings → Model ([#832](https://github.com/PsychedelicShayna/neopi/issues/832)).
 - The composer keeps the active chain stage, elapsed time, and bound skip/cancel keys visible throughout preprocessing in ANSI and Tern, including when a stage is skipped ([#850](https://github.com/PsychedelicShayna/neopi/issues/850)).
@@ -191,6 +192,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 - Fixed terminal attachment routing for rich Ask and Form: dialogs from completed prompt preparation or consumed slash input stay in the pane; clients can detect the fix with `rich_dialog_provenance_v1` ([#878](https://github.com/PsychedelicShayna/neopi/issues/878)).

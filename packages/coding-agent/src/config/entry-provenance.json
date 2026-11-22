@@ -228,6 +228,7 @@
 				"models.catalogProviderStalenessMinutes",
 				"models.catalogRefreshCycleMinutes",
 				"models.defaultScope",
+				"models.newModelTierDays",
 				"models.sessionPicker",
 				"notifyAgent.when",
 				"settings.defaultScope",

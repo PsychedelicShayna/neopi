@@ -251,6 +251,87 @@ test("native folder scopes browse curated models and edit membership from a prov
 	expect(picker()).toMatchObject({ scope: "folder:Review", selected: null, total: 0 });
 });
 
+test.each([false, true])("pins and ages discovered models in the hub (session only: %s)", async sessionOnly => {
+	const saved = vi.fn();
+	const settings: ModelHubSource = {
+		...source({ default: "demo/demo" }, ["demo/demo"]),
+		modelFolders: { entries: [{ name: "Review", models: [] }], save: saved },
+		newModelTierDays: 2,
+	};
+	const start = Date.UTC(2026, 10, 22, 12);
+	const tier = 2 * 86_400_000;
+	let now = start;
+	const clock = spyOn(Date, "now").mockImplementation(() => now);
+	try {
+		let notify: (() => void) | undefined;
+		const sightings = new Map([
+			["demo/demo", start - tier],
+			["openai/gpt-5.6", start],
+		]);
+		const hub = new ModelHubComponent(
+			ui,
+			settings,
+			{
+				...registry(MODELS),
+				getAvailable: () => MODELS.filter(model => model.provider !== "openai"),
+				getModelSightings: () => sightings,
+				subscribeCatalogChanges(listener) {
+					notify = listener;
+					return () => {
+						notify = undefined;
+					};
+				},
+			},
+			[],
+			{ onAssign: () => {}, onUnassign: () => {}, onCancel: () => {} },
+			{ sessionOnly },
+		);
+		hubs.push(hub);
+		const picker = () => props(hub.describe(withPicker));
+		const folders = picker().scopes?.filter(scope => scope.group === "Folders") ?? [];
+		expect(folders.map(scope => scope.id)).toEqual(["newModels", "folder:Review"]);
+		expect(folders[0]?.label).toEqual([expect.objectContaining({ s: "provenancePurple" })]);
+		hub.handleNativeEvent({ type: "action", key: "", act: "scope", value: "newModels", mods: [] });
+		for (const act of ["folderRename", "folderDelete", "folderClear", "folderRemove"]) {
+			expect(picker().actions?.some(action => action.id === act)).toBe(false);
+			hub.handleNativeEvent({ type: "action", key: "", act, mods: [] });
+		}
+		expect(picker().strip).toBeNull();
+		expect(saved).not.toHaveBeenCalled();
+
+		const latest = () => {
+			const data = picker();
+			return [...(data.itemsAdd ?? []), ...(data.items ?? [])].find(entry => entry.id === "openai/gpt-5.6");
+		};
+		expect(picker().order).toEqual(["openai/gpt-5.6", "demo/demo"]);
+		expect(picker().columns?.at(-1)).toMatchObject({ id: "discovered", head: "Discovered" });
+		expect(latest()?.facts?.discovered).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/u);
+		expect(latest()?.label).toEqual([
+			{ t: `${theme.symbol("provenance.star")} `, s: "provenanceGold" },
+			{ t: "openai/gpt-5.6" },
+		]);
+		expect(hub.render(120).some(line => Bun.stripANSI(line).includes(String(latest()?.facts?.discovered)))).toBe(
+			true,
+		);
+		now = start + tier;
+		notify?.();
+		await Promise.resolve();
+		expect(latest()?.label).toMatchObject([{ s: "provenanceSilver" }, { t: "openai/gpt-5.6" }]);
+		now = start + 2 * tier;
+		notify?.();
+		await Promise.resolve();
+		expect(latest()?.label).toMatchObject([{ s: "provenanceBronze" }, { t: "openai/gpt-5.6" }]);
+		expect(picker().order).toEqual(["openai/gpt-5.6"]);
+		now = start + 3 * tier;
+		notify?.();
+		await Promise.resolve();
+		expect(picker().order).toEqual([]);
+		expect(picker().scopes?.find(scope => scope.id === "newModels")?.count).toBe(0);
+	} finally {
+		clock.mockRestore();
+	}
+});
+
 test.each(["keyboard", "native"])(
 	"session-only rich hub starts on recent models and picks without roles via %s",
 	mode => {
@@ -281,6 +362,7 @@ test.each(["keyboard", "native"])(
 		expect(p.scopes?.map(scope => scope.id)).toEqual([
 			"recent",
 			"all",
+			"newModels",
 			"provider:anthropic",
 			"provider:demo",
 			"provider:openai",

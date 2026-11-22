@@ -30,6 +30,7 @@ import {
 	cfgCatalogProviderStalenessMinutes,
 	cfgCycleOrder,
 	cfgModelPresets,
+	cfgModelFolders,
 	cfgModelRoles,
 } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
@@ -366,6 +367,131 @@ describe("ModelHub", () => {
 		expect(settings.getProjectSettings()).toHaveProperty("modelFolders", [
 			{ name: "Personal", models: [] },
 			{ name: "Team", models: [] },
+		]);
+	});
+
+	test("folder rules run once without removing manual entries, then force apply replaces them", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: ["alpha/manual"] }], "global");
+		const models = [
+			makeModel("alpha", "manual"),
+			makeModel("alpha", "eligible-chat"),
+			makeModel("beta", "eligible-other"),
+		];
+		const { hub } = createHub({ models, settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		const open = "\x1b[105;7u"; // Ctrl+Alt+I
+		hub.handleInput(open);
+		expect(normalize(hub.render(220))).toContain("Folder rules");
+
+		for (const key of [
+			// First condition: Slug *= alpha/eligible-*
+			"\n",
+			"\n",
+			"\x1b[F",
+			"\n",
+			..."alpha/eligible-*",
+			"\n",
+		])
+			hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("alpha/eligible-*");
+		expect(normalize(hub.render(220))).toContain("Match every condition in any clause");
+		expect(normalize(hub.render(220))).not.toContain("Apply condition");
+		for (const key of [DOWN, DOWN, DOWN, DOWN, DOWN, "\n"]) hub.handleInput(key);
+		const rules = { ingest: false, clauses: [[{ attribute: "slug", operator: "*=", value: "alpha/eligible-*" }]] };
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/manual", "alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput(DOWN);
+		hub.handleInput("\n");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/manual", "alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput("\n");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput(ESC);
+		expect(normalize(hub.render(220))).toContain("alpha/eligible-chat");
+		expect(normalize(hub.render(220))).not.toContain("alpha/manual");
+		for (const key of [open, DOWN, DOWN, DOWN, " ", DOWN, "\n"]) hub.handleInput(key);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules: { ...rules, ingest: true } },
+		]);
+		for (const key of [UP, " ", DOWN, "\n", "\x03"]) hub.handleInput(key);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules },
+		]);
+	});
+
+	test("folder rules validate regex and Ctrl+C discards uncommitted edits", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: [] }], "global");
+		const { hub } = createHub({ models: [makeModel("alpha", "model")], settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		for (const key of ["\x1b[105;7u", "\n", "\n", DOWN, DOWN, "\n", "[", "\n"]) hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("Invalid regular expression");
+		hub.handleInput("\x03");
+		expect(normalize(hub.render(220))).toContain("This folder is empty");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([{ name: "Smart", models: [] }]);
+	});
+
+	test("folder rules show the whole expression after Enter and add And to its clause", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: [] }], "global");
+		const { hub } = createHub({ models: [makeModel("alpha", "model")], settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		const type = (...keys: string[]) => {
+			for (const key of keys) hub.handleInput(key);
+		};
+		const screen = () => normalize(hub.render(220));
+		const enter = "\n";
+		const home = "\x1b[H";
+		const end = "\x1b[F";
+
+		type("\x1b[105;7u", enter);
+		expect(screen()).toContain("Choose model attribute");
+		type(enter);
+		expect(screen()).toContain("Choose comparison operator");
+		type(DOWN, DOWN, enter);
+		expect(screen()).toContain("Slug · case-insensitive regex");
+		type("^OPENAI-CODEX/", enter);
+		expect(screen()).toContain("If Slug");
+		expect(screen()).toContain("^OPENAI-CODEX/");
+
+		type(DOWN, enter, DOWN, DOWN, enter, home, DOWN, enter, "500000", enter);
+		expect(screen()).toContain("And Context window");
+		expect(screen()).toContain(">= 500000");
+		type(DOWN, DOWN, enter, DOWN, enter, enter, "anthropic", enter);
+		expect(screen()).toContain("Or Provider");
+		expect(screen()).toContain("If Slug");
+		type(DOWN, enter, DOWN, DOWN, DOWN, DOWN, DOWN, enter, home, DOWN, DOWN, enter, "25", enter);
+		expect(screen()).toContain("And Output price");
+		expect(screen()).toContain("<= 25");
+
+		// Edit the last value: the first Enter after typing still returns directly to the expression.
+		type(enter, DOWN, DOWN, enter, "\x01", "\x0b", "24", enter);
+		expect(screen()).toContain("<= 24");
+		expect(screen()).toContain("Or Provider");
+		type(end, UP, UP, enter);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{
+				name: "Smart",
+				models: [],
+				rules: {
+					ingest: false,
+					clauses: [
+						[
+							{ attribute: "slug", operator: "~=", value: "^OPENAI-CODEX/" },
+							{ attribute: "contextWindow", operator: ">=", value: "500000" },
+						],
+						[
+							{ attribute: "provider", operator: "==", value: "anthropic" },
+							{ attribute: "outputPrice", operator: "<=", value: "24" },
+						],
+					],
+				},
+			},
 		]);
 	});
 
@@ -1081,12 +1207,12 @@ describe("ModelHub", () => {
 				});
 				installTestTheme();
 
-				// Sidebar order: Roles, All models, Effort rules, alpha, beta, delta-local, gamma.
 				// Highlight the keyless provider, then enter to schedule its refresh.
 				hub.handleInput(DOWN); // All models → Effort rules
 				hub.handleInput(DOWN); // Effort rules → Context rules
 				hub.handleInput(DOWN); // Context rules → Model overrides
-				hub.handleInput(DOWN); // all → alpha
+				hub.handleInput(DOWN); // Model overrides → New models
+				hub.handleInput(DOWN); // New models → alpha
 				hub.handleInput(DOWN); // alpha → beta
 				hub.handleInput(DOWN); // beta → delta-local
 				hub.handleInput("\r");
@@ -1166,10 +1292,12 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → locked anthropic
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → locked anthropic
 			expect(normalize(hub.render(220))).toContain("anthropic has no credentials configured");
 
-			hub.handleInput(UP); // locked provider → Effort rules
+			hub.handleInput(UP); // locked provider → New models
+			hub.handleInput(UP); // New models → Model overrides
 			hub.handleInput(UP); // Model overrides → Context rules
 			hub.handleInput(UP); // Context rules → Effort rules
 			hub.handleInput(UP); // Effort rules → All models
@@ -2934,10 +3062,10 @@ describe("ModelHub", () => {
 			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
 			installTestTheme();
 
-			// All models → Effort rules → custom-provider → openrouter.
-			hub.handleInput(DOWN);
+			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
@@ -2974,6 +3102,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN); // openrouter scope
 			hub.handleInput("/");
@@ -2998,6 +3127,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
 			expect(normalize(hub.render(220))).toContain("openrouter ·");
 		});
@@ -3060,6 +3190,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			expect(normalize(hub.render(220))).toContain("prov-a ·");
 		});
@@ -3134,6 +3265,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN); // highlight prov-a without fetching
 			await flushRefresh();
 			expect(refreshCatalogProvider).not.toHaveBeenCalled();
@@ -3172,6 +3304,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			hub.handleInput("\x1br");
@@ -3195,6 +3328,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			await flushRefresh();
@@ -3224,7 +3358,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → prov-a
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → prov-a
 			hub.handleInput("\r");
 			await flushRefresh();
 			expect(refreshProvider).toHaveBeenCalledTimes(1);
@@ -3253,6 +3388,7 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
+			hub.handleInput(DOWN); // Model overrides → New models
 			hub.handleInput(DOWN);
 			hub.handleInput("\r");
 			await flushRefresh();
@@ -3322,7 +3458,8 @@ describe("ModelHub", () => {
 			hub.handleInput(DOWN); // All models → Effort rules
 			hub.handleInput(DOWN); // Effort rules → Context rules
 			hub.handleInput(DOWN); // Context rules → Model overrides
-			hub.handleInput(DOWN); // All models → locked anthropic (separator skipped)
+			hub.handleInput(DOWN); // Model overrides → New models
+			hub.handleInput(DOWN); // New models → locked anthropic (separator skipped)
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("anthropic has no credentials configured");
 			expect(rendered).toContain("claude-locked-test");

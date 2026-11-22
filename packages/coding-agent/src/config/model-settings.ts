@@ -8,6 +8,7 @@ import { setUnpausedProviders } from "@oh-my-pi/pi-ai/oauth";
 import { authProviders } from "@oh-my-pi/pi-catalog/compat/auth";
 import type { cfgDefaultThinkingLevel } from "../session/settings";
 import type { HubModelFolder } from "@oh-my-pi/pi-tui/overlays/model-hub";
+import { validateModelFolderRules } from "@oh-my-pi/pi-tui/overlays/model-folder-rules";
 
 /** Display metadata for one model tag. */
 export interface ModelTagDef {
@@ -214,6 +215,25 @@ export const cfgCatalogProviderStalenessMinutes = register({
 	},
 });
 
+export const cfgNewModelTierDays = register({
+	id: "models.newModelTierDays",
+	type: "number",
+	default: 14,
+	validate: raw => {
+		if (raw !== undefined && (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1)) {
+			throw new Error("Expected a positive whole number of days.");
+		}
+	},
+	ui: {
+		tab: "model",
+		group: "Model Catalog",
+		label: "New models tier (days)",
+		description: "Days per gold, silver, and bronze discovery tier",
+		options: [{ value: "14", label: "14 days (default)" }],
+		customInput: true,
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Total provider budget for one native judge candidate, including setup and retries. */
@@ -259,6 +279,7 @@ export const cfgModelFolders = register({
 			}
 			if (names.has(folder.name)) throw new Error(`Duplicate model folder "${folder.name}"`);
 			names.add(folder.name);
+			if (folder.rules !== undefined) validateModelFolderRules(folder.rules);
 		}
 	},
 });

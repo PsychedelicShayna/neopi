@@ -21,13 +21,19 @@ const ircSchema = type({
 		"my_groups",
 		"keep",
 	),
-	"to?": type("string | string[]").describe("Direct send: one or more peer IDs; mutually exclusive with group"),
-	"group?": type("string").describe("Group name, without a leading #"),
+	"to?": type("string | string[]").describe(
+		"send only: peer ID(s) for a direct message. Use either to or group, never both; omit the other (empty is ignored)",
+	),
+	"group?": type("string").describe(
+		"Group name without a leading #. send (instead of to), create, add, remove, leave, members, keep; omit otherwise",
+	),
 	"message?": type("string").describe("Text for send or broadcast"),
-	"members?": type("string[]").describe("Peer IDs for create, add, or remove"),
-	"reason?": type("string").describe("Why to keep a singleton group longer"),
-	"replyTo?": type("string").describe("Message ID for a direct reply"),
-	"progress?": type("boolean").describe("Direct message is an interim progress note, not an answer"),
+	"members?": type("string[]").describe("Peer IDs for create, add, or remove only; omit otherwise"),
+	"reason?": type("string").describe("keep only: why to keep a singleton group longer; omit otherwise"),
+	"replyTo?": type("string").describe("Direct send only: message ID being answered; omit when not replying"),
+	"progress?": type("boolean").describe(
+		"Direct send only: true marks an interim progress note, not an answer; omit (or false) otherwise",
+	),
 });
 
 type IrcParams = typeof ircSchema.infer;
@@ -55,7 +61,13 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	}
 
 	async execute(_toolCallId: string, params: IrcParams): Promise<AgentToolResult<IrcDetails>> {
-		const { op, group, members, message, to, reason, replyTo, progress } = params;
+		const { op, message } = params;
+		const to = (typeof params.to === "string" ? params.to.trim() : params.to?.length) ? params.to : undefined;
+		const group = params.group?.trim() || undefined;
+		const members = params.members?.length ? params.members : undefined;
+		const reason = params.reason?.trim() || undefined;
+		const replyTo = params.replyTo?.trim() ? params.replyTo : undefined;
+		const progress = params.progress === true || undefined;
 		const result = (text: string, isError = false, receipts?: IrcDeliveryReceipt[]): AgentToolResult<IrcDetails> => ({
 			content: [{ type: "text", text }],
 			details: { op, receipts },
@@ -97,17 +109,16 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			case "create":
 			case "add":
 			case "remove":
-				if (!group?.trim() || !members?.length)
-					return result(`Specify a group and one or more members for ${op}.`, true);
+				if (!group || !members) return result(`Specify a group and one or more members for ${op}.`, true);
 				request = { op, group, members };
 				break;
 			case "leave":
 			case "members":
-				if (!group?.trim()) return result(`Specify a group for ${op}.`, true);
+				if (!group) return result(`Specify a group for ${op}.`, true);
 				request = { op, group };
 				break;
 			case "keep":
-				if (!group?.trim() || !reason?.trim()) return result("Specify a group and a reason to keep it.", true);
+				if (!group || !reason) return result("Specify a group and a reason to keep it.", true);
 				request = { op, group, reason };
 				break;
 			case "groups":
