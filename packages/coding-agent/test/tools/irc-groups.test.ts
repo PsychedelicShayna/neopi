@@ -218,6 +218,98 @@ describe("IRC group session persistence", () => {
 	});
 });
 
+describe("IRC send options", () => {
+	it("delivers a direct message with empty optional fields", async () => {
+		const main = peer("Main", "main");
+		const shayna = peer("shayna");
+		const outsider = peer("Outsider");
+		const sent = await main.call({
+			op: "send",
+			to: "shayna",
+			group: "",
+			message: "Hi",
+			members: [],
+			reason: "",
+			replyTo: "",
+			progress: false,
+		});
+		expect(sent.details?.receipts?.map(receipt => receipt.to)).toEqual(["shayna"]);
+		expect(bodies(shayna.messages)).toEqual(["Hi"]);
+		expect(shayna.messages[0]?.replyTo).toBeUndefined();
+		expect(shayna.messages[0]?.progress).toBeUndefined();
+		expect(outsider.messages).toEqual([]);
+	});
+
+	const noRecipients: string[] = [];
+
+	it.each([{ to: "" }, { to: " \t" }, { to: noRecipients }])(
+		"sends to a group with no direct recipients: %j",
+		async ({ to }) => {
+			const main = peer("Main", "main");
+			const a = peer("A");
+			const b = peer("B");
+			const outsider = peer("Outsider");
+			await main.call({ op: "create", group: "council", members: ["A", "B"] });
+			const sent = await main.call({
+				op: "send",
+				to,
+				group: "council",
+				message: "Hi",
+				members: [],
+				reason: "",
+				replyTo: "",
+				progress: false,
+			});
+			expect(sent.details?.receipts?.map(receipt => receipt.to)).toEqual(["A", "B"]);
+			for (const member of [a, b]) {
+				expect(member.messages.at(-1)?.body).toBe("Main sent this to group council, which you are part of.\n\nHi");
+			}
+			expect(outsider.messages).toEqual([]);
+		},
+	);
+
+	it.each([
+		{ to: "A", group: "council" },
+		{ to: "", group: "" },
+		{ to: noRecipients, group: " \t" },
+	])("rejects ambiguous or missing destinations without delivery: %j", async destinations => {
+		const main = peer("Main", "main");
+		const a = peer("A");
+		const b = peer("B");
+		await main.call({ op: "create", group: "council", members: ["A", "B"] });
+		const sent = await main.call({ op: "send", ...destinations, message: "Hi" });
+		expect(sent.isError).toBe(true);
+		expect(sent.content).toEqual([{ type: "text", text: "Specify either to or group, not both." }]);
+		for (const member of [a, b]) {
+			expect(bodies(member.messages)).toEqual([expect.stringContaining("added to IRC group council")]);
+		}
+	});
+
+	it.each([{ progress: true }, { replyTo: "message-id" }])(
+		"rejects direct-message options on group sends: %j",
+		async options => {
+			const main = peer("Main", "main");
+			const a = peer("A");
+			const b = peer("B");
+			await main.call({ op: "create", group: "council", members: ["A", "B"] });
+			const sent = await main.call({ op: "send", group: "council", message: "Hi", ...options });
+			expect(sent.isError).toBe(true);
+			expect(sent.content).toEqual([{ type: "text", text: "replyTo and progress apply only to direct messages." }]);
+			for (const member of [a, b]) {
+				expect(bodies(member.messages)).toEqual([expect.stringContaining("added to IRC group council")]);
+			}
+		},
+	);
+
+	it("ignores a blank reply ID from direct-send callers outside the tool", async () => {
+		peer("Main", "main");
+		const a = peer("A");
+		await executeSend({ registry, senderId: "Main" }, { to: "A", message: "Hi", replyTo: " \t" });
+		expect(bodies(a.messages)).toEqual(["Hi"]);
+		expect(a.messages[0]?.replyTo).toBeUndefined();
+	});
+});
+
 describe("IRC namespaces", () => {
 	it("delivers a council message to exactly its three members, including the creator", async () => {
 		const main = peer("Main", "main");

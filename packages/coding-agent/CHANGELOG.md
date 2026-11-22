@@ -189,6 +189,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
 - Terminal attachments can opt in to rich Ask for their own prompts and commands; dialogs raised while recovering older turns stay in the pane ([#856](https://github.com/PsychedelicShayna/neopi/issues/856)).
 - Fixed terminal attachment routing for rich Ask and Form: dialogs from completed prompt preparation or consumed slash input stay in the pane; clients can detect the fix with `rich_dialog_provenance_v1` ([#878](https://github.com/PsychedelicShayna/neopi/issues/878)).
