@@ -229,6 +229,7 @@ export interface ModelBrowserItem {
 	selector: string;
 	/** Optional foreground color for the row label. */
 	labelColor?: ThemeColor;
+	discovery?: { timestamp: number; date: string; color: ThemeColor; unavailable: boolean };
 }
 
 /** Resolved role assignment as displayed by the browser and the hub. */
@@ -941,6 +942,11 @@ export const MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "price", head: "$/M", format: "price", priority: 2 },
 ];
 
+export const NEW_MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
+	...MODEL_PICKER_COLUMNS,
+	{ id: "discovered", head: "Discovered", format: "dim", priority: 5 },
+];
+
 /** `$3·15` price fact of a picker row; `free` at zero cost; a declared pricing state otherwise. */
 function pickerPrice(model: Model): string {
 	const declared = declaredPricingStatus(model);
@@ -1218,7 +1224,14 @@ export class ModelBrowser implements Component {
 	/** Picker rows by selector, reused while the model and the roles it holds are unchanged. */
 	#pickerItemCache = new Map<
 		string,
-		{ model: Model; label: string; held: string; epoch: number; value: TspPickerItem }
+		{
+			model: Model;
+			label: string;
+			discovery: ModelBrowserItem["discovery"];
+			held: string;
+			epoch: number;
+			value: TspPickerItem;
+		}
 	>();
 	#pickerItems:
 		| {
@@ -1483,7 +1496,11 @@ export class ModelBrowser implements Component {
 			};
 			this.#ranker = cached;
 		}
-		return this.#insertSeparator(cached.ranker.rank(query));
+		const matches = cached.ranker.rank(query);
+		if (items[0]?.discovery) {
+			return matches.slice().sort((a, b) => b.discovery!.timestamp - a.discovery!.timestamp);
+		}
+		return this.#insertSeparator(matches);
 	}
 
 	/** True when `item`'s context window is smaller than the live session token count (grayed row; hosts compact before switching). */
@@ -1528,6 +1545,7 @@ export class ModelBrowser implements Component {
 		return false;
 	}
 	#insertSeparator(items: ModelBrowserItem[]): ModelBrowserItem[] {
+		if (items[0]?.discovery) return items;
 		const filtered = items.filter(item => item.id !== "separator");
 		const firstNonRecentIndex = filtered.findIndex(item => !this.#isRecentOrRole(item));
 		if (firstNonRecentIndex > 0 && firstNonRecentIndex < filtered.length) {
@@ -1750,6 +1768,7 @@ export class ModelBrowser implements Component {
 		costWidth: number,
 		intelligenceWidth: number,
 		perfWidth: number,
+		discoveryWidth: number,
 		metrics: MetricCells,
 		perfCell: string,
 	): string {
@@ -1771,7 +1790,9 @@ export class ModelBrowser implements Component {
 		const overLimit = overContext
 			? ` ${theme.status.disabled} context>${formatNumber(item.model.contextWindow ?? 0).toLowerCase()}`
 			: "";
-		let left = `${prefix}${providerPrefix}${name}${currentMark}${overLimit}`;
+		const star = item.discovery ? theme.fg(item.discovery.color, `${theme.symbol("provenance.star")} `) : "";
+		const unavailable = item.discovery?.unavailable ? ` ${theme.fg("muted", "Unavailable")}` : "";
+		let left = `${prefix}${star}${providerPrefix}${name}${currentMark}${overLimit}${unavailable}`;
 
 		// Metric columns collapse when empty or when the row needs room for its name.
 		const cols: string[] = [];
@@ -1779,7 +1800,8 @@ export class ModelBrowser implements Component {
 		if (perfWidth > 0) cols.push(theme.fg("dim", padLeftVisible(perfCell, perfWidth)));
 		if (ctxWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.ctx, ctxWidth)));
 		if (costWidth > 0) cols.push(theme.fg("dim", padLeftVisible(metrics.cost, costWidth)));
-		const metaWidth = metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
+		if (discoveryWidth > 0) cols.push(theme.fg("dim", padLeftVisible(item.discovery?.date ?? "", discoveryWidth)));
+		const metaWidth = metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth, discoveryWidth]);
 		const available = Math.max(1, width - metaWidth - (cols.length > 0 ? 1 : 0));
 		left = truncateToWidth(left, available);
 		const gap = Math.max(0, available - visibleWidth(left));
@@ -1789,7 +1811,7 @@ export class ModelBrowser implements Component {
 			// Gray the whole row but keep the selection cursor visible: over-context
 			// models stay selectable (the host compacts before switching).
 			const plainPrefix = Bun.stripANSI(prefix);
-			line = `${prefix}${theme.fg("dim", Bun.stripANSI(line).slice(plainPrefix.length))}`;
+			line = `${prefix}${star}${theme.fg("dim", Bun.stripANSI(line).slice(plainPrefix.length + Bun.stripANSI(star).length))}`;
 		}
 		// The bg band is reserved for the mouse: it marks hover, nothing else.
 		// Keyboard selection is the cursor glyph + accent name.
@@ -1883,6 +1905,7 @@ export class ModelBrowser implements Component {
 			const perfMode: PerfMode = width >= PERF_FULL_MIN_WIDTH ? "full" : width >= PERF_TPS_MIN_WIDTH ? "tps" : "off";
 			let intelligenceWidth = 0;
 			let perfWidth = 0;
+			let discoveryWidth = 0;
 			const visible = this.#menu.visibleItems;
 			const windowMetrics: MetricCells[] = [];
 			const windowPerf: string[] = [];
@@ -1899,12 +1922,18 @@ export class ModelBrowser implements Component {
 					intelligenceWidth = Math.max(intelligenceWidth, metrics.intelligenceWidth);
 				}
 				perfWidth = Math.max(perfWidth, visibleWidth(perfCell));
+				if (item.discovery) discoveryWidth = Math.max(discoveryWidth, visibleWidth(item.discovery.date));
 			}
-			// Preserve at least a readable name by dropping cost, then context.
-			let nameRoom = width - 2 - metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
-			if (nameRoom < MIN_NAME_WIDTH) costWidth = 0;
-			nameRoom = width - 2 - metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth]);
-			if (nameRoom < MIN_NAME_WIDTH) ctxWidth = 0;
+			// Preserve a readable name and prioritize the discovery date in its dedicated scope.
+			const nameRoom = () =>
+				width - 2 - metaColumnsWidth([intelligenceWidth, perfWidth, ctxWidth, costWidth, discoveryWidth]);
+			if (nameRoom() < MIN_NAME_WIDTH) costWidth = 0;
+			if (nameRoom() < MIN_NAME_WIDTH) ctxWidth = 0;
+			if (discoveryWidth > 0) {
+				if (nameRoom() < MIN_NAME_WIDTH) perfWidth = 0;
+				if (nameRoom() < MIN_NAME_WIDTH) intelligenceWidth = 0;
+				if (nameRoom() < MIN_NAME_WIDTH) discoveryWidth = 0;
+			}
 
 			const rows: string[] = [];
 			for (let i = startIndex; i < endIndex; i++) {
@@ -1920,6 +1949,7 @@ export class ModelBrowser implements Component {
 						costWidth,
 						intelligenceWidth,
 						perfWidth,
+						discoveryWidth,
 						windowMetrics[i - startIndex]!,
 						windowPerf[i - startIndex]!,
 					),
@@ -2076,14 +2106,17 @@ export class ModelBrowser implements Component {
 		this.#noteCreditChange(item.model);
 
 		const label: TspSpan[] = [];
+		if (item.discovery) label.push(span(`${theme.symbol("provenance.star")} `, item.discovery.color));
 		if (this.#showProvider) label.push(span(`${item.provider}/`, "dim"));
 		label.push(span(item.id, item.labelColor));
+		if (item.discovery?.unavailable) label.push(span(" Unavailable", "muted"));
 		if (item.selector === this.#currentSelector) label.push(span(` ${theme.status.enabled}`, "success"));
 		const metrics = [
 			formatIntelligence(item.model),
 			this.#perfCell(item, "full"),
 			formatContext(item.model, this.#settings.effectiveContextWindowFor?.(item.model)),
 			formatCostPair(item.model),
+			item.discovery?.date,
 		].filter(Boolean);
 		const overContext = this.isOverContext(item);
 		const itemNode = node(
@@ -2265,6 +2298,7 @@ export class ModelBrowser implements Component {
 		if (
 			cached?.model === model &&
 			cached.label === item.id &&
+			cached.discovery === item.discovery &&
 			cached.held === held &&
 			cached.epoch === this.#pickerEpoch
 		) {
@@ -2286,7 +2320,9 @@ export class ModelBrowser implements Component {
 					: effectiveContext;
 		}
 		facts.price = pickerPrice(model);
+		if (item.discovery) facts.discovered = item.discovery.date;
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
+		if (item.discovery?.unavailable) badges.push({ text: "Unavailable", tone: "warning" });
 		if (this.isOverContext(item)) {
 			badges.push({
 				text: `ctx>${formatNumber(model.contextWindow ?? 0).toLowerCase()}`,
@@ -2311,7 +2347,9 @@ export class ModelBrowser implements Component {
 		const quickRole = item.provider === "" && item.id.startsWith("@");
 		const value: TspPickerItem = {
 			id: item.selector,
-			label: this.#pickerLabel(item),
+			label: item.discovery
+				? [span(`${theme.symbol("provenance.star")} `, item.discovery.color), span(this.#pickerLabel(item))]
+				: this.#pickerLabel(item),
 			mark: providerMark(item.model.provider),
 			mono: true,
 			...(quickRole ? { detail: `${item.model.provider}/${item.model.id}` } : {}),
@@ -2322,7 +2360,14 @@ export class ModelBrowser implements Component {
 		};
 		// Discovery re-mints Model objects for unchanged models; an equal row keeps its identity.
 		const kept = cached && Bun.deepEquals(cached.value, value) ? cached.value : value;
-		this.#pickerItemCache.set(item.selector, { model, label: item.id, held, epoch: this.#pickerEpoch, value: kept });
+		this.#pickerItemCache.set(item.selector, {
+			model,
+			label: item.id,
+			discovery: item.discovery,
+			held,
+			epoch: this.#pickerEpoch,
+			value: kept,
+		});
 		return kept;
 	}
 
@@ -2394,7 +2439,10 @@ export class ModelBrowser implements Component {
 					scoped && providerScope(scoped.providerKey, compactModelSearchText(item.provider)) !== ProviderScope.None
 						? this.#scopedPickerHits(item, scoped)
 						: pickerFuzzyHits(this.#pickerLabel(item), query);
-				if (ranges) hits[item.selector] = ranges;
+				if (ranges) {
+					const offset = item.discovery ? theme.symbol("provenance.star").length + 1 : 0;
+					hits[item.selector] = offset ? ranges.map(([start, end]) => [start + offset, end + offset]) : ranges;
+				}
 			}
 		}
 		const value: ModelPickerOrder = { order, hits, count };

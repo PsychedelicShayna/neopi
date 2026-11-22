@@ -215,6 +215,25 @@ export const cfgCatalogProviderStalenessMinutes = register({
 	},
 });
 
+export const cfgNewModelTierDays = register({
+	id: "models.newModelTierDays",
+	type: "number",
+	default: 14,
+	validate: raw => {
+		if (raw !== undefined && (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1)) {
+			throw new Error("Expected a positive whole number of days.");
+		}
+	},
+	ui: {
+		tab: "model",
+		group: "Model Catalog",
+		label: "New models tier (days)",
+		description: "Days per gold, silver, and bronze discovery tier",
+		options: [{ value: "14", label: "14 days (default)" }],
+		customInput: true,
+	},
+});
+
 export const cfgModelRoles = register({ id: "modelRoles", type: "record", default: EMPTY_STRING_RECORD });
 
 /** Total provider budget for one native judge candidate, including setup and retries. */
