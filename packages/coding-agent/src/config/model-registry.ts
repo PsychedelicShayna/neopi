@@ -174,7 +174,8 @@ import { registerNeoProxyLogin } from "../neopi/neoproxy-connect";
 import { Settings, settings } from "./settings";
 
 import { startCatalogRefresh } from "./catalog-refresh";
-import { cfgCatalogRefreshCycleMinutes, cfgDisabledProviders } from "./model-settings";
+import { createModelFolderMatcher } from "@oh-my-pi/pi-tui/overlays/model-folder-rules";
+import { cfgCatalogRefreshCycleMinutes, cfgDisabledProviders, cfgModelFolders } from "./model-settings";
 import {
 	applyModelFacts,
 	DEFAULT_MODEL_FACT_CONFIG,
@@ -942,6 +943,38 @@ export class ModelRegistry {
 				}
 			}
 		}).unref();
+	}
+
+	#publishCatalogRefresh(): void {
+		// Evaluate after a refresh lands, including when nothing is subscribed.
+		// Mirrored registries never own settings writes.
+		if (!this.#owner && !this.#ignoreLocalModelConfig && this.#settings) {
+			try {
+				this.#ingestModelFolders(this.#settings);
+			} catch (error) {
+				logger.warn("model folder ingest failed", { error: String(error) });
+			}
+		}
+		this.#scheduleCatalogNotification();
+	}
+
+	#ingestModelFolders(scopeSettings: Settings): void {
+		let catalog: readonly Model<Api>[] | undefined;
+		const ingest = createModelFolderMatcher(() => scopeSettings.getStorage()?.getModelPerf());
+		for (const scope of ["global", "project"] as const) {
+			const { value, source } = scopeSettings.resolveFileScopeValue(cfgModelFolders, scope);
+			if (source !== scope) continue; // Inherited global rules are applied once, in their own layer.
+			const folders = value as typeof cfgModelFolders.default;
+			if (!folders.some(folder => folder.rules?.ingest && folder.rules.clauses.length > 0)) continue;
+			const next = folders.map(folder => {
+				const { rules } = folder;
+				if (!rules?.ingest || rules.clauses.length === 0) return folder;
+				const models = ingest(rules, (catalog ??= this.getAll("all")), folder.models);
+				return models === folder.models ? folder : { ...folder, models };
+			});
+			if (next.some((folder, index) => folder !== folders[index]))
+				scopeSettings.writeScopeValue(cfgModelFolders, next, scope);
+		}
 	}
 
 	/**
@@ -2218,7 +2251,7 @@ export class ModelRegistry {
 		this.#unprojectedModels = this.#projectBaseModels(this.#baseModels);
 		this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 		this.#scheduleMirrorFlush();
-		this.#scheduleCatalogNotification();
+		this.#publishCatalogRefresh();
 	}
 
 	#loadModelFactSources(
@@ -2940,7 +2973,7 @@ export class ModelRegistry {
 		} finally {
 			// Mirrors follow every discovery-layer change the pass made, including failure states.
 			this.#scheduleMirrorFlush();
-			this.#scheduleCatalogNotification();
+			this.#publishCatalogRefresh();
 		}
 	}
 

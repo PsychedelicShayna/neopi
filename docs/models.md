@@ -33,11 +33,44 @@ model in `/roles`, Enter assigns it to the selected role.
 
 Folders are browsing shortcuts: editing them does not change models or role
 assignments. The active profile stores them under `modelFolders` (a list of
-`{ name, models }` entries, where `models` contains exact `provider/model` IDs).
+entries with a `name`, exact `provider/model` IDs in `models`, and optional `rules`).
 Editing folders in `/roles project` saves the list for that project. `/model` and
 `/roles session` use that list when present, otherwise they use the global list.
 `/roles global` always edits the global list. Models that aren't currently
 available are hidden from the picker but stay in their folders.
+
+#### Smart folder rules
+
+Highlight a user folder and press **Ctrl+Alt+I** to open **Folder rules**.
+Use **+ And condition** to require another condition in the same clause, or
+**+ Or clause** to add another way to match. A model must match every
+condition in at least one clause. Use **Invert** on a condition to negate it.
+**Esc** goes back one screen; **Ctrl+C** closes the editor without saving
+uncommitted edits.
+
+Choose a fact: the full `provider/model` slug, provider, context window, max
+output, input or output price in dollars per million tokens, intelligence, TPS,
+measured time to first token in milliseconds, reasoning, or vision. Numeric
+facts support `>=`, `<=`, `>`, and `<`. Use `==` or `!=` for equality, `~=`
+for a case-insensitive regular expression, and `*=` for a text glob. For
+`in`, enter one substring for a text condition or comma-separated exact
+values for membership. Text comparisons ignore case. Missing facts never
+match, even with `!=` or **Invert**.
+
+For example, to collect large-context Codex models and Anthropic models
+priced at most $25 per million output tokens, make these two clauses:
+
+- **If** `Slug *= openai-codex/*` **And** `Context window >= 500000`
+- **Or** `Provider == anthropic` **And** `Output price <= 25`
+
+**Save rules** persists the conditions and the **Ingest filter** toggle without
+changing membership. **Run once** saves the rules and adds matches across the
+current catalog. With **Ingest filter** on, each catalog refresh also adds
+matches, but never removes models already in the folder. You can still add and
+remove models manually; a later refresh can re-add a manually removed match.
+**Force apply** saves the rules and, after confirmation, replaces membership
+with current matches, removing non-matching manual and previously ingested
+entries as well.
 
 ### Model overrides
 

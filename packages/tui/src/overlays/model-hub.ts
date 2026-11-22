@@ -94,6 +94,8 @@ import { EffortToggle } from "./effort-toggle";
 import { ModelOverridesPanel, type ModelOverridesHost } from "./model-overrides";
 import { MenuHelp, menuHintLines } from "../components/menu-hints";
 import { MODEL_VARIANTS_FEATURE, ModelVariantsPanel } from "./model-variants";
+import { type FolderRulesAction, ModelFolderRulesPanel } from "./model-folder-rules-panel";
+import { createModelFolderMatcher, type ModelFolderRules } from "./model-folder-rules";
 
 export type HubEffortSelection =
 	| { mode: "inherit" }
@@ -112,6 +114,7 @@ export interface HubContextRule {
 export interface HubModelFolder {
 	readonly name: string;
 	readonly models: readonly string[];
+	readonly rules?: ModelFolderRules;
 }
 
 const NEW_MODELS_ID = "newModels";
@@ -127,6 +130,7 @@ const FOLDER_ACTIONS = [
 	{ id: "folderRename", key: "ctrl+alt+r", label: "Rename folder" },
 	{ id: "folderClear", key: "ctrl+alt+x", label: "Clear folder" },
 	{ id: "folderDelete", key: "delete", label: "Delete folder" },
+	{ id: "folderRules", key: "ctrl+alt+i", label: "Folder rules" },
 ] as const;
 type FolderAction = (typeof FOLDER_ACTIONS)[number]["id"];
 
@@ -832,6 +836,7 @@ export class ModelHubComponent implements Component {
 	#assigning: AssignTarget | null = null;
 	#overridesPanel?: ModelOverridesPanel;
 	#variantsPanel?: ModelVariantsPanel;
+	#folderRulesPanel?: ModelFolderRulesPanel;
 
 	#variants(): ModelVariantsPanel {
 		return (this.#variantsPanel ??= new ModelVariantsPanel({
@@ -883,7 +888,8 @@ export class ModelHubComponent implements Component {
 		}));
 	}
 
-	#activeConfigPanel(): ModelOverridesPanel | ModelVariantsPanel | undefined {
+	#activeConfigPanel(): ModelOverridesPanel | ModelVariantsPanel | ModelFolderRulesPanel | undefined {
+		if (this.#folderRulesPanel) return this.#folderRulesPanel;
 		if (this.#assigning !== null) return undefined;
 		const kind = this.#activeEntry().kind;
 		if (kind === "overrides") return this.#overrides();
@@ -920,6 +926,10 @@ export class ModelHubComponent implements Component {
 				? this.#pinnedProviders.find(provider => provider.id === entry.providerId)
 				: undefined;
 		this.#pinnedActionLine = null;
+		if (this.#folderRulesPanel) {
+			lines.push(...this.#folderRulesPanel.render(width, rows - 1));
+			return lines.slice(0, rows);
+		}
 		if (entry.kind === "overrides" && this.#assigning === null) {
 			lines.push(...this.#overrides().render(width, rows - 1));
 			return lines.slice(0, rows);
@@ -1599,6 +1609,7 @@ export class ModelHubComponent implements Component {
 
 	#setActiveEntry(id: string): void {
 		if (!this.#entries.some(entry => entry.id === id)) return;
+		if (id !== this.#activeEntryId) this.#folderRulesPanel = undefined;
 		this.#activeEntryId = id;
 		this.#sidebarFollowActive = true;
 		this.#pinnedActionFocused = false;
@@ -3300,6 +3311,8 @@ export class ModelHubComponent implements Component {
 					return entry.folder !== undefined && this.#focus === "scope";
 				case "folderClear":
 					return !!entry.folder?.models.length && this.#focus === "scope";
+				case "folderRules":
+					return entry.kind === "folder" && entry.folder !== undefined;
 			}
 		});
 	}
@@ -3318,6 +3331,20 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		const folder = this.#activeEntry().folder;
+		if (action === "folderRules") {
+			if (!folder || this.#activeEntry().kind !== "folder") return;
+			this.#focus = "list";
+			this.#folderRulesPanel = new ModelFolderRulesPanel(
+				folder.name,
+				folder.rules,
+				(rules, action) => this.#applyFolderRules(folder.name, rules, action),
+				() => {
+					this.#folderRulesPanel = undefined;
+					this.#focus = "scope";
+				},
+			);
+			return;
+		}
 		if (action === "folderRemove") {
 			const selector = this.#browser.pickerSelected;
 			if (folder && selector) this.#setFolderMembership(folder.name, selector, false);
@@ -3327,6 +3354,27 @@ export class ModelHubComponent implements Component {
 		if (action === "folderRename" && folder) input.setValue(folder.name);
 		input.focused = true;
 		this.#strip = { kind: "name", purpose: "folder", action, name: folder?.name, input };
+	}
+
+	#applyFolderRules(name: string, rules: ModelFolderRules, action: FolderRulesAction): string {
+		const source = this.#settings.modelFolders;
+		const folders = source?.entries;
+		const folder = folders?.find(folder => folder.name === name);
+		if (!source || !folders || !folder) throw new Error("This folder no longer exists.");
+		const models =
+			action === "save"
+				? folder.models
+				: createModelFolderMatcher(() => this.#settings.modelPerf)(
+						rules,
+						this.#registry.getAll("all"),
+						folder.models,
+						action === "force",
+					);
+		source.save(folders.map(candidate => (candidate === folder ? { ...folder, models, rules } : candidate)));
+		this.#refreshAfterMutation();
+		if (action === "save") return "Rules saved.";
+		if (action === "force") return `Folder synced: ${models.length} matching model(s).`;
+		return `Added ${models.length - folder.models.length} matching model(s).`;
 	}
 
 	#setFolderMembership(name: string, selector: string, add: boolean): void {
@@ -3618,6 +3666,10 @@ export class ModelHubComponent implements Component {
 
 	#handleInput(rawData: string): void {
 		this.#nativeVersion++;
+		if (this.#folderRulesPanel) {
+			this.#folderRulesPanel.handleInput(rawData);
+			return;
+		}
 		if (this.#taskMatchKeys.size > 0 && !this.#filterEditing) {
 			const parsed = parseKey(rawData);
 			if (parsed !== undefined && this.#taskMatchKeys.has(canonicalKeyId(parsed))) {
@@ -4887,6 +4939,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#footerHint(): string {
+		if (this.#folderRulesPanel) return this.#folderRulesPanel.hint;
 		const entry = this.#activeEntry();
 		const configFile =
 			!this.#sessionOnly && this.#settings.editingScope !== "session" && this.#callbacks.onOpenConfigFile
@@ -5279,6 +5332,11 @@ export class ModelHubComponent implements Component {
 		// Same gate as the mouse router: nothing is interactive while an assignment applies.
 		if (this.#assignmentPending) return;
 		const target = event.key.slice(event.key.lastIndexOf("/") + 1);
+		if (this.#folderRulesPanel && event.key.replaceAll("^", "").split("/").includes("modelFolderRules")) {
+			this.#folderRulesPanel.handleNativeEvent(event);
+			this.#requestRender();
+			return;
+		}
 		if (
 			this.#activeEntry().kind === "overrides" &&
 			this.#assigning === null &&

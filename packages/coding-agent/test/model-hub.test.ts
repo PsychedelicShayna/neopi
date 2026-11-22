@@ -30,6 +30,7 @@ import {
 	cfgCatalogProviderStalenessMinutes,
 	cfgCycleOrder,
 	cfgModelPresets,
+	cfgModelFolders,
 	cfgModelRoles,
 } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { cfgEffortRules, cfgFallbackEffortSelections } from "@oh-my-pi/pi-coding-agent/config/effort-policy";
@@ -367,6 +368,77 @@ describe("ModelHub", () => {
 			{ name: "Personal", models: [] },
 			{ name: "Team", models: [] },
 		]);
+	});
+
+	test("folder rules run once without removing manual entries, then force apply replaces them", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: ["alpha/manual"] }], "global");
+		const models = [
+			makeModel("alpha", "manual"),
+			makeModel("alpha", "eligible-chat"),
+			makeModel("beta", "eligible-other"),
+		];
+		const { hub } = createHub({ models, settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		const open = "\x1b[105;7u"; // Ctrl+Alt+I
+		hub.handleInput(open);
+		expect(normalize(hub.render(220))).toContain("Folder rules");
+
+		for (const key of [
+			// First condition: Slug *= alpha/eligible-*
+			"\n",
+			DOWN,
+			"\n",
+			"\x1b[F",
+			"\n",
+			DOWN,
+			"\n",
+			..."alpha/eligible-*",
+			"\n",
+			DOWN,
+			DOWN,
+			"\n",
+		])
+			hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("alpha/eligible-*");
+		for (const key of [DOWN, DOWN, DOWN, DOWN, DOWN, "\n"]) hub.handleInput(key);
+		const rules = { ingest: false, clauses: [[{ attribute: "slug", operator: "*=", value: "alpha/eligible-*" }]] };
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/manual", "alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput(DOWN);
+		hub.handleInput("\n");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/manual", "alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput("\n");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules },
+		]);
+		hub.handleInput(ESC);
+		expect(normalize(hub.render(220))).toContain("alpha/eligible-chat");
+		expect(normalize(hub.render(220))).not.toContain("alpha/manual");
+		for (const key of [open, DOWN, DOWN, DOWN, " ", DOWN, "\n"]) hub.handleInput(key);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules: { ...rules, ingest: true } },
+		]);
+		for (const key of [UP, " ", DOWN, "\n", "\x03"]) hub.handleInput(key);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{ name: "Smart", models: ["alpha/eligible-chat"], rules },
+		]);
+	});
+
+	test("folder rules validate regex and Ctrl+C discards uncommitted edits", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: [] }], "global");
+		const { hub } = createHub({ models: [makeModel("alpha", "model")], settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		for (const key of ["\x1b[105;7u", "\n", DOWN, "\n", DOWN, DOWN, "\n", DOWN, "\n", "[", "\n"])
+			hub.handleInput(key);
+		expect(normalize(hub.render(220))).toContain("Invalid regular expression");
+		hub.handleInput("\x03");
+		expect(normalize(hub.render(220))).toContain("This folder is empty");
+		expect(settings.getGlobalSettings().modelFolders).toEqual([{ name: "Smart", models: [] }]);
 	});
 
 	test.each(["session", "project", "global"] as const)(

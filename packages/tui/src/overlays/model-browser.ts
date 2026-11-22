@@ -56,6 +56,7 @@ import { pickerFuzzyHits } from "../native/picker";
 import type { NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { sameItems } from "../native/memo";
 import { plainText } from "../native/spans";
+import { type MeasuredPerf, ModelPerformanceLookup } from "./model-performance";
 
 /** Canonical display ordering of built-in model roles. */
 export type ModelRole =
@@ -1144,12 +1145,6 @@ function metaColumnsWidth(widths: readonly number[]): number {
 /** What the per-row perf column shows at the current width. */
 type PerfMode = "off" | "tps" | "full";
 
-/** A measured perf aggregate and, when it came from one, its service tier. */
-interface MeasuredPerf {
-	perf: ModelBrowserPerf;
-	tier?: string;
-}
-
 /** Plain catalog metric cells of one row and their terminal widths, valid for one model and theme. */
 interface MetricCells {
 	model: Model;
@@ -1184,11 +1179,7 @@ export class ModelBrowser implements Component {
 	#affinity: SearchAffinity = { models: new Map(), providers: new Map() };
 	/** Ranker for the menu's current item array; rebuilt when items or affinity change. */
 	#ranker?: { source: readonly ModelBrowserItem[]; ranker: ModelItemRanker };
-	#perf: ReadonlyMap<string, ModelBrowserPerf> = new Map();
-	/** Fastest tier aggregate per selector in {@link #perf}, built on the first lookup miss. */
-	#perfTiers:
-		| { perf: ReadonlyMap<string, ModelBrowserPerf>; size: number; best: Map<string, MeasuredPerf> }
-		| undefined;
+	#performance = new ModelPerformanceLookup();
 	/** Theme-formatted catalog metric cells per item; rebuilt when the item's model or the theme changes. */
 	#metricCells = new WeakMap<ModelBrowserItem, MetricCells>();
 	/** Earliest dated credit-rate change among models whose rows are memoized; passing it rebuilds them. */
@@ -1318,8 +1309,9 @@ export class ModelBrowser implements Component {
 
 	/** Measured TPS/TTFT averages keyed by `provider/id` selector (see AgentStorage.getModelPerf). */
 	setPerfStats(perf: ReadonlyMap<string, ModelBrowserPerf>): void {
-		if (perf !== this.#perf) this.#bumpPickerEpoch();
-		this.#perf = perf;
+		if (perf === this.#performance.samples) return;
+		this.#bumpPickerEpoch();
+		this.#performance = new ModelPerformanceLookup(perf);
 	}
 
 	/** Raw row performance using the same session-tier fallback as the native preview. */
@@ -1724,42 +1716,9 @@ export class ModelBrowser implements Component {
 		return index;
 	}
 
-	/**
-	 * Measured perf for a row: the tier the host would send, else the standard
-	 * aggregate, else any measured tier (fastest first) so a model only ever run
-	 * on a non-default tier still shows its real speed. `tier` is set whenever
-	 * the numbers come from a tier aggregate, for the caller to label.
-	 */
 	#perfFor(item: ModelBrowserItem): MeasuredPerf | undefined {
-		if (this.#perf.size === 0) return undefined;
-		const tier = this.#settings.serviceTierFor?.(item.model);
-		if (tier) {
-			const tiered = this.#perf.get(`${item.selector}@${tier}`);
-			if (tiered) return { perf: tiered, tier };
-		}
-		const standard = this.#perf.get(item.selector);
-		if (standard) return { perf: standard };
-		return this.#fastestTierPerf(item.selector);
-	}
-
-	/** Fastest `selector@tier` aggregate (first wins ties), from an index built once per perf map. */
-	#fastestTierPerf(selector: string): MeasuredPerf | undefined {
-		const perfMap = this.#perf;
-		let index = this.#perfTiers;
-		if (index?.perf !== perfMap || index.size !== perfMap.size) {
-			const best = new Map<string, MeasuredPerf>();
-			for (const [key, perf] of perfMap) {
-				// Every `@` may end the selector: `a@b@t` is tier `b@t` of `a` and tier `t` of `a@b`.
-				for (let at = key.indexOf("@"); at >= 0; at = key.indexOf("@", at + 1)) {
-					const owner = key.slice(0, at);
-					const current = best.get(owner);
-					if (!current || perf.tps > current.perf.tps) best.set(owner, { perf, tier: key.slice(at + 1) });
-				}
-			}
-			index = { perf: perfMap, size: perfMap.size, best };
-			this.#perfTiers = index;
-		}
-		return index.best.get(selector);
+		if (this.#performance.samples.size === 0) return undefined;
+		return this.#performance.get(item.selector, this.#settings.serviceTierFor?.(item.model));
 	}
 
 	/** Catalog metric cells of a row, formatted once per model and theme. */
