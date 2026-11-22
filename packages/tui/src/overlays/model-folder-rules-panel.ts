@@ -26,11 +26,12 @@ interface ConditionDraft {
 	clause: number;
 	index: number;
 	condition: ModelFolderCondition;
+	adding: boolean;
 }
 type View = "rules" | "condition" | "attribute" | "operator" | "value";
 const attributes = Object.entries(MODEL_FOLDER_ATTRIBUTES).map(([value, { label }]) => ({ value, label }));
 
-/** Drafts mirror Model Variants: select a row, edit a field, then save the draft. */
+/** Build new conditions step by step; edit saved rows without replaying the wizard. */
 export class ModelFolderRulesPanel {
 	#list = new SelectList([], 12, getSelectListTheme(), { activateOnSpace: false });
 	#clauses: ModelFolderCondition[][];
@@ -60,7 +61,7 @@ export class ModelFolderRulesPanel {
 	}
 
 	get hint(): string {
-		if (this.#view === "value") return "Enter apply value · Esc back · Ctrl+C cancel editor";
+		if (this.#view === "value") return "Enter add to expression · Esc back · Ctrl+C cancel editor";
 		return "Enter select · Space toggle · Esc back · Ctrl+C cancel editor";
 	}
 
@@ -132,6 +133,8 @@ export class ModelFolderRulesPanel {
 			case "operator":
 				if (!draft) return;
 				rows = modelFolderOperators(draft.condition.attribute);
+				if (draft.adding)
+					rows.unshift({ value: "invert", label: "Invert", description: draft.condition.invert ? "On" : "Off" });
 				break;
 			case "value":
 				rows = [{ value: "applyValue", label: "Apply value" }];
@@ -141,28 +144,57 @@ export class ModelFolderRulesPanel {
 	}
 
 	#editCondition(clause: number, index: number): void {
+		const condition = this.#clauses[clause]?.[index];
 		this.#draft = {
 			clause,
 			index,
-			condition: this.#clauses[clause]?.[index] ?? { attribute: "slug", operator: "==", value: "" },
+			adding: condition === undefined,
+			condition: condition ?? { attribute: "slug", operator: "==", value: "" },
 		};
-		this.#enter("condition", "attribute");
+		if (condition) this.#enter("condition", "attribute");
+		else this.#enter("attribute", "slug");
 	}
 
 	#back(): void {
+		const draft = this.#draft;
 		switch (this.#view) {
 			case "rules":
 				this.close();
-				return;
-			case "condition": {
-				const draft = this.#draft;
-				this.#draft = undefined;
-				this.#enter("rules", draft ? this.#conditionRow(draft) : undefined);
-				return;
-			}
-			default:
-				this.#enter("condition", this.#view);
+				break;
+			case "condition":
+				this.#leaveCondition();
+				break;
+			case "attribute":
+				if (draft?.adding) this.#leaveCondition();
+				else this.#enter("condition", "attribute");
+				break;
+			case "operator":
+				if (draft?.adding) this.#enter("attribute", draft.condition.attribute);
+				else this.#enter("condition", "operator");
+				break;
+			case "value":
+				if (draft?.adding) this.#enter("operator", draft.condition.operator);
+				else this.#enter("condition", "value");
+				break;
 		}
+	}
+
+	#leaveCondition(): void {
+		const draft = this.#draft;
+		this.#draft = undefined;
+		this.#enter("rules", draft ? this.#conditionRow(draft) : undefined);
+	}
+
+	#openValue(value: string): void {
+		this.#input.setValue(value);
+		this.#input.focused = true;
+		this.#enter("value");
+	}
+
+	#commitCondition(draft: ConditionDraft, condition: ModelFolderCondition): void {
+		validateModelFolderRules({ clauses: [[condition]], ingest: false });
+		(this.#clauses[draft.clause] ??= [])[draft.index] = condition;
+		this.#leaveCondition();
 	}
 
 	#conditionRow({ clause, index }: ConditionDraft): string {
@@ -206,33 +238,28 @@ export class ModelFolderRulesPanel {
 				const sameKind =
 					MODEL_FOLDER_ATTRIBUTES[attribute].kind === MODEL_FOLDER_ATTRIBUTES[condition.attribute].kind;
 				draft.condition = { ...condition, attribute, operator, value: sameKind ? condition.value : "" };
-				this.#enter("condition", "attribute");
-			} else if (this.#view === "operator") {
-				draft.condition = { ...condition, operator: row as Operator };
-				this.#enter("condition", "operator");
-			} else if (this.#view === "value") {
-				const next = { ...condition, value: this.#input.getValue() };
-				validateModelFolderRules({ clauses: [[next]], ingest: false });
-				draft.condition = next;
-				this.#enter("condition", "value");
-			} else if (row === "attribute" || row === "operator") {
-				this.#enter(row, condition[row]);
-			} else if (row === "value") {
-				this.#input.setValue(condition.value);
-				this.#input.focused = true;
-				this.#enter("value");
+				if (draft.adding) this.#enter("operator", operator);
+				else this.#enter("condition", "attribute");
 			} else if (row === "invert") {
 				draft.condition = { ...condition, invert: !condition.invert };
 				this.#rebuild();
+			} else if (this.#view === "operator") {
+				draft.condition = { ...condition, operator: row as Operator };
+				if (draft.adding) this.#openValue(condition.value);
+				else this.#enter("condition", "operator");
+			} else if (this.#view === "value") {
+				this.#commitCondition(draft, { ...condition, value: this.#input.getValue() });
+			} else if (row === "attribute" || row === "operator") {
+				this.#enter(row, condition[row]);
+			} else if (row === "value") {
+				this.#openValue(condition.value);
 			} else if (row === "done") {
-				validateModelFolderRules({ clauses: [[condition]], ingest: false });
-				(this.#clauses[draft.clause] ??= [])[draft.index] = condition;
-				this.#back();
+				this.#commitCondition(draft, condition);
 			} else if (row === "remove") {
 				const clause = this.#clauses[draft.clause];
 				clause.splice(draft.index, 1);
 				if (!clause.length) this.#clauses.splice(draft.clause, 1);
-				this.#back();
+				this.#leaveCondition();
 			}
 		} catch (error) {
 			this.#error = sanitizeDisplayWarning(error instanceof Error ? error.message : String(error));

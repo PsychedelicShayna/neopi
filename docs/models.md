@@ -42,11 +42,13 @@ available are hidden from the picker but stay in their folders.
 #### Smart folder rules
 
 Highlight a user folder and press **Ctrl+Alt+I** to open **Folder rules**.
-Use **+ And condition** to require another condition in the same clause, or
-**+ Or clause** to add another way to match. A model must match every
-condition in at least one clause. Use **Invert** on a condition to negate it.
-**Esc** goes back one screen; **Ctrl+C** closes the editor without saving
-uncommitted edits.
+Choose **+ First condition**, then select an attribute, select an operator,
+and type a value. **Enter** adds the condition and returns to the whole
+expression. **+ And condition** adds a requirement to that clause; **+ Or
+clause** starts another way to match. A model must match every condition in at
+least one clause. Use **Invert** in the operator list when adding a condition,
+or on the edit screen for an existing condition. **Esc** goes back one
+screen; **Ctrl+C** closes the editor without saving uncommitted edits.
 
 Choose a fact: the full `provider/model` slug, provider, context window, max
 output, input or output price in dollars per million tokens, intelligence, TPS,
