@@ -125,7 +125,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start Codex-backed realtime voice mode or choose the model it requests",
+		description: "Start realtime voice mode or choose the model it requests",
 		allowArgs: true,
 		inlineHint: "[model [slug]]",
 		subcommands: [

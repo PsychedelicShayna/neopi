@@ -1543,6 +1543,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
+	#forcedOpenAITier: { model: Model; tier: "priority" | "ultrafast" } | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	/**
 	 * Providers/models (`${provider}/${id}`) whose runtime context window has
@@ -2908,6 +2909,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
 		this.agent.serviceTierResolver = model => this.#models.effectiveServiceTier(model);
+		const streamWithTier = this.agent.streamFn;
+		this.agent.streamFn = (model, context, options) => {
+			const tier = this.forcedOpenAITier(model);
+			if (!tier) return streamWithTier(model, context, options);
+			const previous = options?.onPayload;
+			return streamWithTier(model, context, {
+				...options,
+				onPayload: async (payload, requestModel, signal) => {
+					const replacement = await previous?.(payload, requestModel, signal);
+					const body = replacement === undefined ? payload : replacement;
+					if (this.forcedOpenAITier(requestModel ?? model) !== tier || !isRecord(body)) return replacement;
+					return { ...body, service_tier: tier };
+				},
+			});
+		};
 		this.#titleSystemPrompt = config.titleSystemPrompt;
 		this.#autoTitle = config.autoTitle === true;
 		this.#transformContext = config.transformContext ?? (messages => messages);
@@ -14974,6 +14990,38 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Enables or disables the OpenAI `ultrafast` tier; `false` when the active model does not offer it. */
 	setUltrafastMode(enabled: boolean): boolean {
 		return this.#models.setUltrafastMode(enabled);
+	}
+
+	/** Explicit wire override for this model and session, independent of advertised capabilities. */
+	setForcedOpenAITier(tier: "priority" | "ultrafast" | undefined): boolean {
+		if (tier === undefined) {
+			const wasForced = this.#forcedOpenAITier !== undefined;
+			this.#forcedOpenAITier = undefined;
+			return wasForced;
+		}
+		const model = this.model;
+		if (
+			!model ||
+			(model.api !== "openai-completions" &&
+				model.api !== "openai-responses" &&
+				model.api !== "openai-codex-responses")
+		) {
+			return false;
+		}
+		this.#forcedOpenAITier = { model, tier };
+		return true;
+	}
+
+	forcedOpenAITier(model = this.model): "priority" | "ultrafast" | undefined {
+		const forced = this.#forcedOpenAITier;
+		if (!forced || !model) return undefined;
+		const target = forced.model;
+		return target.provider === model.provider &&
+			target.id === model.id &&
+			target.api === model.api &&
+			target.baseUrl === model.baseUrl
+			? forced.tier
+			: undefined;
 	}
 
 	/**

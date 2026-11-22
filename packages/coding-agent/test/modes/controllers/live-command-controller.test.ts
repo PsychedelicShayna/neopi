@@ -9,8 +9,11 @@ import {
 	LiveSessionController,
 	type LiveSessionControllerOptions,
 } from "@oh-my-pi/pi-coding-agent/live/controller";
+import { emptyLivePersonaState, LivePersonaStore } from "@oh-my-pi/pi-coding-agent/live/personas";
+import type { LiveTransportOptions } from "@oh-my-pi/pi-coding-agent/live/transport";
 import { LiveCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/live-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { getEditorTheme } from "@oh-my-pi/pi-tui/theme";
 import {
@@ -151,11 +154,14 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	const prompts: string[] = [];
 	const sent: LiveClientMessage[] = [];
 	let fire: ((event: LiveServerEvent) => void) | undefined;
+	const calls: Pick<LiveTransportOptions, "instructions" | "model" | "voice">[] = [];
 	const h = createHarness(
 		options =>
 			new LiveSessionController({
 				...options,
 				createTransport: transportOptions => {
+					const { instructions, model, voice } = transportOptions;
+					calls.push({ instructions, model, voice });
 					fire = transportOptions.callbacks.onEvent;
 					return {
 						async connect() {},
@@ -189,6 +195,7 @@ function createHandoffHarness(acceptance?: Promise<void>, voiceDelivery?: Promis
 	cfgLiveSubmitSilenceMs.set(h.ctx.settings, 5);
 	return {
 		...h,
+		calls,
 		prompts,
 		sent,
 		speech: (text: string) => fire?.({ type: "turn.done", turn: { role: "user", transcript: text } }),
@@ -213,6 +220,50 @@ afterEach(() => {
 });
 
 describe("LiveCommandController", () => {
+	it("opens the live voice persona editor from /live-persona", async () => {
+		const { ctx } = createHarness();
+		ctx.showPersonaConfigure = vi.fn();
+		expect(await executeBuiltinSlashCommand("/live-persona", { ctx })).toBe(true);
+		expect(ctx.showPersonaConfigure).toHaveBeenCalledWith("live");
+	});
+
+	it("starts /live-transcript with the editable Codex profile and /live with its original default", async () => {
+		const state = emptyLivePersonaState();
+		vi.spyOn(LivePersonaStore.prototype, "read").mockResolvedValue(state);
+		const h = createHandoffHarness();
+		h.ctx.handleLiveCommand = mode => h.controller.handleCommand(mode);
+		cfgLiveModel.set(h.ctx.settings, "regular-live-model");
+		try {
+			expect(await executeBuiltinSlashCommand("/live-transcript", { ctx: h.ctx })).toBe(true);
+			expect(h.calls[0]).toEqual({
+				instructions: expect.stringContaining("You are Codex"),
+				model: "gpt-live-1.1-codex",
+				voice: "maple",
+			});
+			expect(h.calls[0]?.instructions).not.toContain("{{ user_first_name }}");
+			await h.controller.stop();
+
+			const edited = {
+				instructions: "Edited Codex system prompt.",
+				model: "edited-live-model",
+				voice: "breeze",
+			};
+			state.codex = edited;
+			await executeBuiltinSlashCommand("/live-transcript", { ctx: h.ctx });
+			expect(h.calls[1]).toEqual(edited);
+			await h.controller.stop();
+
+			expect(await executeBuiltinSlashCommand("/live", { ctx: h.ctx })).toBe(true);
+			expect(h.calls[2]).toEqual({
+				instructions: expect.stringContaining("You: Iris, realtime voice interface"),
+				model: "regular-live-model",
+				voice: "vale",
+			});
+		} finally {
+			await h.controller.stop();
+		}
+	});
+
 	it("routes the complete edited composer once after three spoken keyword fragments", async () => {
 		const prompts: string[] = [];
 		const sent: LiveClientMessage[] = [];

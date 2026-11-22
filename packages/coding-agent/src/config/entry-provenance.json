@@ -236,7 +236,7 @@
 				"update.auto",
 				"update.channel"
 			],
-			"commands": ["advisor restart", "chron", "language", "neoproxy", "personality", "roles", "spawn"]
+			"commands": ["advisor restart", "chron", "language", "live-persona", "neoproxy", "personality", "roles", "spawn"]
 		}
 	},
 	"upstream": [

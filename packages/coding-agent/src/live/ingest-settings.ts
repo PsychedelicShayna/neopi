@@ -1,6 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { PersonaSourceField } from "@oh-my-pi/pi-tui/overlays/persona-config";
-import { LivePersonaStore, onLivePersonaStateChanged } from "./personas";
+import { CODEX_LIVE_PERSONA, LivePersonaStore, onLivePersonaStateChanged } from "./personas";
 
 export interface LiveIngestPersonaSettings {
 	ircPrimary: boolean;
@@ -419,11 +419,27 @@ export function liveIngestSettingsFromFields(
 	return normalizeLiveIngestSettings(next);
 }
 
-export async function resolveLiveIngestSettings(statePath?: string): Promise<LiveIngestPersonaSettings> {
+export function codexLiveIngest(overrides?: LiveIngestPersonaSettings): LiveIngestPersonaSettings {
+	return normalizeLiveIngestSettings(
+		overrides ?? {
+			ircPrimary: false,
+			ircPeers: false,
+			subagents: false,
+			effortAlerts: false,
+			relayReasoning: false,
+			relayProgress: false,
+			includeVoiceNote: false,
+		},
+	);
+}
+
+export async function resolveLiveIngestSettings(statePath?: string, codex = false): Promise<LiveIngestPersonaSettings> {
 	const store = new LivePersonaStore(statePath);
 	try {
 		const state = await store.read();
 		const active = state.active;
+		if (codex || active === CODEX_LIVE_PERSONA)
+			return codexLiveIngest((state.codex ?? state.personas[CODEX_LIVE_PERSONA])?.ingest);
 		if (!active || active === "default") return normalizeLiveIngestSettings(state.defaultIngest);
 		const definition = state.personas[active];
 		if (definition?.instructions.trim()) return normalizeLiveIngestSettings(definition.ingest);
@@ -437,17 +453,19 @@ export async function resolveLiveIngestSettings(statePath?: string): Promise<Liv
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
-	return normalizeLiveIngestSettings(undefined);
+	return codex ? codexLiveIngest() : normalizeLiveIngestSettings(undefined);
 }
 
 export class LiveIngestSettingsSource {
 	#current: LiveIngestPersonaSettings;
 	#statePath: string | undefined;
+	readonly #codex: boolean;
 	#listeners = new Set<(next: LiveIngestPersonaSettings, previous: LiveIngestPersonaSettings) => void>();
 	#seq = 0;
 	#wave: PromiseWithResolvers<void> | undefined;
 	#unsubscribe: (() => void) | undefined;
-	constructor(initial: LiveIngestPersonaSettings, statePath?: string) {
+	constructor(initial: LiveIngestPersonaSettings, statePath?: string, codex = false) {
+		this.#codex = codex;
 		this.#current = initial;
 		this.#statePath = statePath;
 	}
@@ -457,7 +475,7 @@ export class LiveIngestSettingsSource {
 	refresh(): Promise<void> {
 		const seq = ++this.#seq;
 		const wave = (this.#wave ??= Promise.withResolvers<void>());
-		void resolveLiveIngestSettings(this.#statePath).then(next => {
+		void resolveLiveIngestSettings(this.#statePath, this.#codex).then(next => {
 			if (seq !== this.#seq) return;
 			const previous = this.#current;
 			this.#current = next;

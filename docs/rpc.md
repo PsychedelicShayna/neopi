@@ -2597,12 +2597,21 @@ process exits.
 
 ### Custom live endpoint
 
-Live sessions signal Codex with the session's ChatGPT (Codex) sign-in. Set
-`live.endpoint` to a server's base URL (for example `http://127.0.0.1:8080/v1`)
-to run every live session (`/live`, `live_start`, `live_connect`, extension
-`startLive`) on that server instead; no Codex sign-in is needed, and offline mode
-(`models.offline`) allows it. Empty uses Codex. The server speaks the public
-OpenAI Realtime WebRTC API relative to the base:
+By default, live sessions use a usable ChatGPT (Codex) sign-in. If none is
+available or the pre-call OAuth refresh fails temporarily, NeoPi can use a
+stored, scoped `/login neoproxy` key that has been granted Codex Live access.
+NeoPi checks `GET {NeoProxy base}/live` before signaling and uses the same key
+and credential-local TLS trust for both call legs. If no eligible NeoProxy key
+is available after a refresh failure, NeoPi reports that failure. NeoProxy
+relays the Codex live session; no direct Codex sign-in is sent to the relay.
+In offline mode (`models.offline`), automatic routing is limited
+to the active session provider: `openai-codex` or `neoproxy`.
+
+Set `live.endpoint` to a server's base URL (for example `http://127.0.0.1:8080/v1`)
+to override automatic routing for every live session (`/live`, `/live-transcript`,
+`live_start`, `live_connect`, extension `startLive`). This explicit endpoint is
+allowed in offline mode. The server speaks the public OpenAI Realtime WebRTC
+API relative to the base:
 
 1. `POST {base}/realtime/calls` with the SDP offer as the body
    (`Content-Type: application/sdp`); the response body is the SDP answer and
