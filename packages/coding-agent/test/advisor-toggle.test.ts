@@ -858,6 +858,119 @@ describe("AgentSession advisor toggle", () => {
 			await reviewSession.dispose();
 		}
 	});
+
+	it.each(["streaming", "quota-paused"] as const)(
+		"hard-restarts only the %s advisor and continues from the committed review",
+		async state => {
+			const primary = createMockModel({ handler: { content: ["Primary response"] } });
+			const requested = Promise.withResolvers<AbortSignal | undefined>();
+			const reviewed = createMockModel({
+				responses: [
+					{ content: ["First review kept across restart"] },
+					...(state === "streaming" ? [{ delayMs: 30_000, content: ["Interrupted response"] }] : []),
+					{ content: ["Review after restart"] },
+				],
+			});
+			const settings = Settings.isolated({
+				"advisor.enabled": true,
+				"compaction.enabled": false,
+				"retry.enabled": false,
+			});
+			settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+			const primaryAgent = new Agent({
+				initialState: { model, systemPrompt: ["Primary"], tools: [] },
+				streamFn: primary.stream,
+			});
+			await session.dispose();
+			session = new AgentSession({
+				agent: primaryAgent,
+				sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+				settings,
+				modelRegistry,
+				advisorConfigs: [
+					{ name: "Alpha", systemPrompt: "Alpha prompt", reviewMode: "agent-end" },
+					{ name: "Beta", systemPrompt: "Beta prompt", reviewMode: "agent-end" },
+				],
+				advisorTools: fixedAdvisorTools(),
+				advisorStreamFn: (requestModel, context, options) => {
+					if (!context.systemPrompt?.includes("Alpha prompt"))
+						return primary.stream(requestModel, context, options);
+					if (reviewed.calls.length === 1) requested.resolve(options?.signal);
+					return reviewed.stream(requestModel, context, options);
+				},
+			});
+			const [alpha, beta] = session.liveAdvisors();
+			const betaAbort = vi.spyOn(beta.agent, "abort");
+			const changed = vi.fn();
+			session.onLiveAdvisorsChange(changed);
+			expect(session.restartAdvisor("absent")).toBe(false);
+			expect(changed).not.toHaveBeenCalled();
+
+			await session.prompt("Earlier primary input");
+			expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+			const committed = alpha.agent.state.messages.slice();
+			expect(JSON.stringify(committed)).toContain("First review kept across restart");
+			alpha.agent.emitExternalEvent({
+				type: "message_end",
+				message: {
+					...advisorMessage(0, Date.now()),
+					content: [{ type: "text", text: "Observer-only transcript line" }],
+				},
+			});
+			// Simulate a transcript entry that is no longer in the live context.
+			alpha.agent.replaceMessages(committed);
+
+			const quotaYielded = Promise.withResolvers<void>();
+			if (state === "quota-paused") {
+				vi.spyOn(alpha.agent, "prompt").mockRejectedValueOnce(
+					new AIError.ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" }),
+				);
+				vi.spyOn(authStorage.limits, "markReached").mockResolvedValue({ switched: false });
+				session.subscribe(event => {
+					if (
+						event.type === "advisor_yielded" &&
+						session.getAdvisorStatusOverview().advisors[0].status === "quota_exhausted"
+					) {
+						quotaYielded.resolve();
+					}
+				});
+			}
+
+			const running = session.prompt("Outstanding primary input");
+			const aborted = state === "streaming" ? await requested.promise : undefined;
+			if (state === "quota-paused") await quotaYielded.promise;
+			expect(session.restartAdvisor(alpha.slug)).toBe(true);
+			const [replacement, stillBeta] = session.liveAdvisors();
+			expect(changed).toHaveBeenCalledTimes(1);
+			expect(replacement).toMatchObject({ slug: alpha.slug, name: alpha.name });
+			expect(replacement.transcriptFile).toBe(alpha.transcriptFile);
+			expect(replacement.agent).not.toBe(alpha.agent);
+			expect(replacement.agent.state.messages).toEqual(committed);
+			expect(replacement.agent.state.error).toBeUndefined();
+			expect(replacement.agent.state.systemPrompt).toEqual(alpha.agent.state.systemPrompt);
+			expect(replacement.agent.sessionId).toBe(alpha.agent.sessionId);
+			expect(replacement.agent.state.tools[0]).not.toBe(alpha.agent.state.tools[0]);
+			expect(stillBeta.agent).toBe(beta.agent);
+			expect(betaAbort).not.toHaveBeenCalled();
+			if (state === "streaming") expect(aborted?.aborted).toBe(true);
+
+			await running;
+			expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
+			const replay = JSON.stringify(reviewed.calls.at(-1)?.context.messages);
+			expect(replay).toContain("First review kept across restart");
+			expect(replay).not.toContain("Observer-only transcript line");
+			expect(replay.match(/Earlier primary input/g)).toHaveLength(1);
+			expect(replay.match(/Outstanding primary input/g)).toHaveLength(1);
+			expect(session.getAdvisorStatusOverview().advisors[0].status).toBe("running");
+			await session.dispose();
+			if (!replacement.transcriptFile) throw new Error("Expected a persisted advisor transcript");
+			const recorded = await Bun.file(replacement.transcriptFile).text();
+			expect(recorded).toContain("Observer-only transcript line");
+			expect(recorded).toContain("Review after restart");
+			expect(recorded.match(/Outstanding primary input/g)).toHaveLength(1);
+		},
+	);
+
 	it("attributes advisor subscription spend after teardown without rescanning the catalog", () => {
 		// #10131: with the runtime gone, isUsingSubscription() must read the
 		// attribution captured as spend accrued, not fall back to a per-render

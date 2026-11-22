@@ -6,8 +6,8 @@
  * advisor runtimes instead: `running` while the advisor reviews, `idle` between
  * reviews, `parked` once its runtime stops (the transcript stays readable), and
  * unregistered when the owning agent itself leaves the registry. Advisor refs
- * stay session-less and read-only; the live agent is reachable only through
- * {@link liveAdvisorAgent}, for observers that render in-flight output.
+ * stay session-less and read-only. Observers can follow the live agent, and the
+ * local roster can request a restart through the same runtime's owning session.
  */
 import type { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AgentSession } from "../session/agent-session";
@@ -18,16 +18,27 @@ export function advisorAgentId(ownerId: string, slug: string): string {
 	return slug ? `${ownerId}/advisor:${slug}` : `${ownerId}/advisor`;
 }
 
-const liveAgents = new WeakMap<AgentRegistryApi, Map<string, Agent>>();
+const liveAdvisors = new WeakMap<AgentRegistryApi, Map<string, TrackedAdvisor>>();
 
 /** The running agent behind an advisor ref, or undefined when its runtime is not live. */
 export function liveAdvisorAgent(registry: AgentRegistryApi, id: string): Agent | undefined {
-	return liveAgents.get(registry)?.get(id);
+	return liveAdvisors.get(registry)?.get(id)?.agent;
+}
+
+/** Resolve restart only for the current registration, never from a display name or id alone. */
+export function liveAdvisorRestart(registry: AgentRegistryApi, ref: AgentRef): (() => boolean) | undefined {
+	const entry = liveAdvisors.get(registry)?.get(ref.id);
+	if (entry?.ref === ref && registry.get(ref.id) === ref && registry.get(entry.owner.id) === entry.owner) {
+		return entry.restart;
+	}
+	return undefined;
 }
 
 interface TrackedAdvisor {
 	ref: AgentRef;
+	owner: AgentRef;
 	agent: Agent;
+	restart: () => boolean;
 	unsubscribe: () => void;
 }
 
@@ -35,7 +46,7 @@ export interface LiveAdvisorTrackerOptions {
 	registry: AgentRegistryApi;
 	/** Registry id of the session that owns the advisors. */
 	ownerId: string;
-	session: Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange">;
+	session: Pick<AgentSession, "liveAdvisors" | "onLiveAdvisorsChange" | "restartAdvisor">;
 }
 
 function unregisterOwned(registry: AgentRegistryApi, owned: Map<string, AgentRef>): void {
@@ -70,10 +81,10 @@ export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => voi
 	const { registry, ownerId, session } = options;
 	const owner = registry.get(ownerId);
 	if (!owner) return () => {};
-	let agents = liveAgents.get(registry);
+	let agents = liveAdvisors.get(registry);
 	if (!agents) {
 		agents = new Map();
-		liveAgents.set(registry, agents);
+		liveAdvisors.set(registry, agents);
 	}
 	const directory = agents;
 	const tracked = new Map<string, TrackedAdvisor>();
@@ -87,7 +98,7 @@ export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => voi
 	const forget = (id: string, entry: TrackedAdvisor): void => {
 		entry.unsubscribe();
 		tracked.delete(id);
-		if (directory.get(id) === entry.agent) directory.delete(id);
+		if (directory.get(id) === entry) directory.delete(id);
 	};
 
 	const sync = (): void => {
@@ -139,8 +150,16 @@ export function trackLiveAdvisors(options: LiveAdvisorTrackerOptions): () => voi
 					if (entry?.agent === advisor.agent) registry.setStatus(id, "idle", entry.ref);
 				}
 			});
-			tracked.set(id, { ref, agent: advisor.agent, unsubscribe });
-			directory.set(id, advisor.agent);
+			const entry: TrackedAdvisor = {
+				ref,
+				owner,
+				agent: advisor.agent,
+				restart: () =>
+					liveAdvisorRestart(registry, entry.ref) === entry.restart && session.restartAdvisor(advisor.slug),
+				unsubscribe,
+			};
+			tracked.set(id, entry);
+			directory.set(id, entry);
 			registry.setStatus(id, status, ref);
 			// Rebuilt runtimes can retain both id and status: observers still need the new live source.
 			registry.setHistory(id, { readOnly: true }, file ?? undefined);
