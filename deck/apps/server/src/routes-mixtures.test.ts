@@ -2,8 +2,15 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import type { MixtureSaveResponse, MixturesDocument, MixtureSourceDocument, MixturesResponse } from "@npi-deck/protocol";
-import { feature, hasFeature, loadBackend, resolveBackendSelection, sdk } from "./backend/runtime.ts";
+import type {
+	MixtureDraftResponse,
+	MixtureSaveResponse,
+	MixtureSourceDocument,
+	MixturesDocument,
+	MixturesResponse,
+} from "@npi-deck/protocol";
+import type { startMixtureWebEditor } from "@oh-my-pi/pi-coding-agent/moa/web-server";
+import { feature, hasFeature, loadBackend, resolveBackendSelection, resolveManifest, sdk } from "./backend/runtime.ts";
 import { getDeckModelRegistry } from "./auth-singleton.ts";
 import { InProcessAgentBridge } from "./bridge/in-process.ts";
 import type { Config } from "./config.ts";
@@ -22,6 +29,7 @@ const backend = resolveBackendSelection();
 if (!backend) throw new Error("mixture route tests require a configured NeoPi backend");
 await loadBackend(backend);
 if (!hasFeature("mixture-config") || !hasFeature("mixtures")) throw new Error("backend lacks the mixture features these tests exercise");
+if (!hasFeature("mixture-authoring")) throw new Error("backend lacks the shared mixture authoring API");
 
 // The deck's shared registry: the one the bridge lists picker models from and chats resolve against.
 const registry = await getDeckModelRegistry();
@@ -95,6 +103,99 @@ test("validation accepts linear and routed mixtures and reports NeoPi's remainin
 	expect(capabilities.gates.filter(gate => !gate.gated).map(gate => gate.feature)).toEqual([
 		"verdict", "route", "terminate", "routing", "transcript", "toolTrace", "maxTraversals", "cycles", "budgetUsd", "wallClockMinutes", "onLimit", "limitTarget",
 	]);
+});
+
+test("Deck and /moa web load, draft, guard and rewrite the same lossy source", async () => {
+	const { values } = await resolveManifest(backend.path, {
+		"mixture-authoring": {
+			tier: "optional-feature",
+			consumers: [],
+			exports: {
+				startMixtureWebEditor: {
+					module: "@oh-my-pi/pi-coding-agent/moa/web-server",
+					export: "startMixtureWebEditor",
+				},
+			},
+		},
+	});
+	const start = values.get("mixture-authoring")?.startMixtureWebEditor as typeof startMixtureWebEditor | undefined;
+	if (!start) throw new Error("the selected backend does not export its web editor");
+
+	const agentDir = sdk().getAgentDir();
+	const settings = await sdk().Settings.loadReadOnly({ cwd: project, agentDir });
+	const editor = start({ cwd: project, agentDir, settings, registry });
+	try {
+		const canonical = feature("mixture-config").serializeMixturesConfig({ mixtures: [chain("rewrite")] });
+		const original = `roles = false\nunknown_option = true\n\n${canonical}`;
+		await writeFile(file, original);
+
+		const webRequest = (route: string, method?: "POST" | "PUT", body?: unknown) =>
+			fetch(new URL(route, editor.url), {
+				signal: AbortSignal.timeout(3_000),
+				...(method
+					? {
+							method,
+							headers: { "Content-Type": "application/json", Origin: new URL(editor.url).origin },
+							body: JSON.stringify(body),
+						}
+					: {}),
+			});
+		const loaded = await load();
+		const deck = rootSource(loaded);
+		const webLoad = await webRequest("mixtures?scope=project");
+		expect(webLoad.status).toBe(200);
+		expect(await webLoad.json()).toMatchObject({
+			doc: deck.doc,
+			hash: deck.hash,
+			toml: deck.toml,
+			parseDiagnostics: deck.parseDiagnostics,
+		});
+		expect(deck.doc.mixtures.map(mixture => mixture.name)).toEqual(["rewrite"]);
+		expect(deck.parseDiagnostics).toEqual([
+			expect.stringContaining("roles"),
+			expect.stringContaining("saving writes the canonical form"),
+		]);
+
+		const deckDraft = await request("/mixtures/draft", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ cwd: project, input: { kind: "document", doc: deck.doc } }),
+		});
+		const webDraft = await webRequest("mixtures/draft", "POST", { scope: "project", doc: deck.doc });
+		expect(deckDraft.status).toBe(200);
+		expect(webDraft.status).toBe(deckDraft.status);
+		const { doc, toml, parseDiagnostics } = (await deckDraft.json()) as MixtureDraftResponse;
+		expect(await webDraft.json()).toMatchObject({ doc, toml, parseDiagnostics });
+		expect(toml).toBe(canonical);
+
+		const deckBody = { cwd: project, source: loaded.defaultSource, baseHash: deck.hash, doc: deck.doc };
+		const webBody = { scope: "project", baseHash: deck.hash, doc: deck.doc };
+		const deckRefused = await save(deckBody);
+		const webRefused = await webRequest("mixtures", "PUT", webBody);
+		expect(deckRefused.status).toBe(409);
+		expect(webRefused.status).toBe(deckRefused.status);
+		const refusal = await deckRefused.json();
+		expect(refusal).toMatchObject({ code: "rewrite-loses-source", parseDiagnostics: deck.parseDiagnostics });
+		expect(await webRefused.json()).toEqual(refusal);
+		expect(await readFile(file, "utf8")).toBe(original);
+
+		const deckSaved = await save({ ...deckBody, confirmCanonicalRewrite: true });
+		expect(deckSaved.status).toBe(200);
+		const { source } = (await deckSaved.json()) as MixtureSaveResponse;
+		expect(await readFile(file, "utf8")).toBe(canonical);
+		await writeFile(file, original);
+
+		const webSaved = await webRequest("mixtures", "PUT", { ...webBody, confirmCanonicalRewrite: true });
+		expect(webSaved.status).toBe(deckSaved.status);
+		expect(await webSaved.json()).toMatchObject({
+			hash: source.hash,
+			toml: source.toml,
+			parseDiagnostics: source.parseDiagnostics,
+		});
+		expect(await readFile(file, "utf8")).toBe(canonical);
+	} finally {
+		editor.stop();
+	}
 });
 
 test("save is compare-and-swap on the loaded hash and verifies the file it wrote", async () => {

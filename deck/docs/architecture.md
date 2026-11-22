@@ -55,14 +55,18 @@ sessions-related flows through `AgentBridge` or `SessionHandle`.
 NeoPi owns mixture parsing, resolution, validation, persistence and execution.
 `apps/server/src/mixtures-service.ts` (routes in `routes-mixtures.ts`) lists
 every `MIXTURES.toml` on NeoPi's search path for a known workspace, addressed
-by opaque ids, and validates drafts through the `mixture-config` manifest
-feature. `mixture-files.ts` reads and writes those files without following
-links (temp file + rename in the expected directory). A save holds NeoPi's
-cross-process file lock across the hash compare, write and read-back, then
-calls `AgentBridge.refreshMixtureRoster(cwd)`, the only place the deck
-replaces a workspace's mixture roster. The bridge otherwise leases a
-workspace scope per request (picker listing, chat creation, model switch) and
-re-validates the chosen mixture under the chat's settings.
+by opaque ids. Deck and `/moa web` use NeoPi's `moa/authoring.ts` to load and
+validate drafts, warn about lossy canonical rewrites, and require confirmation
+before replacing that source. NeoPi's `moa/authoring-files.ts` performs link-safe
+I/O in the expected directory. The `mixture-authoring` manifest feature is
+required for Deck editing; the separate `mixture-config` feature still supports
+discovery and picker validation on older backends.
+
+NeoPi holds its cross-process file lock across the hash compare, write and
+read-back. After success Deck calls `AgentBridge.refreshMixtureRoster(cwd)`,
+the only place Deck replaces a workspace's mixture roster. The bridge
+otherwise leases a workspace scope per request (picker listing, chat creation,
+model switch) and re-validates the chosen mixture under the chat's settings.
 
 The web side keeps the chat's trace cards (`reducer.ts`) and the inspector's
 MoA panel (`mixture-reducer.ts`) on the same `mixture_*` events. The routine

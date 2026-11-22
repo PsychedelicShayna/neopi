@@ -3,7 +3,15 @@ import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { ABSENT, digest, readHash, readSource, SourceConflictError, writeSource, type MixtureSource } from "./mixture-files.ts";
+import {
+	ABSENT,
+	digest,
+	readHash,
+	readSource,
+	SourceConflictError,
+	writeSource,
+	type MixtureSource,
+} from "@oh-my-pi/pi-coding-agent/moa/authoring-files";
 
 // Simulate the Windows failures on Linux without weakening the POSIX contract.
 for (const platform of ["win32", "linux"] as const) {
@@ -11,7 +19,13 @@ for (const platform of ["win32", "linux"] as const) {
 		test(`${platform} mixture saves ${platform === "win32" ? "skip" : "propagate"} directory ${code}`, async () => {
 			const dir = await fs.mkdtemp(path.join(tmpdir(), "deck-mixture-fsync-"));
 			const file = path.join(dir, "MIXTURES.toml");
-			const source: MixtureSource = { id: "test", path: file, kind: "project", order: 0, expectedDir: await fs.realpath(dir) };
+			const source: MixtureSource = {
+				id: "test",
+				path: file,
+				kind: "project",
+				order: 0,
+				expectedDir: await fs.realpath(dir),
+			};
 			const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 			const open = fs.open;
 			let fileSyncs = 0;
@@ -31,10 +45,12 @@ for (const platform of ["win32", "linux"] as const) {
 				const handle = await open(...args);
 				if (String(args[0]).endsWith(".tmp")) {
 					const sync = handle.sync.bind(handle);
-					syncSpies.push(spyOn(handle, "sync").mockImplementation(async () => {
-						fileSyncs++;
-						await sync();
-					}));
+					syncSpies.push(
+						spyOn(handle, "sync").mockImplementation(async () => {
+							fileSyncs++;
+							await sync();
+						}),
+					);
 				}
 				return handle;
 			});

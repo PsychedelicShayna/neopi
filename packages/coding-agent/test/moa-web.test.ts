@@ -52,7 +52,12 @@ function getScope(url: string, scope: MixtureConfigScope): Promise<Snapshot> {
 function write(
 	url: string,
 	method: "POST" | "PUT",
-	body: { scope: MixtureConfigScope; doc: MixturesConfigDoc; baseHash?: string | null },
+	body: {
+		scope: MixtureConfigScope;
+		doc: MixturesConfigDoc;
+		baseHash?: string | null;
+		confirmCanonicalRewrite?: boolean;
+	},
 	origin: string | null = new URL(url).origin,
 ): Promise<Response> {
 	const headers = new Headers({ "Content-Type": "application/json" });
@@ -198,6 +203,38 @@ describe("Mixture web editor", () => {
 			mixtures: [{ name: "user-pipeline" }],
 		});
 		expect(await Bun.file(project.sourcePath).text()).toBe(preview.toml);
+	});
+
+	it("loads source the canonical codec cannot preserve and requires a hash-bound confirmation", async () => {
+		const url = open();
+		const sourcePath = (await getScope(url, "project")).sourcePath;
+		const original = `roles = false\nunknown_option = true\n\n${DRAFT_THEN_EDIT_TOML}`;
+		await Bun.write(sourcePath, original);
+		const { doc, hash, parseDiagnostics } = await json<Snapshot & { parseDiagnostics: string[] }>(
+			await request(url, "mixtures?scope=project"),
+		);
+		expect(doc.mixtures.map(item => item.name)).toEqual(["draft-then-edit"]);
+		expect(parseDiagnostics).toEqual([
+			expect.stringContaining("roles"),
+			expect.stringContaining("saving writes the canonical form"),
+		]);
+
+		const body = { scope: "project", doc, baseHash: hash } as const;
+		const refused = await json<{ code: string; parseDiagnostics: string[] }>(await write(url, "PUT", body), 409);
+		expect(refused).toMatchObject({ code: "rewrite-loses-source", parseDiagnostics });
+		expect(await Bun.file(sourcePath).text()).toBe(original);
+
+		const confirmed = { ...body, confirmCanonicalRewrite: true };
+		await Bun.write(sourcePath, `${original}\n# edited in another process`);
+		const stale = await json<{ error: string }>(await write(url, "PUT", confirmed), 409);
+		expect(stale.error).toContain("changed since it was loaded");
+		await Bun.write(sourcePath, original);
+
+		await json(await write(url, "PUT", confirmed));
+		expect(Bun.TOML.parse(await Bun.file(sourcePath).text())).toMatchObject({
+			mixtures: [{ name: "draft-then-edit" }],
+		});
+		expect(await Bun.file(sourcePath).text()).not.toContain("unknown_option");
 	});
 
 	it("keeps two project working directories isolated despite sharing an agent directory", async () => {

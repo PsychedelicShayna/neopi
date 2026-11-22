@@ -2567,6 +2567,10 @@ invoking session. **Save** writes canonical `MIXTURES.toml` (comments and
 formatting are not kept), checks for intervening changes, and immediately
 refreshes that workspace's model roster. Running mixtures keep their pinned
 revision. A higher-priority source can still shadow a saved definition.
+If a source contains fields NeoPi cannot keep, the editor still loads the
+parts it understands and shows source warnings and the canonical preview.
+As in Deck, you must confirm before saving a rewrite that discards those
+fields. Reload if another editor changed the source after you opened it.
 
 The server binds only to `127.0.0.1` on an available port. The URL contains a
 private launch token: don't share it. A new launch from the same session

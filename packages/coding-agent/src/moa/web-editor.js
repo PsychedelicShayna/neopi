@@ -52,9 +52,19 @@ function status(text, error = false) {
 	byId("feedback").toggleAttribute("data-error", error);
 }
 
-function findings(validation, toml) {
+function findings(validation, toml, parseDiagnostics = []) {
 	const view = byId("findings");
 	view.replaceChildren();
+	for (const [label, diagnostics] of [
+		["Source warnings", source?.parseDiagnostics ?? []],
+		["Draft warnings", parseDiagnostics],
+	]) {
+		if (!diagnostics.length) continue;
+		const list = el("ul");
+		list.className = "warnings";
+		for (const message of diagnostics) list.append(el("li", message));
+		view.append(el("h3", label), list);
+	}
 	for (const [key, label] of [
 		["errors", "Errors"],
 		["warnings", "Warnings"],
@@ -90,7 +100,7 @@ function controls() {
 	]) {
 		byId(id).disabled = busy || (id !== "reload" && !source);
 	}
-	byId("save").disabled ||= !dirty;
+	byId("save").disabled ||= !dirty || Boolean(source?.readOnly);
 	for (const id of ["add-model", "add-verdict", "connect", "mixture-settings"]) byId(id).disabled ||= !mixture;
 	byId("connect").disabled ||= !connecting && (selection.kind !== "member" || selection.item.kind === "verdict");
 	byId("connect").textContent = connecting
@@ -120,7 +130,11 @@ async function request(route, method, value) {
 	);
 	const result = await response.json();
 	if (!response.ok)
-		throw Object.assign(new Error(result.error ?? "The request failed."), { validation: result.validation });
+		throw Object.assign(new Error(result.error ?? "The request failed."), {
+			code: result.code,
+			parseDiagnostics: result.parseDiagnostics,
+			validation: result.validation,
+		});
 	return result;
 }
 
@@ -151,8 +165,16 @@ async function load(scope) {
 			}),
 		);
 		redraw();
-		findings(source.validation);
-		status(source.hash ? "Loaded MIXTURES.toml." : "This scope has no MIXTURES.toml yet. Add a mixture to start.");
+		findings(source.validation, source.parseDiagnostics.length ? source.toml : undefined);
+		status(
+			source.readOnly
+				? `Read-only: ${source.readOnly}`
+				: source.parseDiagnostics.length
+					? "Loaded with source warnings. Saving requires confirmation."
+					: source.hash
+						? "Loaded MIXTURES.toml."
+						: "This scope has no MIXTURES.toml yet. Add a mixture to start.",
+		);
 	} catch (error) {
 		if (source) scopeInput.value = source.scope;
 		status(error.message, true);
@@ -176,14 +198,28 @@ async function submit(save) {
 	controls();
 	try {
 		const { scope, doc, hash } = source;
-		const result = await request(save ? "mixtures" : "mixtures/draft", save ? "PUT" : "POST", {
-			scope,
-			doc,
-			...(save ? { baseHash: hash } : {}),
-		});
-		findings(result.validation, result.toml);
+		const send = (confirmCanonicalRewrite = false) =>
+			request(save ? "mixtures" : "mixtures/draft", save ? "PUT" : "POST", {
+				scope,
+				doc,
+				...(save ? { baseHash: hash, confirmCanonicalRewrite } : {}),
+			});
+		let result;
+		try {
+			result = await send();
+		} catch (error) {
+			if (!save || error.code !== "rewrite-loses-source") throw error;
+			const diagnostics = error.parseDiagnostics.join("\n");
+			if (!window.confirm(`${error.message}.\n\n${diagnostics}\n\nSave NeoPi's canonical form anyway?`)) {
+				status("Save cancelled. The source file was not changed.");
+				return;
+			}
+			result = await send(true);
+		}
 		if (save) {
 			source.hash = result.hash;
+			source.parseDiagnostics = result.parseDiagnostics;
+			delete doc.warnings;
 			dirty = false;
 			status(
 				result.registered
@@ -191,8 +227,9 @@ async function submit(save) {
 					: "Saved. Higher-priority definitions still take precedence.",
 			);
 		} else status("The draft passes NeoPi validation.");
+		findings(result.validation, result.toml, save ? [] : result.parseDiagnostics);
 	} catch (error) {
-		findings(error.validation);
+		findings(error.validation, undefined, error.code === "rewrite-loses-source" ? [] : error.parseDiagnostics);
 		status(error.message, true);
 	} finally {
 		busy = false;
