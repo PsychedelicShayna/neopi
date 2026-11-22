@@ -1,5 +1,5 @@
 import { clearSubmittedText } from "./helpers/draft";
-import { Spacer } from "@oh-my-pi/pi-tui";
+import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, formatAge, getAgentDir } from "@oh-my-pi/pi-utils";
 import { getLocale } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -10,6 +10,7 @@ import { formatMixtureReset, formatMixtureStatus } from "../moa/status";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
+import { entryProvenance } from "../config/entry-provenance";
 import { settings } from "../config/settings";
 import { parseExportArgs } from "../export/html/args";
 import { shareSession } from "../export/share";
@@ -33,6 +34,7 @@ import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers
 import { formatDumpArchiveReport } from "../session/session-dump-format";
 import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "./types";
 import type { AgentSession } from "../session/agent-session";
+import type { LiveAdvisor } from "../session/session-advisors";
 
 import { cfgBrowserEnabled, cfgBrowserHeadless } from "../tools/browser/settings";
 import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../commands/settings";
@@ -44,6 +46,67 @@ function advisorEnabledMessage(session: AgentSession): string {
 		.advisors.filter(advisor => advisor.status === "running")
 		.map(advisor => sanitizeDisplayLine(advisor.name));
 	return names.length > 0 ? `Advisor enabled: ${names.join(", ")}.` : "Advisor enabled; no advisors running.";
+}
+
+const ADVISOR_ARGS = "[on|off|status|restart [slug|name]|dump [raw]|configure]";
+const ADVISOR_USAGE = `Usage: /advisor ${ADVISOR_ARGS}`;
+
+function resolveAdvisorTarget(advisors: readonly LiveAdvisor[], target: string): LiveAdvisor | "ambiguous" | undefined {
+	let match: LiveAdvisor | undefined;
+	for (const advisor of advisors) {
+		if (advisor.slug.toLowerCase() !== target && advisor.name.toLowerCase() !== target) continue;
+		if (match) return "ambiguous";
+		match = advisor;
+	}
+	return match;
+}
+
+function restartAdvisor(session: AgentSession, target: string): { message: string; restarted: boolean } {
+	const advisors = session.liveAdvisors();
+	if (advisors.length === 0) return { message: "No live advisors to restart.", restarted: false };
+	if (!target && advisors.length > 1) {
+		return { message: "Specify a live advisor: /advisor restart <slug|name>.", restarted: false };
+	}
+	const advisor = target ? resolveAdvisorTarget(advisors, target.toLowerCase()) : advisors[0];
+	if (advisor === "ambiguous") {
+		return {
+			message: "More than one live advisor matches that target. Use a unique slug or name.",
+			restarted: false,
+		};
+	}
+	if (!advisor) return { message: "No live advisor matches that slug or name.", restarted: false };
+	const name = sanitizeDisplayLine(advisor.name);
+	return session.restartAdvisor(advisor.slug)
+		? { message: `Restarted advisor ${name}.`, restarted: true }
+		: { message: `Could not restart advisor ${name}.`, restarted: false };
+}
+
+function advisorRestartCompletions(prefix: string, session: AgentSession | undefined): AutocompleteItem[] | null {
+	if (!session) return null;
+	const advisors = session.liveAdvisors();
+	const query = prefix.trimStart().toLowerCase();
+	const items: AutocompleteItem[] = [];
+	for (const advisor of advisors) {
+		const slug = advisor.slug.toLowerCase();
+		const name = advisor.name.toLowerCase();
+		if (!slug.startsWith(query) && !name.startsWith(query)) continue;
+		// Prefer the slug unless it would collide with another advisor's display name.
+		const target =
+			slug && resolveAdvisorTarget(advisors, slug) === advisor
+				? advisor.slug
+				: name && resolveAdvisorTarget(advisors, name) === advisor
+					? advisor.name
+					: undefined;
+		if (!target) continue;
+		items.push({
+			value: `${target} `,
+			label: sanitizeDisplayLine(target),
+			description: target !== advisor.name ? sanitizeDisplayLine(advisor.name) : undefined,
+			submitsCommand: true,
+			preserveInputOnSubmit: true,
+		});
+	}
+	return items.length > 0 ? items : null;
 }
 
 /** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
@@ -236,13 +299,20 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 	{
 		name: "advisor",
 		icon: "advisor",
-		description: "Toggle the advisor (a second model that reviews each turn and injects notes)",
-		acpDescription: "Toggle advisor",
-		acpInputHint: "[on|off|status|dump [raw]|configure]",
+		description: "Manage advisors that review turns and inject notes",
+		acpDescription: "Manage advisors",
+		acpInputHint: ADVISOR_ARGS,
 		subcommands: [
 			{ name: "on", description: "Enable the advisor" },
 			{ name: "off", description: "Disable the advisor" },
 			{ name: "status", description: "Show advisor status" },
+			{
+				name: "restart",
+				description: "Restart one live advisor without losing its conversation",
+				provenance: entryProvenance("commands", "advisor restart"),
+				usage: "[slug|name]",
+				getArgumentCompletions: (tail, _runtime, session) => advisorRestartCompletions(tail, session),
+			},
 			{
 				name: "dump",
 				description: "Copy the advisor's transcript to clipboard",
@@ -291,6 +361,11 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				await runtime.output(runtime.session.formatAdvisorStatus());
 				return commandConsumed();
 			}
+			if (verb === "restart") {
+				const result = restartAdvisor(runtime.session, rest);
+				await runtime.output(result.message);
+				return commandConsumed({ failed: !result.restarted });
+			}
 			if (verb === "dump") {
 				const isRaw = rest.toLowerCase() === "raw";
 				const text = runtime.session.formatAdvisorHistoryAsText({ compact: !isRaw });
@@ -303,7 +378,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				);
 				return commandConsumed();
 			}
-			return usage("Usage: /advisor [on|off|status|dump [raw]|configure]", runtime);
+			return usage(ADVISOR_USAGE, runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -344,6 +419,13 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				clearSubmittedText(runtime);
 				return;
 			}
+			if (verb === "restart") {
+				const { message, restarted } = restartAdvisor(runtime.ctx.session, rest);
+				runtime.ctx.showStatus(message);
+				if (restarted) refreshStatusLine(runtime.ctx);
+				clearSubmittedText(runtime);
+				return;
+			}
 			if (verb === "dump") {
 				const isRaw = rest.toLowerCase() === "raw";
 				runtime.ctx.handleAdvisorDumpCommand(isRaw);
@@ -355,7 +437,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				clearSubmittedText(runtime);
 				return;
 			}
-			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]|configure]");
+			runtime.ctx.showStatus(ADVISOR_USAGE);
 			clearSubmittedText(runtime);
 		},
 	},

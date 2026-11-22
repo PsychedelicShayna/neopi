@@ -55,10 +55,13 @@ Vim navigation is off by default. Enable **Vim Navigation and Editing** in `/set
 | `Tab`                       | Toggle the inspector on narrow terminals.                                    |
 | `PageUp` / `PageDown`       | Scroll an open inspector.                                                    |
 | `r`                         | Revive the selected parked or killed agent.                                  |
+| `Shift+R`                   | Restart the selected live advisor without losing its conversation.          |
 | `x`                         | Abort a running turn if necessary, then kill and release the selected agent. |
 | `Esc`                       | Clear an active filter first, then close the narrow inspector or the Hub.    |
 
 `parked` and killed (`aborted`) agents can be explicitly revived with `r` or **Revive**. A killed agent needs a resumable saved transcript and comes back as a fresh instance with its history; its old registry generation remains terminal. `x` is immediate. Opening or focusing a killed transcript, ordinary chat, and IRC messages do not undo the kill.
+
+`Shift+R` (or **Restart advisor** in the native roster) immediately restarts only the selected live advisor. The shortcut is a roster action, not a transcript-viewer shortcut. Historical advisor rows have no live runtime to restart; for live advisors, `/advisor restart [slug|name]` is also available.
 
 ## Activity log
 
@@ -104,7 +107,8 @@ Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows unde
 - their transcripts can be opened and followed;
 - they cannot be messaged;
 - they cannot be revived;
-- they cannot be killed.
+- they cannot be killed;
+- a live advisor can be restarted from its roster row without making its transcript writable.
 
 Collab does not replicate advisor rows or serve their transcripts to guests; the host also rejects advisor chat, revive, and kill requests by id.
 
