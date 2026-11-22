@@ -6,6 +6,7 @@
  *   chat), live from the global AgentHubRegistry — status, unread irc count,
  *   current/last task, last activity. Navigate with keys, wheel, hover, and
  *   click; `r` explicitly revives a parked or killed agent, `x` aborts + releases one.
+ *   `R` restarts a selected live local advisor without opening its transcript.
  * - Chat view: per-agent transcript (incremental session-file tail, absorbed
  *   from the old session observer overlay) plus an input line. Submitting
  *   revives a parked agent, then prompts/steers it; the message
@@ -149,6 +150,8 @@ const AGENT_HINTS: Readonly<Record<HubViewMode, readonly NativeHint[]>> = {
 	roster: agentHints("by parent"),
 	tree: agentHints("flat"),
 };
+const RESTART_ADVISOR_KEY = "shift+r";
+const RESTART_ADVISOR_HINT: NativeHint = { keys: [RESTART_ADVISOR_KEY], label: "restart advisor" };
 const ACTIVITY_HINTS: readonly NativeHint[] = [
 	{ keys: ["up", "down"], label: "select" },
 	{ keys: ["enter"], label: "transcript" },
@@ -341,6 +344,8 @@ export interface AgentHubDeps<TRecord extends AgentRecordLike = AgentRecordLike>
 	inSession?: (ref: AgentRecordLike) => boolean;
 	/** Resolve lifecycle actions lazily when a local action needs them. */
 	lifecycle: () => AgentLifecycleLike<TRecord>;
+	/** Resolve the local owner's restart action for this exact live advisor row. */
+	advisorRestart?(ref: TRecord): (() => boolean) | undefined;
 	/** Host message bus supplying unread counts. */
 	irc: IrcBusLike;
 	/** TUI handle for transcript components; tests omit it and get a render-only stub. */
@@ -408,6 +413,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#transcript: AgentTranscriptSource;
 	#irc: IrcBusLike;
 	#lifecycle: () => AgentLifecycleLike<TRecord>;
+	readonly #advisorRestart: AgentHubDeps<TRecord>["advisorRestart"];
 	#onDone: () => void;
 	#requestRender: () => void;
 	#hubKeys: KeyId[];
@@ -443,7 +449,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#rosterTotalRows = 0;
 	readonly #rosterViewport = new MenuViewport();
 	readonly #keys = new MenuKeyReader();
-	readonly #help = new MenuHelp();
+	readonly #help = new MenuHelp(undefined, "Shift+R: restart the selected live local advisor in the Agents roster");
 	readonly #rosterMotion = {
 		move: (delta: number) => this.#moveRosterSelection(this.#selectedRow + delta),
 		moveToBoundary: (edge: "first" | "last") =>
@@ -470,7 +476,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#hoveredRow: number | null = null;
 	/** Per-render screen-line to agent-row map, shared by click and hover routing. */
 	#hitRows: Array<number | undefined> = [];
-	#notice: string | undefined;
+	#notice: { message: string; tone?: "success" } | undefined;
 	/** Double-tap window state for the table's left-left "close hub" gesture. */
 	#lastLeftTap = 0;
 	/** Operational ordering by default; tree mode groups descendants under their spawner. */
@@ -585,6 +591,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#transcript = deps.transcript;
 		this.#irc = deps.irc;
 		this.#lifecycle = deps.lifecycle;
+		this.#advisorRestart = deps.remote ? undefined : deps.advisorRestart;
 		this.#onDone = deps.onDone;
 		this.#requestRender = () => {
 			this.#native = undefined;
@@ -757,6 +764,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			else if (keyData === "s") this.#cycleActivityScope();
 		} else if (keyData === "t") this.#toggleViewMode();
 		else if (keyData === "r") this.#reviveSelected();
+		else if (matchesKey(keyData, RESTART_ADVISOR_KEY)) this.#restartSelectedAdvisor();
 		else if (keyData === "x") this.#killSelected();
 	}
 
@@ -875,7 +883,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	showNotice(message: string): void {
 		if (this.#disposed) return;
 		this.#closeTranscriptViewer();
-		this.#notice = message;
+		this.#notice = { message };
 		this.#requestRender();
 	}
 
@@ -1104,6 +1112,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			case "revive":
 				this.#reviveSelected();
 				return;
+			case "restart-advisor":
+				this.#restartSelectedAdvisor();
+				return;
 			case "kill":
 				this.#killSelected();
 				return;
@@ -1164,13 +1175,23 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 						: "Only parked agents or killed agents with transcripts can be revived"),
 			},
 			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
+		];
+		if (selected?.kind === "advisor" && this.#advisorRestart) {
+			actions.push({
+				id: "restart-advisor",
+				label: "Restart advisor",
+				keys: [RESTART_ADVISOR_KEY],
+				disabled: this.#selectedAdvisorRestart() ? undefined : "Select a live local advisor to restart",
+			});
+		}
+		actions.push(
 			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
 			{ id: "filter", label: "Filter", keys: ["/"] },
 			{
 				...CLOSE_ACTION,
 				label: this.#agentFilter.focused ? "Back to list" : this.#narrowDetailsOpen ? "Back to roster" : "Close",
 			},
-		];
+		);
 		return {
 			noun: "agents",
 			layout: this.#viewMode === "tree" ? "tree" : "rows",
@@ -1305,7 +1326,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			),
 		];
 		if (this.#notice) {
-			out.push(node("text", { text: this.#notice, tone: "error", wrap: "word" }, undefined, "notice"));
+			const { message, tone = "error" } = this.#notice;
+			out.push(node("text", { text: message, tone, wrap: "word" }, undefined, "notice"));
 		}
 		const facts = this.#detailFacts(ref, observed, metrics);
 		const chip = modelChip(ref, observed);
@@ -1473,11 +1495,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			),
 		);
 		if (this.#notice) {
-			children.push(
-				node("text", { spans: [span(this.#notice, "error")], wrap: "word", tone: "error" }, undefined, "notice"),
-			);
+			const { message, tone = "error" } = this.#notice;
+			children.push(node("text", { spans: [span(message, tone)], wrap: "word", tone }, undefined, "notice"));
 		}
-		children.push(hintsRow(AGENT_HINTS[this.#viewMode]));
+		const hints = AGENT_HINTS[this.#viewMode];
+		children.push(hintsRow(this.#selectedAdvisorRestart() ? [...hints, RESTART_ADVISOR_HINT] : hints));
 		return children;
 	}
 
@@ -2159,9 +2181,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			: "";
 		const close = this.#lastLeftTap > 0 && Date.now() - this.#lastLeftTap < LEFT_TAP_WINDOW_MS ? "←:close  " : "";
 		const nextView = this.#viewMode === "roster" ? "tree" : "flat";
+		const restart = this.#selectedAdvisorRestart() ? `${formatKeyHint(RESTART_ADVISOR_KEY)}:restart advisor  ` : "";
 		const hint = detailsFocused
 			? `${filter}←:roster  Tab:section  Enter:open  Esc:roster  ?:help`
-			: `${filter}${close}/:filter  Enter:open  t:${nextView}  Tab:section  r/x:manage  Esc:close  ?:help`;
+			: `${filter}${close}/:filter  Enter:open  t:${nextView}  Tab:section  ${restart}r/x:manage  Esc:close  ?:help`;
 		return menuHintLines(hint, availableWidth).map(line => theme.fg("dim", line));
 	}
 
@@ -2173,7 +2196,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			hitRows.push(undefined);
 		}
 
-		const noticeLines = this.#notice ? [theme.fg("error", sanitizeLine(this.#notice, Math.max(10, width)))] : [];
+		const notice = this.#notice;
+		const noticeLines = notice
+			? [theme.fg(notice.tone ?? "error", sanitizeLine(notice.message, Math.max(10, width)))]
+			: [];
 		const budget = Math.max(0, rows - lines.length - noticeLines.length);
 		if (this.#rows.length === 0) {
 			if (this.#loadingPersistedSubagents) {
@@ -2641,7 +2667,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				await focusAgent(ref.id); // ensureLive inside revives parked agents
 				this.#onDone();
 			} catch (error) {
-				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#notice = { message: error instanceof Error ? error.message : String(error) };
 				this.#requestRender();
 			} finally {
 				this.#pendingOperations--;
@@ -2649,16 +2675,41 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		})();
 	}
 
+	#selectedAdvisorRestart(): (() => boolean) | undefined {
+		if (this.#agentFilter.focused || this.#narrowDetailsOpen) return undefined;
+		const ref = this.#rows[this.#selectedRow];
+		if (ref?.kind !== "advisor" || (ref.status !== "idle" && ref.status !== "running")) return undefined;
+		return this.#advisorRestart?.(ref);
+	}
+
+	#restartSelectedAdvisor(): void {
+		if (this.#disposed || this.#help.open || this.#agentFilter.focused || this.#narrowDetailsOpen) return;
+		const ref = this.#rows[this.#selectedRow];
+		if (!ref) return;
+		const restart = this.#selectedAdvisorRestart();
+		if (!restart) {
+			this.#notice = { message: "Select a live local advisor to restart." };
+		} else {
+			const id = sanitizeDisplaySingleLine(ref.id);
+			this.#notice = restart()
+				? { message: `Restarted ${id}.`, tone: "success" }
+				: { message: `Could not restart ${id} right now.` };
+		}
+		this.#requestRender();
+	}
+
 	#reviveSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
 		if (isAgentTranscriptReadOnly(ref)) {
-			this.#notice = `"${ref.id}" is a read-only transcript — nothing to revive.`;
+			this.#notice = { message: `"${ref.id}" is a read-only transcript — nothing to revive.` };
 			this.#requestRender();
 			return;
 		}
 		if (!canReviveAgent(ref)) {
-			this.#notice = `Agent "${ref.id}" is ${ref.status} — revival needs a parked agent or a killed agent with a transcript.`;
+			this.#notice = {
+				message: `Agent "${ref.id}" is ${ref.status} — revival needs a parked agent or a killed agent with a transcript.`,
+			};
 			this.#requestRender();
 			return;
 		}
@@ -2673,7 +2724,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#lifecycle()
 			.ensureLive(ref.id)
 			.catch((error: unknown) => {
-				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#notice = { message: error instanceof Error ? error.message : String(error) };
 				this.#requestRender();
 			})
 			.finally(() => {
@@ -2686,7 +2737,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
 		if (isAgentTranscriptReadOnly(ref)) {
-			this.#notice = `"${ref.id}" is a read-only transcript — cannot be killed.`;
+			this.#notice = { message: `"${ref.id}" is a read-only transcript — cannot be killed.` };
 			this.#requestRender();
 			return;
 		}
@@ -2706,7 +2757,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				await this.#lifecycle().release(ref.id, ref, { tombstone: true });
 			} catch (error) {
 				logger.warn("Agent hub: kill failed", { id: ref.id, error: String(error) });
-				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#notice = { message: error instanceof Error ? error.message : String(error) };
 			} finally {
 				this.#pendingOperations--;
 			}

@@ -18791,6 +18791,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#advisors.liveAdvisors();
 	}
 
+	/** Hard-restart one live advisor without changing its roster entry or conversation. */
+	restartAdvisor(slug: string): boolean {
+		return !this.isSessionTransitioning && this.#advisors.restartAdvisor(slug);
+	}
+
 	/** Notified after advisor runtimes start, stop, or rebuild. */
 	onLiveAdvisorsChange(listener: () => void): () => void {
 		return this.#advisors.onLiveAdvisorsChange(listener);

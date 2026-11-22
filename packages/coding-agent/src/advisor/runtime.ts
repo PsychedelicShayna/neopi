@@ -308,6 +308,9 @@ export class AdvisorRuntime {
 	#busy = false;
 	#sessionTransitionPaused = false;
 	#promptInFlight: Promise<void> | undefined;
+	/** A popped review that has not yet committed or returned to the queue. */
+	#activeDeltas: PendingDelta[] | undefined;
+	#activeMessageStart: number | undefined;
 	/** True while the drain awaits batch collection (context maintenance). */
 	#collecting = false;
 	/** Set by {@link supersede} for the batch collecting or in flight: it is held, not reviewed. */
@@ -544,6 +547,35 @@ export class AdvisorRuntime {
 		this.#held = [...held.deltas];
 	}
 
+	/** Copy only the conversation and its delivery position into a fresh runtime. */
+	restoreConversation(previous: AdvisorRuntime): void {
+		const active = previous.#activeDeltas;
+		this.agent.state.messages = previous.agent.state.messages.slice(0, active && previous.#activeMessageStart);
+		this.#lastCount = previous.#lastCount;
+		this.#deliveredPrefix = previous.#deliveredPrefix;
+		this.#latestMessages = previous.#latestMessages;
+		this.#seenContext = new Map(previous.#seenContextInFlight ?? previous.#seenContext);
+		for (const secret of previous.#advisorRegexSecretValues) this.#advisorRegexSecretValues.add(secret);
+		// Rerender queued updates under the fresh runtime's (configured) reasoning
+		// policy rather than carrying a refusal's suppression to the replacement.
+		const requeue = (delta: PendingDelta): PendingDelta => ({
+			...delta,
+			renderRevision: -1,
+			overflowRecovery: undefined,
+		});
+		// Superseded work already owes a review at a later primary boundary.
+		// A restart must not schedule that review before the boundary arrives.
+		this.#pending = [...(previous.#superseded ? [] : (active ?? [])), ...previous.#pending].map(requeue);
+		this.#held = [...(previous.#superseded ? (active ?? []) : []), ...previous.#held].map(requeue);
+		this.#backlog = this.#pending.reduce((turns, delta) => turns + delta.turns, 0);
+		this.#hasReviewed = previous.#hasReviewed;
+	}
+
+	/** Resume captured reviews after the replacement becomes the live advisor. */
+	resumeReviews(): void {
+		if (this.#pending.length > 0) void this.#drain();
+	}
+
 	/** Queue held deltas plus `latest` as ONE review: one backlog unit, however many updates it carries. */
 	#dispatch(latest: PendingDelta | undefined): void {
 		const parts = latest ? [...this.#held, latest] : this.#held;
@@ -631,6 +663,7 @@ export class AdvisorRuntime {
 		this.disposed = true;
 		this.#epoch++;
 		this.#pending = [];
+		this.#activeDeltas = undefined;
 		this.#held = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
@@ -673,6 +706,7 @@ export class AdvisorRuntime {
 		this.#lastCount = 0;
 		this.#deliveredPrefix = [];
 		this.#pending = [];
+		this.#activeDeltas = undefined;
 		this.#held = [];
 		this.#consecutiveFailures = 0;
 		this.#clearAdvisorContextAtCurrentCursor();
@@ -1376,6 +1410,8 @@ export class AdvisorRuntime {
 				} else {
 					popped = this.#pending.splice(0);
 				}
+				this.#activeDeltas = popped;
+				this.#activeMessageStart = undefined;
 				const iterationAbort = new AbortController();
 				this.#iterationAbort = iterationAbort;
 				const epoch = this.#epoch;
@@ -1441,6 +1477,7 @@ export class AdvisorRuntime {
 				// batch on top of stale turns and the dropped-after-3 path would leak
 				// orphan failures into the next successful run's context.
 				const messageSnapshot = this.agent.state.messages.length;
+				this.#activeMessageStart = messageSnapshot;
 				const contextWasFresh = resetContext || recoveringOverflow || messageSnapshot === 0;
 				try {
 					this.host.beginAdvisorUpdate?.(wip);
@@ -1461,6 +1498,7 @@ export class AdvisorRuntime {
 					} finally {
 						if (this.#promptInFlight === prompt) this.#promptInFlight = undefined;
 					}
+					if (this.#epoch !== epoch) continue;
 					// Agent.#runLoop catches provider/stream failures internally and
 					// resolves prompt() cleanly with stopReason: "error". Treat that
 					// as a failed turn so endpoint rejections trip the retry path.
@@ -1475,6 +1513,7 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
+					this.#activeDeltas = undefined;
 					this.#seenContextInFlight = undefined;
 					this.#hasReviewed = true;
 					this.#failing = false;
@@ -1533,6 +1572,7 @@ export class AdvisorRuntime {
 						AIError.retriable(terminalFailureId) ||
 						AIError.is(terminalFailureId, AIError.Flag.ContextOverflow);
 					this.#rollbackFailedTurn(messageSnapshot);
+					this.#activeMessageStart = undefined;
 					logger.debug("advisor turn failed", { err: String(err) });
 					if (classifierRefusal) {
 						// Stripping only recovers when it changes what was sent: a batch
@@ -1750,6 +1790,7 @@ export class AdvisorRuntime {
 								wip,
 								overflowRecovery: recoveringOverflow || undefined,
 							});
+							this.#activeDeltas = undefined;
 							const retryDelayMs = this.#retryDelayFor(
 								this.#consecutiveFailures,
 								`${err instanceof Error ? err.message : String(err)} ${terminalFailure?.errorMessage ?? ""}`,
@@ -1774,6 +1815,7 @@ export class AdvisorRuntime {
 			}
 		} finally {
 			this.#iterationAbort = undefined;
+			this.#activeDeltas = undefined;
 			this.#busy = false;
 			this.#collecting = false;
 			// Notify on EVERY path that lands the runtime in the yielded state —

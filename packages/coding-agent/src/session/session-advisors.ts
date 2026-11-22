@@ -391,7 +391,7 @@ interface ActiveAdvisor {
 	 * own budget. Reset with {@link providerWaitRetries}.
 	 */
 	credentialSwitches: { provider: string; count: number } | undefined;
-	signature: string;
+	descriptor: AdvisorRuntimeDescriptor;
 }
 /** First index whose provider usage may anchor the advisor's context estimate. */
 function advisorAnchorSearchStart(messages: readonly AgentMessage[]): number {
@@ -856,7 +856,7 @@ export class SessionAdvisors {
 
 	/** Starts configured advisor runtimes when they are eligible. */
 	buildRuntime(seedToCurrent = false): boolean {
-		const running = this.#buildAdvisorRuntime(seedToCurrent);
+		const running = this.#buildAdvisorRuntime({ seedToCurrent });
 		this.#notifyLiveAdvisors();
 		return running;
 	}
@@ -871,6 +871,17 @@ export class SessionAdvisors {
 				agent: advisor.agent,
 				transcriptFile: advisor.recorder.targetFile(),
 			}));
+	}
+
+	/** Replace exactly one advisor, retaining its configured identity and conversation. */
+	restartAdvisor(slug: string): boolean {
+		if (!this.#advisorEnabled || this.#host.isDisposed()) return false;
+		const index = this.#advisors.findIndex(advisor => advisor.slug === slug && !advisor.runtime.disposed);
+		if (index < 0) return false;
+		const advisor = this.#advisors[index];
+		if (!this.#buildAdvisorRuntime({ restart: { index, advisor } })) return false;
+		this.#notifyLiveAdvisors();
+		return true;
 	}
 
 	/** Called after every start, stop, or rebuild of the advisor runtimes. */
@@ -1436,7 +1447,7 @@ export class SessionAdvisors {
 		const descriptors = this.#resolveAdvisorRuntimeDescriptors(false);
 		if (descriptors.length !== this.#advisors.length) return false;
 		for (let i = 0; i < descriptors.length; i++) {
-			if (descriptors[i].signature !== this.#advisors[i].signature) return false;
+			if (descriptors[i].signature !== this.#advisors[i].descriptor.signature) return false;
 		}
 		return true;
 	}
@@ -1460,7 +1471,7 @@ export class SessionAdvisors {
 		const carried = new Map<string, AdvisorCarry>();
 		const stale: ActiveAdvisor[] = [];
 		for (const advisor of this.#advisors) {
-			if (wanted.get(advisor.slug) === advisor.signature) keep.set(advisor.slug, advisor);
+			if (wanted.get(advisor.slug) === advisor.descriptor.signature) keep.set(advisor.slug, advisor);
 			else {
 				carried.set(advisor.slug, {
 					held: advisor.runtime.releaseHeld(),
@@ -1472,7 +1483,7 @@ export class SessionAdvisors {
 		}
 		this.#stopAdvisors(stale);
 		this.#advisors = [];
-		const running = this.#buildAdvisorRuntime(seedToCurrent, emitWarnings, keep, carried);
+		const running = this.#buildAdvisorRuntime({ seedToCurrent, emitWarnings, reuse: keep, carried });
 		if (!running) {
 			this.#advisorYieldQueueUnsubscribe?.();
 			this.#advisorYieldQueueUnsubscribe = undefined;
@@ -1481,22 +1492,29 @@ export class SessionAdvisors {
 		return running;
 	}
 
-	#buildAdvisorRuntime(
+	#buildAdvisorRuntime({
 		seedToCurrent = false,
 		emitWarnings = true,
-		reuse?: ReadonlyMap<string, ActiveAdvisor>,
-		carried?: ReadonlyMap<string, AdvisorCarry>,
-	): boolean {
+		reuse,
+		carried,
+		restart,
+	}: {
+		seedToCurrent?: boolean;
+		emitWarnings?: boolean;
+		reuse?: ReadonlyMap<string, ActiveAdvisor>;
+		carried?: ReadonlyMap<string, AdvisorCarry>;
+		restart?: { index: number; advisor: ActiveAdvisor };
+	} = {}): boolean {
 		if (this.#host.isDisposed()) return false;
-		if (this.#advisors.length > 0) return true;
+		if (this.#advisors.length > 0 && !restart) return true;
 		if (!this.#advisorEnabled) return false;
 
 		// Rebuild the status map from scratch so removed/renamed advisors don't
 		// leave stale entries. #resolveAdvisorRuntimeDescriptors populates every
 		// entry (`paused`/`no_model`/`running`) in roster order; the build loop
 		// below confirms `running` for successfully built advisors.
-		this.#advisorStatuses.clear();
-		const descriptors = this.#resolveAdvisorRuntimeDescriptors(emitWarnings);
+		if (!restart) this.#advisorStatuses.clear();
+		const descriptors = restart ? [restart.advisor.descriptor] : this.#resolveAdvisorRuntimeDescriptors(emitWarnings);
 
 		// Advisor service tier (`tier.advisor`): "none" (default) runs the advisor
 		// on standard processing; "inherit" tracks the session's live per-family
@@ -1521,6 +1539,7 @@ export class SessionAdvisors {
 				kept.reviewMode = descriptor.reviewMode;
 				kept.reviewInterval = descriptor.reviewInterval;
 				kept.syncBacklog = descriptor.syncBacklog;
+				kept.descriptor = descriptor;
 				this.#advisorStatuses.set(kept.slug, { name: kept.name, status: "running" });
 				this.#advisors.push(kept);
 				continue;
@@ -1533,7 +1552,6 @@ export class SessionAdvisors {
 				thinkingLevel: advisorThinkingLevel,
 				autoThinking: advisorAutoThinking,
 				autoSelection: advisorAutoSelection,
-				signature,
 			} = descriptor;
 			const budgetPerUpdate = this.#advisorMaxNotesPerUpdate(config);
 			// The tool owns admission end-to-end: the guard decides acceptance,
@@ -1877,19 +1895,6 @@ export class SessionAdvisors {
 				state: advisorAgent.state,
 			};
 
-			// Persist this advisor's turns to `<session>/__advisor[.<slug>].jsonl`
-			// (resolved lazily so it follows session switches) for stats attribution
-			// and Agent Hub observability, without registering it as a peer.
-			const recorder = new AdvisorTranscriptRecorder(
-				() => this.#host.sessionManager.getSessionFile(),
-				() => this.#host.sessionManager.getCwd(),
-				advisorTranscriptFilename(slug),
-				// On the advisor on→off→on toggle, wait for the prior recorders' closes
-				// so two SessionManagers never hold the same file at once.
-				this.#advisorCostSnapshotBarrier
-					? Promise.all([this.#advisorRecorderClosed, this.#advisorCostSnapshotBarrier])
-					: this.#advisorRecorderClosed,
-			);
 			const runtime = new AdvisorRuntime(
 				advisorAgentFacade,
 				{
@@ -1960,6 +1965,26 @@ export class SessionAdvisors {
 				1000,
 			);
 
+			const previous = restart?.advisor;
+			if (previous) {
+				runtime.restoreConversation(previous.runtime);
+				this.#disposeAdvisorRuntime(previous);
+			}
+
+			// The transcript observer is independent of the runtime. Retain its
+			// writer and replay window so restarting an unfinished review does not
+			// duplicate its already-recorded inputs or race a second writer.
+			const recorder =
+				previous?.recorder ??
+				new AdvisorTranscriptRecorder(
+					() => this.#host.sessionManager.getSessionFile(),
+					() => this.#host.sessionManager.getCwd(),
+					advisorTranscriptFilename(slug),
+					this.#advisorCostSnapshotBarrier
+						? Promise.all([this.#advisorRecorderClosed, this.#advisorCostSnapshotBarrier])
+						: this.#advisorRecorderClosed,
+				);
+
 			const advisorRef: ActiveAdvisor = {
 				name: advisorName,
 				slug,
@@ -1977,13 +2002,13 @@ export class SessionAdvisors {
 				reviewMode: descriptor.reviewMode,
 				reviewInterval: descriptor.reviewInterval,
 				syncBacklog: descriptor.syncBacklog,
-				eligibleUpdates: carried?.get(slug)?.eligibleUpdates ?? 0,
-				reviewOwed: carried?.get(slug)?.reviewOwed ?? false,
-				pendingCoveredTurn: 0,
+				eligibleUpdates: previous?.eligibleUpdates ?? carried?.get(slug)?.eligibleUpdates ?? 0,
+				reviewOwed: previous?.reviewOwed ?? carried?.get(slug)?.reviewOwed ?? false,
+				pendingCoveredTurn: previous?.pendingCoveredTurn ?? 0,
 				retryFallbackPendingSuccess: false,
 				providerWaitRetries: 0,
 				credentialSwitches: undefined,
-				signature,
+				descriptor,
 			};
 			this.#refreshAdvisorProviderIdentity(advisorRef);
 			this.#attachAdvisorRecorderFeed(advisorRef);
@@ -1991,7 +2016,12 @@ export class SessionAdvisors {
 			if (held) runtime.adoptHeld(held);
 			else if (seedToCurrent) runtime.seedTo(this.#host.agent.state.messages.length);
 			this.#advisorStatuses.set(slug, { name: advisorName, status: "running" });
-			this.#advisors.push(advisorRef);
+			if (restart) {
+				this.#advisors[restart.index] = advisorRef;
+				runtime.resumeReviews();
+			} else {
+				this.#advisors.push(advisorRef);
+			}
 		}
 
 		// One shared non-blocking aside channel for all advisors; the build callback
@@ -2040,6 +2070,7 @@ export class SessionAdvisors {
 	 * emitted, so a deferred flush replays the backlog without re-filtering.
 	 */
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity, turn?: number): void {
+		if (advisor.runtime.disposed) return;
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
@@ -2266,17 +2297,20 @@ export class SessionAdvisors {
 		this.#notifyLiveAdvisors();
 	}
 
+	#disposeAdvisorRuntime(advisor: ActiveAdvisor): void {
+		// An aborted loop can still emit message_end. Stop recording before
+		// abort so those events don't reach a closing or transferred writer.
+		advisor.agentUnsubscribe?.();
+		advisor.agentUnsubscribe = undefined;
+		advisor.runtime.dispose();
+	}
+
 	/** Dispose the given advisors and extend the recorder-close barrier with their closes. */
 	#stopAdvisors(advisors: readonly ActiveAdvisor[]): void {
 		if (advisors.length === 0) return;
-		// Detach each recorder feed BEFORE aborting its advisor agent: dispose() aborts
-		// the loop, and an abort emits a final `message_end` we must not enqueue against
-		// a closing recorder (it would reopen and resurrect an already-released file).
 		const closes: Promise<void>[] = [this.#advisorRecorderClosed];
 		for (const a of advisors) {
-			a.agentUnsubscribe?.();
-			a.agentUnsubscribe = undefined;
-			a.runtime.dispose();
+			this.#disposeAdvisorRuntime(a);
 			// Capture each close so dispose()/`/delete` can await the queued open+append+close —
 			// the last advisor turn would otherwise be lost on a fast process exit.
 			a.recorderClosed = a.recorder.close();

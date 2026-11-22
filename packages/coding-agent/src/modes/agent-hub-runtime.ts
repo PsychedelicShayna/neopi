@@ -11,6 +11,7 @@ import type { Settings } from "../config/settings";
 import { IrcBus, type IrcBusApi } from "../irc/bus";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentRegistryApi, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { liveAdvisorRestart } from "../registry/live-advisors";
 import { registerPersistedSubagents, sessionFileBelongsToRoot } from "../registry/persisted-agents";
 import { BlobStore } from "../session/blob-store";
 import { normalizeAssistantUsage, parseSessionEntries, resolveBlobRefsInEntriesSync } from "../session/session-loader";
@@ -56,6 +57,7 @@ export function createAgentHubRuntime(
 	| "registry"
 	| "inSession"
 	| "lifecycle"
+	| "advisorRestart"
 	| "irc"
 	| "activity"
 	| "manageActivityLive"
@@ -84,6 +86,9 @@ export function createAgentHubRuntime(
 	return {
 		registry: scopedRegistry,
 		lifecycle: () => scopedLifecycle,
+		advisorRestart: options.remote
+			? undefined
+			: ref => (owns(ref.id) ? liveAdvisorRestart(registry, ref) : undefined),
 		// Local roster only: a collab guest mirrors the host's registry, whose
 		// transcript paths never sit under the guest's replica session.
 		inSession:
