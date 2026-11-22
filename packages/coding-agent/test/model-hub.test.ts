@@ -387,20 +387,16 @@ describe("ModelHub", () => {
 		for (const key of [
 			// First condition: Slug *= alpha/eligible-*
 			"\n",
-			DOWN,
 			"\n",
 			"\x1b[F",
 			"\n",
-			DOWN,
-			"\n",
 			..."alpha/eligible-*",
-			"\n",
-			DOWN,
-			DOWN,
 			"\n",
 		])
 			hub.handleInput(key);
 		expect(normalize(hub.render(220))).toContain("alpha/eligible-*");
+		expect(normalize(hub.render(220))).toContain("Match every condition in any clause");
+		expect(normalize(hub.render(220))).not.toContain("Apply condition");
 		for (const key of [DOWN, DOWN, DOWN, DOWN, DOWN, "\n"]) hub.handleInput(key);
 		const rules = { ingest: false, clauses: [[{ attribute: "slug", operator: "*=", value: "alpha/eligible-*" }]] };
 		expect(settings.getGlobalSettings().modelFolders).toEqual([
@@ -433,12 +429,70 @@ describe("ModelHub", () => {
 		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: [] }], "global");
 		const { hub } = createHub({ models: [makeModel("alpha", "model")], settings, hub: { sessionOnly: true } });
 		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
-		for (const key of ["\x1b[105;7u", "\n", DOWN, "\n", DOWN, DOWN, "\n", DOWN, "\n", "[", "\n"])
-			hub.handleInput(key);
+		for (const key of ["\x1b[105;7u", "\n", "\n", DOWN, DOWN, "\n", "[", "\n"]) hub.handleInput(key);
 		expect(normalize(hub.render(220))).toContain("Invalid regular expression");
 		hub.handleInput("\x03");
 		expect(normalize(hub.render(220))).toContain("This folder is empty");
 		expect(settings.getGlobalSettings().modelFolders).toEqual([{ name: "Smart", models: [] }]);
+	});
+
+	test("folder rules show the whole expression after Enter and add And to its clause", () => {
+		const settings = Settings.isolated();
+		settings.writeScopeValue(cfgModelFolders, [{ name: "Smart", models: [] }], "global");
+		const { hub } = createHub({ models: [makeModel("alpha", "model")], settings, hub: { sessionOnly: true } });
+		hub.restoreNavigation({ ...hub.navigationSnapshot(), entry: "folder:Smart", focus: "scope" });
+		const type = (...keys: string[]) => {
+			for (const key of keys) hub.handleInput(key);
+		};
+		const screen = () => normalize(hub.render(220));
+		const enter = "\n";
+		const home = "\x1b[H";
+		const end = "\x1b[F";
+
+		type("\x1b[105;7u", enter);
+		expect(screen()).toContain("Choose model attribute");
+		type(enter);
+		expect(screen()).toContain("Choose comparison operator");
+		type(DOWN, DOWN, enter);
+		expect(screen()).toContain("Slug · case-insensitive regex");
+		type("^OPENAI-CODEX/", enter);
+		expect(screen()).toContain("If Slug");
+		expect(screen()).toContain("^OPENAI-CODEX/");
+
+		type(DOWN, enter, DOWN, DOWN, enter, home, DOWN, enter, "500000", enter);
+		expect(screen()).toContain("And Context window");
+		expect(screen()).toContain(">= 500000");
+		type(DOWN, DOWN, enter, DOWN, enter, enter, "anthropic", enter);
+		expect(screen()).toContain("Or Provider");
+		expect(screen()).toContain("If Slug");
+		type(DOWN, enter, DOWN, DOWN, DOWN, DOWN, DOWN, enter, home, DOWN, DOWN, enter, "25", enter);
+		expect(screen()).toContain("And Output price");
+		expect(screen()).toContain("<= 25");
+
+		// Edit the last value: the first Enter after typing still returns directly to the expression.
+		type(enter, DOWN, DOWN, enter, "\x01", "\x0b", "24", enter);
+		expect(screen()).toContain("<= 24");
+		expect(screen()).toContain("Or Provider");
+		type(end, UP, UP, enter);
+		expect(settings.getGlobalSettings().modelFolders).toEqual([
+			{
+				name: "Smart",
+				models: [],
+				rules: {
+					ingest: false,
+					clauses: [
+						[
+							{ attribute: "slug", operator: "~=", value: "^OPENAI-CODEX/" },
+							{ attribute: "contextWindow", operator: ">=", value: "500000" },
+						],
+						[
+							{ attribute: "provider", operator: "==", value: "anthropic" },
+							{ attribute: "outputPrice", operator: "<=", value: "24" },
+						],
+					],
+				},
+			},
+		]);
 	});
 
 	test.each(["session", "project", "global"] as const)(
