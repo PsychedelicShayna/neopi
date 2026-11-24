@@ -124,7 +124,7 @@ export async function buildExportViewer(options: ExportViewerBuildOptions = {}):
 		";document.getElementById('viewer-status')?.remove();",
 		"} catch (error) {",
 		"const status = document.getElementById('viewer-status');",
-		"if (status) status.textContent = 'Failed to load viewer: ' + (error instanceof Error ? error.message : String(error));",
+		"if (status) status.textContent = (status.dataset.errorPrefix ?? 'Failed to load viewer: ') + (error instanceof Error ? error.message : String(error));",
 		"}",
 		"})();",
 		"",

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { OverlayPanel } from "../chrome/overlay-box";
 import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-routing";
 import { type SelectItem, SelectList } from "../components/select-list";
@@ -14,13 +15,18 @@ export class AgentMenuComponent extends OverlayPanel {
 	readonly #sheet: SelectListSheet;
 
 	constructor(actions: { shutdown: () => void; restart?: () => void; forceShutdown: () => void; close: () => void }) {
-		super(`Agent Menu${uiProvenanceSuffix("features", "agent-menu", true)}`, "omp.overlay.agent-menu");
+		super(
+			t("overlays.agent_menu.menu_title", {
+				uiProvenanceSuffix: `${uiProvenanceSuffix("features", "agent-menu", true)}`,
+			}),
+			"omp.overlay.agent-menu",
+		);
 		const items: SelectItem[] = [
-			{ value: "detach", label: "Detach from Agent", disabled: true },
-			{ value: "reattach", label: "Reattach to Agent", disabled: true },
-			{ value: "shutdown", label: "Shutdown Agent" },
-			{ value: "restart", label: "Restart Agent", disabled: !actions.restart },
-			{ value: "force", label: "Force Shutdown" },
+			{ value: "detach", label: t("overlays.agent_menu.detach_agent"), disabled: true },
+			{ value: "reattach", label: t("overlays.agent_menu.reattach_agent"), disabled: true },
+			{ value: "shutdown", label: t("overlays.agent_menu.shutdown_agent") },
+			{ value: "restart", label: t("overlays.agent_menu.restart_agent"), disabled: !actions.restart },
+			{ value: "force", label: t("overlays.agent_menu.force_shutdown") },
 		];
 		this.#list = new SelectList(items, items.length, getSelectListTheme(), {
 			search: "never",
@@ -46,7 +52,9 @@ export class AgentMenuComponent extends OverlayPanel {
 		this.#sheet = new SelectListSheet(
 			this.#list,
 			{
-				title: `Agent Menu${uiProvenanceSuffix("features", "agent-menu")}`,
+				title: t("overlays.agent_menu.menu_title", {
+					uiProvenanceSuffix: `${uiProvenanceSuffix("features", "agent-menu")}`,
+				}),
 				noun: "actions",
 			},
 			{ docked: false },

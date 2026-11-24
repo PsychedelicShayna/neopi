@@ -27,6 +27,7 @@
  * the model. Terminals without those kinds get one `md` per section and the
  * options as a horizontal bar (←/→ select, Shift+←/→ drive the slider).
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Ellipsis,
@@ -82,9 +83,7 @@ function vimKey(data: string, key: "h" | "j" | "k" | "l"): boolean {
 }
 
 /** Title shown in the overlay's top border. */
-const OVERLAY_TITLE = "Plan Review";
 /** Native sheet title when the plan has no title heading of its own. */
-const NATIVE_TITLE = "Plan review";
 /** Minimum plan-body rows kept visible even on short terminals. */
 const MIN_BODY_ROWS = 3;
 /** Visible rows for the in-overlay annotation editor before it scrolls. */
@@ -98,7 +97,6 @@ const MAX_ANNOTATION_CONTEXT_WIDTH = 120;
 /** Oldest delete/annotate undo snapshots are dropped past this depth (each holds the full plan text). */
 const MAX_UNDO_ENTRIES = 100;
 /** Label of the Save option and button. */
-const SAVE_LABEL = "Save";
 /** Leading heading/list/quote markers stripped from a quote before matching it against rendered rows. */
 const QUOTE_MARKER_RE = /^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)*/;
 /** An ATX heading line: the title's source is group 2 (offset after group 1). */
@@ -250,7 +248,7 @@ function lineContexts(rendered: readonly string[]): readonly LineAnchorContext[]
 			const sanitized = sanitizeStatusText(line);
 			const truncated = visibleWidth(sanitized) > MAX_ANNOTATION_CONTEXT_WIDTH;
 			const text = truncateToWidth(sanitized, MAX_ANNOTATION_CONTEXT_WIDTH, Ellipsis.Unicode);
-			return { text: text || "(blank line)", truncated };
+			return { text: text || t("overlays.plan_review_overlay.blank_line"), truncated };
 		});
 		lineContextCache.set(rendered, contexts);
 	}
@@ -325,7 +323,7 @@ function quoteLine(quote: string): string {
 
 /** What an annotation is on, as the annotation chooser lists it. */
 function annotationWhere(target: AnnotationTarget): string {
-	if (target.kind === "line") return `line ${target.context}`;
+	if (target.kind === "line") return t("overlays.plan_review_overlay.line_number", { context: `${target.context}` });
 	return target.kind === "quote" ? `“${quoteLine(target.quote)}”` : "section";
 }
 
@@ -1645,7 +1643,7 @@ export class PlanReviewOverlay implements Component {
 	/** An option's label and, for an approval choice with one, its dim `meta`. */
 	#entryLabel(entry: OptionEntry): { label: string; meta?: string } {
 		if (entry.kind === "approve") return { label: entry.choice.label, meta: entry.choice.meta };
-		return { label: entry.kind === "refine" ? entry.label : SAVE_LABEL };
+		return { label: entry.kind === "refine" ? entry.label : t("overlays.plan_review_overlay.save") };
 	}
 
 	#renderOptionLines(): string[] {
@@ -1679,35 +1677,48 @@ export class PlanReviewOverlay implements Component {
 		const enter = formatKeyHint("enter");
 		switch (this.#focus) {
 			case "actions":
-				parts.push(`${upDown} select`, `${enter} confirm`);
-				if (this.#slider) parts.push(`${formatKeyHints(["left", "right"])} model`);
+				parts.push(
+					t("overlays.plan_review_overlay.select_hint", { upDown: `${upDown}` }),
+					t("overlays.plan_review_overlay.confirm_hint", { enter: `${enter}` }),
+				);
+				if (this.#slider)
+					parts.push(
+						t("overlays.plan_review_overlay.model_hint", { items: `${formatKeyHints(["left", "right"])}` }),
+					);
 				break;
 			case "toc":
 				parts.push(
-					`${upDown} section`,
-					`${enter} open`,
-					`${formatKeyHint("a")} annotate`,
-					`${formatKeyHint("e")} edit`,
-					`${formatKeyHint("d")} delete`,
-					`${formatKeyHint("u")} undo`,
+					t("overlays.plan_review_overlay.section_hint", { upDown: `${upDown}` }),
+					t("overlays.plan_review_overlay.open_hint", { enter: `${enter}` }),
+					t("overlays.plan_review_overlay.annotate_hint", { value: `${formatKeyHint("a")}` }),
+					t("overlays.plan_review_overlay.edit_hint", { value: `${formatKeyHint("e")}` }),
+					t("overlays.plan_review_overlay.delete_hint", { value: `${formatKeyHint("d")}` }),
+					t("overlays.plan_review_overlay.undo_hint", { value: `${formatKeyHint("u")}` }),
 				);
 				break;
 			case "body":
 				parts.push(
-					`${upDown} scroll`,
-					`${formatKeyHint("shift")} faster`,
+					t("overlays.plan_review_overlay.scroll_hint", { upDown: `${upDown}` }),
+					t("overlays.plan_review_overlay.faster_hint", { value: `${formatKeyHint("shift")}` }),
 					formatKeyHints(["pageUp", "pageDown"]),
-					`${formatKeyHints(["g", "shift+g"])} ends`,
-					`${formatKeyHint("a")} annotate`,
-					`${formatKeyHint("e")} edit`,
-					`${formatKeyHint("u")} undo`,
+					t("overlays.plan_review_overlay.ends_hint", { items: `${formatKeyHints(["g", "shift+g"])}` }),
+					t("overlays.plan_review_overlay.annotate_hint", { value: `${formatKeyHint("a")}` }),
+					t("overlays.plan_review_overlay.edit_hint", { value: `${formatKeyHint("e")}` }),
+					t("overlays.plan_review_overlay.undo_hint", { value: `${formatKeyHint("u")}` }),
 				);
 				break;
 		}
-		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} copy`);
-		parts.push(`${formatKeyHint("tab")} regions`);
-		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
-		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} cancel`);
+		if (this.callbacks.onCopyPlan)
+			parts.push(t("overlays.plan_review_overlay.copy_hint", { value: `${formatKeyHint("c")}` }));
+		parts.push(t("overlays.plan_review_overlay.regions_hint", { value: `${formatKeyHint("tab")}` }));
+		if (this.#externalEditorLabel && this.#focus !== "toc")
+			parts.push(
+				t("overlays.plan_review_overlay.editor_hint", { externalEditorLabel: `${this.#externalEditorLabel}` }),
+			);
+		parts.push(
+			this.#helpSuffix ??
+				t("overlays.plan_review_overlay.cancel_hint", { editorKey: `${editorKey("tui.select.cancel")}` }),
+		);
 		return parts.join(sep);
 	}
 
@@ -1834,7 +1845,7 @@ export class PlanReviewOverlay implements Component {
 		for (let i = 0; i < noteLines.length; i++) {
 			const prefix =
 				i === 0
-					? `${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}`
+					? `${theme.fg("warning", "▎ ")}${theme.fg("dim", t("overlays.plan_review_overlay.note_prefix"))}`
 					: `${theme.fg("warning", "▎ ")}${theme.fg("dim", "      ")}`;
 			const available = Math.max(0, bodyContentWidth - visibleWidth(prefix));
 			const displayLine = truncateToWidth(
@@ -1914,7 +1925,7 @@ export class PlanReviewOverlay implements Component {
 						0,
 						Math.min(chooser.selected - Math.floor(optionLimit / 2), chooser.entries.length - optionLimit),
 					);
-		const lines = [theme.bold(theme.fg("accent", "Edit annotation"))];
+		const lines = [theme.bold(theme.fg("accent", t("overlays.plan_review_overlay.edit_annotation")))];
 		for (let windowIndex = 0; windowIndex < optionLimit; windowIndex++) {
 			const optionIndex = start + windowIndex;
 			const selection = chooser.entries[optionIndex];
@@ -1925,7 +1936,7 @@ export class PlanReviewOverlay implements Component {
 			const target = annotationWhere(annotation.target);
 			const note = sanitizeStatusText(annotation.note);
 			const marker = optionIndex === chooser.selected ? theme.fg("accent", "› ") : "  ";
-			const label = `${marker}${sanitizeStatusText(section.title || "Plan preamble")} · ${target} · ${note}`;
+			const label = `${marker}${sanitizeStatusText(section.title || t("overlays.plan_review_overlay.plan_preamble"))} · ${target} · ${note}`;
 			lines.push(truncateToWidth(label, innerWidth, Ellipsis.Unicode));
 		}
 		if (!Number.isFinite(maxRows) || maxRows >= 2) {
@@ -1933,7 +1944,11 @@ export class PlanReviewOverlay implements Component {
 			lines.push(
 				theme.fg(
 					"dim",
-					`${upDown} choose · ${formatKeyHint("enter")} edit · ${editorKey("tui.select.cancel")} cancel`,
+					t("overlays.plan_review_overlay.chooser_hint", {
+						upDown: `${upDown}`,
+						value: `${formatKeyHint("enter")}`,
+						editorKey: `${editorKey("tui.select.cancel")}`,
+					}),
 				),
 			);
 		}
@@ -1945,23 +1960,26 @@ export class PlanReviewOverlay implements Component {
 		if (this.#annotating) {
 			const target = this.#annotationTarget;
 			const section = target ? this.#sections[target.sectionIndex] : undefined;
-			const title = sanitizeStatusText(section?.title || "Plan preamble");
+			const title = sanitizeStatusText(section?.title || t("overlays.plan_review_overlay.plan_preamble"));
 			const location =
 				target?.row === null
 					? `‹${title}›`
 					: `‹${title}› · ${truncateToWidth(target?.context ?? "", Math.max(1, innerWidth - 16), Ellipsis.Unicode)}`;
 			const caption = truncateToWidth(
-				`${theme.fg("dim", "Annotate")} ${theme.fg("accent", location)}`,
+				`${theme.fg("dim", t("overlays.plan_review_overlay.annotate"))} ${theme.fg("accent", location)}`,
 				innerWidth,
 				Ellipsis.Unicode,
 			);
 			const hintParts = [
-				`${editorKey("tui.input.submit")} save`,
-				`${editorKey("tui.input.newLine")} newline`,
-				`${editorKey("tui.select.cancel")} cancel`,
+				t("overlays.plan_review_overlay.save_hint", { editorKey: `${editorKey("tui.input.submit")}` }),
+				t("overlays.plan_review_overlay.newline_hint", { editorKey: `${editorKey("tui.input.newLine")}` }),
+				t("overlays.plan_review_overlay.cancel_hint", { editorKey: `${editorKey("tui.select.cancel")}` }),
 			];
-			if (this.#editingAnnotation) hintParts.push("empty deletes");
-			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
+			if (this.#editingAnnotation) hintParts.push(t("overlays.plan_review_overlay.empty_deletes"));
+			if (this.#externalEditorLabel)
+				hintParts.push(
+					t("overlays.plan_review_overlay.editor_hint", { externalEditorLabel: `${this.#externalEditorLabel}` }),
+				);
 			this.#editor.setMaxHeight(Math.max(1, Math.min(MAX_ANNOTATION_EDITOR_ROWS, (process.stdout.rows || 40) - 12)));
 			this.#editor.focused = true;
 			return [caption, ...this.#editor.render(innerWidth), theme.fg("dim", hintParts.join(" · "))];
@@ -1972,7 +1990,7 @@ export class PlanReviewOverlay implements Component {
 	/** The native sheet: large glass, titled by the plan's own title heading (the body never repeats it). */
 	get nativeOverlay(): NonNullable<Component["nativeOverlay"]> {
 		const heading = this.#sections[this.#titleIndex]?.title;
-		const title = heading ? sanitizeStatusText(heading) : NATIVE_TITLE;
+		const title = heading ? sanitizeStatusText(heading) : t("overlays.plan_review_overlay.review_title_2");
 		if (this.#nativeOverlay?.title !== title) {
 			this.#nativeOverlay = {
 				title,
@@ -2034,11 +2052,13 @@ export class PlanReviewOverlay implements Component {
 			children.push(keyed(text([span(this.#promptTitle, "muted")], { role: "omp.plan.prompt" }), "prompt"));
 		}
 		if (this.#committed) {
-			const label = this.#committedLabel ? `${this.#committedLabel} — submitting…` : "Submitting…";
+			const label = this.#committedLabel
+				? t("overlays.plan_review_overlay.label_submitting", { committedLabel: `${this.#committedLabel}` })
+				: t("overlays.plan_review_overlay.submitting");
 			children.push(node("spinner", { label: [span(label, "accent strong")] }, undefined, "options"));
 			children.push(
 				keyed(
-					text([span("Applying your selection — this can take a moment while context is prepared.", "dim")], {
+					text([span(t("overlays.plan_review_overlay.applying_selection"), "dim")], {
 						wrap: "word",
 					}),
 					"footer",
@@ -2126,7 +2146,7 @@ export class PlanReviewOverlay implements Component {
 		const main = node(
 			"button",
 			{
-				text: refine ? "Refine" : "Approve",
+				text: refine ? t("overlays.plan_review_overlay.refine") : t("tui.approval.approve"),
 				variant: "primary",
 				keys: ["enter"],
 				actions: { click: refine ? "refine" : "approve" },
@@ -2145,7 +2165,13 @@ export class PlanReviewOverlay implements Component {
 		});
 		const more = node(
 			"menu",
-			{ trigger: "primary", icon: "chev", title: "Approve options", align: "start", items: menuItems },
+			{
+				trigger: "primary",
+				icon: "chev",
+				title: t("overlays.plan_review_overlay.approve_options"),
+				align: "start",
+				items: menuItems,
+			},
 			undefined,
 			"more",
 		);
@@ -2162,7 +2188,7 @@ export class PlanReviewOverlay implements Component {
 						role: "omp.plan.model",
 						text: active.detail ?? active.label,
 						caret: true,
-						title: "Model that executes the plan",
+						title: t("overlays.plan_review_overlay.execution_model"),
 						items: slider.segments.map((segment, i) => ({
 							id: `tier:${i}`,
 							label: segment.label,
@@ -2179,7 +2205,12 @@ export class PlanReviewOverlay implements Component {
 		children.push(node("spacer", { grow: 1 }));
 		if (this.callbacks.onSave) {
 			children.push(
-				node("button", { role: "omp.btn", text: SAVE_LABEL, actions: { click: "save" } }, undefined, "save"),
+				node(
+					"button",
+					{ role: "omp.btn", text: t("overlays.plan_review_overlay.save"), actions: { click: "save" } },
+					undefined,
+					"save",
+				),
 			);
 		}
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
@@ -2188,7 +2219,7 @@ export class PlanReviewOverlay implements Component {
 				"button",
 				{
 					role: "omp.btn",
-					text: "Cancel",
+					text: t("tui.components.loader.cancel"),
 					...(cancelKey ? { keys: keyNames(cancelKey) } : {}),
 					actions: { click: "cancel" },
 				},
@@ -2205,7 +2236,7 @@ export class PlanReviewOverlay implements Component {
 		return node(
 			"row",
 			{ role: "omp.plan.tools", gap: "sm", align: "center", justify: "end" },
-			[actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {})],
+			[actionButton(t("tui.components.loader.cancel"), "cancel", cancelKey ? { keys: cancelKey } : {})],
 			"tools",
 		);
 	}
@@ -2430,17 +2461,17 @@ export class PlanReviewOverlay implements Component {
 				const where = annotation ? annotationWhere(annotation.target) : "section";
 				return item(`c${i}`, {
 					label: sanitizeStatusText(annotation?.note ?? ""),
-					detail: `${sanitizeStatusText(section?.title || "Plan preamble")} · ${where}`,
+					detail: `${sanitizeStatusText(section?.title || t("overlays.plan_review_overlay.plan_preamble"))} · ${where}`,
 				});
 			});
 			return [
-				keyed(text([span("Edit annotation", "accent strong")]), "chooserHead"),
+				keyed(text([span(t("overlays.plan_review_overlay.edit_annotation"), "accent strong")]), "chooserHead"),
 				selectList("chooser", entries, { selected: `c${chooser.selected}` }),
 				hintsRow(
 					[
-						actionHint(["tui.select.up", "tui.select.down"], "choose"),
-						{ keys: ["enter"], label: "edit" },
-						actionHint("tui.select.cancel", "cancel"),
+						actionHint(["tui.select.up", "tui.select.down"], t("overlays.native_hint.choose")),
+						{ keys: ["enter"], label: t("overlays.plan_review_overlay.edit") },
+						actionHint("tui.select.cancel", t("tui.ask.hint.cancel")),
 					],
 					"chooserHints",
 				),
@@ -2448,15 +2479,23 @@ export class PlanReviewOverlay implements Component {
 		}
 		if (this.#annotating) {
 			const target = this.#annotationTarget;
-			const title = sanitizeStatusText(this.#sections[target?.sectionIndex ?? -1]?.title || "Plan preamble");
+			const title = sanitizeStatusText(
+				this.#sections[target?.sectionIndex ?? -1]?.title || t("overlays.plan_review_overlay.plan_preamble"),
+			);
 			const location = target?.row === null ? `‹${title}›` : `‹${title}› · ${target?.context ?? ""}`;
 			const hints: (NativeHint | undefined)[] = [
-				actionHint("tui.input.submit", "save"),
-				actionHint("tui.input.newLine", "newline"),
-				actionHint("tui.select.cancel", "cancel"),
+				actionHint("tui.input.submit", t("overlays.plan_review_overlay.save_hint_label")),
+				actionHint("tui.input.newLine", t("overlays.native_hint.newline")),
+				actionHint("tui.select.cancel", t("tui.ask.hint.cancel")),
 			];
-			if (this.#editingAnnotation) hints.push({ keys: [], label: "empty deletes" });
-			if (this.#externalEditorLabel) hints.push({ keys: [], label: `${this.#externalEditorLabel} editor` });
+			if (this.#editingAnnotation) hints.push({ keys: [], label: t("overlays.plan_review_overlay.empty_deletes") });
+			if (this.#externalEditorLabel)
+				hints.push({
+					keys: [],
+					label: t("overlays.plan_review_overlay.editor_hint", {
+						externalEditorLabel: `${this.#externalEditorLabel}`,
+					}),
+				});
 			// The feedback field, inline under the plan: its caption names the anchor, omp's editor holds the text.
 			return [
 				node(
@@ -2464,7 +2503,9 @@ export class PlanReviewOverlay implements Component {
 					{ role: "omp.plan.feedback", gap: "xs" },
 					[
 						keyed(
-							text([span("Note on ", "muted"), span(location, "accent")], { truncate: "end" }),
+							text([span(t("overlays.plan_review_overlay.note_on"), "muted"), span(location, "accent")], {
+								truncate: "end",
+							}),
 							"annotateHead",
 						),
 						this.#editor,
@@ -2487,46 +2528,64 @@ export class PlanReviewOverlay implements Component {
 		const hints: (NativeHint | undefined)[] = [];
 		if (this.#nativeDock) {
 			// The dock's buttons carry their own keycaps (Enter, Esc); the hints name the rest.
-			if (this.#slider) hints.push(key(["left", "right"], "model"));
+			if (this.#slider) hints.push(key(["left", "right"], t("overlays.plan_review_overlay.model_hint_label")));
 			if (this.#sidebarShown) {
-				hints.push(upDown("section"), key("d", "delete section"));
-				if (!this.#nativeDoc) hints.push(key("a", "annotate"), key("e", "edit"));
+				hints.push(
+					upDown(t("overlays.native_hint.section")),
+					key("d", t("overlays.plan_review_overlay.delete_section_hint")),
+				);
+				if (!this.#nativeDoc)
+					hints.push(
+						key("a", t("overlays.native_hint.annotate")),
+						key("e", t("overlays.plan_review_overlay.edit_hint_label")),
+					);
 			}
-			hints.push(key("u", "undo"));
+			hints.push(key("u", t("overlays.native_hint.undo")));
 			if (this.#nativeDoc) {
-				hints.push({ keys: [], label: "double-click to edit" }, { keys: [], label: "select text to comment" });
+				hints.push(
+					{ keys: [], label: t("overlays.plan_review_overlay.double_click_edit") },
+					{ keys: [], label: t("overlays.plan_review_overlay.select_text_comment") },
+				);
 			}
 			return hints;
 		}
 		switch (this.#focus) {
 			case "actions":
-				hints.push(key(["left", "right"], "select"), key("enter", "confirm"));
-				if (this.#slider) hints.push(key(["shift+left", "shift+right"], "model"));
+				hints.push(
+					key(["left", "right"], t("tui.ask.hint.select")),
+					key("enter", t("overlays.plan_review_overlay.confirm_hint_label")),
+				);
+				if (this.#slider)
+					hints.push(key(["shift+left", "shift+right"], t("overlays.plan_review_overlay.model_hint_label")));
 				break;
 			case "toc":
 				hints.push(
-					upDown("section"),
-					key("enter", "open"),
-					key("a", "annotate"),
-					key("e", "edit"),
-					key("d", "delete"),
-					key("u", "undo"),
+					upDown(t("overlays.native_hint.section")),
+					key("enter", t("overlays.plan_review_overlay.open_hint_label")),
+					key("a", t("overlays.native_hint.annotate")),
+					key("e", t("overlays.plan_review_overlay.edit_hint_label")),
+					key("d", t("overlays.plan_review_overlay.delete_hint_label")),
+					key("u", t("overlays.native_hint.undo")),
 				);
 				break;
 			case "body":
 				hints.push(
-					upDown("scroll"),
-					key("shift", "faster"),
-					key(["pageUp", "pageDown"], "page"),
-					key(["g", "shift+g"], "ends"),
-					key("a", "annotate"),
-					key("e", "edit"),
-					key("u", "undo"),
+					upDown(t("overlays.native_hint.scroll")),
+					key("shift", t("overlays.native_hint.faster")),
+					key(["pageUp", "pageDown"], t("overlays.native_hint.page")),
+					key(["g", "shift+g"], t("overlays.native_hint.ends")),
+					key("a", t("overlays.native_hint.annotate")),
+					key("e", t("overlays.plan_review_overlay.edit_hint_label")),
+					key("u", t("overlays.native_hint.undo")),
 				);
 				break;
 		}
-		hints.push(key("tab", "regions"));
-		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));
+		hints.push(key("tab", t("overlays.native_hint.regions")));
+		hints.push(
+			this.#helpSuffix
+				? { keys: [], label: this.#helpSuffix }
+				: actionHint("tui.select.cancel", t("tui.ask.hint.cancel")),
+		);
 		return hints;
 	}
 
@@ -2540,7 +2599,9 @@ export class PlanReviewOverlay implements Component {
 
 		const committed = this.#committed;
 		const sliderLines = committed ? [] : this.#renderSliderLines();
-		const submittingLabel = this.#committedLabel ? `${this.#committedLabel} — submitting…` : "Submitting…";
+		const submittingLabel = this.#committedLabel
+			? t("overlays.plan_review_overlay.label_submitting", { committedLabel: `${this.#committedLabel}` })
+			: t("overlays.plan_review_overlay.submitting");
 		const optionLines = committed ? [theme.bold(theme.fg("accent", submittingLabel))] : this.#renderOptionLines();
 		const promptLines = this.#promptTitle ? [theme.bold(theme.fg("accent", this.#promptTitle))] : [];
 		const baseChrome = 4 + promptLines.length + sliderLines.length + optionLines.length;
@@ -2548,7 +2609,7 @@ export class PlanReviewOverlay implements Component {
 			? Math.max(0, termHeight - baseChrome - MIN_BODY_ROWS)
 			: Number.POSITIVE_INFINITY;
 		const footerLines = committed
-			? [theme.fg("dim", "Applying your selection — this can take a moment while context is prepared.")]
+			? [theme.fg("dim", t("overlays.plan_review_overlay.applying_selection"))]
 			: this.#renderFooterLines(innerWidth, chooserFooterRows);
 
 		// Chrome rows: top border, two dividers, bottom border, plus the
@@ -2575,7 +2636,7 @@ export class PlanReviewOverlay implements Component {
 		const out: string[] = [];
 		if (sidebarShown) {
 			const { lines: sidebar, posForRow } = this.#renderSidebarLines(regionRows, sidebarWidth);
-			out.push(topBorderSplit(width, OVERLAY_TITLE, sidebarWidth));
+			out.push(topBorderSplit(width, t("overlays.plan_review_overlay.review_title"), sidebarWidth));
 			for (let i = 0; i < regionRows; i++) {
 				const pos = posForRow[i];
 				if (pos !== undefined) this.#tocClickRows.set(out.length, pos);
@@ -2584,7 +2645,7 @@ export class PlanReviewOverlay implements Component {
 			}
 			out.push(dividerSplit(width, sidebarWidth));
 		} else {
-			out.push(topBorder(width, OVERLAY_TITLE));
+			out.push(topBorder(width, t("overlays.plan_review_overlay.review_title")));
 			for (const line of body) {
 				this.#bodyClickRows.add(out.length);
 				out.push(row(line, width));

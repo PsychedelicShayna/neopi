@@ -6,6 +6,7 @@
  * because changing them does not modify the definition file.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type {
 	TspPickerAction,
@@ -86,21 +87,55 @@ export interface HubAgent extends AgentDefinitionDraft {
 }
 
 const SOURCE_LABEL: Record<AgentSource, string> = {
-	project: "Project",
-	user: "User",
-	bundled: "Bundled",
+	get project() {
+		return t("overlays.agents_hub.source_project");
+	},
+	get user() {
+		return t("overlays.agents_hub.source_user");
+	},
+	get bundled() {
+		return t("overlays.agents_hub.source_bundled");
+	},
 };
 
-const BUNDLED_FILE_HINT = "Save a copy to edit the file";
 const SOURCE_ORDER: Record<AgentSource, number> = { project: 0, user: 1, bundled: 2 };
 const SOURCES = ["project", "user", "bundled"] as const satisfies readonly AgentSource[];
 /** Per-agent override columns of the config picker; lower priorities hide first. */
 const AGENT_COLUMNS: readonly TspPickerColumn[] = [
-	{ id: "model", head: "Model", format: "text", priority: 4, min: 8 },
-	{ id: "prewalk", head: "Prewalk", format: "text", priority: 2 },
-	{ id: "advisor", head: "Advisor", format: "text", priority: 3 },
+	{
+		id: "model",
+		get head() {
+			return t("settings.tab.model.label");
+		},
+		format: "text",
+		priority: 4,
+		min: 8,
+	},
+	{
+		id: "prewalk",
+		get head() {
+			return t("settings.group.prewalk");
+		},
+		format: "text",
+		priority: 2,
+	},
+	{
+		id: "advisor",
+		get head() {
+			return t("settings.group.advisor");
+		},
+		format: "text",
+		priority: 3,
+	},
 ];
-const SOURCE_COLUMN: TspPickerColumn = { id: "source", head: "Source", format: "dim", priority: 1 };
+const SOURCE_COLUMN: TspPickerColumn = {
+	id: "source",
+	get head() {
+		return t("overlays.agents_hub.column_source");
+	},
+	format: "dim",
+	priority: 1,
+};
 
 interface SidebarEntry extends HubSidebarEntry<"all" | "source" | "new" | "separator"> {
 	source?: AgentSource;
@@ -259,7 +294,7 @@ export class AgentsHubComponent implements Component {
 		} else if (this.#definitionEditor) {
 			lines.push(...this.#definitionEditor.render(width, rows - 1));
 		} else {
-			lines.push(theme.fg("dim", "Enter to create an agent"));
+			lines.push(theme.fg("dim", t("overlays.agents_hub.create_agent_hint")));
 		}
 		while (lines.length < rows) lines.push("");
 		return lines.slice(0, rows);
@@ -300,7 +335,7 @@ export class AgentsHubComponent implements Component {
 		this.#deps = deps;
 		this.#callbacks = callbacks;
 		this.#browser = new ModelBrowser(deps.browserSource, {
-			emptyText: () => "  No models available — configure a provider in /roles first.",
+			emptyText: () => t("overlays.agents_hub.no_models"),
 		});
 		this.#browser.setShowProvider(true);
 		this.#browser.onActivate = item => this.#commitPickedModel(item);
@@ -372,7 +407,7 @@ export class AgentsHubComponent implements Component {
 
 	async #openConfigFile(agent = this.#selectedAgent()): Promise<void> {
 		if (agent?.source === "bundled") {
-			this.#notice = BUNDLED_FILE_HINT;
+			this.#notice = t("overlays.agents_hub.bundled_file_hint");
 			this.#requestRender();
 			return;
 		}
@@ -397,7 +432,12 @@ export class AgentsHubComponent implements Component {
 		const counts: Record<AgentSource, number> = { project: 0, user: 0, bundled: 0 };
 		for (const agent of this.#allAgents) counts[agent.source]++;
 		const entries: SidebarEntry[] = [
-			{ id: "all", kind: "all", label: "All agents", annotation: String(this.#allAgents.length) },
+			{
+				id: "all",
+				kind: "all",
+				label: t("overlays.agents_hub.all_agents"),
+				annotation: String(this.#allAgents.length),
+			},
 		];
 		const sources = (["project", "user", "bundled"] as const).filter(source => counts[source] > 0);
 		if (sources.length > 0) {
@@ -413,7 +453,7 @@ export class AgentsHubComponent implements Component {
 			}
 		}
 		entries.push({ id: "sep:actions", kind: "separator", label: "" });
-		entries.push({ id: "new", kind: "new", label: "New agent" });
+		entries.push({ id: "new", kind: "new", label: t("overlays.agents_hub.new_agent") });
 		this.#entries = entries;
 		this.#scopeEntries = entries.filter(entry => entry.kind !== "separator");
 		if (!entries.some(entry => entry.id === this.#activeEntryId)) this.#activeEntryId = "all";
@@ -459,7 +499,7 @@ export class AgentsHubComponent implements Component {
 	#toggleAgent(agent: HubAgent): void {
 		agent.disabled = !agent.disabled;
 		this.#deps.setAgentDisabled(agent.name, { disabled: agent.disabled });
-		this.#notice = `${agent.name} ${agent.disabled ? "disabled" : "enabled"}`;
+		this.#notice = `${agent.name} ${agent.disabled ? t("overlays.agents_hub.notice_disabled") : t("overlays.agents_hub.notice_enabled")}`;
 		this.#requestRender();
 	}
 
@@ -499,16 +539,28 @@ export class AgentsHubComponent implements Component {
 			case "model": {
 				const patterns = this.#deps.effectiveModelPatterns(agent);
 				const resolved = this.#deps.resolvePatterns(patterns);
-				const base = agent.overrideModel ?? (patterns.length > 0 ? patterns.join(",") : "session model");
-				return `${agent.name} model: ${base}${resolved ? ` → ${resolved}` : ""}`;
+				const base =
+					agent.overrideModel ??
+					(patterns.length > 0 ? patterns.join(",") : t("overlays.agents_hub.session_model"));
+				return t("overlays.agents_hub.model_notice", {
+					name: `${agent.name}`,
+					base: `${base}`,
+					value: `${resolved ? ` → ${resolved}` : ""}`,
+				});
 			}
 			case "prewalk": {
 				const pattern = this.#deps.effectivePrewalkPattern(agent);
-				return `${agent.name} prewalk: ${pattern ? `on (${pattern})` : "off"}`;
+				return t("overlays.agents_hub.prewalk_notice", {
+					name: `${agent.name}`,
+					value: `${pattern ? t("overlays.agents_hub.prewalk_on", { pattern: `${pattern}` }) : "off"}`,
+				});
 			}
 			case "advisor": {
 				const pattern = this.#deps.effectiveAdvisorPattern(agent);
-				return `${agent.name} advisor: ${pattern ? `on (${pattern})` : "off"}`;
+				return t("overlays.agents_hub.advisor_notice", {
+					name: `${agent.name}`,
+					value: `${pattern ? t("overlays.agents_hub.advisor_on", { pattern: `${pattern}` }) : "off"}`,
+				});
 			}
 		}
 	}
@@ -539,8 +591,8 @@ export class AgentsHubComponent implements Component {
 		const enabledChip: StripChip = {
 			label: agent.disabled ? "enable" : "disable",
 			styled: agent.disabled
-				? theme.fg("success", `${theme.status.enabled} enable`)
-				: theme.fg("dim", `${theme.status.disabled} disable`),
+				? theme.fg("success", t("overlays.agents_hub.enable_chip", { enabled: `${theme.status.enabled}` }))
+				: theme.fg("dim", t("overlays.agents_hub.disable_chip", { disabled: `${theme.status.disabled}` })),
 			action: { kind: "toggle" },
 		};
 		const propertyChip = (property: PropertyKind): StripChip => {
@@ -569,26 +621,26 @@ export class AgentsHubComponent implements Component {
 			active ? theme.fg("accent", `${theme.status.enabled} ${label}`) : theme.fg(color, label);
 		if (property === "model") {
 			chips.push({
-				label: "pick model…",
-				styled: theme.fg("accent", "pick model…"),
+				label: t("overlays.agents_hub.pick_model"),
+				styled: theme.fg("accent", t("overlays.agents_hub.pick_model")),
 				action: { kind: "pick", property },
 			});
 			chips.push({
-				label: "pattern…",
-				styled: theme.fg("muted", "pattern…"),
+				label: t("overlays.agents_hub.pattern"),
+				styled: theme.fg("muted", t("overlays.agents_hub.pattern")),
 				action: { kind: "pattern", property },
 			});
 			if (agent.overrideModel) {
 				chips.push({
-					label: "clear override",
-					styled: theme.fg("warning", "clear override"),
+					label: t("overlays.agents_hub.clear_override"),
+					styled: theme.fg("warning", t("overlays.agents_hub.clear_override")),
 					action: { kind: "set", property, value: undefined },
 				});
 			}
 		} else {
 			chips.push({
-				label: "agent default",
-				styled: mark("agent default", current === undefined),
+				label: t("overlays.agents_hub.agent_default"),
+				styled: mark(t("overlays.agents_hub.agent_default"), current === undefined),
 				action: { kind: "set", property, value: undefined },
 			});
 			chips.push({
@@ -602,13 +654,13 @@ export class AgentsHubComponent implements Component {
 				action: { kind: "set", property, value: "off" },
 			});
 			chips.push({
-				label: "pick model…",
-				styled: theme.fg("accent", "pick model…"),
+				label: t("overlays.agents_hub.pick_model"),
+				styled: theme.fg("accent", t("overlays.agents_hub.pick_model")),
 				action: { kind: "pick", property },
 			});
 			chips.push({
-				label: "pattern…",
-				styled: theme.fg("muted", "pattern…"),
+				label: t("overlays.agents_hub.pattern"),
+				styled: theme.fg("muted", t("overlays.agents_hub.pattern")),
 				action: { kind: "pattern", property },
 			});
 		}
@@ -752,7 +804,10 @@ export class AgentsHubComponent implements Component {
 				saveScopeEditable: !agent?.filePath || agent.source === "bundled",
 				save: async (definition, scope, options) => {
 					const filePath = await this.#deps.saveDefinition(scope, definition, options?.asCopy ? undefined : agent);
-					this.#notice = `Saved agent ${definition.name} at ${shortenPath(filePath)}`;
+					this.#notice = t("overlays.agents_hub.agent_saved", {
+						name: `${definition.name}`,
+						filePath: `${shortenPath(filePath)}`,
+					});
 					await this.#reload();
 					const index = this.#rows.findIndex(
 						rowDef => rowDef.kind === "agent" && rowDef.agent.filePath === filePath,
@@ -763,7 +818,10 @@ export class AgentsHubComponent implements Component {
 					agent?.filePath && agent.source !== "bundled" && this.#deps.deleteDefinition
 						? async () => {
 								await this.#deps.deleteDefinition!(agent);
-								this.#notice = `Deleted agent ${agent.name} (${shortenPath(agent.filePath!)})`;
+								this.#notice = t("overlays.agents_hub.agent_deleted", {
+									name: `${agent.name}`,
+									value: `${shortenPath(agent.filePath!)}`,
+								});
 								await this.#reload();
 							}
 						: undefined,
@@ -1135,18 +1193,29 @@ export class AgentsHubComponent implements Component {
 		if (this.#loadError) return truncateToWidth(theme.fg("error", ` ${this.#loadError}`), width);
 		if (this.#assigning) {
 			const { agent, property } = this.#assigning;
-			const what = property === "model" ? "model override" : `${property} model`;
+			const what =
+				property === "model"
+					? t("overlays.agents_hub.model_override")
+					: t("overlays.agents_hub.property_model", { property: `${property}` });
 			return truncateToWidth(
 				theme.fg(
 					"accent",
-					` Picking ${what} for ${theme.bold(agent.name)} — ${formatKeyHint("enter")} assigns, ${editorKey("tui.select.cancel")} cancels`,
+					t("overlays.agents_hub.picking_model_hint", {
+						what: `${what}`,
+						bold: `${theme.bold(agent.name)}`,
+						value: `${formatKeyHint("enter")}`,
+						editorKey: `${editorKey("tui.select.cancel")}`,
+					}),
 				),
 				width,
 			);
 		}
 		if (this.#notice) return truncateToWidth(theme.fg("success", ` ${this.#notice}`), width);
 		const entry = this.#activeEntry();
-		const scopeLabel = entry.kind === "source" ? `${entry.label} agents` : "All agents";
+		const scopeLabel =
+			entry.kind === "source"
+				? t("overlays.agents_hub.source_agents", { label: `${entry.label}` })
+				: t("overlays.agents_hub.all_agents");
 		const count = this.#rows.filter(rowDef => rowDef.kind === "agent").length;
 		return truncateToWidth(theme.fg("muted", ` ${scopeLabel} · ${count}`), width);
 	}
@@ -1169,7 +1238,7 @@ export class AgentsHubComponent implements Component {
 			const hovered = i === this.#rowHover;
 			const cursor = selected && listFocused ? theme.fg("accent", theme.nav.cursor) : " ";
 			if (rowDef.kind === "new") {
-				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", "+ New agent…")}`;
+				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", t("overlays.agents_hub.add_agent"))}`;
 				if (hovered) line = theme.bg("selectedBg", line);
 				lines.push(truncateToWidth(line, width));
 				continue;
@@ -1204,29 +1273,39 @@ export class AgentsHubComponent implements Component {
 		if (this.#strip) {
 			if (this.#strip.kind === "pattern") {
 				const property = this.#strip.property;
-				const values = property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
-				return `Enter ${values} (role aliases like @smol and :level suffixes work; empty clears) · ${cancel} back`;
+				const values =
+					property === "model" ? t("overlays.agents_hub.model_pattern") : t("overlays.agents_hub.pattern_values");
+				return t("overlays.agents_hub.enter_pattern_hint", { values: `${values}`, cancel: `${cancel}` });
 			}
-			return `${enter}/Space set · Tab context · ${cancel} back`;
+			return t("overlays.agents_hub.set_context_hint", { enter: `${enter}`, cancel: `${cancel}` });
 		}
-		if (this.#search.focused) return "Search · type to filter · Esc back to list";
+		if (this.#search.focused) return t("overlays.agents_hub.search_hint");
 		if (this.#assigning) {
-			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
+			return t("overlays.agents_hub.model_browser_hint", { enter: `${enter}`, cancel: `${cancel}` });
 		}
 		if (this.#createActive) {
-			const fileHint = this.#editingOriginal?.source === "bundled" ? ` · ${BUNDLED_FILE_HINT}` : "";
-			return `${enter} edit field${fileHint} · ${cancel} back to agents`;
+			const fileHint =
+				this.#editingOriginal?.source === "bundled" ? ` · ${t("overlays.agents_hub.bundled_file_hint")}` : "";
+			return t("overlays.agents_hub.edit_field_hint", {
+				enter: `${enter}`,
+				fileHint: `${fileHint}`,
+				cancel: `${cancel}`,
+			});
 		}
 		if (this.#focus === "scope") {
-			return `Enter agents · / search · ${cancel} close`;
+			return t("overlays.agents_hub.scope_footer_hint", { cancel: `${cancel}` });
 		}
 		const agent = this.#selectedAgent();
 		const fileHint = this.#canOpenDefinitionFile(agent)
-			? " · Ctrl-G open file"
+			? t("overlays.agents_hub.open_file_hint")
 			: agent?.source === "bundled"
-				? ` · ${BUNDLED_FILE_HINT}`
+				? ` · ${t("overlays.agents_hub.bundled_file_hint")}`
 				: "";
-		return `${enter} edit fields · Space enable/disable · o overrides · / search${fileHint} · Ctrl-R reload · ${cancel} close`;
+		return t("overlays.agents_hub.agent_footer_hint", {
+			enter: `${enter}`,
+			fileHint: `${fileHint}`,
+			cancel: `${cancel}`,
+		});
 	}
 
 	#renderFooter(width: number): string[] {
@@ -1236,7 +1315,7 @@ export class AgentsHubComponent implements Component {
 			this.#createActive ||
 			(this.#assigning ? this.#browser.filterFocused : this.#search.focused);
 		const lines = menuHintLines(
-			editing ? this.#footerHint() : `${this.#footerHint()} · ? help`,
+			editing ? this.#footerHint() : t("overlays.agents_hub.help_hint", { footerHint: `${this.#footerHint()}` }),
 			width,
 			editing ? "" : undefined,
 		).map(line => theme.fg("dim", line));
@@ -1246,8 +1325,19 @@ export class AgentsHubComponent implements Component {
 
 	#renderStrip(width: number, strip: StripState): string {
 		if (strip.kind === "pattern") {
-			const label = theme.fg("accent", `${strip.agent.name} ${strip.property} pattern:`);
-			const labelWidth = visibleWidth(`${strip.agent.name} ${strip.property} pattern:`);
+			const label = theme.fg(
+				"accent",
+				t("overlays.agents_hub.property_pattern_label", {
+					name: `${strip.agent.name}`,
+					property: `${strip.property}`,
+				}),
+			);
+			const labelWidth = visibleWidth(
+				t("overlays.agents_hub.property_pattern_label", {
+					name: `${strip.agent.name}`,
+					property: `${strip.property}`,
+				}),
+			);
 			const inputWidth = Math.max(8, Math.min(40, width - labelWidth - 4));
 			const inputLine = strip.input.render(inputWidth)[0] ?? "";
 			return truncateToWidth(`${label} ${inputLine}`, width);
@@ -1315,7 +1405,7 @@ export class AgentsHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.hub.agents",
-			"Agents",
+			t("settings.option.sidebar.view.agents.label"),
 			node(
 				"col",
 				{ basis: 0.28, min: { w: "18ch" }, max: { w: "32ch" } },
@@ -1343,36 +1433,40 @@ export class AgentsHubComponent implements Component {
 						icon: rowDef.agent.disabled ? "pause" : "agent",
 						group: SOURCE_LABEL[rowDef.agent.source],
 					}
-				: { id: "new", label: "New agent…", icon: "plus" },
+				: { id: "new", label: t("overlays.agents_hub.new_agent_ellipsis"), icon: "plus" },
 		);
 		const rows: TspPrefsRow[] = agent
 			? [
-					{ id: "enabled", label: "Enabled", control: { k: "switch", on: !agent.disabled } },
+					{
+						id: "enabled",
+						label: t("overlays.agents_hub.enabled"),
+						control: { k: "switch", on: !agent.disabled },
+					},
 					{
 						id: "overrides",
-						label: "Settings overrides",
-						hint: "Model, prewalk and advisor overrides do not change the definition file.",
-						disabled: editor?.dirty ? "Save or discard changes first" : undefined,
-						control: { k: "action", act: "edit", label: "Configure…" },
+						label: t("overlays.agents_hub.settings_overrides"),
+						hint: t("overlays.agents_hub.overrides_hint"),
+						disabled: editor?.dirty ? t("overlays.agents_hub.save_or_discard") : undefined,
+						control: { k: "action", act: "edit", label: t("overlays.agents_hub.configure") },
 					},
 				]
 			: [
 					{
 						id: "create-agent",
-						label: "Create an agent",
-						control: { k: "action", act: "edit", label: "Create…" },
+						label: t("overlays.agents_hub.create_agent"),
+						control: { k: "action", act: "edit", label: t("overlays.agents_hub.create_ellipsis") },
 					},
 				];
 		if (this.#activeEntryId !== "all") {
 			rows.push({
 				id: "all-agents",
-				label: "Show all agents",
-				disabled: editor?.dirty ? "Save or discard changes first" : undefined,
-				control: { k: "action", act: "edit", label: "Show" },
+				label: t("overlays.agents_hub.show_all_agents"),
+				disabled: editor?.dirty ? t("overlays.agents_hub.save_or_discard") : undefined,
+				control: { k: "action", act: "edit", label: t("tui.ask.show") },
 			});
 		}
 		return node("prefs", {
-			title: editor?.dirty ? "Agents · unsaved" : "Agents",
+			title: editor?.dirty ? t("overlays.agents_hub.title_unsaved") : t("settings.option.sidebar.view.agents.label"),
 			pages,
 			page: listRowId(this.#rows[this.#rowIndex] ?? { kind: "new" }),
 			lead:
@@ -1380,7 +1474,10 @@ export class AgentsHubComponent implements Component {
 				editor?.detailNotice ??
 				this.#notice ??
 				(agent ? sanitizeDisplaySingleLine(agent.description) : undefined),
-			sections: [...(editor?.detailSections() ?? []), { id: "roster", title: "Roster", rows }],
+			sections: [
+				...(editor?.detailSections() ?? []),
+				{ id: "roster", title: t("overlays.agents_hub.roster"), rows },
+			],
 			focus: this.#createActive ? editor?.selectedDetailItem : null,
 		});
 	}
@@ -1576,14 +1673,15 @@ export class AgentsHubComponent implements Component {
 		const counts: Record<AgentSource, number> = { project: 0, user: 0, bundled: 0 };
 		for (const agent of this.#allAgents) counts[agent.source]++;
 		const scopes: TspPickerScope[] = [
-			{ id: "all", label: "All agents", icon: "users", count: this.#allAgents.length },
+			{ id: "all", label: t("overlays.agents_hub.all_agents"), icon: "users", count: this.#allAgents.length },
 			...SOURCES.map((source): TspPickerScope => ({
 				id: `source:${source}`,
 				label: SOURCE_LABEL[source],
 				icon: source === "project" ? "folder" : source === "user" ? "user" : "box",
 				count: counts[source],
-				group: "Source",
-				disabled: counts[source] === 0 ? `No ${source} agents` : undefined,
+				group: t("overlays.agents_hub.source"),
+				disabled:
+					counts[source] === 0 ? t("overlays.agents_hub.no_source_agents", { source: `${source}` }) : undefined,
 			})),
 		];
 		const entry = this.#activeEntry();
@@ -1592,46 +1690,65 @@ export class AgentsHubComponent implements Component {
 		let actions: TspPickerAction[];
 		if (strip) {
 			actions = [
-				{ id: "apply", label: strip.property ? "Apply" : "Open", keys: ["enter"], primary: true },
-				{ id: "back", label: strip.property ? "Back" : "Cancel", keys: ["esc"], end: true },
+				{
+					id: "apply",
+					label: strip.property ? t("tui.theme.apply") : t("overlays.agents_hub.open"),
+					keys: ["enter"],
+					primary: true,
+				},
+				{
+					id: "back",
+					label: strip.property ? t("overlays.agents_hub.back") : t("tui.components.loader.cancel"),
+					keys: ["esc"],
+					end: true,
+				},
 			];
 		} else {
-			const noAgent = agent ? undefined : "Select an agent";
+			const noAgent = agent ? undefined : t("overlays.agents_hub.select_agent");
 			const canOpenFile = this.#canOpenDefinitionFile(agent);
 			actions = [
-				{ id: "edit-definition", label: agent ? "Edit fields" : "Create", keys: ["enter"], primary: true },
-				{ id: "configure", label: "Overrides", keys: ["o"], disabled: noAgent },
+				{
+					id: "edit-definition",
+					label: agent ? t("overlays.agents_hub.edit_fields") : t("overlays.agents_hub.create"),
+					keys: ["enter"],
+					primary: true,
+				},
+				{ id: "configure", label: t("overlays.agents_hub.overrides"), keys: ["o"], disabled: noAgent },
 				{
 					id: "toggle",
-					label: "Toggle",
+					label: t("overlays.agents_hub.toggle"),
 					keys: ["space"],
 					on: agent ? !agent.disabled : undefined,
 					disabled: noAgent,
 				},
-				{ id: "model", label: "Model", disabled: noAgent },
-				{ id: "new", label: "New agent" },
+				{ id: "model", label: t("settings.tab.model.label"), disabled: noAgent },
+				{ id: "new", label: t("overlays.agents_hub.new_agent") },
 				{
 					id: "edit-file",
-					label: "Open file",
+					label: t("overlays.agents_hub.open_file"),
 					keys: canOpenFile ? ["ctrl", "g"] : undefined,
-					disabled: canOpenFile ? undefined : agent?.source === "bundled" ? BUNDLED_FILE_HINT : "No editable file",
+					disabled: canOpenFile
+						? undefined
+						: agent?.source === "bundled"
+							? t("overlays.agents_hub.bundled_file_hint")
+							: t("overlays.agents_hub.no_editable_file"),
 				},
-				{ id: "reload", label: "Reload", keys: ["ctrl", "r"] },
-				{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+				{ id: "reload", label: t("overlays.agents_hub.reload"), keys: ["ctrl", "r"] },
+				{ ...CLOSE_ACTION, label: this.#search.focused ? t("tui.picker.back_to_list") : t("tui.picker.close") },
 			];
 		}
 		const selectedRow = this.#rows[this.#rowIndex];
 		return picker(
 			{
-				title: "Agents",
+				title: t("settings.option.sidebar.view.agents.label"),
 				subtitle: compileMenuRegex(this.#search.value)?.error ?? this.#notice ?? undefined,
 				icon: "users",
-				noun: "agents",
+				noun: t("tools.count.agent.many"),
 				size: "lg",
 				layout: "rows",
 				preview: "side",
 				...pickerQuery(this.#search.input),
-				placeholder: "Search agents…",
+				placeholder: t("overlays.agents_hub.search_agents"),
 				scopes,
 				scope: entry.kind === "source" ? entry.id : "all",
 				columns: entry.kind === "source" ? AGENT_COLUMNS : [...AGENT_COLUMNS, SOURCE_COLUMN],
@@ -1660,7 +1777,12 @@ export class AgentsHubComponent implements Component {
 
 	#pickerItem(rowDef: ListRow): TspPickerItem {
 		if (rowDef.kind === "new") {
-			return { id: listRowId(rowDef), label: "New agent…", icon: "plus", tone: "muted" };
+			return {
+				id: listRowId(rowDef),
+				label: t("overlays.agents_hub.new_agent_ellipsis"),
+				icon: "plus",
+				tone: "muted",
+			};
 		}
 		const agent = rowDef.agent;
 		const prewalk = this.#deps.effectivePrewalkPattern(agent);
@@ -1671,7 +1793,7 @@ export class AgentsHubComponent implements Component {
 			mono: true,
 			detail: sanitizeDisplaySingleLine(agent.description),
 			dot: agent.disabled ? "muted" : "success",
-			disabled: agent.disabled ? "Disabled · space to enable" : undefined,
+			disabled: agent.disabled ? t("overlays.agents_hub.disabled_hint") : undefined,
 			facts: {
 				model: agent.overrideModel ? agent.overrideModel : [span("auto", "dim")],
 				prewalk: prewalk ?? [span("off", "dim")],
@@ -1684,7 +1806,8 @@ export class AgentsHubComponent implements Component {
 	/** Chip text of a configuration strip, without the ANSI state glyphs (the chip's `on` carries state). */
 	#stripChipLabel(agent: HubAgent, chip: StripChip): string {
 		const action = chip.action;
-		if (action.kind === "toggle") return agent.disabled ? "Enable" : "Disable";
+		if (action.kind === "toggle")
+			return agent.disabled ? t("overlays.agents_hub.enable") : t("overlays.agents_hub.disable");
 		if (action.kind === "property") return `${action.property}: ${this.#propertySummary(agent, action.property)}`;
 		return chip.label;
 	}
@@ -1700,28 +1823,37 @@ export class AgentsHubComponent implements Component {
 		if (!rowDef) return [];
 		if (rowDef.kind === "new") {
 			return [
-				text("New agent", { role: "omp.picker.title" }),
-				md("Create or mix an agent definition, with rich fields, raw editing and generation in one editor."),
+				text(t("overlays.agents_hub.new_agent"), { role: "omp.picker.title" }),
+				md(t("overlays.agents_hub.new_agent_description")),
 			];
 		}
 		const agent = rowDef.agent;
 		const patterns = this.#deps.effectiveModelPatterns(agent);
 		const resolved = this.#deps.resolvePatterns(patterns);
-		const model: TspSpan[] = [patterns.length > 0 ? span(patterns.join(","), "mono") : span("session model", "dim")];
+		const model: TspSpan[] = [
+			patterns.length > 0 ? span(patterns.join(","), "mono") : span(t("overlays.agents_hub.session_model"), "dim"),
+		];
 		if (resolved) model.push(span(" → ", "dim"), span(resolved, "mono success"));
 		const prewalk = this.#deps.effectivePrewalkPattern(agent);
 		const advisor = this.#deps.effectiveAdvisorPattern(agent);
 		const facts: { k: string; v: TspSpan[] | string }[] = [
-			{ k: "Model", v: model },
-			{ k: "Prewalk", v: [prewalk ? span(prewalk, "mono") : span("off", "dim")] },
-			{ k: "Advisor", v: [advisor ? span(advisor, "mono") : span("off", "dim")] },
-			{ k: "Status", v: [agent.disabled ? span("Disabled", "warning") : span("Enabled", "success")] },
-			{ k: "Source", v: SOURCE_LABEL[agent.source] },
+			{ k: t("settings.tab.model.label"), v: model },
+			{ k: t("settings.group.prewalk"), v: [prewalk ? span(prewalk, "mono") : span("off", "dim")] },
+			{ k: t("settings.group.advisor"), v: [advisor ? span(advisor, "mono") : span("off", "dim")] },
+			{
+				k: t("overlays.agents_hub.status"),
+				v: [
+					agent.disabled
+						? span(t("settings.option.ask.timeout.0.label"), "warning")
+						: span(t("overlays.agents_hub.enabled"), "success"),
+				],
+			},
+			{ k: t("overlays.agents_hub.source"), v: SOURCE_LABEL[agent.source] },
 		];
 		if (agent.filePath) {
 			// Bundled agents live in the binary (`embedded:…`): nothing to open.
 			const href = agent.filePath.startsWith("/") ? { href: `file://${agent.filePath}` } : undefined;
-			facts.push({ k: "File", v: [span(shortenPath(agent.filePath), "path", href)] });
+			facts.push({ k: t("overlays.agents_hub.file"), v: [span(shortenPath(agent.filePath), "path", href)] });
 		}
 		const out: NativeChild[] = [
 			node("text", { text: agent.name, role: "omp.picker.title" }, undefined, "title"),
@@ -1733,7 +1865,7 @@ export class AgentsHubComponent implements Component {
 			out.push(
 				node(
 					"section",
-					{ head: "System prompt", role: "omp.agents.prompt" },
+					{ head: t("overlays.agents_hub.system_prompt"), role: "omp.agents.prompt" },
 					[code(agent.systemPrompt, { lang: "md", wrap: true })],
 					"prompt",
 				),
@@ -1774,7 +1906,7 @@ export class AgentsHubComponent implements Component {
 						"definition-fields",
 					),
 				);
-			} else children.push(text([span("Enter to create an agent", "dim")]));
+			} else children.push(text([span(t("overlays.agents_hub.create_agent_hint"), "dim")]));
 		}
 		// Zero basis keeps the body within the space left of the sidebar.
 		return {
@@ -1786,12 +1918,21 @@ export class AgentsHubComponent implements Component {
 		if (this.#loadError) return [span(this.#loadError, "error")];
 		if (this.#assigning) {
 			const { agent, property } = this.#assigning;
-			const what = property === "model" ? "model override" : `${property} model`;
-			return [span(`Picking ${what} for `, "accent"), span(agent.name, "accent strong")];
+			const what =
+				property === "model"
+					? t("overlays.agents_hub.model_override")
+					: t("overlays.agents_hub.property_model", { property: `${property}` });
+			return [
+				span(t("overlays.agents_hub.picking_for", { what: `${what}` }), "accent"),
+				span(agent.name, "accent strong"),
+			];
 		}
 		if (this.#notice) return [span(this.#notice, "success")];
 		const entry = this.#activeEntry();
-		const scopeLabel = entry.kind === "source" ? `${entry.label} agents` : "All agents";
+		const scopeLabel =
+			entry.kind === "source"
+				? t("overlays.agents_hub.source_agents", { label: `${entry.label}` })
+				: t("overlays.agents_hub.all_agents");
 		const count = this.#rows.filter(rowDef => rowDef.kind === "agent").length;
 		return [span(`${scopeLabel} · ${count}`, "muted")];
 	}
@@ -1800,7 +1941,11 @@ export class AgentsHubComponent implements Component {
 		const search = this.#search.focused
 			? node(
 					"input",
-					{ text: this.#search.value, cursor: this.#search.cursor, prompt: [span("Search: ", "muted")] },
+					{
+						text: this.#search.value,
+						cursor: this.#search.cursor,
+						prompt: [span(t("tui.components.search.prefix"), "muted")],
+					},
 					undefined,
 					"search",
 				)
@@ -1809,8 +1954,13 @@ export class AgentsHubComponent implements Component {
 					{
 						spans: [
 							this.#search.value
-								? span(`Search: ${sanitizeDisplaySingleLine(this.#search.value)} · / search`, "muted")
-								: span("/ search", "dim"),
+								? span(
+										t("overlays.agents_hub.search_value_hint", {
+											value: `${sanitizeDisplaySingleLine(this.#search.value)}`,
+										}),
+										"muted",
+									)
+								: span(t("tui.components.search.placeholder"), "dim"),
 						],
 						truncate: "end",
 					},
@@ -1819,7 +1969,7 @@ export class AgentsHubComponent implements Component {
 				);
 		const items = this.#rows.map(rowDef =>
 			rowDef.kind === "new"
-				? node("item", { label: [span("+ New agent…", "dim")] }, undefined, listRowId(rowDef))
+				? node("item", { label: [span(t("overlays.agents_hub.add_agent"), "dim")] }, undefined, listRowId(rowDef))
 				: this.#describeAgentItem(rowDef.agent),
 		);
 		const selectedRow = this.#rows[this.#rowIndex];
@@ -1831,7 +1981,7 @@ export class AgentsHubComponent implements Component {
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
-				aria: "Agents",
+				aria: t("settings.option.sidebar.view.agents.label"),
 			},
 			items,
 			"agents",
@@ -1891,8 +2041,8 @@ export class AgentsHubComponent implements Component {
 		switch (action.kind) {
 			case "toggle":
 				return chip.label === "enable"
-					? [span(`${theme.status.enabled} enable`, "success")]
-					: [span(`${theme.status.disabled} disable`, "dim")];
+					? [span(t("overlays.agents_hub.enable_chip", { enabled: `${theme.status.enabled}` }), "success")]
+					: [span(t("overlays.agents_hub.disable_chip", { disabled: `${theme.status.disabled}` }), "dim")];
 			case "property":
 				return [span(action.property, "accent"), span(`: ${this.#propertySummary(agent, action.property)}`, "dim")];
 			case "set": {
@@ -1916,7 +2066,18 @@ export class AgentsHubComponent implements Component {
 			return node(
 				"row",
 				{ gap: "sm", align: "center" },
-				[text([span(`${strip.agent.name} ${strip.property} pattern:`, "accent")]), col([strip.input], { grow: 1 })],
+				[
+					text([
+						span(
+							t("overlays.agents_hub.property_pattern_label", {
+								name: `${strip.agent.name}`,
+								property: `${strip.property}`,
+							}),
+							"accent",
+						),
+					]),
+					col([strip.input], { grow: 1 }),
+				],
 				"pattern",
 			);
 		}
@@ -1950,52 +2111,61 @@ export class AgentsHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "pattern") {
-				const values = strip.property === "model" ? "a model pattern" : '"on", "off", or a model pattern';
+				const values =
+					strip.property === "model"
+						? t("overlays.agents_hub.model_pattern")
+						: t("overlays.agents_hub.pattern_values");
 				return [
-					{ keys: ["enter"], label: `${values} (role aliases like @smol and :level suffixes work; empty clears)` },
-					cancel("back"),
+					{ keys: ["enter"], label: t("overlays.agents_hub.pattern_help", { values: `${values}` }) },
+					cancel(t("overlays.agents_hub.back_lower")),
 				];
 			}
 			return [
-				{ keys: ["up", "down"], label: "choose" },
-				{ keys: ["enter", "space"], label: "set" },
-				{ keys: ["left", "right"], label: "pane" },
-				cancel("back"),
+				{ keys: ["up", "down"], label: t("overlays.native_hint.choose") },
+				{ keys: ["enter", "space"], label: t("overlays.native_hint.set") },
+				{ keys: ["left", "right"], label: t("overlays.native_hint.pane") },
+				cancel(t("overlays.agents_hub.back_lower")),
 			];
 		}
 		if (this.#assigning) {
 			return [
-				{ keys: ["enter"], label: "pick" },
-				upDown("models"),
-				{ keys: ["/"], label: "search" },
-				cancel("cancel"),
+				{ keys: ["enter"], label: t("overlays.native_hint.pick") },
+				upDown(t("overlays.native_hint.models")),
+				{ keys: ["/"], label: t("overlays.agents_hub.search_lower") },
+				cancel(t("tui.ask.hint.cancel")),
 			];
 		}
 		if (this.#createActive)
 			return [
-				{ keys: ["r"], label: "generate field" },
-				{ keys: ["shift+r"], label: "generate with comment" },
-				this.#editingOriginal?.source === "bundled" ? { keys: [], label: BUNDLED_FILE_HINT } : undefined,
-				cancel("back"),
+				{ keys: ["r"], label: t("overlays.agents_hub.generate_field") },
+				{ keys: ["shift+r"], label: t("overlays.agents_hub.generate_with_comment") },
+				this.#editingOriginal?.source === "bundled"
+					? { keys: [], label: t("overlays.agents_hub.bundled_file_hint") }
+					: undefined,
+				cancel(t("overlays.agents_hub.back_lower")),
 			];
-		if (this.#search.focused) return [cancel("back to list")];
+		if (this.#search.focused) return [cancel(t("overlays.agents_hub.back_to_list_lower"))];
 		if (this.#focus === "scope") {
-			return [upDown("scopes"), { keys: ["right", "enter"], label: "agents" }, cancel("close")];
+			return [
+				upDown(t("overlays.native_hint.scopes")),
+				{ keys: ["right", "enter"], label: t("tools.count.agent.many") },
+				cancel(t("settings.selector.close")),
+			];
 		}
 		const agent = this.#selectedAgent();
 		return [
-			{ keys: ["enter"], label: "edit fields" },
-			{ keys: ["o"], label: "overrides" },
-			{ keys: ["space"], label: "enable/disable" },
-			upDown("rows"),
-			{ keys: ["/"], label: "search" },
-			{ keys: ["ctrl+r"], label: "reload" },
+			{ keys: ["enter"], label: t("overlays.agents_hub.edit_fields_lower") },
+			{ keys: ["o"], label: t("overlays.native_hint.overrides") },
+			{ keys: ["space"], label: t("overlays.native_hint.enable_disable") },
+			upDown(t("overlays.native_hint.rows")),
+			{ keys: ["/"], label: t("overlays.agents_hub.search_lower") },
+			{ keys: ["ctrl+r"], label: t("overlays.native_hint.reload") },
 			this.#canOpenDefinitionFile(agent)
-				? { keys: ["ctrl+g"], label: "open file" }
+				? { keys: ["ctrl+g"], label: t("overlays.agents_hub.open_file_lower") }
 				: agent?.source === "bundled"
-					? { keys: [], label: BUNDLED_FILE_HINT }
+					? { keys: [], label: t("overlays.agents_hub.bundled_file_hint") }
 					: undefined,
-			cancel("close"),
+			cancel(t("settings.selector.close")),
 		];
 	}
 

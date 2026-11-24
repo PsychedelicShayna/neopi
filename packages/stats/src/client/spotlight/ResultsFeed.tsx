@@ -9,7 +9,8 @@ import {
 	formatRelativeTime,
 	formatTimestamp,
 } from "../data/formatters";
-import type { SpotlightRecoveryKind, SpotlightResultRow } from "../types";
+import { useLocale, useTranslation } from "../i18n";
+import type { Locale, SpotlightRecoveryKind, SpotlightResultRow, Translation } from "../types";
 import { Badge, Card, type Column, Drawer, KeyValues, Table } from "../ui";
 import { KindBadge } from "./chips";
 import { formatSignedCompact, RECOVERY_KIND, RECOVERY_KINDS, toolIcon } from "./meta";
@@ -28,13 +29,34 @@ function NetCell({ value }: { value: number }) {
 
 /** Plain → out with a bar of what survived the cut (would have, when held out). */
 function ShrinkCell({ row }: { row: SpotlightResultRow }) {
+	const tr = useTranslation();
 	const { plainTokens, outTokens } = row;
 	const kept = plainTokens > 0 ? Math.min(1, outTokens / plainTokens) : 1;
 	return (
 		<div
 			className="spot-shrink"
 			data-holdout={row.holdout}
-			title={`plain would show ${formatInteger(plainTokens)} tokens, the cut ${row.holdout ? "would show" : "showed"} ${formatInteger(outTokens)} (shaping read ${formatInteger(row.inTokens)})`}
+			title={
+				row.holdout
+					? tr(
+							"insights.results.shrink_holdout",
+							"plain would show {plain} tokens, the cut would show {out} (shaping read {full})",
+							{
+								plain: formatInteger(plainTokens),
+								out: formatInteger(outTokens),
+								full: formatInteger(row.inTokens),
+							},
+						)
+					: tr(
+							"insights.results.shrink_cut",
+							"plain would show {plain} tokens, the cut showed {out} (shaping read {full})",
+							{
+								plain: formatInteger(plainTokens),
+								out: formatInteger(outTokens),
+								full: formatInteger(row.inTokens),
+							},
+						)
+			}
 		>
 			<span className="num">
 				{formatCompact(plainTokens)}
@@ -57,10 +79,10 @@ function kindCounts(row: SpotlightResultRow): [SpotlightRecoveryKind, number][] 
 	});
 }
 
-const COLUMNS: Column<SpotlightResultRow>[] = [
+const resultColumns = (tr: Translation, locale: Locale): Column<SpotlightResultRow>[] => [
 	{
 		key: "target",
-		header: "Result",
+		header: tr("insights.results.result", "Result"),
 		width: "40%",
 		sort: row => row.timestamp,
 		render: row => {
@@ -78,8 +100,8 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 						<span className="row spot-result-meta">
 							{row.holdout && <HoldoutBadge />}
 							{row.scoreFree && <ScoreFreeBadge />}
-							<span className="dim" title={formatTimestamp(row.timestamp)}>
-								{formatRelativeTime(row.timestamp)}
+							<span className="dim" title={formatTimestamp(row.timestamp, locale)}>
+								{formatRelativeTime(row.timestamp, locale)}
 							</span>
 						</span>
 					</div>
@@ -89,21 +111,27 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 	},
 	{
 		key: "shrink",
-		header: "Plain → out",
+		header: tr("insights.results.plain_out", "Plain → out"),
 		align: "right",
 		sort: row => (row.plainTokens > 0 ? row.outTokens / row.plainTokens : 1),
-		title: "What pi would have shown unshaped (plain) for the call, and what the cut showed; the bar is the share that survived",
+		title: tr(
+			"insights.results.plain_out_tip",
+			"What pi would have shown unshaped (plain) for the call, and what the cut showed; the bar is the share that survived",
+		),
 		render: row => <ShrinkCell row={row} />,
 	},
 	{
 		key: "saved",
-		header: "Saved",
+		header: tr("insights.saved", "Saved"),
 		align: "right",
 		sort: row => row.savedTokens,
 		render: row =>
 			row.holdout ? (
-				<span className="spot-would-save" title="Held out: what the cut would have saved">
-					<span className="dim">would save </span>
+				<span
+					className="spot-would-save"
+					title={tr("insights.results.would_save_tip", "Held out: what the cut would have saved")}
+				>
+					<span className="dim">{tr("insights.results.would_save_prefix", "would save ")}</span>
 					<span className="num">{formatSignedCompact(row.savedTokens)}</span>
 				</span>
 			) : (
@@ -112,7 +140,7 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 	},
 	{
 		key: "hidden",
-		header: "Hidden lines",
+		header: tr("insights.results.hidden", "Hidden lines"),
 		align: "right",
 		sort: row => row.hiddenLines,
 		render: row =>
@@ -124,12 +152,12 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 	},
 	{
 		key: "recoveries",
-		header: "Fetched back",
+		header: tr("insights.fetched_back", "Fetched back"),
 		sort: row => row.recoveries.length,
 		render: row => {
 			const counts = kindCounts(row);
 			return counts.length === 0 ? (
-				<span className="dim" title="Nothing fetched back">
+				<span className="dim" title={tr("insights.results.nothing_fetched", "Nothing fetched back")}>
 					–
 				</span>
 			) : (
@@ -143,13 +171,22 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 	},
 	{
 		key: "net",
-		header: "Net",
+		header: tr("insights.net", "Net"),
 		align: "right",
 		sort: row => row.netTokens,
-		title: "Saved tokens minus the tokens of the calls that fetched hidden output back",
+		title: tr(
+			"insights.results.net_tip",
+			"Saved tokens minus the tokens of the calls that fetched hidden output back",
+		),
 		render: row =>
 			row.holdout ? (
-				<span className="dim" title="Held out: the model saw the whole result, so nothing was saved">
+				<span
+					className="dim"
+					title={tr(
+						"insights.results.net_holdout",
+						"Held out: the model saw the whole result, so nothing was saved",
+					)}
+				>
 					–
 				</span>
 			) : (
@@ -159,23 +196,38 @@ const COLUMNS: Column<SpotlightResultRow>[] = [
 ];
 
 function HoldoutBadge() {
+	const tr = useTranslation();
 	return (
-		<span title="Held out at random: the model saw the original, unshortened result">
-			<Badge>held out</Badge>
+		<span
+			title={tr(
+				"insights.results.holdout_tip",
+				"Held out at random: the model saw the original, unshortened result",
+			)}
+		>
+			<Badge>{tr("insights.results.holdout_badge", "held out")}</Badge>
 		</span>
 	);
 }
 
 function ScoreFreeBadge() {
+	const tr = useTranslation();
 	return (
-		<span title="A random coin skipped Spotlight: the no-score fallback rules made this cut">
-			<Badge>score-free</Badge>
+		<span
+			title={tr(
+				"insights.results.score_free_tip",
+				"A random coin skipped Spotlight: the no-score fallback rules made this cut",
+			)}
+		>
+			<Badge>{tr("insights.results.score_free_badge", "score-free")}</Badge>
 		</span>
 	);
 }
 
 /** The 60 newest shortened results; a row opens its recovery timeline. */
 export function ResultsFeed({ rows, stale }: { rows: readonly SpotlightResultRow[]; stale: boolean }) {
+	const tr = useTranslation();
+	const locale = useLocale();
+	const columns = useMemo(() => resultColumns(tr, locale), [tr, locale]);
 	const [selected, setSelected] = useState<string | null>(null);
 	const close = useCallback(() => setSelected(null), []);
 	const current = useMemo(() => rows.find(row => rowKey(row) === selected) ?? null, [rows, selected]);
@@ -184,20 +236,30 @@ export function ResultsFeed({ rows, stale }: { rows: readonly SpotlightResultRow
 		<>
 			<Card
 				index={6}
-				title="Recent results"
-				description="The newest shortened and held-out tool results and what the agent fetched back"
+				title={tr("insights.results.title", "Recent results")}
+				description={tr(
+					"insights.results.description",
+					"The newest shortened and held-out tool results and what the agent fetched back",
+				)}
 				flush
 				stale={stale}
-				footer="Saved is what plain would have shown minus what the cut showed (the would-be cut for held-out ones, which save nothing); recovery tokens are the recovery calls' results (chars ÷ 4 when no exact count exists)."
+				footer={tr(
+					"insights.results.footer",
+					"Saved is what plain would have shown minus what the cut showed (the would-be cut for held-out ones, which save nothing); recovery tokens are the recovery calls' results (chars ÷ 4 when no exact count exists).",
+				)}
 			>
 				<Table
 					rows={rows}
 					rowKey={rowKey}
-					columns={COLUMNS}
+					columns={columns}
 					onRowClick={row => setSelected(rowKey(row))}
 					selectedKey={selected}
 					limit={15}
-					empty={<div className="empty">No shortened or held-out results in this range.</div>}
+					empty={
+						<div className="empty">
+							{tr("insights.results.empty", "No shortened or held-out results in this range.")}
+						</div>
+					}
 				/>
 			</Card>
 			<RecoveryDrawer row={current} onClose={close} />
@@ -206,6 +268,8 @@ export function ResultsFeed({ rows, stale }: { rows: readonly SpotlightResultRow
 }
 
 function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onClose: () => void }) {
+	const tr = useTranslation();
+	const locale = useLocale();
 	if (row === null) return null;
 	const Icon = toolIcon(row.tool);
 	const recovered = row.savedTokens - row.netTokens;
@@ -225,25 +289,30 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 					{row.tool}
 					{row.holdout && <HoldoutBadge />}
 					{row.scoreFree && <ScoreFreeBadge />}
-					<span>{formatTimestamp(row.timestamp)}</span>
+					<span>{formatTimestamp(row.timestamp, locale)}</span>
 				</span>
 			}
 		>
 			<div className="spot-drawer-summary">
 				<div>
-					<div className="spot-eyebrow">{row.holdout ? "Would save" : "Saved"}</div>
+					<div className="spot-eyebrow">
+						{row.holdout ? tr("insights.results.would_save", "Would save") : tr("insights.saved", "Saved")}
+					</div>
 					<div className="spot-drawer-figure num">{formatSignedCompact(row.savedTokens)}</div>
 				</div>
 				<div>
-					<div className="spot-eyebrow">Fetched back</div>
+					<div className="spot-eyebrow">{tr("insights.fetched_back", "Fetched back")}</div>
 					<div className={recovered > 0 ? "spot-drawer-figure num tone-warn" : "spot-drawer-figure num"}>
 						{formatCompact(recovered)}
 					</div>
 				</div>
 				<div>
-					<div className="spot-eyebrow">Net</div>
+					<div className="spot-eyebrow">{tr("insights.net", "Net")}</div>
 					{row.holdout ? (
-						<div className="spot-drawer-figure dim" title="Held out: the model saw the whole result">
+						<div
+							className="spot-drawer-figure dim"
+							title={tr("insights.results.drawer_net_holdout", "Held out: the model saw the whole result")}
+						>
 							–
 						</div>
 					) : (
@@ -260,27 +329,53 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 
 			<KeyValues
 				items={[
-					{ key: "plain", label: "Plain would show", value: formatInteger(row.plainTokens) },
-					{ key: "out", label: "Tokens out", value: formatInteger(row.outTokens) },
-					{ key: "in", label: "Full output read", value: formatInteger(row.inTokens) },
+					{
+						key: "plain",
+						label: tr("insights.results.drawer_plain", "Plain would show"),
+						value: formatInteger(row.plainTokens),
+					},
+					{
+						key: "out",
+						label: tr("insights.results.drawer_out", "Tokens out"),
+						value: formatInteger(row.outTokens),
+					},
+					{
+						key: "in",
+						label: tr("insights.results.drawer_full", "Full output read"),
+						value: formatInteger(row.inTokens),
+					},
 					{
 						key: "hidden",
-						label: row.holdout ? "Lines it would hide" : "Hidden lines",
+						label: row.holdout
+							? tr("insights.results.drawer_would_hide", "Lines it would hide")
+							: tr("insights.results.hidden", "Hidden lines"),
 						value: formatInteger(row.hiddenLines),
 					},
-					{ key: "steps", label: "Steps", value: row.steps.length > 0 ? row.steps.join(" → ") : "–" },
-					{ key: "cost", label: "Spotlight cost", value: formatCost(row.spotlightUsd) },
-					{ key: "ms", label: "Shaping time", value: formatDurationMs(row.shapeMs) },
+					{
+						key: "steps",
+						label: tr("insights.steps.steps", "Steps"),
+						value: row.steps.length > 0 ? row.steps.join(" → ") : "–",
+					},
+					{
+						key: "cost",
+						label: tr("insights.spotlight_cost", "Spotlight cost"),
+						value: formatCost(row.spotlightUsd),
+					},
+					{
+						key: "ms",
+						label: tr("insights.results.drawer_shaping_time", "Shaping time"),
+						value: formatDurationMs(row.shapeMs),
+					},
 				]}
 			/>
 
 			<div>
-				<div className="section-label">Call</div>
+				<div className="section-label">{tr("insights.results.call", "Call")}</div>
 				<pre className="code-block spot-drawer-call">{row.target}</pre>
 			</div>
 
 			<div>
-				<div className="section-label">Recovery timeline</div>
+				<div className="section-label">{tr("insights.results.timeline", "Recovery timeline")}</div>
 				<ol className="spot-timeline">
 					<li className="spot-timeline-item" data-kind={row.holdout ? "holdout" : "cut"}>
 						<span className="spot-timeline-node" aria-hidden="true">
@@ -289,12 +384,24 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 						<div className="spot-timeline-body">
 							<div className="row spot-timeline-head">
 								<span className="cell-primary">
-									{row.holdout ? "Held out: the model saw the original" : "Shortened"}
+									{row.holdout
+										? tr("insights.results.timeline_holdout", "Held out: the model saw the original")
+										: tr("insights.results.shortened", "Shortened")}
 								</span>
 								<span className="dim num">
-									{row.holdout && "would be "}
-									{formatCompact(row.plainTokens)} → {formatCompact(row.outTokens)} tokens
-									{row.hiddenLines > 0 && `, ${formatInteger(row.hiddenLines)} lines hidden`}
+									{row.holdout
+										? tr("insights.results.would_change", "would be {plain} → {out} tokens", {
+												plain: formatCompact(row.plainTokens),
+												out: formatCompact(row.outTokens),
+											})
+										: tr("insights.results.cut_change", "{plain} → {out} tokens", {
+												plain: formatCompact(row.plainTokens),
+												out: formatCompact(row.outTokens),
+											})}
+									{row.hiddenLines > 0 &&
+										tr("insights.results.hidden_count", ", {count} lines hidden", {
+											count: formatInteger(row.hiddenLines),
+										})}
 								</span>
 							</div>
 						</div>
@@ -312,7 +419,7 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 							<div className="spot-timeline-body">
 								<div className="row spot-timeline-head">
 									<KindBadge kind={r.kind} />
-									{r.turn && <Badge tone="warn">extra turn</Badge>}
+									{r.turn && <Badge tone="warn">{tr("insights.results.extra_turn", "extra turn")}</Badge>}
 									<span className="spot-timeline-spacer" />
 									<span className="num tone-warn">+{formatCompact(r.tokens)}</span>
 								</div>
@@ -322,9 +429,17 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 								</code>
 								<div className="micro">
 									{r.after === 0
-										? "The next call"
-										: `${formatInteger(r.after)} ${r.after === 1 ? "call" : "calls"} later`}
-									{` · ${formatElapsed(Math.max(0, r.timestamp - row.timestamp))} after the cut`}
+										? tr("insights.results.next_call", "The next call")
+										: r.after === 1
+											? tr("insights.results.call_later_one", "{count} call later", {
+													count: formatInteger(r.after),
+												})
+											: tr("insights.results.call_later_many", "{count} calls later", {
+													count: formatInteger(r.after),
+												})}
+									{tr("insights.results.after_cut", " · {elapsed} after the cut", {
+										elapsed: formatElapsed(Math.max(0, r.timestamp - row.timestamp)),
+									})}
 								</div>
 							</div>
 						</li>
@@ -336,14 +451,18 @@ function RecoveryDrawer({ row, onClose }: { row: SpotlightResultRow | null; onCl
 								<span className="cell-primary">
 									{row.holdout
 										? row.recoveries.length === 0
-											? "Nothing fetched back"
-											: "Fetched more although it saw everything"
+											? tr("insights.results.nothing_fetched", "Nothing fetched back")
+											: tr("insights.results.fetched_full", "Fetched more although it saw everything")
 										: row.recoveries.length === 0
-											? "Nothing fetched back: the full saving stands"
-											: "Net"}
+											? tr("insights.results.full_saving", "Nothing fetched back: the full saving stands")
+											: tr("insights.net", "Net")}
 								</span>
 								<span className="spot-timeline-spacer" />
-								{row.holdout ? <span className="dim">saves nothing</span> : <NetCell value={row.netTokens} />}
+								{row.holdout ? (
+									<span className="dim">{tr("insights.results.no_saving", "saves nothing")}</span>
+								) : (
+									<NetCell value={row.netTokens} />
+								)}
 							</div>
 						</div>
 					</li>

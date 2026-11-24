@@ -32,6 +32,7 @@ import type {
 	StatusLineSeparatorStyle,
 } from "../status-line/schema";
 import {
+	localizeSettingOption,
 	numberSteps,
 	numericOption,
 	SETTINGS_FILE_SCOPES,
@@ -228,7 +229,7 @@ class NumericSettingsField extends Container {
 				}
 				this.#field = createSettingsTextField(
 					def.label,
-					"Enter a token count, such as 120000. Clear the field to inherit the default.",
+					t("settings.selector.token_count_help"),
 					Number(currentValue) > 0 ? currentValue : "",
 					false,
 					input => {
@@ -268,7 +269,7 @@ class NumericSettingsField extends Container {
 
 /** An enum setting's values as choices, each labelled by its value. */
 function enumOptions(def: SettingDef & { type: "enum" }): SelectItem[] {
-	return def.values.map(value => ({ value, label: value }));
+	return def.values.map(value => localizeSettingOption(def.path, { value, label: value }));
 }
 /**
  * Single-choice setting field backed by the shared select form field.
@@ -402,10 +403,14 @@ class MultiSelectSubmenu extends Container {
 			this.#cursor = this.#options.findIndex(option => option.value === item.value);
 		};
 		this.#selectList.onCancel = this.#onClose;
-		const back = `${editorKey("tui.select.cancel")} to go back`;
+		const back = t("settings.selector.multiselect.back", { cancel_key: editorKey("tui.select.cancel") });
 		const hint = this.#ordered
-			? `  Click to toggle · drag selected items to reorder · ←/→ move · 1-9 place · / search · ${back}`
-			: `  Click/${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to toggle · ${back}`;
+			? t("settings.selector.multiselect.ordered_hint", { back })
+			: t("settings.selector.multiselect.hint", {
+					confirm_key: editorKey("tui.select.confirm"),
+					space_key: formatKeyHint("space"),
+					back,
+				});
 		this.#field = new FormField(this.#selectList, {
 			theme: formTheme,
 			label: this.#title,
@@ -615,19 +620,21 @@ class ProviderLimitsSubmenu extends Container {
 						{
 							value: "__clear_all",
 							label: t("settings.selector.clear_limits.label"),
-							description: "Make every provider unlimited",
+							description: t("settings.selector.clear_limits.description"),
 						},
 					];
 		const items = [...providerItems, ...clearItem];
 		this.#listField = new SelectFormField({
 			theme: formTheme,
-			label: "Max In-Flight Requests",
-			description:
-				"Select a provider, enter a positive number to cap concurrent LLM requests, or clear it for unlimited.",
+			label: t("settings.selector.provider_limits.label"),
+			description: t("settings.selector.provider_limits.description"),
 			items,
 			maxVisible: 12,
 			selectTheme: getSelectListTheme(),
-			hint: `  ${editorKey("tui.select.confirm")} to edit provider · ${editorKey("tui.select.cancel")} to go back`,
+			hint: t("settings.selector.provider_limits.hint", {
+				confirm_key: editorKey("tui.select.confirm"),
+				cancel_key: editorKey("tui.select.cancel"),
+			}),
 			onSubmit: value => {
 				if (value === "__clear_all") {
 					this.#settings.set("providers.maxInFlightRequests", {});
@@ -658,10 +665,12 @@ class ProviderLimitsSubmenu extends Container {
 		this.addChild(
 			new TextFormField({
 				theme: formTheme,
-				label: `Max In-Flight Requests: ${provider}`,
-				description: this.#settings.own
-					? "Enter a positive number. Decimals round down. Clear the field to inherit this provider’s limit."
-					: "Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
+				label: t("settings.selector.provider_limit.label", { provider }),
+				description: t(
+					this.#settings.own
+						? "settings.selector.provider_limit.inherit_description"
+						: "settings.selector.provider_limit.description",
+				),
 				initialValue: limits[provider]?.toString() ?? undefined,
 				empty: "submit",
 				hint: t("settings.selector.text_hint", {
@@ -786,7 +795,7 @@ function getSettingsTabs(): Tab[] {
 			const icon = theme.symbol(meta.icon);
 			return { id, label: `${icon} ${t(`settings.tab.${id}.label`)}`, short: icon };
 		}),
-		{ id: "plugins", label: `${theme.icon.package} Plugins`, short: theme.icon.package },
+		{ id: "plugins", label: `${theme.icon.package} ${t("settings.selector.plugins")}`, short: theme.icon.package },
 	];
 }
 
@@ -899,6 +908,7 @@ export class SettingsSelectorComponent implements Component {
 	#contentRowStart = 0;
 	#contentRowCount = 0;
 	#sidebarWidth: number;
+	#locale = getLocale();
 	readonly #context: SettingsRuntimeContext;
 	readonly #callbacks: SettingsCallbacks;
 
@@ -968,7 +978,7 @@ export class SettingsSelectorComponent implements Component {
 		const edit = this.#editingSetting;
 		if (!edit?.changedElsewhere) return undefined;
 		const label = getSettingDef(this.#context.settings.entries, edit.path)?.label ?? edit.path;
-		return `${label}: changed elsewhere — your edit is preserved`;
+		return t("settings.selector.reload_conflict", { label });
 	}
 
 	invalidate(): void {
@@ -1050,14 +1060,13 @@ export class SettingsSelectorComponent implements Component {
 
 	#scopeTitle(styled = false): string {
 		const active = this.#context.settings.scope ?? "global";
-		const scopes = SETTINGS_FILE_SCOPES.map(scope =>
-			scope === active
-				? styled
-					? theme.bold(theme.fg("accent", `[${scope.toUpperCase()}]`))
-					: `[${scope.toUpperCase()}]`
-				: scope,
-		);
-		return `Settings · ${scopes.join(" / ")} · Ctrl+S cycle scope`;
+		const scopes = SETTINGS_FILE_SCOPES.map(scope => {
+			const label = t(`settings.value.${scope}`);
+			if (scope !== active) return label;
+			const marked = `[${label.toUpperCase()}]`;
+			return styled ? theme.bold(theme.fg("accent", marked)) : marked;
+		});
+		return t("settings.selector.scope_title", { scopes: scopes.join(" / ") });
 	}
 
 	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
@@ -1090,6 +1099,7 @@ export class SettingsSelectorComponent implements Component {
 	 * then a footer hint pinned above the bottom border.
 	 */
 	render(width: number): readonly string[] {
+		this.#refreshLocale();
 		const height = Math.max(14, process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
 		const hints = menuHintLines(
@@ -1165,6 +1175,7 @@ export class SettingsSelectorComponent implements Component {
 	 * root card of today's generic composition.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		this.#refreshLocale();
 		if (this.#help.open) return this.#help.describe();
 		return cx.supports("prefs") ? this.#describePrefs() : this.#describeCard();
 	}
@@ -1189,7 +1200,12 @@ export class SettingsSelectorComponent implements Component {
 			const changed = this.#changedCount(id);
 			return { id, label: t(`settings.tab.${id}.label`), icon: id, changed: changed > 0 ? changed : undefined };
 		});
-		pages.push({ id: PLUGINS_PAGE, label: "Installed", icon: "plugins", group: "Plugins" });
+		pages.push({
+			id: PLUGINS_PAGE,
+			label: t("settings.selector.installed"),
+			icon: "plugins",
+			group: t("settings.selector.plugins"),
+		});
 
 		let sections: TspPrefsProps["sections"] = [];
 		let focus: string | null = null;
@@ -1255,11 +1271,13 @@ export class SettingsSelectorComponent implements Component {
 			page: searching ? this.#preSearchTabId : this.#currentTabId,
 			lead: [
 				searchError
-					? `Invalid regex: ${searchError}`
+					? t("settings.selector.invalid_regex", { error: searchError })
 					: searching
 						? undefined
 						: (pluginPage?.lead ?? (tab ? t(`settings.tab.${tab}.lead`) : undefined)),
-				`Ctrl+S cycle scope${this.#callbacks.onApply ? " · F6 Apply" : ""}`,
+				t("settings.selector.scope_hint", {
+					apply_hint: this.#callbacks.onApply ? t("settings.selector.apply_hint") : "",
+				}),
 				this.#applyFeedback,
 				this.#getReloadConflict(),
 			]
@@ -1342,7 +1360,7 @@ export class SettingsSelectorComponent implements Component {
 					mono: !def.secret && MONO_TEXT_SETTING.test(def.path) ? true : undefined,
 				};
 			case "providerLimits":
-				return { k: "action", label: "Edit…", act: "edit" };
+				return { k: "action", label: t("settings.selector.edit"), act: "edit" };
 			case "multiselect":
 				return {
 					k: "multi",
@@ -1358,7 +1376,11 @@ export class SettingsSelectorComponent implements Component {
 		const value: unknown = def.defaultValue;
 		switch (def.type) {
 			case "boolean":
-				return value ? "On" : "Off";
+				return t(value ? "settings.selector.boolean.on" : "settings.selector.boolean.off");
+			case "enum": {
+				const raw = String(value ?? "");
+				return localizeSettingOption(def.path, { value: raw, label: raw }).label;
+			}
 			case "submenu": {
 				const raw = this.#getSubmenuCurrentValue(def.path, value);
 				return this.#submenuOptions(def).find(o => o.value === raw)?.label ?? raw;
@@ -1551,6 +1573,17 @@ export class SettingsSelectorComponent implements Component {
 		}
 	}
 
+	#refreshLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.#sidebarWidth = settingsSidebarWidth(this.#context.settings.entries);
+		const activeTab = this.#tabBar.getActiveTab().id;
+		this.#tabs = getSettingsTabs();
+		this.#tabBar.setTabs(this.#tabs, activeTab);
+		this.#refreshItems();
+	}
+
 	/**
 	 * Root card: tab strip, search field while searching, the active content
 	 * component (settings list, search results, or plugins), the appearance
@@ -1639,7 +1672,7 @@ export class SettingsSelectorComponent implements Component {
 		children.push(memo.hints[mode]);
 
 		if (memo.root && sameItems(memo.root.children, children)) return memo.root.node;
-		const root = overlayCard("omp.overlay.settings", "Settings", children);
+		const root = overlayCard("omp.overlay.settings", t("settings.selector.title"), children);
 		memo.root = { children, node: root };
 		return root;
 	}
@@ -1879,7 +1912,7 @@ export class SettingsSelectorComponent implements Component {
 		// Plugins hosts its own UI; it is not part of the schema-backed search.
 		empty.push({
 			id: "plugins",
-			label: `${theme.icon.package} Plugins`,
+			label: `${theme.icon.package} ${t("settings.selector.plugins")}`,
 			short: theme.icon.package,
 			muted: true,
 		});
@@ -1942,26 +1975,46 @@ export class SettingsSelectorComponent implements Component {
 			valueSymbol,
 			defaultLabel: changed ? this.#defaultLabel(def) : undefined,
 		};
+		const localized = getLocale() !== "en";
 
 		switch (def.type) {
 			case "boolean":
-				return { ...item, currentValue: currentValue ? "true" : "false", values: ["true", "false"] };
+				return {
+					...item,
+					currentValue: currentValue ? "true" : "false",
+					values: ["true", "false"],
+					valueLabel: localized
+						? value => t(value === "true" ? "settings.selector.boolean.true" : "settings.selector.boolean.false")
+						: undefined,
+				};
 
-			case "enum":
+			case "enum": {
+				const options = localized ? enumOptions(def) : undefined;
 				return {
 					...item,
 					currentValue: String(currentValue ?? ""),
 					values: [...def.values],
+					valueLabel: options
+						? value => options.find(option => option.value === value)?.label ?? value
+						: undefined,
 					menu: (cv, done) =>
-						createSettingsSelectField(def.label, def.description, enumOptions(def), cv, done, () => done()),
+						createSettingsSelectField(def.label, def.description, options ?? enumOptions(def), cv, done, () =>
+							done(),
+						),
 				};
+			}
 
-			case "submenu":
+			case "submenu": {
+				const options = localized ? this.#submenuOptions(def) : undefined;
 				return {
 					...item,
 					currentValue: this.#getSubmenuCurrentValue(def.path, currentValue),
+					valueLabel: options
+						? value => options.find(option => option.value === value)?.label ?? value
+						: undefined,
 					submenu: (cv, done) => this.#editSetting(def.path, done, finish => this.#createSubmenu(def, cv, finish)),
 				};
+			}
 
 			case "text":
 				return {
@@ -2018,7 +2071,11 @@ export class SettingsSelectorComponent implements Component {
 		if (def.path === "defaultThinkingLevel") {
 			// Prepend `auto`; the rest are the model's runtime-supported efforts.
 			const levels: ConfiguredThinkingLevel[] = [AUTO_THINKING, ...this.#context.availableThinkingLevels];
-			return levels.map(level => def.options.find(o => o.value === level) ?? { value: level, label: level });
+			return levels.map(
+				level =>
+					def.options.find(o => o.value === level) ??
+					localizeSettingOption(def.path, { value: level, label: level }),
+			);
 		}
 		if (def.path === "theme.dark" || def.path === "theme.light") {
 			return this.#context.availableThemes.map(t => ({ value: t, label: t }));
@@ -2232,7 +2289,8 @@ export class SettingsSelectorComponent implements Component {
 					return option ? [option.label] : [];
 				})
 			: [];
-		if (labels.length === 0) return def.ordered ? "default" : "none";
+		if (labels.length === 0)
+			return t(def.ordered ? "settings.selector.multiselect.default" : "settings.selector.multiselect.none");
 		return def.ordered ? labels.join(" → ") : labels.join(", ");
 	}
 
@@ -2260,19 +2318,19 @@ export class SettingsSelectorComponent implements Component {
 			try {
 				parsed = JSON.parse(value);
 			} catch {
-				throw new Error(`Invalid array JSON for ${path}`);
+				throw new Error(t("settings.selector.invalid_array", { path }));
 			}
-			if (!Array.isArray(parsed)) throw new Error(`Invalid array JSON for ${path}`);
+			if (!Array.isArray(parsed)) throw new Error(t("settings.selector.invalid_array", { path }));
 			this.#context.settings.set(path, parsed);
 		} else if (schemaType === "record") {
 			let parsed: unknown;
 			try {
 				parsed = JSON.parse(value || "{}");
 			} catch {
-				throw new Error(`Invalid record JSON for ${path}`);
+				throw new Error(t("settings.selector.invalid_record", { path }));
 			}
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				throw new Error(`Invalid record JSON for ${path}`);
+				throw new Error(t("settings.selector.invalid_record", { path }));
 			}
 			if (path === "providers.maxInFlightRequests") {
 				parsed = this.#context.settings.validateProviderLimits(parsed);
@@ -2483,14 +2541,16 @@ export class SettingsSelectorComponent implements Component {
 		if (matchesKey(data, "f6") && this.#callbacks.onApply) {
 			if (!this.#applyPending) {
 				this.#applyPending = true;
-				this.#applyFeedback = "Applying…";
+				this.#applyFeedback = t("settings.selector.applying");
 				void this.#callbacks
 					.onApply(this.#context.settings.scope ?? "global")
 					.then(message => {
 						this.#applyFeedback = message;
 					})
 					.catch((error: unknown) => {
-						this.#applyFeedback = `Apply failed: ${error instanceof Error ? error.message : String(error)}`;
+						this.#applyFeedback = t("settings.selector.apply_failed", {
+							error: error instanceof Error ? error.message : String(error),
+						});
 					})
 					.finally(() => {
 						this.#applyPending = false;

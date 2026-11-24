@@ -11,6 +11,7 @@
 import { replaceTabs, truncateToWidth } from "../utils";
 import { renderTableRow, type TableColumn } from "../components/table";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { fgOrPlain, theme } from "../theme/theme";
 import { createLiveBoard, type LiveBoardOutput } from "../chrome/live-board";
 
@@ -63,12 +64,12 @@ const LABEL_WIDTH = 34;
 const DETAIL_WIDTH = 120;
 
 /** Human-readable verdict for each scored failure mode. */
-const FAILURE_TEXT: Record<IfBenchFailure, string> = {
-	result: "wrong array",
-	cat: "no cat sound",
-	"result+cat": "wrong array + no cat sound",
-	format: "no <result> block",
-	provider: "provider error",
+const FAILURE_KEYS: Record<IfBenchFailure, string> = {
+	result: "cli.commands.if_bench.board.failure_result",
+	cat: "cli.commands.if_bench.board.failure_cat",
+	"result+cat": "cli.commands.if_bench.board.failure_result_cat",
+	format: "cli.commands.if_bench.board.failure_format",
+	provider: "cli.commands.if_bench.board.failure_provider",
 };
 
 /** Rendering surface for one `npi if-bench` run. */
@@ -169,18 +170,23 @@ function renderLive(
 	const deepest = Math.max(0, ...[...rows.values()].map(row => row.actions));
 	const header =
 		`${fgOrPlain("accent", spinner)} ${theme ? theme.bold("if-bench") : "if-bench"} ${fgOrPlain("dim", "·")} ` +
-		`${rows.size} live ${fgOrPlain("dim", "·")} ${deepest} actions ${fgOrPlain("dim", "·")} ` +
+		t("cli.commands.if_bench.board.live_counts", {
+			live: rows.size,
+			actions: deepest,
+			separator: fgOrPlain("dim", "·"),
+		}) +
 		`${fgOrPlain("dim", `L=${meta.arrayLength} nya{1,${meta.nyaMax}}`)} ${fgOrPlain("dim", "·")} ` +
 		`${formatDuration(Date.now() - startedAt)}`;
 	const lines = [header];
 	for (const [label, row] of rows) {
 		const meterCells = ladder(row, meta.maxTurns, spinner);
 		const parts = [
-			`turn ${Math.max(row.turn, 1)}/${meta.maxTurns}`,
-			`${row.actions} acts`,
+			t("cli.commands.if_bench.board.live_turn", { turn: Math.max(row.turn, 1), total: meta.maxTurns }),
+			t("cli.commands.if_bench.board.acts", { count: row.actions }),
 			formatDuration(Date.now() - row.startedAt),
 		];
-		if (row.placement) parts.push(fgOrPlain("dim", `cat@${row.placement}`));
+		if (row.placement)
+			parts.push(fgOrPlain("dim", t("cli.commands.if_bench.board.cat_at", { position: row.placement })));
 		lines.push(
 			renderTableRow(
 				[
@@ -234,15 +240,19 @@ function formatTurnLine(label: string, record: IfBenchTurnRecord): string {
 
 function formatVerdict(report: IfBenchModelReport, meta: IfBenchBoardMeta): string {
 	const stats = [
-		`${report.turnsPassed}/${meta.maxTurns} turns`,
-		`${report.actionsPassed} actions`,
-		`${formatDuration(Math.round(meanTurnMs(report)))}/turn`,
+		t("cli.commands.if_bench.board.turns_passed", { passed: report.turnsPassed, total: meta.maxTurns }),
+		t("cli.commands.if_bench.board.actions_passed", { count: report.actionsPassed }),
+		t("cli.commands.if_bench.board.time_per_turn", { duration: formatDuration(Math.round(meanTurnMs(report))) }),
 	];
 	if (report.outputTokens > 0) stats.push(`${formatNumber(report.outputTokens)} tok`);
 	if (report.cost > 0) stats.push(formatCost(report.cost));
 	const body = `${theme ? theme.bold(report.label) : report.label} ${stats.join(fgOrPlain("dim", " · "))}`;
 	if (!report.failure) return `${fgOrPlain("success", "✓")} ${body}`;
-	return `${fgOrPlain("error", "✗")} ${body} ${fgOrPlain("dim", "·")} ${fgOrPlain("error", `broke on turn ${report.failure.turn}: ${FAILURE_TEXT[report.failure.kind]}`)}`;
+	const failure = t("cli.commands.if_bench.board.failed_turn", {
+		turn: report.failure.turn,
+		failure: t(FAILURE_KEYS[report.failure.kind]),
+	});
+	return `${fgOrPlain("error", "✗")} ${body} ${fgOrPlain("dim", "·")} ${fgOrPlain("error", failure)}`;
 }
 
 /** Expected/actual pair for the turn that ended a run, clipped for the terminal. */
@@ -252,10 +262,12 @@ function failureDetail(report: IfBenchModelReport): string[] {
 	const oneLine = (text: string): string =>
 		truncateToWidth(replaceTabs(text).replace(/\s+/g, " ").trim(), DETAIL_WIDTH);
 	if (failed.failure === "provider")
-		return [`    ${fgOrPlain("dim", "provider")} ${fgOrPlain("error", oneLine(failed.response))}`];
+		return [
+			`    ${fgOrPlain("dim", t("cli.commands.if_bench.board.provider"))} ${fgOrPlain("error", oneLine(failed.response))}`,
+		];
 	return [
-		`    ${fgOrPlain("dim", "expected")} <${failed.expected}>`,
-		`    ${fgOrPlain("dim", "actual  ")} ${oneLine(failed.response)}`,
+		`    ${fgOrPlain("dim", t("cli.commands.if_bench.board.expected"))} <${failed.expected}>`,
+		`    ${fgOrPlain("dim", t("cli.commands.if_bench.board.actual"))} ${oneLine(failed.response)}`,
 	];
 }
 
@@ -283,21 +295,42 @@ export function formatIfBenchScoreboard(summary: IfBenchSummary): string {
 		(a, b) => b.turnsPassed - a.turnsPassed || b.actionsPassed - a.actionsPassed || meanTurnMs(a) - meanTurnMs(b),
 	);
 	const columns: ScoreboardColumn[] = [
-		{ header: "model", value: report => report.label },
-		{ header: "turns", value: report => `${report.turnsPassed}/${summary.maxTurns}`, align: "right" },
-		{ header: "actions", value: report => String(report.actionsPassed), align: "right" },
+		{ header: t("cli.commands.if_bench.board.model"), value: report => report.label },
 		{
-			header: "broke on",
-			value: report =>
-				report.failure ? `turn ${report.failure.turn} · ${FAILURE_TEXT[report.failure.kind]}` : "survived",
+			header: t("cli.commands.if_bench.board.turns"),
+			value: report => `${report.turnsPassed}/${summary.maxTurns}`,
+			align: "right",
 		},
-		{ header: "per turn", value: report => formatDuration(Math.round(meanTurnMs(report))), align: "right" },
 		{
-			header: "tokens",
+			header: t("cli.commands.if_bench.board.actions"),
+			value: report => String(report.actionsPassed),
+			align: "right",
+		},
+		{
+			header: t("cli.commands.if_bench.board.broke_on"),
+			value: report =>
+				report.failure
+					? t("cli.commands.if_bench.board.failure_cell", {
+							turn: report.failure.turn,
+							failure: t(FAILURE_KEYS[report.failure.kind]),
+						})
+					: t("cli.commands.if_bench.board.survived"),
+		},
+		{
+			header: t("cli.commands.if_bench.board.per_turn"),
+			value: report => formatDuration(Math.round(meanTurnMs(report))),
+			align: "right",
+		},
+		{
+			header: t("cli.commands.if_bench.board.tokens"),
 			value: report => (report.outputTokens > 0 ? formatNumber(report.outputTokens) : "-"),
 			align: "right",
 		},
-		{ header: "cost", value: report => (report.cost > 0 ? formatCost(report.cost) : "-"), align: "right" },
+		{
+			header: t("cli.commands.if_bench.board.cost"),
+			value: report => (report.cost > 0 ? formatCost(report.cost) : "-"),
+			align: "right",
+		},
 	];
 	const cells = ranked.map(report => columns.map(column => column.value(report)));
 	const widths = columns.map((column, index) =>

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { playHelp as commandHelp } from "../cli/command-help";
 import { playRecording } from "../stream/player";
 import { latestRecording, parseRecording, type Recording, recordingsDir } from "../stream/recording";
@@ -26,15 +27,15 @@ export default class Play extends Command {
 		const { args, flags } = await this.parse(Play);
 		const speed = parsePositive("--speed", flags.speed) ?? 1;
 		const idleLimit = parsePositive("--idle-limit", flags["idle-limit"]);
-		if (!process.stdout.isTTY) throw new CliUsageError(`${APP_NAME} play needs an interactive terminal`);
+		if (!process.stdout.isTTY) throw new CliUsageError(t("cli.commands.play.interactive", { app: APP_NAME }));
 
 		const file = args.file ? path.resolve(args.file) : await latestRecording();
-		if (!file) throw new CliUsageError(`no recordings in ${recordingsDir()}; start one with /record`);
+		if (!file) throw new CliUsageError(t("cli.commands.play.no_recordings", { directory: recordingsDir() }));
 		let text: string;
 		try {
 			text = await Bun.file(file).text();
 		} catch (error) {
-			if (isEnoent(error)) throw new CliUsageError(`recording not found: ${file}`);
+			if (isEnoent(error)) throw new CliUsageError(t("cli.commands.play.missing_recording", { file }));
 			throw error;
 		}
 		let recording: Recording;
@@ -50,6 +51,8 @@ export default class Play extends Command {
 function parsePositive(flag: string, value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
 	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) throw new CliUsageError(`${flag} must be a positive number`);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		throw new CliUsageError(t("cli.commands.play.positive_number", { flag }));
+	}
 	return parsed;
 }

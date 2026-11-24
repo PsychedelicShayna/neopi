@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { entryProvenance } from "../config/entry-provenance";
 import type { Settings } from "../config/settings";
 import { type ControlActor, runAsControlCommand } from "../control/actor";
@@ -14,7 +15,6 @@ import {
 	buildEffortArgumentCompletions,
 	buildEffortInlineHint,
 	buildLocalFileArgumentCompletions,
-	buildStaticInlineHint,
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
 import { BUILTIN_CONTROL_SLASH_COMMANDS } from "./builtin-control";
@@ -91,7 +91,9 @@ export const BUILTIN_SLASH_COMMAND_DEFS: ReadonlyArray<BuiltinSlashCommand> = BU
 		provenance: entryProvenance("commands", command.name),
 		subcommands: command.subcommands,
 		subcommandOptional: command.subcommandOptional,
-		inlineHint: command.inlineHint,
+		get inlineHint() {
+			return command.inlineHint;
+		},
 		getTuiAutocompleteDescription: command.getTuiAutocompleteDescription,
 		getTuiArgumentCompletions: command.getTuiArgumentCompletions,
 		getTuiInlineHint: command.getTuiInlineHint,
@@ -102,7 +104,16 @@ function materializeTuiBuiltinSlashCommand(
 	cmd: BuiltinSlashCommand,
 	runtime?: TuiSlashCommandRuntime,
 ): TuiBuiltinSlashCommand {
-	const materialized: TuiBuiltinSlashCommand = { ...cmd };
+	const materialized: TuiBuiltinSlashCommand = {
+		...cmd,
+		get description() {
+			return cmd.description;
+		},
+		get inlineHint() {
+			return cmd.inlineHint;
+		},
+	};
+	const inlineHint = cmd.inlineHint ? (text: string) => (text.trim() ? null : (cmd.inlineHint ?? null)) : undefined;
 	const customCompletions = cmd.getTuiArgumentCompletions;
 	if (customCompletions) {
 		materialized.getArgumentCompletions = prefix => customCompletions(prefix, runtime);
@@ -110,9 +121,7 @@ function materializeTuiBuiltinSlashCommand(
 			cmd.getTuiInlineHint ??
 			(cmd.subcommands
 				? buildSubcommandInlineHint(cmd.subcommands, { optional: cmd.subcommandOptional })
-				: cmd.inlineHint
-					? buildStaticInlineHint(cmd.inlineHint)
-					: undefined);
+				: inlineHint);
 	} else if (cmd.subcommands) {
 		const subcommands = cmd.subcommands;
 		// `/effort` narrows its declarative list to the viewed session.
@@ -126,12 +135,12 @@ function materializeTuiBuiltinSlashCommand(
 		}
 	} else if (cmd.name === "move") {
 		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
-		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
+		if (inlineHint) materialized.getInlineHint = inlineHint;
 	} else if (cmd.name === "local" && runtime) {
 		materialized.getArgumentCompletions = buildLocalFileArgumentCompletions(runtime);
-		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
-	} else if (cmd.inlineHint) {
-		materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
+		if (inlineHint) materialized.getInlineHint = inlineHint;
+	} else if (inlineHint) {
+		materialized.getInlineHint = inlineHint;
 	}
 	if (runtime && cmd.getTuiAutocompleteDescription) {
 		materialized.getAutocompleteDescription = () => cmd.getTuiAutocompleteDescription?.(runtime);
@@ -181,7 +190,7 @@ export async function executeBuiltinSlashCommand(
 	// Collab guests run a read-mostly replica: session-mutating builtins are
 	// host-only; the allowlist covers purely local/read-only commands.
 	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
-		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
+		runtime.ctx.showStatus(t("commands.registry.hostOnly", { command: command.name }));
 		// A detached draft already left the editor: give it back, images included.
 		if (runtime.draftDetached) {
 			restoreDetachedDraft(runtime.ctx.editor, parsed.text, runtime.input?.images, runtime.input?.imageLinks);

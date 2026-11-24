@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { DotWhisker, type DotWhiskerMark, type DotWhiskerRow } from "../charts";
 import { formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type {
 	SpotlightCutGroup,
 	SpotlightDashboardStats,
@@ -10,7 +11,17 @@ import type {
 } from "../types";
 import { Card } from "../ui";
 import { GroupLegend, MoreTools } from "./chips";
-import { CUT_GROUP, CUT_GROUPS, foldTools, formatShare, GAP_BINS, toolIcon, toolsBySaving } from "./meta";
+import {
+	CUT_GROUP,
+	CUT_GROUPS,
+	cutGroupLabel,
+	cutGroupRule,
+	foldTools,
+	formatShare,
+	GAP_BINS,
+	toolIcon,
+	toolsBySaving,
+} from "./meta";
 
 /** Vertical spread of a row's marks, so overlapping intervals stay readable. */
 const MARK_OFFSET: Record<SpotlightCutGroup, number> = {
@@ -28,9 +39,6 @@ const COMPARISONS: readonly SpotlightCutGroup[] = ["scoreFree", "holdout", "refe
 type GapGroup = "applied" | "holdout";
 const GAP_GROUPS: readonly GapGroup[] = ["applied", "holdout"];
 
-const FETCH_BACK_RULE =
-	"One rule for every group: within 12 calls, a read of the same path overlapping the result's own window (the whole file without a selector), a rerun of the call (a similar bash command; for other tools, ≥ 60% shared argument tokens), or a read of an artifact it named; not after an edit of that path (reads) or any edit (reruns), nor from the same request.";
-
 export interface FetchBackProps {
 	stats: SpotlightDashboardStats;
 	stale: boolean;
@@ -38,6 +46,7 @@ export interface FetchBackProps {
 
 /** Fetch-back rate per tool: the scored cut against the score-free one, the random holdout and the unchanged results. */
 export function FetchBack({ stats, stale }: FetchBackProps) {
+	const tr = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const cells = new Map<string, SpotlightFetchBackCell>();
 	for (const cell of stats.fetchBack) cells.set(`${cell.tool}/${cell.group}`, cell);
@@ -64,7 +73,12 @@ export function FetchBack({ stats, stale }: FetchBackProps) {
 			color: CUT_GROUP[cell.group].color,
 			shape: CUT_GROUP[cell.group].shape,
 			offset: MARK_OFFSET[cell.group],
-			title: `${CUT_GROUP[cell.group].label}: ${formatShare(cell.rate.value)} of ${formatInteger(cell.results)} results in ${formatInteger(cell.sessions)} sessions`,
+			title: tr("insights.fetch.mark", "{group}: {share} of {results} results in {sessions} sessions", {
+				group: cutGroupLabel(tr, cell.group),
+				share: formatShare(cell.rate.value),
+				results: formatInteger(cell.results),
+				sessions: formatInteger(cell.sessions),
+			}),
 		}));
 		rows.push({
 			key: tool,
@@ -76,7 +90,7 @@ export function FetchBack({ stats, stale }: FetchBackProps) {
 			),
 			marks,
 			figure: (
-				<span style={{ color: CUT_GROUP.applied.color }} title={CUT_GROUP.applied.rule}>
+				<span style={{ color: CUT_GROUP.applied.color }} title={cutGroupRule(tr, "applied")}>
 					{applied === undefined ? "–" : formatShare(applied.rate.value)}
 				</span>
 			),
@@ -85,7 +99,7 @@ export function FetchBack({ stats, stale }: FetchBackProps) {
 					{COMPARISONS.map((group, i) => {
 						const cell = byGroup.get(group);
 						return (
-							<span key={group} title={`${CUT_GROUP[group].label}: ${CUT_GROUP[group].rule}`}>
+							<span key={group} title={`${cutGroupLabel(tr, group)}: ${cutGroupRule(tr, group)}`}>
 								{i > 0 && " · "}
 								<span className="spot-fb-detail" data-group={group}>
 									{cell === undefined ? "–" : formatShare(cell.rate.value)}
@@ -101,13 +115,19 @@ export function FetchBack({ stats, stale }: FetchBackProps) {
 	return (
 		<Card
 			index={3}
-			title="Does the agent come back for it?"
-			description="Share of results the agent fetched more of within 12 calls: cut with Spotlight's scores, cut without them, held out at random, kept whole by pi's former edit gate, and left unchanged"
+			title={tr("insights.fetch.title", "Does the agent come back for it?")}
+			description={tr(
+				"insights.fetch.description",
+				"Share of results the agent fetched more of within 12 calls: cut with Spotlight's scores, cut without them, held out at random, kept whole by pi's former edit gate, and left unchanged",
+			)}
 			stale={stale}
-			footer={`${FETCH_BACK_RULE} Held-out results are the true counterfactual: drawn at random from the would-be cuts and shown whole; until they accumulate, unchanged results stand in, re-weighted to the cuts' size mix. Score-free cuts skip Spotlight by a second coin and take the no-score fallback rules: if they come back as often as scored cuts, the scores add nothing. Gated reads are reads pi's former edit gate (removed) kept whole, listed only where the range has any. Small print: score-free · held out · unchanged. Whiskers are 90% session bootstrap intervals, from 3 sessions.`}
+			footer={tr(
+				"insights.fetch.footer",
+				"One rule for every group: within 12 calls, a read of the same path overlapping the result's own window (the whole file without a selector), a rerun of the call (a similar bash command; for other tools, ≥ 60% shared argument tokens), or a read of an artifact it named; not after an edit of that path (reads) or any edit (reruns), nor from the same request. Held-out results are the true counterfactual: drawn at random from the would-be cuts and shown whole; until they accumulate, unchanged results stand in, re-weighted to the cuts' size mix. Score-free cuts skip Spotlight by a second coin and take the no-score fallback rules: if they come back as often as scored cuts, the scores add nothing. Gated reads are reads pi's former edit gate (removed) kept whole, listed only where the range has any. Small print: score-free · held out · unchanged. Whiskers are 90% session bootstrap intervals, from 3 sessions.",
+			)}
 		>
 			{rows.length === 0 ? (
-				<div className="empty">No evaluated results in this range.</div>
+				<div className="empty">{tr("insights.no_evaluated", "No evaluated results in this range.")}</div>
 			) : (
 				<div className="spot-fb">
 					<GroupLegend groups={legend} />
@@ -123,6 +143,7 @@ export function FetchBack({ stats, stale }: FetchBackProps) {
 
 /** Fetch-backs per gap bin as each group's share of its own fetch-backs (the groups differ in size). */
 function GapPanel({ tool, counts }: { tool: SpotlightTool; counts: readonly SpotlightGapCount[] }) {
+	const tr = useTranslation();
 	const Icon = toolIcon(tool);
 	const byBin = new Map(counts.map(c => [c.gap, c]));
 	let applied = 0;
@@ -139,17 +160,19 @@ function GapPanel({ tool, counts }: { tool: SpotlightTool; counts: readonly Spot
 	}
 
 	return (
-		<section className="spot-gap" aria-label={`${tool} fetch-back gaps`}>
+		<section className="spot-gap" aria-label={tr("insights.gap.aria", "{tool} fetch-back gaps", { tool })}>
 			<h3 className="spot-panel-title row spot-gap-title">
 				<Icon size={13} aria-hidden="true" />
 				{tool}
 				<span className="dim">
-					<span className="num">{formatInteger(applied)}</span> shortened ·{" "}
-					<span className="num">{formatInteger(holdout)}</span> held out
+					<span className="num">{formatInteger(applied)}</span>
+					{tr("insights.gap.shortened_count_suffix", " shortened · ")}
+					<span className="num">{formatInteger(holdout)}</span>
+					{tr("insights.gap.holdout_count_suffix", " held out")}
 				</span>
 			</h3>
 			{applied + holdout === 0 ? (
-				<div className="spot-gap-empty dim">No fetch-backs</div>
+				<div className="spot-gap-empty dim">{tr("insights.gap.no_fetch", "No fetch-backs")}</div>
 			) : (
 				<div className="spot-gap-bins">
 					{GAP_BINS.map(bin => {
@@ -161,14 +184,31 @@ function GapPanel({ tool, counts }: { tool: SpotlightTool; counts: readonly Spot
 										const n = count?.[group] ?? 0;
 										const total = totals[group];
 										const share = total > 0 ? n / total : 0;
-										const noun = bin === "1" ? "call" : "calls";
+										const titleValues = {
+											bin,
+											count: formatInteger(n),
+											total: formatInteger(total),
+											group: cutGroupLabel(tr, group).toLowerCase(),
+										};
 										return (
 											<span
 												key={group}
 												className="spot-gap-bar"
 												data-group={group}
 												data-empty={total === 0}
-												title={`${bin} ${noun} later: ${formatInteger(n)} of ${formatInteger(total)} ${CUT_GROUP[group].label.toLowerCase()} fetch-backs`}
+												title={
+													bin === "1"
+														? tr(
+																"insights.gap.one_call",
+																"{bin} call later: {count} of {total} {group} fetch-backs",
+																titleValues,
+															)
+														: tr(
+																"insights.gap.many_calls",
+																"{bin} calls later: {count} of {total} {group} fetch-backs",
+																titleValues,
+															)
+												}
 											>
 												{total > 0 && <span className="spot-gap-value num">{formatShare(share)}</span>}
 												<span
@@ -191,19 +231,23 @@ function GapPanel({ tool, counts }: { tool: SpotlightTool; counts: readonly Spot
 
 /** How many calls after the cut the agent fetched back, per tool, shortened against held out. */
 export function FetchBackGaps({ stats, stale }: FetchBackProps) {
+	const tr = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const counted = new Set(stats.gaps.map(count => count.tool));
 	const { listed, rest } = foldTools(toolsBySaving(stats).filter(tool => counted.has(tool)));
 	return (
 		<Card
 			index={3}
-			title="How soon it comes back"
-			description="Calls between a result and the first fetch-back after it"
+			title={tr("insights.gap.title", "How soon it comes back")}
+			description={tr("insights.gap.description", "Calls between a result and the first fetch-back after it")}
 			stale={stale}
-			footer="Bars are each group's share of its own fetch-backs, so shortened and held-out results compare despite their different counts (next to each tool). Same rule as above; nothing after 12 calls counts."
+			footer={tr(
+				"insights.gap.footer",
+				"Bars are each group's share of its own fetch-backs, so shortened and held-out results compare despite their different counts (next to each tool). Same rule as above; nothing after 12 calls counts.",
+			)}
 		>
 			{listed.length === 0 ? (
-				<div className="empty">No fetch-backs in this range.</div>
+				<div className="empty">{tr("insights.gap.empty", "No fetch-backs in this range.")}</div>
 			) : (
 				<>
 					<GroupLegend groups={GAP_GROUPS} />

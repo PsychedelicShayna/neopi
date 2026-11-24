@@ -4,6 +4,7 @@
  * transcript rows from persisted message entries; holding the row construction
  * here keeps the two byte-for-byte identical.
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type Component } from "../tui";
@@ -86,20 +87,26 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 		rows.push({
 			parts: [
-				{ text: `${theme.status.success} Background job completed`, color: "success" },
+				{
+					text: t("overlays.transcript_render_helpers.job_completed_status", {
+						success: `${theme.status.success}`,
+					}),
+					color: "success",
+				},
 				{ text: `[${type}]`, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 			native: {
 				tone: "success",
-				message: [span("Background job completed"), ...facts([type, jobId, duration])],
+				message: [span(t("overlays.transcript_render_helpers.job_completed")), ...facts([type, jobId, duration])],
 			},
 		});
 		if (job.transcriptPreview) {
 			const lines = sanitizeDisplayLines(job.transcriptPreview);
 			const shown = lines.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED);
-			if (lines.length > shown.length) shown.push(`… ${lines.length - shown.length} more`);
+			if (lines.length > shown.length)
+				shown.push(t("overlays.transcript_render_helpers.more_lines", { value: `${lines.length - shown.length}` }));
 			for (const line of shown) {
 				const output = truncateToWidth(line, TRUNCATE_LENGTHS.LINE);
 				rows.push({
@@ -150,13 +157,13 @@ export function buildAsyncResultComponent(
 
 /** The warning row under a background job whose output artifact could not be saved. */
 function artifactErrorRow(error: OutputArtifactError): TranscriptStatusRow {
-	const notice = formatArtifactErrorNotice(error);
+	const notice = formatArtifactErrorNotice(error, getLocale());
 	return { parts: [{ text: notice, color: "warning" }], native: { tone: "warning", message: [span(notice)] } };
 }
 
 /** The dim row under a background job whose output the minimizer shortened. */
 function minimizedRow(minimized: MinimizedMeta): TranscriptStatusRow {
-	const fact = `Minimized: ${formatMinimizedMeta(minimized)}`;
+	const fact = t("overlays.transcript_render_helpers.minimized", { minimized: `${formatMinimizedMeta(minimized)}` });
 	return { parts: [{ text: fact, color: "dim" }], native: { tone: "info", message: [span(fact, "dim")] } };
 }
 
@@ -185,8 +192,13 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 	}
 	for (const daemon of daemons) {
 		const failed = daemon.state === "failed" || (daemon.exitCode !== undefined && daemon.exitCode !== 0);
-		const label = failed ? "Supervised process failed" : "Supervised process completed";
-		const exit = daemon.exitCode !== undefined ? `exit ${daemon.exitCode}` : undefined;
+		const label = failed
+			? t("overlays.transcript_render_helpers.process_failed")
+			: t("overlays.transcript_render_helpers.process_completed");
+		const exit =
+			daemon.exitCode !== undefined
+				? t("overlays.transcript_render_helpers.exit_code", { exitCode: `${daemon.exitCode}` })
+				: undefined;
 		const duration =
 			daemon.exitedAt !== undefined && daemon.startedAt !== undefined
 				? formatDuration(daemon.exitedAt - daemon.startedAt)
@@ -227,7 +239,10 @@ export function buildAsyncNotifyBlock(message: CustomOrHookMessage): ToolActivit
 		},
 	});
 	for (const report of details?.reports ?? []) {
-		const label = report.type === "service" ? "Supervised process output" : "Background job output";
+		const label =
+			report.type === "service"
+				? t("overlays.transcript_render_helpers.process_output")
+				: t("overlays.transcript_render_helpers.job_output");
 		const total = report.lines.length + report.omitted;
 		const tally = formatCount("line", total);
 		rows.push({
@@ -248,8 +263,11 @@ export function buildAsyncNotifyBlock(message: CustomOrHookMessage): ToolActivit
 				native: { tone: "info", body: true, message: [span(output, "mono")] },
 			});
 		}
-		if (total > shown.length) rows.push(detail(`… ${total - shown.length} more`, "dim"));
-		if (report.stopped) rows.push(detail("Matched too often: notify is off for it", "warning"));
+		if (total > shown.length)
+			rows.push(
+				detail(t("overlays.transcript_render_helpers.more_rows", { value: `${total - shown.length}` }), "dim"),
+			);
+		if (report.stopped) rows.push(detail(t("overlays.transcript_render_helpers.notify_disabled"), "warning"));
 	}
 	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
 }
@@ -321,19 +339,25 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 	for (const file of files) {
 		let detail: string;
 		if (file.skippedReason === "tooLarge" || file.skippedReason === "binary") {
-			const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
-			detail = file.skippedReason === "binary" ? `skipped: binary, ${size}` : `skipped: ${size}`;
+			const size =
+				typeof file.byteSize === "number"
+					? formatBytes(file.byteSize)
+					: t("overlays.transcript_render_helpers.unknown_size");
+			detail =
+				file.skippedReason === "binary"
+					? t("overlays.transcript_render_helpers.skipped_binary", { size: `${size}` })
+					: t("overlays.transcript_render_helpers.skipped", { size: `${size}` });
 		} else {
 			detail = file.image
 				? "image"
 				: file.lineCount === undefined
-					? "unknown lines"
+					? t("overlays.transcript_render_helpers.unknown_lines")
 					: formatCount("line", file.lineCount);
 		}
 		rows.push({
 			parts: [
 				{ text: theme.tree.last, color: "dim" },
-				{ text: "Read", color: "muted" },
+				{ text: t("overlays.transcript_render_helpers.read"), color: "muted" },
 				{ text: formatStyledPath(file.path, theme) },
 				{ text: `(${detail})`, color: "dim" },
 			],
@@ -341,7 +365,12 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 			native: {
 				tone: "info",
 				icon: "read",
-				message: [span("Read"), span(" "), span(file.path, "path"), ...facts([detail])],
+				message: [
+					span(t("overlays.transcript_render_helpers.read")),
+					span(" "),
+					span(file.path, "path"),
+					...facts([detail]),
+				],
 			},
 		});
 	}
@@ -468,7 +497,7 @@ export function resolveAssistantErrorPresentation(
 		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
 	}
 	if (message.stopReason === "error") {
-		return { kind: "full", text: message.errorMessage || "Error", isError: true };
+		return { kind: "full", text: message.errorMessage || t("status.chrome.error"), isError: true };
 	}
 	if (message.errorMessage && shouldRenderAbortReason(message)) {
 		return { kind: "full", text: message.errorMessage, isError: true };

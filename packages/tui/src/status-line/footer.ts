@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type Component, padding, truncateToWidth, visibleWidth } from "../index";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -164,7 +165,7 @@ export class FooterComponent implements Component {
 				? null
 				: headState.kind === "ref"
 					? (headState.branch ?? headState.refName ?? "HEAD")
-					: "detached";
+					: t("status.git.detached");
 		return this.#cachedBranch;
 	}
 
@@ -217,10 +218,10 @@ export class FooterComponent implements Component {
 		const tone = getContextUsageTone(level);
 		if (tone) contextProps.tone = tone;
 		seg("context", contextProps);
-		let model = state.model?.id || "no-model";
+		let model = state.model?.id || t("status.model.none");
 		if (state.model?.thinking) {
 			const level = this.session.isAutoThinking
-				? (this.session.autoResolvedThinkingLevel() ?? `${theme.thinking.autoPending} auto`)
+				? (this.session.autoResolvedThinkingLevel() ?? t("status.model.auto", { icon: theme.thinking.autoPending }))
 				: (state.thinkingLevel ?? ThinkingLevel.Off);
 			model += ` • ${level}`;
 		}
@@ -325,7 +326,7 @@ export class FooterComponent implements Component {
 		let statsLeft = statsParts.join(" ");
 
 		// Add model name on the right side, plus thinking level if model supports it
-		const modelName = state.model?.id || "no-model";
+		const modelName = state.model?.id || t("status.model.none");
 
 		// Add thinking level hint when the current model advertises supported efforts
 		let rightSide = modelName;
@@ -334,7 +335,7 @@ export class FooterComponent implements Component {
 				// Pending (no turn classified yet / classifying) shows a symbol-theme
 				// question-box marker; once resolved it shows `<level>`.
 				const resolved = this.session.autoResolvedThinkingLevel();
-				rightSide = `${modelName} • ${resolved ? resolved : `${theme.thinking.autoPending} auto`}`;
+				rightSide = `${modelName} • ${resolved ? resolved : t("status.model.auto", { icon: theme.thinking.autoPending })}`;
 			} else {
 				const thinkingLevel = state.thinkingLevel ?? ThinkingLevel.Off;
 				rightSide = `${modelName} • ${thinkingLevel}`;

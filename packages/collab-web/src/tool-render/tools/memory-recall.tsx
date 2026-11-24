@@ -4,6 +4,7 @@
  * header followed by blank-line-separated `- <text> [type] (date)` bullets.
  */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, InvalidArg, Output, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { normalizeWs, resultTextOf, str, truncate } from "../util";
@@ -16,13 +17,21 @@ function foundCount(props: ToolRenderProps): number | null {
 }
 
 function Summary(props: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const query = str(props.args.query);
 	const found = foundCount(props);
 	return (
 		<>
 			{query !== null ? <span>{truncate(normalizeWs(query), 96)}</span> : <InvalidArg what="query" />}
 			{found !== null && (
-				<> {found > 0 ? <Badge tone="accent">{found} found</Badge> : <Badge tone="warn">no matches</Badge>}</>
+				<>
+					{" "}
+					{found > 0 ? (
+						<Badge tone="accent">{t("guesttools.memory.found", "{count} found", { count: found })}</Badge>
+					) : (
+						<Badge tone="warn">{t("guesttools.search.no_matches", "no matches")}</Badge>
+					)}
+				</>
 			)}
 		</>
 	);
@@ -53,6 +62,7 @@ function parseEntry(raw: string): RecallEntry {
 }
 
 function Body(props: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const { args, result } = props;
 	const query = str(args.query) ?? "";
 	const text = resultTextOf(result);
@@ -69,10 +79,10 @@ function Body(props: ToolRenderProps): ReactNode {
 	}
 	return (
 		<>
-			{query && <Output text={query} title="query" maxLines={4} />}
+			{query && <Output text={query} title={t("guesttools.label.query", "query")} maxLines={4} />}
 			{entries.length > 0 ? (
 				<>
-					{asOf && <Badges items={[`as of ${asOf} UTC`]} />}
+					{asOf && <Badges items={[t("guesttools.memory.as_of", "as of {date} UTC", { date: asOf })]} />}
 					<div className="tv-list">
 						{entries.map((entry, i) => (
 							<Row key={i}>

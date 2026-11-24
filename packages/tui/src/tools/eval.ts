@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../index";
 import { Markdown, Text } from "../index";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
@@ -434,16 +435,18 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			break;
 		}
 		case "read":
-			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
-			if (data.path) parts.push(`from ${shortenPath(String(data.path))}`);
+			parts.push(t("tools.eval.chars", { count: String(data.chars ?? data.bytes ?? 0) }));
+			if (data.path) parts.push(t("tools.eval.from", { path: shortenPath(String(data.path)) }));
 			break;
 		case "write":
-			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
-			if (data.path) parts.push(`to ${shortenPath(String(data.path))}`);
+			parts.push(t("tools.eval.chars", { count: String(data.chars ?? data.bytes ?? 0) }));
+			if (data.path) parts.push(t("tools.eval.to", { path: shortenPath(String(data.path)) }));
 			break;
 		case "cat":
-			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""}`);
-			parts.push(`${data.chars} chars`);
+			parts.push(
+				t(data.files === 1 ? "tools.eval.files.one" : "tools.eval.files.many", { count: String(data.files) }),
+			);
+			parts.push(t("tools.eval.chars", { count: String(data.chars) }));
 			break;
 		case "ls":
 			parts.push(`${data.count} entr${(data.count as number) !== 1 ? "ies" : "y"}`);
@@ -454,7 +457,11 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			} else if (data.action === "get") {
 				parts.push(`${data.key}=${truncateToWidth(String(data.value ?? ""), 30)}`);
 			} else {
-				parts.push(`${data.count} variable${(data.count as number) !== 1 ? "s" : ""}`);
+				parts.push(
+					t(data.count === 1 ? "tools.eval.variables.one" : "tools.eval.variables.many", {
+						count: String(data.count),
+					}),
+				);
 			}
 			break;
 		case "git_status":
@@ -462,27 +469,37 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 				parts.push("clean");
 			} else {
 				const statusParts: string[] = [];
-				if (data.staged) statusParts.push(`${data.staged} staged`);
-				if (data.modified) statusParts.push(`${data.modified} modified`);
-				if (data.untracked) statusParts.push(`${data.untracked} untracked`);
+				if (data.staged) statusParts.push(t("tools.eval.count_staged", { count: String(data.staged) }));
+				if (data.modified) statusParts.push(t("tools.eval.count_modified", { count: String(data.modified) }));
+				if (data.untracked) statusParts.push(t("tools.eval.count_untracked", { count: String(data.untracked) }));
 				parts.push(statusParts.join(", ") || "unknown");
 			}
-			if (data.branch) parts.push(`on ${data.branch}`);
+			if (data.branch) parts.push(t("tools.eval.branch", { branch: String(data.branch) }));
 			break;
 		case "git_log":
-			parts.push(`${data.commits} commit${(data.commits as number) !== 1 ? "s" : ""}`);
+			parts.push(
+				t(data.commits === 1 ? "tools.eval.commits.one" : "tools.eval.commits.many", {
+					count: String(data.commits),
+				}),
+			);
 			break;
 		case "git_diff":
-			parts.push(`${data.lines} line${(data.lines as number) !== 1 ? "s" : ""}`);
-			if (data.staged) parts.push("(staged)");
+			parts.push(
+				t(data.lines === 1 ? "tools.eval.lines.one" : "tools.eval.lines.many", { count: String(data.lines) }),
+			);
+			if (data.staged) parts.push(t("tools.eval.staged"));
 			break;
 		case "batch":
-			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
+			parts.push(
+				t(data.files === 1 ? "tools.eval.files_processed.one" : "tools.eval.files_processed.many", {
+					count: String(data.files),
+				}),
+			);
 			break;
 		case "completion":
 			if (data.model) parts.push(String(data.model));
 			if (data.tier && data.tier !== data.model) parts.push(`(${data.tier})`);
-			parts.push(`${data.chars ?? 0} chars`);
+			parts.push(t("tools.eval.chars", { count: String(data.chars ?? 0) }));
 			break;
 		case "tool_define":
 			parts.push(`${data.name}(${(Array.isArray(data.params) ? data.params : []).join(", ")})`);
@@ -496,7 +513,7 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "judge_batch":
 			parts.push(`${data.action} ${data.id}`);
 			parts.push(`${data.done ?? 0}/${data.total ?? 0}`);
-			if (data.failed) parts.push(`${data.failed} failed`);
+			if (data.failed) parts.push(t("tools.eval.count_failed", { count: String(data.failed) }));
 			if (data.model) parts.push(String(data.model));
 			break;
 		case "wc":
@@ -764,12 +781,15 @@ function evalToolHead(
 ): NativeToolHead {
 	const badges: { text: string; title?: string }[] = [...new Set(languages)].map(language => ({ text: language }));
 	if (details?.async?.state === "running") {
-		badges.push({ text: "background", title: `Backgrounded as job ${details.async.jobId}` });
+		badges.push({
+			text: t("tools.eval.background"),
+			title: t("tools.eval.background_job", { id: details.async.jobId }),
+		});
 	}
 	return {
 		title: (cellCount > 1 ? "" : plainText(title ?? "").trim()) || "Eval",
 		badges: badges.length > 0 ? badges : undefined,
-		meta: cellCount > 1 ? [`${cellCount} cells`] : undefined,
+		meta: cellCount > 1 ? [t("tools.eval.cell_count", { cellCount })] : undefined,
 	};
 }
 
@@ -873,7 +893,10 @@ function evalStatusSection(log: StatusEventLog, expanded: boolean): NativeNode |
 	return node(
 		"col",
 		{ role: "omp.run.status", gap: "none" },
-		compact<NativeNode>([hidden > 0 && keyed(text([span(`${hidden} earlier`, "muted")]), "earlier"), ...lines]),
+		compact<NativeNode>([
+			hidden > 0 && keyed(text([span(t("tools.eval.earlier", { hidden }), "muted")]), "earlier"),
+			...lines,
+		]),
 		"status",
 	);
 }
@@ -1018,7 +1041,7 @@ export const evalToolRenderer = {
 		const timeoutSeconds = options.renderContext?.timeout;
 		const timeoutLine =
 			typeof timeoutSeconds === "number"
-				? uiTheme.fg("dim", wrapBrackets(`Timeout: ${timeoutSeconds}s`, uiTheme))
+				? uiTheme.fg("dim", wrapBrackets(t("tools.eval.timeout", { timeoutSeconds }), uiTheme))
 				: undefined;
 		let warningLine: string | undefined;
 		if (details?.meta?.truncation || details?.meta?.artifactError) {
@@ -1027,7 +1050,7 @@ export const evalToolRenderer = {
 		const noticeLine = details?.notice ? uiTheme.fg("dim", wrapBrackets(details.notice, uiTheme)) : undefined;
 		const asyncLine =
 			details?.async?.state === "running"
-				? uiTheme.fg("dim", wrapBrackets(`Backgrounded: ${details.async.jobId}`, uiTheme))
+				? uiTheme.fg("dim", wrapBrackets(t("tools.eval.backgrounded", { id: details.async.jobId }), uiTheme))
 				: undefined;
 
 		const cellResults = details?.cells;
@@ -1082,13 +1105,13 @@ export const evalToolRenderer = {
 									outputLines.push(
 										uiTheme.fg(
 											"dim",
-											`… ${outputContent.hiddenCount} more lines (${expandKeyHint()} to expand)`,
+											t("tools.eval.more_lines", { count: outputContent.hiddenCount, key: expandKeyHint() }),
 										),
 									);
 								}
 								if (statusLines.length > 0) {
 									if (outputLines.length > 0) {
-										outputLines.push(uiTheme.fg("dim", "Status"));
+										outputLines.push(uiTheme.fg("dim", t("tools.common.status")));
 									}
 									outputLines.push(...statusLines);
 								}
@@ -1188,7 +1211,7 @@ export const evalToolRenderer = {
 
 		if (!output && statusLines.length > 0) {
 			const lines = [
-				uiTheme.fg("dim", "Status"),
+				uiTheme.fg("dim", t("tools.common.status")),
 				...statusLines,
 				timeoutLine,
 				noticeLine,
@@ -1205,7 +1228,7 @@ export const evalToolRenderer = {
 				.join("\n");
 			const lines = [
 				styledOutput,
-				...(statusLines.length > 0 ? [uiTheme.fg("dim", "Status"), ...statusLines] : []),
+				...(statusLines.length > 0 ? [uiTheme.fg("dim", t("tools.common.status")), ...statusLines] : []),
 				timeoutLine,
 				noticeLine,
 				asyncLine,
@@ -1244,13 +1267,18 @@ export const evalToolRenderer = {
 					outputLines.push("");
 					const skippedLine = uiTheme.fg(
 						"dim",
-						`… (${result.skippedCount} earlier lines, showing ${result.visualLines.length} of ${result.skippedCount + result.visualLines.length}) (${expandKeyHint()} to expand)`,
+						t("tools.eval.earlier_lines", {
+							earlier: result.skippedCount,
+							shown: result.visualLines.length,
+							total: result.skippedCount + result.visualLines.length,
+							key: expandKeyHint(),
+						}),
 					);
 					outputLines.push(truncateToWidth(skippedLine, width));
 				}
 				outputLines.push(...result.visualLines);
 				if (statusLines.length > 0) {
-					outputLines.push(truncateToWidth(uiTheme.fg("dim", "Status"), width));
+					outputLines.push(truncateToWidth(uiTheme.fg("dim", t("tools.common.status")), width));
 					for (const statusLine of statusLines) {
 						outputLines.push(truncateToWidth(statusLine, width));
 					}

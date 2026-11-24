@@ -8,6 +8,7 @@
  * field is picked rather than memorized. One draft owns rich, raw and
  * generated changes; nothing touches disk until Save.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { TspPrefsRow, TspPrefsSection } from "@oh-my-pi/pi-wire";
@@ -66,42 +67,85 @@ export * from "./agent-definition-fields";
 /** What each field means to the harness; shown beside the field while it is highlighted or edited. */
 const FIELD_HELP: Record<AgentDefinitionField, string> = {
 	name: "Exact identifier used by spawns lists and task calls. main and sub are reserved. Saved as <name>.md in the chosen scope; the first definition found with a name wins (project, then user, then plugins, then bundled).",
-	description:
-		"Shown to the delegating agent in the task catalog; it decides when this type is chosen. Say what the type is for and when not to use it.",
-	systemPrompt:
-		"The Markdown body becomes the child's Role. Write standing instructions in second person: the job, judgment calls, expected result, and what to do if blocked. The harness supplies each assignment and the mechanics of returning a result.",
-	harness:
-		"omp runs natively (default). claude runs through the Claude adapter with the subset of tools it can represent. codex parses but cannot be spawned.",
-	inherit:
-		"For native NeoPi agents, all keeps context files and the harness prompt (default); context keeps only files; system keeps only the harness prompt; none keeps neither. Agent instructions always apply. Claude supports only all.",
-	model: "Ordered fallbacks: @role aliases or provider/model selectors, each with an optional :effort suffix. The first available one is used; an empty list inherits the parent's model. A per-call model and the task.agentModelOverrides setting win over this list.",
-	thinkingLevel:
-		"Reasoning effort when the chosen model selector carries no :effort suffix; a per-call effort wins over both. inherit follows the parent, auto lets the harness choose.",
-	prewalk:
-		"After the agent's first completed edit or write (and a todo, while the todo tool is active) its session switches to another model and effort. It changes model and effort only, not the role or its advisors. On uses the configured prewalk target; a selector chooses the target. task.agentPrewalk overrides this field.",
-	advisor:
-		"Subagents run without an advisor unless their definition opts in. Advisor role uses the advisor role and catalog; a selector changes the advisor's model; a named advisor binds one WATCHDOG entry; a private advisor is defined here for this type only. Role activation sets are separate settings.",
-	spawns:
-		"Exact-name allowlist of agent types this agent may start; the first listed is its default. * allows any type. Omitted means none, except that a tools list containing task silently grants *. Chains (A spawns B, B spawns C) are enforced and bounded by task.maxRecursionDepth.",
-	tools: "Omitted uses the default built-ins; [] selects none explicitly. Structured runs still get yield, and spawns adds task below the depth cap. This is not a sandbox: MCP and custom tools stay available unless the caller restricts them.",
-	output:
-		"A JSON Schema or JTD object the agent's yield {data} is validated against; a caller's outputSchema overrides it. Omit it for free-text results. true and null are rejected before dispatch.",
-	structured:
-		"On keeps yield and the output schema even when the task.structured setting is off. Off cannot veto a caller that keeps structured mode on.",
-	blocking:
-		"On runs the agent inline, so its result is in hand before the delegating turn continues. Otherwise it runs detached when async execution is available.",
-	autoloadSkills:
-		"Exact skill names delivered to the agent before its assignment. Names the session does not have are silently dropped.",
-	readSummarize: "Off makes read return verbatim file content instead of structural summaries for this agent.",
+	get description() {
+		return t("overlays.agent_definition_editor.description_help");
+	},
+	get systemPrompt() {
+		return t("overlays.agent_definition_editor.prompt_help");
+	},
+	get harness() {
+		return t("overlays.agent_definition_editor.harness_help");
+	},
+	get inherit() {
+		return t("overlays.agent_definition_editor.inherit_help");
+	},
+	get model() {
+		return t("overlays.agent_definition_editor.model_help");
+	},
+	get thinkingLevel() {
+		return t("overlays.agent_definition_editor.thinking_help");
+	},
+	get prewalk() {
+		return t("overlays.agent_definition_editor.prewalk_help");
+	},
+	get advisor() {
+		return t("overlays.agent_definition_editor.advisor_help");
+	},
+	get spawns() {
+		return t("overlays.agent_definition_editor.spawns_help");
+	},
+	get tools() {
+		return t("overlays.agent_definition_editor.tools_help");
+	},
+	get output() {
+		return t("overlays.agent_definition_editor.output_help");
+	},
+	get structured() {
+		return t("overlays.agent_definition_editor.structured_help");
+	},
+	get blocking() {
+		return t("overlays.agent_definition_editor.blocking_help");
+	},
+	get autoloadSkills() {
+		return t("overlays.agent_definition_editor.skills_help");
+	},
+	get readSummarize() {
+		return t("overlays.agent_definition_editor.read_help");
+	},
 };
 
 /** Detail list: field rows grouped by purpose, then actions. */
 const DETAIL_GROUPS: readonly { title: string; fields: readonly AgentDefinitionField[] }[] = [
-	{ title: "Identity", fields: ["name", "description", "systemPrompt", "inherit"] },
-	{ title: "Model", fields: ["model", "thinkingLevel", "harness"] },
-	{ title: "Powers", fields: ["tools", "spawns", "autoloadSkills", "readSummarize"] },
-	{ title: "Lifecycle", fields: ["blocking", "prewalk", "advisor"] },
-	{ title: "Result", fields: ["output", "structured"] },
+	{
+		get title() {
+			return t("overlays.agent_definition_editor.identity_section");
+		},
+		fields: ["name", "description", "systemPrompt", "inherit"],
+	},
+	{
+		get title() {
+			return t("settings.tab.model.label");
+		},
+		fields: ["model", "thinkingLevel", "harness"],
+	},
+	{
+		get title() {
+			return t("overlays.agent_definition_editor.powers_section");
+		},
+		fields: ["tools", "spawns", "autoloadSkills", "readSummarize"],
+	},
+	{
+		get title() {
+			return t("overlays.agent_definition_editor.lifecycle_section");
+		},
+		fields: ["blocking", "prewalk", "advisor"],
+	},
+	{
+		get title() {
+			return t("overlays.agent_definition_editor.result_section");
+		},
+		fields: ["output", "structured"],
+	},
 ];
 const FIELD_BY_KEY = new Map(AGENT_DEFINITION_FIELDS.map(field => [field.key, field]));
 const FIELD_KEYS = new Set<string>(AGENT_DEFINITION_FIELDS.map(field => field.key));
@@ -160,11 +204,13 @@ function record(value: unknown): JsonRecord {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 function displayValue(value: unknown): string {
-	if (value === undefined) return "Default";
-	if (typeof value === "string") return value || "Not set";
-	if (Array.isArray(value)) return value.join(", ") || "None";
-	if (typeof value === "object") return "Configured";
-	return value ? "On" : "Off";
+	if (value === undefined) return t("settings.option.statusLine.preset.default.label");
+	if (typeof value === "string") return value || t("overlays.agent_definition_editor.not_set_value");
+	if (Array.isArray(value)) return value.join(", ") || t("settings.option.statusLine.separator.none.label");
+	if (typeof value === "object") return t("overlays.agent_definition_editor.configured_value");
+	return value
+		? t("overlays.agent_definition_editor.on_value")
+		: t("settings.option.paste.largeMenuThreshold.0.label");
 }
 function triState(value: boolean | undefined, on: string, off: string, unset: string): string {
 	return value === undefined ? unset : value ? on : off;
@@ -250,7 +296,9 @@ export class AgentDefinitionEditor implements Component {
 		this.#scope = scope;
 		this.#saved = deps.serialize(this.#draft);
 		if (deps.embedded) this.#split.setLeftSize({ ratio: 0.46, min: 22, max: 72 });
-		this.#title = definition.name ? `Edit ${definition.name}` : "New agent definition";
+		this.#title = definition.name
+			? t("overlays.agent_definition_editor.edit_title", { name: `${definition.name}` })
+			: t("overlays.agent_definition_editor.new_title");
 		this.#active = new SelectList([], 1, getSelectListTheme());
 		this.#showDetail();
 	}
@@ -283,7 +331,11 @@ export class AgentDefinitionEditor implements Component {
 		for (const item of this.#active.pickerView().items) {
 			if (item.value.startsWith("group:")) {
 				const group = item.value.slice("group:".length);
-				section = { id: group.toLowerCase(), title: group === "actions" ? "Author & file" : group, rows: [] };
+				section = {
+					id: group.toLowerCase(),
+					title: group === "actions" ? t("overlays.agent_definition_editor.author_file_section") : group,
+					rows: [],
+				};
 				sections.push(section);
 				continue;
 			}
@@ -292,8 +344,12 @@ export class AgentDefinitionEditor implements Component {
 				id: item.value,
 				label: item.label.trim(),
 				hint: field && item.value === selected ? FIELD_HELP[field.key] : undefined,
-				disabled: item.disabled ? item.description || "Not available" : undefined,
-				control: { k: "action", label: item.description || "Open", act: "edit" },
+				disabled: item.disabled ? item.description || t("overlays.agent_definition_editor.unavailable") : undefined,
+				control: {
+					k: "action",
+					label: item.description || t("overlays.agent_definition_editor.open"),
+					act: "edit",
+				},
 			});
 		}
 		return sections;
@@ -371,7 +427,15 @@ export class AgentDefinitionEditor implements Component {
 			try {
 				value = this.#deps.inspect(this.#draft);
 			} catch (error) {
-				value = { facts: [], findings: [{ level: "warn", text: `Inspection failed: ${String(error)}` }] };
+				value = {
+					facts: [],
+					findings: [
+						{
+							level: "warn",
+							text: t("overlays.agent_definition_editor.inspection_failed", { error: `${String(error)}` }),
+						},
+					],
+				};
 			}
 			this.#inspection = { key, value };
 		}
@@ -387,46 +451,66 @@ export class AgentDefinitionEditor implements Component {
 				return firstLine(draft.description, "(required)");
 			case "systemPrompt": {
 				const lines = draft.systemPrompt.trim() ? draft.systemPrompt.trim().split("\n").length : 0;
-				return lines ? `${lines} line${lines === 1 ? "" : "s"} · ${firstLine(draft.systemPrompt, "")}` : "(empty)";
+				return lines
+					? t("overlays.agent_definition_editor.prompt_lines", {
+							lines: `${lines}`,
+							plural: `${lines === 1 ? "" : "s"}`,
+							firstLine: `${firstLine(draft.systemPrompt, "")}`,
+						})
+					: "(empty)";
 			}
 			case "harness":
-				return draft.harness ?? "omp (default)";
+				return draft.harness ?? t("overlays.agent_definition_editor.harness_default");
 			case "inherit":
-				return draft.inherit ?? "all (default)";
+				return draft.inherit ?? t("overlays.agent_definition_editor.inherit_default");
 			case "model":
-				return draft.model?.length ? draft.model.join(" → ") : "inherit the parent's model";
+				return draft.model?.length
+					? draft.model.join(" → ")
+					: t("overlays.agent_definition_editor.model_inherited");
 			case "thinkingLevel":
 				return draft.thinkingLevel ?? "inherit";
 			case "tools":
 				return draft.tools === undefined
-					? "default selection"
+					? t("overlays.agent_definition_editor.tools_default")
 					: draft.tools.length
 						? `${draft.tools.length}: ${draft.tools.join(", ")}`
-						: "none";
+						: t("overlays.agent_definition_editor.tools_none");
 			case "spawns":
 				return draft.spawns === "*"
-					? "any type (*)"
+					? t("overlays.agent_definition_editor.spawns_any")
 					: draft.spawns?.length
 						? draft.spawns.join(", ")
 						: draft.tools?.includes("task")
-							? "omitted → * (task tool)"
-							: "none";
+							? t("overlays.agent_definition_editor.spawns_omitted")
+							: t("overlays.agent_definition_editor.spawns_none");
 			case "autoloadSkills":
-				return draft.autoloadSkills?.length ? draft.autoloadSkills.join(", ") : "none";
+				return draft.autoloadSkills?.length
+					? draft.autoloadSkills.join(", ")
+					: t("overlays.agent_definition_editor.skills_none");
 			case "readSummarize":
-				return triState(draft.readSummarize, "on", "off — verbatim reads", "inherit");
+				return triState(draft.readSummarize, "on", t("overlays.agent_definition_editor.read_verbatim"), "inherit");
 			case "blocking":
-				return triState(draft.blocking, "on — inline", "off — detached", "default (detached)");
+				return triState(
+					draft.blocking,
+					t("overlays.agent_definition_editor.blocking_inline"),
+					t("overlays.agent_definition_editor.blocking_detached"),
+					t("overlays.agent_definition_editor.blocking_default"),
+				);
 			case "structured":
-				return triState(draft.structured, "always", "off", "default");
+				return triState(
+					draft.structured,
+					t("overlays.agent_definition_editor.structured_always"),
+					"off",
+					"default",
+				);
 			case "prewalk":
 				return draft.prewalk === undefined
-					? "default (off)"
+					? t("overlays.agent_definition_editor.prewalk_default")
 					: draft.prewalk === true
-						? "on — configured target"
+						? t("overlays.agent_definition_editor.prewalk_on")
 						: draft.prewalk === false
 							? "off"
-							: `target ${draft.prewalk}`;
+							: t("overlays.agent_definition_editor.prewalk_target_2", { prewalk: `${draft.prewalk}` });
 			case "advisor":
 				return this.#advisorSummary();
 			case "output":
@@ -435,16 +519,21 @@ export class AgentDefinitionEditor implements Component {
 	}
 	#advisorSummary(): string {
 		const advisor = this.#draft.advisor;
-		if (advisor === undefined) return "none (default)";
-		if (advisor === true) return "advisor role";
-		if (advisor === false) return "disabled";
-		if (typeof advisor === "string") return `model ${advisor}`;
-		if ("ref" in advisor) return `named ${advisor.ref}${advisor.scope ? ` (${advisor.scope})` : ""}`;
-		return `private ${advisor.inline.name}`;
+		if (advisor === undefined) return t("overlays.agent_definition_editor.advisor_default");
+		if (advisor === true) return t("overlays.agent_definition_editor.advisor_role_2");
+		if (advisor === false) return t("overlays.agent_definition_editor.advisor_disabled");
+		if (typeof advisor === "string")
+			return t("overlays.agent_definition_editor.advisor_model", { advisor: `${advisor}` });
+		if ("ref" in advisor)
+			return t("overlays.agent_definition_editor.advisor_named", {
+				ref: `${advisor.ref}`,
+				value: `${advisor.scope ? ` (${advisor.scope})` : ""}`,
+			});
+		return t("overlays.agent_definition_editor.advisor_private", { name: `${advisor.inline.name}` });
 	}
 	#outputSummary(): string {
 		const output = this.#draft.output;
-		if (output === undefined) return "none — free-text result";
+		if (output === undefined) return t("overlays.agent_definition_editor.output_free_text");
 		if (output === null || typeof output !== "object") return `⚠ ${String(output)}`;
 		const jtd = this.#deps.outputSchemaDialect?.(output) === "jtd";
 		const schema = record(output);
@@ -475,51 +564,75 @@ export class AgentDefinitionEditor implements Component {
 				});
 			}
 		}
-		items.push({ value: "group:actions", label: theme.fg("dim", "AUTHOR & FILE"), disabled: true });
+		items.push({
+			value: "group:actions",
+			label: theme.fg("dim", t("overlays.agent_definition_editor.author_file_heading")),
+			disabled: true,
+		});
 		items.push(
 			{
 				value: "generate",
-				label: "  Generate with the author…",
-				description: "Describe the agent; filled fields are kept",
+				label: t("overlays.agent_definition_editor.generate_author"),
+				description: t("overlays.agent_definition_editor.generate_author_hint"),
 			},
 			{
 				value: "from-existing",
-				label: "  Generate from sources…",
-				description: "Mix definitions and other harness sources",
+				label: t("overlays.agent_definition_editor.generate_sources"),
+				description: t("overlays.agent_definition_editor.generate_sources_hint"),
 			},
 		);
 		for (const missing of this.#missingSpawnTargets())
 			if (this.#deps.createMissing)
 				items.push({
 					value: `create:${missing}`,
-					label: `  Create missing "${missing}"…`,
-					description: "Spawn target",
+					label: t("overlays.agent_definition_editor.create_missing", { missing: `${missing}` }),
+					description: t("overlays.agent_definition_editor.spawn_target"),
 				});
 		if (this.#deps.openDefinitionFile)
 			items.push({
 				value: "open-file",
-				label: "  Open backing file",
-				description: dirty ? "Save or discard draft changes first" : "Ctrl+G",
+				label: t("overlays.agent_definition_editor.open_file_2"),
+				description: dirty ? t("overlays.agent_definition_editor.save_or_discard") : "Ctrl+G",
 				disabled: dirty,
 			});
 		items.push(
-			{ value: "raw", label: "  Edit definition file contents…", description: "Front matter and body as text" },
+			{
+				value: "raw",
+				label: t("overlays.agent_definition_editor.edit_file_contents"),
+				description: t("overlays.agent_definition_editor.file_contents_hint"),
+			},
 			{
 				value: "scope",
-				label: this.#deps.saveScopeEditable === false ? "  File scope (edit in place)" : "  Save scope",
+				label:
+					this.#deps.saveScopeEditable === false
+						? t("overlays.agent_definition_editor.file_scope_in_place")
+						: t("overlays.agent_definition_editor.save_scope"),
 				description: this.#scope,
 			},
-			{ value: "save", label: "  Save definition", description: dirty ? "● unsaved changes" : "no changes" },
-			{ value: "copy", label: "  Save as a new copy…", description: "New name, new file" },
+			{
+				value: "save",
+				label: t("overlays.agent_definition_editor.save_definition"),
+				description: dirty
+					? t("overlays.agent_definition_editor.unsaved_changes")
+					: t("overlays.agent_definition_editor.no_changes"),
+			},
+			{
+				value: "copy",
+				label: t("overlays.agent_definition_editor.save_copy"),
+				description: t("overlays.agent_definition_editor.save_copy_hint"),
+			},
 		);
-		if (this.#deps.remove) items.push({ value: "delete", label: "  Delete definition file…" });
+		if (this.#deps.remove) items.push({ value: "delete", label: t("overlays.agent_definition_editor.delete_file") });
 		const list = this.#list(items, selected ?? "name");
 		list.onSelect = item => this.#run(() => this.#onDetailSelect(item.value));
 		list.onCancel = () => this.#leave();
 		this.#setScreen(
 			"detail",
 			list,
-			`${this.#deps.openDefinitionFile ? "Ctrl+G open file · " : ""}Enter edit · r regenerate · R with comment · c copy${this.#deps.remove ? " · Del delete" : ""} · ←/Esc close`,
+			t("overlays.agent_definition_editor.detail_keys", {
+				value: `${this.#deps.openDefinitionFile ? t("overlays.agent_definition_editor.open_file_key") : ""}`,
+				value2: `${this.#deps.remove ? t("overlays.agent_definition_editor.delete_key") : ""}`,
+			}),
 			{ preview: true, rebuild: next => this.#showDetail(next) },
 		);
 	}
@@ -538,7 +651,7 @@ export class AgentDefinitionEditor implements Component {
 		switch (value) {
 			case "generate":
 				this.#showText(
-					"Describe the agent for the author",
+					t("overlays.agent_definition_editor.describe_agent"),
 					"",
 					comment => void this.#generate("all", comment.trim() || undefined),
 					() => this.#showDetail("generate"),
@@ -552,7 +665,7 @@ export class AgentDefinitionEditor implements Component {
 				return;
 			case "raw":
 				this.#showText(
-					"Definition file contents",
+					t("overlays.agent_definition_editor.definition_contents"),
 					this.#deps.serialize(this.#draft),
 					raw => {
 						this.#draft = this.#deps.parse(raw);
@@ -601,7 +714,7 @@ export class AgentDefinitionEditor implements Component {
 			}
 			case "systemPrompt":
 				this.#showText(
-					"Instructions / body",
+					t("overlays.agent_definition_editor.instructions_body"),
 					this.#draft.systemPrompt,
 					value => {
 						this.#draft.systemPrompt = value;
@@ -612,13 +725,25 @@ export class AgentDefinitionEditor implements Component {
 				return;
 			case "harness":
 				this.#choose({
-					title: "Harness",
+					title: t("overlays.agent_definition_editor.harness_title"),
 					field: field.key,
 					current: this.#draft.harness ?? "",
 					options: [
-						{ value: "", label: "omp (default)", description: "Native NeoPi session." },
-						{ value: "claude", label: "claude", description: "Claude adapter; only representable tools." },
-						{ value: "codex", label: "codex", description: "Parses, but cannot be spawned today." },
+						{
+							value: "",
+							label: t("overlays.agent_definition_editor.harness_option_default"),
+							description: t("overlays.agent_definition_editor.harness_native_hint"),
+						},
+						{
+							value: "claude",
+							label: "claude",
+							description: t("overlays.agent_definition_editor.harness_claude_hint"),
+						},
+						{
+							value: "codex",
+							label: "codex",
+							description: t("overlays.agent_definition_editor.harness_codex_hint"),
+						},
 					],
 					pick: value => this.#set("harness", value || undefined),
 					back,
@@ -631,7 +756,7 @@ export class AgentDefinitionEditor implements Component {
 					current: this.#draft.inherit ?? "all",
 					options: AGENT_INHERITANCE_VALUES.map(value => ({
 						value,
-						label: value === "all" ? "all (default)" : value,
+						label: value === "all" ? t("overlays.agent_definition_editor.inherit_option_default") : value,
 					})),
 					pick: value => this.#set("inherit", value === "all" ? undefined : value),
 					back,
@@ -642,19 +767,23 @@ export class AgentDefinitionEditor implements Component {
 				return;
 			case "thinkingLevel":
 				this.#choose({
-					title: "Thinking level",
+					title: t("overlays.agent_definition_editor.thinking_title"),
 					field: field.key,
 					current: this.#draft.thinkingLevel ?? "",
 					options: [
-						{ value: "", label: "Not set", description: "Omit the field; the parent's effort applies." },
+						{
+							value: "",
+							label: t("overlays.agent_definition_editor.thinking_unset"),
+							description: t("overlays.agent_definition_editor.thinking_unset_hint"),
+						},
 						...(field.choices ?? []).map(level => ({
 							value: level,
 							label: level,
 							description:
 								level === "inherit"
-									? "Follow the parent's effort."
+									? t("overlays.agent_definition_editor.thinking_inherit_hint")
 									: level === "auto"
-										? "Let the harness pick per request."
+										? t("overlays.agent_definition_editor.thinking_auto_hint")
 										: parseThinkingLevel(level)
 											? getThinkingLevelMetadata(parseThinkingLevel(level)!).description
 											: undefined,
@@ -672,8 +801,8 @@ export class AgentDefinitionEditor implements Component {
 				return;
 			case "autoloadSkills":
 				this.#checklist({
-					title: "Autoload skills",
-					subtitle: "Delivered before the assignment; missing names are dropped.",
+					title: t("overlays.agent_definition_editor.autoload_title"),
+					subtitle: t("overlays.agent_definition_editor.autoload_hint"),
 					field: field.key,
 					entries: (this.#deps.skills ?? []).map(skill => ({
 						value: skill.name,
@@ -681,8 +810,15 @@ export class AgentDefinitionEditor implements Component {
 						description: skill.description,
 					})),
 					selected: this.#draft.autoloadSkills ?? [],
-					presets: [{ value: "__none", label: "None", description: "Omit the field.", apply: () => undefined }],
-					custom: "+ Add skill name…",
+					presets: [
+						{
+							value: "__none",
+							label: t("overlays.agent_definition_editor.autoload_none"),
+							description: t("overlays.agent_definition_editor.autoload_none_hint"),
+							apply: () => undefined,
+						},
+					],
+					custom: t("overlays.agent_definition_editor.add_skill"),
 					apply: selected => this.#set("autoloadSkills", selected?.length ? selected : undefined),
 				});
 				return;
@@ -728,7 +864,10 @@ export class AgentDefinitionEditor implements Component {
 			}
 		};
 		input.onEscape = back;
-		this.#setScreen("input", input, `${title} · Enter save · Esc cancel`, { field, preview: true });
+		this.#setScreen("input", input, t("overlays.agent_definition_editor.input_keys", { title: `${title}` }), {
+			field,
+			preview: true,
+		});
 	}
 
 	#showText(
@@ -790,16 +929,21 @@ export class AgentDefinitionEditor implements Component {
 				if (revision === this.#revision) options.back();
 			});
 		list.onCancel = options.back;
-		this.#setScreen("choice", list, `${options.title} · Enter choose · Esc back`, {
-			preview: true,
-			field: options.field,
-			sheet: {
-				title: options.title,
-				subtitle: options.subtitle ?? (options.field ? FIELD_HELP[options.field] : undefined),
-				noun: "options",
-				current: [options.current],
+		this.#setScreen(
+			"choice",
+			list,
+			t("overlays.agent_definition_editor.choice_keys", { title: `${options.title}` }),
+			{
+				preview: true,
+				field: options.field,
+				sheet: {
+					title: options.title,
+					subtitle: options.subtitle ?? (options.field ? FIELD_HELP[options.field] : undefined),
+					noun: "options",
+					current: [options.current],
+				},
 			},
-		});
+		);
 	}
 
 	/** Enter toggles; Done or Esc applies, like the advisor tools editor. */
@@ -821,7 +965,7 @@ export class AgentDefinitionEditor implements Component {
 							: item,
 					),
 				...(options.custom ? [{ value: "__custom", label: options.custom }] : []),
-				{ value: DONE, label: "Done" },
+				{ value: DONE, label: t("overlays.agent_definition_editor.checklist_done") },
 			];
 			const list = this.#list(items, cursor);
 			list.onSelect = item =>
@@ -840,18 +984,23 @@ export class AgentDefinitionEditor implements Component {
 					checklist.toggle(item.value);
 				});
 			list.onCancel = apply;
-			this.#setScreen("checklist", list, `${options.title} · Enter toggle · Done / Esc apply`, {
-				preview: true,
-				field: options.field,
-				rebuild: build,
-				sheet: {
-					title: options.title,
-					subtitle: options.subtitle,
-					noun: "entries",
-					current: checklist.current,
-					confirm: "Toggle",
+			this.#setScreen(
+				"checklist",
+				list,
+				t("overlays.agent_definition_editor.checklist_keys", { title: `${options.title}` }),
+				{
+					preview: true,
+					field: options.field,
+					rebuild: build,
+					sheet: {
+						title: options.title,
+						subtitle: options.subtitle,
+						noun: "entries",
+						current: checklist.current,
+						confirm: t("overlays.agent_definition_editor.checklist_toggle"),
+					},
 				},
-			});
+			);
 		};
 		build(undefined);
 	}
@@ -862,7 +1011,7 @@ export class AgentDefinitionEditor implements Component {
 		const all = this.#deps.tools;
 		const readOnly = this.#deps.readOnlyTools ?? [];
 		this.#checklist({
-			title: "Tools",
+			title: t("settings.tab.tools.label"),
 			subtitle: FIELD_HELP.tools,
 			field: "tools",
 			entries: [...all]
@@ -870,21 +1019,21 @@ export class AgentDefinitionEditor implements Component {
 				.map(tool => ({
 					value: tool.name,
 					label: tool.name,
-					description: `${readOnly.includes(tool.name) ? "read-only · " : ""}${tool.description ?? ""}`,
+					description: `${readOnly.includes(tool.name) ? t("overlays.agent_definition_editor.read_only_prefix") : ""}${tool.description ?? ""}`,
 				})),
 			selected: this.#draft.tools,
 			presets: [
 				{
 					value: "__defaults",
-					label: "Default selection",
-					description: "Omit the field; toggling individual tools starts an explicit list.",
+					label: t("overlays.agent_definition_editor.tools_default_option"),
+					description: t("overlays.agent_definition_editor.tools_default_hint"),
 					apply: () => undefined,
 				},
 				...(readOnly.length
 					? [
 							{
 								value: "__readonly",
-								label: "Read-only set",
+								label: t("overlays.agent_definition_editor.tools_read_only"),
 								description: readOnly.filter(name => all.some(tool => tool.name === name)).join(", "),
 								apply: () => readOnly.filter(name => all.some(tool => tool.name === name)),
 							},
@@ -892,19 +1041,19 @@ export class AgentDefinitionEditor implements Component {
 					: []),
 				{
 					value: "__none",
-					label: "No tools",
-					description: "Select no built-ins explicitly; automatic, MCP, and custom tools can still be available.",
+					label: t("overlays.agent_definition_editor.tools_none_option"),
+					description: t("overlays.agent_definition_editor.tools_none_hint"),
 					apply: () => [],
 				},
 			],
-			custom: "+ Add tool name (MCP or extension)…",
+			custom: t("overlays.agent_definition_editor.add_tool"),
 			apply: selected => this.#set("tools", selected),
 		});
 	}
 
 	#showSpawns(): void {
 		this.#checklist({
-			title: "Allowed child agents",
+			title: t("overlays.agent_definition_editor.children_title"),
 			subtitle: FIELD_HELP.spawns,
 			field: "spawns",
 			ordered: true,
@@ -919,13 +1068,18 @@ export class AgentDefinitionEditor implements Component {
 			presets: [
 				{
 					value: "__none",
-					label: "None",
-					description: "Omit the field (a tools list with task still grants *).",
+					label: t("settings.option.statusLine.separator.none.label"),
+					description: t("overlays.agent_definition_editor.children_none_hint"),
 					apply: () => undefined,
 				},
-				{ value: "__any", label: "Any type (*)", description: "Every discovered agent.", apply: () => ["*"] },
+				{
+					value: "__any",
+					label: t("overlays.agent_definition_editor.children_any"),
+					description: t("overlays.agent_definition_editor.children_any_hint"),
+					apply: () => ["*"],
+				},
 			],
-			custom: "+ Add agent name…",
+			custom: t("overlays.agent_definition_editor.add_agent"),
 			apply: selected =>
 				this.#set(
 					"spawns",
@@ -940,17 +1094,25 @@ export class AgentDefinitionEditor implements Component {
 			...models.map((selector, index) => ({
 				value: `entry:${index}`,
 				label: `${index + 1}. ${selector}`,
-				description: index === 0 ? "tried first" : "fallback",
+				description: index === 0 ? t("overlays.agent_definition_editor.model_first") : "fallback",
 			})),
-			{ value: "add-model", label: "+ Add model…", description: "Pick from available models, then an effort" },
-			{ value: "add-role", label: "+ Add role alias…", description: "@role follows the role's configured model" },
+			{
+				value: "add-model",
+				label: t("overlays.agent_definition_editor.add_model"),
+				description: t("overlays.agent_definition_editor.add_model_hint"),
+			},
+			{
+				value: "add-role",
+				label: t("overlays.agent_definition_editor.add_role"),
+				description: t("overlays.agent_definition_editor.add_role_hint"),
+			},
 			{
 				value: "add-pattern",
-				label: "+ Add selector…",
-				description: "provider/model, glob or regex, optional :effort",
+				label: t("overlays.agent_definition_editor.add_selector"),
+				description: t("overlays.agent_definition_editor.selector_hint"),
 			},
-			...(models.length ? [{ value: "clear", label: "Clear (inherit the parent's model)" }] : []),
-			{ value: DONE, label: "Done" },
+			...(models.length ? [{ value: "clear", label: t("overlays.agent_definition_editor.clear_models") }] : []),
+			{ value: DONE, label: t("overlays.agent_definition_editor.models_done") },
 		];
 		const list = this.#list(items, selected ?? (models.length ? "entry:0" : "add-model"));
 		const back = (): void => this.#showDetail("model");
@@ -960,11 +1122,12 @@ export class AgentDefinitionEditor implements Component {
 				const reopen = (): void => this.#showModels(item.value);
 				if (item.value === DONE) return back();
 				if (item.value === "clear") return this.#set("model", undefined);
-				if (item.value === "add-model") return this.#pickModel("Add model", undefined, add, reopen);
+				if (item.value === "add-model")
+					return this.#pickModel(t("overlays.agent_definition_editor.add_model_title"), undefined, add, reopen);
 				if (item.value === "add-role") return this.#pickRole(add, reopen);
 				if (item.value === "add-pattern")
 					return this.#showInput(
-						"Model selector",
+						t("overlays.agent_definition_editor.selector_title"),
 						"",
 						value => {
 							if (value.trim()) add(value.trim());
@@ -975,11 +1138,15 @@ export class AgentDefinitionEditor implements Component {
 				this.#modelEntry(Number(item.value.slice("entry:".length)));
 			});
 		list.onCancel = back;
-		this.#setScreen("models", list, "Models in priority order · Enter edit entry · Esc back", {
+		this.#setScreen("models", list, t("overlays.agent_definition_editor.models_keys"), {
 			preview: true,
 			field: "model",
 			rebuild: next => this.#showModels(next),
-			sheet: { title: "Models / roles", subtitle: FIELD_HELP.model, noun: "entries" },
+			sheet: {
+				title: t("overlays.agent_definition_editor.models_roles_title"),
+				subtitle: FIELD_HELP.model,
+				noun: "entries",
+			},
 		});
 	}
 
@@ -999,23 +1166,34 @@ export class AgentDefinitionEditor implements Component {
 			this.#set("model", models);
 		};
 		this.#choose({
-			title: `Model entry ${index + 1}: ${selector}`,
+			title: t("overlays.agent_definition_editor.model_entry_title", {
+				value: `${index + 1}`,
+				selector: `${selector}`,
+			}),
 			field: "model",
 			current: "",
 			options: [
-				{ value: "model", label: "Replace with a model…" },
-				{ value: "role", label: "Replace with a role alias…" },
-				{ value: "edit", label: "Edit selector text…" },
-				...(index > 0 ? [{ value: "up", label: "Move up" }] : []),
-				...(index < models.length - 1 ? [{ value: "down", label: "Move down" }] : []),
-				{ value: "remove", label: "Remove" },
+				{ value: "model", label: t("overlays.agent_definition_editor.replace_model") },
+				{ value: "role", label: t("overlays.agent_definition_editor.replace_role") },
+				{ value: "edit", label: t("overlays.agent_definition_editor.edit_selector") },
+				...(index > 0 ? [{ value: "up", label: t("overlays.agent_definition_editor.move_up") }] : []),
+				...(index < models.length - 1
+					? [{ value: "down", label: t("overlays.agent_definition_editor.move_down") }]
+					: []),
+				{ value: "remove", label: t("overlays.agent_definition_editor.remove_entry") },
 			],
 			pick: value => {
-				if (value === "model") return this.#pickModel(`Replace ${selector}`, selector, replace, reopen);
+				if (value === "model")
+					return this.#pickModel(
+						t("overlays.agent_definition_editor.replace_title", { selector: `${selector}` }),
+						selector,
+						replace,
+						reopen,
+					);
 				if (value === "role") return this.#pickRole(replace, reopen);
 				if (value === "edit")
 					return this.#showInput(
-						"Model selector",
+						t("overlays.agent_definition_editor.edit_selector_title"),
 						selector,
 						next => {
 							if (!next.trim()) throw new Error("Use Remove to delete an entry.");
@@ -1039,11 +1217,17 @@ export class AgentDefinitionEditor implements Component {
 	#pickRole(apply: (selector: string) => void, back: () => void): void {
 		const roles = this.#deps.roles ?? [];
 		if (!roles.length) {
-			this.#showInput("Role alias (@role)", "@", value => apply(value.trim()), back, "model");
+			this.#showInput(
+				t("overlays.agent_definition_editor.role_alias_input"),
+				"@",
+				value => apply(value.trim()),
+				back,
+				"model",
+			);
 			return;
 		}
 		this.#choose({
-			title: "Role alias",
+			title: t("overlays.agent_definition_editor.role_alias_title"),
 			field: "model",
 			current: "",
 			options: roles.map(role => ({
@@ -1093,13 +1277,13 @@ export class AgentDefinitionEditor implements Component {
 				return;
 			}
 			this.#choose({
-				title: `Effort for ${item.selector}`,
+				title: t("overlays.agent_definition_editor.effort_title", { selector: `${item.selector}` }),
 				current: current?.startsWith(`${item.selector}:`) ? current.slice(item.selector.length + 1) : "",
 				options: [
 					{
 						value: "",
-						label: "No suffix",
-						description: "The agent's thinking level or the model default applies.",
+						label: t("overlays.agent_definition_editor.no_suffix"),
+						description: t("overlays.agent_definition_editor.no_suffix_hint"),
 					},
 					...efforts.map(effort => ({
 						value: effort,
@@ -1114,53 +1298,64 @@ export class AgentDefinitionEditor implements Component {
 			});
 		};
 		browser.onCancel = back;
-		this.#setScreen("model-browser", browser, `${title} · / search · Enter pick · Esc back`, {
-			field: this.#helpField,
-		});
+		this.#setScreen(
+			"model-browser",
+			browser,
+			t("overlays.agent_definition_editor.model_browser_keys", { title: `${title}` }),
+			{
+				field: this.#helpField,
+			},
+		);
 	}
 
 	#showPrewalk(): void {
 		const back = (): void => this.#showDetail("prewalk");
 		const prewalk = this.#draft.prewalk;
 		this.#choose({
-			title: "Prewalk",
+			title: t("settings.group.prewalk"),
 			field: "prewalk",
 			current: prewalk === undefined ? "" : prewalk === true ? "on" : prewalk === false ? "off" : "target",
 			options: [
 				{
 					value: "",
-					label: "Default",
-					description: "Omit the field: off (the bundled task agent follows task.prewalk).",
+					label: t("settings.option.statusLine.preset.default.label"),
+					description: t("overlays.agent_definition_editor.prewalk_default_hint"),
 				},
 				{
 					value: "on",
-					label: "On — configured target",
-					description: "Hand off to the prewalk target after the first edit.",
+					label: t("overlays.agent_definition_editor.prewalk_option_on"),
+					description: t("overlays.agent_definition_editor.prewalk_on_hint"),
 				},
-				{ value: "off", label: "Off", description: "Never hand off." },
+				{
+					value: "off",
+					label: t("settings.option.paste.largeMenuThreshold.0.label"),
+					description: t("overlays.agent_definition_editor.prewalk_off_hint"),
+				},
 				{
 					value: "model",
-					label: "Choose a target model…",
+					label: t("overlays.agent_definition_editor.choose_target_model"),
 					description:
-						typeof prewalk === "string" ? `Current: ${prewalk}` : "Model and effort after the first edit.",
+						typeof prewalk === "string"
+							? t("overlays.agent_definition_editor.current_prewalk", { prewalk: `${prewalk}` })
+							: t("overlays.agent_definition_editor.prewalk_description"),
 				},
 				{
 					value: "pattern",
-					label: "Enter a target selector…",
-					description: "@role, pattern or provider/model:effort.",
+					label: t("overlays.agent_definition_editor.target_selector_prompt"),
+					description: t("overlays.agent_definition_editor.target_selector_help"),
 				},
 			],
 			pick: value => {
 				if (value === "model")
 					return this.#pickModel(
-						"Prewalk target",
+						t("overlays.agent_definition_editor.prewalk_target"),
 						typeof prewalk === "string" ? prewalk : undefined,
 						selector => this.#set("prewalk", selector),
 						back,
 					);
 				if (value === "pattern")
 					return this.#showInput(
-						"Prewalk target selector",
+						t("overlays.agent_definition_editor.prewalk_selector"),
 						typeof prewalk === "string" ? prewalk : "",
 						selector => this.#set("prewalk", selector.trim() || undefined),
 						back,
@@ -1188,32 +1383,44 @@ export class AgentDefinitionEditor implements Component {
 								? "named"
 								: "inline";
 		this.#choose({
-			title: "Advisor",
+			title: t("settings.group.advisor"),
 			field: "advisor",
 			current,
 			options: [
-				{ value: "", label: "None (default)", description: "Subagents run without an advisor." },
-				{ value: "role", label: "Advisor role", description: "Opt in with the advisor role and catalog." },
-				{ value: "off", label: "Disabled", description: "advisor: false" },
+				{
+					value: "",
+					label: t("overlays.agent_definition_editor.advisor_none"),
+					description: t("overlays.agent_definition_editor.advisor_none_help"),
+				},
+				{
+					value: "role",
+					label: t("overlays.agent_definition_editor.advisor_role"),
+					description: t("overlays.agent_definition_editor.advisor_role_help"),
+				},
+				{ value: "off", label: t("settings.option.ask.timeout.0.label"), description: "advisor: false" },
 				{
 					value: "model",
-					label: "Advisor role with another model…",
+					label: t("overlays.agent_definition_editor.advisor_other_model"),
 					description:
-						typeof advisor === "string" ? `Current: ${advisor}` : "A model or @role selector for the advisor.",
+						typeof advisor === "string"
+							? t("overlays.agent_definition_editor.current_advisor_model", { advisor: `${advisor}` })
+							: t("overlays.agent_definition_editor.advisor_selector_help"),
 				},
 				{
 					value: "named",
-					label: "Named advisor…",
+					label: t("overlays.agent_definition_editor.named_advisor"),
 					description:
-						typeof advisor === "object" && "ref" in advisor ? `Current: ${advisor.ref}` : "One WATCHDOG entry.",
+						typeof advisor === "object" && "ref" in advisor
+							? t("overlays.agent_definition_editor.current_named_advisor", { ref: `${advisor.ref}` })
+							: t("overlays.agent_definition_editor.watchdog_entry"),
 				},
 				{
 					value: "inline",
-					label: "Private advisor…",
+					label: t("overlays.agent_definition_editor.private_advisor"),
 					description:
 						typeof advisor === "object" && "inline" in advisor
-							? `Current: ${advisor.inline.name}`
-							: "Defined in this file only.",
+							? t("overlays.agent_definition_editor.current_private_advisor", { name: `${advisor.inline.name}` })
+							: t("overlays.agent_definition_editor.private_advisor_help"),
 				},
 			],
 			pick: value => {
@@ -1222,7 +1429,7 @@ export class AgentDefinitionEditor implements Component {
 				else if (value === "off") this.#draft.advisor = false;
 				else if (value === "model")
 					this.#showInput(
-						"Advisor model or @role",
+						t("overlays.agent_definition_editor.advisor_model_input"),
 						typeof advisor === "string" ? advisor : "@advisor",
 						selector => {
 							this.#draft.advisor = selector.trim() || true;
@@ -1243,20 +1450,20 @@ export class AgentDefinitionEditor implements Component {
 			// The advisor choice already returned to the detail list; open only if the user is still there.
 			if (this.#closed || this.#screen !== "detail") return;
 			if (!advisors.length) {
-				this.#notice = "No named advisors are configured (WATCHDOG.yml).";
+				this.#notice = t("overlays.agent_definition_editor.no_named_advisors");
 				this.#render();
 				return;
 			}
 			const current =
 				typeof this.#draft.advisor === "object" && "ref" in this.#draft.advisor ? this.#draft.advisor : undefined;
 			this.#choose({
-				title: "Named advisors",
+				title: t("overlays.agent_definition_editor.named_advisors"),
 				field: "advisor",
 				current: current ? `${current.ref}\u0000${current.scope ?? ""}` : "",
 				options: advisors.map(advisor => ({
 					value: `${advisor.name}\u0000${advisor.scope}`,
 					label: advisor.name,
-					description: `${advisor.scope} · ${advisor.config.model ?? "advisor role"}`,
+					description: `${advisor.scope} · ${advisor.config.model ?? t("overlays.agent_definition_editor.advisor_role_fallback")}`,
 				})),
 				pick: value => {
 					const [ref, scope] = value.split("\u0000");
@@ -1304,7 +1511,7 @@ export class AgentDefinitionEditor implements Component {
 				formRow?.activate();
 			});
 		list.onCancel = () => this.#pop();
-		this.#setScreen("form", list, `${page.title} · Enter edit · Esc back`, {
+		this.#setScreen("form", list, t("overlays.agent_definition_editor.form_navigation", { title: `${page.title}` }), {
 			preview: true,
 			field,
 			rebuild: next => {
@@ -1349,21 +1556,36 @@ export class AgentDefinitionEditor implements Component {
 			kind: "text" | "boolean" | "number";
 			choices?: string[];
 		}[] = [
-			{ key: "name", label: "Name", kind: "text" },
-			{ key: "model", label: "Model / role", kind: "text" },
-			{ key: "instructions", label: "Instructions", kind: "text" },
-			{ key: "systemPrompt", label: "Base system prompt override", kind: "text" },
-			{ key: "enabled", label: "Enabled", kind: "boolean" },
-			{ key: "includeThinking", label: "Include primary thinking", kind: "boolean" },
-			{ key: "maxNotesPerUpdate", label: "Maximum notes per update", kind: "number" },
-			{ key: "reviewMode", label: "Review mode", kind: "text", choices: ["turn", "agent-end"] },
-			{ key: "reviewInterval", label: "Review interval", kind: "number" },
-			{ key: "syncBacklog", label: "Sync backlog", kind: "text", choices: ["off", "1", "3", "5", "strict"] },
-			{ key: "scope", label: "Attach to session kinds", kind: "text", choices: ["main", "subagent", "all"] },
+			{ key: "name", label: t("overlays.agent_definition_editor.name"), kind: "text" },
+			{ key: "model", label: t("overlays.agent_definition_editor.model_role"), kind: "text" },
+			{ key: "instructions", label: t("overlays.agent_definition_editor.instructions"), kind: "text" },
+			{ key: "systemPrompt", label: t("overlays.agent_definition_editor.system_prompt_override"), kind: "text" },
+			{ key: "enabled", label: t("overlays.agent_definition_editor.enabled"), kind: "boolean" },
+			{ key: "includeThinking", label: t("overlays.agent_definition_editor.include_thinking"), kind: "boolean" },
+			{ key: "maxNotesPerUpdate", label: t("overlays.agent_definition_editor.max_notes"), kind: "number" },
+			{
+				key: "reviewMode",
+				label: t("overlays.agent_definition_editor.review_mode"),
+				kind: "text",
+				choices: ["turn", "agent-end"],
+			},
+			{ key: "reviewInterval", label: t("overlays.agent_definition_editor.review_interval"), kind: "number" },
+			{
+				key: "syncBacklog",
+				label: t("overlays.agent_definition_editor.sync_backlog"),
+				kind: "text",
+				choices: ["off", "1", "3", "5", "strict"],
+			},
+			{
+				key: "scope",
+				label: t("overlays.agent_definition_editor.session_kinds"),
+				kind: "text",
+				choices: ["main", "subagent", "all"],
+			},
 		];
 		this.#enterForm(
 			"advisor",
-			"Private advisor — saved in this definition only",
+			t("overlays.agent_definition_editor.private_advisor_form"),
 			() => [
 				...fields.map(field => ({
 					id: field.key,
@@ -1383,7 +1605,7 @@ export class AgentDefinitionEditor implements Component {
 							this.#push(field.label, () =>
 								[undefined, ...field.choices!].map(value => ({
 									id: value ?? "default",
-									label: value ?? "Default",
+									label: value ?? t("settings.option.statusLine.preset.default.label"),
 									value: get()[field.key] === value ? "✓" : "",
 									field: "advisor",
 									activate: () => {
@@ -1411,14 +1633,14 @@ export class AgentDefinitionEditor implements Component {
 				})),
 				...(["nit", "concern", "blocker"] as const).map(severity => ({
 					id: `delivery:${severity}`,
-					label: `${severity} delivery`,
-					value: get().delivery?.[severity] ?? "Default",
+					label: t("overlays.agent_definition_editor.delivery_label", { severity: `${severity}` }),
+					value: get().delivery?.[severity] ?? t("settings.option.statusLine.preset.default.label"),
 					field: "advisor" as const,
 					activate: () =>
-						this.#push(`${severity} delivery`, () =>
+						this.#push(t("overlays.agent_definition_editor.delivery_title", { severity: `${severity}` }), () =>
 							[undefined, "on-yield", "next-tool-call"].map(value => ({
 								id: value ?? "default",
-								label: value ?? "Default",
+								label: value ?? t("settings.option.statusLine.preset.default.label"),
 								field: "advisor",
 								activate: () => {
 									const delivery = { ...get().delivery };
@@ -1432,14 +1654,14 @@ export class AgentDefinitionEditor implements Component {
 				})),
 				{
 					id: "tools",
-					label: "Tools…",
+					label: t("overlays.agent_definition_editor.tools"),
 					value: displayValue(get().tools),
 					field: "advisor",
 					activate: () =>
-						this.#push("Private advisor tools", () => [
+						this.#push(t("overlays.agent_definition_editor.private_advisor_tools"), () => [
 							{
 								id: "default",
-								label: "Use default tools",
+								label: t("overlays.agent_definition_editor.default_tools"),
 								field: "advisor",
 								value: get().tools === undefined ? "[x]" : "[ ]",
 								activate: () => {
@@ -1470,8 +1692,7 @@ export class AgentDefinitionEditor implements Component {
 			try {
 				this.#draft.output = JSON.parse(this.#draft.output);
 			} catch {
-				this.#notice =
-					"The output schema is not valid JSON. Edit it as JSON or in the raw definition to repair it.";
+				this.#notice = t("overlays.agent_definition_editor.invalid_schema_notice");
 			}
 		}
 		let jtd = this.#deps.outputSchemaDialect?.(this.#draft.output) === "jtd";
@@ -1480,10 +1701,10 @@ export class AgentDefinitionEditor implements Component {
 			jtd ? { properties: {}, optionalProperties: {} } : { type: "object", properties: {}, required: [] };
 		const enabled = (): boolean =>
 			this.#draft.output !== undefined && this.#draft.output !== null && this.#draft.output !== false;
-		this.#enterForm("output", "Structured output", () => [
+		this.#enterForm("output", t("overlays.agent_definition_editor.structured_output"), () => [
 			{
 				id: "enable",
-				label: "Enable structured output",
+				label: t("overlays.agent_definition_editor.enable_structured_output"),
 				value: enabled() ? "[x]" : "[ ]",
 				field: "output",
 				activate: () => {
@@ -1492,7 +1713,7 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "format",
-				label: "Schema format",
+				label: t("overlays.agent_definition_editor.schema_format"),
 				value: jtd ? "JSON Type Definition" : "JSON Schema",
 				field: "output",
 				activate: () => {
@@ -1503,11 +1724,11 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "json",
-				label: "Edit schema as JSON…",
+				label: t("overlays.agent_definition_editor.edit_schema_json"),
 				field: "output",
 				activate: () =>
 					this.#prompt(
-						"Output schema (JSON)",
+						t("overlays.agent_definition_editor.output_schema_json"),
 						this.#draft.output === undefined ? "" : JSON.stringify(this.#draft.output, null, 2),
 						value => {
 							if (!value.trim()) {
@@ -1567,11 +1788,11 @@ export class AgentDefinitionEditor implements Component {
 		return [
 			{
 				id: "type",
-				label: "Type",
+				label: t("overlays.agent_definition_editor.type"),
 				value: displayValue(schemaType),
 				field: "output",
 				activate: () =>
-					this.#push("Output type", () =>
+					this.#push(t("overlays.agent_definition_editor.output_type"), () =>
 						types.map(type => ({
 							id: type,
 							label: type,
@@ -1609,32 +1830,36 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "description",
-				label: "Description",
+				label: t("overlays.agent_definition_editor.description"),
 				value: displayValue(description),
 				field: "output",
 				activate: () =>
-					this.#prompt("Field description", typeof description === "string" ? description : "", value => {
-						if (jtd) {
-							const metadata = { ...record(record(get()).metadata) };
-							if (value) metadata.description = value;
-							else delete metadata.description;
-							update("metadata", metadata);
-						} else update("description", value || undefined);
-					}),
+					this.#prompt(
+						t("overlays.agent_definition_editor.field_description"),
+						typeof description === "string" ? description : "",
+						value => {
+							if (jtd) {
+								const metadata = { ...record(record(get()).metadata) };
+								if (value) metadata.description = value;
+								else delete metadata.description;
+								update("metadata", metadata);
+							} else update("description", value || undefined);
+						},
+					),
 			},
 			...Object.keys(properties).map(name => ({
 				id: `property:${name}`,
 				label: name,
-				value: `${displayValue(record(properties[name]).type)}${jtd ? (Object.hasOwn(record(schema.properties), name) ? " · Required" : " · Optional") : Array.isArray(schema.required) && schema.required.includes(name) ? " · Required" : " · Optional"}`,
+				value: `${displayValue(record(properties[name]).type)}${jtd ? (Object.hasOwn(record(schema.properties), name) ? t("overlays.agent_definition_editor.required_suffix_jtd") : t("overlays.agent_definition_editor.optional_suffix_jtd")) : Array.isArray(schema.required) && schema.required.includes(name) ? t("overlays.agent_definition_editor.required_suffix_json") : t("overlays.agent_definition_editor.optional_suffix_json")}`,
 				field: "output" as const,
 				activate: () => this.#schemaProperty(get, set, name, jtd),
 			})),
 			{
 				id: "add-field",
-				label: "+ New output field",
+				label: t("overlays.agent_definition_editor.new_output_field"),
 				field: "output",
 				activate: () =>
-					this.#prompt("New output field name", "", name => {
+					this.#prompt(t("overlays.agent_definition_editor.new_field_name"), "", name => {
 						if (!name.trim()) throw new Error("Field name is required");
 						const next = { ...record(get()) };
 						if (
@@ -1653,11 +1878,11 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "items",
-				label: "Array item schema…",
+				label: t("overlays.agent_definition_editor.array_item_schema"),
 				value: displayValue(jtd ? schema.elements : schema.items),
 				field: "output",
 				activate: () =>
-					this.#push("Array items", () =>
+					this.#push(t("overlays.agent_definition_editor.array_items"), () =>
 						this.#schemaRows(
 							() => record(get())[jtd ? "elements" : "items"],
 							value => update(jtd ? "elements" : "items", value),
@@ -1668,10 +1893,10 @@ export class AgentDefinitionEditor implements Component {
 			{
 				id: "keywords",
 				label: jtd
-					? "Enums, records, tagged unions, references and metadata…"
-					: "Constraints, unions and other schema keywords…",
+					? t("overlays.agent_definition_editor.jtd_keywords")
+					: t("overlays.agent_definition_editor.schema_constraints"),
 				field: "output",
-				activate: () => this.#jsonObject("Schema keywords", get, set),
+				activate: () => this.#jsonObject(t("overlays.agent_definition_editor.schema_keywords"), get, set),
 			},
 		];
 	}
@@ -1686,14 +1911,14 @@ export class AgentDefinitionEditor implements Component {
 			const key = bucket();
 			set({ ...root, [key]: { ...record(root[key]), [name]: value } });
 		};
-		this.#push(`Output field: ${name}`, () => [
+		this.#push(t("overlays.agent_definition_editor.output_field_title", { name: `${name}` }), () => [
 			{
 				id: "name",
-				label: "Field name",
+				label: t("overlays.agent_definition_editor.field_name_label"),
 				value: name,
 				field: "output",
 				activate: () =>
-					this.#prompt("Field name", name, nextName => {
+					this.#prompt(t("overlays.agent_definition_editor.field_name_prompt"), name, nextName => {
 						if (!nextName.trim()) throw new Error("Field name is required");
 						const root = record(get());
 						const key = bucket();
@@ -1719,7 +1944,7 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "required",
-				label: "Required",
+				label: t("overlays.agent_definition_editor.required"),
 				value: jtd
 					? bucket() === "properties"
 						? "[x]"
@@ -1749,7 +1974,7 @@ export class AgentDefinitionEditor implements Component {
 			...this.#schemaRows(childGet, childSet, jtd),
 			{
 				id: "delete",
-				label: "Remove this field",
+				label: t("overlays.agent_definition_editor.remove_field"),
 				activate: () => {
 					const root = record(get());
 					const key = bucket();
@@ -1790,10 +2015,10 @@ export class AgentDefinitionEditor implements Component {
 			})),
 			{
 				id: "add",
-				label: "+ New keyword",
+				label: t("overlays.agent_definition_editor.new_keyword"),
 				field: "output",
 				activate: () =>
-					this.#prompt("Schema keyword (enum, anyOf, minimum, $ref…)", "", key => {
+					this.#prompt(t("overlays.agent_definition_editor.keyword_prompt"), "", key => {
 						if (!key.trim()) throw new Error("Keyword is required");
 						set({ ...record(get()), [key]: null });
 					}),
@@ -1805,14 +2030,14 @@ export class AgentDefinitionEditor implements Component {
 		this.#push(title, () => [
 			{
 				id: "text",
-				label: "Text",
+				label: t("settings.option.tui.vimModeDisplay.text.label"),
 				field: "output",
 				value: typeof get() === "string" ? String(get()) : "",
 				activate: () => this.#prompt(title, typeof get() === "string" ? String(get()) : "", set),
 			},
 			{
 				id: "number",
-				label: "Number",
+				label: t("overlays.agent_definition_editor.number_type"),
 				field: "output",
 				value: typeof get() === "number" ? String(get()) : "",
 				activate: () =>
@@ -1824,17 +2049,26 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "boolean",
-				label: "Boolean",
+				label: t("overlays.agent_definition_editor.boolean_type"),
 				field: "output",
 				value: typeof get() === "boolean" ? String(get()) : "",
 				activate: () => set(get() !== true),
 			},
-			{ id: "null", label: "Null", field: "output", value: get() === null ? "✓" : "", activate: () => set(null) },
+			{
+				id: "null",
+				label: t("overlays.agent_definition_editor.null_type"),
+				field: "output",
+				value: get() === null ? "✓" : "",
+				activate: () => set(null),
+			},
 			{
 				id: "object",
-				label: "Object…",
+				label: t("overlays.agent_definition_editor.object_type"),
 				field: "output",
-				value: get() && typeof get() === "object" && !Array.isArray(get()) ? "Configured" : "",
+				value:
+					get() && typeof get() === "object" && !Array.isArray(get())
+						? t("overlays.agent_definition_editor.configured")
+						: "",
 				activate: () => {
 					if (!get() || typeof get() !== "object" || Array.isArray(get())) set({});
 					this.#jsonObject(title, get, set);
@@ -1842,9 +2076,11 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "array",
-				label: "Array…",
+				label: t("overlays.agent_definition_editor.array_type"),
 				field: "output",
-				value: Array.isArray(get()) ? `${(get() as unknown[]).length} items` : "",
+				value: Array.isArray(get())
+					? t("overlays.agent_definition_editor.item_count", { length: `${(get() as unknown[]).length}` })
+					: "",
 				activate: () => {
 					if (!Array.isArray(get())) set([]);
 					this.#jsonArray(title, get, set);
@@ -1852,7 +2088,7 @@ export class AgentDefinitionEditor implements Component {
 			},
 			{
 				id: "delete",
-				label: "Remove keyword",
+				label: t("overlays.agent_definition_editor.remove_keyword"),
 				field: "output",
 				activate: () => {
 					set(undefined);
@@ -1864,7 +2100,7 @@ export class AgentDefinitionEditor implements Component {
 
 	#jsonArray(title: string, get: () => unknown, set: (value: unknown) => void): void {
 		const items = (): unknown[] => (Array.isArray(get()) ? (get() as unknown[]) : []);
-		this.#push(`${title} items`, () => [
+		this.#push(t("overlays.agent_definition_editor.items_title", { title: `${title}` }), () => [
 			...items().map((value, index) => ({
 				id: String(index),
 				label: `${index + 1}`,
@@ -1884,7 +2120,7 @@ export class AgentDefinitionEditor implements Component {
 			})),
 			{
 				id: "add",
-				label: "+ New item",
+				label: t("overlays.agent_definition_editor.new_item"),
 				field: "output",
 				activate: () => set([...items(), null]),
 			},
@@ -1913,7 +2149,9 @@ export class AgentDefinitionEditor implements Component {
 		const entries: SelectItem[] = [
 			...bases.map((definition, index) => ({
 				value: `base:${index}`,
-				label: `agent: ${sanitizeDisplaySingleLine(definition.name)}`,
+				label: t("overlays.agent_definition_editor.agent_source", {
+					name: `${sanitizeDisplaySingleLine(definition.name)}`,
+				}),
 				description: sanitizeDisplaySingleLine(firstLine(definition.description, "")),
 			})),
 			...sources.map((source, index) => ({
@@ -1923,7 +2161,7 @@ export class AgentDefinitionEditor implements Component {
 			})),
 		];
 		const checklist = new Checklist({ entries, selected: [] });
-		const next = { value: "generate", label: "Continue to instructions…" };
+		const next = { value: "generate", label: t("overlays.agent_definition_editor.continue_instructions") };
 		const build = (cursor: string | undefined): void => {
 			const list = this.#list([next, ...checklist.items()], cursor);
 			list.onSelect = item =>
@@ -1938,7 +2176,7 @@ export class AgentDefinitionEditor implements Component {
 					const baseDefinitions = bases.filter((_, index) => selected.has(`base:${index}`));
 					const pickedSources = sources.filter((_, index) => selected.has(`source:${index}`));
 					this.#showText(
-						"What should the new agent do?",
+						t("overlays.agent_definition_editor.new_agent_prompt"),
 						"",
 						comment => {
 							const instructions = comment.trim();
@@ -1951,17 +2189,17 @@ export class AgentDefinitionEditor implements Component {
 						},
 						() => build("generate"),
 						undefined,
-						"Describe what to use from the selected sources; optional when sources are selected.",
+						t("overlays.agent_definition_editor.source_instructions_help"),
 					);
 				});
 			list.onCancel = () => this.#showDetail("from-existing");
-			this.#setScreen("checklist", list, "Generation sources · Enter toggle or continue · Esc back", {
+			this.#setScreen("checklist", list, t("overlays.agent_definition_editor.sources_navigation"), {
 				sheet: {
-					title: "Generation sources",
-					subtitle: "Select references to give to the author, then continue to instructions.",
+					title: t("overlays.agent_definition_editor.generation_sources"),
+					subtitle: t("overlays.agent_definition_editor.sources_help"),
 					noun: "sources",
 					current: checklist.current,
-					confirm: "Select",
+					confirm: t("tui.picker.select"),
 				},
 			});
 		};
@@ -1979,16 +2217,24 @@ export class AgentDefinitionEditor implements Component {
 		const controller = new AbortController();
 		this.#controller = controller;
 		const returnTo = target === "all" ? (references ? "from-existing" : "generate") : target;
-		const cancel = this.#list([{ value: "cancel", label: "The author is writing…" }], "cancel");
+		const cancel = this.#list(
+			[{ value: "cancel", label: t("overlays.agent_definition_editor.author_writing") }],
+			"cancel",
+		);
 		cancel.onSelect = cancel.onCancel = () => {
 			controller.abort();
 			this.#busy = false;
 			this.#showDetail(returnTo);
 		};
-		this.#setScreen("generating", cancel, `Generating · ${interruptKey()} cancel`, {
-			preview: true,
-			field: target === "all" ? undefined : target,
-		});
+		this.#setScreen(
+			"generating",
+			cancel,
+			t("overlays.agent_definition_editor.generating", { interruptKey: `${interruptKey()}` }),
+			{
+				preview: true,
+				field: target === "all" ? undefined : target,
+			},
+		);
 		try {
 			const result = await this.#deps.generate({
 				definition: this.definition,
@@ -2003,8 +2249,10 @@ export class AgentDefinitionEditor implements Component {
 			this.#conversationId = result.conversationId;
 			this.#notice =
 				target === "all"
-					? "Generated; review every field before saving."
-					: `Regenerated ${FIELD_BY_KEY.get(target)?.label}.`;
+					? t("overlays.agent_definition_editor.generated_notice")
+					: t("overlays.agent_definition_editor.regenerated_notice", {
+							label: `${FIELD_BY_KEY.get(target)?.label}`,
+						});
 		} catch (error) {
 			if (!controller.signal.aborted) this.#notice = error instanceof Error ? error.message : String(error);
 		} finally {
@@ -2021,7 +2269,7 @@ export class AgentDefinitionEditor implements Component {
 		const open = this.#deps.openDefinitionFile;
 		if (!open || !this.rosterVisible || this.#busy) return;
 		if (this.dirty) {
-			this.#notice = "Save or discard draft changes before opening the backing file.";
+			this.#notice = t("overlays.agent_definition_editor.save_before_open");
 			this.#render();
 			return;
 		}
@@ -2061,7 +2309,7 @@ export class AgentDefinitionEditor implements Component {
 		for (let suffix = 2; taken.has(suggestion); suffix++)
 			suggestion = `${this.#draft.name || "agent"}-copy-${suffix}`;
 		this.#showInput(
-			"Name for the new copy",
+			t("overlays.agent_definition_editor.copy_name"),
 			suggestion,
 			value => {
 				const name = value.trim();
@@ -2081,8 +2329,16 @@ export class AgentDefinitionEditor implements Component {
 		if (!remove) return;
 		const list = this.#list(
 			[
-				{ value: "cancel", label: "Cancel", description: "Keep the file" },
-				{ value: "confirm", label: "Delete definition file", description: this.#draft.name },
+				{
+					value: "cancel",
+					label: t("tui.components.loader.cancel"),
+					description: t("overlays.agent_definition_editor.keep_file"),
+				},
+				{
+					value: "confirm",
+					label: t("overlays.agent_definition_editor.delete_definition"),
+					description: this.#draft.name,
+				},
 			],
 			"cancel",
 		);
@@ -2105,13 +2361,18 @@ export class AgentDefinitionEditor implements Component {
 				},
 			);
 		};
-		this.#setScreen("confirm", list, `Delete ${this.#draft.name}? · Enter choose · Esc cancel`, {
-			sheet: {
-				title: `Delete ${this.#draft.name}?`,
-				subtitle: "Removes the file; a bundled agent of the same name reappears.",
-				noun: "options",
+		this.#setScreen(
+			"confirm",
+			list,
+			t("overlays.agent_definition_editor.delete_navigation", { name: `${this.#draft.name}` }),
+			{
+				sheet: {
+					title: t("overlays.agent_definition_editor.delete_title", { name: `${this.#draft.name}` }),
+					subtitle: t("overlays.agent_definition_editor.delete_help"),
+					noun: "options",
+				},
 			},
-		});
+		);
 	}
 
 	/** Leaving with unsaved changes asks first; a clean draft closes at once. */
@@ -2123,9 +2384,9 @@ export class AgentDefinitionEditor implements Component {
 		}
 		const list = this.#list(
 			[
-				{ value: "keep", label: "Keep editing" },
-				{ value: "save", label: "Save and close" },
-				{ value: "discard", label: "Discard changes" },
+				{ value: "keep", label: t("overlays.agent_definition_editor.keep_editing") },
+				{ value: "save", label: t("overlays.agent_definition_editor.save_close") },
+				{ value: "discard", label: t("overlays.agent_definition_editor.discard_changes") },
 			],
 			"keep",
 		);
@@ -2137,8 +2398,12 @@ export class AgentDefinitionEditor implements Component {
 				this.#close();
 			} else this.#showDetail();
 		};
-		this.#setScreen("confirm", list, "Unsaved changes · Enter choose · Esc keep editing", {
-			sheet: { title: "Unsaved changes", subtitle: "Save, discard, or keep editing.", noun: "options" },
+		this.#setScreen("confirm", list, t("overlays.agent_definition_editor.unsaved_navigation"), {
+			sheet: {
+				title: t("overlays.agent_definition_editor.unsaved_title"),
+				subtitle: t("overlays.agent_definition_editor.unsaved_help"),
+				noun: "options",
+			},
 		});
 	}
 
@@ -2153,7 +2418,11 @@ export class AgentDefinitionEditor implements Component {
 
 	#previewBlocks(): PreviewBlock[] {
 		const blocks: PreviewBlock[] = [
-			{ kind: "title", text: this.#draft.name || "(unnamed agent)", sub: firstLine(this.#draft.description, "") },
+			{
+				kind: "title",
+				text: this.#draft.name || t("overlays.agent_definition_editor.unnamed_agent"),
+				sub: firstLine(this.#draft.description, ""),
+			},
 		];
 		const field = this.#previewField();
 		const inspection = this.#inspect();
@@ -2164,12 +2433,12 @@ export class AgentDefinitionEditor implements Component {
 			for (const finding of findings) blocks.push({ kind: "finding", level: finding.level, text: finding.text });
 		}
 		if (inspection?.facts.length) {
-			blocks.push({ kind: "section", text: "What the harness will do" });
+			blocks.push({ kind: "section", text: t("overlays.agent_definition_editor.harness_summary") });
 			blocks.push({ kind: "kv", items: inspection.facts });
 		}
 		const others = inspection?.findings.filter(finding => finding.field !== field) ?? [];
 		if (others.length) {
-			blocks.push({ kind: "section", text: "Findings" });
+			blocks.push({ kind: "section", text: t("overlays.agent_definition_editor.findings") });
 			for (const finding of others) blocks.push({ kind: "finding", level: finding.level, text: finding.text });
 		}
 		let file: string;
@@ -2182,10 +2451,19 @@ export class AgentDefinitionEditor implements Component {
 		const end = lines.indexOf("---", 1);
 		const head = end > 0 ? lines.slice(0, end + 1) : lines;
 		const body = end > 0 ? lines.slice(end + 1).filter((line, index) => index > 0 || line.trim()) : [];
-		blocks.push({ kind: "section", text: `File · ${this.#scope} scope` });
+		blocks.push({
+			kind: "section",
+			text: t("overlays.agent_definition_editor.file_scope", { scope: `${this.#scope}` }),
+		});
 		blocks.push({
 			kind: "code",
-			lines: [...head, ...body.slice(0, 8), ...(body.length > 8 ? [`… ${body.length - 8} more body lines`] : [])],
+			lines: [
+				...head,
+				...body.slice(0, 8),
+				...(body.length > 8
+					? [t("overlays.agent_definition_editor.more_body_lines", { value: `${body.length - 8}` })]
+					: []),
+			],
 		});
 		return blocks;
 	}
@@ -2292,8 +2570,8 @@ export class AgentDefinitionEditor implements Component {
 				theme.fg(
 					"dim",
 					this.#previewScroll < maxScroll
-						? `  ↓ ${maxScroll - this.#previewScroll} more · Ctrl-E/Ctrl-Y scroll`
-						: "  (end)",
+						? t("overlays.agent_definition_editor.preview_more", { value: `${maxScroll - this.#previewScroll}` })
+						: t("overlays.agent_definition_editor.preview_end"),
 				),
 			);
 		while (window.length < rows) window.push("");
@@ -2301,7 +2579,11 @@ export class AgentDefinitionEditor implements Component {
 	}
 
 	#frameTitle(): string {
-		const state = this.#busy ? "  ◐ working" : this.dirty ? "  ● unsaved" : "";
+		const state = this.#busy
+			? t("overlays.agent_definition_editor.working_state")
+			: this.dirty
+				? t("overlays.agent_definition_editor.unsaved_state")
+				: "";
 		return `${sanitizeDisplaySingleLine(this.#title)}${uiProvenanceSuffix("features", "agent-definition-editor", true)}${state}`;
 	}
 
@@ -2383,7 +2665,7 @@ export class AgentDefinitionEditor implements Component {
 					if (data === "r") void this.#generate(target);
 					else
 						this.#showText(
-							"What should change?",
+							t("overlays.agent_definition_editor.change_prompt"),
 							"",
 							comment => void this.#generate(target, comment),
 							() => this.#showDetail(value),
@@ -2413,7 +2695,7 @@ export class AgentDefinitionEditor implements Component {
 			if (data === "r") void this.#generate(target);
 			else
 				this.#showText(
-					"What should change?",
+					t("overlays.agent_definition_editor.change_prompt_field"),
 					"",
 					comment => void this.#generate(target, comment),
 					() => this.#showDetail(target),
@@ -2477,23 +2759,33 @@ export class AgentDefinitionEditor implements Component {
 		if (!cx.supports("picker")) return col([text(this.render(cx.cols).join("\n"))]);
 		const notice = this.#notice ? [text(this.#notice, { tone: "warning" })] : [];
 		if (active instanceof ModelBrowser) {
-			const order = active.pickerOrder({ providers: false, rest: active.query.trim() ? "Matches" : "All" });
+			const order = active.pickerOrder({
+				providers: false,
+				rest: active.query.trim()
+					? t("overlays.agent_definition_editor.model_matches")
+					: t("overlays.agent_definition_editor.model_all"),
+			});
 			const catalogue = active.pickerItems(buildBrowserItems(this.#deps.getAvailableModels?.() ?? []));
 			return picker(
 				{
-					title: "Choose a model",
+					title: t("overlays.agent_definition_editor.choose_model"),
 					subtitle: this.#hint,
 					icon: "model",
 					noun: "models",
 					size: "md",
 					layout: "rows",
 					preview: "below",
-					placeholder: "Search models…",
+					placeholder: t("overlays.agent_definition_editor.search_models"),
 					...active.pickerRows(catalogue, order, undefined),
-					empty: "No models available",
+					empty: t("overlays.agent_definition_editor.no_models"),
 					actions: [
-						pickerAction("use", "Use model", "enter", { primary: true }),
-						{ ...CLOSE_ACTION, label: active.filterFocused ? "Back to list" : "Back" },
+						pickerAction("use", t("overlays.agent_definition_editor.use_model"), "enter", { primary: true }),
+						{
+							...CLOSE_ACTION,
+							label: active.filterFocused
+								? t("tui.picker.back_to_list")
+								: t("overlays.agent_definition_editor.back"),
+						},
 					],
 				},
 				[...notice, ...active.pickerPreview("compact")],
@@ -2503,18 +2795,24 @@ export class AgentDefinitionEditor implements Component {
 			const props = selectListPicker(
 				active,
 				this.#sheet ?? {
-					title: `${this.#title}${uiProvenanceSuffix("features", "agent-definition-editor")}${this.dirty ? " · unsaved" : ""}`,
+					title: `${this.#title}${uiProvenanceSuffix("features", "agent-definition-editor")}${this.dirty ? t("overlays.agent_definition_editor.unsaved_suffix") : ""}`,
 					noun: "fields",
 				},
 			);
 			const actions =
 				this.#screen === "detail"
 					? [
-							pickerAction("confirm", "Edit", "enter", { primary: true }),
-							{ id: "generate", label: "Regenerate field", keys: ["r"] },
-							{ id: "comment", label: "Regenerate with comment", keys: ["shift", "r"] },
+							pickerAction("confirm", t("overlays.agent_definition_editor.edit_action"), "enter", {
+								primary: true,
+							}),
+							{ id: "generate", label: t("overlays.agent_definition_editor.regenerate_field"), keys: ["r"] },
+							{
+								id: "comment",
+								label: t("overlays.agent_definition_editor.regenerate_comment"),
+								keys: ["shift", "r"],
+							},
 							...(this.#deps.openDefinitionFile && !this.dirty
-								? [pickerAction("open-file", "Open file", "ctrl+g")]
+								? [pickerAction("open-file", t("overlays.agent_definition_editor.open_file"), "ctrl+g")]
 								: []),
 							CLOSE_ACTION,
 						]

@@ -1,6 +1,7 @@
 /**
  * One-line text prompt an extension (hook) asks the user.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Spacer, Text, type TUI } from "../index";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
@@ -99,7 +100,14 @@ export class HookInputComponent extends OverlayPanel {
 			isCancel: matchesAppInterrupt,
 		});
 		this.addChild(this.#form);
-		this.addChild(new KeyLegend(`${editorKey("tui.input.submit")} submit  ${interruptKey()} cancel`));
+		this.addChild(
+			new KeyLegend(
+				t("overlays.hook_input.hook_input_controls", {
+					editorKey: `${editorKey("tui.input.submit")}`,
+					interruptKey: `${interruptKey()}`,
+				}),
+			),
+		);
 		this.addChild(new Spacer(1));
 	}
 
@@ -162,7 +170,7 @@ export class HookInputComponent extends OverlayPanel {
 			titleRow.push(
 				node(
 					"row",
-					{ role: `${PART}.timer`, title: "Cancels when the time runs out; typing restarts it" },
+					{ role: `${PART}.timer`, title: t("overlays.hook_input.hook_input_timer_tip") },
 					[countdown],
 					"timer",
 				),
@@ -191,8 +199,8 @@ export class HookInputComponent extends OverlayPanel {
 		const cancelKey = boundKeys("app.interrupt", ["ctrl+c"])[0];
 		this.#nativeActions = actionBar([
 			null,
-			actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {}),
-			actionButton("Submit", "submit", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
+			actionButton(t("tui.components.loader.cancel"), "cancel", cancelKey ? { keys: cancelKey } : {}),
+			actionButton(t("tui.ask.submit"), "submit", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
 		]);
 		return this.#nativeActions;
 	}

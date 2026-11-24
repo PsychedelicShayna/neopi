@@ -1,3 +1,5 @@
+import { formatCount } from "./localized-count";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
@@ -5,7 +7,6 @@ import { Ellipsis, renderStatusLine, truncateToWidth } from "../render";
 import { framedToolCard } from "../render/tool-card";
 import {
 	appendParseErrorsBulletList,
-	formatCount,
 	formatErrorDetail,
 	formatParseErrorsCountLabel,
 	PREVIEW_LIMITS,
@@ -98,7 +99,7 @@ function patternPreview(pat: string | undefined): string | undefined {
 function rewriteLabel(args: AstEditRenderArgs | undefined): string | undefined {
 	const rewriteCount = args?.ops?.length ?? 0;
 	if (rewriteCount === 1) return patternPreview(args?.ops?.[0]?.pat);
-	return rewriteCount > 1 ? `${rewriteCount} rewrites` : undefined;
+	return rewriteCount > 1 ? t("tools.ast_edit.rewrites", { count: rewriteCount }) : undefined;
 }
 
 /**
@@ -170,9 +171,10 @@ function astEditPatternHead(args: AstEditRenderArgs | undefined): Pick<NativeToo
 /** Scope facts for the final quiet line: `in src · searched 12 files · limit reached; narrow path`. */
 function astEditScopeStats(details: AstEditToolDetails | undefined): NativeNode | undefined {
 	const parts: string[] = [];
-	if (details?.scopePath) parts.push(`in ${details.scopePath}`);
-	if (details?.filesSearched) parts.push(`searched ${formatCount("file", details.filesSearched)}`);
-	if (details?.limitReached) parts.push("limit reached; narrow path");
+	if (details?.scopePath) parts.push(t("tools.common.scope", { path: details.scopePath }));
+	if (details?.filesSearched)
+		parts.push(t("tools.ast_edit.searched_files", { files: formatCount("file", details.filesSearched) }));
+	if (details?.limitReached) parts.push(t("tools.common.limit_narrow_path"));
 	return statsText(parts);
 }
 
@@ -196,7 +198,7 @@ export const astEditToolRenderer = {
 		const description = astEditSubject(rewriteLabel(args), args, uiTheme, details?.scopePath);
 
 		if (result.isError) {
-			const errorText = result.content?.find(c => c.type === "text")?.text || "Unknown error";
+			const errorText = result.content?.find(c => c.type === "text")?.text || t("tools.common.unknown_error");
 			const header = renderStatusLine({ icon: "error", title: "AST Edit", description }, uiTheme);
 			return framedToolCard(uiTheme, () => ({
 				header,
@@ -212,8 +214,8 @@ export const astEditToolRenderer = {
 		const limitReached = details?.limitReached ?? false;
 
 		if (totalReplacements === 0) {
-			const meta = ["0 replacements"];
-			if (filesSearched > 0) meta.push(`searched ${filesSearched}`);
+			const meta = [t("tools.ast_edit.no_replacements")];
+			if (filesSearched > 0) meta.push(t("tools.common.searched", { count: filesSearched }));
 			// Only parse errors are worth a body, so frame solely when there are some; a
 			// framed card carries the counts in its bottom border, as a successful one does.
 			const bodyLines: string[] = [];
@@ -235,7 +237,7 @@ export const astEditToolRenderer = {
 		const summaryParts = [
 			formatCount("replacement", totalReplacements),
 			formatCount("file", filesTouched),
-			`searched ${filesSearched}`,
+			t("tools.common.searched", { count: filesSearched }),
 		];
 
 		const textContent = result.details?.displayContent ?? result.content?.find(c => c.type === "text")?.text ?? "";
@@ -267,12 +269,12 @@ export const astEditToolRenderer = {
 		);
 		// An unapplied result is a staged proposal; the bottom rail leads with that state.
 		const footerParts = summaryParts.map(part => uiTheme.fg("dim", part));
-		if (!details?.applied) footerParts.unshift(uiTheme.fg("warning", "proposed"));
+		if (!details?.applied) footerParts.unshift(uiTheme.fg("warning", t("tools.common.proposed")));
 		const footerMeta = footerParts.join(uiTheme.fg("dim", uiTheme.sep.dot));
 
 		const extraLines: string[] = [];
 		if (limitReached) {
-			extraLines.push(uiTheme.fg("warning", "limit reached; narrow path"));
+			extraLines.push(uiTheme.fg("warning", t("tools.common.limit_narrow_path")));
 		}
 		if (details?.parseErrors?.length) {
 			extraLines.push(
@@ -314,7 +316,9 @@ export const astEditToolRenderer = {
 			tool: {
 				title: "AST Edit",
 				...astEditPatternHead(args),
-				meta: args.paths?.length ? [`in ${args.paths.map(displayPath).join(", ")}`] : undefined,
+				meta: args.paths?.length
+					? [t("tools.common.scope", { path: args.paths.map(displayPath).join(", ") })]
+					: undefined,
 			},
 		};
 	},
@@ -330,9 +334,13 @@ export const astEditToolRenderer = {
 			// A failed edit keeps the scope it ran in, as the terminal card does.
 			const scope = details?.scopePath || args?.paths?.map(displayPath).join(", ");
 			return {
-				tool: { title: "AST Edit", ...patternHead, meta: scope ? [`in ${scope}`] : undefined },
+				tool: {
+					title: "AST Edit",
+					...patternHead,
+					meta: scope ? [t("tools.common.scope", { path: scope })] : undefined,
+				},
 				tone: "error",
-				body: [errorText(resultText(result) || "Unknown error")],
+				body: [errorText(resultText(result) || t("tools.common.unknown_error"))],
 			};
 		}
 		const parseErrors = details?.parseErrors ?? [];
@@ -352,7 +360,7 @@ export const astEditToolRenderer = {
 		const totalReplacements = details?.totalReplacements ?? 0;
 		if (totalReplacements === 0) {
 			return {
-				tool: { title: "AST Edit", ...patternHead, meta: ["0 replacements"] },
+				tool: { title: "AST Edit", ...patternHead, meta: [t("tools.ast_edit.no_replacements")] },
 				tone: "warning",
 				body: compact<NativeChild>([parseNote, astEditScopeStats(details)]),
 			};
@@ -387,7 +395,7 @@ export const astEditToolRenderer = {
 				target: single ? displayPath(single.path) : formatCount("file", fileCount),
 				targetKind: single ? "path" : "text",
 				meta: compact([diffStatsMeta(added, removed), formatCount("replacement", totalReplacements)]),
-				badges: details?.applied ? undefined : [{ text: "proposed", tone: "warning" }],
+				badges: details?.applied ? undefined : [{ text: t("tools.common.proposed"), tone: "warning" }],
 			},
 			tone: limitReached ? "warning" : undefined,
 			body: compact<NativeChild>([

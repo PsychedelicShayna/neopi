@@ -1,5 +1,6 @@
 import { formatCompact, formatCost, formatInteger } from "../data/formatters";
-import type { SpotlightCutEconomics, SpotlightDashboardStats } from "../types";
+import { useTranslation } from "../i18n";
+import type { SpotlightCutEconomics, SpotlightDashboardStats, Translation } from "../types";
 import { Card } from "../ui";
 import { foldTools, formatSignedCost, OTHER_TOOLS, toolIcon, toolsBySaving } from "./meta";
 
@@ -18,13 +19,22 @@ const MIN_TINT = 5;
 /** Narrowest tool column before the table scrolls sideways instead of squeezing its cells. */
 const TOOL_COLUMN_PX = 120;
 
-function cellTitle(cell: SpotlightCutEconomics): string {
+function cellTitle(tr: Translation, cell: SpotlightCutEconomics, tool: string): string {
 	return [
-		`${cell.tool}: ${formatInteger(cell.cuts)} cuts`,
-		`Saved ${formatCompact(cell.savedTokens)} tokens (${formatCost(cell.savedUsd)})`,
-		`Fetched back ${formatCompact(cell.recoveredTokens)} tokens (${formatCost(cell.recoveryUsd)})`,
-		`${formatInteger(cell.extraTurns)} extra turns (${formatCost(cell.turnUsd)})`,
-		`Net ${formatSignedCost(cell.netUsd)}`,
+		tr("insights.economics.tooltip.cuts", "{tool}: {count} cuts", { tool, count: formatInteger(cell.cuts) }),
+		tr("insights.economics.tooltip.saved", "Saved {tokens} tokens ({cost})", {
+			tokens: formatCompact(cell.savedTokens),
+			cost: formatCost(cell.savedUsd),
+		}),
+		tr("insights.economics.tooltip.recovered", "Fetched back {tokens} tokens ({cost})", {
+			tokens: formatCompact(cell.recoveredTokens),
+			cost: formatCost(cell.recoveryUsd),
+		}),
+		tr("insights.economics.tooltip.turns", "{count} extra turns ({cost})", {
+			count: formatInteger(cell.extraTurns),
+			cost: formatCost(cell.turnUsd),
+		}),
+		tr("insights.economics.tooltip.net", "Net {net}", { net: formatSignedCost(cell.netUsd) }),
 	].join("\n");
 }
 
@@ -66,6 +76,7 @@ function otherCell(cells: readonly SpotlightCutEconomics[]): SpotlightCutEconomi
  * largest saving first; past the top ones the rest sum into one `other` column.
  */
 export function Economics({ stats, stale }: EconomicsProps) {
+	const tr = useTranslation();
 	const cut = new Set(stats.economics.filter(cell => cell.cuts > 0).map(cell => cell.tool));
 	const { listed, rest } = foldTools(toolsBySaving(stats).filter(tool => cut.has(tool)));
 	const folded = new Set(rest);
@@ -79,8 +90,11 @@ export function Economics({ stats, stale }: EconomicsProps) {
 	return (
 		<Card
 			index={3}
-			title="What cuts earn, by tool"
-			description="Net dollars per 100 cuts after fetch-backs, extra turns and Spotlight's own bill"
+			title={tr("insights.economics.title", "What cuts earn, by tool")}
+			description={tr(
+				"insights.economics.description",
+				"Net dollars per 100 cuts after fetch-backs, extra turns and Spotlight's own bill",
+			)}
 			actions={
 				maxAbs > 0 && (
 					<span className="spot-econ-scale" aria-hidden="true">
@@ -91,10 +105,13 @@ export function Economics({ stats, stale }: EconomicsProps) {
 				)
 			}
 			stale={stale}
-			footer="Shortened results only; held-out ones save nothing. Every fetch-back counts against the cut here, the share held-out results show comes back anyway included, so this is the cautious view. An extra turn is a request whose every tool call fetched back output these cuts hid. Dollars price saved and fetched-back tokens as carried context, like Compounding."
+			footer={tr(
+				"insights.economics.footer",
+				"Shortened results only; held-out ones save nothing. Every fetch-back counts against the cut here, the share held-out results show comes back anyway included, so this is the cautious view. An extra turn is a request whose every tool call fetched back output these cuts hid. Dollars price saved and fetched-back tokens as carried context, like Compounding.",
+			)}
 		>
 			{tools.length === 0 ? (
-				<div className="empty">No shortened results in this range.</div>
+				<div className="empty">{tr("insights.no_shortened", "No shortened results in this range.")}</div>
 			) : (
 				<div className="spot-econ-scroll">
 					<table className="spot-econ" style={{ minWidth: `${tools.length * TOOL_COLUMN_PX}px` }}>
@@ -106,7 +123,11 @@ export function Economics({ stats, stale }: EconomicsProps) {
 										<th key={tool} scope="col" title={tool === OTHER_TOOLS ? rest.join(", ") : tool}>
 											<span className="row spot-econ-tool">
 												<Icon size={13} aria-hidden="true" />
-												<span className="spot-econ-tool-name">{tool}</span>
+												<span className="spot-econ-tool-name">
+													{rest.length > 0 && tool === OTHER_TOOLS
+														? tr("insights.other_tools", "other")
+														: tool}
+												</span>
 											</span>
 										</th>
 									);
@@ -117,11 +138,13 @@ export function Economics({ stats, stale }: EconomicsProps) {
 							<tr>
 								{tools.map(tool => {
 									const cell = cells.get(tool);
+									const label =
+										rest.length > 0 && tool === OTHER_TOOLS ? tr("insights.other_tools", "other") : tool;
 									if (cell === undefined || cell.cuts === 0) {
 										return (
 											<td key={tool}>
 												<div className="spot-econ-cell" data-empty="true">
-													<span className="dim">No cuts</span>
+													<span className="dim">{tr("insights.economics.no_cuts", "No cuts")}</span>
 												</div>
 											</td>
 										);
@@ -136,20 +159,20 @@ export function Economics({ stats, stale }: EconomicsProps) {
 												className="spot-econ-cell"
 												data-tone={tone}
 												style={{ "--tint": `${tint}%` }}
-												title={cellTitle(cell)}
+												title={cellTitle(tr, cell, label)}
 											>
 												<span className="spot-econ-net num">{formatSignedCost(net)}</span>
 												<dl className="spot-econ-facts">
 													<div>
-														<dt>cuts</dt>
+														<dt>{tr("insights.cuts_lower", "cuts")}</dt>
 														<dd className="num">{formatInteger(cell.cuts)}</dd>
 													</div>
 													<div>
-														<dt>saved</dt>
+														<dt>{tr("insights.saved_lower", "saved")}</dt>
 														<dd className="num">{formatCompact(cell.savedTokens)}</dd>
 													</div>
 													<div>
-														<dt>extra turns /100</dt>
+														<dt>{tr("insights.economics.turns_per_100", "extra turns /100")}</dt>
 														<dd className="num">{cell.extraTurnsPer100Cuts.toFixed(1)}</dd>
 													</div>
 												</dl>

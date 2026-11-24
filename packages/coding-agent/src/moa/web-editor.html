@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{locale}}">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>Mixture editor · NeoPi</title>
+		<title>{{pageTitle}}</title>
 		<link rel="icon" href="data:," />
 		<style>
 			:root {
@@ -387,47 +387,48 @@
 	<body>
 		<header>
 			<span class="brand">NeoPi</span
-			><span class="nightly" title="New in nightly" aria-label="New in nightly">☾</span>
-			<h1>Mixture editor</h1>
-			<label for="scope">Scope</label>
+			><span class="nightly" title="{{nightly}}" aria-label="{{nightly}}">☾</span>
+			<h1>{{title}}</h1>
+			<label for="scope">{{scope}}</label>
 			<select id="scope" disabled>
-				<option value="project">Project</option>
-				<option value="user">User</option>
+				<option value="project">{{project}}</option>
+				<option value="user">{{user}}</option>
 			</select>
-			<code id="source" class="path" title="MIXTURES.toml destination"></code>
-			<button id="reload" type="button">Reload</button>
-			<button id="validate" type="button" disabled>Validate</button>
-			<button id="save" type="button" class="primary" disabled>Save</button>
+			<code id="source" class="path" title="{{destination}}"></code>
+			<button id="reload" type="button">{{reload}}</button>
+			<button id="validate" type="button" disabled>{{validate}}</button>
+			<button id="save" type="button" class="primary" disabled>{{save}}</button>
 		</header>
 		<div class="shell">
-			<nav class="rail" aria-label="Mixtures">
-				<h2>Mixtures</h2>
+			<nav class="rail" aria-label="{{mixtures}}">
+				<h2>{{mixtures}}</h2>
 				<div id="mixtures"></div>
-				<button id="add-mixture" class="new" type="button" disabled>+ Mixture</button>
-				<button id="document" type="button" disabled>File presets</button>
+				<button id="add-mixture" class="new" type="button" disabled>{{addMixture}}</button>
+				<button id="document" type="button" disabled>{{filePresets}}</button>
 			</nav>
-			<main class="stage" aria-label="Mixture flow graph">
-				<div class="toolbar" aria-label="Graph controls">
-					<button id="add-model" type="button" disabled>+ Model</button>
-					<button id="add-verdict" type="button" disabled>+ Verdict</button>
-					<button id="connect" type="button" disabled>Connect</button>
+			<main class="stage" aria-label="{{graph}}">
+				<div class="toolbar" aria-label="{{graphControls}}">
+					<button id="add-model" type="button" disabled>{{addModel}}</button>
+					<button id="add-verdict" type="button" disabled>{{addVerdict}}</button>
+					<button id="connect" type="button" disabled>{{connect}}</button>
 					<span class="spacer"></span>
-					<button id="mixture-settings" type="button" disabled>Mixture settings</button>
+					<button id="mixture-settings" type="button" disabled>{{mixtureSettings}}</button>
 				</div>
 				<div class="surface" id="surface"><div class="board" id="board"></div></div>
-				<p class="stage-note" id="graph-note" aria-live="polite">Loading mixture graph…</p>
+				<p class="stage-note" id="graph-note" aria-live="polite">{{loadingGraph}}</p>
 			</main>
-			<aside id="inspector" class="inspector" aria-label="Graph inspector"></aside>
+			<aside id="inspector" class="inspector" aria-label="{{inspector}}"></aside>
 		</div>
-		<section class="feedback" id="feedback" aria-label="Validation and save status">
-			<p id="status" role="status">Opening the workspace…</p>
+		<section class="feedback" id="feedback" aria-label="{{feedback}}">
+			<p id="status" role="status">{{openingWorkspace}}</p>
 			<div id="findings"></div>
 			<details id="preview" hidden>
-				<summary>Canonical TOML preview</summary>
+				<summary>{{preview}}</summary>
 				<pre></pre>
 			</details>
 		</section>
 		<datalist id="models"></datalist>
+		<script type="application/json" id="editor-i18n">{{editorMessages}}</script>
 		<script src="editor.js" defer></script>
 	</body>
 </html>

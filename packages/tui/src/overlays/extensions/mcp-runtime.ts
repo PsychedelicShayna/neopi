@@ -54,6 +54,7 @@ export interface MCPConnectionDisplay {
 	prompts?: MCPResourceDisplay[];
 }
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { PREVIEW_LIMITS } from "../../render/render-utils";
 import {
 	sanitizeDisplayField,
@@ -251,16 +252,31 @@ export function formatMcpListHint(snapshot: MCPRuntimeSnapshot): string {
 		case "inactive":
 			return "inactive";
 		case "connecting":
-			return "connecting…";
+			return t("overlays.mcp_runtime.connecting_progress");
 		case "disconnected":
 			return "unavailable";
 		case "connected": {
-			const parts = [`${snapshot.tools.length} tool${snapshot.tools.length === 1 ? "" : "s"}`];
+			const parts = [
+				t("overlays.mcp_runtime.tool_count", {
+					length: `${snapshot.tools.length}`,
+					plural: `${snapshot.tools.length === 1 ? "" : "s"}`,
+				}),
+			];
 			if (snapshot.resources.length > 0) {
-				parts.push(`${snapshot.resources.length} resource${snapshot.resources.length === 1 ? "" : "s"}`);
+				parts.push(
+					t("overlays.mcp_runtime.resource_count", {
+						length: `${snapshot.resources.length}`,
+						plural: `${snapshot.resources.length === 1 ? "" : "s"}`,
+					}),
+				);
 			}
 			if (snapshot.prompts.length > 0) {
-				parts.push(`${snapshot.prompts.length} prompt${snapshot.prompts.length === 1 ? "" : "s"}`);
+				parts.push(
+					t("overlays.mcp_runtime.prompt_count", {
+						length: `${snapshot.prompts.length}`,
+						plural: `${snapshot.prompts.length === 1 ? "" : "s"}`,
+					}),
+				);
 			}
 			return parts.join(" · ");
 		}
@@ -270,13 +286,13 @@ export function formatMcpListHint(snapshot: MCPRuntimeSnapshot): string {
 export function formatMcpHealthLabel(health: MCPConnectionHealth): string {
 	switch (health) {
 		case "connected":
-			return "Connected";
+			return t("overlays.mcp_runtime.connected");
 		case "connecting":
-			return "Connecting";
+			return t("overlays.mcp_runtime.connecting");
 		case "disconnected":
-			return "Not connected";
+			return t("overlays.mcp_runtime.not_connected");
 		case "inactive":
-			return "Inactive";
+			return t("overlays.mcp_runtime.inactive");
 	}
 }
 

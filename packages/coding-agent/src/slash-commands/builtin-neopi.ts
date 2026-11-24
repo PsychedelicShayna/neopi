@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { resolvePromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 /**
  * NeoPi operator commands: `/notice`, `/persona`, `/loadout`, `/repl`, `/kernel`, `/neoproxy`.
@@ -29,7 +30,11 @@ import {
 	selectPersonality,
 } from "../neopi/personality-settings";
 import type { Settings } from "../config/settings";
-import { describePersonalityCacheImpact, personalityCacheImpact } from "../neopi/personality-cache";
+import {
+	describePersonalityCacheImpact,
+	formatPersonalityCacheImpact,
+	personalityCacheImpact,
+} from "../neopi/personality-cache";
 import { previewBuiltinPersonality } from "../system-prompt";
 import {
 	PERSONA_SUBCOMMANDS,
@@ -62,21 +67,81 @@ const deferCancelValues = argumentValues("cancel");
 const PERSONA_DEFS: SubcommandDef[] = PERSONA_SUBCOMMANDS.map(item => ({ ...item }));
 const LIVE_PERSONA_DEFS = PERSONA_DEFS.filter(item => item.name !== "live");
 const LOADOUT_DEFS: SubcommandDef[] = [
-	{ name: "set", description: "Apply a loadout", usage: "<name>" },
-	{ name: "use", description: "Apply a loadout (alias for set)", usage: "<name>" },
-	{ name: "off", description: "Restore the configured models" },
-	{ name: "list", description: "List loadouts; * marks the active one" },
-	{ name: "show", description: "Print a loadout definition", usage: "<name>" },
-	{ name: "status", description: "Show the active loadout" },
+	{
+		name: "set",
+		get description() {
+			return t("commands.neopi.loadoutSetDescription");
+		},
+		usage: "<name>",
+	},
+	{
+		name: "use",
+		get description() {
+			return t("commands.neopi.loadoutUseDescription");
+		},
+		usage: "<name>",
+	},
+	{
+		name: "off",
+		get description() {
+			return t("commands.neopi.loadoutOffDescription");
+		},
+	},
+	{
+		name: "list",
+		get description() {
+			return t("commands.neopi.loadoutListDescription");
+		},
+	},
+	{
+		name: "show",
+		get description() {
+			return t("commands.neopi.loadoutShowDescription");
+		},
+		usage: "<name>",
+	},
+	{
+		name: "status",
+		get description() {
+			return t("commands.neopi.loadoutStatusDescription");
+		},
+	},
 ];
 const KERNEL_DEFS: SubcommandDef[] = [
-	{ name: "status", description: "Show which kernels are running" },
-	{ name: "reset", description: "Start the next cell in a fresh kernel", usage: "<py|js>" },
-	{ name: "interrupt", description: "Cancel running eval and bash cells" },
+	{
+		name: "status",
+		get description() {
+			return t("commands.neopi.kernelStatusDescription");
+		},
+	},
+	{
+		name: "reset",
+		get description() {
+			return t("commands.neopi.kernelResetDescription");
+		},
+		usage: "<py|js>",
+	},
+	{
+		name: "interrupt",
+		get description() {
+			return t("commands.neopi.kernelInterruptDescription");
+		},
+	},
 ];
 const NEOPROXY_DEFS: SubcommandDef[] = [
-	{ name: "status", description: "Show the server URL, stored keys, and granted models" },
-	{ name: "url", description: "Connect to another NeoProxy server with a key it issued", usage: "<url>" },
+	{
+		name: "status",
+		get description() {
+			return t("commands.neopi.proxyStatusDescription");
+		},
+	},
+	{
+		name: "url",
+		get description() {
+			return t("commands.neopi.proxyUrlDescription");
+		},
+		usage: "<url>",
+	},
 ];
 
 interface NamedArgument {
@@ -152,10 +217,18 @@ function personaInlineHint(argumentText: string): string | null {
 	return lead ? livePersonaSubcommandHint(argumentText.slice(lead.length)) : personaSubcommandHint(argumentText);
 }
 
-const LOADOUT_USAGE = "Usage: /loadout [set <name>|use <name>|off|list|show <name>|status]";
-const REPL_USAGE = "Usage: /repl [agent|js|py|bash]";
-const KERNEL_USAGE = "Usage: /kernel [status|reset <py|js>|interrupt]";
-const NEOPROXY_USAGE = "Usage: /neoproxy [status|url <url>]";
+function loadoutUsage() {
+	return t("commands.neopi.loadoutUsage");
+}
+function replUsage() {
+	return t("commands.neopi.replUsage");
+}
+function kernelUsage() {
+	return t("commands.neopi.kernelUsage");
+}
+function neoProxyUsage() {
+	return t("commands.neopi.proxyUsage");
+}
 
 function tuiPersonaHost(ctx: InteractiveModeContext) {
 	return sessionPersonaHost(ctx.session, {
@@ -199,16 +272,20 @@ async function loadoutMenu(ctx: InteractiveModeContext): Promise<void> {
 	const loadouts = loadoutFeature();
 	const data = await loadouts.data();
 	if (!ui || data.items.length === 0) {
-		ctx.showStatus(data.items.length === 0 ? "No loadouts defined in neopi-loadout.json." : await loadouts.list());
+		ctx.showStatus(data.items.length === 0 ? t("commands.neopi.noLoadouts") : await loadouts.list());
 		return;
 	}
-	const OFF = "Turn loadout off";
+	const OFF = t("commands.neopi.loadoutOff");
 	const options = data.items.map(item => ({
 		label: `${item.active ? "●" : "○"} ${item.name}`,
 		description: item.loadout.mainModel,
 	}));
-	if (data.active) options.push({ label: OFF, description: `Restore the configured models (now: ${data.active})` });
-	const picked = await ui.select(data.active ? `Loadouts · active: ${data.active}` : "Loadouts", options);
+	if (data.active)
+		options.push({ label: OFF, description: t("commands.neopi.restoreModels", { active: data.active }) });
+	const picked = await ui.select(
+		data.active ? t("commands.neopi.activeLoadout", { active: data.active }) : t("commands.neopi.loadouts"),
+		options,
+	);
 	if (!picked) return;
 	const host = loadoutHost(ctx.session, ctx);
 	const name = picked === OFF ? undefined : picked.slice(2);
@@ -224,10 +301,13 @@ async function replMenu(ctx: InteractiveModeContext): Promise<void> {
 	if (!ui) return;
 	const current = ctx.replMode.target;
 	const picked = await ui.select(
-		`REPL target · now: ${replTargetLabel(current)}`,
+		t("commands.neopi.replTarget", { target: replTargetLabel(current) }),
 		REPL_TARGETS.map(item => ({
 			label: `${item.id === current ? "●" : "○"} ${item.label}`,
-			description: item.id === "agent" ? "Composer sends prompts to the agent" : `Composer runs ${item.label} code`,
+			description:
+				item.id === "agent"
+					? t("commands.neopi.composerAgent")
+					: t("commands.neopi.composerCode", { language: item.label }),
 		})),
 	);
 	const target = REPL_TARGETS.find(item => picked?.slice(2) === item.label)?.id;
@@ -238,13 +318,16 @@ function setRepl(ctx: InteractiveModeContext, target: ReplTarget): void {
 	ctx.setReplTarget(target);
 	ctx.showStatus(
 		target === "agent"
-			? "REPL off: the composer talks to the agent."
-			: `REPL ${replTargetLabel(target)}: Enter inserts a newline; ${ctx.keybindings.getKeys("app.repl.execute").join(" / ")} runs the buffer.`,
+			? t("commands.neopi.replOff")
+			: t("commands.neopi.replKeys", {
+					target: replTargetLabel(target),
+					keys: ctx.keybindings.getKeys("app.repl.execute").join(" / "),
+				}),
 	);
 }
 
 function kernelStatus(session: AgentSession): string {
-	const state = (busy: boolean) => (busy ? "running" : "idle");
+	const state = (busy: boolean) => (busy ? t("commands.neopi.kernelRunning") : t("commands.neopi.kernelIdle"));
 	return [
 		`JavaScript: ${state(session.isEvalLanguageRunning("js"))}`,
 		`Python: ${state(session.isEvalLanguageRunning("py"))}`,
@@ -295,7 +378,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "personality",
 		icon: "personality",
-		description: "Choose or manage system-prompt personalities",
+		get description() {
+			return t("commands.neopi.personalityDescription");
+		},
 		allowArgs: true,
 		inlineHint: "[name]",
 		getTuiArgumentCompletions: (prefix, runtime) =>
@@ -314,24 +399,27 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const names = listPersonalityNames(runtime.settings);
 				await runtime.output(
 					[
-						`Personality: ${current}`,
-						"Available:",
+						t("commands.neopi.personality", { name: current }),
+						t("commands.neopi.available"),
 						...names.map(name => `  ${name}`),
-						"Usage: /personality <name>",
+						t("commands.neopi.personalityUsage"),
 					].join("\n"),
 				);
 				return commandConsumed();
 			}
 			try {
 				const name = resolvePersonalityName(listPersonalityNames(runtime.settings), requested);
-				if (!name) return usage(`Unknown or ambiguous personality: ${requested}`, runtime);
+				if (!name) return usage(t("commands.neopi.unknownPersonality", { name: requested }), runtime);
 				const prompt = await personalityPrompt(runtime.settings, name, runtime.cwd);
-				if (prompt === undefined) return usage(`Personality not found: ${name}`, runtime);
+				if (prompt === undefined) return usage(t("commands.neopi.personalityNotFound", { name }), runtime);
 				const impact = await personalityCacheImpact(runtime.session, prompt);
 				selectPersonality(runtime.settings, "session", name);
 				await runtime.settings.flush();
 				await runtime.output(
-					`Personality: ${name} (session)${impact ? `\n${describePersonalityCacheImpact(impact).replace(/ Continue\?$/, "")}` : ""}`,
+					t("commands.neopi.personalitySessionImpact", {
+						name,
+						impact: impact ? `\n${formatPersonalityCacheImpact(impact)}` : "",
+					}),
 				);
 				return commandConsumed();
 			} catch (error) {
@@ -350,20 +438,26 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const names = listPersonalityNames(ctx.settings);
 				const name = resolvePersonalityName(names, requested);
 				if (!name) {
-					ctx.showError(`Unknown or ambiguous personality: ${requested}`);
+					ctx.showError(t("commands.neopi.unknownPersonality", { name: requested }));
 					return;
 				}
 				const prompt = await personalityPrompt(ctx.settings, name, ctx.sessionManager.getCwd());
 				if (prompt === undefined) {
-					ctx.showError(`Personality not found: ${name}`);
+					ctx.showError(t("commands.neopi.personalityNotFound", { name }));
 					return;
 				}
 				const impact = await personalityCacheImpact(ctx.session, prompt);
-				if (impact && !(await ctx.showHookConfirm("Change personality?", describePersonalityCacheImpact(impact))))
+				if (
+					impact &&
+					!(await ctx.showHookConfirm(
+						t("commands.neopi.confirmPersonality"),
+						describePersonalityCacheImpact(impact),
+					))
+				)
 					return;
 				selectPersonality(ctx.settings, "session", name);
 				await ctx.settings.flush();
-				ctx.showStatus(`Personality: ${name} (session)`);
+				ctx.showStatus(t("commands.neopi.personalitySession", { name }));
 			} catch (error) {
 				ctx.showError(errorMessage(error));
 			}
@@ -372,7 +466,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "defer",
 		icon: "prompt",
-		description: "Submit composer input after a delay, or cancel a deferred submission",
+		get description() {
+			return t("commands.neopi.deferDescription");
+		},
 		inlineHint: "<duration> <input> | cancel <id|all>",
 		allowArgs: true,
 		getTuiArgumentCompletions: (prefix, runtime) =>
@@ -407,7 +503,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const cancellation = /^cancel\s+(\d+|all)$/.exec(command.args);
 			if (cancellation) {
 				const count = schedules.cancel(cancellation[1] === "all" ? undefined : Number(cancellation[1]));
-				ctx.showStatus(`Cancelled ${count} deferred submission${count === 1 ? "" : "s"}.`);
+				ctx.showStatus(t("commands.neopi.deferCancelled", { count, plural: count === 1 ? "" : "s" }));
 				return;
 			}
 			const parsed = parseDeferredInput(command.text.slice(command.name.length + 2).trimStart());
@@ -425,7 +521,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						try {
 							await runWithDetachedDraft(async () => {
 								const draft = currentDeferredDraft();
-								if (!draft) throw new Error("Missing deferred draft scope");
+								if (!draft) throw new Error(t("commands.neopi.missingDeferredScope"));
 								returned = draft;
 								ctx.editor.pendingImages = [...images];
 								ctx.editor.pendingImageLinks = [...imageLinks];
@@ -447,34 +543,34 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 									returned.images.map((_, index) => formatVisionMarker("image", index + 1)).join(" ");
 								if (text.trim()) {
 									restoreDetachedDraft(ctx.editor, text, returned.images, returned.imageLinks);
-									ctx.showWarning(
-										"Deferred input was not consumed; returned to the composer beside your current draft.",
-									);
+									ctx.showWarning(t("commands.neopi.deferUnconsumed"));
 									ctx.ui.requestRender();
 								}
 							}
 						}
 					}),
-				error => ctx.showError(`Deferred submission failed: ${errorMessage(error)}`),
+				error => ctx.showError(t("commands.neopi.deferFailed", { error: errorMessage(error) })),
 			);
 			if (images.length && images.every((image, index) => ctx.editor.pendingImages[index] === image)) {
 				ctx.editor.pendingImages.splice(0, images.length);
 				ctx.editor.pendingImageLinks.splice(0, images.length);
 				ctx.editor.imageLinks = ctx.editor.pendingImageLinks.length ? ctx.editor.pendingImageLinks : undefined;
 			}
-			ctx.showStatus(`Deferred submission ${id} scheduled. Cancel with /defer cancel ${id}.`);
+			ctx.showStatus(t("commands.neopi.deferScheduled", { id, target: id }));
 		},
 	},
 	{
 		name: "notice",
 		icon: "prompt",
-		description: "Send an operator-authored system notice to this session",
+		get description() {
+			return t("commands.neopi.noticeDescription");
+		},
 		inlineHint: "<text>",
 		allowArgs: true,
 		// Headless hosts: the same steering notice, sent through the session.
 		handle: async (command, runtime) => {
 			const text = command.text.slice(command.name.length + 2);
-			if (!text.trim()) return usage("Usage: /notice <text>", runtime);
+			if (!text.trim()) return usage(t("commands.neopi.noticeUsage"), runtime);
 			try {
 				await runtime.session.prompt(operatorNotice(text), noticeOptions(command.text));
 			} catch (error) {
@@ -488,7 +584,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const text = command.text.slice(command.name.length + 2);
 			clearSubmittedText(runtime);
 			if (!text.trim()) {
-				ctx.showStatus("Usage: /notice <text>");
+				ctx.showStatus(t("commands.neopi.noticeUsage"));
 				return;
 			}
 			const notice = operatorNotice(text);
@@ -511,8 +607,12 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "persona",
 		icon: "prompt",
-		description: "Edit and switch system-prompt personas; `/persona live` does the same for the voice model",
-		acpDescription: "Switch or inspect system-prompt and live-voice personas",
+		get description() {
+			return t("commands.neopi.personaDescription");
+		},
+		get acpDescription() {
+			return t("commands.neopi.personaAcpDescription");
+		},
 		acpInputHint: "[live] [set <name>|off|list|show <name>|status|clone <source> <name>|delete <name>]",
 		subcommands: PERSONA_DEFS,
 		getTuiArgumentCompletions: personaArgumentCompletions,
@@ -551,7 +651,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live-persona",
 		icon: "prompt",
-		description: "Edit live voice personas, including the Codex profile for /live-transcript",
+		get description() {
+			return t("commands.neopi.livePersonaDescription");
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			runtime.ctx.showPersonaConfigure("live");
@@ -560,7 +662,9 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "loadout",
 		icon: "swap",
-		description: "Switch runtime model loadouts (model roles, fallback chains, task-agent models)",
+		get description() {
+			return t("commands.neopi.loadoutDescription");
+		},
 		acpInputHint: "[set <name>|use <name>|off|list|show <name>|status]",
 		subcommands: LOADOUT_DEFS,
 		getTuiArgumentCompletions: prefix =>
@@ -575,7 +679,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handle: async (command, runtime) => {
 			try {
 				const message = await runLoadoutCommand(command.args, loadoutHost(runtime.session));
-				if (message === undefined) return usage(LOADOUT_USAGE, runtime);
+				if (message === undefined) return usage(loadoutUsage(), runtime);
 				await runtime.output(message);
 				return commandConsumed();
 			} catch (error) {
@@ -591,7 +695,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			try {
 				const message = await runLoadoutCommand(command.args, loadoutHost(ctx.session, ctx));
-				if (message === undefined) ctx.showError(LOADOUT_USAGE);
+				if (message === undefined) ctx.showError(loadoutUsage());
 				else ctx.showStatus(message);
 			} catch (error) {
 				ctx.showError(errorMessage(error));
@@ -601,17 +705,25 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "repl",
 		icon: "computer",
-		description: "Point the composer at a kernel (JavaScript, Python, Bash) or back at the agent",
-		acpDescription: "REPL mode (interactive TUI only)",
+		get description() {
+			return t("commands.neopi.replDescription");
+		},
+		get acpDescription() {
+			return t("commands.neopi.replAcpDescription");
+		},
 		subcommands: REPL_TARGETS.map(item => ({
 			name: item.id,
-			description: item.id === "agent" ? "Leave REPL mode" : `Run composer text as ${item.label}`,
+			description:
+				item.id === "agent"
+					? t("commands.neopi.leaveRepl")
+					: t("commands.neopi.runComposer", { language: item.label }),
 		})),
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime =>
-			runtime.ctx.replMode.active ? `REPL: ${replTargetLabel(runtime.ctx.replMode.target)}` : undefined,
-		handle: async (_command, runtime) =>
-			usage("/repl switches the interactive composer and is only available in the TUI.", runtime),
+			runtime.ctx.replMode.active
+				? t("commands.neopi.replState", { target: replTargetLabel(runtime.ctx.replMode.target) })
+				: undefined,
+		handle: async (_command, runtime) => usage(t("commands.neopi.replTuiOnly"), runtime),
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
@@ -622,7 +734,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			}
 			const target = parseReplTarget(token);
 			if (!target) {
-				ctx.showError(REPL_USAGE);
+				ctx.showError(replUsage());
 				return;
 			}
 			setRepl(ctx, target);
@@ -631,13 +743,15 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "kernel",
 		icon: "restart",
-		description: "Show, reset, or interrupt the REPL kernels",
+		get description() {
+			return t("commands.neopi.kernelDescription");
+		},
 		acpInputHint: "[status|interrupt]",
 		subcommands: KERNEL_DEFS,
 		getTuiArgumentCompletions: prefix =>
 			subcommandThenNameCompletions(prefix, "", KERNEL_DEFS, new Set(["reset"]), async () => [
-				{ name: "js", description: "JavaScript kernel" },
-				{ name: "py", description: "Python kernel" },
+				{ name: "js", description: t("commands.neopi.javascriptKernel") },
+				{ name: "py", description: t("commands.neopi.pythonKernel") },
 			]),
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -649,10 +763,10 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (verb === "interrupt") {
 				runtime.session.abortEval();
 				runtime.session.abortBash();
-				await runtime.output("Interrupted running kernels.");
+				await runtime.output(t("commands.neopi.kernelsInterrupted"));
 				return commandConsumed();
 			}
-			return usage(KERNEL_USAGE, runtime);
+			return usage(kernelUsage(), runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
@@ -665,22 +779,24 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (verb === "interrupt") {
 				ctx.session.abortEval();
 				ctx.session.abortBash();
-				ctx.showStatus("Interrupted running kernels.");
+				ctx.showStatus(t("commands.neopi.kernelsInterrupted"));
 				return;
 			}
 			const kernel = parseReplTarget(rest);
 			if (verb === "reset" && (kernel === "py" || kernel === "js")) {
 				ctx.replMode.requestReset(kernel);
-				ctx.showStatus(`The next ${replTargetLabel(kernel)} cell starts in a fresh kernel.`);
+				ctx.showStatus(t("commands.neopi.nextKernel", { language: replTargetLabel(kernel) }));
 				return;
 			}
-			ctx.showError(KERNEL_USAGE);
+			ctx.showError(kernelUsage());
 		},
 	},
 	{
 		name: "neoproxy",
 		icon: "signIn",
-		description: "Show or change the NeoProxy server and its stored API keys",
+		get description() {
+			return t("commands.neopi.proxyDescription");
+		},
 		acpInputHint: "[status]",
 		subcommands: NEOPROXY_DEFS,
 		allowArgs: true,
@@ -690,12 +806,8 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output(describeNeoProxy(runtime.session.modelRegistry));
 				return commandConsumed();
 			}
-			if (verb === "url")
-				return usage(
-					"Changing the NeoProxy server needs a key prompt: run `npi login neoproxy --url <url>`.",
-					runtime,
-				);
-			return usage(NEOPROXY_USAGE, runtime);
+			if (verb === "url") return usage(t("commands.neopi.proxyKeyRequired"), runtime);
+			return usage(neoProxyUsage(), runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
@@ -711,7 +823,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				);
 				return;
 			}
-			ctx.showError(NEOPROXY_USAGE);
+			ctx.showError(neoProxyUsage());
 		},
 	},
 ];

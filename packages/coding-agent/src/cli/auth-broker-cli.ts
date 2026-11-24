@@ -36,6 +36,7 @@ import { refreshOAuthToken } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { $which, APP_NAME, getAgentDbPath, getConfigRootDir, logger, postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { setTransports as setLoggerTransports } from "@oh-my-pi/pi-utils/logger";
 import { $ } from "bun";
 import { refreshManagedMcpOAuthCredential } from "../mcp/oauth-credentials";
@@ -211,9 +212,7 @@ async function runToken(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 
 async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	if (flags.via && !flags.provider) {
-		throw new Error(
-			`Usage: ${APP_NAME} auth-broker login <provider> --via=user@host (provider required for remote login)`,
-		);
+		throw new Error(t("cli.commands.auth-broker.remoteLoginUsage", { app: APP_NAME }));
 	}
 	applyUnpausedProviders(await resolveEffectiveSettings());
 	const providers = getOAuthProviders();
@@ -225,10 +224,13 @@ async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		providerArg = flags.provider ?? (await pickOAuthProvider(rl, providers));
 		if (!providers.some(p => p.id === providerArg)) {
 			throw new Error(
-				`Unknown OAuth provider '${providerArg}'. Known: ${providers
-					.map(p => p.id)
-					.sort()
-					.join(", ")}`,
+				t("cli.commands.auth-broker.unknownProvider", {
+					provider: providerArg,
+					providers: providers
+						.map(p => p.id)
+						.sort()
+						.join(", "),
+				}),
 			);
 		}
 		if (!flags.via) {
@@ -249,7 +251,7 @@ async function runLocalLogin(rl: readline.Interface, provider: string): Promise<
 	await storage.credentials.reload();
 	try {
 		await runTerminalOAuthLogin(rl, storage, provider);
-		process.stdout.write(`\nCredentials saved to ${getAgentDbPath()}\n`);
+		process.stdout.write(`\n${t("cli.commands.auth-broker.saved", { path: getAgentDbPath() })}\n`);
 	} finally {
 		store.close();
 	}
@@ -258,9 +260,7 @@ async function runLocalLogin(rl: readline.Interface, provider: string): Promise<
 async function runRemoteLogin(provider: string, via: string, dryRun: boolean): Promise<void> {
 	const port = CALLBACK_PORTS[provider];
 	if (port === undefined) {
-		throw new Error(
-			`No known OAuth callback port for '${provider}'. Use device-code flow on the broker host directly.`,
-		);
+		throw new Error(t("cli.commands.auth-broker.unknownCallbackPort", { provider }));
 	}
 	const sshArgs = [
 		"-L",
@@ -276,7 +276,7 @@ async function runRemoteLogin(provider: string, via: string, dryRun: boolean): P
 	}
 	const sshBin = $which("ssh");
 	if (!sshBin) {
-		throw new Error("ssh binary not found in PATH");
+		throw new Error(t("cli.commands.auth-broker.sshMissing"));
 	}
 	const proc = Bun.spawn({
 		cmd: [sshBin, ...sshArgs],
@@ -286,7 +286,7 @@ async function runRemoteLogin(provider: string, via: string, dryRun: boolean): P
 	});
 	const exitCode = await proc.exited;
 	if (exitCode !== 0) {
-		throw new Error(`ssh exited with code ${exitCode}`);
+		throw new Error(t("cli.commands.auth-broker.sshExit", { code: exitCode }));
 	}
 }
 
@@ -297,18 +297,18 @@ async function runLogout(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		if (!providerArg) {
 			const stored = store.listProviders();
 			if (stored.length === 0) {
-				process.stdout.write("No credentials stored.\n");
+				process.stdout.write(`${t("cli.commands.auth-broker.noCredentials")}\n`);
 				return;
 			}
 			const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 			try {
-				providerArg = stored[await pickIndex(rl, "Select a provider to logout:", stored)];
+				providerArg = stored[await pickIndex(rl, t("cli.commands.auth-broker.logoutSelection"), stored)];
 			} finally {
 				rl.close();
 			}
 		}
 		await store.deleteAuthCredentials(providerArg, "logged out by user");
-		process.stdout.write(`Logged out of ${providerArg}\n`);
+		process.stdout.write(`${t("cli.commands.auth-broker.loggedOut", { provider: providerArg })}\n`);
 	} finally {
 		store.close();
 	}
@@ -321,7 +321,7 @@ async function runList(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		process.stdout.write(`${JSON.stringify(providers.map(p => ({ id: p.id, name: p.name })))}\n`);
 		return;
 	}
-	process.stdout.write("Available providers:\n\n");
+	process.stdout.write(`${t("cli.commands.auth-broker.availableProviders")}\n\n`);
 	for (const p of providers) {
 		process.stdout.write(`  ${p.id.padEnd(20)} ${p.name}\n`);
 	}
@@ -389,7 +389,7 @@ async function collectImportSources(target: string): Promise<string[]> {
 	const stat = await fs.stat(target);
 	if (stat.isFile()) return [target];
 	if (!stat.isDirectory()) {
-		throw new Error(`Import source is neither file nor directory: ${target}`);
+		throw new Error(t("cli.commands.auth-broker.importInvalidSource", { path: target }));
 	}
 	const entries = await fs.readdir(target, { withFileTypes: true });
 	const files: string[] = [];
@@ -406,6 +406,7 @@ async function loadImportPlan(
 	target: string,
 	overrideProvider: string | undefined,
 	includeDisabled: boolean,
+	outputLocale: Locale,
 ): Promise<{ entries: ImportPlanEntry[]; skipped: Array<{ file: string; reason: string }> }> {
 	const files = await collectImportSources(target);
 	const entries: ImportPlanEntry[] = [];
@@ -415,28 +416,34 @@ async function loadImportPlan(
 		try {
 			json = JSON.parse(await fs.readFile(file, "utf8")) as CliProxyCredentialJson;
 		} catch (err) {
-			skipped.push({ file, reason: `unreadable JSON: ${String(err)}` });
+			skipped.push({
+				file,
+				reason: t(outputLocale, "cli.commands.auth-broker.importUnreadable", { error: String(err) }),
+			});
 			continue;
 		}
 		if (json.disabled === true && !includeDisabled) {
-			skipped.push({ file, reason: "credential marked disabled (use --include-disabled to import anyway)" });
+			skipped.push({ file, reason: t(outputLocale, "cli.commands.auth-broker.importDisabled") });
 			continue;
 		}
 		const provider = resolveCliProxyProvider(json, file, overrideProvider);
 		if (!provider) {
 			skipped.push({
 				file,
-				reason: `cannot determine provider from type=${json.type ?? "?"} (pass --provider to override)`,
+				reason: t(outputLocale, "cli.commands.auth-broker.importUnknownType", { type: json.type ?? "?" }),
 			});
 			continue;
 		}
 		if (!json.access_token || !json.refresh_token) {
-			skipped.push({ file, reason: "missing access_token or refresh_token" });
+			skipped.push({ file, reason: t(outputLocale, "cli.commands.auth-broker.importMissingFields") });
 			continue;
 		}
 		const expiresAt = parseCliProxyExpiry(json.expired);
 		if (expiresAt === null) {
-			skipped.push({ file, reason: `cannot parse expired=${json.expired ?? "?"}` });
+			skipped.push({
+				file,
+				reason: t(outputLocale, "cli.commands.auth-broker.importInvalidExpiry", { value: json.expired ?? "?" }),
+			});
 			continue;
 		}
 		const email = typeof json.email === "string" && json.email.length > 0 ? json.email : null;
@@ -463,21 +470,30 @@ async function loadImportPlan(
 }
 
 function describeImportEntry(entry: ImportPlanEntry): string {
-	const ident = entry.email ?? entry.accountId ?? "(no identity)";
-	const stale = entry.expiresAt < Date.now() ? " [expired]" : "";
-	const disabled = entry.disabled ? " [disabled]" : "";
-	return `${entry.provider}: ${ident}${stale}${disabled} from ${entry.sourceFile}`;
+	const ident = entry.email ?? entry.accountId ?? t("cli.commands.auth-broker.importNoIdentity");
+	const stale = entry.expiresAt < Date.now() ? t("cli.commands.auth-broker.importExpired") : "";
+	const disabled = entry.disabled ? t("cli.commands.auth-broker.importDisabledBadge") : "";
+	return t("cli.commands.auth-broker.importEntry", {
+		provider: entry.provider,
+		identity: ident,
+		stale,
+		disabled,
+		path: entry.sourceFile,
+	});
 }
 
 async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const target = flags.source;
 	if (!target) {
-		throw new Error(
-			`Usage: ${APP_NAME} auth-broker import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]`,
-		);
+		throw new Error(t("cli.commands.auth-broker.importUsage", { app: APP_NAME }));
 	}
 	const resolvedTarget = path.resolve(target.startsWith("~") ? target.replace(/^~/, os.homedir()) : target);
-	const { entries, skipped } = await loadImportPlan(resolvedTarget, flags.provider, flags.includeDisabled === true);
+	const { entries, skipped } = await loadImportPlan(
+		resolvedTarget,
+		flags.provider,
+		flags.includeDisabled === true,
+		flags.json ? "en" : getLocale(),
+	);
 
 	if (flags.json) {
 		process.stdout.write(
@@ -501,18 +517,18 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 
 	if (!flags.json) {
 		for (const skip of skipped) {
-			process.stdout.write(`${chalk.yellow("skip")} ${skip.file}: ${skip.reason}\n`);
+			process.stdout.write(`${chalk.yellow(t("cli.commands.auth-broker.skip"))} ${skip.file}: ${skip.reason}\n`);
 		}
 	}
 
 	if (entries.length === 0) {
-		if (!flags.json) process.stdout.write(`No importable credentials in ${resolvedTarget}.\n`);
+		if (!flags.json) process.stdout.write(`${t("cli.commands.auth-broker.importEmpty", { path: resolvedTarget })}\n`);
 		return;
 	}
 
 	if (flags.dryRun === true) {
 		if (!flags.json) {
-			process.stdout.write(`Dry run — would import ${entries.length} credential(s):\n`);
+			process.stdout.write(`${t("cli.commands.auth-broker.importDryRun", { count: entries.length })}\n`);
 			for (const entry of entries) process.stdout.write(`  ${describeImportEntry(entry)}\n`);
 		}
 		return;
@@ -525,14 +541,18 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 			try {
 				await client.uploadCredential(entry.provider, entry.credential);
 				if (!flags.json) {
-					process.stdout.write(`${chalk.green("uploaded")} ${describeImportEntry(entry)} → ${brokerConfig.url}\n`);
+					process.stdout.write(
+						`${chalk.green(t("cli.commands.auth-broker.uploaded"))} ${describeImportEntry(entry)} → ${brokerConfig.url}\n`,
+					);
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				if (flags.json) {
 					process.stdout.write(`${JSON.stringify({ error: message, file: entry.sourceFile })}\n`);
 				} else {
-					process.stdout.write(`${chalk.red("failed")} ${describeImportEntry(entry)}: ${message}\n`);
+					process.stdout.write(
+						`${chalk.red(t("cli.commands.auth-broker.failed"))} ${describeImportEntry(entry)}: ${message}\n`,
+					);
 				}
 				process.exitCode = 1;
 			}
@@ -544,7 +564,10 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	try {
 		for (const entry of entries) {
 			await store.upsertAuthCredential(entry.provider, entry.credential);
-			if (!flags.json) process.stdout.write(`${chalk.green("imported")} ${describeImportEntry(entry)}\n`);
+			if (!flags.json)
+				process.stdout.write(
+					`${chalk.green(t("cli.commands.auth-broker.imported"))} ${describeImportEntry(entry)}\n`,
+				);
 		}
 	} finally {
 		store.close();
@@ -567,8 +590,8 @@ interface MigrateSkip {
 	reason: string;
 }
 
-function credentialIdentity(provider: string, credential: AuthCredential): string {
-	if (credential.type === "api_key") return "(api key)";
+function credentialIdentity(provider: string, credential: AuthCredential, outputLocale: Locale): string {
+	if (credential.type === "api_key") return t(outputLocale, "cli.commands.auth-broker.apiKey");
 	const base = credential.email ?? credential.accountId ?? credential.projectId ?? `<${provider} oauth>`;
 	return credential.orgId ? `${base} (${credential.orgName ?? credential.orgId})` : base;
 }
@@ -599,23 +622,20 @@ function brokerAlreadyHas(
 async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
-		throw new Error(
-			"OMP_AUTH_BROKER_URL must be set (or `auth.broker.url` in config.yml). `migrate` uploads local credentials to a configured broker.",
-		);
+		throw new Error(t("cli.commands.auth-broker.migrateBrokerRequired"));
 	}
 	if (flags.fromLocal !== true) {
-		throw new Error(
-			`\`${APP_NAME} auth-broker migrate\` requires an explicit source. Pass \`--from-local\` to migrate from the local SQLite store and env vars.`,
-		);
+		throw new Error(t("cli.commands.auth-broker.migrateSourceRequired", { app: APP_NAME }));
 	}
 
 	const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 	const snapshotResult = await client.fetchSnapshot();
-	if (snapshotResult.status !== 200) throw new Error("Auth broker returned no snapshot");
+	if (snapshotResult.status !== 200) throw new Error(t("cli.commands.auth-broker.migrateNoSnapshot"));
 	const existing = snapshotResult.snapshot.credentials;
 
 	const plan: MigratePlanEntry[] = [];
 	const skipped: MigrateSkip[] = [];
+	const outputLocale = flags.json ? "en" : getLocale();
 
 	// 1. Local SQLite rows.
 	const localDbPath = getAgentDbPath();
@@ -631,18 +651,18 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 				skipped.push({
 					source: "local-sqlite",
 					provider: row.provider,
-					identity: "(api key)",
-					reason: "placeholder sentinel '<authenticated>' is not a real key",
+					identity: t(outputLocale, "cli.commands.auth-broker.apiKey"),
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateSentinel"),
 				});
 				continue;
 			}
-			const identity = credentialIdentity(row.provider, row.credential);
+			const identity = credentialIdentity(row.provider, row.credential, outputLocale);
 			if (row.credential.type === "oauth" && flags.includeOauth !== true) {
 				skipped.push({
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "OAuth from local SQLite skipped by default (use --include-oauth)",
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateSkipOauth"),
 				});
 				continue;
 			}
@@ -651,7 +671,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "already on broker",
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateAlreadyOnBroker"),
 				});
 				continue;
 			}
@@ -660,7 +680,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "another local api_key for this provider already planned",
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateDuplicateLocalKey"),
 				});
 				continue;
 			}
@@ -682,8 +702,8 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 				skipped.push({
 					source: "env",
 					provider,
-					identity: "(api key)",
-					reason: "already on broker (provider has an api_key)",
+					identity: t(outputLocale, "cli.commands.auth-broker.apiKey"),
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateExistingBrokerKey"),
 				});
 				continue;
 			}
@@ -692,12 +712,17 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 				skipped.push({
 					source: "env",
 					provider,
-					identity: "(api key)",
-					reason: "local SQLite already supplied an api_key for this provider",
+					identity: t(outputLocale, "cli.commands.auth-broker.apiKey"),
+					reason: t(outputLocale, "cli.commands.auth-broker.migrateExistingLocalKey"),
 				});
 				continue;
 			}
-			plan.push({ source: "env", provider, credential, identity: "(api key)" });
+			plan.push({
+				source: "env",
+				provider,
+				credential,
+				identity: t(outputLocale, "cli.commands.auth-broker.apiKey"),
+			});
 		}
 	}
 
@@ -712,19 +737,19 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 	} else {
 		for (const skip of skipped) {
 			process.stdout.write(
-				`${chalk.yellow("skip")} [${skip.source}] ${skip.provider} ${skip.identity}: ${skip.reason}\n`,
+				`${chalk.yellow(t("cli.commands.auth-broker.skip"))} [${skip.source}] ${skip.provider} ${skip.identity}: ${skip.reason}\n`,
 			);
 		}
 	}
 
 	if (plan.length === 0) {
-		if (!flags.json) process.stdout.write("Nothing to migrate.\n");
+		if (!flags.json) process.stdout.write(`${t("cli.commands.auth-broker.migrateEmpty")}\n`);
 		return;
 	}
 
 	if (flags.dryRun === true) {
 		if (!flags.json) {
-			process.stdout.write(`Dry run — would upload ${plan.length} credential(s):\n`);
+			process.stdout.write(`${t("cli.commands.auth-broker.migrateDryRun", { count: plan.length })}\n`);
 			for (const entry of plan) {
 				process.stdout.write(`  [${entry.source}] ${entry.provider} ${entry.identity}\n`);
 			}
@@ -736,14 +761,18 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 		try {
 			await client.uploadCredential(entry.provider, entry.credential);
 			if (!flags.json) {
-				process.stdout.write(`${chalk.green("uploaded")} [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+				process.stdout.write(
+					`${chalk.green(t("cli.commands.auth-broker.uploaded"))} [${entry.source}] ${entry.provider} ${entry.identity}\n`,
+				);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (flags.json) {
 				process.stdout.write(`${JSON.stringify({ error: message, provider: entry.provider })}\n`);
 			} else {
-				process.stdout.write(`${chalk.red("failed")} [${entry.source}] ${entry.provider}: ${message}\n`);
+				process.stdout.write(
+					`${chalk.red(t("cli.commands.auth-broker.migrateFailed"))} [${entry.source}] ${entry.provider}: ${message}\n`,
+				);
 			}
 			process.exitCode = 1;
 		}
@@ -753,9 +782,8 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const cfg = await resolveAuthBrokerConfig();
 	if (!cfg) {
-		const message = "No auth-broker configured (set OMP_AUTH_BROKER_URL to enable).";
 		if (flags.json) process.stdout.write(`${JSON.stringify({ ok: false, reason: "not_configured" })}\n`);
-		else process.stdout.write(`${chalk.yellow(message)}\n`);
+		else process.stdout.write(`${chalk.yellow(t("cli.commands.auth-broker.statusNotConfigured"))}\n`);
 		return;
 	}
 	const client = new AuthBrokerClient({ url: cfg.url, token: cfg.token });
@@ -764,14 +792,16 @@ async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify({ url: cfg.url, ...health })}\n`);
 		} else {
-			process.stdout.write(`${chalk.green("OK")} ${cfg.url} (version=${health.version ?? "unknown"})\n`);
+			process.stdout.write(
+				`${chalk.green("OK")} ${cfg.url} (version=${health.version ?? t("cli.commands.auth-broker.unknownVersion")})\n`,
+			);
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify({ ok: false, url: cfg.url, error: message })}\n`);
 		} else {
-			process.stdout.write(`${chalk.red("FAILED")} ${cfg.url}: ${message}\n`);
+			process.stdout.write(`${chalk.red(t("cli.commands.auth-broker.statusFailed"))} ${cfg.url}: ${message}\n`);
 		}
 		process.exitCode = 1;
 	}
@@ -806,7 +836,7 @@ export async function runAuthBrokerCommand(cmd: AuthBrokerCommandArgs): Promise<
 		default: {
 			// Exhaustive check.
 			const _exhaustive: never = cmd.action;
-			throw new Error(`Unknown auth-broker action: ${String(_exhaustive)}`);
+			throw new Error(t("cli.commands.auth-broker.unknownAction", { action: String(_exhaustive) }));
 		}
 	}
 }

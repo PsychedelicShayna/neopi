@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { promptsHelp } from "../cli/command-help";
 import { PROMPT_ACTIONS, runPromptsCommand } from "../cli/prompts-cli";
 
@@ -40,22 +41,24 @@ export default class Prompts extends Command {
 			description: "check: include user/project agents; bodies are inspected, not runtime overrides",
 		}),
 	};
-	static examples = [
-		`${APP_NAME} prompts unpack`,
-		`${APP_NAME} prompts unpack --project --only 'system/system-prompt.md'`,
-		`${APP_NAME} prompts unpack --force --include core`,
-		`${APP_NAME} prompts list --json`,
-		`${APP_NAME} prompts show tools/bash.md --vars`,
-		`${APP_NAME} prompts diff 'tools/*.md'`,
-		`${APP_NAME} prompts lexicon --unused --scope system`,
-		`${APP_NAME} prompts keys live/prompts/live-instructions.md`,
-		`${APP_NAME} prompts check --installed --strict --runtime`,
-		`${APP_NAME} prompts check .omp/agents/scout.md --scope agent-body`,
-		`${APP_NAME} prompts reset tools/bash.md`,
-		`${APP_NAME} prompts reset --all --user`,
-		"Templates stay dynamic. SYSTEM.md, APPEND_SYSTEM.md, TITLE_SYSTEM.md and PERSONALITY.md remain plain text.",
-		"check exits 0 for success, 1 for validation errors, 2 for usage errors, and 3 for internal failures.",
-	];
+	static get examples() {
+		return [
+			`${APP_NAME} prompts unpack`,
+			`${APP_NAME} prompts unpack --project --only 'system/system-prompt.md'`,
+			`${APP_NAME} prompts unpack --force --include core`,
+			`${APP_NAME} prompts list --json`,
+			`${APP_NAME} prompts show tools/bash.md --vars`,
+			`${APP_NAME} prompts diff 'tools/*.md'`,
+			`${APP_NAME} prompts lexicon --unused --scope system`,
+			`${APP_NAME} prompts keys live/prompts/live-instructions.md`,
+			`${APP_NAME} prompts check --installed --strict --runtime`,
+			`${APP_NAME} prompts check .omp/agents/scout.md --scope agent-body`,
+			`${APP_NAME} prompts reset tools/bash.md`,
+			`${APP_NAME} prompts reset --all --user`,
+			t("cli.commands.prompts.example.templates"),
+			t("cli.commands.prompts.example.exit_codes"),
+		];
+	}
 
 	async run(): Promise<void> {
 		try {
@@ -67,7 +70,7 @@ export default class Prompts extends Command {
 			process.exitCode = await runPromptsCommand({ action: args.action, targets: args.targets, flags });
 		} catch (error) {
 			if (!(error instanceof CliUsageError)) throw error;
-			process.stderr.write(`prompts: ${error.message}\n`);
+			process.stderr.write(`prompts: ${error.displayMessage}\n`);
 			process.exitCode = 2;
 		}
 	}

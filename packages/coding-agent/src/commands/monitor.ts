@@ -12,6 +12,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import { APP_NAME, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { monitorHelp as commandHelp } from "../cli/command-help";
 import { resolveCtlTarget } from "../cli/ctl-cli";
@@ -53,17 +54,17 @@ export default class Monitor extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Monitor);
 		const session = args.session;
-		if (!session) throw new CliUsageError("monitor needs the owner session (control instance id or selector)");
+		if (!session) throw new CliUsageError(t("cli.commands.monitor.owner_required"));
 		if (args.action === "idle") {
 			process.exitCode = await runIdle(session);
 			return;
 		}
 		const capabilityFile = flags["capability-file"];
 		if ((capabilityFile === undefined) === (flags.agent === undefined)) {
-			throw new CliUsageError("monitor attach needs exactly one of --capability-file or --agent");
+			throw new CliUsageError(t("cli.commands.monitor.capability_source"));
 		}
 		if (process.stdout.isTTY !== true || process.stdin.isTTY !== true) {
-			process.stderr.write(`${APP_NAME} monitor attach is interactive and requires a TTY\n`);
+			process.stderr.write(t("cli.commands.monitor.interactive", { app: APP_NAME }));
 			process.exitCode = 1;
 			return;
 		}
@@ -106,11 +107,13 @@ async function readCapabilityFile(file: string): Promise<string> {
 	try {
 		capability = (await Bun.file(file).text()).trim();
 	} catch (error) {
-		if (isEnoent(error)) throw new CliUsageError(`capability file ${file} is gone (already used?)`);
+		if (isEnoent(error)) throw new CliUsageError(t("cli.commands.monitor.capability_missing", { file }));
 		throw error;
 	}
 	await fs.rm(file, { force: true });
-	if (!/^[0-9a-f]{64}$/.test(capability)) throw new CliUsageError(`capability file ${file} is malformed`);
+	if (!/^[0-9a-f]{64}$/.test(capability)) {
+		throw new CliUsageError(t("cli.commands.monitor.capability_malformed", { file }));
+	}
 	return capability;
 }
 
@@ -119,7 +122,9 @@ async function mintCapability(metadata: ControlMetadata, agentId: string): Promi
 	await client.connect();
 	try {
 		const response = await client.request({ type: "monitor_grant", agentId });
-		if (!response.success) throw new CliUsageError(response.error ?? `cannot monitor ${agentId}`);
+		if (!response.success) {
+			throw new CliUsageError(response.error ?? t("cli.commands.monitor.grant_failed", { agentId }));
+		}
 		return (response.data as MonitorGrantInfo).capability;
 	} finally {
 		client.close();
@@ -130,7 +135,7 @@ async function mintCapability(metadata: ControlMetadata, agentId: string): Promi
 async function runIdle(selector: string): Promise<number> {
 	const metadata = await resolveCtlTarget(selector);
 	const title = metadata.title ?? metadata.cwd;
-	process.stdout.write(`\n  npi monitor · ${title}\n\n  Subagent and advisor panes open here as they start.\n`);
+	process.stdout.write(t("cli.commands.monitor.idle", { title }));
 	for (;;) {
 		await Bun.sleep(IDLE_POLL_MS);
 		const current = await findControlMetadata(metadata.instanceId);

@@ -8,6 +8,7 @@
  * one-row note stands in until it lands, when it cannot be shown, and on a
  * terminal without graphics.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeStatusText } from "../chrome/shared";
 import { Image, type ImageBudget } from "../components/image";
 import { isSvgMedia } from "../media";
@@ -55,7 +56,6 @@ type Load =
 	| { readonly state: "failed"; readonly reason: string };
 
 const NO_ROWS: readonly string[] = [];
-const VISIT = "[Visit]";
 
 let nextEmbedId = 0;
 
@@ -234,9 +234,13 @@ export class EmbedFigure implements Component {
 		const page = embed.kind === "iframe";
 		const name = sanitizeStatusText(embed.label || (/^data:/i.test(embed.src) ? "image" : embed.src));
 		let text = `▣ ${name}`;
-		if (load?.state === "loading") text += page ? " — capturing…" : " — loading…";
+		if (load?.state === "loading")
+			text += page ? t("overlays.embed_figure.capturing") : t("overlays.embed_figure.loading");
 		else if (load?.state === "failed")
-			text += ` — couldn't ${page ? "capture" : "load"}: ${sanitizeStatusText(load.reason)}`;
+			text += t("overlays.embed_figure.load_failed", {
+				value: `${page ? "capture" : "load"}`,
+				reason: `${sanitizeStatusText(load.reason)}`,
+			});
 		const target = this.#target;
 		if (!page) {
 			const row = theme.fg("dim", truncateToWidth(text, width - 1, Ellipsis.Unicode));
@@ -250,8 +254,8 @@ export class EmbedFigure implements Component {
 			if (embed.label) text += ` — ${sanitizeStatusText(url)}`;
 			return ` ${theme.fg("dim", truncateToWidth(text, width - 1, Ellipsis.Unicode))}`;
 		}
-		const room = width - 2 - visibleWidth(VISIT);
-		return ` ${theme.fg("dim", truncateToWidth(text, room, Ellipsis.Unicode))} ${uriHyperlink(url, theme.fg("accent", VISIT))}`;
+		const room = width - 2 - visibleWidth(t("overlays.embed_figure.visit"));
+		return ` ${theme.fg("dim", truncateToWidth(text, room, Ellipsis.Unicode))} ${uriHyperlink(url, theme.fg("accent", t("overlays.embed_figure.visit")))}`;
 	}
 }
 

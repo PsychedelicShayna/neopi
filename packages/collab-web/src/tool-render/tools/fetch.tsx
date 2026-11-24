@@ -1,5 +1,6 @@
 /** `fetch` — reader-mode URL fetch; output is markdown with a metadata header. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, InvalidArg, Kv, KvGrid, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, num, str, truncate } from "../util";
@@ -34,6 +35,7 @@ function fetchDetails(record: Record<string, unknown> | null): FetchDetails | nu
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const url = str(args.url) ?? str(args.path);
 	const method = (str(args.method) ?? "").toUpperCase();
 	const details = fetchDetails(detailsRecord(result));
@@ -55,7 +57,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 			{details?.truncated && (
 				<>
 					{" "}
-					<Badge tone="warn">truncated</Badge>
+					<Badge tone="warn">{t("guesttools.status.truncated", "truncated")}</Badge>
 				</>
 			)}
 		</>
@@ -63,6 +65,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const url = str(args.url) ?? str(args.path);
 	const method = (str(args.method) ?? "").toUpperCase();
 	const timeout = num(args.timeout);
@@ -71,15 +74,21 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<Kv k="url">{url ?? <InvalidArg what="url" />}</Kv>
-				<Kv k="method">{method && method !== "GET" && <Badge tone="accent">{method}</Badge>}</Kv>
+				<Kv k={t("guesttools.label.url", "url")}>{url ?? <InvalidArg what="url" />}</Kv>
+				<Kv k={t("guesttools.label.method", "method")}>
+					{method && method !== "GET" && <Badge tone="accent">{method}</Badge>}
+				</Kv>
 				<Kv k="raw">{args.raw === true && <Badge>raw</Badge>}</Kv>
-				<Kv k="timeout">{timeout != null && `${timeout}s`}</Kv>
-				<Kv k="final url">{redirected && details?.finalUrl}</Kv>
+				<Kv k={t("guesttools.label.timeout", "timeout")}>{timeout != null && `${timeout}s`}</Kv>
+				<Kv k={t("guesttools.label.final_url", "final url")}>{redirected && details?.finalUrl}</Kv>
 				<Kv k="content-type">{details?.contentType}</Kv>
-				<Kv k="via">{details?.method}</Kv>
-				<Kv k="notes">{details && details.notes.length > 0 && details.notes.join("; ")}</Kv>
-				<Kv k="truncated">{details?.truncated && <Badge tone="warn">output truncated</Badge>}</Kv>
+				<Kv k={t("guesttools.label.via", "via")}>{details?.method}</Kv>
+				<Kv k={t("guesttools.label.notes", "notes")}>
+					{details && details.notes.length > 0 && details.notes.join("; ")}
+				</Kv>
+				<Kv k={t("guesttools.label.truncation", "truncated")}>
+					{details?.truncated && <Badge tone="warn">{t("guesttools.output.truncated", "output truncated")}</Badge>}
+				</Kv>
 			</KvGrid>
 			<ResultText result={result} maxLines={12} lang="markdown" />
 		</>

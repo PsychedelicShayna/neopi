@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { YAML } from "bun";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { loadBundledAgents } from "../task/agents";
@@ -42,7 +43,7 @@ function resolveTargetDir(flags: AgentsCommandArgs["flags"]): string {
 	}
 
 	if (flags.user && flags.project) {
-		throw new Error("Choose either --user or --project, not both.");
+		throw new Error(t("cli.commands.agents.exclusiveLocation"));
 	}
 
 	if (flags.project) {
@@ -118,13 +119,20 @@ export async function runAgentsCommand(cmd: AgentsCommandArgs): Promise<void> {
 				return;
 			}
 
-			writeStdout(chalk.bold(`Bundled agents: ${result.total}`));
-			writeStdout(chalk.dim(`Target directory: ${result.targetDir}`));
-			writeStdout(chalk.green(`${theme.status.success} Written: ${result.written.length}`));
+			writeStdout(chalk.bold(t("cli.commands.agents.bundledCount", { count: result.total })));
+			writeStdout(chalk.dim(t("cli.commands.agents.targetDirectory", { path: result.targetDir })));
+			writeStdout(
+				chalk.green(
+					t("cli.commands.agents.written", { success: theme.status.success, count: result.written.length }),
+				),
+			);
 			if (result.skipped.length > 0) {
 				writeStdout(
 					chalk.yellow(
-						`${theme.status.warning} Skipped existing: ${result.skipped.length} (use --force to overwrite)`,
+						t("cli.commands.agents.skippedExisting", {
+							warning: theme.status.warning,
+							count: result.skipped.length,
+						}),
 					),
 				);
 			}

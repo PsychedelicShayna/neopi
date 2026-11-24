@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { resolvePromptAsset, renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -110,7 +111,7 @@ export class TanCommandController {
 	async start(work: string, images?: ImageContent[]): Promise<boolean> {
 		const trimmedWork = work.trim();
 		if (!trimmedWork) {
-			this.ctx.showStatus("Usage: /tan <work>");
+			this.ctx.showStatus(t("overlays.tan_command_controller.usage"));
 			return false;
 		}
 
@@ -118,19 +119,19 @@ export class TanCommandController {
 
 		const model = session.model;
 		if (!model) {
-			this.ctx.showError("No active model available for /tan.");
+			this.ctx.showError(t("overlays.tan_command_controller.no_model"));
 			return false;
 		}
 
 		const manager = session.asyncJobManager;
 		if (!manager) {
-			this.ctx.showError("Background jobs are disabled; enable async jobs to use /tan.");
+			this.ctx.showError(t("overlays.tan_command_controller.jobs_disabled"));
 			return false;
 		}
 
 		const parentFile = this.ctx.sessionManager.getSessionFile();
 		if (!parentFile) {
-			this.ctx.showError("/tan requires a persisted session.");
+			this.ctx.showError(t("overlays.tan_command_controller.persisted_session"));
 			return false;
 		}
 
@@ -184,7 +185,7 @@ export class TanCommandController {
 		const agentRegistry = AgentRegistry.global();
 		const label = `/tan ${previewWork(trimmedWork)}`;
 		const naming = generateTanName(session, trimmedWork);
-		this.ctx.showStatus("Naming background tan…");
+		this.ctx.showStatus(t("overlays.tan_command_controller.naming"));
 
 		await this.ctx.sessionManager.ensureOnDisk();
 		await this.ctx.sessionManager.flush();
@@ -434,7 +435,7 @@ export class TanCommandController {
 			},
 			{ triggerTurn: false, deliverAs: "steer" },
 		);
-		this.ctx.showStatus(`Dispatched background tan ${jobId}`);
+		this.ctx.showStatus(t("overlays.tan_command_controller.dispatched", { part1: `${jobId}` }));
 		return true;
 	}
 }

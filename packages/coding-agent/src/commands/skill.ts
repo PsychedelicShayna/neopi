@@ -3,9 +3,10 @@
  */
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SkillSearchSort } from "@oh-my-pi/pi-wire/skillshare";
 import { skillHelp as commandHelp } from "../cli/command-help";
-import { runSkillCommand, SKILL_ACTIONS, SKILL_USAGE, type SkillAction } from "../cli/skill-cli";
+import { runSkillCommand, SKILL_ACTIONS, type SkillAction } from "../cli/skill-cli";
 
 export default class Skill extends Command {
 	static description = commandHelp.description;
@@ -49,7 +50,7 @@ export default class Skill extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Skill);
 		if (!args.action) {
-			process.stdout.write(SKILL_USAGE);
+			process.stdout.write(t("cli.commands.skill.usage", { bin: APP_NAME }));
 			return;
 		}
 		const exitCode = await runSkillCommand({

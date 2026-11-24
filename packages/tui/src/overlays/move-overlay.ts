@@ -5,6 +5,7 @@
  * The user types a path, Tab autocompletes the highlighted directory, and Enter
  * confirms — yielding the resolved directory string (or `undefined` on cancel).
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, type Focusable, Key, matchesKey, truncateToWidth } from "../index";
 import { theme } from "../theme/theme";
 import {
@@ -80,7 +81,7 @@ export class MoveOverlay implements Component, Focusable {
 		this.#done = done;
 		this.#field = new TextFormField({
 			theme: formTheme,
-			prompt: theme.fg("dim", "Path: "),
+			prompt: theme.fg("dim", t("overlays.move_overlay.path_prompt")),
 			empty: "submit",
 			spaceBeforeControl: false,
 			spaceAfterControl: false,
@@ -194,13 +195,13 @@ export class MoveOverlay implements Component, Focusable {
 		const memo = this.#renderMemo;
 		if (memo?.width === width && memo.fieldLines === fieldLines && memo.revision === this.#revision)
 			return memo.lines;
-		const lines = [topBorder(width, "Move to directory")];
+		const lines = [topBorder(width, t("overlays.move_overlay.move_title"))];
 		for (const fieldLine of fieldLines) lines.push(row(fieldLine, width));
 		lines.push(row("", width));
 		const results = this.#menu.visibleItems;
 		const window = this.#viewport.layout(this.#rowCounts, this.#menu.selectedIndex, MAX_RESULTS);
 		if (results.length === 0 && this.#field.getValue().length > 0) {
-			lines.push(row(theme.fg("dim", "No matching directories"), width));
+			lines.push(row(theme.fg("dim", t("overlays.move_overlay.no_directories")), width));
 		} else {
 			const rowWidth = contentRowWidth(innerWidth, results.length, MAX_RESULTS);
 			const rows: string[] = [];
@@ -221,8 +222,8 @@ export class MoveOverlay implements Component, Focusable {
 		}
 		lines.push(row("", width));
 		const hint = this.#pathFocused
-			? `Type path · ${formatKeyHint("tab")} complete · Enter confirm · Esc back to list`
-			: `/ or Tab edit · Enter confirm · ${editorKey("tui.select.cancel")} cancel · ? help`;
+			? t("overlays.move_overlay.path_focused_hint", { value: `${formatKeyHint("tab")}` })
+			: t("overlays.move_overlay.list_focused_hint", { editorKey: `${editorKey("tui.select.cancel")}` });
 		for (const line of menuHintLines(hint, innerWidth, this.#pathFocused ? "" : "jk gg/G C-u d e y")) {
 			lines.push(row(theme.fg("dim", line), width));
 		}
@@ -244,7 +245,10 @@ export class MoveOverlay implements Component, Focusable {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: this.#field.getValue().length > 0 ? [span("No matching directories", "dim")] : undefined,
+					empty:
+						this.#field.getValue().length > 0
+							? [span(t("overlays.move_overlay.no_directories"), "dim")]
+							: undefined,
 					max: { lines: MAX_RESULTS },
 				},
 				items,
@@ -253,18 +257,30 @@ export class MoveOverlay implements Component, Focusable {
 			scroll: this.#nativeScroll,
 		};
 		const hints = statusHintsRow(
-			[span(this.#pathFocused ? "Type path · Tab complete · Esc back to list" : "/ or Tab edit · ? help", "dim")],
+			[
+				span(
+					this.#pathFocused
+						? t("overlays.move_overlay.path_status_hint")
+						: t("overlays.move_overlay.list_status_hint"),
+					"dim",
+				),
+			],
 			[],
 		);
 		const actions = actionBar([
-			actionButton("Accept", "accept", { keys: this.#pathFocused ? "tab" : undefined }),
-			this.#pathFocused ? actionButton("Back to list", "back", { keys: "escape" }) : null,
-			actionButton("Cancel", "cancel", {
+			actionButton(t("overlays.move_overlay.accept"), "accept", { keys: this.#pathFocused ? "tab" : undefined }),
+			this.#pathFocused ? actionButton(t("tui.picker.back_to_list"), "back", { keys: "escape" }) : null,
+			actionButton(t("tui.components.loader.cancel"), "cancel", {
 				keys: this.#pathFocused ? undefined : (getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape"),
 			}),
-			actionButton("Confirm", "confirm", { keys: "enter", tone: "accent" }),
+			actionButton(t("tui.picker.confirm"), "confirm", { keys: "enter", tone: "accent" }),
 		]);
-		const described = overlayCard("omp.dialog.move", "Move to directory", [this.#field, list, hints, actions]);
+		const described = overlayCard("omp.dialog.move", t("overlays.move_overlay.move_title"), [
+			this.#field,
+			list,
+			hints,
+			actions,
+		]);
 		this.#native = { revision: this.#revision, node: described };
 		return described;
 	}
@@ -308,7 +324,7 @@ export class MoveOverlay implements Component, Focusable {
 	}
 
 	invalidate(): void {
-		this.#field.input.prompt = theme.fg("dim", "Path: ");
+		this.#field.input.prompt = theme.fg("dim", t("overlays.move_overlay.path_prompt"));
 		this.#field.invalidate();
 		this.#revision++;
 		this.#renderMemo = undefined;

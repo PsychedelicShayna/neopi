@@ -3,6 +3,7 @@
  * and Agent Hub rows, accumulated from assistant-message usage by
  * {@link addAssistantUsage}, so every surface counts the same way.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { outputTokensPerSecond } from "../overlays/usage-row";
@@ -86,10 +87,15 @@ export function agentUsageFromMessages(messages: ReadonlyArray<{ role: string } 
 
 /** One-line token split and last-request timing, e.g. `in 12K · out 4.5K · reasoning 2K · ttft 820ms · 45 tok/s`. */
 export function formatAgentUsageBreakdown(usage: AgentUsage): string {
-	const parts = [`in ${formatNumber(usage.input)}`, `out ${formatNumber(usage.output)}`];
-	if (usage.reasoning > 0) parts.push(`reasoning ${formatNumber(usage.reasoning)}`);
+	const parts = [
+		t("tools.usage.input", { count: formatNumber(usage.input) }),
+		t("tools.usage.output", { count: formatNumber(usage.output) }),
+	];
+	if (usage.reasoning > 0) parts.push(t("tools.usage.reasoning", { count: formatNumber(usage.reasoning) }));
 	if (usage.cacheRead > 0 || usage.cacheWrite > 0) {
-		parts.push(`cache ${formatNumber(usage.cacheRead)} read / ${formatNumber(usage.cacheWrite)} write`);
+		parts.push(
+			t("tools.usage.cache", { read: formatNumber(usage.cacheRead), write: formatNumber(usage.cacheWrite) }),
+		);
 	}
 	const last = usage.last;
 	if (last?.ttftMs !== undefined) parts.push(`ttft ${formatDuration(last.ttftMs)}`);

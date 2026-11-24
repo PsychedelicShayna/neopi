@@ -5,7 +5,7 @@
  */
 
 import { format } from "@oh-my-pi/pi-utils/dates";
-import type { TimeRange } from "../types";
+import type { Locale, TimeRange } from "../types";
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -40,15 +40,28 @@ export function rangeMeta(range: TimeRange): RangeMeta {
 	return RANGE_META[range];
 }
 
+const bucketDateSpanish = new Intl.DateTimeFormat("es-419", { month: "short", day: "numeric" });
+const bucketDateTimeSpanish = new Intl.DateTimeFormat("es-419", {
+	month: "short",
+	day: "numeric",
+	hour: "2-digit",
+	minute: "2-digit",
+	hourCycle: "h23",
+});
+
 /** Tick/tooltip label for a bucket start, precise enough for the bucket size. */
-export function formatBucket(timestamp: number, bucketMs: number): string {
+export function formatBucket(timestamp: number, bucketMs: number, locale: Locale = "en"): string {
+	if (locale === "es" && bucketMs >= HOUR_MS) {
+		return (bucketMs < DAY_MS ? bucketDateTimeSpanish : bucketDateSpanish).format(timestamp);
+	}
 	if (bucketMs < DAY_MS) return format(new Date(timestamp), bucketMs < HOUR_MS ? "HH:mm" : "MMM d HH:mm");
 	return format(new Date(timestamp), "MMM d");
 }
 
 /** Compact axis tick for a bucket start. */
-export function formatTick(timestamp: number, bucketMs: number): string {
+export function formatTick(timestamp: number, bucketMs: number, locale: Locale = "en"): string {
 	if (bucketMs < DAY_MS) return format(new Date(timestamp), "HH:mm");
+	if (locale === "es") return bucketDateSpanish.format(timestamp);
 	return format(new Date(timestamp), "MMM d");
 }
 

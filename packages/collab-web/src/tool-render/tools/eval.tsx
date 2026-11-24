@@ -8,6 +8,7 @@
  */
 import type { ReactNode } from "react";
 import { Markdown } from "../../components/transcript/Markdown";
+import { useTranslation } from "../../lib/i18n";
 import { Badges, CodeBlock, InvalidArg, Note, Output, ResultImages, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { argsDigest, detailsRecord, isRecord, normalizeWs, num, str, truncate } from "../util";
@@ -466,6 +467,7 @@ function renderCells(args: Record<string, unknown>, name: string, detailCells: D
 }
 
 function Summary({ name, args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const cells = renderCells(args, name, detailCellsOf(detailsRecord(result)));
 	if (cells.length === 0) return <span className="tv-muted">{argsDigest(args)}</span>;
 	const first = cells[0];
@@ -474,12 +476,18 @@ function Summary({ name, args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{label && <span>{truncate(label, 72)}</span>}
-			<Badges items={[cells.length > 1 ? `${cells.length} cells` : null, ...langs]} />
+			<Badges
+				items={[
+					cells.length > 1 ? t("guesttools.eval.cells", "{count} cells", { count: cells.length }) : null,
+					...langs,
+				]}
+			/>
 		</>
 	);
 }
 
 function Body({ name, args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const detailCells = detailCellsOf(details);
 	const cells = renderCells(args, name, detailCells);
@@ -512,7 +520,11 @@ function Body({ name, args, result }: ToolRenderProps): ReactNode {
 							titleParts.push(ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
 						}
 						if (dc.status === "error")
-							titleParts.push(dc.exitCode !== null ? `error (exit ${dc.exitCode})` : "error");
+							titleParts.push(
+								dc.exitCode !== null
+									? t("guesttools.eval.error_exit", "error (exit {code})", { code: dc.exitCode })
+									: t("guesttools.status.error", "error"),
+							);
 					}
 					return (
 						<div className="tv-cell" key={`c${i}`}>

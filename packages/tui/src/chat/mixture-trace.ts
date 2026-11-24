@@ -5,6 +5,7 @@
  * the hop's output when it is visible; header-only cards (hidden output, the
  * terminal hop whose output is the answer) still carry the run totals.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { Disclosure } from "../components/disclosure";
 import type { MixtureTraceDetails } from "../overlays/mixture-types";
@@ -32,7 +33,7 @@ export function mixtureTraceTitle(details: MixtureTraceDetails): string {
 		case "branch": {
 			const parts = [
 				details.mixture,
-				`hop ${details.hop}`,
+				t("overlays.mixture_trace.hop", { hop: `${details.hop}` }),
 				`${details.memberId} (${details.model})${details.edgeInId ? ` ← ${details.edgeInId}` : ""}`,
 				formatCost(details.usage.cost.total),
 				formatElapsed(details.elapsedMs),
@@ -41,17 +42,39 @@ export function mixtureTraceTitle(details: MixtureTraceDetails): string {
 			return parts.join(" · ");
 		}
 		case "decision":
-			return `${details.mixture} · hop ${details.hop} · ${details.decision.kind} ${details.decision.outcome} · ${details.decision.judge} (${details.decision.judgeKind})`;
+			return t("overlays.mixture_trace.hop_decision", {
+				mixture: `${details.mixture}`,
+				hop: `${details.hop}`,
+				kind: `${details.decision.kind}`,
+				outcome: `${details.decision.outcome}`,
+				judge: `${details.decision.judge}`,
+				judgeKind: `${details.decision.judgeKind}`,
+			});
 		case "steering":
-			return `${details.mixture} · steering → ${details.targetMemberId}`;
+			return t("overlays.mixture_trace.steering_target", {
+				mixture: `${details.mixture}`,
+				targetMemberId: `${details.targetMemberId}`,
+			});
 		case "limit":
-			return `${details.mixture} · ${details.limit} limit ${details.value} · ${details.action}`;
+			return t("overlays.mixture_trace.limit", {
+				mixture: `${details.mixture}`,
+				limit: `${details.limit}`,
+				value: `${details.value}`,
+				action: `${details.action}`,
+			});
 		case "checkpoint":
-			return `${details.mixture} · checkpoint (${details.reason})${details.note ? ` · ${details.note}` : ""}`;
+			return t("overlays.mixture_trace.checkpoint", {
+				mixture: `${details.mixture}`,
+				reason: `${details.reason}`,
+				value: `${details.note ? ` · ${details.note}` : ""}`,
+			});
 		case "run_start":
-			return `${details.mixture} · run started`;
+			return t("overlays.mixture_trace.run_started", { mixture: `${details.mixture}` });
 		case "run_end":
-			return `${details.mixture} · run ended (${details.endReason})`;
+			return t("overlays.mixture_trace.run_ended", {
+				mixture: `${details.mixture}`,
+				endReason: `${details.endReason}`,
+			});
 	}
 }
 

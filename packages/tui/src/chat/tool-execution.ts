@@ -1,3 +1,4 @@
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { RunTrace } from "@oh-my-pi/pi-natives";
 import { isShellTrace, type ShellTrace, type ShellVizPreferences, type ShellVizPresentation } from "@oh-my-pi/pi-wire";
 import { defaultShellVizPreferences, readShellPresentation, shellVisualization } from "../tools/shell-viz";
@@ -440,6 +441,7 @@ export class ToolExecutionComponent extends Container {
 	// committed-render bypass must observe those mutations.
 	#blockVersion = 0;
 	#lastDisplayKey: string | undefined;
+	#displayLocale: Locale | undefined;
 	// Bumped whenever a render input that #rebuildDisplay consumes but the memo
 	// key cannot cheaply hash changes: streamed call args, native edit-diff
 	// previews, and Kitty PNG conversions. Folded into the dirty key so those
@@ -1342,6 +1344,7 @@ export class ToolExecutionComponent extends Container {
 			host.shell,
 			host.tray,
 			getThemeEpoch(),
+			getLocale(),
 			presentation,
 		];
 		return this.#native.get(key, () => {
@@ -1391,7 +1394,10 @@ export class ToolExecutionComponent extends Container {
 				: node("col", { gap: "sm", role: "omp.tool.diagnostics" }, sections, "late");
 		return {
 			section,
-			chip: { text: count === 1 ? "1 diagnostic" : `${count} diagnostics`, tone: errored ? "error" : "warning" },
+			chip: {
+				text: t(count === 1 ? "status.tool.diagnostics_one" : "status.tool.diagnostics_many", { count }),
+				tone: errored ? "error" : "warning",
+			},
 		};
 	}
 
@@ -1429,7 +1435,8 @@ export class ToolExecutionComponent extends Container {
 				href: head?.href,
 				meta: head?.meta,
 				badges: badges.length > 0 ? badges : undefined,
-				note: head?.note ?? (status === "cancelled" && !this.#isBenignSkip() ? "cancelled" : undefined),
+				note:
+					head?.note ?? (status === "cancelled" && !this.#isBenignSkip() ? t("status.tool.cancelled") : undefined),
 				exit: head?.exit ?? undefined,
 				status,
 				age: live ? ms : undefined,
@@ -1460,7 +1467,7 @@ export class ToolExecutionComponent extends Container {
 		const target = typeof head.target === "string" ? span(head.target, "muted") : head.target?.map(s => ({ ...s }));
 		const meta = (head.meta ?? []).map(m => (typeof m === "string" ? m : m.map(s => s.t).join("")));
 		const spans = toolHead(title, ...(Array.isArray(target) ? target : [target]), ...meta);
-		if (head.exit) spans.push(span(" "), span(`exit ${head.exit}`, "error"));
+		if (head.exit) spans.push(span(" "), span(t("status.tool.exit", { code: head.exit }), "error"));
 		if (head.note)
 			spans.push(
 				span(" "),
@@ -1665,9 +1672,11 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}|${this.#toolName === "bash" && chatTranscriptDisplayPreferences.shellVisualization}`;
+		const locale = getLocale();
+		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${locale}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}|${this.#toolName === "bash" && chatTranscriptDisplayPreferences.shellVisualization}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
+		this.#displayLocale = locale;
 
 		this.#rebuildDisplay();
 		this.#displayBuilt = true;
@@ -1711,6 +1720,7 @@ export class ToolExecutionComponent extends Container {
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
+		if (this.#displayLocale !== getLocale()) this.#updateDisplay();
 		const presentation = this.#presentation.draw();
 		if (presentation.mode === "hidden") return [];
 		if (presentation.mode === "compact") {
@@ -2006,7 +2016,12 @@ export class ToolExecutionComponent extends Container {
 						{
 							iconOverride: spinner,
 							title: "Edit",
-							description: theme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
+							description: theme.fg(
+								"dim",
+								t(remaining > 1 ? "status.tool.files_pending_many" : "status.tool.files_pending_one", {
+									count: remaining,
+								}),
+							),
 						},
 						theme,
 					);

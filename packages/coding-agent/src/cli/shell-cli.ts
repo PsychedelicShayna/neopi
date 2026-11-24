@@ -8,6 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { Shell } from "@oh-my-pi/pi-natives";
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import { buildMinimizerOptions } from "../exec/bash-executor";
 import { cfgShellMinimizer } from "../exec/settings";
@@ -45,7 +46,7 @@ export function parseShellArgs(args: string[]): ShellCommandArgs | undefined {
 
 export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 	if (!process.stdin.isTTY) {
-		process.stderr.write("Error: shell console requires an interactive TTY.\n");
+		process.stderr.write(`${t("cli.commands.shell.tty_required")}\n`);
 		process.exit(1);
 	}
 
@@ -64,23 +65,23 @@ export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 
 	const printHelp = () => {
 		process.stdout.write(
-			`${chalk.bold("Shell Console Commands")}
+			`${chalk.bold(t("cli.commands.shell.console_commands"))}
 
 ` +
-				`${chalk.bold("Special Commands:")}
-  .help           Show this help
-  .exit, exit     Exit the console
+				`${chalk.bold(t("cli.commands.shell.special_commands"))}
+  .help           ${t("cli.commands.shell.show_help")}
+  .exit, exit     ${t("cli.commands.shell.exit_console")}
 
 ` +
-				`${chalk.bold("Options:")}
-  --cwd, -C <path>     Set working directory for commands
-  --timeout, -t <ms>   Timeout per command in milliseconds
-  --no-snapshot        Skip sourcing snapshot from user shell
+				`${chalk.bold(t("cli.config.help.options"))}
+  --cwd, -C <path>     ${t("cli.command.shell.flag.cwd.description")}
+  --timeout, -t <ms>   ${t("cli.command.shell.flag.timeout.description")}
+  --no-snapshot        ${t("cli.command.shell.flag.no-snapshot.description")}
 
 ` +
-				`${chalk.bold("Notes:")}
-  Runs in a persistent embedded bash session.
-  Variables and functions defined in one command persist for the next.
+				`${chalk.bold(t("cli.commands.shell.notes"))}
+  ${t("cli.commands.shell.embedded_session")}
+  ${t("cli.commands.shell.persistent_definitions")}
 
 `,
 		);
@@ -96,7 +97,7 @@ export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 	};
 
 	process.on("SIGINT", interruptHandler);
-	process.stdout.write(chalk.dim("Type .help for commands.\n"));
+	process.stdout.write(chalk.dim(`${t("cli.commands.shell.help_hint")}\n`));
 
 	try {
 		while (true) {
@@ -138,15 +139,15 @@ export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 				}
 
 				if (result.timedOut) {
-					process.stderr.write(chalk.yellow("Command timed out.\n"));
+					process.stderr.write(chalk.yellow(`${t("cli.commands.shell.timed_out")}\n`));
 				} else if (result.cancelled) {
-					process.stderr.write(chalk.yellow("Command cancelled.\n"));
+					process.stderr.write(chalk.yellow(`${t("cli.commands.shell.cancelled")}\n`));
 				} else if (result.exitCode !== 0 && result.exitCode !== undefined) {
-					process.stderr.write(chalk.yellow(`Exit code: ${result.exitCode}\n`));
+					process.stderr.write(chalk.yellow(`${t("cli.commands.shell.exit_code", { code: result.exitCode })}\n`));
 				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				process.stderr.write(chalk.red(`Error: ${message}\n`));
+				process.stderr.write(chalk.red(`${t("tools.common.error_detail", { message })}\n`));
 			} finally {
 				active = false;
 			}
@@ -158,18 +159,18 @@ export async function runShellCommand(cmd: ShellCommandArgs): Promise<void> {
 }
 
 export function printShellHelp(): void {
-	process.stdout.write(`${chalk.bold(`${APP_NAME} shell`)} - Interactive shell console for testing
+	process.stdout.write(`${chalk.bold(`${APP_NAME} shell`)} - ${t("cli.commands.shell.title")}
 
-${chalk.bold("Usage:")}
+${chalk.bold(t("cli.commands.shell.usage"))}
   ${APP_NAME} shell [options]
 
-${chalk.bold("Options:")}
-  --cwd, -C <path>     Set working directory for commands
-  --timeout, -t <ms>   Timeout per command in milliseconds
-  --no-snapshot        Skip sourcing snapshot from user shell
-  -h, --help           Show this help
+${chalk.bold(t("cli.config.help.options"))}
+  --cwd, -C <path>     ${t("cli.command.shell.flag.cwd.description")}
+  --timeout, -t <ms>   ${t("cli.command.shell.flag.timeout.description")}
+  --no-snapshot        ${t("cli.command.shell.flag.no-snapshot.description")}
+  -h, --help           ${t("cli.commands.shell.show_help")}
 
-${chalk.bold("Examples:")}
+${chalk.bold(t("cli.config.help.examples"))}
   ${APP_NAME} shell
   ${APP_NAME} shell --cwd ./tmp
   ${APP_NAME} shell --timeout 2000

@@ -5,6 +5,7 @@
 import { MODEL_KINDS, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { modelsHelp as commandHelp } from "../cli/command-help";
 import { MODEL_ACTIONS, resolveModelsArgs, runModelsCommand } from "../cli/models-cli";
 
@@ -45,14 +46,16 @@ export default class Models extends Command {
 		}),
 	};
 
-	static examples = [
-		`# List available chat models, grouped by provider\n  ${APP_NAME} models`,
-		`# List models of every catalog kind\n  ${APP_NAME} models --kind all`,
-		`# List one provider's models (any provider name works)\n  ${APP_NAME} models openai-codex`,
-		`# Find models by substring\n  ${APP_NAME} models find minimax`,
-		`# Force a fresh catalog fetch (replaces rm -rf ~/.omp/models.db)\n  ${APP_NAME} models refresh`,
-		`# Machine-readable output\n  ${APP_NAME} models --json`,
-	];
+	static get examples() {
+		return [
+			`# ${t("cli.commands.models.example.list")}\n  ${APP_NAME} models`,
+			`# ${t("cli.commands.models.example.all")}\n  ${APP_NAME} models --kind all`,
+			`# ${t("cli.commands.models.example.provider")}\n  ${APP_NAME} models openai-codex`,
+			`# ${t("cli.commands.models.example.find")}\n  ${APP_NAME} models find minimax`,
+			`# ${t("cli.commands.models.example.refresh")}\n  ${APP_NAME} models refresh`,
+			`# ${t("cli.commands.models.example.json")}\n  ${APP_NAME} models --json`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Models);

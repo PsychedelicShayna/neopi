@@ -15,6 +15,7 @@ import { formatCost } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { formatBytes } from "@oh-my-pi/pi-utils";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { DownloadActivity } from "../downloads/activity";
 import type { JudgmentBatchProgress } from "../eval/judgment-batch-events";
 
@@ -117,15 +118,24 @@ export class ChainProgressHud extends Text {
 		const bindings = this.keybindings();
 		const skip = bindings.getDisplayString("app.chain.skipStep");
 		const cancel = bindings.getDisplayString("app.interrupt");
-		const controls = [skip && `${skip} skip`, cancel && `${cancel} cancel`].filter(Boolean).join(" · ");
-		const stage = `step ${progress.number}/${progress.total} "${sanitizeStatusText(progress.step)}"`;
+		const controls = [
+			skip && t("status.hud.chain.skip", { key: skip }),
+			cancel && t("status.hud.chain.cancel", { key: cancel }),
+		]
+			.filter(Boolean)
+			.join(" · ");
+		const stage = t("status.hud.chain.step", {
+			number: progress.number,
+			total: progress.total,
+			step: sanitizeStatusText(progress.step),
+		});
 		const transition = progress.skipping
-			? `${stage} · skipping…`
+			? t("status.hud.chain.skipping", { stage })
 			: progress.skipped === undefined
 				? stage
-				: `skipped "${sanitizeStatusText(progress.skipped)}" → ${stage}`;
+				: t("status.hud.chain.skipped", { skipped: sanitizeStatusText(progress.skipped), stage });
 		const age = formatCoarseDuration(performance.now() - progress.startedAt);
-		const label = `Chain ${sanitizeStatusText(progress.chain)} · ${transition} · ${age}`;
+		const label = t("status.hud.chain.label", { chain: sanitizeStatusText(progress.chain), transition, age });
 		if (this.setText(controls ? `${label} (${controls})` : label)) this.requestRender();
 	}
 }
@@ -134,6 +144,7 @@ export class ChainProgressHud extends Text {
 export class JudgmentBatchProgressHud implements Component {
 	readonly #batches = new Map<string, JudgmentBatchProgress>();
 	#native: NativeNode | undefined;
+	#nativeLocale: Locale | undefined;
 
 	update(progress: JudgmentBatchProgress): void {
 		this.#batches.set(progress.id, progress);
@@ -151,12 +162,18 @@ export class JudgmentBatchProgressHud implements Component {
 	}
 
 	describe(): NativeNode {
+		const locale = getLocale();
+		if (this.#nativeLocale !== locale) {
+			this.#nativeLocale = locale;
+			this.#native = undefined;
+		}
 		this.#native ??= col(
 			Array.from(this.#batches.values(), progress => {
 				const tail: TspSpan[] = [span(`${progress.done}/${progress.total}`, "strong")];
 				// Zero cost means unpriced, not free — omit rather than show $0.
 				if (progress.cost > 0) tail.push(span(` · ${formatCost(progress.cost)}`, "dim"));
-				if (progress.failed > 0) tail.push(span(` · ${progress.failed} failed`, "warning"));
+				if (progress.failed > 0)
+					tail.push(span(t("status.hud.judge.failed", { count: progress.failed }), "warning"));
 				return describeHudRow(progress.id, progress.intent, tail, progress.done / Math.max(1, progress.total));
 			}),
 			{ role: "omp.hud.judge" },
@@ -176,7 +193,7 @@ export class JudgmentBatchProgressHud implements Component {
 		const countText = `${progress.done}/${progress.total}`;
 		// Zero cost means unpriced (local/native without catalog pricing), not free — omit rather than show $0.
 		const costText = progress.cost > 0 ? ` · ${formatCost(progress.cost)}` : "";
-		const failedText = progress.failed > 0 ? ` · ${progress.failed} failed` : "";
+		const failedText = progress.failed > 0 ? t("status.hud.judge.failed", { count: progress.failed }) : "";
 		const compactFailedText = progress.failed > 0 ? ` +${progress.failed}!` : "";
 		let failure = failedText;
 		if (
@@ -211,7 +228,9 @@ const DOWNLOAD_FAILED_RETAIN_MS = 10_000;
 function formatStep(activity: DownloadActivity): string {
 	const { loaded, unit } = activity;
 	if (loaded) return unit === "steps" ? `${loaded}` : formatBytes(loaded);
-	return activity.detail ?? (unit === "steps" ? "working…" : "downloading…");
+	return (
+		activity.detail ?? (unit === "steps" ? t("status.hud.download.working") : t("status.hud.download.downloading"))
+	);
 }
 
 /** Progress of an activity whose total is known: `129MB / 258MB`, or `3/12` steps. */
@@ -235,7 +254,7 @@ export class DownloadActivityHud implements Component {
 	readonly #rows = new Map<number, DownloadRow>();
 	readonly #requestRender: () => void;
 	/** Last description and the revealed-row signature it was built for. */
-	#native: { node: NativeNode; revision: number; shown: string } | undefined;
+	#native: { node: NativeNode; revision: number; shown: string; locale: Locale } | undefined;
 	#revision = 0;
 
 	constructor(requestRender: () => void) {
@@ -286,22 +305,32 @@ export class DownloadActivityHud implements Component {
 			row => row.activity.state !== "running" || now - row.startedAt >= DOWNLOAD_REVEAL_MS,
 		);
 		const signature = shown.map(row => row.activity.id).join(",");
-		if (this.#native?.revision === this.#revision && this.#native.shown === signature) return this.#native.node;
+		const locale = getLocale();
+		if (
+			this.#native?.revision === this.#revision &&
+			this.#native.shown === signature &&
+			this.#native.locale === locale
+		) {
+			return this.#native.node;
+		}
 		const nodeOut = col(
 			shown.map(row => this.#describeRow(row.activity)),
 			{ role: "omp.hud.downloads" },
 		);
-		this.#native = { node: nodeOut, revision: this.#revision, shown: signature };
+		this.#native = { node: nodeOut, revision: this.#revision, shown: signature, locale };
 		return nodeOut;
 	}
 
 	#describeRow(activity: DownloadActivity): NativeNode {
 		const key = `${activity.id}`;
 		if (activity.state === "failed") {
-			const reason = `failed: ${sanitizeStatusText(activity.error ?? "unknown error")}`;
+			const reason = t("status.hud.download.failed", {
+				reason: sanitizeStatusText(activity.error ?? t("status.hud.download.unknown_error")),
+			});
 			return describeHudRow(key, activity.label, [span(reason, "warning")]);
 		}
-		if (activity.state === "done") return describeHudRow(key, activity.label, [span("ready", "success")]);
+		if (activity.state === "done")
+			return describeHudRow(key, activity.label, [span(t("status.hud.download.ready"), "success")]);
 		const { loaded, total } = activity;
 		if (total !== undefined && total > 0) {
 			const received = loaded ?? 0;
@@ -331,7 +360,9 @@ export class DownloadActivityHud implements Component {
 
 	#renderRow(activity: DownloadActivity, width: number): string {
 		if (activity.state === "failed") {
-			const reason = `failed: ${sanitizeStatusText(activity.error ?? "unknown error")}`;
+			const reason = t("status.hud.download.failed", {
+				reason: sanitizeStatusText(activity.error ?? t("status.hud.download.unknown_error")),
+			});
 			return renderHudProgressRow(width, {
 				label: activity.label,
 				tail: theme.fg("warning", truncateToWidth(reason, Math.max(8, Math.floor(width * 0.6)))),
@@ -341,8 +372,8 @@ export class DownloadActivityHud implements Component {
 		if (activity.state === "done") {
 			return renderHudProgressRow(width, {
 				label: activity.label,
-				tail: theme.fg("success", "ready"),
-				fallback: theme.fg("success", `${activity.label} ready`),
+				tail: theme.fg("success", t("status.hud.download.ready")),
+				fallback: theme.fg("success", t("status.hud.download.label_ready", { label: activity.label })),
 			});
 		}
 		const { loaded, total } = activity;

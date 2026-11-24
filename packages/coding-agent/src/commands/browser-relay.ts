@@ -3,6 +3,7 @@
  */
 import { APP_NAME, PRODUCT_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	BROWSER_RELAY_ACTIONS,
 	type BrowserRelayAction,
@@ -34,11 +35,13 @@ export default class BrowserRelay extends Command {
 		verbose: Flags.boolean({ char: "v", description: "Log relay traffic summaries to stderr", default: false }),
 	};
 
-	static examples = [
-		`${APP_NAME} browser-relay install    # write the Chrome extension to disk + setup steps`,
-		`${APP_NAME} browser-relay            # serve the relay on the default port`,
-		`${APP_NAME} browser-relay -p 9333 --token s3cret`,
-	];
+	static get examples(): string[] {
+		return [
+			`${APP_NAME} browser-relay install    # ${t("cli.commands.browser-relay.example.install")}`,
+			`${APP_NAME} browser-relay            # ${t("cli.commands.browser-relay.example.serve")}`,
+			`${APP_NAME} browser-relay -p 9333 --token s3cret`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(BrowserRelay);

@@ -137,10 +137,10 @@ async function renderLocalizedHelp(
 		| { kind: "root"; config: CliConfig<CommandMetadata> }
 		| { kind: "command"; bin: string; id: string; command: CommandCtor },
 ): Promise<void> {
-	// Help loads the selected profile's environment only after profile bootstrap.
-	const [{ renderRootHelp, renderCommandHelp }, { getExtraHelpText, initializeCliLanguage, translateHelpHeading }] =
-		await Promise.all([import("@oh-my-pi/pi-utils/cli"), import("./cli/help-extra")]);
-	await initializeCliLanguage();
+	const [{ renderRootHelp, renderCommandHelp }, { getExtraHelpText, translateHelpHeading }] = await Promise.all([
+		import("@oh-my-pi/pi-utils/cli"),
+		import("./cli/help-extra"),
+	]);
 	if (target.kind === "command") {
 		renderCommandHelp(target.bin, target.id, target.command, translateHelpHeading);
 		return;
@@ -475,11 +475,20 @@ export async function runCli(argv: string[], isProcessEntry = false): Promise<vo
 			setProfile(resolveProfileEnv(process.env.OMP_PROFILE, process.env.PI_PROFILE), "environment");
 		}
 		if (extracted.aliasName !== undefined) {
-			// Command boundary: shell/path setup is used only by --alias.
-			const { installProfileAlias, resolveProfileAliasCommandFromProcess } = await import("./cli/profile-alias");
+			// Import settings and alias installation only after selecting the profile.
+			const [{ installProfileAlias, resolveProfileAliasCommandFromProcess }, localization] = await Promise.all([
+				import("./cli/profile-alias"),
+				import("./cli/help-extra"),
+			]);
+			await localization.initializeCliLanguage();
 			const profile = extracted.profile ?? getActiveProfile();
 			if (!profile) {
-				throw new Error("--alias requires --profile <name> or OMP_PROFILE");
+				throw new Error(
+					localization.translateHelpHeading(
+						"cli.alias.requiresProfile",
+						"--alias requires --profile <name> or OMP_PROFILE",
+					),
+				);
 			}
 			const result = await installProfileAlias({
 				profile,
@@ -487,9 +496,18 @@ export async function runCli(argv: string[], isProcessEntry = false): Promise<vo
 				command: resolveProfileAliasCommandFromProcess(),
 			});
 			process.stdout.write(
-				`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
-					`Restart your shell or run: ${result.reloadedWith}\n` +
-					`Then use: ${result.aliasName} update, ${result.aliasName} --version, or ${result.aliasName}\n`,
+				localization.translateHelpHeading(
+					"cli.alias.created",
+					`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
+						`Restart your shell or run: ${result.reloadedWith}\n` +
+						`Then use: ${result.aliasName} update, ${result.aliasName} --version, or ${result.aliasName}\n`,
+					{
+						alias: result.aliasName,
+						profile: result.profile,
+						path: result.configPath,
+						reload: result.reloadedWith,
+					},
+				),
 			);
 			return;
 		}
@@ -591,8 +609,19 @@ export async function runCli(argv: string[], isProcessEntry = false): Promise<vo
 		const resolved = resolveCliArgv(
 			resolveNpiIdeaArgv(resolveNpiUpdateArgv(resolvedArgv, process.execPath), process.execPath),
 		);
+		// Import lazily: this module reads the selected profile's environment at
+		// import time, and version and shell completion probes skip settings.
+		const localization =
+			isVersionProbe || ("argv" in resolved && resolved.argv[0] === "__complete")
+				? undefined
+				: await import("./cli/help-extra");
+		if (localization) await localization.initializeCliLanguage();
 		if ("error" in resolved) {
-			process.stderr.write(`error: ${resolved.error}\n`);
+			const message =
+				localization?.translateHelpHeading(`cli.error.reserved.${resolved.reservedWord}`, resolved.error, {
+					bin: APP_NAME,
+				}) ?? resolved.error;
+			process.stderr.write(`error: ${message}\n`);
 			process.exitCode = 1;
 			return;
 		}
@@ -604,6 +633,7 @@ export async function runCli(argv: string[], isProcessEntry = false): Promise<vo
 			commands,
 			metadataHelp: showHelp,
 			commandHelp: showCommandHelp,
+			translate: localization?.translateHelpHeading,
 		});
 	} finally {
 		stopStartupComposer?.();

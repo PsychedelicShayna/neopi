@@ -7,6 +7,7 @@
  * stay in their respective files.
  */
 
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Loader } from "../components/loader";
 import { Text } from "../components/text";
 import { Container, type TUI } from "../tui";
@@ -41,7 +42,10 @@ export function clampDisplayLine(line: string): string {
 		return line;
 	}
 	const omitted = visible - MAX_DISPLAY_LINE_CHARS;
-	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}… [${omitted} visible columns omitted]`;
+	return t("overlays.execution_shared.omitted_columns", {
+		line: `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}`,
+		omitted: `${omitted}`,
+	});
 }
 
 export type ExecutionStatus = "running" | "complete" | "cancelled" | "error";
@@ -72,7 +76,7 @@ export function buildExecutionFrame(
 		ui,
 		spinner => theme.fg(colorKey, spinner),
 		text => theme.fg("muted", text),
-		`Running… (${interruptKey()} to cancel)`,
+		t("overlays.execution_shared.running_cancel", { interruptKey: `${interruptKey()}` }),
 		// The status spinner, as on a running tool card's header.
 		theme.spinnerFrames,
 	);
@@ -89,7 +93,8 @@ export function executionStatusLabel(
 	exitCode: number | undefined,
 ): string | undefined {
 	if (status === "cancelled") return theme.fg("warning", "cancelled");
-	if (status === "error") return theme.fg("error", `exit ${exitCode}`);
+	if (status === "error")
+		return theme.fg("error", t("overlays.execution_shared.exit_code", { exitCode: `${exitCode}` }));
 	return undefined;
 }
 
@@ -109,16 +114,29 @@ export function buildStatusFooter(opts: {
 	const parts: string[] = [];
 
 	if (opts.hiddenLineCount > 0 && !opts.suppressHiddenCount) {
-		parts.push(theme.fg("dim", `… ${opts.hiddenLineCount} more lines (${expandKeyHint()} to expand)`));
+		parts.push(
+			theme.fg(
+				"dim",
+				t("overlays.execution_shared.hidden_lines", {
+					hiddenLineCount: `${opts.hiddenLineCount}`,
+					expandKeyHint: `${expandKeyHint()}`,
+				}),
+			),
+		);
 	}
 	if (opts.truncation) {
-		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation)));
+		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation, undefined, getLocale())));
 	}
 	if (opts.artifactError) {
-		parts.push(theme.fg("warning", formatArtifactErrorNotice(opts.artifactError)));
+		parts.push(theme.fg("warning", formatArtifactErrorNotice(opts.artifactError, getLocale())));
 	}
 	if (opts.minimized) {
-		parts.push(theme.fg("dim", `Minimized: ${formatMinimizedMeta(opts.minimized)}`));
+		parts.push(
+			theme.fg(
+				"dim",
+				t("overlays.execution_shared.minimized", { minimized: `${formatMinimizedMeta(opts.minimized)}` }),
+			),
+		);
 	}
 
 	if (parts.length === 0) return undefined;
@@ -177,7 +195,16 @@ export function describeExecutionCard(input: ExecutionCardInput): NativeNode {
 	if (input.images) children.push(...input.images);
 	if (running) {
 		children.push(
-			node("spinner", { label: [span(`Running… (${interruptKey()} to cancel)`, "muted")] }, undefined, "running"),
+			node(
+				"spinner",
+				{
+					label: [
+						span(t("overlays.execution_shared.running_cancel", { interruptKey: `${interruptKey()}` }), "muted"),
+					],
+				},
+				undefined,
+				"running",
+			),
 		);
 	}
 	const notes: TspSpan[] = [];
@@ -185,11 +212,13 @@ export function describeExecutionCard(input: ExecutionCardInput): NativeNode {
 		if (notes.length > 0) notes.push(span("\n"));
 		notes.push(span(value, token));
 	};
-	if (input.status === "cancelled") note("(cancelled)", "warning");
-	else if (input.status === "error") note(`(exit ${input.exitCode})`, "error");
-	if (input.truncation) note(formatTruncationMetaNotice(input.truncation), "warning");
-	if (input.minimized) note(`Minimized: ${formatMinimizedMeta(input.minimized)}`, "muted");
-	if (input.artifactError) note(formatArtifactErrorNotice(input.artifactError), "warning");
+	if (input.status === "cancelled") note(t("overlays.execution_shared.cancelled"), "warning");
+	else if (input.status === "error")
+		note(t("overlays.execution_shared.exit_code_paren", { exitCode: `${input.exitCode}` }), "error");
+	if (input.truncation) note(formatTruncationMetaNotice(input.truncation, undefined, getLocale()), "warning");
+	if (input.minimized)
+		note(t("overlays.execution_shared.minimized", { minimized: `${formatMinimizedMeta(input.minimized)}` }), "muted");
+	if (input.artifactError) note(formatArtifactErrorNotice(input.artifactError, getLocale()), "warning");
 	if (notes.length > 0) children.push(text(notes, { wrap: "word", key: "notes" }));
 	return card(
 		{
@@ -264,14 +293,25 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 				state,
 				exitCode: input.exitCode,
 				elapsedMs: ms,
-				facts: input.minimized ? [`Minimized ${formatMinimizedMeta(input.minimized)}`] : undefined,
+				facts: input.minimized
+					? [
+							t("overlays.execution_shared.minimized_fact", {
+								minimized: `${formatMinimizedMeta(input.minimized)}`,
+							}),
+						]
+					: undefined,
 				meta: { truncation: input.truncation, artifactError: input.artifactError },
 			}),
 		],
 		{ key: "run", tone: state === "failed" ? "error" : undefined },
 	);
 	const badges: { text: string; tone?: TspTone; title?: string }[] = [{ text: "you", tone: "user" }];
-	if (input.excluded) badges.push({ text: "not sent", title: "Not sent to the model", tone: "muted" });
+	if (input.excluded)
+		badges.push({
+			text: t("overlays.execution_shared.not_sent"),
+			title: t("overlays.execution_shared.not_sent_model"),
+			tone: "muted",
+		});
 	return node(
 		"tool",
 		{

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { resolveIssuesRoleSelection } from "../../config/model-resolver";
 import { MAIN_AGENT_ID } from "../../registry/agent-registry";
@@ -23,21 +24,22 @@ function previewProse(prose: string): string {
 function statusLine(notice: IssueNotice): string {
 	switch (notice.kind) {
 		case "dispatched":
-			return `/issue dispatched as ${notice.agentId}`;
+			return t("overlays.issue_command_controller.dispatched", { part1: `${notice.agentId}` });
 		case "question":
-			return `/issue needs your answer: reply to ${notice.agentId} in the Agent Hub`;
+			return t("overlays.issue_command_controller.needs_answer", { part1: `${notice.agentId}` });
 		case "failed":
-			return `/issue failed: ${notice.error}`;
+			return t("overlays.issue_command_controller.failed", { part1: `${notice.error}` });
 		case "outcome":
-			if (notice.outcome.kind === "published") return `/issue filed ${notice.outcome.issue.url}`;
+			if (notice.outcome.kind === "published")
+				return t("overlays.issue_command_controller.filed", { part1: `${notice.outcome.issue.url}` });
 			if (notice.outcome.kind === "published-unread")
-				return `/issue filed ${notice.outcome.issue.url} (record unavailable)`;
+				return t("overlays.issue_command_controller.filed_no_record", { part1: `${notice.outcome.issue.url}` });
 			if (notice.outcome.kind === "publication-uncertain")
-				return `/issue publication unconfirmed for ${notice.outcome.repo}`;
+				return t("overlays.issue_command_controller.not_confirmed", { part1: `${notice.outcome.repo}` });
 			if (notice.outcome.kind === "existing-owner") {
-				return `/issue not filed: ${notice.outcome.owner.url} already owns it`;
+				return t("overlays.issue_command_controller.already_owned", { part1: `${notice.outcome.owner.url}` });
 			}
-			return `/issue not filed: ${notice.outcome.reason}`;
+			return t("overlays.issue_command_controller.not_filed", { part1: `${notice.outcome.reason}` });
 	}
 }
 
@@ -52,30 +54,28 @@ export class IssueCommandController {
 	async start(prose: string): Promise<void> {
 		const trimmed = prose.trim();
 		if (!trimmed) {
-			this.ctx.showStatus("Usage: /issue <what to file, in your own words>");
+			this.ctx.showStatus(t("overlays.issue_command_controller.usage"));
 			return;
 		}
 		const session = this.ctx.session;
 		const manager = session.asyncJobManager;
 		if (!manager) {
-			this.ctx.showError("Background jobs are disabled; enable async jobs to use /issue.");
+			this.ctx.showError(t("overlays.issue_command_controller.jobs_disabled"));
 			return;
 		}
 		const parentFile = this.ctx.sessionManager.getSessionFile();
 		if (!parentFile) {
-			this.ctx.showError("/issue requires a persisted session.");
+			this.ctx.showError(t("overlays.issue_command_controller.persisted_session"));
 			return;
 		}
 		if (!github.available()) {
-			this.ctx.showError("/issue needs the GitHub CLI (gh) installed and authenticated.");
+			this.ctx.showError(t("overlays.issue_command_controller.needs_gh"));
 			return;
 		}
 		const modelRegistry = session.modelRegistry;
 		const selection = resolveIssuesRoleSelection(this.ctx.settings, modelRegistry.getAvailable());
 		if (!selection) {
-			this.ctx.showError(
-				"/issue needs the issues model role. Assign it in /roles (Issue filing) or set modelRoles.issues; it never borrows the current model.",
-			);
+			this.ctx.showError(t("overlays.issue_command_controller.needs_role"));
 			return;
 		}
 
@@ -145,6 +145,6 @@ export class IssueCommandController {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 			return;
 		}
-		this.ctx.showStatus(`Dispatched /issue ${jobId}`);
+		this.ctx.showStatus(t("overlays.issue_command_controller.dispatch_status", { part1: `${jobId}` }));
 	}
 }

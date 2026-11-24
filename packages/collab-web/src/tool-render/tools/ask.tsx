@@ -1,5 +1,6 @@
 /** `ask` — an HTML form posed to the user mid-run, answered with its form data. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, InvalidArg, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, normalizeWs, str, truncate } from "../util";
@@ -89,6 +90,7 @@ function notesOf(details: Record<string, unknown> | null): AskOptionNote[] {
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const html = str(args.html);
 	const answers = answersOf(detailsRecord(result));
 	const outline = html ? formOutline(html) : { headings: [], fields: 0 };
@@ -98,12 +100,13 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<span>{truncate(normalizeWs(first), 70)}</span>
-			{count > 1 && <Badge>{count} fields</Badge>}
+			{count > 1 && <Badge>{t("guesttools.ask.fields", "{count} fields", { count })}</Badge>}
 		</>
 	);
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const answers = answersOf(details);
 	const notes = notesOf(details);
@@ -120,7 +123,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 								</Row>
 							) : (
 								<Row k="—">
-									<span className="tv-faint">(no answer)</span>
+									<span className="tv-faint">{t("guesttools.ask.no_answer", "(no answer)")}</span>
 								</Row>
 							)}
 							{notes
@@ -133,7 +136,11 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						</div>
 					))}
 				</div>
-				{details?.timedOut === true && <Note tone="warn">auto-selected after timeout — not a user choice</Note>}
+				{details?.timedOut === true && (
+					<Note tone="warn">
+						{t("guesttools.ask.auto_selected", "auto-selected after timeout — not a user choice")}
+					</Note>
+				)}
 			</>
 		);
 	}

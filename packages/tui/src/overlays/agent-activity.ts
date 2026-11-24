@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentProgress } from "../tools/task";
 
 export type AgentActivityKind = "response" | "tool" | "irc" | "lifecycle";
@@ -85,7 +86,7 @@ export function activityRowsFromProgress(progress: AgentProgress, lastUpdate = D
 		timestamp: lastUpdate,
 		kind: "lifecycle",
 		title: progress.status ?? "running",
-		summary: progress.task ?? progress.description ?? "Agent activity",
+		summary: progress.task ?? progress.description ?? t("overlays.agent_activity.agent_activity"),
 		status:
 			progress.status === "completed"
 				? "success"
@@ -103,7 +104,7 @@ export function activityRowsFromProgress(progress: AgentProgress, lastUpdate = D
 			agentId: progress.id,
 			timestamp: lastUpdate,
 			kind: "response",
-			title: "Response",
+			title: t("overlays.agent_activity.response"),
 			summary: response,
 			status: progress.status === "failed" ? "error" : progress.status === "aborted" ? "aborted" : "pending",
 			source: "live",

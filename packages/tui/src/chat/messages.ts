@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage, ImageContent, MessageAttribution, MessageOrigin, TextContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
@@ -135,9 +136,12 @@ export function resolveAbortLabel(
 		return message.errorMessage!;
 	}
 	if (retryAttempt > 0) {
-		return `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`;
+		return t("overlays.messages.aborted_after_retries", {
+			retryAttempt: `${retryAttempt}`,
+			plural: `${retryAttempt > 1 ? "s" : ""}`,
+		});
 	}
-	return "Operation aborted";
+	return t("overlays.messages.operation_aborted");
 }
 
 /** True when a persisted or extension-supplied value can be sent as custom-message content. */

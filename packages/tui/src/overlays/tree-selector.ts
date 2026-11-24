@@ -1,3 +1,4 @@
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, Container, FuzzyQuery, FuzzyText, Input, matchesKey, Spacer, truncateToWidth } from "../index";
 import { isRecord, oklabDistance, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -228,11 +229,36 @@ interface TreePickerView {
 }
 
 const FILTER_TABS: readonly { id: TreeFilterMode; label: string }[] = [
-	{ id: "default", label: "Default" },
-	{ id: "no-tools", label: "No tools" },
-	{ id: "user-only", label: "User only" },
-	{ id: "labeled-only", label: "Labeled" },
-	{ id: "all", label: "All" },
+	{
+		id: "default",
+		get label() {
+			return t("settings.option.statusLine.preset.default.label");
+		},
+	},
+	{
+		id: "no-tools",
+		get label() {
+			return t("overlays.tree_selector.filter_no_tools");
+		},
+	},
+	{
+		id: "user-only",
+		get label() {
+			return t("overlays.tree_selector.filter_user_only");
+		},
+	},
+	{
+		id: "labeled-only",
+		get label() {
+			return t("overlays.tree_selector.filter_labeled");
+		},
+	},
+	{
+		id: "all",
+		get label() {
+			return t("overlays.tree_selector.filter_all");
+		},
+	},
 ];
 
 class TreeList implements Component {
@@ -314,7 +340,7 @@ class TreeList implements Component {
 		initialSelectedId?: string,
 	) {
 		this.#filterMode = initialFilterMode;
-		this.searchInput.placeholder = "Type to search";
+		this.searchInput.placeholder = t("overlays.tree_selector.search_placeholder");
 		this.#multipleRoots = tree.length > 1;
 		this.#indexSession(tree);
 		this.#tree = new TreeView<TreeSelectorNode, string>({
@@ -1003,18 +1029,21 @@ class TreeList implements Component {
 	/** The empty-state explanation from {@link render}, as spans. */
 	#emptyText(): TspText {
 		const total = this.#tree.allRows.length;
-		if (total === 0) return [span("No entries found", "muted")];
+		if (total === 0) return [span(t("overlays.tree_selector.no_entries"), "muted")];
 		const query = this.getSearchQuery();
 		if (query.length > 0) {
-			return [span(`No entries match search "${query}". Edit the search to change results.`, "muted")];
+			return [span(t("overlays.tree_selector.search_no_matches_help", { query: `${query}` }), "muted")];
 		}
 		const filterLabel = this.#getFilterLabel().trim() || "[default]";
 		return [
-			span(`${total} entries hidden by the current filter ${filterLabel}. Press `, "muted"),
+			span(
+				t("overlays.tree_selector.hidden_entries_press", { total: `${total}`, filterLabel: `${filterLabel}` }),
+				"muted",
+			),
 			span("alt+a", "key"),
-			span(" to show all, ", "muted"),
+			span(t("overlays.tree_selector.show_all_hint"), "muted"),
 			span("alt+d", "key"),
-			span(" for default", "muted"),
+			span(t("overlays.tree_selector.default_hint"), "muted"),
 		];
 	}
 
@@ -1080,17 +1109,31 @@ class TreeList implements Component {
 			//    `model_change` + `thinking_level_change` (both hidden by the default filter)
 			//    read as "broken /tree" — see #1909.
 			if (totalCount === 0) {
-				lines.push(truncateToWidth(theme.fg("muted", "No entries found"), width));
+				lines.push(truncateToWidth(theme.fg("muted", t("overlays.tree_selector.no_entries")), width));
 				lines.push(truncateToWidth(theme.fg("muted", `(0/0)${this.#getFilterLabel()}`), width));
 			} else if (this.getSearchQuery().length > 0) {
-				lines.push(truncateToWidth(theme.fg("muted", `No entries match search "${this.getSearchQuery()}"`), width));
-				lines.push(truncateToWidth(theme.fg("muted", "Edit the search to change results."), width));
+				lines.push(
+					truncateToWidth(
+						theme.fg(
+							"muted",
+							t("overlays.tree_selector.search_no_matches", { getSearchQuery: `${this.getSearchQuery()}` }),
+						),
+						width,
+					),
+				);
+				lines.push(truncateToWidth(theme.fg("muted", t("overlays.tree_selector.edit_search_help")), width));
 				lines.push(truncateToWidth(theme.fg("muted", `(0/${totalCount})${this.#getFilterLabel()}`), width));
 			} else {
 				const filterLabel = this.#getFilterLabel().trim() || "[default]";
 				lines.push(
 					truncateToWidth(
-						theme.fg("muted", `${totalCount} entries hidden by the current filter ${filterLabel}`),
+						theme.fg(
+							"muted",
+							t("overlays.tree_selector.hidden_entries", {
+								totalCount: `${totalCount}`,
+								filterLabel: `${filterLabel}`,
+							}),
+						),
 						width,
 					),
 				);
@@ -1098,7 +1141,10 @@ class TreeList implements Component {
 					truncateToWidth(
 						theme.fg(
 							"muted",
-							`Press ${formatKeyHint("alt+a")} to show all, ${formatKeyHint("alt+d")} for default`,
+							t("overlays.tree_selector.filter_shortcuts", {
+								value: `${formatKeyHint("alt+a")}`,
+								value2: `${formatKeyHint("alt+d")}`,
+							}),
 						),
 						width,
 					),
@@ -1245,7 +1291,7 @@ class TreeList implements Component {
 					const msgWithContent = msg as { content?: unknown };
 					const content = normalize(this.#extractContent(msgWithContent.content));
 					return [
-						{ t: "user: ", s: "accent", strong: true },
+						{ t: t("overlays.tree_selector.user_role"), s: "accent", strong: true },
 						{ t: content, s: "accent", strong: true },
 					];
 				}
@@ -1253,13 +1299,13 @@ class TreeList implements Component {
 					const msgWithContent = msg as { content?: unknown };
 					const content = normalize(this.#extractContent(msgWithContent.content));
 					return [
-						{ t: "developer: ", s: "dim" },
+						{ t: t("overlays.tree_selector.developer_role"), s: "dim" },
 						{ t: content, s: "muted" },
 					];
 				}
 				if (role === "assistant") {
 					const presentation = resolveAssistantErrorPresentation(msg);
-					const head: EntryPart = { t: "assistant: ", s: assistantLabelColor() };
+					const head: EntryPart = { t: t("overlays.tree_selector.assistant_role"), s: assistantLabelColor() };
 					if (presentation.kind === "compact-recovered") return [head, { t: presentation.text, s: "dim" }];
 					const msgWithContent = msg as { content?: unknown; stopReason?: string; errorMessage?: string };
 					const textContent = normalize(this.#extractContent(msgWithContent.content));
@@ -1268,7 +1314,7 @@ class TreeList implements Component {
 						return [head, { t: normalize(presentation.text).slice(0, 80), s: "error" }];
 					}
 					if (msgWithContent.stopReason === "aborted") return [head, { t: "(aborted)", s: "muted" }];
-					return [head, { t: "(no content)", s: "muted" }];
+					return [head, { t: t("overlays.tree_selector.no_content"), s: "muted" }];
 				}
 				if (role === "toolResult") {
 					const toolMsg = msg as { toolCallId?: string; toolName?: string };
@@ -1285,7 +1331,9 @@ class TreeList implements Component {
 			case "custom_message": {
 				if (entry.customType === "advisor") {
 					const { qualifier, text } = advisorTreeDisplay(entry.details);
-					const label = qualifier ? `advisor (${qualifier}): ` : "advisor: ";
+					const label = qualifier
+						? t("overlays.tree_selector.advisor_qualified", { qualifier: `${qualifier}` })
+						: t("overlays.tree_selector.advisor_role");
 					return [
 						{ t: label, s: "customMessageLabel" },
 						{ t: normalize(text), s: "muted" },
@@ -1299,25 +1347,44 @@ class TreeList implements Component {
 			}
 			case "compaction": {
 				const tokens = Math.round(entry.tokensBefore / 1000);
-				return [{ t: `[compaction: ${tokens}k tokens]`, s: "borderAccent" }];
+				return [{ t: t("overlays.tree_selector.compaction_tokens", { tokens: `${tokens}` }), s: "borderAccent" }];
 			}
 			case "branch_summary":
-				return [{ t: `[branch summary]: `, s: "warning" }, { t: normalize(entry.summary) }];
+				return [{ t: t("overlays.tree_selector.branch_summary"), s: "warning" }, { t: normalize(entry.summary) }];
 			case "model_change":
-				return [{ t: `[model: ${entry.model}]`, s: "dim" }];
+				return [{ t: t("overlays.tree_selector.model_entry", { model: `${entry.model}` }), s: "dim" }];
 			case "model_usage": {
 				const purpose = sanitizeTreeField(entry.purpose);
 				const role = sanitizeTreeField(entry.role ?? "");
 				const provider = sanitizeTreeField(entry.provider);
 				const model = sanitizeTreeField(entry.model);
-				return [{ t: `[model usage: ${purpose} ${role ? `${role} ` : ""}${provider}/${model}]`, s: "dim" }];
+				return [
+					{
+						t: t("overlays.tree_selector.model_usage_entry", {
+							purpose: `${purpose}`,
+							value: `${role ? `${role} ` : ""}`,
+							provider: `${provider}`,
+							model: `${model}`,
+						}),
+						s: "dim",
+					},
+				];
 			}
 			case "thinking_level_change":
-				return [{ t: `[thinking: ${entry.thinkingLevel ?? ThinkingLevel.Off}]`, s: "dim" }];
+				return [
+					{
+						t: t("overlays.tree_selector.thinking_entry", {
+							thinkingLevel: `${entry.thinkingLevel ?? ThinkingLevel.Off}`,
+						}),
+						s: "dim",
+					},
+				];
 			case "custom":
-				return [{ t: `[custom: ${entry.customType}]`, s: "dim" }];
+				return [{ t: t("overlays.tree_selector.custom_entry", { customType: `${entry.customType}` }), s: "dim" }];
 			case "label":
-				return [{ t: `[label: ${entry.label ?? "(cleared)"}]`, s: "dim" }];
+				return [
+					{ t: t("overlays.tree_selector.label_entry", { label: `${entry.label ?? "(cleared)"}` }), s: "dim" },
+				];
 			case "service_tier_change": {
 				// Per-family map, or null when the session went back to the default.
 				const tiers = entry.serviceTier
@@ -1325,14 +1392,18 @@ class TreeList implements Component {
 							.map(([family, tier]) => `${family}:${tier}`)
 							.join(" ")
 					: "(default)";
-				return [{ t: `[service tier: ${tiers}]`, s: "dim" }];
+				return [{ t: t("overlays.tree_selector.service_tier_entry", { tiers: `${tiers}` }), s: "dim" }];
 			}
 			case "title_change":
-				return [{ t: `[title: ${normalize(entry.title)}]`, s: "dim" }];
+				return [
+					{ t: t("overlays.tree_selector.title_entry", { normalize: `${normalize(entry.title)}` }), s: "dim" },
+				];
 			case "mode_change":
-				return [{ t: `[mode: ${entry.mode}]`, s: "dim" }];
+				return [{ t: t("overlays.tree_selector.mode_entry", { mode: `${entry.mode}` }), s: "dim" }];
 			case "credential_pin":
-				return [{ t: `[credential pin: ${entry.provider}]`, s: "dim" }];
+				return [
+					{ t: t("overlays.tree_selector.credential_pin_entry", { provider: `${entry.provider}` }), s: "dim" },
+				];
 			default:
 				// Bookkeeping entries with nothing worth spelling out still get their
 				// type. A row that renders to the empty string is worse than a
@@ -1608,11 +1679,14 @@ class LabelInput implements Component {
 	/** Prompt, the label `Input`, and save/cancel hints; the Input describes its own edits. */
 	describe(_cx: DescribeContext): NativeNode {
 		this.#native ??= node("col", { gap: "xs" }, [
-			text([span("Label (empty to remove):", "muted")]),
+			text([span(t("overlays.tree_selector.label_prompt"), "muted")]),
 			this.#input,
 			hintsRow([
-				{ keys: ["enter"], label: "save" },
-				{ keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"], label: "back (keep draft)" },
+				{ keys: ["enter"], label: t("overlays.tree_selector.save") },
+				{
+					keys: [boundKeys("app.navigation.dismiss", ["escape"])[0] ?? "escape"],
+					label: t("overlays.tree_selector.back_keep_draft"),
+				},
 			]),
 		]);
 		return this.#native;
@@ -1621,8 +1695,8 @@ class LabelInput implements Component {
 	/** The picker preview while editing: the prompt and the label `Input` (save/cancel sit in the action bar). */
 	get preview(): readonly NativeChild[] {
 		this.#preview ??= [
-			text("Label", { role: "omp.picker.title" }),
-			text([span("Empty to remove", "muted")]),
+			text(t("overlays.tree_selector.label_title"), { role: "omp.picker.title" }),
+			text([span(t("overlays.tree_selector.empty_to_remove"), "muted")]),
 			this.#input,
 		];
 		return this.#preview;
@@ -1636,11 +1710,20 @@ class LabelInput implements Component {
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
-		lines.push(truncateToWidth(theme.fg("muted", "Label (empty to remove):"), width));
+		lines.push(truncateToWidth(theme.fg("muted", t("overlays.tree_selector.label_prompt")), width));
 		lines.push(...this.#input.render(width));
 		const cancel = dismissKey();
 		lines.push(
-			truncateToWidth(theme.fg("dim", `${formatKeyHint("enter")}: save  ${cancel}: back (keep draft)`), width),
+			truncateToWidth(
+				theme.fg(
+					"dim",
+					t("overlays.tree_selector.label_input_hints", {
+						value: `${formatKeyHint("enter")}`,
+						cancel: `${cancel}`,
+					}),
+				),
+				width,
+			),
 		);
 		return lines;
 	}
@@ -1661,7 +1744,7 @@ class LabelInput implements Component {
  */
 export class TreeSelectorComponent extends OverlayPanel {
 	#treeList: TreeList;
-	readonly #help = new MenuHelp(undefined, "h collapses a branch or selects its parent; l expands it.");
+	readonly #help = new MenuHelp(undefined, () => t("overlays.tree_selector.tree_navigation_help"));
 	#labelInput: LabelInput | null = null;
 	#labelInputContainer: Container;
 	#treeContainer: Container;
@@ -1670,6 +1753,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 	onNavigationVisit?: (page: string, previousSnapshot: unknown) => void;
 	#nativeMemo:
 		| {
+				locale: Locale;
 				content: NativeChild;
 				query: string;
 				cursor: number;
@@ -1698,7 +1782,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 		/** The picker's subtitle. */
 		private readonly sessionName?: string,
 	) {
-		super("Session Tree");
+		super(t("overlays.tree_selector.session_tree_title"));
 		// The outer panel has eight fixed rows around the tree list: top/bottom
 		// borders, the two spacers, help, search, and section divider.
 		const PANEL_CHROME_ROWS = 8;
@@ -1725,15 +1809,17 @@ export class TreeSelectorComponent extends OverlayPanel {
 		this.addChild(
 			new MenuHints(
 				[
-					`${formatKeyHint("enter")} switch`,
-					`${formatKeyHints(["alt+up", "alt+down"])} previous/next turn`,
-					...(branchKeys ? [`${branchKeys} previous/next branch`] : []),
-					"← collapse/parent · → expand · Space toggle",
-					`${formatKeyHint("shift+enter")} summarize & switch`,
-					`${formatKeyHint("e")} label`,
-					"Tab/Shift-Tab or Ctrl-n/p filter mode",
-					`${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])} filter`,
-					"/ search · Esc field/list/close · ? help",
+					t("overlays.tree_selector.switch_hint", { value: `${formatKeyHint("enter")}` }),
+					t("overlays.tree_selector.turn_hint", { items: `${formatKeyHints(["alt+up", "alt+down"])}` }),
+					...(branchKeys ? [t("overlays.tree_selector.branch_hint", { branchKeys: `${branchKeys}` })] : []),
+					t("overlays.tree_selector.tree_controls_hint"),
+					t("overlays.tree_selector.summarize_switch_hint", { value: `${formatKeyHint("shift+enter")}` }),
+					t("overlays.tree_selector.label_hint", { value: `${formatKeyHint("e")}` }),
+					t("overlays.tree_selector.filter_mode_shortcuts"),
+					t("overlays.tree_selector.filter_hint", {
+						items: `${formatKeyHints(["alt+d", "alt+t", "alt+u", "alt+l", "alt+a"])}`,
+					}),
+					t("overlays.tree_selector.search_close_help_hint"),
 				].join(" · "),
 				text => theme.fg("muted", text),
 			),
@@ -1822,7 +1908,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 			return memo.node;
 		}
 		const props: TspPickerProps = {
-			title: "Session tree",
+			title: t("overlays.tree_selector.session_tree_title_2"),
 			subtitle: compileMenuRegex(view.query)?.error ?? this.sessionName ?? undefined,
 			icon: "git-branch",
 			noun: "entries",
@@ -1830,7 +1916,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 			layout: "tree",
 			preview: "side",
 			...pickerQuery(this.#treeList.searchInput),
-			placeholder: "Search entries…",
+			placeholder: t("overlays.tree_selector.search_entries"),
 			tabs: FILTER_TABS,
 			tab: view.filterMode,
 			items: view.items,
@@ -1842,16 +1928,19 @@ export class TreeSelectorComponent extends OverlayPanel {
 			focus: label ? "preview" : "list",
 			actions: label
 				? [
-						pickerAction("label-save", "Save label", "enter", { primary: true }),
-						{ ...CLOSE_ACTION, label: "Back (keep draft)" },
+						pickerAction("label-save", t("overlays.tree_selector.save_label"), "enter", { primary: true }),
+						{ ...CLOSE_ACTION, label: t("overlays.tree_selector.back_keep_draft_title") },
 					]
 				: [
-						pickerAction("switch", "Switch", "enter", { primary: true }),
-						pickerAction("summarize", "Summarize & switch", "shift+enter"),
-						pickerAction("label", "Label", "e"),
-						pickerAction("expand", "Expand/collapse", "space"),
-						pickerAction("filter", "Next filter", "tab"),
-						{ ...CLOSE_ACTION, label: this.#treeList.filterFocused ? "Back to list" : "Close" },
+						pickerAction("switch", t("overlays.tree_selector.switch"), "enter", { primary: true }),
+						pickerAction("summarize", t("overlays.tree_selector.summarize_switch"), "shift+enter"),
+						pickerAction("label", t("overlays.tree_selector.label_action"), "e"),
+						pickerAction("expand", t("overlays.tree_selector.expand_collapse_action"), "space"),
+						pickerAction("filter", t("overlays.tree_selector.next_filter"), "tab"),
+						{
+							...CLOSE_ACTION,
+							label: this.#treeList.filterFocused ? t("tui.picker.back_to_list") : t("tui.picker.close"),
+						},
 					],
 		};
 		const result = col([keyed(picker(props, preview), "picker")]);
@@ -1914,9 +2003,11 @@ export class TreeSelectorComponent extends OverlayPanel {
 		const query = search.getValue();
 		const cursor = search.getCursor();
 		const filterMode = this.#treeList.getFilterMode();
+		const locale = getLocale();
 		const memo = this.#nativeMemo;
 		if (
-			memo?.content === content &&
+			memo?.locale === locale &&
+			memo.content === content &&
 			memo.query === query &&
 			memo.cursor === cursor &&
 			memo.filterMode === filterMode
@@ -1929,21 +2020,24 @@ export class TreeSelectorComponent extends OverlayPanel {
 			...(compileMenuRegex(query)?.error ? [text([span(compileMenuRegex(query)!.error!, "error")])] : []),
 			content,
 			hintsRow([
-				{ keys: ["enter"], label: "switch" },
-				{ keys: ["alt+up", "alt+down"], label: "previous/next turn" },
-				actionHint(["app.tree.previousBranch", "app.tree.nextBranch"], "previous/next branch"),
-				actionHint(["tui.select.pageUp", "tui.select.pageDown"], "page"),
-				{ keys: ["home", "end"], label: "first/last" },
-				{ keys: ["shift+enter"], label: "summarize & switch" },
-				{ keys: ["e"], label: "label" },
-				{ keys: ["left", "right"], label: "collapse/parent · expand" },
-				{ keys: ["space"], label: "toggle expansion" },
-				{ keys: ["tab", "shift+tab"], label: "filter mode" },
-				{ keys: ["/"], label: "search" },
+				{ keys: ["enter"], label: t("overlays.native_hint.switch") },
+				{ keys: ["alt+up", "alt+down"], label: t("overlays.tree_selector.previous_next_turn") },
+				actionHint(
+					["app.tree.previousBranch", "app.tree.nextBranch"],
+					t("overlays.tree_selector.previous_next_branch"),
+				),
+				actionHint(["tui.select.pageUp", "tui.select.pageDown"], t("overlays.native_hint.page")),
+				{ keys: ["home", "end"], label: t("overlays.native_hint.first_last") },
+				{ keys: ["shift+enter"], label: t("overlays.tree_selector.summarize_switch_lower") },
+				{ keys: ["e"], label: t("overlays.tree_selector.label_key_hint") },
+				{ keys: ["left", "right"], label: t("overlays.tree_selector.collapse_expand") },
+				{ keys: ["space"], label: t("overlays.tree_selector.toggle_expansion") },
+				{ keys: ["tab", "shift+tab"], label: t("overlays.tree_selector.filter_mode") },
+				{ keys: ["/"], label: t("overlays.tree_selector.search") },
 			]),
 		];
-		const result = overlayCard("omp.overlay.tree", "Session Tree", children);
-		this.#nativeMemo = { content, query, cursor, filterMode, node: result };
+		const result = overlayCard("omp.overlay.tree", t("overlays.tree_selector.session_tree_title"), children);
+		this.#nativeMemo = { locale, content, query, cursor, filterMode, node: result };
 		return result;
 	}
 

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -1298,8 +1299,11 @@ export class UiHelpers {
 				}
 			}
 			if (compactionCount > 0) {
-				const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
-				this.ctx.showStatus(`Session compacted ${times}`);
+				const times =
+					compactionCount === 1
+						? t("overlays.ui_helpers.compaction_once")
+						: t("overlays.ui_helpers.compaction_times", { compactionCount: `${compactionCount}` });
+				this.ctx.showStatus(t("overlays.ui_helpers.session_compacted", { times: `${times}` }));
 			}
 			// Rows of the previous transcript already in native scrollback were drawn with the old
 			// text renderer set; retire them as the direct renderer-change rebuild does.
@@ -1357,8 +1361,8 @@ export class UiHelpers {
 		}
 
 		const groups = [
-			{ label: "Steering", messages: steeringMessages },
-			{ label: "After yield", messages: followUpMessages },
+			{ label: t("overlays.ui_helpers.steering"), messages: steeringMessages },
+			{ label: t("overlays.ui_helpers.after_yield"), messages: followUpMessages },
 		].filter(group => group.messages.length > 0);
 		if (groups.length > 0) {
 			const dequeueKey = this.ctx.keybindings.getKeys("app.message.dequeue")[0] ?? "alt+up";
@@ -1381,7 +1385,9 @@ export class UiHelpers {
 		else this.ctx.editor.clearDraft(text);
 		this.ctx.updatePendingMessagesDisplay();
 		this.ctx.showStatus(
-			queuedImages ? "Queued message with image for after compaction" : "Queued message for after compaction",
+			queuedImages
+				? t("overlays.ui_helpers.queued_image_after_compaction")
+				: t("overlays.ui_helpers.queued_after_compaction"),
 		);
 	}
 
@@ -1502,9 +1508,10 @@ export class UiHelpers {
 		const reportFailure = (count: number, error: unknown) => {
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.showError(
-				`Failed to send queued message${count > 1 ? "s" : ""}: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
+				t("overlays.ui_helpers.queued_send_failed", {
+					plural: `${count > 1 ? "s" : ""}`,
+					message: `${error instanceof Error ? error.message : String(error)}`,
+				}),
 			);
 		};
 

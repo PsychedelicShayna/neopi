@@ -2,9 +2,10 @@ import { format } from "@oh-my-pi/pi-utils/dates";
 import { useMemo, useState } from "react";
 import { getSpotlightSessionContext } from "../api";
 import { Chart, type ChartSeries, Legend, type SlotMarker } from "../charts";
-import { formatCompact, formatFolder, formatInteger } from "../data/formatters";
+import { formatCompact, formatFolder, formatInteger, formatTimestamp } from "../data/formatters";
 import { useQuery } from "../data/query";
-import type { SpotlightDashboardStats, SpotlightSessionContext, SpotlightSessionSummary } from "../types";
+import { useLocale, useTranslation } from "../i18n";
+import type { SpotlightDashboardStats, SpotlightSessionContext, SpotlightSessionSummary, Translation } from "../types";
 import { Badge, Card, ChartSkeleton, EmptyState, ErrorState } from "../ui";
 import { formatShare, formatSignedCompact, formatSignedCost } from "./meta";
 
@@ -19,16 +20,20 @@ export interface CompoundingProps {
  * folder. Subagent and advisor sessions are indented under an arrow and tagged,
  * since they sit in the newest-first list beside the session that spawned them.
  */
-function sessionLabel(session: SpotlightSessionSummary): string {
+function sessionLabel(tr: Translation, session: SpotlightSessionSummary): string {
 	const main = session.agentType === "main";
 	const base = (session.sessionFile.split("/").pop() ?? "").replace(/\.jsonl$/, "");
-	const name = session.title?.trim() || (main ? formatFolder(session.folder) : base);
+	const name = session.title?.trim() || (main ? formatFolder(session.folder, tr) : base);
 	const head = main ? name : `↳ ${name} (${session.agentType})`;
-	return `${head} · ${formatCompact(session.savedTokens)} saved`;
+	return tr("insights.compounding.session_option", "{head} · {count} saved", {
+		head,
+		count: formatCompact(session.savedTokens),
+	});
 }
 
 /** A cut keeps paying: every later request would have re-read it. One session's context with and without shaping. */
 export function Compounding({ stats, active, stale }: CompoundingProps) {
+	const tr = useTranslation();
 	const { compounding } = stats;
 	const [picked, setPicked] = useState<string | null>(null);
 	const sessions = stats.sessionList;
@@ -60,31 +65,37 @@ export function Compounding({ stats, active, stale }: CompoundingProps) {
 	return (
 		<Card
 			index={3}
-			title="Compounding"
-			description="A cut is never re-read: each later request of the session carries a smaller context"
+			title={tr("insights.compounding.title", "Compounding")}
+			description={tr(
+				"insights.compounding.description",
+				"A cut is never re-read: each later request of the session carries a smaller context",
+			)}
 			actions={
 				sessions.length > 0 && (
 					<select
 						className="input spot-session-select"
-						aria-label="Session"
+						aria-label={tr("insights.compounding.select_session", "Session")}
 						value={file ?? ""}
 						onChange={e => setPicked(e.target.value)}
 					>
 						{sessions.map(s => (
 							<option key={s.sessionFile} value={s.sessionFile}>
-								{sessionLabel(s)}
+								{sessionLabel(tr, s)}
 							</option>
 						))}
 					</select>
 				)
 			}
 			stale={stale}
-			footer="Context = input + cache read + cache write of each request. A compaction is a request whose context is under 60% of the previous one's; it ends the carry."
+			footer={tr(
+				"insights.compounding.footer",
+				"Context = input + cache read + cache write of each request. A compaction is a request whose context is under 60% of the previous one's; it ends the carry.",
+			)}
 		>
 			<div className="spot-compounding">
 				<div className="spot-compounding-chart">
 					{file === undefined ? (
-						<EmptyState title="No experiment sessions in this range" />
+						<EmptyState title={tr("insights.compounding.empty", "No experiment sessions in this range")} />
 					) : context.data === null ? (
 						context.error ? (
 							<ErrorState error={context.error} onRetry={context.refetch} />
@@ -96,20 +107,34 @@ export function Compounding({ stats, active, stale }: CompoundingProps) {
 					)}
 				</div>
 				<aside className="spot-compounding-side">
-					<div className="spot-eyebrow">Context avoided in this session</div>
+					<div className="spot-eyebrow">
+						{tr("insights.compounding.avoided_title", "Context avoided in this session")}
+					</div>
 					<div className="spot-side-value">{formatShare(sessionShare?.share ?? null)}</div>
 					{points !== undefined && (
 						<p className="spot-side-copy">
 							{sessionShare === null
-								? "This session has no recorded requests."
-								: `of what its requests would have carried without Spotlight: ${formatSignedCompact(sessionShare.tokens)} prompt tokens, net of recoveries.`}
+								? tr("insights.compounding.no_recorded", "This session has no recorded requests.")
+								: tr(
+										"insights.compounding.session_savings",
+										"of what its requests would have carried without Spotlight: {tokens} prompt tokens, net of recoveries.",
+										{ tokens: formatSignedCompact(sessionShare.tokens) },
+									)}
 						</p>
 					)}
 					{context.data && <SessionFacts session={context.data.session} />}
 					<p className="spot-side-range">
-						<span className="spot-side-range-value">{formatShare(compounding.avoidedShare)}</span> across all the
-						sessions shown: cuts kept {formatCompact(Math.max(0, avoided))} tokens out of later requests
-						{carry !== null && <>, each saved token re-sent {carry.toFixed(1)} times on average</>}.
+						<span className="spot-side-range-value">{formatShare(compounding.avoidedShare)}</span>{" "}
+						{tr(
+							"insights.compounding.range",
+							"across all the sessions shown: cuts kept {tokens} tokens out of later requests",
+							{ tokens: formatCompact(Math.max(0, avoided)) },
+						)}
+						{carry !== null &&
+							tr("insights.compounding.carry", ", each saved token re-sent {count} times on average", {
+								count: carry.toFixed(1),
+							})}
+						.
 					</p>
 				</aside>
 			</div>
@@ -118,51 +143,53 @@ export function Compounding({ stats, active, stale }: CompoundingProps) {
 }
 
 function SessionFacts({ session }: { session: SpotlightSessionSummary }) {
+	const tr = useTranslation();
 	return (
 		<dl className="spot-facts">
 			<div>
-				<dt>Agent</dt>
+				<dt>{tr("insights.compounding.agent", "Agent")}</dt>
 				<dd className="row">
 					<Badge>{session.agentType}</Badge>
 				</dd>
 			</div>
 			<div>
-				<dt>Requests</dt>
+				<dt>{tr("insights.compounding.requests", "Requests")}</dt>
 				<dd className="num">{formatInteger(session.requests)}</dd>
 			</div>
 			<div>
-				<dt>Saved</dt>
+				<dt>{tr("insights.saved", "Saved")}</dt>
 				<dd className="num">{formatSignedCompact(session.savedTokens)}</dd>
 			</div>
 			<div>
-				<dt>Net $</dt>
+				<dt>{tr("insights.compounding.net_usd", "Net $")}</dt>
 				<dd className="num">{formatSignedCost(session.netUsd)}</dd>
 			</div>
 		</dl>
 	);
 }
 
-const CONTEXT_LEGEND = [
-	{ key: "actual", label: "Context", color: "var(--spot-gross)" },
-	{ key: "ghost", label: "Without Spotlight", color: "var(--spot-ghost)" },
-	{ key: "compaction", label: "Compaction", color: "var(--line-4)" },
-];
-
 /** One session's context per request. The x axis is the request number (several can share a minute); the tooltip carries the time. */
 function ContextChart({ context, stale }: { context: SpotlightSessionContext; stale: boolean }) {
+	const tr = useTranslation();
+	const locale = useLocale();
 	const { points } = context;
+	const legend = [
+		{ key: "actual", label: tr("insights.compounding.context", "Context"), color: "var(--spot-gross)" },
+		{ key: "ghost", label: tr("insights.compounding.without", "Without Spotlight"), color: "var(--spot-ghost)" },
+		{ key: "compaction", label: tr("insights.compounding.compaction", "Compaction"), color: "var(--line-4)" },
+	];
 	const chart = useMemo(() => {
 		const series: ChartSeries[] = [
 			{
 				key: "actual",
-				label: "Context",
+				label: tr("insights.compounding.context", "Context"),
 				color: "var(--spot-gross)",
 				kind: "area",
 				values: points.map(p => p.contextTokens),
 			},
 			{
 				key: "ghost",
-				label: "Avoided",
+				label: tr("insights.compounding.avoided", "Avoided"),
 				color: "var(--spot-ghost)",
 				kind: "area",
 				pattern: "hatch",
@@ -175,21 +202,29 @@ function ContextChart({ context, stale }: { context: SpotlightSessionContext; st
 			if (p.compacted) markers.push({ index: i });
 		});
 		return { series, markers };
-	}, [points]);
+	}, [points, tr]);
 
 	if (points.length === 0) {
-		return <EmptyState title="No requests recorded for this session" />;
+		return <EmptyState title={tr("insights.compounding.no_requests", "No requests recorded for this session")} />;
 	}
 	return (
 		<div className="spot-context" data-stale={stale}>
-			<Legend items={CONTEXT_LEGEND} />
+			<Legend items={legend} />
 			<Chart
 				slots={points.length}
 				series={chart.series}
 				markers={chart.markers}
 				height={280}
 				tickLabel={i => `#${i + 1}`}
-				tooltipTitle={i => `Request ${i + 1} · ${format(new Date(points[i].timestamp), "MMM d HH:mm:ss")}`}
+				tooltipTitle={i =>
+					tr("insights.compounding.tooltip_title", "Request {index} · {time}", {
+						index: i + 1,
+						time:
+							locale === "es"
+								? formatTimestamp(points[i].timestamp, locale)
+								: format(new Date(points[i].timestamp), "MMM d HH:mm:ss"),
+					})
+				}
 				formatTooltip={formatInteger}
 				showTotal={false}
 				tooltipExtra={i => {
@@ -197,22 +232,30 @@ function ContextChart({ context, stale }: { context: SpotlightSessionContext; st
 					return (
 						<div className="spot-tooltip-extra">
 							<div className="chart-tooltip-row chart-tooltip-total">
-								<span className="chart-tooltip-label">Without Spotlight</span>
+								<span className="chart-tooltip-label">
+									{tr("insights.compounding.without", "Without Spotlight")}
+								</span>
 								<span className="chart-tooltip-value">{formatInteger(p.withoutTokens)}</span>
 							</div>
 							{p.saved > 0 && (
 								<div className="chart-tooltip-row">
-									<span className="chart-tooltip-label">Cut since last request</span>
+									<span className="chart-tooltip-label">
+										{tr("insights.compounding.cut_since", "Cut since last request")}
+									</span>
 									<span className="chart-tooltip-value">{formatInteger(p.saved)}</span>
 								</div>
 							)}
 							{p.recovered > 0 && (
 								<div className="chart-tooltip-row">
-									<span className="chart-tooltip-label">Fetched back</span>
+									<span className="chart-tooltip-label">{tr("insights.fetched_back", "Fetched back")}</span>
 									<span className="chart-tooltip-value">{formatInteger(p.recovered)}</span>
 								</div>
 							)}
-							{p.compacted && <div className="chart-tooltip-row dim">Compaction before this request</div>}
+							{p.compacted && (
+								<div className="chart-tooltip-row dim">
+									{tr("insights.compounding.compacted", "Compaction before this request")}
+								</div>
+							)}
 						</div>
 					);
 				}}

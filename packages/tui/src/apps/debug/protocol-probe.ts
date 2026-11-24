@@ -14,6 +14,7 @@
  * protocols, each of which decodes a standard PNG.
  */
 import { hsvToRgb } from "@oh-my-pi/pi-utils/color";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import * as zlib from "node:zlib";
 import { type Component, Container } from "../../tui";
 import { encodeTextSized, type TextSizingScale } from "../../utils";
@@ -24,7 +25,7 @@ import { ImageProtocol, NotifyProtocol, TERMINAL } from "../../terminal-capabili
 import { DynamicBorder } from "../../chrome/dynamic-border";
 import { theme } from "../../theme/theme";
 import { ansi } from "../../native/describe";
-import type { NativeNode } from "../../native/node";
+import type { DescribeContext, NativeNode } from "../../native/node";
 
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 
@@ -137,13 +138,13 @@ function notifyProtocolLabel(): string {
 function imageProtocolLabel(): string {
 	switch (TERMINAL.imageProtocol) {
 		case ImageProtocol.Kitty:
-			return "Kitty graphics";
+			return t("cli.commands.debug.terminal.kitty_graphics");
 		case ImageProtocol.Iterm2:
-			return "iTerm2 inline images";
+			return t("cli.commands.debug.terminal.iterm2_images");
 		case ImageProtocol.Sixel:
 			return "Sixel";
 		default:
-			return "none — text fallback";
+			return t("cli.commands.debug.terminal.graphics_fallback");
 	}
 }
 
@@ -184,21 +185,70 @@ export interface ProtocolProbeOptions {
  * protocol into the chat transcript.
  */
 export class ProtocolProbeComponent extends Container {
+	readonly #options: ProtocolProbeOptions;
+	#locale: Locale | undefined;
+
 	constructor(options: ProtocolProbeOptions) {
 		super();
+		this.#options = options;
+	}
+
+	override render(width: number): readonly string[] {
+		this.#prepare();
+		return super.render(width);
+	}
+
+	override describe(cx: DescribeContext): NativeNode | null {
+		this.#prepare();
+		return super.describe(cx);
+	}
+
+	#prepare(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		if (this.#locale !== undefined) this.disposeChildren();
+		this.#locale = locale;
+		const options = this.#options;
 		const hyperlinksOn = TERMINAL.hyperlinks;
 		const sizingOn = TERMINAL.textSizing;
-		const yesNo = (on: boolean) => (on ? theme.fg("success", "supported") : theme.fg("muted", "unsupported"));
+		const yesNo = (on: boolean) =>
+			on
+				? theme.fg("success", t("cli.commands.debug.protocol_probe.supported"))
+				: theme.fg("muted", t("cli.commands.debug.protocol_probe.unsupported"));
 
 		this.addChild(new DynamicBorder());
-		this.addChild(new Text(theme.bold(theme.fg("accent", "Terminal Protocol Test")), 1, 0));
+		this.addChild(new Text(theme.bold(theme.fg("accent", t("cli.commands.debug.protocol_probe.title"))), 1, 0));
 
 		// Styling: SGR attributes, themed foregrounds, and a truecolor sweep.
 		const styling = [
-			theme.fg("muted", "Styling (SGR)"),
-			`  ${theme.bold("bold")}  ${theme.italic("italic")}  ${theme.underline("underline")}  ${theme.strikethrough("strike")}  ${theme.inverse(" inverse ")}  ${theme.fg("dim", "dim")}`,
-			`  ${theme.fg("accent", "accent")}  ${theme.fg("success", "success")}  ${theme.fg("warning", "warning")}  ${theme.fg("error", "error")}`,
-			`  truecolor: ${truecolorBar(32)} (${theme.fg("muted", `24-bit ${TERMINAL.trueColor ? "on" : "off"}`)})`,
+			theme.fg("muted", t("cli.commands.debug.protocol_probe.styling")),
+			"  " +
+				[
+					theme.bold(t("cli.commands.debug.protocol_probe.bold")),
+					theme.italic(t("cli.commands.debug.protocol_probe.italic")),
+					theme.underline(t("cli.commands.debug.protocol_probe.underline")),
+					theme.strikethrough(t("cli.commands.debug.protocol_probe.strike")),
+					theme.inverse(t("cli.commands.debug.protocol_probe.inverse")),
+					theme.fg("dim", t("cli.commands.debug.protocol_probe.dim")),
+				].join("  "),
+			"  " +
+				[
+					theme.fg("accent", t("cli.commands.debug.protocol_probe.color_accent")),
+					theme.fg("success", t("cli.commands.debug.protocol_probe.color_success")),
+					theme.fg("warning", t("cli.commands.debug.protocol_probe.color_warning")),
+					theme.fg("error", t("cli.commands.debug.protocol_probe.color_error")),
+				].join("  "),
+			t("cli.commands.debug.protocol_probe.truecolor", {
+				swatch: truecolorBar(32),
+				status: theme.fg(
+					"muted",
+					t("cli.commands.debug.protocol_probe.truecolor_status", {
+						state: TERMINAL.trueColor
+							? t("cli.commands.debug.protocol_probe.on")
+							: t("cli.commands.debug.protocol_probe.off"),
+					}),
+				),
+			}),
 		].join("\n");
 		this.addChild(new Text(styling, 1, 0));
 		this.addChild(new Spacer(1));
@@ -207,8 +257,8 @@ export class ProtocolProbeComponent extends Container {
 		this.addChild(
 			new Text(
 				[
-					`${theme.fg("muted", "Hyperlinks (OSC 8)")} — ${yesNo(hyperlinksOn)}`,
-					`  \x1b]8;;https://github.com/can1357/oh-my-pi\x07omp repo\x1b]8;;\x07`,
+					`${theme.fg("muted", t("cli.commands.debug.protocol_probe.hyperlinks"))} — ${yesNo(hyperlinksOn)}`,
+					`  \x1b]8;;https://github.com/can1357/oh-my-pi\x07${t("cli.commands.debug.protocol_probe.repository")}\x1b]8;;\x07`,
 				].join("\n"),
 				1,
 				0,
@@ -217,18 +267,28 @@ export class ProtocolProbeComponent extends Container {
 		this.addChild(new Spacer(1));
 
 		// Text sizing: OSC 66.
-		this.addChild(new Text(`${theme.fg("muted", "Text sizing (OSC 66)")} — ${yesNo(sizingOn)}`, 1, 0));
+		this.addChild(
+			new Text(
+				`${theme.fg("muted", t("cli.commands.debug.protocol_probe.text_sizing"))} — ${yesNo(sizingOn)}`,
+				1,
+				0,
+			),
+		);
 		if (sizingOn) {
 			this.addChild(new RawLines(buildLargeTextLines()));
 		} else {
-			this.addChild(
-				new Text(theme.fg("dim", "  (enable via the tui.textSizing setting on a Kitty terminal)"), 1, 0),
-			);
+			this.addChild(new Text(theme.fg("dim", t("cli.commands.debug.protocol_probe.enable_text_sizing")), 1, 0));
 		}
 		this.addChild(new Spacer(1));
 
 		// Graphics: Kitty / iTerm2 / Sixel, with a text fallback baked into Image.
-		this.addChild(new Text(`${theme.fg("muted", "Graphics")} — ${theme.fg("dim", imageProtocolLabel())}`, 1, 0));
+		this.addChild(
+			new Text(
+				`${theme.fg("muted", t("cli.commands.debug.protocol_probe.graphics"))} — ${theme.fg("dim", imageProtocolLabel())}`,
+				1,
+				0,
+			),
+		);
 		this.addChild(
 			new Image(
 				options.image.base64,
@@ -244,11 +304,11 @@ export class ProtocolProbeComponent extends Container {
 
 		// Notifications: fired by the caller; this line reports the outcome.
 		const notifyStatus = options.notificationSuppressed
-			? theme.fg("warning", "suppressed (PI_NOTIFICATIONS)")
-			: theme.fg("success", "sent — check your desktop / titlebar");
+			? theme.fg("warning", t("cli.commands.debug.protocol_probe.notification_suppressed"))
+			: theme.fg("success", t("cli.commands.debug.protocol_probe.notification_sent"));
 		this.addChild(
 			new Text(
-				`${theme.fg("muted", "Notification")} (${theme.fg("dim", notifyProtocolLabel())}) — ${notifyStatus}`,
+				`${theme.fg("muted", t("cli.commands.debug.protocol_probe.notification"))} (${theme.fg("dim", notifyProtocolLabel())}) — ${notifyStatus}`,
 				1,
 				0,
 			),

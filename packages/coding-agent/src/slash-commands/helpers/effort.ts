@@ -1,10 +1,13 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentViewSession } from "../../session/agent-session-handle";
 import { type ConfiguredThinkingLevel, parseCliThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 /** Text shown when the active model has no thinking dial. */
 export function noThinkingMessage(session: AgentViewSession): string {
 	const model = session.model;
-	return `${model ? `${model.provider}/${model.id}` : "The current model"} has no adjustable thinking level.`;
+	return t("commands.effort.notAdjustable", {
+		model: model ? `${model.provider}/${model.id}` : t("commands.effort.currentModel"),
+	});
 }
 
 /**
@@ -21,7 +24,7 @@ export function resolveThinkingArgument(
 	const selector = args.trim().toLowerCase();
 	const parsed = parseCliThinkingLevel(selector);
 	if (parsed === undefined || !choices.includes(parsed)) {
-		return { error: `Unknown thinking level: ${selector}. Available: ${choices.join(", ")}` };
+		return { error: t("commands.effort.unknown", { selector, choices: choices.join(", ") }) };
 	}
 	return { level: parsed };
 }

@@ -1,9 +1,10 @@
 import { DotWhisker, type DotWhiskerMark, type DotWhiskerRow } from "../charts";
 import { formatCompact, formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type { SpotlightDashboardStats, SpotlightHeatPosition, SpotlightRankingCell } from "../types";
 import { Card } from "../ui";
 import { GroupLegend } from "./chips";
-import { CUT_GROUP, formatInterval } from "./meta";
+import { CUT_GROUP, cutGroupLabel, cutGroupRule, formatInterval } from "./meta";
 
 type RankingGroup = SpotlightRankingCell["group"];
 
@@ -56,6 +57,7 @@ const NEED_SOURCES = [
 
 /** Per-line ranking quality: Spotlight's heat and the cut against the lines the agent needed later. */
 export function Ranking({ stats, stale }: { stats: SpotlightDashboardStats; stale: boolean }) {
+	const tr = useTranslation();
 	const { ranking } = stats;
 	const cells: ReadonlyMap<RankingGroup, SpotlightRankingCell> = new Map(
 		ranking.cells.map(cell => [cell.group, cell]),
@@ -65,14 +67,22 @@ export function Ranking({ stats, stale }: { stats: SpotlightDashboardStats; stal
 	return (
 		<Card
 			index={4}
-			title="Does Spotlight keep what the agent needs?"
-			description="Lines of a shaped read the agent read again or edited later, against Spotlight's heat and the cut"
+			title={tr("insights.ranking.title", "Does Spotlight keep what the agent needs?")}
+			description={tr(
+				"insights.ranking.description",
+				"Lines of a shaped read the agent read again or edited later, against Spotlight's heat and the cut",
+			)}
 			actions={<GroupLegend groups={GROUPS} />}
 			stale={stale}
-			footer="Shaped reads with at least one needed line, until the file's first edit or a later whole-file read. Scored and score-free cuts are biased alike (the agent re-reads what a cut hid), so compare them with each other; held-out would-be cuts, shown whole, are the unbiased measure. Score-free cuts have no heat, so only the cut's lift exists for them. Dashed lines are chance; whiskers are 90% session bootstrap intervals, from 3 sessions."
+			footer={tr(
+				"insights.ranking.footer",
+				"Shaped reads with at least one needed line, until the file's first edit or a later whole-file read. Scored and score-free cuts are biased alike (the agent re-reads what a cut hid), so compare them with each other; held-out would-be cuts, shown whole, are the unbiased measure. Score-free cuts have no heat, so only the cut's lift exists for them. Dashed lines are chance; whiskers are 90% session bootstrap intervals, from 3 sessions.",
+			)}
 		>
 			{!measured ? (
-				<div className="empty">No shaped read was needed again in this range.</div>
+				<div className="empty">
+					{tr("insights.ranking.empty", "No shaped read was needed again in this range.")}
+				</div>
 			) : (
 				<div className="spot-rank">
 					<div className="spot-rank-panels">
@@ -83,15 +93,18 @@ export function Ranking({ stats, stale }: { stats: SpotlightDashboardStats; stal
 					<div className="spot-rank-foot">
 						<SampleTable cells={cells} />
 						<PositionHeat positions={ranking.position} />
-						<section className="spot-rank-sources" aria-label="How the need was seen">
-							<h3 className="spot-panel-title">How the need was seen</h3>
+						<section
+							className="spot-rank-sources"
+							aria-label={tr("insights.ranking.need", "How the need was seen")}
+						>
+							<h3 className="spot-panel-title">{tr("insights.ranking.need", "How the need was seen")}</h3>
 							<dl className="spot-facts spot-rank-facts">
 								{NEED_SOURCES.map(source => (
-									<div key={source.key} title={source.rule}>
-										<dt>{source.label}</dt>
+									<div key={source.key} title={tr(`insights.ranking.source.${source.key}.rule`, source.rule)}>
+										<dt>{tr(`insights.ranking.source.${source.key}.label`, source.label)}</dt>
 										<dd className="num">
 											{formatInteger(ranking.sources[source.key])}
-											<span className="dim"> results</span>
+											<span className="dim">{tr("insights.ranking.result_suffix", " results")}</span>
 										</dd>
 									</div>
 								))}
@@ -105,6 +118,8 @@ export function Ranking({ stats, stale }: { stats: SpotlightDashboardStats; stal
 }
 
 function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<RankingGroup, SpotlightRankingCell> }) {
+	const tr = useTranslation();
+	const title = tr(`insights.ranking.measure.${measure.key}.title`, measure.title);
 	const marks: DotWhiskerMark[] = GROUPS.flatMap(group => {
 		const cell = cells.get(group);
 		if (cell === undefined || cell.results === 0) return [];
@@ -117,7 +132,17 @@ function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<Ra
 				color: CUT_GROUP[group].color,
 				shape: CUT_GROUP[group].shape,
 				offset: MARK_OFFSET[group],
-				title: `${CUT_GROUP[group].label}: ${estimate.value === null ? "–" : measure.format(estimate.value)}${interval === "" ? "" : ` (${interval})`} over ${formatInteger(cell.results)} results, ${formatInteger(cell.neededLines)} needed lines`,
+				title: tr(
+					"insights.ranking.mark",
+					"{group}: {value}{interval} over {count} results, {lines} needed lines",
+					{
+						group: cutGroupLabel(tr, group),
+						value: estimate.value === null ? "–" : measure.format(estimate.value),
+						interval: interval === "" ? "" : ` (${interval})`,
+						count: formatInteger(cell.results),
+						lines: formatInteger(cell.neededLines),
+					},
+				),
 			},
 		];
 	});
@@ -125,7 +150,7 @@ function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<Ra
 	const rows: DotWhiskerRow[] = [
 		{
 			key: "reads",
-			label: "Shaped reads",
+			label: tr("insights.ranking.shaped_reads", "Shaped reads"),
 			marks,
 			figure: (
 				<span style={{ color: CUT_GROUP.applied.color }}>{applied === null ? "–" : measure.format(applied)}</span>
@@ -135,7 +160,7 @@ function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<Ra
 					{(["scoreFree", "holdout"] as const).map((group, i) => {
 						const value = cells.get(group)?.[measure.key].value ?? null;
 						return (
-							<span key={group} title={CUT_GROUP[group].label}>
+							<span key={group} title={cutGroupLabel(tr, group)}>
 								{i > 0 && " · "}
 								<span className="spot-fb-detail" data-group={group}>
 									{value === null ? "–" : measure.format(value)}
@@ -148,10 +173,12 @@ function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<Ra
 		},
 	];
 	return (
-		<section className="spot-rank-panel" aria-label={measure.title}>
-			<h3 className="spot-panel-title" title={measure.rule}>
-				{measure.title}
-				<span className="spot-rank-chance">{measure.chanceLabel}</span>
+		<section className="spot-rank-panel" aria-label={title}>
+			<h3 className="spot-panel-title" title={tr(`insights.ranking.measure.${measure.key}.rule`, measure.rule)}>
+				{title}
+				<span className="spot-rank-chance">
+					{tr(`insights.ranking.measure.${measure.key}.chance`, measure.chanceLabel)}
+				</span>
 			</h3>
 			<DotWhisker
 				rows={rows}
@@ -165,18 +192,19 @@ function RankPanel({ measure, cells }: { measure: Measure; cells: ReadonlyMap<Ra
 
 /** Results and needed lines behind every cell of the panels. */
 function SampleTable({ cells }: { cells: ReadonlyMap<RankingGroup, SpotlightRankingCell> }) {
+	const tr = useTranslation();
 	return (
-		<section aria-label="Sample per cell">
+		<section aria-label={tr("insights.ranking.sample", "Sample per cell")}>
 			<h3 className="spot-panel-title">
-				Sample per cell
-				<span className="spot-rank-chance">results · needed lines</span>
+				{tr("insights.ranking.sample", "Sample per cell")}
+				<span className="spot-rank-chance">{tr("insights.ranking.sample_units", "results · needed lines")}</span>
 			</h3>
 			<table className="spot-rank-n">
 				<thead>
 					<tr>
 						{GROUPS.map(group => (
-							<th key={group} scope="col" title={CUT_GROUP[group].rule}>
-								{CUT_GROUP[group].label}
+							<th key={group} scope="col" title={cutGroupRule(tr, group)}>
+								{cutGroupLabel(tr, group)}
 							</th>
 						))}
 					</tr>
@@ -190,7 +218,11 @@ function SampleTable({ cells }: { cells: ReadonlyMap<RankingGroup, SpotlightRank
 									{cell === undefined || cell.results === 0 ? (
 										<span className="dim">–</span>
 									) : (
-										<span title={`${formatInteger(cell.neededLines)} needed lines`}>
+										<span
+											title={tr("insights.ranking.line_count", "{count} needed lines", {
+												count: formatInteger(cell.neededLines),
+											})}
+										>
 											{formatInteger(cell.results)}
 											<span className="dim"> · {formatCompact(cell.neededLines)}</span>
 										</span>
@@ -207,15 +239,16 @@ function SampleTable({ cells }: { cells: ReadonlyMap<RankingGroup, SpotlightRank
 
 /** Mean heat by line position. */
 function PositionHeat({ positions }: { positions: readonly SpotlightHeatPosition[] }) {
+	const tr = useTranslation();
 	const top = Math.max(0, ...positions.map(p => p.meanHeat));
 	return (
-		<section className="spot-rank-pos" aria-label="Mean heat by position">
+		<section className="spot-rank-pos" aria-label={tr("insights.ranking.position", "Mean heat by position")}>
 			<h3 className="spot-panel-title">
-				Mean heat by position
-				<span className="spot-rank-chance">0–9, outputs ≥ 40 lines</span>
+				{tr("insights.ranking.position", "Mean heat by position")}
+				<span className="spot-rank-chance">{tr("insights.ranking.position_hint", "0–9, outputs ≥ 40 lines")}</span>
 			</h3>
 			{positions.length === 0 || top === 0 ? (
-				<div className="dim spot-gap-empty">No heat recorded</div>
+				<div className="dim spot-gap-empty">{tr("insights.ranking.no_heat", "No heat recorded")}</div>
 			) : (
 				<>
 					<div className="spot-rank-bars">
@@ -223,7 +256,11 @@ function PositionHeat({ positions }: { positions: readonly SpotlightHeatPosition
 							<div
 								key={p.label}
 								className="spot-rank-bar"
-								title={`${p.label}: mean heat ${p.meanHeat.toFixed(2)} over ${formatInteger(p.lines)} lines`}
+								title={tr("insights.ranking.position_tip", "{label}: mean heat {mean} over {count} lines", {
+									label: p.label,
+									mean: p.meanHeat.toFixed(2),
+									count: formatInteger(p.lines),
+								})}
 							>
 								<span className="spot-rank-bar-track">
 									<span className="spot-rank-bar-value num">{p.meanHeat.toFixed(1)}</span>
@@ -240,7 +277,9 @@ function PositionHeat({ positions }: { positions: readonly SpotlightHeatPosition
 							</div>
 						))}
 					</div>
-					<div className="micro spot-rank-axis">L = line of the output, then each tenth of it (% into it)</div>
+					<div className="micro spot-rank-axis">
+						{tr("insights.ranking.position_axis", "L = line of the output, then each tenth of it (% into it)")}
+					</div>
 				</>
 			)}
 		</section>

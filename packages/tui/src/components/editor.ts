@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import {
@@ -93,10 +94,18 @@ export interface NativeEditorLayout {
  */
 const VIM_MODE_LABELS: Record<VimMode, string | undefined> = {
 	insert: undefined,
-	normal: "NORMAL",
-	visual: "VISUAL",
-	"visual-line": "VISUAL",
-	replace: "REPLACE",
+	get normal() {
+		return t("status.vim.normal");
+	},
+	get visual() {
+		return t("status.vim.visual");
+	},
+	get "visual-line"() {
+		return t("status.vim.visual");
+	},
+	get replace() {
+		return t("status.vim.replace");
+	},
 };
 
 const PASSTHROUGH_COLOR = (text: string): string => text;
@@ -6159,7 +6168,11 @@ export class Editor implements Component, Focusable {
 		if (alternatives) {
 			// Tab opens the alternatives list from here; without a bound key there is nothing to hint.
 			const tab = editorKey("tui.input.tab");
-			if (tab) return ` ${tab} ${alternatives.choices.length - 1} more`;
+			if (tab)
+				return t("overlays.editor.alternatives_more", {
+					tab: `${tab}`,
+					value: `${alternatives.choices.length - 1}`,
+				});
 		}
 		// Fall back to provider's getInlineHint
 		if (this.#autocompleteProvider?.getInlineHint) {

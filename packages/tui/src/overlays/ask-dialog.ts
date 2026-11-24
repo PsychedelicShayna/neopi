@@ -1,5 +1,5 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
+import { getLocale, t, type Locale, t as translate } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Ellipsis,
@@ -104,11 +104,7 @@ import { actionBar, actionButton } from "../native/overlay";
 import { getKeybindings } from "../keybindings";
 import { plainText } from "../native/spans";
 
-const OTHER_OPTION = "Other (type your own)";
 const RECOMMENDED_SUFFIX = " (Recommended)";
-/** Native label for the free-text row. */
-const OTHER_LABEL = "Other…";
-
 // Action rows appended by the guest race participant. An option sanitizing
 // to one of these must disambiguate identically on both sides, or the same
 // question renders different rows depending on who answers.
@@ -372,13 +368,14 @@ function normalizedInlineInput(input: string): string {
  * participant answers. State and results keep originals.
  */
 function displayOptionLabels(question: ExtensionAskDialogQuestion): string[] {
+	const suffix = t("overlays.ask_dialog.recommended_suffix");
 	const badged = question.options.map((option, index) => {
 		const base = sanitizeCarriageReturns(option.label);
-		return question.recommended === index && !base.endsWith(RECOMMENDED_SUFFIX)
-			? `${base}${RECOMMENDED_SUFFIX}`
+		return question.recommended === index && !base.endsWith(RECOMMENDED_SUFFIX) && !base.endsWith(suffix)
+			? `${base}${suffix}`
 			: base;
 	});
-	return disambiguateDisplayLabels(badged, [OTHER_OPTION, ...GUEST_ACTION_LABELS]);
+	return disambiguateDisplayLabels(badged, [translate("overlays.ask_dialog.other_option"), ...GUEST_ACTION_LABELS]);
 }
 
 function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: QuestionState): string {
@@ -392,7 +389,9 @@ function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: Questi
 		.map(entry => entry.display);
 	if (question.multi) {
 		const answers = [...selected];
-		if (state.customInput !== undefined) answers.push(`Other: “${normalizedInlineInput(state.customInput)}”`);
+		if (state.customInput !== undefined) {
+			answers.push(t("overlays.ask_dialog.custom_answer", { answer: normalizedInlineInput(state.customInput) }));
+		}
 		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", t("tui.ask.unanswered"));
 	}
 	if (state.customInput !== undefined) return `“${normalizedInlineInput(state.customInput)}”`;
@@ -415,8 +414,9 @@ function inlineCodeSpans(value: string): TspSpan[] {
 
 /** An option's native label: the `(Recommended)` suffix goes (the row's badge says it), inline code runs mono. */
 function optionLabelSpans(question: ExtensionAskDialogQuestion, optionIndex: number, label: string): TspSpan[] {
-	const recommended = question.recommended === optionIndex && label.endsWith(RECOMMENDED_SUFFIX);
-	return inlineCodeSpans(recommended ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label);
+	const suffix = t("overlays.ask_dialog.recommended_suffix");
+	const match = label.endsWith(suffix) ? suffix : label.endsWith(RECOMMENDED_SUFFIX) ? RECOMMENDED_SUFFIX : "";
+	return inlineCodeSpans(question.recommended === optionIndex && match ? label.slice(0, -match.length) : label);
 }
 
 function isAnswered(state: QuestionState): boolean {
@@ -425,7 +425,7 @@ function isAnswered(state: QuestionState): boolean {
 
 /** The answer to one question for the Review tab: the chosen labels (code mono), the custom answer, the note. */
 function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): readonly TspSpan[] {
-	if (!isAnswered(state) && !state.notes.size) return [span("Unanswered", "warning")];
+	if (!isAnswered(state) && !state.notes.size) return [span(translate("overlays.ask_dialog.unanswered"), "warning")];
 	const labels = displayOptionLabels(question);
 	const spans: TspSpan[] = [];
 	const push = (parts: readonly TspSpan[]): void => {
@@ -439,7 +439,7 @@ function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionSta
 	if (state.customInput !== undefined) push([span(`“${normalizedInlineInput(state.customInput)}”`)]);
 	for (const entry of itemNotes(question, state)) {
 		spans.push(
-			span(`  ✎ ${normalizedInlineInput(entry.option ?? OTHER_OPTION)}: `, "dim"),
+			span(`  ✎ ${normalizedInlineInput(entry.option ?? translate("overlays.ask_dialog.other_option"))}: `, "dim"),
 			span(normalizedInlineInput(entry.note), "em"),
 		);
 	}
@@ -507,7 +507,9 @@ function renderRowLabel(
 	const marker = `${theme.fg(checked ? "success" : "dim", optionMarker(theme, question.multi, checked))} `;
 	const cursor = selected ? theme.fg("accent", `${theme.nav.cursor} `) : "  ";
 	const label = renderInlineMarkdown(rowItem.label, mdTheme, t => theme.fg(color, t));
-	const noteMarker = state.notes.has(rowItem.key) ? theme.fg("success", "  ✎ note") : "";
+	const noteMarker = state.notes.has(rowItem.key)
+		? theme.fg("success", translate("overlays.ask_dialog.note_marker"))
+		: "";
 	// `width` is already the inner content width supplied by OverlayPanel; when
 	// a scrollbar is needed, renderRows() calls this again with one less column.
 	// Keep the cursor, option marker, first wrapped label line, and optional
@@ -668,7 +670,7 @@ export class AskDialogComponent implements Component {
 				() => this.#handleTimeout(),
 			);
 		}
-		this.#panel = new OverlayPanel("Ask");
+		this.#panel = new OverlayPanel(translate("overlays.ask_dialog.ask_title"));
 		this.#headerRegion = new PanelRows();
 		this.#bodyRegion = new PanelRows();
 		this.#footerRegion = new PanelRows();
@@ -963,7 +965,7 @@ export class AskDialogComponent implements Component {
 						items,
 						active,
 						role: "omp.ask.questions",
-						title: "Next question  l · tab · Ctrl+N · Previous  h · shift+tab · Ctrl+P",
+						title: translate("overlays.ask_dialog.question_navigation"),
 						actions: { click: "select" },
 					},
 					undefined,
@@ -1061,7 +1063,7 @@ export class AskDialogComponent implements Component {
 					// The badge replaces the ANSI `(Recommended)` suffix.
 					label:
 						rowItem.kind === "other"
-							? [span(OTHER_LABEL)]
+							? [span(translate("overlays.ask_dialog.other_label"))]
 							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
 					role,
 					...(detail ? { detail } : {}),
@@ -1160,11 +1162,13 @@ export class AskDialogComponent implements Component {
 		const submit = actionButton(enterLabel, "submit", {
 			keys: "enter",
 			tone: "accent",
-			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
+			title: question?.multi
+				? translate("overlays.ask_dialog.enter_toggle_hint", { enterLabel: `${enterLabel}` })
+				: `${enterLabel}  enter`,
 		});
-		const note = actionButton("Note", "note", {
+		const note = actionButton(translate("overlays.ask_dialog.note_button"), "note", {
 			keys: "n",
-			title: "Add or edit the highlighted item's note  n",
+			title: translate("overlays.ask_dialog.note_tooltip"),
 		});
 		return actionBar([...lead, null, note, skip, submit]);
 	}
@@ -1354,7 +1358,9 @@ export class AskDialogComponent implements Component {
 	}
 
 	#titleText(): string {
-		return this.#remainingSeconds === undefined ? "Ask" : `Ask (${this.#remainingSeconds}s)`;
+		return this.#remainingSeconds === undefined
+			? translate("overlays.ask_dialog.ask_title")
+			: translate("overlays.ask_dialog.ask_countdown", { remainingSeconds: `${this.#remainingSeconds}` });
 	}
 
 	/** True while a draft that predates the dialog still owns typing. */
@@ -1507,7 +1513,12 @@ export class AskDialogComponent implements Component {
 			label: display[index] ?? sanitizeCarriageReturns(option.label),
 			optionIndex: index,
 		}));
-		rows.push({ kind: "other", key: "other", label: OTHER_OPTION, optionIndex: undefined });
+		rows.push({
+			kind: "other",
+			key: "other",
+			label: translate("overlays.ask_dialog.other_option"),
+			optionIndex: undefined,
+		});
 		return rows;
 	}
 
@@ -1887,7 +1898,7 @@ export class AskDialogComponent implements Component {
 			const answer = renderAnswerSummary(question, state);
 			allLines.push(`${theme.fg("dim", `${index + 1}. ${label}:`)} ${answer}`);
 			for (const entry of itemNotes(question, state)) {
-				const note = `${normalizedInlineInput(entry.option ?? OTHER_OPTION)}: ${normalizedInlineInput(entry.note)}`;
+				const note = `${normalizedInlineInput(entry.option ?? translate("overlays.ask_dialog.other_option"))}: ${normalizedInlineInput(entry.note)}`;
 				allLines.push(theme.fg("muted", `   ✎ ${truncateToWidth(note, Math.max(1, width - 5), Ellipsis.Unicode)}`));
 			}
 		}

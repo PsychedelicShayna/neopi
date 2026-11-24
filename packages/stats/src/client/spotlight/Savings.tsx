@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { type ChartSeries, Legend, TimeChart, Waterfall, type WaterfallStep } from "../charts";
 import { formatCompact, formatCost, formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import { bucketAxis, rangeMeta } from "../data/range";
 import { densify } from "../data/series";
 import type { SpotlightAdjustedTool, SpotlightDashboardStats, SpotlightToolRow, TimeRange } from "../types";
@@ -15,18 +16,28 @@ import {
 	OTHER_TOOLS,
 	RECOVERY_KIND,
 	RECOVERY_KINDS,
+	recoveryLabel,
+	recoveryRule,
 	toolIcon,
 } from "./meta";
 
 type Unit = "tokens" | "usd";
 
-const UNIT_OPTIONS = [
-	{ value: "tokens", label: "Tokens" },
-	{ value: "usd", label: "$" },
-] as const;
-
 function UnitToggle({ value, onChange }: { value: Unit; onChange: (unit: Unit) => void }) {
-	return <Segmented size="sm" aria-label="Unit" options={UNIT_OPTIONS} value={value} onChange={onChange} />;
+	const tr = useTranslation();
+	const options = [
+		{ value: "tokens", label: tr("insights.tokens", "Tokens") },
+		{ value: "usd", label: "$" },
+	] as const;
+	return (
+		<Segmented
+			size="sm"
+			aria-label={tr("insights.unit", "Unit")}
+			options={options}
+			value={value}
+			onChange={onChange}
+		/>
+	);
 }
 
 export interface SavingsProps {
@@ -37,6 +48,7 @@ export interface SavingsProps {
 
 /** Cumulative gross vs net per bucket, with what recoveries took back hanging below zero. */
 export function SavingsOverTime({ stats, range, stale }: SavingsProps) {
+	const tr = useTranslation();
 	const [unit, setUnit] = useState<Unit>("tokens");
 	const meta = rangeMeta(range);
 
@@ -54,41 +66,53 @@ export function SavingsOverTime({ stats, range, stale }: SavingsProps) {
 		const series: ChartSeries[] = [
 			{
 				key: "gross",
-				label: "Gross (cumulative)",
+				label: tr("insights.savings.gross", "Gross (cumulative)"),
 				color: "var(--spot-gross)",
 				kind: "area",
 				values: saved.map(v => (grossRun += v)),
 			},
 			{
 				key: "clawback",
-				label: usd ? "Recoveries + Spotlight cost" : "Fetched back",
+				label: usd
+					? tr("insights.savings.recoveries_cost", "Recoveries + Spotlight cost")
+					: tr("insights.fetched_back", "Fetched back"),
 				color: "var(--spot-clawback)",
 				kind: "bars",
 				values: saved.map((v, i) => net[i] - v),
 			},
 			{
 				key: "net",
-				label: "Net of every fetch-back (cumulative)",
+				label: tr("insights.savings.net", "Net of every fetch-back (cumulative)"),
 				color: "var(--spot-net)",
 				kind: "line",
 				values: net.map(v => (netRun += v)),
 			},
 		];
 		return { buckets, series };
-	}, [stats.series, range, meta.bucketMs, unit]);
+	}, [stats.series, range, meta.bucketMs, unit, tr]);
 
 	const format = unit === "usd" ? formatSignedCost : formatSignedCompact;
 	return (
 		<Card
 			index={1}
-			title="Savings over time"
-			description={`Running gross and net per ${bucketNoun(meta.bucketMs)}; what recoveries took back hangs below zero`}
+			title={tr("insights.savings.title", "Savings over time")}
+			description={tr(
+				"insights.savings.description",
+				"Running gross and net per {bucket}; what recoveries took back hangs below zero",
+				{ bucket: bucketNoun(tr, meta.bucketMs) },
+			)}
 			actions={<UnitToggle value={unit} onChange={setUnit} />}
 			stale={stale}
 			footer={
 				unit === "usd"
-					? "Dollars price each saved token at the cache-read rate of every later request that would have carried it (plus one cache write); recoveries are priced the same way."
-					: "Gross is what the cuts removed against what plain would have shown; this net subtracts every later call that fetched hidden output back, including the share held-out results show comes back anyway (the headline adds that back). Each lands in the bucket of its own timestamp."
+					? tr(
+							"insights.savings.usd_footer",
+							"Dollars price each saved token at the cache-read rate of every later request that would have carried it (plus one cache write); recoveries are priced the same way.",
+						)
+					: tr(
+							"insights.savings.tokens_footer",
+							"Gross is what the cuts removed against what plain would have shown; this net subtracts every later call that fetched hidden output back, including the share held-out results show comes back anyway (the headline adds that back). Each lands in the bucket of its own timestamp.",
+						)
 			}
 		>
 			<div className="spot-chart-legend">
@@ -106,7 +130,7 @@ export function SavingsOverTime({ stats, range, stale }: SavingsProps) {
 					unit === "usd" ? formatSignedCost : v => (v < 0 ? `−${formatInteger(-v)}` : formatInteger(v))
 				}
 				showTotal={false}
-				emptyLabel="No shortened results in this range"
+				emptyLabel={tr("insights.no_shortened_nopunct", "No shortened results in this range")}
 			/>
 		</Card>
 	);
@@ -114,6 +138,7 @@ export function SavingsOverTime({ stats, range, stale }: SavingsProps) {
 
 /** Bridge from gross to the holdout-adjusted net: every way the saving was undone, and what would have come back anyway. */
 export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) {
+	const tr = useTranslation();
 	const [unit, setUnit] = useState<Unit>("tokens");
 	const { gross, clawback, compounding, adjusted } = stats;
 
@@ -129,7 +154,7 @@ export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) 
 				label: (
 					<>
 						<span className="spot-step-swatch" style={{ background: RECOVERY_KIND[kind].color }} />
-						{RECOVERY_KIND[kind].plural}
+						{recoveryLabel(tr, kind, true)}
 						<span className="dim num">{formatInteger(totals.events)}</span>
 					</>
 				),
@@ -137,19 +162,27 @@ export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) 
 				value: -value,
 				color: RECOVERY_KIND[kind].color,
 				note: share(value),
-				title: RECOVERY_KIND[kind].rule,
+				title: recoveryRule(tr, kind),
 			};
 		});
 		const steps: WaterfallStep[] = [
 			{
 				key: "gross",
-				label: usd ? "Gross saved" : "Gross vs plain",
+				label: usd
+					? tr("insights.savings.gross_saved", "Gross saved")
+					: tr("insights.gross_vs_plain", "Gross vs plain"),
 				kind: "total",
 				value: top,
 				color: "var(--spot-gross)",
 				title: usd
-					? "Avoided context priced at each later request's cache-read rate, plus one cache write"
-					: "Σ (plain − shortened) tokens over shortened results; a cut that showed more than plain counts negative",
+					? tr(
+							"insights.savings.usd_tip",
+							"Avoided context priced at each later request's cache-read rate, plus one cache write",
+						)
+					: tr(
+							"insights.gross_vs_plain_tip",
+							"Σ (plain − shortened) tokens over shortened results; a cut that showed more than plain counts negative",
+						),
 			},
 			...kindSteps,
 		];
@@ -160,7 +193,7 @@ export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) 
 					label: (
 						<>
 							<span className="spot-step-swatch" style={{ background: "var(--spot-turns)" }} />
-							Extra turns
+							{tr("insights.extra_turns", "Extra turns")}
 							<span className="dim num">{formatInteger(clawback.turns)}</span>
 						</>
 					),
@@ -168,21 +201,24 @@ export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) 
 					value: -clawback.turnsUsd,
 					color: "var(--spot-turns)",
 					note: share(clawback.turnsUsd),
-					title: "Provider cost of requests that issued nothing but recovery calls",
+					title: tr(
+						"insights.savings.turns_tip",
+						"Provider cost of requests that issued nothing but recovery calls",
+					),
 				},
 				{
 					key: "spotlight",
 					label: (
 						<>
 							<span className="spot-step-swatch" style={{ background: "var(--spot-cost)" }} />
-							Spotlight cost
+							{tr("insights.spotlight_cost", "Spotlight cost")}
 						</>
 					),
 					kind: "delta",
 					value: -compounding.spotlightUsd,
 					color: "var(--spot-cost)",
 					note: share(compounding.spotlightUsd),
-					title: "Spotlight's own scoring bill",
+					title: tr("insights.savings.spotlight_tip", "Spotlight's own scoring bill"),
 				},
 			);
 		}
@@ -196,44 +232,56 @@ export function WhereSavingsWent({ stats, stale }: Omit<SavingsProps, "range">) 
 				label: (
 					<>
 						<span className="spot-step-swatch" style={{ background: "var(--spot-anyway)" }} />
-						Back anyway
+						{tr("insights.savings.anyway", "Back anyway")}
 					</>
 				),
 				kind: "delta",
 				value: anyway,
 				color: "var(--spot-anyway)",
 				note: share(anyway),
-				title: "Fetch-backs held-out results (shown whole) show the agent makes regardless, per tool: not the cut's cost",
+				title: tr(
+					"insights.savings.anyway_tip",
+					"Fetch-backs held-out results (shown whole) show the agent makes regardless, per tool: not the cut's cost",
+				),
 			});
 		}
 		const net = adjustedNet ?? unadjusted;
 		steps.push({
 			key: "net",
-			label: adjustedNet === null ? "Net (no holdout baseline yet)" : "Net",
+			label:
+				adjustedNet === null
+					? tr("insights.savings.net_unadjusted", "Net (no holdout baseline yet)")
+					: tr("insights.net", "Net"),
 			kind: "total",
 			value: net,
 			color: "var(--spot-net-fill)",
 			note: share(net),
 		});
 		return steps;
-	}, [unit, gross, clawback, compounding, adjusted]);
+	}, [unit, gross, clawback, compounding, adjusted, tr]);
 
 	return (
 		<Card
 			index={2}
-			title="Where the savings went"
-			description="Gross, minus each way hidden output came back"
+			title={tr("insights.savings.where_title", "Where the savings went")}
+			description={tr("insights.savings.where_description", "Gross, minus each way hidden output came back")}
 			actions={<UnitToggle value={unit} onChange={setUnit} />}
 			stale={stale}
 			footer={
 				unit === "usd"
-					? "Recoveries are priced as carried context; extra turns are requests that only recovered; Spotlight cost is its own scoring bill. What comes back anyway is the recovery $ in proportion to the tokens held-out results fetch regardless."
-					: "Recovered tokens are the full results of the recovery calls (estimated as chars ÷ 4 where no exact count exists). What comes back anyway is, per tool, the tokens a held-out result gets fetched back times the tool's cuts."
+					? tr(
+							"insights.savings.where_usd_footer",
+							"Recoveries are priced as carried context; extra turns are requests that only recovered; Spotlight cost is its own scoring bill. What comes back anyway is the recovery $ in proportion to the tokens held-out results fetch regardless.",
+						)
+					: tr(
+							"insights.savings.where_tokens_footer",
+							"Recovered tokens are the full results of the recovery calls (estimated as chars ÷ 4 where no exact count exists). What comes back anyway is, per tool, the tokens a held-out result gets fetched back times the tool's cuts.",
+						)
 			}
 		>
 			<Waterfall steps={steps} format={unit === "usd" ? formatCost : formatCompact} />
 			<div className="spot-by-tool">
-				<div className="section-label">Net by tool, tokens</div>
+				<div className="section-label">{tr("insights.savings.by_tool", "Net by tool, tokens")}</div>
 				<ToolNetList byTool={gross.byTool} adjusted={adjusted.byTool} />
 			</div>
 		</Card>
@@ -262,6 +310,7 @@ function ToolNetList({
 	byTool: readonly SpotlightToolRow[];
 	adjusted: readonly SpotlightAdjustedTool[];
 }) {
+	const tr = useTranslation();
 	const adjustedByTool = new Map(adjusted.map(row => [row.tool, row]));
 	// Fewer rows than other cards: the list sits under the waterfall, beside the savings chart it should not outgrow.
 	const { listed, rest } = foldTools(byTool, NET_LIST_TOOLS);
@@ -277,11 +326,22 @@ function ToolNetList({
 				row === undefined
 					? undefined
 					: [
-							`${formatInteger(row.cuts)} cuts fetched back ${formatCompact(row.recoveredTokens)} tokens`,
+							tr("insights.savings.cuts_fetched", "{cuts} cuts fetched back {tokens} tokens", {
+								cuts: formatInteger(row.cuts),
+								tokens: formatCompact(row.recoveredTokens),
+							}),
 							baseline === null
-								? "No held-out baseline yet"
-								: `${formatInteger(row.holdouts)} held-out results get ${formatCompact(baseline)} each fetched back anyway`,
-							excessInterval === "" ? "" : `Beyond the baseline: ${excessInterval} (90%)`,
+								? tr("insights.no_holdout_baseline", "No held-out baseline yet")
+								: tr(
+										"insights.savings.holdout_fetched",
+										"{count} held-out results get {tokens} each fetched back anyway",
+										{ count: formatInteger(row.holdouts), tokens: formatCompact(baseline) },
+									),
+							excessInterval === ""
+								? ""
+								: tr("insights.savings.beyond", "Beyond the baseline: {interval} (90%)", {
+										interval: excessInterval,
+									}),
 						]
 							.filter(Boolean)
 							.join("\n"),
@@ -310,13 +370,16 @@ function ToolNetList({
 			tool: OTHER_TOOLS,
 			totals,
 			excess,
-			title: `${formatInteger(rest.length)} more tools: ${rest.map(row => row.tool).join(", ")}`,
+			title: tr("insights.savings.others_tip", "{count} more tools: {tools}", {
+				count: formatInteger(rest.length),
+				tools: rest.map(row => row.tool).join(", "),
+			}),
 		});
 	}
 	const top = Math.max(0, ...rows.map(row => row.totals.savedTokens));
 	return (
 		<ul className="spot-tool-net">
-			{rows.map(({ tool, totals, excess, title }) => {
+			{rows.map(({ tool, totals, excess, title }, i) => {
 				const net = excess === null ? null : totals.savedTokens - excess;
 				const Icon = toolIcon(tool);
 				// A tool whose cuts showed more than plain nets below zero: no bar.
@@ -327,13 +390,18 @@ function ToolNetList({
 					<li key={tool} className="spot-tool-net-row" title={title}>
 						<div className="row spot-tool-net-head">
 							<Icon size={13} aria-hidden="true" />
-							<span className="cell-primary">{tool}</span>
+							<span className="cell-primary">
+								{rest.length > 0 && i === rows.length - 1 ? tr("insights.other_tools", "other") : tool}
+							</span>
 							<span className="dim num">
-								{formatInteger(totals.shaped)} of {formatInteger(totals.results)} shortened
+								{tr("insights.savings.shortened", "{count} of {total} shortened", {
+									count: formatInteger(totals.shaped),
+									total: formatInteger(totals.results),
+								})}
 							</span>
 							<span
 								className="spot-tool-net-value num"
-								title={net === null ? "No holdout baseline yet" : undefined}
+								title={net === null ? tr("insights.no_holdout_baseline", "No holdout baseline yet") : undefined}
 							>
 								{formatSignedCompact(net ?? totals.savedTokens)}
 							</span>
@@ -344,8 +412,13 @@ function ToolNetList({
 							</span>
 						</div>
 						<div className="micro spot-tool-net-detail">
-							{formatSignedCompact(totals.savedTokens)} gross
-							{excess !== null && <> − {formatCompact(excess)} beyond baseline</>}
+							{tr("insights.savings.gross_value", "{value} gross", {
+								value: formatSignedCompact(totals.savedTokens),
+							})}
+							{excess !== null &&
+								tr("insights.savings.beyond_value", " − {value} beyond baseline", {
+									value: formatCompact(excess),
+								})}
 						</div>
 					</li>
 				);

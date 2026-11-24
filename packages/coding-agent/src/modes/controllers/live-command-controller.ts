@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { logger, sanitizeText, toError } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../../registry/agent-registry";
@@ -87,7 +88,7 @@ class LiveAssistantCaption implements Component {
 
 	render(width: number): readonly string[] {
 		if (!this.#text || width <= 0) return [];
-		const label = "Voice: ";
+		const label = t("overlays.live_command_controller.voice");
 		const content = truncateMiddleToWidth(this.#text, Math.max(0, width - Bun.stringWidth(label)));
 		return [truncateToWidth(`${theme.fg("borderAccent", label)}${theme.fg("muted", content)}`, width)];
 	}
@@ -255,7 +256,7 @@ export class LiveCommandController {
 		const draft = editor.getText();
 		// After what is already there, so several undelivered prompts come back in order.
 		editor.setText(draft.trim() ? `${draft}\n${text}` : text);
-		this.#ctx.showWarning("The voice agent did not receive your message; it is back in the composer");
+		this.#ctx.showWarning(t("overlays.live_command_controller.composer_restored"));
 		this.#ctx.ui.requestRender();
 	}
 
@@ -410,7 +411,7 @@ export class LiveCommandController {
 						session.retireComposerSpeech();
 						this.#utterance = undefined;
 						this.#committedSpeech.clear();
-						this.#ctx.showStatus("Speech ignored while a chain rewrites the draft");
+						this.#ctx.showStatus(t("overlays.live_command_controller.speech_ignored"));
 						return;
 					}
 					this.#typeUserTranscript(speech);
@@ -516,7 +517,10 @@ export class LiveCommandController {
 			) {
 				this.#protocolNoticeShown.add(active.name);
 				this.#ctx.showStatus(
-					`Live persona "${active.name}" lacks the client protocol lines; open /persona live → ${active.name} → "Append client protocol lines".`,
+					t("overlays.live_command_controller.missing_protocol", {
+						part1: `${active.name}`,
+						part2: `${active.name}`,
+					}),
 				);
 			}
 		} catch (error) {

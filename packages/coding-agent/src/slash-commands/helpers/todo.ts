@@ -1,4 +1,5 @@
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	applyOpsToPhases,
 	getLatestTodoPhasesFromEntries,
@@ -99,32 +100,32 @@ function commitTodos(runtime: SlashCommandRuntime, phases: TodoPhase[]): void {
 }
 
 const TODO_HELP_TEXT = [
-	"Usage: /todo <verb> [args]",
-	"  /todo                              Show current todos",
-	"  /todo edit                         (TUI only) open in $EDITOR",
-	"  /todo copy                         Print todos as Markdown",
-	"  /todo expand                       (TUI only) expand the sticky HUD",
-	"  /todo collapse                     (TUI only) collapse the sticky HUD",
-	"  /todo export [<path>]              Write todos to file (default: TODO.md)",
-	"  /todo import [<path>]              Replace todos from file (default: TODO.md)",
-	"  /todo append [<phase>] <task...>   Append a task",
-	"  /todo start  <task>                Mark task in_progress (fuzzy match)",
-	"  /todo done   [<task|phase>]        Mark task/phase/all completed",
-	"  /todo drop   [<task|phase>]        Mark task/phase/all abandoned",
-	"  /todo rm     [<task|phase>]        Remove task/phase/all",
+	t("commands.todo.usage"),
+	t("commands.todo.helpDefault"),
+	t("commands.todo.helpEdit"),
+	t("commands.todo.helpCopy"),
+	t("commands.todo.helpExpand"),
+	t("commands.todo.helpCollapse"),
+	t("commands.todo.helpExport"),
+	t("commands.todo.helpImport"),
+	t("commands.todo.helpAppend"),
+	t("commands.todo.helpStart"),
+	t("commands.todo.helpDone"),
+	t("commands.todo.helpDrop"),
+	t("commands.todo.helpRemove"),
 ].join("\n");
 
 async function handleTodoCopyCommand(runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	const phases = currentPhases(runtime);
 	const markdown = phases.length === 0 ? "" : phasesToMarkdown(phases).trimEnd();
-	await runtime.output(`Copy not available in ACP mode; printing instead:\n\n${markdown || "No todos."}`);
+	await runtime.output(t("commands.todo.clipboardUnavailable", { markdown: markdown || t("commands.todo.empty") }));
 	return commandConsumed();
 }
 
 async function handleTodoExportCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	const phases = currentPhases(runtime);
 	if (phases.length === 0) {
-		await runtime.output("No todos to export.");
+		await runtime.output(t("commands.todo.nothingToExport"));
 		return commandConsumed();
 	}
 	let target: string;
@@ -132,9 +133,9 @@ async function handleTodoExportCommand(restArgs: string, runtime: SlashCommandRu
 		target = resolveTodoMarkdownPath(restArgs, runtime.sessionManager.getCwd());
 		await Bun.write(target, phasesToMarkdown(phases));
 	} catch (err) {
-		return usage(`Failed to write todos: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.todo.writeFailed", { error: errorMessage(err) }), runtime);
 	}
-	await runtime.output(`Wrote todos to ${target}`);
+	await runtime.output(t("commands.todo.written", { path: target }));
 	return commandConsumed();
 }
 
@@ -145,19 +146,20 @@ async function handleTodoImportCommand(restArgs: string, runtime: SlashCommandRu
 		target = resolveTodoMarkdownPath(restArgs, runtime.sessionManager.getCwd());
 		content = await Bun.file(target).text();
 	} catch (err) {
-		return usage(`Failed to read todos: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.todo.readFailed", { error: errorMessage(err) }), runtime);
 	}
 	const { phases, errors } = markdownToPhases(content);
-	if (errors.length > 0) return usage(`Could not parse ${target}:\n  ${errors.join("\n  ")}`, runtime);
+	if (errors.length > 0)
+		return usage(t("commands.todo.parseFailed", { path: target, errors: errors.join("\n  ") }), runtime);
 	commitTodos(runtime, phases);
 	const taskCount = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
-	await runtime.output(`Imported ${phases.length} phase(s), ${taskCount} task(s) from ${target}.`);
+	await runtime.output(t("commands.todo.imported", { phases: phases.length, tasks: taskCount, path: target }));
 	return commandConsumed();
 }
 
 async function handleTodoAppendCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	const tokens = tokenize(restArgs);
-	if (tokens.length === 0) return usage("Usage: /todo append [<phase>] <task...>", runtime);
+	if (tokens.length === 0) return usage(t("commands.todo.appendUsage"), runtime);
 
 	const current = currentPhases(runtime);
 	const phaseName = tokens.length === 1 ? undefined : tokens[0];
@@ -179,19 +181,19 @@ async function handleTodoAppendCommand(restArgs: string, runtime: SlashCommandRu
 	const finalContent = titleCaseSentence(content);
 	targetPhase.tasks.push({ content: finalContent, status: "pending" });
 	commitTodos(runtime, next);
-	await runtime.output(`Appended to ${targetPhase.name}: ${finalContent}`);
+	await runtime.output(t("commands.todo.appended", { phase: targetPhase.name, task: finalContent }));
 	return commandConsumed();
 }
 
 async function handleTodoStartCommand(restArgs: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
-	if (!restArgs) return usage("Usage: /todo start <task>", runtime);
+	if (!restArgs) return usage(t("commands.todo.startUsage"), runtime);
 	const current = currentPhases(runtime);
 	const query = tokenize(restArgs).join(" ") || restArgs;
 	const hit = findTaskFuzzy(current, query);
-	if (!hit) return usage(`No task matched "${restArgs}". Use /todo to list current tasks.`, runtime);
+	if (!hit) return usage(t("commands.todo.noMatchingTask", { task: restArgs }), runtime);
 	const { phases } = applyOpsToPhases(current, [{ op: "start", task: hit.task.content }]);
 	commitTodos(runtime, phases);
-	await runtime.output(`Started: ${hit.task.content}`);
+	await runtime.output(t("commands.todo.started", { task: hit.task.content }));
 	return commandConsumed();
 }
 
@@ -205,12 +207,12 @@ async function handleTodoMutationCommand(
 	if (!trimmedArg) {
 		if (verb === "rm") {
 			commitTodos(runtime, []);
-			await runtime.output("Cleared all todos.");
+			await runtime.output(t("commands.todo.cleared"));
 			return commandConsumed();
 		}
 		const { phases } = applyOpsToPhases(current, [{ op: verb }]);
 		commitTodos(runtime, phases);
-		await runtime.output(verb === "done" ? "Marked all tasks completed." : "Marked all tasks abandoned.");
+		await runtime.output(verb === "done" ? t("commands.todo.allCompleted") : t("commands.todo.allAbandoned"));
 		return commandConsumed();
 	}
 
@@ -218,7 +220,12 @@ async function handleTodoMutationCommand(
 	if (taskHit) {
 		const { phases } = applyOpsToPhases(current, [{ op: verb, task: taskHit.task.content }]);
 		commitTodos(runtime, phases);
-		const label = verb === "done" ? "Marked completed" : verb === "drop" ? "Marked abandoned" : "Removed";
+		const label =
+			verb === "done"
+				? t("commands.todo.markedCompleted")
+				: verb === "drop"
+					? t("commands.todo.markedAbandoned")
+					: t("commands.todo.removed");
 		await runtime.output(`${label}: ${taskHit.task.content}`);
 		return commandConsumed();
 	}
@@ -229,15 +236,15 @@ async function handleTodoMutationCommand(
 		commitTodos(runtime, phases);
 		const message =
 			verb === "done"
-				? `Marked phase ${phaseHit.name} completed.`
+				? t("commands.todo.phaseCompleted", { phase: phaseHit.name })
 				: verb === "drop"
-					? `Marked phase ${phaseHit.name} abandoned.`
-					: `Removed phase: ${phaseHit.name}`;
+					? t("commands.todo.phaseAbandoned", { phase: phaseHit.name })
+					: t("commands.todo.phaseRemoved", { phase: phaseHit.name });
 		await runtime.output(message);
 		return commandConsumed();
 	}
 
-	return usage(`No task or phase matched "${trimmedArg}".`, runtime);
+	return usage(t("commands.todo.noMatch", { target: trimmedArg }), runtime);
 }
 
 /** ACP/text-mode `/todo` handler. Shared by both dispatchers via the spec. */
@@ -248,9 +255,7 @@ export async function handleTodoAcp(
 	const trimmed = command.args.trim();
 	if (!trimmed) {
 		const phases = currentPhases(runtime);
-		await runtime.output(
-			phases.length === 0 ? "No todos. Use /todo append <task> to start one." : phasesToMarkdown(phases).trimEnd(),
-		);
+		await runtime.output(phases.length === 0 ? t("commands.todo.emptyHint") : phasesToMarkdown(phases).trimEnd());
 		return commandConsumed();
 	}
 
@@ -271,18 +276,15 @@ export async function handleTodoAcp(
 		case "rm":
 			return await handleTodoMutationCommand(verb, rest, runtime);
 		case "edit":
-			return usage(
-				"/todo edit requires the TUI editor; use /todo export then /todo import for non-interactive edits.",
-				runtime,
-			);
+			return usage(t("commands.todo.editTuiOnly"), runtime);
 		case "expand":
 		case "collapse":
-			return usage(`/todo ${verb} controls the interactive HUD and is unavailable in this mode.`, runtime);
+			return usage(t("commands.todo.hudTuiOnly", { subcommand: verb }), runtime);
 		case "help":
 		case "?":
 			await runtime.output(TODO_HELP_TEXT);
 			return commandConsumed();
 		default:
-			return usage("Unknown /todo subcommand. Use append, start, done, drop, rm, copy, export, import.", runtime);
+			return usage(t("commands.todo.unknownSubcommand"), runtime);
 	}
 }

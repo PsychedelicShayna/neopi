@@ -1,4 +1,5 @@
-import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { sessionsHelp } from "../cli/command-help";
 import { listSessionCatalog, readSessionCatalog } from "../cli/sessions-cli";
 import { readSessionJournalPage, RpcJournalError } from "../modes/rpc/rpc-journal";
@@ -27,12 +28,18 @@ export default class Sessions extends Command {
 
 	async run(): Promise<void> {
 		const json = this.argv.includes("--json");
+		const errorLocale = json ? "en" : getLocale();
 		let parsed = false;
 		try {
 			const { args, flags } = await this.parse(Sessions);
 			parsed = true;
 			if (args.operation === "entries") {
-				if (!args.file) throw new RpcJournalError("sessions entries requires a session file", "invalid_request");
+				if (!args.file) {
+					throw new RpcJournalError(
+						t(errorLocale, "cli.commands.sessions.entries_file_required"),
+						"invalid_request",
+					);
+				}
 				const page = await readSessionJournalPage(args.file, {
 					scope: flags.scope as "journal" | "branch" | undefined,
 					direction: flags.direction as "forward" | "backward" | undefined,
@@ -42,8 +49,12 @@ export default class Sessions extends Command {
 				process.stdout.write(`${JSON.stringify(page)}\n`);
 				return;
 			}
-			if (args.operation === "read" && !args.file) throw new Error("sessions read requires a session file");
-			if (args.operation === "list" && args.file) throw new Error("sessions list does not accept a session file");
+			if (args.operation === "read" && !args.file) {
+				throw new Error(t(errorLocale, "cli.commands.sessions.read_file_required"));
+			}
+			if (args.operation === "list" && args.file) {
+				throw new Error(t(errorLocale, "cli.commands.sessions.list_file_disallowed"));
+			}
 			const result =
 				args.operation === "read"
 					? await readSessionCatalog(args.file!, flags["max-messages"])
@@ -73,8 +84,9 @@ export default class Sessions extends Command {
 				process.exitCode = 1;
 				return;
 			}
+			const diagnostic = error instanceof CliUsageError ? error.displayMessage : message;
 			process.stderr.write(
-				`${json ? JSON.stringify({ type: "error", code: "session_catalog_error", message }) : message}\n`,
+				`${json ? JSON.stringify({ type: "error", code: "session_catalog_error", message }) : diagnostic}\n`,
 			);
 			process.exitCode = 1;
 		}

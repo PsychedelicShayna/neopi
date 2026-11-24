@@ -7,6 +7,7 @@
  *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { compactImageAttachments, formatVisionMarker, PLACEHOLDER_REGEX } from "../prompt/composer-attachments";
 import { classifyImagePaste } from "../prompt/custom-editor";
@@ -197,8 +198,18 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		const [primaryFollowUpKey = "ctrl+q"] = followUpKeys;
 		const externalEditorKey = editorKey("app.editor.external") || formatKeyHint("ctrl+g");
 		const hint = this.#promptStyle
-			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${formatKeyHint("escape")} ${this.#saveOnEscape ? `save  ${interruptKey()} cancel` : "cancel"}  ${externalEditorKey} external editor`
-			: `${formatKeyHints(followUpKeys)} submit  ${this.#escapeBack ? `${formatKeyHint("escape")} back` : `${interruptKey()} cancel`}  ${externalEditorKey} external editor`;
+			? t("overlays.hook_editor.hook_editor_prompt_controls", {
+					value: `${formatKeyHint("enter")}`,
+					primaryFollowUpKey: `${formatKeyHint(primaryFollowUpKey)}`,
+					value2: `${formatKeyHint("escape")}`,
+					value3: `${this.#saveOnEscape ? t("overlays.hook_editor.hook_editor_save_cancel", { interruptKey: `${interruptKey()}` }) : t("tui.ask.hint.cancel")}`,
+					externalEditorKey: `${externalEditorKey}`,
+				})
+			: t("overlays.hook_editor.hook_editor_controls", {
+					followUpKeys: `${formatKeyHints(followUpKeys)}`,
+					value: `${this.#escapeBack ? t("overlays.hook_editor.hook_editor_back_hint", { value: `${formatKeyHint("escape")}` }) : t("overlays.hook_editor.hook_editor_cancel_hint", { interruptKey: `${interruptKey()}` })}`,
+					externalEditorKey: `${externalEditorKey}`,
+				});
 		this.#field = new FormField(this.#editor, {
 			theme: formTheme,
 			details:
@@ -213,7 +224,13 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		// Native: the field drops its terminal frame for the sheet's, and says what to type while empty.
 		const fieldRole = this.#promptStyle ? `${PART}.line` : `${PART}.field`;
 		this.#editor.describeLayout = input => ({ role: fieldRole, children: [input], caret: "input" });
-		const placeholder = [span(this.#promptStyle ? "Type your answer" : "Type here")];
+		const placeholder = [
+			span(
+				this.#promptStyle
+					? t("overlays.hook_editor.hook_editor_answer_placeholder")
+					: t("overlays.hook_editor.hook_editor_placeholder"),
+			),
+		];
 		this.#editor.describePlaceholder = () => placeholder;
 
 		const head: NativeChild[] = [];
@@ -269,24 +286,33 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		if (this.#externalEditor) {
 			const [externalKey] = boundKeys("app.editor.external", ["ctrl+g"]);
 			buttons.push(
-				actionButton("Open in editor", "external", {
+				actionButton(t("overlays.hook_editor.hook_editor_open_editor"), "external", {
 					...(externalKey ? { keys: externalKey } : {}),
-					title: tip([["Edit in your external editor", externalKey]]),
+					title: tip([[t("overlays.hook_editor.hook_editor_external_tip"), externalKey]]),
 				}),
 			);
 		}
 		buttons.push(
 			null,
-			actionButton(this.#escapeBack ? "Back" : "Cancel", "cancel", {
-				keys: cancelKey,
-				title: tip([[this.#escapeBack ? "Back" : "Cancel", cancelKey]]),
-			}),
-			actionButton("Submit", "submit", {
+			actionButton(
+				this.#escapeBack ? t("overlays.hook_editor.hook_editor_back") : t("tui.components.loader.cancel"),
+				"cancel",
+				{
+					keys: cancelKey,
+					title: tip([
+						[
+							this.#escapeBack ? t("overlays.hook_editor.hook_editor_back") : t("tui.components.loader.cancel"),
+							cancelKey,
+						],
+					]),
+				},
+			),
+			actionButton(t("tui.ask.submit"), "submit", {
 				keys: submitKey,
 				tone: "accent",
 				title: tip([
-					["Submit", submitKey],
-					["New line", newlineKey],
+					[t("tui.ask.submit"), submitKey],
+					[t("overlays.hook_editor.hook_editor_new_line"), newlineKey],
 				]),
 			}),
 		);

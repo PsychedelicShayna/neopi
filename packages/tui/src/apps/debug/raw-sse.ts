@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspScrollBy } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { matchesKey } from "../../keys";
@@ -114,6 +115,7 @@ export class RawSseViewerComponent implements Component {
 	#bodyRevision = -1;
 	#bodyWidth = -1;
 	#bodyThemeEpoch = -1;
+	#bodyLocale: string | undefined;
 	readonly #keys = new MenuKeyReader();
 	readonly #help = new MenuHelp("jk gg/G C-u d e y PgUp/PgDn");
 
@@ -128,7 +130,7 @@ export class RawSseViewerComponent implements Component {
 			this.#onUpdate?.();
 		});
 		this.#frame = new DebugViewerFrame({
-			title: "Raw Provider Stream",
+			title: () => t("cli.commands.debug.raw_sse.title"),
 			getHeight: () => process.stdout.rows || this.#terminalRows || 24,
 			headerRows: 1,
 			footerRows: 1,
@@ -280,10 +282,10 @@ export class RawSseViewerComponent implements Component {
 		const snapshot = this.#currentSnapshot();
 		const stream = this.#feedNative(snapshot);
 		const head = this.#nativeHead.get(
-			[snapshot.totalEvents, snapshot.records.length, snapshot.droppedRecords, snapshot.lastUpdatedAt],
+			[getLocale(), snapshot.totalEvents, snapshot.records.length, snapshot.droppedRecords, snapshot.lastUpdatedAt],
 			() => this.#describeHead(snapshot),
 		);
-		const body = this.#nativeBody.get([stream, this.#nativeScroll], () =>
+		const body = this.#nativeBody.get([getLocale(), stream, this.#nativeScroll], () =>
 			stream.length > 0
 				? {
 						...node(
@@ -297,10 +299,8 @@ export class RawSseViewerComponent implements Component {
 				: keyed(
 						col(
 							[
-								text("No raw SSE frames captured yet", { role: "omp.app.empty-title" }),
-								text([
-									span("HTTP SSE providers populate this view while a model response is streaming.", "muted"),
-								]),
+								text(t("cli.commands.debug.raw_sse.empty_title"), { role: "omp.app.empty-title" }),
+								text([span(t("cli.commands.debug.raw_sse.empty_detail"), "muted")]),
 							],
 							{ gap: "xs", align: "center", role: "omp.app.empty" },
 						),
@@ -313,7 +313,7 @@ export class RawSseViewerComponent implements Component {
 	/** The docked bar under the stream page: the copy status and the buttons. */
 	describe(): NativeNode {
 		if (this.#help.open) return this.#help.describe();
-		return this.#native.get([this.#statusMessage, this.#statusFailed], () =>
+		return this.#native.get([getLocale(), this.#statusMessage, this.#statusFailed], () =>
 			col(
 				compact([
 					this.#statusMessage !== undefined &&
@@ -325,9 +325,9 @@ export class RawSseViewerComponent implements Component {
 							"status",
 						),
 					actionBar([
-						actionButton("Copy raw", "copy-raw", { keys: "ctrl+c", tone: "accent" }),
+						actionButton(t("cli.commands.debug.raw_sse.copy"), "copy-raw", { keys: "ctrl+c", tone: "accent" }),
 						null,
-						actionButton("Close", "close", { keys: "escape" }),
+						actionButton(t("tui.picker.close"), "close", { keys: "escape" }),
 					]),
 				]),
 				{ role: "omp.debug.bar", gap: "sm" },
@@ -337,25 +337,37 @@ export class RawSseViewerComponent implements Component {
 
 	#describeHead(snapshot: RawSseDebugSnapshot): NativeNode {
 		const stats = [
-			span(`${snapshot.totalEvents} events`, "num"),
+			span(t("cli.commands.debug.raw_sse.event_count", { count: snapshot.totalEvents }), "num"),
 			span(" · ", "dim"),
-			span(`${snapshot.records.length} records`, "num"),
+			span(t("cli.commands.debug.raw_sse.record_count", { count: snapshot.records.length }), "num"),
 		];
 		if (snapshot.droppedRecords > 0) {
-			stats.push(span(" · ", "dim"), span(`${snapshot.droppedRecords} dropped`, "warning"));
+			stats.push(
+				span(" · ", "dim"),
+				span(t("cli.commands.debug.raw_sse.dropped_count", { count: snapshot.droppedRecords }), "warning"),
+			);
 		}
 		stats.push(
 			span(" · ", "dim"),
 			snapshot.lastUpdatedAt
-				? span(`last ${formatRawSseIsoTime(snapshot.lastUpdatedAt)}`, "muted")
-				: span("waiting for first frame", "muted"),
+				? span(
+						t("cli.commands.debug.raw_sse.last_time", { time: formatRawSseIsoTime(snapshot.lastUpdatedAt) }),
+						"muted",
+					)
+				: span(t("cli.commands.debug.raw_sse.waiting"), "muted"),
 		);
 		return keyed(
-			row([text("Raw provider stream", { role: "omp.app.title" }), text(stats, { truncate: "end" })], {
-				gap: "sm",
-				align: "center",
-				role: "omp.app.head",
-			}),
+			row(
+				[
+					text(t("cli.commands.debug.raw_sse.native_title"), { role: "omp.app.title" }),
+					text(stats, { truncate: "end" }),
+				],
+				{
+					gap: "sm",
+					align: "center",
+					role: "omp.app.head",
+				},
+			),
 			"head",
 		);
 	}
@@ -417,13 +429,15 @@ export class RawSseViewerComponent implements Component {
 		if (
 			this.#bodyRevision === this.#snapshotRevision &&
 			this.#bodyWidth === innerWidth &&
-			this.#bodyThemeEpoch === themeEpoch
+			this.#bodyThemeEpoch === themeEpoch &&
+			this.#bodyLocale === getLocale()
 		) {
 			return this.#bodyLines;
 		}
 		this.#bodyRevision = this.#snapshotRevision;
 		this.#bodyWidth = innerWidth;
 		this.#bodyThemeEpoch = themeEpoch;
+		this.#bodyLocale = getLocale();
 		this.#bodyLines = this.#formatRawLines(snapshot, innerWidth);
 		return this.#bodyLines;
 	}
@@ -431,8 +445,8 @@ export class RawSseViewerComponent implements Component {
 	#formatRawLines(snapshot: RawSseDebugSnapshot, innerWidth: number): string[] {
 		if (snapshot.records.length === 0) {
 			return [
-				theme.fg("muted", "No raw SSE frames captured yet."),
-				theme.fg("muted", "HTTP SSE providers populate this view while a model response is streaming."),
+				theme.fg("muted", t("cli.commands.debug.raw_sse.empty_line")),
+				theme.fg("muted", t("cli.commands.debug.raw_sse.empty_detail")),
 			];
 		}
 		const lines: string[] = [];
@@ -477,16 +491,16 @@ export class RawSseViewerComponent implements Component {
 	#summaryText(): string {
 		const snapshot = this.#currentSnapshot();
 		const last = snapshot.lastUpdatedAt
-			? `${theme.fg("muted", "last")} ${theme.fg("accent", formatRawSseIsoTime(snapshot.lastUpdatedAt))}`
-			: theme.fg("muted", "waiting for first frame");
+			? `${theme.fg("muted", t("cli.commands.debug.raw_sse.last"))} ${theme.fg("accent", formatRawSseIsoTime(snapshot.lastUpdatedAt))}`
+			: theme.fg("muted", t("cli.commands.debug.raw_sse.waiting"));
 		const follow = this.#frame.isFollowingTail()
-			? theme.fg("success", "follow on")
-			: theme.fg("warning", "follow off");
-		return `${theme.fg("muted", "events")} ${theme.fg("accent", String(snapshot.totalEvents))}  ${theme.fg("muted", "records")} ${theme.fg("accent", String(snapshot.records.length))}  ${last}  ${follow}`;
+			? theme.fg("success", t("cli.commands.debug.raw_sse.follow_on"))
+			: theme.fg("warning", t("cli.commands.debug.raw_sse.follow_off"));
+		return `${theme.fg("muted", t("cli.commands.debug.raw_sse.events"))} ${theme.fg("accent", String(snapshot.totalEvents))}  ${theme.fg("muted", t("cli.commands.debug.raw_sse.records"))} ${theme.fg("accent", String(snapshot.records.length))}  ${last}  ${follow}`;
 	}
 
 	#statusText(): string {
-		const help = "Esc close · Ctrl-c copy raw · End follow tail · click summary toggles follow · ? help";
+		const help = t("cli.commands.debug.raw_sse.help");
 		return this.#statusMessage
 			? `${theme.fg("success", this.#statusMessage)}  ${theme.fg("dim", help)}`
 			: theme.fg("dim", help);
@@ -495,7 +509,7 @@ export class RawSseViewerComponent implements Component {
 	#copyAll(): void {
 		const payload = this.#buffer.toRawText();
 		if (payload.trim().length === 0) {
-			const message = "No raw SSE frames to copy";
+			const message = t("cli.commands.debug.raw_sse.nothing_to_copy");
 			this.#statusMessage = message;
 			this.#statusFailed = true;
 			this.#onStatus?.(message);
@@ -505,13 +519,13 @@ export class RawSseViewerComponent implements Component {
 
 		try {
 			this.#deps.copyToClipboard(payload);
-			const message = "Copied raw SSE stream";
+			const message = t("cli.commands.debug.raw_sse.copied");
 			this.#statusMessage = message;
 			this.#statusFailed = false;
 			this.#onStatus?.(message);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.#statusMessage = `Copy failed: ${message}`;
+			this.#statusMessage = t("cli.commands.debug.raw_sse.copy_failed", { message });
 			this.#statusFailed = true;
 		}
 		this.#onUpdate?.();

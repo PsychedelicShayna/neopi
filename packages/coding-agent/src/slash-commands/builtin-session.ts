@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { clearSubmittedText } from "./helpers/draft";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -71,16 +72,16 @@ async function handleUsageResetCommand(
 	try {
 		accounts = toResetUsageAccounts(await session.listResetCredits());
 	} catch (error) {
-		await output(`Could not load saved resets: ${oneLine(errorMessage(error))}`);
+		await output(t("commands.session.resetsFailed", { error: oneLine(errorMessage(error)) }));
 		return;
 	}
 	if (accounts.length === 0) {
-		await output("No provider accounts found. Use /login to add one.");
+		await output(t("commands.session.noAccounts"));
 		return;
 	}
 	if (!arg.trim()) {
-		const lines = ["Saved rate-limit resets:", ...accounts.map(formatResetUsageAccountLine)];
-		lines.push("", "Spend one with `/usage reset <provider>/<credential id>` or `/usage reset <provider>/active`.");
+		const lines = [t("commands.session.savedResets"), ...accounts.map(formatResetUsageAccountLine)];
+		lines.push("", t("commands.session.spendReset"));
 		await output(lines.join("\n"));
 		return;
 	}
@@ -106,12 +107,12 @@ async function handleJobsKillCommand(
 ): Promise<void> {
 	const target = arg.trim();
 	if (!target) {
-		await output("Usage: /jobs kill <id>|all");
+		await output(t("commands.session.killUsage"));
 		return;
 	}
 	const snapshot = session.getAsyncJobSnapshot({ recentLimit: 0 });
 	if (!snapshot) {
-		await output("Async background jobs are unavailable in this session.");
+		await output(t("commands.session.jobsUnavailable"));
 		return;
 	}
 	if (target === "all") {
@@ -121,20 +122,20 @@ async function handleJobsKillCommand(
 		}
 		await output(
 			cancelled === 0
-				? "No running background jobs to cancel."
-				: `Cancelled ${cancelled} background job${cancelled === 1 ? "" : "s"}.`,
+				? t("commands.session.noJobsToCancel")
+				: t("commands.session.jobsCancelled", { count: cancelled, plural: cancelled === 1 ? "" : "s" }),
 		);
 		return;
 	}
 	const safeTarget = truncateToWidth(sanitizeText(target).replace(/\s+/g, " ").trim(), 60);
 	if (!snapshot.running.some(job => job.id === target)) {
-		await output(`No running background job with id "${safeTarget}".`);
+		await output(t("commands.session.jobNotFound", { id: safeTarget }));
 		return;
 	}
 	await output(
 		session.cancelAsyncJob(target)
-			? `Cancelled background job ${safeTarget}.`
-			: `Could not cancel background job ${safeTarget}.`,
+			? t("commands.session.jobCancelled", { id: safeTarget })
+			: t("commands.session.jobCancelFailed", { id: safeTarget }),
 	);
 }
 
@@ -144,18 +145,18 @@ async function handleSessionPinCommand(
 	output: SlashCommandRuntime["output"],
 ): Promise<void> {
 	if (session.isStreaming) {
-		await output("Cannot pin an account while the session is streaming.");
+		await output(t("commands.session.pinStreaming"));
 		return;
 	}
 	let accountList: SessionOAuthAccountList | undefined;
 	try {
 		accountList = await session.listCurrentProviderOAuthAccounts();
 	} catch (error) {
-		await output(`Could not load provider accounts: ${errorMessage(error)}`);
+		await output(t("commands.session.accountsFailed", { error: errorMessage(error) }));
 		return;
 	}
 	if (!accountList) {
-		await output("Select a model before pinning a provider account.");
+		await output(t("commands.session.selectModelBeforePin"));
 		return;
 	}
 	const provider = getOAuthProviders().find(candidate => candidate.id === accountList.provider);
@@ -165,42 +166,44 @@ async function handleSessionPinCommand(
 		const source = session.modelRegistry.authStorage.keys.describe(accountList.provider, session.sessionId);
 		await output(
 			source
-				? `No stored OAuth accounts for ${providerName}. Current auth comes from ${source}.`
-				: `No stored OAuth accounts for ${providerName}. Use /login to add one.`,
+				? t("commands.session.noOauthAccountsWithSource", { provider: providerName, source })
+				: t("commands.session.noOauthAccounts", { provider: providerName }),
 		);
 		return;
 	}
 
 	const selector = arg.trim();
 	if (!selector) {
-		const lines = [`OAuth accounts for ${providerName}:`];
+		const lines = [t("commands.session.oauthAccounts", { provider: providerName })];
 		for (const account of accounts) {
 			lines.push(`${account.position + 1}. ${account.label}${account.active ? " (active)" : ""}`);
 		}
-		lines.push("", "Pin one with `/session pin <number|email|account id>`.");
+		lines.push("", t("commands.session.pinHint"));
 		await output(lines.join("\n"));
 		return;
 	}
 
 	const matches = matchSessionPinAccounts(accounts, selector);
 	if (matches.length === 0) {
-		await output(`No ${providerName} account matches "${selector}".`);
+		await output(t("commands.session.unmatchedAccount", { provider: providerName, selector }));
 		return;
 	}
 	if (matches.length > 1) {
 		await output(
-			`"${selector}" matches multiple ${providerName} accounts: ${matches
-				.map(account => `${account.position + 1}. ${account.label}`)
-				.join(", ")}. Use the account number.`,
+			t("commands.session.ambiguousAccount", {
+				selector,
+				provider: providerName,
+				accounts: matches.map(account => `${account.position + 1}. ${account.label}`).join(", "),
+			}),
 		);
 		return;
 	}
 	const account = matches[0];
 	if (!account || !session.pinCurrentProviderOAuthAccount(account.credentialId)) {
-		await output(`${account?.label ?? selector} is no longer available to pin.`);
+		await output(t("commands.session.accountUnavailable", { account: account?.label ?? selector }));
 		return;
 	}
-	await output(`Pinned ${account.label} to this session for ${providerName}.`);
+	await output(t("commands.session.accountPinned", { account: account.label, provider: providerName }));
 }
 
 /**
@@ -229,53 +232,91 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "todo",
 		icon: "todo",
-		description: "View or modify the agent's todo list",
-		acpDescription: "Manage todos",
+		get description() {
+			return t("commands.session.todoDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.todoAcpDescription");
+		},
 		acpInputHint: "<subcommand>",
 		subcommands: [
-			{ name: "edit", description: "Open todos in $EDITOR (Markdown round-trip)" },
-			{ name: "copy", description: "Copy todos as Markdown to clipboard" },
-			{ name: "expand", description: "Show every phase and task in the HUD" },
-			{ name: "collapse", description: "Restore the bounded HUD preview" },
+			{
+				name: "edit",
+				get description() {
+					return t("commands.session.todoEditDescription");
+				},
+			},
+			{
+				name: "copy",
+				get description() {
+					return t("commands.session.todoCopyDescription");
+				},
+			},
+			{
+				name: "expand",
+				get description() {
+					return t("commands.session.todoExpandDescription");
+				},
+			},
+			{
+				name: "collapse",
+				get description() {
+					return t("commands.session.todoCollapseDescription");
+				},
+			},
 			{
 				name: "export",
-				description: "Write todos as Markdown to a file (default: TODO.md)",
+				get description() {
+					return t("commands.session.todoExportDescription");
+				},
 				usage: "[<path>]",
 				getArgumentCompletions: completeTodoPath,
 			},
 			{
 				name: "import",
-				description: "Replace todos from a Markdown file (default: TODO.md)",
+				get description() {
+					return t("commands.session.todoImportDescription");
+				},
 				usage: "[<path>]",
 				getArgumentCompletions: completeTodoPath,
 			},
 			{
 				name: "append",
-				description: "Append a task; phase fuzzy-matched or auto-created",
+				get description() {
+					return t("commands.session.todoAddDescription");
+				},
 				usage: "[<phase>] <task...>",
 				arguments: [todoPhaseValues, null],
 			},
 			{
 				name: "start",
-				description: "Mark task in_progress (fuzzy-matched)",
+				get description() {
+					return t("commands.session.todoStartDescription");
+				},
 				usage: "<task>",
 				getArgumentCompletions: todoTargetCompletions(false),
 			},
 			{
 				name: "done",
-				description: "Mark task/phase/all completed (fuzzy-matched)",
+				get description() {
+					return t("commands.session.todoDoneDescription");
+				},
 				usage: "[<task|phase>]",
 				getArgumentCompletions: todoTargetCompletions(true),
 			},
 			{
 				name: "drop",
-				description: "Mark task/phase/all abandoned (fuzzy-matched)",
+				get description() {
+					return t("commands.session.todoAbandonDescription");
+				},
 				usage: "[<task|phase>]",
 				getArgumentCompletions: todoTargetCompletions(true),
 			},
 			{
 				name: "rm",
-				description: "Remove task/phase/all (fuzzy-matched)",
+				get description() {
+					return t("commands.session.todoRemoveDescription");
+				},
 				usage: "[<task|phase>]",
 				getArgumentCompletions: todoTargetCompletions(true),
 			},
@@ -284,11 +325,11 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const tasks = runtime.ctx.todoPhases.flatMap(phase => phase.tasks);
-			if (tasks.length === 0) return "Todos: none";
+			if (tasks.length === 0) return t("commands.session.noTodos");
 			const pending = tasks.filter(task => task.status === "pending").length;
 			const inProgress = tasks.filter(task => task.status === "in_progress").length;
 			const completed = tasks.filter(task => task.status === "completed").length;
-			return `Todos: ${pending + inProgress} open (${inProgress} in progress, ${completed} done)`;
+			return t("commands.session.todos", { open: pending + inProgress, inProgress, completed });
 		},
 		handle: handleTodoAcp,
 		handleTui: async (command, runtime) => {
@@ -299,15 +340,31 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "session",
 		icon: "session",
-		description: "Session management commands",
-		acpDescription: "Show or configure the current session",
+		get description() {
+			return t("commands.session.description");
+		},
+		get acpDescription() {
+			return t("commands.session.acpDescription");
+		},
 		acpInputHint: "[info|delete|pin [account]]",
 		subcommands: [
-			{ name: "info", description: "Show session info and stats" },
-			{ name: "delete", description: "Delete current session and return to selector" },
+			{
+				name: "info",
+				get description() {
+					return t("commands.session.infoDescription");
+				},
+			},
+			{
+				name: "delete",
+				get description() {
+					return t("commands.session.deleteDescription");
+				},
+			},
 			{
 				name: "pin",
-				description: "Pin a stored OAuth account to the current provider for this session",
+				get description() {
+					return t("commands.session.pinDescription");
+				},
 				usage: "[account]",
 				getArgumentCompletions: completeSessionPinArguments,
 			},
@@ -319,38 +376,46 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (!verb || (verb === "info" && !rest)) {
 				await runtime.output(
 					[
-						`Session: ${runtime.session.sessionId}`,
-						`Title: ${runtime.session.sessionName}`,
-						`CWD: ${runtime.cwd}`,
+						t("commands.session.sessionId", { id: runtime.session.sessionId }),
+						t("commands.session.sessionTitle", { title: String(runtime.session.sessionName) }),
+						t("commands.session.cwd", { path: runtime.cwd }),
 					].join("\n"),
 				);
 				return commandConsumed();
 			}
 			if (verb === "delete" && !rest) {
-				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
+				if (runtime.session.isStreaming) return usage(t("commands.session.deleteStreaming"), runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
-				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
+				if (!sessionFile) return usage(t("commands.session.deleteInMemory"), runtime);
 				// Detach the live agent before deleting its file; the next prompt must
 				// belong to a fresh session with a valid header and no old history.
 				// `drop` deletes the old file and keeps the successor lazy, so deleting
 				// never leaves an empty session behind.
 				try {
 					if (!(await runtime.session.newSession({ drop: true })))
-						return usage("Session deletion cancelled.", runtime);
+						return usage(t("commands.session.deleteCancelled"), runtime);
 				} catch (err) {
-					return usage(`Failed to start a new session: ${errorMessage(err)}`, runtime);
+					return usage(t("commands.session.newFailed", { error: errorMessage(err) }), runtime);
 				}
 				try {
 					// `drop` only logs a failed delete; retry here to report it (ENOENT is success).
 					await runtime.sessionManager.dropSession(sessionFile);
 				} catch (err) {
 					return usage(
-						`Started new session ${runtime.session.sessionId}, but failed to delete ${sessionFile}: ${errorMessage(err)}`,
+						t("commands.session.deleteFailed", {
+							id: runtime.session.sessionId,
+							file: sessionFile,
+							error: errorMessage(err),
+						}),
 						runtime,
 					);
 				}
 				await runtime.output(
-					`Session deleted: ${sessionFile}. New session: ${runtime.session.sessionId} (${runtime.session.sessionFile}).`,
+					t("commands.session.deleted", {
+						file: sessionFile,
+						id: runtime.session.sessionId,
+						newFile: String(runtime.session.sessionFile),
+					}),
 				);
 				return commandConsumed();
 			}
@@ -358,7 +423,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await handleSessionPinCommand(rest, runtime.session, runtime.output);
 				return commandConsumed();
 			}
-			return usage("Usage: /session [info|delete|pin [account]]", runtime);
+			return usage(t("commands.session.usage"), runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -380,7 +445,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (!verb || (verb === "info" && !rest)) {
 				await runtime.ctx.handleSessionCommand();
 			} else {
-				runtime.ctx.showStatus("Usage: /session [info|delete|pin [account]]");
+				runtime.ctx.showStatus(t("commands.session.usage"));
 			}
 			clearSubmittedText(runtime);
 		},
@@ -388,14 +453,25 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "jobs",
 		icon: "jobs",
-		description: "Show async background jobs status",
-		acpDescription: "Show background jobs",
+		get description() {
+			return t("commands.session.jobsDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.jobsAcpDescription");
+		},
 		acpInputHint: "[full|kill <id>|kill all]",
 		subcommands: [
-			{ name: "full", description: "Show full, untruncated command lines" },
+			{
+				name: "full",
+				get description() {
+					return t("commands.session.jobsFullDescription");
+				},
+			},
 			{
 				name: "kill",
-				description: "Cancel a running background job",
+				get description() {
+					return t("commands.session.jobsKillDescription");
+				},
 				usage: "<id>|all",
 				arguments: [runningJobValues],
 			},
@@ -404,8 +480,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const snapshot = runtime.ctx.session.getAsyncJobSnapshot({ recentLimit: 5 });
-			if (!snapshot || (snapshot.running.length === 0 && snapshot.recent.length === 0)) return "Jobs: none";
-			return `Jobs: ${snapshot.running.length} running, ${snapshot.recent.length} recent`;
+			if (!snapshot || (snapshot.running.length === 0 && snapshot.recent.length === 0))
+				return t("commands.session.noJobs");
+			return t("commands.session.jobsStatus", { running: snapshot.running.length, recent: snapshot.recent.length });
 		},
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -413,14 +490,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await handleJobsKillCommand(rest, runtime.session, runtime.output);
 				return commandConsumed();
 			}
-			if (rest || (verb && verb !== "full")) return usage("Usage: /jobs [full|kill <id>|kill all]", runtime);
+			if (rest || (verb && verb !== "full")) return usage(t("commands.session.jobsUsage"), runtime);
 			const full = verb === "full";
 			if (full) runtime.session.requestJobCaptions();
 			const tree = runtime.session.getAsyncJobTree();
 			if (!tree || (tree.running.length === 0 && tree.recent.length === 0)) {
-				await runtime.output(
-					"No background jobs running. (Background jobs run async tools — e.g. long-running bash, debug, or task subagents that would otherwise tie up a turn. They appear here while alive and briefly after (until their result is delivered; at most ~5 minutes).)",
-				);
+				await runtime.output(t("commands.session.jobsEmptyExplanation"));
 				return commandConsumed();
 			}
 			// One fenced block keeps the tree rails aligned; the fence outgrows any run inside a command.
@@ -451,7 +526,14 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const body = rows.join("\n");
 			const fence = markdownFenceFor(body);
 			await runtime.output(
-				["Background Jobs", `Running: ${tree.running.length}`, "", `${fence}text`, body, fence].join("\n"),
+				[
+					t("commands.session.jobsTitle"),
+					t("commands.session.jobsRunning", { count: tree.running.length }),
+					"",
+					`${fence}text`,
+					body,
+					fence,
+				].join("\n"),
 			);
 			return commandConsumed();
 		},
@@ -460,7 +542,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (verb === "kill") {
 				await handleJobsKillCommand(rest, runtime.ctx.session, text => runtime.ctx.showStatus(text));
 			} else if (rest || (verb && verb !== "full")) {
-				runtime.ctx.showStatus("Usage: /jobs [full|kill <id>|kill all]");
+				runtime.ctx.showStatus(t("commands.session.jobsUsage"));
 			} else {
 				await runtime.ctx.handleJobsCommand({ full: verb === "full" });
 			}
@@ -470,14 +552,25 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "usage",
 		icon: "gauge",
-		description: "Show provider usage and limits",
-		acpDescription: "Show token usage",
+		get description() {
+			return t("commands.session.usageDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.usageAcpDescription");
+		},
 		acpInputHint: "[show|reset [provider/credential-id|provider/active]]",
 		subcommands: [
-			{ name: "show", description: "Show provider usage and limits" },
+			{
+				name: "show",
+				get description() {
+					return t("commands.session.usageDescription");
+				},
+			},
 			{
 				name: "reset",
-				description: "Spend a saved provider rate-limit reset",
+				get description() {
+					return t("commands.session.resetDescription");
+				},
 				usage: "[provider/credential-id|provider/active]",
 				arguments: [resetUsageValues],
 			},
@@ -494,7 +587,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await handleUsageResetCommand(rest, runtime.session, runtime.output);
 				return commandConsumed();
 			}
-			return usage("Usage: /usage [show|reset [provider/credential-id|provider/active]]", runtime);
+			return usage(t("commands.session.usageGuide"), runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -512,14 +605,16 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				clearSubmittedText(runtime);
 				return;
 			}
-			runtime.ctx.showStatus("Usage: /usage [show|reset [provider/credential-id|provider/active]]");
+			runtime.ctx.showStatus(t("commands.session.usageGuide"));
 			clearSubmittedText(runtime);
 		},
 	},
 	{
 		name: "stats",
 		icon: "stats",
-		description: "Launch the local stats dashboard",
+		get description() {
+			return t("commands.session.statsDescription");
+		},
 		inlineHint: "[--port <port>] [--host <host>]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeStatsArguments,
@@ -527,12 +622,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const parsed = parseStatsDashboardArgs(command.args);
 			if ("error" in parsed) return usage(parsed.error, runtime);
 
-			await runtime.output("Syncing session files...");
+			await runtime.output(t("commands.session.statsSyncing"));
 			try {
 				const result = await launchSessionStatsDashboard(parsed, runtime);
 				await runtime.output(result.message);
 			} catch (error) {
-				await runtime.output(`Stats dashboard failed: ${errorMessage(error)}`);
+				await runtime.output(t("commands.session.statsFailed", { error: errorMessage(error) }));
 				// Mark the failure like `usage()` does, for hosts that report a
 				// failed builtin (print mode does not dispatch `/stats`).
 				return commandConsumed({ failed: true });
@@ -551,19 +646,34 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const result = await launchSessionStatsDashboard(parsed, ctx);
 				ctx.presentCommandOutput(new StatsNotice(result.message, result.url));
 			} catch (error) {
-				ctx.showError(`Stats dashboard failed: ${errorMessage(error)}`);
+				ctx.showError(t("commands.session.statsFailed", { error: errorMessage(error) }));
 			}
 		},
 	},
 	{
 		name: "changelog",
 		icon: "news",
-		description: "Show changelog entries",
-		acpDescription: "Show changelog",
+		get description() {
+			return t("commands.session.changelogDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.changelogAcpDescription");
+		},
 		acpInputHint: "[full|last [N]]",
 		subcommands: [
-			{ name: "full", description: "Show complete changelog" },
-			{ name: "last", description: "Show the last N releases (default 1)", usage: "[N]" },
+			{
+				name: "full",
+				get description() {
+					return t("commands.session.changelogFullDescription");
+				},
+			},
+			{
+				name: "last",
+				get description() {
+					return t("commands.session.changelogCountDescription");
+				},
+				usage: "[N]",
+			},
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
@@ -573,7 +683,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const allEntries = await parseChangelog(changelogPath);
 			const entriesToShow = selectChangelogEntries(allEntries, view);
 			if (entriesToShow.length === 0) {
-				await runtime.output("No changelog entries found.");
+				await runtime.output(t("commands.session.changelogEmpty"));
 				return commandConsumed();
 			}
 			await runtime.output(renderChangelogEntries(entriesToShow).markdown);
@@ -587,7 +697,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "hotkeys",
 		icon: "keyboard",
-		description: "Show all keyboard shortcuts",
+		get description() {
+			return t("commands.session.hotkeysDescription");
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.handleHotkeysCommand();
 			clearSubmittedText(runtime);
@@ -596,7 +708,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "tool",
 		icon: "tools",
-		description: "Inspect enabled tools, or invoke with JSON or key=value arguments",
+		get description() {
+			return t("commands.session.toolDescription");
+		},
 		allowArgs: true,
 		getTuiArgumentCompletions: completeToolArguments,
 		handle: async ({ args }, runtime) => {
@@ -633,18 +747,24 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "tools",
 		icon: "tools",
-		description: "Show tools currently visible to the agent",
-		acpDescription: "Show available tools",
+		get description() {
+			return t("commands.session.toolsDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.toolsAcpDescription");
+		},
 		getTuiAutocompleteDescription: runtime => {
 			const active = runtime.ctx.session.getActiveToolNames().length;
 			const all = runtime.ctx.session.getAllToolNames().length;
-			return all === 0 ? "Tools: none available" : `Tools: ${active} active / ${all} available`;
+			return all === 0
+				? t("commands.session.noTools")
+				: t("commands.session.toolCounts", { active, available: all });
 		},
 		handle: async (_command, runtime) => {
 			const active = runtime.session.getActiveToolNames();
 			const all = runtime.session.getAllToolNames();
 			if (all.length === 0) {
-				await runtime.output("No tools are available.");
+				await runtime.output(t("commands.session.noAvailableTools"));
 				return commandConsumed();
 			}
 			const lines = all.map(name => `${active.includes(name) ? "*" : "-"} ${name}`);
@@ -662,12 +782,20 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "context",
 		icon: "context",
-		description: "Browse context usage and detailed content",
-		acpDescription: "Show context usage",
+		get description() {
+			return t("commands.session.contextDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.contextAcpDescription");
+		},
 		getTuiAutocompleteDescription: runtime => {
 			const usage = runtime.ctx.session.getContextUsage();
-			if (!usage) return "Context: unavailable";
-			return `Context: ${Math.round(usage.percent)}% (${formatTokenCount(usage.tokens)}/${formatTokenCount(usage.contextWindow)})`;
+			if (!usage) return t("commands.session.contextUnavailable");
+			return t("commands.session.contextUsage", {
+				percent: Math.round(usage.percent),
+				used: formatTokenCount(usage.tokens),
+				total: formatTokenCount(usage.contextWindow),
+			});
 		},
 		handle: async (_command, runtime) => {
 			await runtime.output(buildContextReportText(runtime));
@@ -682,7 +810,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "extensions",
 		aliases: ["status"],
 		icon: "extension",
-		description: "Open Extension Control Center dashboard",
+		get description() {
+			return t("commands.session.extensionsDescription");
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showExtensionsDashboard();
 			clearSubmittedText(runtime);
@@ -691,7 +821,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "agents",
 		icon: "agents",
-		description: "Open the agents hub (per-agent model, prewalk, and advisor)",
+		get description() {
+			return t("commands.session.agentsDescription");
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showAgentsDashboard();
 			clearSubmittedText(runtime);
@@ -700,7 +832,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "git",
 		icon: "branch",
-		description: "Open the git UI (split diff viewer, staging, commit composer)",
+		get description() {
+			return t("commands.session.gitDescription");
+		},
 		inlineHint: "[revision]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeGitRevision,
@@ -712,7 +846,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "local",
 		icon: "pencil",
-		description: "Open a session local:// file in $EDITOR (picker when no name given)",
+		get description() {
+			return t("commands.session.editDescription");
+		},
 		inlineHint: "[name]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
@@ -724,7 +860,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "hub",
 		aliases: ["subagents"],
 		icon: "agents",
-		description: "Open the live Agent Hub or go straight to an agent's transcript",
+		get description() {
+			return t("commands.session.agentHubDescription");
+		},
 		inlineHint: "[agent]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeHubArguments,
@@ -737,7 +875,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "irc",
 		icon: "agents",
-		description: "Open the IRC viewer, message peers, or manage groups as yourself",
+		get description() {
+			return t("commands.session.ircDescription");
+		},
 		inlineHint: "[<peer>|#<group>|all <message> | group <operation>]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeIrcArguments,
@@ -747,7 +887,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "branch",
 		aliases: ["rewind"],
 		icon: "branch",
-		description: "Rewind to a previous message, keeping the old path as a branch",
+		get description() {
+			return t("commands.session.rewindDescription");
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showUserMessageSelector();
 			clearSubmittedText(runtime);
@@ -756,11 +898,28 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "fork",
 		icon: "branch",
-		description: "Fork this session, or open it in a multiplexer pane or window",
+		get description() {
+			return t("commands.session.forkDescription");
+		},
 		subcommands: [
-			{ name: "pane", description: "Open the fork in a new terminal pane" },
-			{ name: "window", description: "Open the fork in a new multiplexer window" },
-			{ name: "tab", description: "Alias for window" },
+			{
+				name: "pane",
+				get description() {
+					return t("commands.session.forkPaneDescription");
+				},
+			},
+			{
+				name: "window",
+				get description() {
+					return t("commands.session.forkWindowDescription");
+				},
+			},
+			{
+				name: "tab",
+				get description() {
+					return t("commands.session.forkTabDescription");
+				},
+			},
 		],
 		subcommandOptional: true,
 		allowArgs: true,
@@ -771,7 +930,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const [keyword, ...extra] = args.split(/\s+/);
 				if (extra.length > 0) {
 					clearSubmittedText(runtime);
-					runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+					runtime.ctx.showError(t("commands.session.forkUsage"));
 					return;
 				}
 				switch (keyword?.toLowerCase()) {
@@ -784,7 +943,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						break;
 					default:
 						clearSubmittedText(runtime);
-						runtime.ctx.showError("Usage: /fork [pane|window|tab]");
+						runtime.ctx.showError(t("commands.session.forkUsage"));
 						return;
 				}
 			}
@@ -796,7 +955,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "tree",
 		icon: "tree",
-		description: "Navigate session tree (switch branches)",
+		get description() {
+			return t("commands.session.treeDescription");
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showTreeSelector();
 			clearSubmittedText(runtime);
@@ -805,14 +966,18 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "login",
 		icon: "signIn",
-		description: "Login with OAuth provider",
+		get description() {
+			return t("commands.session.loginDescription");
+		},
 		inlineHint: "[provider|neoproxy <url>|redirect URL]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeLoginArguments,
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.oauthManualInput.hasPending()
-				? `Login: waiting for ${runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth"} callback`
-				: "Login: choose provider",
+				? t("commands.session.loginWaiting", {
+						provider: runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth",
+					})
+				: t("commands.session.loginChoose"),
 		handleTui: (command, runtime) => {
 			const manualInput = runtime.ctx.oauthManualInput;
 			const args = command.args.trim();
@@ -826,8 +991,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					if (manualInput.hasPending()) {
 						const pendingProvider = manualInput.pendingProviderId;
 						const message = pendingProvider
-							? `OAuth login already in progress for ${pendingProvider}. Paste the redirect URL with /login <url>.`
-							: "OAuth login already in progress. Paste the redirect URL with /login <url>.";
+							? t("commands.session.loginInProgressForProvider", { provider: pendingProvider })
+							: t("commands.session.loginInProgress");
 						runtime.ctx.showWarning(message);
 						clearSubmittedText(runtime);
 						return;
@@ -844,9 +1009,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				}
 				const submitted = manualInput.submit(args);
 				if (submitted) {
-					runtime.ctx.showStatus("OAuth callback received; completing login…");
+					runtime.ctx.showStatus(t("commands.session.loginCallbackReceived"));
 				} else {
-					runtime.ctx.showWarning("No OAuth login is waiting for a manual callback.");
+					runtime.ctx.showWarning(t("commands.session.loginCallbackNotExpected"));
 				}
 				clearSubmittedText(runtime);
 				return;
@@ -855,8 +1020,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (manualInput.hasPending()) {
 				const provider = manualInput.pendingProviderId;
 				const message = provider
-					? `OAuth login already in progress for ${provider}. Paste the redirect URL with /login <url>.`
-					: "OAuth login already in progress. Paste the redirect URL with /login <url>.";
+					? t("commands.session.loginInProgressForProvider", { provider })
+					: t("commands.session.loginInProgress");
 				runtime.ctx.showWarning(message);
 				clearSubmittedText(runtime);
 				return;
@@ -869,7 +1034,9 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "logout",
 		icon: "signOut",
-		description: "Logout from OAuth provider",
+		get description() {
+			return t("commands.session.logoutDescription");
+		},
 		inlineHint: "[provider]",
 		allowArgs: true,
 		getTuiArgumentCompletions: completeLogoutArguments,
@@ -878,7 +1045,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (providerId) {
 				const matchedProvider = getOAuthProviders().find(provider => provider.id === providerId);
 				if (!matchedProvider) {
-					runtime.ctx.showWarning(`Unknown OAuth provider: ${providerId}`);
+					runtime.ctx.showWarning(t("commands.session.unknownOauthProvider", { provider: providerId }));
 					clearSubmittedText(runtime);
 					return;
 				}
@@ -893,64 +1060,114 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "mcp",
 		icon: "mcp",
-		description: "Manage MCP servers (add, list, remove, test)",
-		acpDescription: "Manage MCP servers",
+		get description() {
+			return t("commands.session.mcpDescription");
+		},
+		get acpDescription() {
+			return t("commands.session.mcpAcpDescription");
+		},
 		inlineHint: "<subcommand>",
 		subcommands: [
 			{
 				name: "add",
-				description: "Add a new MCP server",
+				get description() {
+					return t("commands.session.mcpAddDescription");
+				},
 				usage: "<name> [--scope project|user] [--url <url> --transport http|sse] [--token <token>] [-- <command...>]",
 				getArgumentCompletions: completeMcpAddArguments,
 			},
-			{ name: "list", description: "List all configured MCP servers" },
+			{
+				name: "list",
+				get description() {
+					return t("commands.session.mcpListDescription");
+				},
+			},
 			{
 				name: "remove",
-				description: "Remove an MCP server",
+				get description() {
+					return t("commands.session.mcpRemoveDescription");
+				},
 				usage: "<name> [--scope project|user]",
 				getArgumentCompletions: completeMcpRemoveArguments,
 			},
 			{
 				name: "test",
-				description: "Test connection to a server",
+				get description() {
+					return t("commands.session.mcpTestDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("test")],
 			},
 			{
 				name: "reauth",
-				description: "Reauthorize OAuth for a server",
+				get description() {
+					return t("commands.session.mcpAuthDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("reauth")],
 			},
 			{
 				name: "unauth",
-				description: "Remove OAuth auth from a server",
+				get description() {
+					return t("commands.session.mcpUnauthDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("unauth")],
 			},
 			{
 				name: "enable",
-				description: "Enable an MCP server",
+				get description() {
+					return t("commands.session.mcpEnableDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("enable")],
 			},
 			{
 				name: "disable",
-				description: "Disable an MCP server",
+				get description() {
+					return t("commands.session.mcpDisableDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("disable")],
 			},
 			{
 				name: "reconnect",
-				description: "Reconnect to a specific MCP server",
+				get description() {
+					return t("commands.session.mcpReconnectDescription");
+				},
 				usage: "<name>",
 				arguments: [mcpServerArgumentValues("reconnect")],
 			},
-			{ name: "reload", description: "Force reload MCP runtime tools" },
-			{ name: "resources", description: "List available resources from connected servers" },
-			{ name: "prompts", description: "List available prompts from connected servers" },
-			{ name: "notifications", description: "Show notification capabilities and subscriptions" },
-			{ name: "help", description: "Show help message" },
+			{
+				name: "reload",
+				get description() {
+					return t("commands.session.mcpReloadDescription");
+				},
+			},
+			{
+				name: "resources",
+				get description() {
+					return t("commands.session.mcpResourcesDescription");
+				},
+			},
+			{
+				name: "prompts",
+				get description() {
+					return t("commands.session.mcpPromptsDescription");
+				},
+			},
+			{
+				name: "notifications",
+				get description() {
+					return t("commands.session.mcpNotificationsDescription");
+				},
+			},
+			{
+				name: "help",
+				get description() {
+					return t("commands.session.mcpHelpDescription");
+				},
+			},
 		],
 		allowArgs: true,
 		handle: handleMcpAcp,

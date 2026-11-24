@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { MessageDividerComponent } from "../chrome/message-divider";
@@ -89,9 +90,17 @@ export class CacheInvalidationMarkerComponent extends MessageDividerComponent {
 		super({
 			label: () => {
 				const icon = theme.icon.cacheMiss;
-				const head = icon ? `${icon} cache miss` : "cache miss";
+				const head = icon
+					? t("overlays.cache_invalidation_marker.cache_miss_icon", { icon: `${icon}` })
+					: t("overlays.cache_invalidation_marker.cache_miss");
 				const tokens = info.reprocessedTokens;
-				return tokens > 0 ? `${head} ${theme.sep.dot.trim()} ${formatNumber(tokens)} tokens` : head;
+				return tokens > 0
+					? t("overlays.cache_invalidation_marker.cache_tokens", {
+							head: `${head}`,
+							trim: `${theme.sep.dot.trim()}`,
+							tokens: `${formatNumber(tokens)}`,
+						})
+					: head;
 			},
 			labelColor: "muted",
 			ruleColor: "dim",
@@ -101,8 +110,10 @@ export class CacheInvalidationMarkerComponent extends MessageDividerComponent {
 				icon: "database",
 				label: () =>
 					info.reprocessedTokens > 0
-						? `Cache miss · ${formatNumber(info.reprocessedTokens)} tokens`
-						: "Cache miss",
+						? t("overlays.cache_invalidation_marker.cache_miss_tokens", {
+								reprocessedTokens: `${formatNumber(info.reprocessedTokens)}`,
+							})
+						: t("overlays.cache_invalidation_marker.cache_miss_title"),
 			},
 			// Too narrow to frame — preserve the legacy bare label.
 			truncateWhenNarrow: false,

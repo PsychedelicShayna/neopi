@@ -9,6 +9,7 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, matchesKey, parseKey } from "../keys";
 import { MenuKeyReader } from "../components/menu-navigation";
@@ -109,9 +110,9 @@ const MIN_VISIBLE = 5;
 /** Fraction of the terminal height the floating overlay occupies. */
 const HEIGHT_FRACTION = 0.4;
 
-const STATUS_HINT = "Session-only switch — role models stay unchanged";
-const QUICK_ROLE_STATUS_HINT = "Quick role switch — applies its model and thinking for this session";
-const TASK_STATUS_HINT = "Task subagent switch — spawned task agents use this model (session-only)";
+function statusHint(mode: PickerMode): string {
+	return t(`overlaysModel.modelPicker.status.${mode}`);
+}
 
 type PickerMode = "session" | "role" | "task";
 
@@ -120,17 +121,10 @@ const ALL_SCOPE = "all";
 /** Prefix of a provider scope id (`provider:anthropic`). */
 const PROVIDER_SCOPE = "provider:";
 
-/** Slider step labels by thinking selector. */
-const THINKING_STEP_LABELS: Readonly<Record<string, string>> = {
-	[AUTO_THINKING]: "Auto",
-	[ThinkingLevel.Off]: "Off",
-	[ThinkingLevel.Minimal]: "Min",
-	[ThinkingLevel.Low]: "Low",
-	[ThinkingLevel.Medium]: "Med",
-	[ThinkingLevel.High]: "High",
-	[ThinkingLevel.XHigh]: "XHigh",
-	[ThinkingLevel.Max]: "Max",
-};
+/** Slider step labels are independent of their protocol values. */
+function thinkingStepLabel(level: ConfiguredThinkingLevel): string {
+	return level === ThinkingLevel.Inherit ? level : t(`overlaysModel.modelPicker.level.${level}`);
+}
 /** The frozen slider's steps for a model without an effort to pick. */
 const FROZEN_THINKING_STEPS: readonly ConfiguredThinkingLevel[] = [
 	ThinkingLevel.Off,
@@ -155,7 +149,10 @@ function thinkingSteps(model: Model): { steps: readonly ConfiguredThinkingLevel[
 	if (efforts.length > 0) return { steps: [AUTO_THINKING, ThinkingLevel.Off, ...efforts] };
 	return {
 		steps: FROZEN_THINKING_STEPS,
-		disabled: model.reasoning ? `${model.name} picks its own effort` : `${model.name} does not reason`,
+		disabled: t(
+			model.reasoning ? "overlaysModel.modelPicker.level.automatic" : "overlaysModel.modelPicker.level.unsupported",
+			{ model: model.name },
+		),
 	};
 }
 
@@ -176,18 +173,21 @@ function thinkingStep(
 
 /** Footer hint for the active mode; keys resolve at render time so theme/keybinding changes apply. */
 function footerHint(mode: PickerMode, thinking: boolean): string {
-	const navigation = "/ search · ? help";
 	const enter = formatKeyHint("enter");
-	const provider = `${formatKeyHint("tab")} provider`;
-	const close = `${editorKey("tui.select.cancel")} close`;
+	const close = editorKey("tui.select.cancel");
 	switch (mode) {
 		case "role":
-			return `${navigation} · ${enter}/Space apply role model · ${close}`;
+			return t("overlaysModel.modelPicker.footer.role", { enter, close });
 		case "task":
-			return `${navigation} · ${enter}/Space use for Task subagents · ${provider} · ${close}`;
+			return t("overlaysModel.modelPicker.footer.task", { enter, close, tab: formatKeyHint("tab") });
 		default: {
-			const level = thinking ? ` · ${formatKeyHint("left")}/${formatKeyHint("right")} thinking` : "";
-			return `${navigation} · ${enter}/Space use for this session · ${provider}${level} · @ quick roles · ${close}`;
+			const level = thinking
+				? t("overlaysModel.modelPicker.footer.level", {
+						left: formatKeyHint("left"),
+						right: formatKeyHint("right"),
+					})
+				: "";
+			return t("overlaysModel.modelPicker.footer.session", { enter, close, tab: formatKeyHint("tab"), level });
 		}
 	}
 }
@@ -269,7 +269,9 @@ export class ModelPickerComponent implements Component {
 			markOverContext: true,
 			emptyText: () =>
 				this.#roleMode
-					? `  No quick roles in the ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} cycle`
+					? `  ${t("overlaysModel.modelPicker.empty.roles", {
+							key: editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p"),
+						})}`
 					: undefined,
 		});
 		// The rail's logos name each row's provider: the rows show the model id alone.
@@ -568,24 +570,27 @@ export class ModelPickerComponent implements Component {
 		let status = this.#configError
 			? theme.fg("error", ` ${this.#configError}`)
 			: this.#taskMode
-				? theme.fg("error", ` ${TASK_STATUS_HINT}`)
-				: theme.fg("muted", ` ${this.#roleMode ? QUICK_ROLE_STATUS_HINT : STATUS_HINT}`);
+				? theme.fg("error", ` ${statusHint("task")}`)
+				: theme.fg("muted", ` ${statusHint(this.#mode())}`);
 		const slider = this.#slider();
 		if (slider) {
 			status += slider.disabled
-				? theme.fg("dim", " · no thinking")
-				: `${theme.fg("muted", " · thinking ")}${theme.getThinkingBorderColor(slider.value)(THINKING_STEP_LABELS[slider.value] ?? slider.value)}`;
+				? theme.fg("dim", t("overlaysModel.modelPicker.status.noThinking"))
+				: `${theme.fg("muted", t("overlaysModel.modelPicker.status.thinking"))}${theme.getThinkingBorderColor(slider.value)(thinkingStepLabel(slider.value))}`;
 		}
 
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#mode(), this.#thinkingLevelFor !== undefined);
-		if (this.#browser.filterFocused) footer = "Search · Enter confirm · Esc clear";
+		if (this.#browser.filterFocused) footer = t("overlaysModel.modelPicker.footer.search");
 		if (this.#taskModeKey !== undefined && !this.#roleMode && !this.#browser.filterFocused) {
-			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
+			const target = t(`overlaysModel.modelPicker.target.${this.#taskMode ? "session" : "task"}`);
+			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${target}`;
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, this.#taskMode ? "Switch Task Model" : "Switch Model", borderColor));
+		out.push(
+			topBorder(width, t(`overlaysModel.modelPicker.title.${this.#taskMode ? "task" : "session"}`), borderColor),
+		);
 		out.push(row(status, width, borderColor));
 		for (const line of this.#browser.render(inner)) {
 			out.push(row(line, width, borderColor));
@@ -658,7 +663,7 @@ export class ModelPickerComponent implements Component {
 		const query = this.#browser.query;
 		const view = this.#browser.pickerOrder({
 			providers: false,
-			rest: mode === "role" ? null : query.trim() ? "Matches" : "All",
+			rest: mode === "role" ? null : t(`overlaysModel.modelPicker.group.${query.trim() ? "matches" : "all"}`),
 		});
 		const catalogue = this.#browser.pickerItems(this.#roleMode ? this.#quickRoleItems : this.#modelItems);
 		const current =
@@ -671,7 +676,7 @@ export class ModelPickerComponent implements Component {
 		const level = this.#levelProps();
 		const selected = this.#browser.pickerSelected;
 		const cursor = this.#browser.cursor;
-		const memo = `${mode}\0${this.#configError ?? ""}\0${this.#browser.value}\0${cursor}\0${selected ?? ""}\0${this.#scope}\0${this.#browser.filterFocused}`;
+		const memo = `${getLocale()}\0${mode}\0${this.#configError ?? ""}\0${this.#browser.value}\0${cursor}\0${selected ?? ""}\0${this.#scope}\0${this.#browser.filterFocused}`;
 		const cached = this.#pickerRoot;
 		if (
 			cached !== undefined &&
@@ -686,28 +691,33 @@ export class ModelPickerComponent implements Component {
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
 		const node = picker({
 			icon: "cpu",
-			noun: mode === "role" ? "roles" : "models",
+			noun: t(`overlaysModel.modelPicker.noun.${mode === "role" ? "roles" : "models"}`),
 			size: "md",
 			anchor: "composer",
 			search: "list",
 			density: "snug",
 			layout: "rows",
 			preview: "none",
-			placeholder: mode === "task" ? "Search Task models…" : "Search, @ for roles…",
+			placeholder: t(`overlaysModel.modelPicker.placeholder.${mode === "task" ? "task" : "session"}`),
 			...(scopes ? { scopes, scope: this.#scope, scopeStyle: "rail" as const } : {}),
 			...this.#browser.pickerRows(catalogue, view, current),
 			level,
 			// The head is the search alone; a config error titles it instead (`message` shows only in the error state).
-			...(this.#configError ? { title: "Switch model", subtitle: [span(this.#configError, "error")] } : {}),
-			empty: mode === "role" ? `No quick roles in the ${cycleKey} cycle` : "No models available",
+			...(this.#configError
+				? { title: t("overlaysModel.modelPicker.title.error"), subtitle: [span(this.#configError, "error")] }
+				: {}),
+			empty:
+				mode === "role"
+					? t("overlaysModel.modelPicker.empty.roles", { key: cycleKey })
+					: t("overlaysModel.modelPicker.empty.models"),
 			// No action bar: click/Enter pick, Esc and the head's esc keycap close; the
 			// Task-subagent toggle sits in the head. An open `/` search shows only its
 			// Enter confirm (menu navigation: confirming never picks a row).
 			actions: this.#browser.filterFocused
-				? [pickerAction("searchConfirm", "Search", "enter", { primary: true })]
+				? [pickerAction("searchConfirm", t("overlaysModel.modelPicker.action.search"), "enter", { primary: true })]
 				: this.#taskModeKey !== undefined && mode !== "role"
 					? [
-							pickerAction("task", "Task / Main", this.#taskModeKey, {
+							pickerAction("task", t("overlaysModel.modelPicker.action.task"), this.#taskModeKey, {
 								on: mode === "task",
 								head: true,
 								icon: "users",
@@ -725,11 +735,11 @@ export class ModelPickerComponent implements Component {
 		if (!slider) return null;
 		// The rows leave their provider out: the chip names the highlighted one's.
 		const provider = this.#browser.getSelected()?.model.provider ?? "";
-		const key = `${slider.steps.join(",")}\0${slider.value}\0${slider.disabled ?? ""}\0${provider}`;
+		const key = `${getLocale()}\0${slider.steps.join(",")}\0${slider.value}\0${slider.disabled ?? ""}\0${provider}`;
 		if (this.#level?.key === key) return this.#level.value;
 		const value: TspPickerLevel = {
-			label: "Thinking",
-			steps: slider.steps.map(id => ({ id, label: THINKING_STEP_LABELS[id] ?? id })),
+			label: t("overlaysModel.modelPicker.level.title"),
+			steps: slider.steps.map(id => ({ id, label: thinkingStepLabel(id) })),
 			value: slider.value,
 			...(provider ? { detail: provider } : {}),
 			icon: "brain",
@@ -743,36 +753,37 @@ export class ModelPickerComponent implements Component {
 	/** Root card over the status line, the embedded browser, and the mode's key hints. */
 	#describeCard(): NativeNode {
 		const mode = this.#mode();
-		const memo = `${mode}\0${this.#configError ?? ""}\0${this.#taskModeKey ?? ""}`;
+		const memo = `${getLocale()}\0${mode}\0${this.#configError ?? ""}\0${this.#taskModeKey ?? ""}`;
 		if (this.#nativeRoot?.memo === memo) return this.#nativeRoot.node;
 
 		const status = this.#configError
 			? span(this.#configError, "error")
 			: this.#taskMode
-				? span(TASK_STATUS_HINT, "error")
-				: span(this.#roleMode ? QUICK_ROLE_STATUS_HINT : STATUS_HINT, "muted");
+				? span(statusHint("task"), "error")
+				: span(statusHint(mode), "muted");
 		const hints: (NativeHint | undefined)[] = [
-			actionHint(["tui.select.up", "tui.select.down"], mode === "role" ? "roles" : "models"),
+			actionHint(
+				["tui.select.up", "tui.select.down"],
+				t(`overlaysModel.modelPicker.noun.${mode === "role" ? "roles" : "models"}`),
+			),
 			{
 				keys: ["enter"],
-				label:
-					mode === "role"
-						? "apply role model"
-						: mode === "task"
-							? "use for Task subagents"
-							: "use for this session",
+				label: t(`overlaysModel.modelPicker.hint.${mode}`),
 			},
-			{ keys: ["/"], label: "search (@ for quick roles)" },
+			{ keys: ["/"], label: t("overlaysModel.modelPicker.hint.search") },
 		];
-		hints.push(actionHint("tui.select.cancel", "close"));
+		hints.push(actionHint("tui.select.cancel", t("overlaysModel.modelPicker.hint.close")));
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
-			hints.push({ keys: [this.#taskModeKey], label: this.#taskMode ? "session model" : "task model" });
+			hints.push({
+				keys: [this.#taskModeKey],
+				label: t(`overlaysModel.modelPicker.target.${this.#taskMode ? "session" : "task"}`),
+			});
 		}
 		// `card` directly: the task-mode tone is a common prop `overlayCard` doesn't take.
 		const node = card(
 			{
 				role: "omp.overlay.model-picker",
-				head: this.#taskMode ? "Switch Task Model" : "Switch Model",
+				head: t(`overlaysModel.modelPicker.title.${this.#taskMode ? "task" : "session"}`),
 				tone: this.#taskMode ? "error" : undefined,
 			},
 			[text([status], { wrap: "word" }), this.#browser, hintsRow(hints)],

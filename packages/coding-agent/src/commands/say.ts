@@ -11,6 +11,7 @@
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sayHelp as commandHelp } from "../cli/command-help";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
@@ -55,7 +56,7 @@ export default class Say extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Say);
 		if (args.text && flags.file) {
-			process.stderr.write(chalk.red("error: pass either text or --file, not both\n"));
+			process.stderr.write(chalk.red(t("cli.commands.say.text_or_file")));
 			process.exit(1);
 		}
 
@@ -64,16 +65,18 @@ export default class Say extends Command {
 		const voice = flags.voice ?? cfgTtsLocalVoice.get(settings);
 		const speed = flags.speed === undefined ? cfgTtsLocalSpeed.get(settings) : Number(flags.speed);
 		if (!Number.isFinite(speed) || speed <= 0) {
-			process.stderr.write(chalk.red(`error: invalid --speed: ${flags.speed}\n`));
+			process.stderr.write(chalk.red(t("cli.commands.say.invalid_speed", { speed: String(flags.speed) })));
 			process.exit(1);
 		}
 
 		let exitCode = 0;
 		const unsubscribe = ttsClient.onProgress(event => {
 			if (event.status === "progress" && typeof event.progress === "number") {
-				process.stderr.write(
-					`\r${chalk.dim(`downloading ${event.file ?? model}: ${Math.round(event.progress)}%`)}`,
-				);
+				const status = t("cli.commands.say.downloading", {
+					file: event.file ?? model,
+					progress: Math.round(event.progress),
+				});
+				process.stderr.write(`\r${chalk.dim(status)}`);
 			} else if (event.status === "done" || event.status === "ready") {
 				// Clear the progress line once the download finishes.
 				process.stderr.write("\r\x1b[K");
@@ -85,7 +88,7 @@ export default class Say extends Command {
 			const splitter = new SpeakableStream(model === "kokoro-paced" ? speechSegmentOptions(settings) : undefined);
 			const segments = [...splitter.push(text), ...splitter.flush()];
 			if (segments.length === 0) {
-				process.stderr.write(chalk.red("error: nothing speakable in the input\n"));
+				process.stderr.write(chalk.red(t("cli.commands.say.empty")));
 				exitCode = 1;
 				return;
 			}
@@ -124,11 +127,13 @@ export default class Say extends Command {
 				}
 				const wav = encodeWav(pcm, sampleRate);
 				await Bun.write(flags.out, wav);
-				const durationSec = total / sampleRate;
-				process.stdout.write(
-					`${chalk.green("saved")} ${flags.out} ` +
-						`${chalk.dim(`(${voice}, ${model}, ${durationSec.toFixed(1)}s, ${wav.byteLength} bytes)`)}\n`,
-				);
+				const details = t("cli.commands.say.saved_details", {
+					voice,
+					model,
+					seconds: (total / sampleRate).toFixed(1),
+					bytes: wav.byteLength,
+				});
+				process.stdout.write(`${chalk.green(t("cli.commands.say.saved"))} ${flags.out} ${chalk.dim(details)}\n`);
 				return;
 			}
 
@@ -148,11 +153,17 @@ export default class Say extends Command {
 				return;
 			}
 			await player.end();
-			process.stdout.write(
-				`${chalk.green("spoke")} ${chalk.dim(`(${voice}, ${model}, ${seconds.toFixed(1)}s, ${spoken} segments)`)}\n`,
-			);
+			const details = t("cli.commands.say.spoke_details", {
+				voice,
+				model,
+				seconds: seconds.toFixed(1),
+				segments: spoken,
+			});
+			process.stdout.write(`${chalk.green(t("cli.commands.say.spoke"))} ${chalk.dim(details)}\n`);
 		} catch (err) {
-			process.stderr.write(chalk.red(`error: ${err instanceof Error ? err.message : String(err)}\n`));
+			process.stderr.write(
+				chalk.red(t("cli.commands.say.error", { message: err instanceof Error ? err.message : String(err) })),
+			);
 			exitCode = 1;
 		} finally {
 			unsubscribe();
@@ -173,10 +184,6 @@ export default class Say extends Command {
 	}
 
 	#synthesisFailed(model: string): void {
-		process.stderr.write(
-			chalk.red(
-				`error: could not synthesize with local TTS model "${model}". Run \`${APP_NAME} setup speech\` to install it.\n`,
-			),
-		);
+		process.stderr.write(chalk.red(t("cli.commands.say.synthesis_failed", { model, app: APP_NAME })));
 	}
 }

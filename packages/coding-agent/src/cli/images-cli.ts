@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { getBundledModels } from "@oh-my-pi/pi-catalog";
 import { $which, type FetchImpl, formatBytes, getAgentDbPath, isEnoent } from "@oh-my-pi/pi-utils";
+import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import {
 	queryBlobBrokerDoctor,
 	queryBlobBrokerProbe,
@@ -208,6 +209,23 @@ const BINARY_BY_DESTINATION: Readonly<Partial<Record<BlobDestinationId, string>>
 	bore: "bore",
 };
 
+// The returned results and JSON keep their English diagnostics. Store only the
+// command-authored copy here; daemon and provider diagnostics pass through.
+class ImageDetails {
+	readonly #messages = new WeakMap<object, { key: string; values: TranslationValues | undefined }>();
+
+	add<const T extends object>(record: T, key: string, values?: TranslationValues): T & { detail: string } {
+		const row = { ...record, detail: t("en", key, values) };
+		this.#messages.set(row, { key, values });
+		return row;
+	}
+
+	render(record: { detail: string }): string {
+		const message = this.#messages.get(record);
+		return message ? t(message.key, message.values) : record.detail;
+	}
+}
+
 function defaultResolveConfig(settings: Settings, projectDir: string): ImagesResolvedConfig {
 	return {
 		enabled: cfgImagesUrlsEnabled.get(settings),
@@ -383,15 +401,20 @@ function configuredValue(value: unknown): boolean {
 	return typeof value === "string" ? value.trim().length > 0 : value !== undefined;
 }
 
-function configChecks(config: ImagesResolvedConfig, deps: ImagesCliDependencies): ImagesDoctorCheck[] {
+function configChecks(
+	config: ImagesResolvedConfig,
+	deps: ImagesCliDependencies,
+	details: ImageDetails,
+): ImagesDoctorCheck[] {
 	const checks: ImagesDoctorCheck[] = [];
-	checks.push({
-		name: "enabled",
-		severity: config.enabled ? "ok" : "error",
-		detail: config.enabled ? "Image publication is enabled" : "images.urls.enabled is false",
-	});
+	checks.push(
+		details.add(
+			{ name: "enabled", severity: config.enabled ? "ok" : "error" },
+			config.enabled ? "cli.commands.images.publicationEnabled" : "cli.commands.images.enabledFalse",
+		),
+	);
 	if (config.orderedBackends.length === 0) {
-		checks.push({ name: "backends", severity: "error", detail: "No image publication backends are configured" });
+		checks.push(details.add({ name: "backends", severity: "error" }, "cli.commands.images.noPublicationBackends"));
 	}
 	const configByKind = new Map(config.configs.map(item => [item.kind, item]));
 	for (const backend of config.orderedBackends) {
@@ -429,29 +452,34 @@ function configChecks(config: ImagesResolvedConfig, deps: ImagesCliDependencies)
 					runtimeError = safeDetail(error);
 				}
 			}
-			checks.push({
+			const check = {
 				name: `config:${backend}`,
 				severity: missing.length === 0 && runtimeError === undefined ? "ok" : "error",
-				detail:
-					missing.length > 0
-						? `Missing required fields: ${missing.join(", ")}`
-						: (runtimeError ?? "Required configuration is present"),
-			});
+			} as const;
+			checks.push(
+				missing.length > 0
+					? details.add(check, "cli.commands.images.missingFields", { fields: missing.join(", ") })
+					: runtimeError !== undefined
+						? { ...check, detail: runtimeError }
+						: details.add(check, "cli.commands.images.configPresent"),
+			);
 		}
 		const binary = BINARY_BY_DESTINATION[backend];
 		if (binary) {
 			const found = deps.which(binary);
-			checks.push({
-				name: `binary:${backend}`,
-				severity: found ? "ok" : "error",
-				detail: found ? `${binary} is available` : `${binary} is not on PATH`,
-			});
+			checks.push(
+				details.add(
+					{ name: `binary:${backend}`, severity: found ? "ok" : "error" },
+					found ? "cli.commands.images.binaryAvailable" : "cli.commands.images.binaryUnavailable",
+					{ binary },
+				),
+			);
 		}
 	}
 	return checks;
 }
 
-async function diskChecks(config: ImagesResolvedConfig): Promise<ImagesDoctorCheck[]> {
+async function diskChecks(config: ImagesResolvedConfig, details: ImageDetails): Promise<ImagesDoctorCheck[]> {
 	const directories = new Set<string>([
 		path.dirname(config.providerFileCachePath),
 		path.dirname(config.savingsJournalPath),
@@ -463,17 +491,15 @@ async function diskChecks(config: ImagesResolvedConfig): Promise<ImagesDoctorChe
 	for (const directory of directories) {
 		try {
 			await fs.access(directory, fsConstants.R_OK | fsConstants.W_OK);
-			checks.push({
-				name: "disk",
-				severity: "ok",
-				detail: `Cache directory is readable and writable: ${directory}`,
-			});
+			checks.push(
+				details.add({ name: "disk", severity: "ok" }, "cli.commands.images.diskWritable", { path: directory }),
+			);
 		} catch {
-			checks.push({
-				name: "disk",
-				severity: "warn",
-				detail: `Cache directory is absent or not writable: ${directory}`,
-			});
+			checks.push(
+				details.add({ name: "disk", severity: "warn" }, "cli.commands.images.diskUnavailable", {
+					path: directory,
+				}),
+			);
 		}
 	}
 	return checks;
@@ -483,8 +509,9 @@ async function collectDoctor(
 	projectDir: string,
 	config: ImagesResolvedConfig,
 	deps: ImagesCliDependencies,
+	details: ImageDetails,
 ): Promise<ImagesDoctorResult> {
-	const checks = [...configChecks(config, deps), ...(await diskChecks(config))];
+	const checks = [...configChecks(config, deps, details), ...(await diskChecks(config, details))];
 	if (config.orderedBackends.includes("provider-files")) {
 		let storage: AuthStorage | undefined;
 		try {
@@ -492,27 +519,27 @@ async function collectDoctor(
 			const authenticated = (["openai", "anthropic", "google"] as const).filter(
 				provider => storage?.keys.source(provider) !== undefined,
 			);
-			checks.push({
-				name: "config:provider-files",
-				severity: authenticated.length > 0 ? "ok" : "error",
-				detail:
-					authenticated.length > 0
-						? `Authentication is available for: ${authenticated.join(", ")}`
-						: "No OpenAI, Anthropic, or Google authentication is available",
-			});
+			checks.push(
+				details.add(
+					{ name: "config:provider-files", severity: authenticated.length > 0 ? "ok" : "error" },
+					authenticated.length > 0 ? "cli.commands.images.authAvailable" : "cli.commands.images.authUnavailable",
+					{ providers: authenticated.join(", ") },
+				),
+			);
 		} catch {
-			checks.push({
-				name: "config:provider-files",
-				severity: "warn",
-				detail: "Provider authentication storage could not be inspected",
-			});
+			checks.push(
+				details.add(
+					{ name: "config:provider-files", severity: "warn" },
+					"cli.commands.images.authInspectionFailed",
+				),
+			);
 		} finally {
 			storage?.close();
 		}
 	}
 	const daemon = await deps.queryDoctor(projectDir, { probe: true });
 	if (!daemon) {
-		checks.push({ name: "daemon", severity: "warn", detail: "Image daemon is stopped or unreachable" });
+		checks.push(details.add({ name: "daemon", severity: "warn" }, "cli.commands.images.daemonUnreachable"));
 	} else {
 		for (const check of daemon.checks) {
 			checks.push({
@@ -531,29 +558,21 @@ async function collectProbe(
 	config: ImagesResolvedConfig,
 	timeoutMs: number | undefined,
 	deps: ImagesCliDependencies,
+	details: ImageDetails,
 ): Promise<ImagesProbeResult> {
 	const first = config.configs[0];
 	if (!config.enabled || !first) {
-		return {
-			action: "probe",
-			exitCode: 1,
-			projectDir,
-			daemonState: "stopped",
-			ok: false,
-			detail: config.enabled ? "No URL backend is configured" : "Image publication is disabled",
-		};
+		return details.add(
+			{ action: "probe", exitCode: 1, projectDir, daemonState: "stopped", ok: false },
+			config.enabled ? "cli.commands.images.noUrlBackend" : "cli.commands.images.publicationDisabled",
+		);
 	}
 	const response = await deps.queryProbe(projectDir, first, { timeoutMs });
 	if (!response) {
-		return {
-			action: "probe",
-			exitCode: 1,
-			projectDir,
-			backend: first.kind,
-			daemonState: "stopped",
-			ok: false,
-			detail: "Image daemon could not be started or reached",
-		};
+		return details.add(
+			{ action: "probe", exitCode: 1, projectDir, backend: first.kind, daemonState: "stopped", ok: false },
+			"cli.commands.images.daemonStartFailed",
+		);
 	}
 	return {
 		action: "probe",
@@ -684,22 +703,44 @@ async function collectPurge(
 
 function renderStatus(result: ImagesStatusResult): string {
 	const lines = [
-		`Image backends: ${result.backends.length > 0 ? result.backends.join(" → ") : "none"}`,
-		`Enabled: ${result.enabled ? "yes" : "no"}`,
-		`Daemon: ${result.daemon.state}${result.daemon.baseUrl ? ` (${result.daemon.baseUrl})` : ""}`,
+		t("cli.commands.images.backends", {
+			backends: result.backends.length > 0 ? result.backends.join(" → ") : t("cli.commands.images.none"),
+		}),
+		t(result.enabled ? "cli.commands.images.enabledYes" : "cli.commands.images.enabledNo"),
+		t(result.daemon.state === "running" ? "cli.commands.images.daemonRunning" : "cli.commands.images.daemonStopped", {
+			address: result.daemon.baseUrl ? ` (${result.daemon.baseUrl})` : "",
+		}),
 	];
 	const metrics = result.daemon.metrics;
 	if (metrics) {
 		lines.push(
-			`Blobs: ${metrics.activeBlobs} active (${metrics.eagerBlobs} eager, ${metrics.lazyBlobs} lazy)`,
-			`Storage: ${formatBytes(metrics.residentBytes)} resident, ${formatBytes(metrics.diskBytes)} disk`,
-			`Fetch: ${metrics.hits} hits, ${metrics.misses} misses, ${metrics.duplicateTokenGets} duplicate GETs`,
-			`Bytes served: ${formatBytes(metrics.bytesServed)}`,
+			t("cli.commands.images.blobs", {
+				active: metrics.activeBlobs,
+				eager: metrics.eagerBlobs,
+				lazy: metrics.lazyBlobs,
+			}),
+			t("cli.commands.images.storage", {
+				resident: formatBytes(metrics.residentBytes),
+				disk: formatBytes(metrics.diskBytes),
+			}),
+			t("cli.commands.images.fetch", {
+				hits: metrics.hits,
+				misses: metrics.misses,
+				duplicates: metrics.duplicateTokenGets,
+			}),
+			t("cli.commands.images.bytesServed", { bytes: formatBytes(metrics.bytesServed) }),
 		);
 	}
 	lines.push(
-		`Bytes saved: ${formatBytes(result.savings.savedBytes)} (${formatBytes(result.savings.inlineBytes)} inline → ${formatBytes(result.savings.referenceBytes)} references)`,
-		`Provider files: ${result.providerFiles.entries} active, ${formatBytes(result.providerFiles.bytes)}`,
+		t("cli.commands.images.bytesSaved", {
+			saved: formatBytes(result.savings.savedBytes),
+			inline: formatBytes(result.savings.inlineBytes),
+			reference: formatBytes(result.savings.referenceBytes),
+		}),
+		t("cli.commands.images.providerStatus", {
+			count: result.providerFiles.entries,
+			bytes: formatBytes(result.providerFiles.bytes),
+		}),
 	);
 	for (const event of result.daemon.recentFetches ?? []) {
 		lines.push(
@@ -709,44 +750,57 @@ function renderStatus(result: ImagesStatusResult): string {
 	return `${lines.join("\n")}\n`;
 }
 
-function renderDoctor(result: ImagesDoctorResult): string {
-	const lines = result.checks.map(check => `[${check.severity.toUpperCase()}] ${check.name}: ${check.detail}`);
-	lines.push(result.healthy ? "Image diagnostics passed." : "Image diagnostics found errors.");
+function renderDoctor(result: ImagesDoctorResult, details: ImageDetails): string {
+	const lines = result.checks.map(
+		check => `[${check.severity.toUpperCase()}] ${check.name}: ${details.render(check)}`,
+	);
+	lines.push(t(result.healthy ? "cli.commands.images.doctorPassed" : "cli.commands.images.doctorFailed"));
 	return `${lines.join("\n")}\n`;
 }
 
-function renderProbe(result: ImagesProbeResult): string {
-	const duration = result.durationMs === undefined ? "" : ` in ${result.durationMs} ms`;
-	return `Image probe ${result.ok ? "passed" : "failed"}${duration}: ${result.detail}\n`;
+function renderProbe(result: ImagesProbeResult, details: ImageDetails): string {
+	const detail = details.render(result);
+	if (result.durationMs === undefined) {
+		return `${t(result.ok ? "cli.commands.images.probePassed" : "cli.commands.images.probeFailed", { detail })}\n`;
+	}
+	return `${t(result.ok ? "cli.commands.images.probePassedTimed" : "cli.commands.images.probeFailedTimed", {
+		duration: result.durationMs,
+		detail,
+	})}\n`;
 }
 
 function renderPurge(result: ImagesPurgeResult): string {
 	const daemonSelected = result.daemon?.purgedBlobs ?? 0;
 	const daemonBytes = result.daemon?.reclaimedBytes ?? 0;
 	const lines = [
-		result.applied ? "Image purge applied." : "Image purge dry-run; pass --apply to delete.",
-		`Daemon blobs: ${daemonSelected}, ${formatBytes(daemonBytes)}`,
-		`Provider files: ${result.providerFiles.selected} selected, ${result.providerFiles.deleted} deleted, ${formatBytes(result.providerFiles.bytes)}`,
+		t(result.applied ? "cli.commands.images.purgeApplied" : "cli.commands.images.purgeDryRun"),
+		t("cli.commands.images.daemonBlobs", { count: daemonSelected, bytes: formatBytes(daemonBytes) }),
+		t("cli.commands.images.providerPurge", {
+			selected: result.providerFiles.selected,
+			deleted: result.providerFiles.deleted,
+			bytes: formatBytes(result.providerFiles.bytes),
+		}),
 	];
 	if (result.providerFiles.skippedAuth > 0) {
-		lines.push(
-			`Skipped ${result.providerFiles.skippedAuth} provider file(s): matching authentication was unavailable.`,
-		);
+		lines.push(t("cli.commands.images.skippedAuth", { count: result.providerFiles.skippedAuth }));
 	}
-	for (const error of result.daemon?.errors ?? []) lines.push(`Daemon error: ${error}`);
-	for (const error of result.providerFiles.errors) lines.push(`Provider error: ${error}`);
+	for (const error of result.daemon?.errors ?? []) lines.push(t("cli.commands.images.daemonError", { error }));
+	for (const error of result.providerFiles.errors) lines.push(t("cli.commands.images.providerError", { error }));
 	return `${lines.join("\n")}\n`;
 }
 
-function renderHuman(result: ImagesCommandResult): string {
-	if ("error" in result) return `images ${result.action}: ${result.error}\n`;
+function renderHuman(result: ImagesCommandResult, details: ImageDetails): string {
+	if ("error" in result) {
+		const error = result.exitCode === 2 ? t("cli.commands.images.invalidTimeout") : result.error;
+		return `images ${result.action}: ${error}\n`;
+	}
 	switch (result.action) {
 		case "status":
 			return renderStatus(result);
 		case "doctor":
-			return renderDoctor(result);
+			return renderDoctor(result, details);
 		case "probe":
-			return renderProbe(result);
+			return renderProbe(result, details);
 		case "purge":
 			return renderPurge(result);
 	}
@@ -758,11 +812,12 @@ export async function runImagesCommand(
 	overrides?: Partial<ImagesCliDependencies>,
 ): Promise<ImagesCommandResult> {
 	const deps = dependencies(overrides);
+	const details = new ImageDetails();
 	let result: ImagesCommandResult;
 	const projectDir = path.resolve(args.flags.dir ?? process.cwd());
 	const timeout = args.flags.timeout;
 	if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0)) {
-		result = { action: args.action, exitCode: 2, error: "--timeout must be a positive integer" };
+		result = { action: args.action, exitCode: 2, error: t("en", "cli.commands.images.invalidTimeout") };
 	} else {
 		try {
 			const settings = await deps.loadSettings(projectDir);
@@ -772,7 +827,7 @@ export async function runImagesCommand(
 					result = await collectStatus(projectDir, config, deps);
 					break;
 				case "doctor":
-					result = await collectDoctor(projectDir, config, deps);
+					result = await collectDoctor(projectDir, config, deps, details);
 					break;
 				case "probe":
 					result = await collectProbe(
@@ -780,6 +835,7 @@ export async function runImagesCommand(
 						config,
 						timeout === undefined ? undefined : timeout * 1000,
 						deps,
+						details,
 					);
 					break;
 				case "purge":
@@ -797,7 +853,7 @@ export async function runImagesCommand(
 		}
 	}
 	if (args.flags.json) deps.writeStdout(`${JSON.stringify(result)}\n`);
-	else if ("error" in result) deps.writeStderr(renderHuman(result));
-	else deps.writeStdout(renderHuman(result));
+	else if ("error" in result) deps.writeStderr(renderHuman(result, details));
+	else deps.writeStdout(renderHuman(result, details));
 	return result;
 }

@@ -1,6 +1,7 @@
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { MixtureConfigScope, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { isRecord, logger, toError } from "@oh-my-pi/pi-utils";
+import { getCatalog, getLocale, LOCALES, type Locale, t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import {
 	draftMixtureSource,
 	loadMixtureSource,
@@ -40,6 +41,42 @@ const HEADERS = {
 	"X-Content-Type-Options": "nosniff",
 };
 
+const EDITOR_MESSAGES = "overlaysModel.moaWeb.editor.";
+const SERVER_MESSAGES = "overlaysModel.moaWeb.server.";
+
+function editorPage(locale: Locale): string {
+	const messages = Object.fromEntries(
+		Object.entries(getCatalog(locale))
+			.filter(([key]) => key.startsWith(EDITOR_MESSAGES))
+			.map(([key, value]) => [key.slice(EDITOR_MESSAGES.length), value]),
+	);
+	// The catalog already falls back to English per key. The JSON data block is inert under the CSP.
+	return (editorHtml as unknown as string).replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+		if (key === "locale") return locale;
+		if (key === "editorMessages") return JSON.stringify(messages).replaceAll("<", "\\u003c");
+		return Bun.escapeHTML(t(locale, `${EDITOR_MESSAGES}${key}`));
+	});
+}
+
+function serverText(locale: Locale, key: string, values?: TranslationValues): string {
+	return t(locale, `${SERVER_MESSAGES}${key}`, values);
+}
+
+// Keep the existing protocol error and add presentation copy only for localized browser requests.
+function displayError(locale: Locale | undefined, key: string, values?: TranslationValues): { displayError?: string } {
+	return locale && locale !== "en" ? { displayError: serverText(locale, key, values) } : {};
+}
+
+function webError(
+	locale: Locale | undefined,
+	status: number,
+	key: string,
+	values?: TranslationValues,
+	details?: object,
+): Response {
+	return json({ error: serverText("en", key, values), ...details, ...displayError(locale, key, values) }, status);
+}
+
 function json(body: unknown, status = 200): Response {
 	return Response.json(body, { status, headers: HEADERS });
 }
@@ -73,8 +110,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 	async function sourceFor(scope: MixtureConfigScope) {
 		const path = mixturesConfigFilePath(scope, dirs);
 		const source = (await mixtureSources(cwd, dirs)).find(candidate => candidate.path === path);
-		if (!source) throw new MixtureAuthoringError(422, `${path} is not an editable mixture source for this workspace`);
-		return source;
+		return { path, source };
 	}
 	const prefix = `/${crypto.randomUUID()}/`;
 	let stopped = false;
@@ -89,6 +125,8 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 		maxRequestBodySize: MAX_REQUEST_BYTES,
 		async fetch(request, listener) {
 			const url = new URL(request.url);
+			const lang = url.searchParams.get("lang");
+			const locale = LOCALES.find(candidate => candidate === lang);
 			const origin = request.headers.get("origin");
 			const site = request.headers.get("sec-fetch-site");
 			if (
@@ -96,19 +134,22 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 				(origin !== null && origin !== listener.url.origin) ||
 				(site !== null && site !== "same-origin" && site !== "none")
 			)
-				return json({ error: "Foreign origin refused" }, 403);
-			if (!url.pathname.startsWith(prefix)) return json({ error: "Not found" }, 404);
-			if (!current()) return json({ error: "The invoking session changed. Run /moa web again." }, 410);
+				return webError(locale, 403, "foreignOrigin");
+			if (!url.pathname.startsWith(prefix)) return webError(locale, 404, "notFound");
+			if (!current()) return webError(locale, 410, "sessionChanged");
 			const route = url.pathname.slice(prefix.length);
+			let savePath: string | undefined;
 			try {
 				if (request.method === "GET") {
-					if (route === "" || route === "editor.js") {
-						// The text attribute overrides Bun's default .html bundle loader.
-						return new Response(route === "" ? (editorHtml as unknown as string) : editorJs, {
-							headers: {
-								...HEADERS,
-								"Content-Type": route === "" ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8",
-							},
+					if (route === "") {
+						const pageLocale = lang === null ? getLocale() : (locale ?? "en");
+						return new Response(editorPage(pageLocale), {
+							headers: { ...HEADERS, "Content-Type": "text/html; charset=utf-8" },
+						});
+					}
+					if (route === "editor.js") {
+						return new Response(editorJs, {
+							headers: { ...HEADERS, "Content-Type": "text/javascript; charset=utf-8" },
 						});
 					}
 					if (route === "mixtures/discovered") {
@@ -120,8 +161,9 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 					}
 					if (route === "mixtures") {
 						const scope = scopeOf(url.searchParams.get("scope") ?? initialScope);
-						if (!scope) return json({ error: "Select project or user scope" }, 400);
-						const source = await sourceFor(scope);
+						if (!scope) return webError(locale, 400, "invalidScope");
+						const { path, source } = await sourceFor(scope);
+						if (!source) return webError(locale, 422, "sourceNotEditable", { path });
 						const { doc, hash, toml, validation, parseDiagnostics, readOnly } = await loadMixtureSource(
 							source,
 							context,
@@ -145,47 +187,47 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 					}
 				}
 				const draft = request.method === "POST" && route === "mixtures/draft";
-				if (!draft && !(request.method === "PUT" && route === "mixtures")) return json({ error: "Not found" }, 404);
-				if (origin !== listener.url.origin) return json({ error: "Same-origin request required" }, 403);
+				if (!draft && !(request.method === "PUT" && route === "mixtures")) return webError(locale, 404, "notFound");
+				if (origin !== listener.url.origin) return webError(locale, 403, "sameOriginRequired");
 				if (request.headers.get("content-type")?.split(";", 1)[0] !== "application/json")
-					return json({ error: "JSON body required" }, 415);
+					return webError(locale, 415, "jsonRequired");
 				const body: unknown = await request.json().catch(() => null);
 				const scope = isRecord(body) ? scopeOf(body.scope) : undefined;
 				if (!isRecord(body) || !scope || !isRecord(body.doc) || !Array.isArray(body.doc.mixtures))
-					return json({ error: "A project or user scope and a mixture document are required" }, 400);
+					return webError(locale, 400, "documentRequired");
 				const doc = body.doc as unknown as MixturesConfigDoc;
 				if (draft) {
 					const result = draftMixtureSource({ kind: "document", doc }, context);
 					const validation = findings(result.validation);
 					const first = validation.errors[0];
 					if (first)
-						return json(
+						return webError(
+							locale,
+							422,
+							"invalidDraft",
+							{ path: first.path, message: first.message },
 							{
-								error: `${first.path}: ${first.message}`,
 								validation,
 								parseDiagnostics: result.parseDiagnostics,
 							},
-							422,
 						);
 					if (result.parseDiagnostics.length)
-						return json(
-							{
-								error: "NeoPi cannot represent this draft without changing it",
-								parseDiagnostics: result.parseDiagnostics,
-								validation,
-							},
-							422,
-						);
+						return webError(locale, 422, "unrepresentableDraft", undefined, {
+							parseDiagnostics: result.parseDiagnostics,
+							validation,
+						});
 					return json({ ...result, validation });
 				}
 				const { baseHash, confirmCanonicalRewrite } = body;
 				if (baseHash !== null && (typeof baseHash !== "string" || !/^[a-f0-9]{64}$/.test(baseHash)))
-					return json({ error: "The source hash from the last load is required" }, 400);
+					return webError(locale, 400, "sourceHashRequired");
 				if (confirmCanonicalRewrite !== undefined && typeof confirmCanonicalRewrite !== "boolean")
-					return json({ error: "confirmCanonicalRewrite must be a boolean" }, 400);
+					return webError(locale, 400, "confirmationBoolean");
 				const save = saved.then(async () => {
-					if (!current()) return json({ error: "The invoking session changed. Run /moa web again." }, 410);
-					const source = await sourceFor(scope);
+					if (!current()) return webError(locale, 410, "sessionChanged");
+					const { path, source } = await sourceFor(scope);
+					if (!source) return webError(locale, 422, "sourceNotEditable", { path });
+					savePath = source.path;
 					const result = await saveMixtureSource(
 						source,
 						{ doc, baseHash: baseHash ?? ABSENT, confirmCanonicalRewrite },
@@ -197,9 +239,10 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 					const registered = result.validation.every(
 						report => !report.runnable || workspace.find(report.name)?.revision === report.revision,
 					);
-					const message = registered
-						? `Saved ${scope} MIXTURES.toml and refreshed the mixture roster.`
-						: `Saved ${scope} MIXTURES.toml; higher-priority definitions still take precedence.`;
+					const uiLocale = getLocale();
+					const message = serverText(uiLocale, registered ? "saved" : "savedShadowed", {
+						scope: serverText(uiLocale, scope === "project" ? "projectScope" : "userScope"),
+					});
 					if (current()) {
 						try {
 							onSaved?.(message);
@@ -223,7 +266,28 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 					const validation = reports && findings(reports);
 					const issue = validation?.errors[0];
 					const message = issue ? `${error.message}: ${issue.path}: ${issue.message}` : error.message;
-					return json({ error: message, ...details, validation }, error.status);
+					let localized: { displayError?: string } = {};
+					if (locale && locale !== "en") {
+						// Only infer the meaning of shared authoring errors with structured discriminators.
+						if (details.code === "rewrite-loses-source" && savePath)
+							localized = displayError(locale, "rewriteLosesSource", { path: savePath });
+						else if (details.current)
+							localized = displayError(locale, "reloadChangedSource", { path: details.current.path });
+						else if (details.source)
+							localized = displayError(locale, "readbackMismatch", { path: details.source.path });
+						else if (details.blocked && reports) {
+							const blocked = new Set(details.blocked);
+							const names = reports
+								.filter(report => blocked.has(report.index))
+								.map(report => report.name || serverText(locale, "unnamed"))
+								.join(", ");
+							localized = displayError(locale, "blockedSave", {
+								names,
+								detail: issue ? `: ${issue.path}: ${issue.message}` : "",
+							});
+						}
+					}
+					return json({ error: message, ...details, validation, ...localized }, error.status);
 				}
 				return json({ error: toError(error).message }, 422);
 			}

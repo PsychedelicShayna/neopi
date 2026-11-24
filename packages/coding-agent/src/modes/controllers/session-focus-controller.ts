@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type AgentLifecycleApi, AgentLifecycleManager } from "../../registry/agent-lifecycle";
@@ -215,7 +216,12 @@ export class SessionFocusController {
 		const dead = event.type === "status_changed" && (event.ref.status === "parked" || event.ref.status === "aborted");
 		if (!gone && !dead) return;
 		void this.#detachToMain().then(() => {
-			this.ctx.showStatus(`Agent ${event.ref.id} is ${gone ? "gone" : event.ref.status}; returned to main session`);
+			this.ctx.showStatus(
+				t("overlays.session_focus_controller.agent_returned_main", {
+					id: `${event.ref.id}`,
+					value: `${gone ? "gone" : event.ref.status}`,
+				}),
+			);
 		});
 	}
 

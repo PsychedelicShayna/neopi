@@ -1,3 +1,4 @@
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { Theme } from "../theme/theme";
 import { parseSpillUrl, sanitizeText, spillUrl } from "@oh-my-pi/pi-utils";
 import {
@@ -171,11 +172,18 @@ export function formatGroupedDiagnosticMessages(messages: string[]): string {
  * Format a recoverable output artifact link. An artifact the size cap cut
  * (`artifactElidedBytes > 0`) is labeled as the head/tail sample it holds.
  */
-export function formatFullOutputReference(artifactId: string, artifactElidedBytes?: number): string {
+export function formatFullOutputReference(
+	artifactId: string,
+	artifactElidedBytes?: number,
+	locale: Locale = "en",
+): string {
 	if (artifactElidedBytes !== undefined && artifactElidedBytes > 0) {
-		return `Read ${spillUrl(artifactId)} for a head/tail sample of the output; ${formatBytes(artifactElidedBytes)} from its middle was not saved`;
+		return t(locale, "tools.output.artifact_sample", {
+			path: spillUrl(artifactId),
+			size: formatBytes(artifactElidedBytes),
+		});
 	}
-	return `Read ${spillUrl(artifactId)} for full output`;
+	return t(locale, "tools.output.artifact_full", { path: spillUrl(artifactId) });
 }
 
 /** Strip the last literal notice or a matching final line; optionally preserve surrounding whitespace. */
@@ -269,14 +277,18 @@ export function stripGeneratedOutputNotice(text: string): string {
 }
 
 /** Format truncation ranges and recovery hints. */
-export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: SourceMeta): string {
+export function formatTruncationMetaNotice(
+	truncation: TruncationMeta,
+	source?: SourceMeta,
+	locale: Locale = "en",
+): string {
 	let notice: string;
 	const artifactReference =
 		truncation.artifactId == null
 			? undefined
 			: source?.type === "report"
-				? `Read ${spillUrl(truncation.artifactId)} for full report (${source.value})`
-				: formatFullOutputReference(truncation.artifactId, truncation.artifactElidedBytes);
+				? t(locale, "tools.output.report_full", { path: spillUrl(truncation.artifactId), name: source.value })
+				: formatFullOutputReference(truncation.artifactId, truncation.artifactElidedBytes, locale);
 
 	if (truncation.direction === "middle") {
 		const head = truncation.headRange;
@@ -284,17 +296,30 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: 
 		const totalLines = truncation.totalLines;
 		const elidedBytes = truncation.elidedBytes ?? Math.max(0, truncation.totalBytes - truncation.outputBytes);
 		const elidedLines = truncation.elidedLines ?? Math.max(0, totalLines - truncation.outputLines);
-		const headPart = head ? `lines ${head.start}-${head.end}` : "";
+		const headPart = head ? t(locale, "tools.output.line_range_short", { start: head.start, end: head.end }) : "";
 		const tailPart = tail ? `${tail.start}-${tail.end}` : "";
 		if (headPart && tailPart) {
-			notice = `Showing ${headPart} and ${tailPart} of ${totalLines}; ${elidedLines.toLocaleString()} middle line${elidedLines === 1 ? "" : "s"} (${formatBytes(elidedBytes)}) elided`;
+			notice = t(locale, elidedLines === 1 ? "tools.output.head_tail.one" : "tools.output.head_tail.many", {
+				head: headPart,
+				tail: tailPart,
+				total: totalLines,
+				count: elidedLines.toLocaleString(),
+				size: formatBytes(elidedBytes),
+			});
 		} else if (elidedBytes > 0) {
-			notice = `Showing head and tail bytes of ${totalLines.toLocaleString()} line${totalLines === 1 ? "" : "s"}; ${formatBytes(elidedBytes)} elided`;
+			notice = t(
+				locale,
+				totalLines === 1 ? "tools.output.head_tail_bytes.one" : "tools.output.head_tail_bytes.many",
+				{ total: totalLines.toLocaleString(), size: formatBytes(elidedBytes) },
+			);
 		} else {
-			notice = `Showing ${Math.min(truncation.outputLines, totalLines)} of ${totalLines} lines; middle elided`;
+			notice = t(locale, "tools.output.middle_elided", {
+				shown: Math.min(truncation.outputLines, totalLines),
+				total: totalLines,
+			});
 		}
 		if (truncation.nextOffset != null) {
-			notice += `. Use :${truncation.nextOffset}- to continue`;
+			notice += t(locale, "tools.output.continue", { offset: truncation.nextOffset });
 		}
 		if (artifactReference) {
 			notice += `. ${artifactReference}`;
@@ -304,7 +329,12 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: 
 
 	if (truncation.partialLine) {
 		const line = truncation.shownRange?.start ?? 1;
-		notice = `Showing line ${line} (partial, ${formatBytes(truncation.outputBytes)} of ${formatBytes(truncation.totalBytes)}) of ${truncation.totalLines}`;
+		notice = t(locale, "tools.output.partial_line", {
+			line,
+			shown: formatBytes(truncation.outputBytes),
+			size: formatBytes(truncation.totalBytes),
+			total: truncation.totalLines,
+		});
 		if (artifactReference) {
 			notice += `. ${artifactReference}`;
 		}
@@ -313,18 +343,22 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: 
 
 	const range = truncation.shownRange;
 	if (range && range.end >= range.start) {
-		notice = `Showing lines ${range.start}-${range.end} of ${truncation.totalLines}`;
+		notice = t(locale, "tools.output.line_range", {
+			start: range.start,
+			end: range.end,
+			total: truncation.totalLines,
+		});
 	} else {
-		notice = `Showing ${truncation.outputLines} of ${truncation.totalLines} lines`;
+		notice = t(locale, "tools.output.line_count", { shown: truncation.outputLines, total: truncation.totalLines });
 	}
 
 	if (truncation.truncatedBy === "bytes") {
 		const maxBytes = truncation.maxBytes ?? truncation.outputBytes;
-		notice += ` (${formatBytes(maxBytes)} limit)`;
+		notice += t(locale, "tools.output.size_limit", { size: formatBytes(maxBytes) });
 	}
 
 	if (truncation.nextOffset != null) {
-		notice += `. Use :${truncation.nextOffset}- to continue`;
+		notice += t(locale, "tools.output.continue", { offset: truncation.nextOffset });
 	}
 
 	if (artifactReference) {
@@ -339,12 +373,12 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta, source?: 
  * For TUI rendering of truncation warnings.
  */
 export function formatStyledArtifactReference(artifactId: string, theme: Theme): string {
-	return theme.fg("warning", formatFullOutputReference(artifactId));
+	return theme.fg("warning", formatFullOutputReference(artifactId, undefined, getLocale()));
 }
 
 /** Describe an incomplete artifact capture. */
-export function formatArtifactErrorNotice(error: OutputArtifactError): string {
-	return `Full output was not saved completely (artifact ${error} failed)`;
+export function formatArtifactErrorNotice(error: OutputArtifactError, locale: Locale = "en"): string {
+	return t(locale, "tools.output.artifact_error", { error });
 }
 
 /**
@@ -437,8 +471,8 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 export function formatStyledTruncationWarning(meta: OutputMeta | undefined, theme: Theme): string | null {
 	if (!meta?.truncation && !meta?.artifactError) return null;
 	const parts: string[] = [];
-	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
-	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError));
+	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source, getLocale()));
+	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError, getLocale()));
 	return theme.fg("warning", wrapBrackets(parts.join(". "), theme));
 }
 

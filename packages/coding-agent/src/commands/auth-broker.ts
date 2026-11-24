@@ -4,6 +4,7 @@
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	AUTH_BROKER_ACTIONS,
 	type AuthBrokerAction,
@@ -56,23 +57,25 @@ export default class AuthBroker extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Boot the broker against the local SQLite store\n  ${APP_NAME} auth-broker serve`,
-		`# Boot on a non-default port\n  ${APP_NAME} auth-broker serve --bind=127.0.0.1:9000`,
-		`# Trust client IP headers from a trusted reverse proxy\n  ${APP_NAME} auth-broker serve --trust-proxy-headers`,
-		`# Print the bearer token\n  ${APP_NAME} auth-broker token`,
-		`# Rotate the bearer token\n  ${APP_NAME} auth-broker token --regenerate`,
-		`# List supported OAuth providers\n  ${APP_NAME} auth-broker list`,
-		`# Local login (run on the broker host)\n  ${APP_NAME} auth-broker login anthropic`,
-		`# Interactive provider selection\n  ${APP_NAME} auth-broker login`,
-		`# Remote login over SSH tunnel\n  ${APP_NAME} auth-broker login anthropic --via=user@broker`,
-		`# Log out of a provider (interactive without provider arg)\n  ${APP_NAME} auth-broker logout anthropic`,
-		`# Import a CLIProxyAPI auth dump\n  ${APP_NAME} auth-broker import ~/.cliproxy/auth`,
-		`# Import a single CLIProxyAPI JSON, overriding the provider mapping\n  ${APP_NAME} auth-broker import ~/.cliproxy/auth/claude-foo.json --provider anthropic`,
-		`# Preview a migration from local store + env vars to the configured broker\n  ${APP_NAME} auth-broker migrate --from-local --include-env --dry-run`,
-		`# Apply the migration\n  ${APP_NAME} auth-broker migrate --from-local --include-env`,
-		`# Health-check the configured remote broker\n  ${APP_NAME} auth-broker status`,
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.auth-broker.example.serve")}\n  ${APP_NAME} auth-broker serve`,
+			`# ${t("cli.commands.auth-broker.example.port")}\n  ${APP_NAME} auth-broker serve --bind=127.0.0.1:9000`,
+			`# ${t("cli.commands.auth-broker.example.trust_proxy")}\n  ${APP_NAME} auth-broker serve --trust-proxy-headers`,
+			`# ${t("cli.commands.auth-broker.example.token")}\n  ${APP_NAME} auth-broker token`,
+			`# ${t("cli.commands.auth-broker.example.rotate_token")}\n  ${APP_NAME} auth-broker token --regenerate`,
+			`# ${t("cli.commands.auth-broker.example.list")}\n  ${APP_NAME} auth-broker list`,
+			`# ${t("cli.commands.auth-broker.example.login_local")}\n  ${APP_NAME} auth-broker login anthropic`,
+			`# ${t("cli.commands.auth-broker.example.login_interactive")}\n  ${APP_NAME} auth-broker login`,
+			`# ${t("cli.commands.auth-broker.example.login_ssh")}\n  ${APP_NAME} auth-broker login anthropic --via=user@broker`,
+			`# ${t("cli.commands.auth-broker.example.logout")}\n  ${APP_NAME} auth-broker logout anthropic`,
+			`# ${t("cli.commands.auth-broker.example.import_directory")}\n  ${APP_NAME} auth-broker import ~/.cliproxy/auth`,
+			`# ${t("cli.commands.auth-broker.example.import_file")}\n  ${APP_NAME} auth-broker import ~/.cliproxy/auth/claude-foo.json --provider anthropic`,
+			`# ${t("cli.commands.auth-broker.example.preview_migration")}\n  ${APP_NAME} auth-broker migrate --from-local --include-env --dry-run`,
+			`# ${t("cli.commands.auth-broker.example.migrate")}\n  ${APP_NAME} auth-broker migrate --from-local --include-env`,
+			`# ${t("cli.commands.auth-broker.example.status")}\n  ${APP_NAME} auth-broker status`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(AuthBroker);

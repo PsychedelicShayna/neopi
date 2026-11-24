@@ -1,5 +1,6 @@
 /** `grep` (legacy `search`) — ripgrep content search across workspace files. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, num, resultTextOf, scopePaths, shortenPath, str } from "../util";
@@ -32,15 +33,17 @@ function Pattern({ args }: { args: Record<string, unknown> }): ReactNode {
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	return (
 		<span>
-			<Pattern args={args} /> <span className="tv-muted">in</span>{" "}
+			<Pattern args={args} /> <span className="tv-muted">{t("guesttools.search.in", "in")}</span>{" "}
 			<span className="tv-path">{pathsOf(args).join(", ")}</span> <Badges items={argBadges(args)} />
 		</span>
 	);
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const matchCount = num(details?.matchCount);
 	const fileCount = num(details?.fileCount);
@@ -53,21 +56,35 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		}
 	}
 	const badges = argBadges(args);
-	if (matchCount !== null) badges.push(`${matchCount} ${matchCount === 1 ? "match" : "matches"}`);
-	if (fileCount !== null) badges.push(`${fileCount} ${fileCount === 1 ? "file" : "files"}`);
+	if (matchCount !== null)
+		badges.push(
+			matchCount === 1
+				? t("guesttools.count.match.one", "{count} match", { count: matchCount })
+				: t("guesttools.count.match.many", "{count} matches", { count: matchCount }),
+		);
+	if (fileCount !== null)
+		badges.push(
+			fileCount === 1
+				? t("guesttools.count.file.one", "{count} file", { count: fileCount })
+				: t("guesttools.count.file.many", "{count} files", { count: fileCount }),
+		);
 	return (
 		<>
 			<div>
-				<Pattern args={args} /> <span className="tv-muted">in</span>{" "}
+				<Pattern args={args} /> <span className="tv-muted">{t("guesttools.search.in", "in")}</span>{" "}
 				<span className="tv-path">{pathsOf(args).join(", ")}</span> <Badges items={badges} />
 				{truncated && (
 					<>
 						{" "}
-						<Badge tone="warn">truncated</Badge>
+						<Badge tone="warn">{t("guesttools.status.truncated", "truncated")}</Badge>
 					</>
 				)}
 			</div>
-			{missing.length > 0 && <Note tone="warn">skipped missing: {missing.join(", ")}</Note>}
+			{missing.length > 0 && (
+				<Note tone="warn">
+					{t("guesttools.search.skipped_missing", "skipped missing: {paths}", { paths: missing.join(", ") })}
+				</Note>
+			)}
 			{error !== null && !resultTextOf(result).trim() && <Note tone="err">{error}</Note>}
 			<ResultText result={result} maxLines={14} variant="code" />
 		</>

@@ -2,6 +2,7 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import * as path from "node:path";
 import { STREAM_TITLE_MAX } from "@oh-my-pi/pi-wire";
 import { CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { streamHelp as commandHelp } from "../cli/command-help";
 import { Settings } from "../config/settings";
 import { StencilCredential } from "../stencil/credential";
@@ -29,7 +30,7 @@ export default class Stream extends Command {
 		const cwd = process.cwd();
 		const title = flags.title ?? path.basename(cwd);
 		if (title.length > STREAM_TITLE_MAX) {
-			throw new CliUsageError(`title must be at most ${STREAM_TITLE_MAX} characters`);
+			throw new CliUsageError(t("cli.commands.stream.titleTooLong", { max: STREAM_TITLE_MAX }));
 		}
 		const settings = await Settings.loadReadOnly({ cwd });
 		let urls: StreamUrls;

@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, useState } from "react";
 import { formatCompact, formatInteger } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type { SpotlightDashboardStats, SpotlightSizeBin, SpotlightStepCell, SpotlightTool } from "../types";
 import { Card } from "../ui";
 import { MoreTools } from "./chips";
@@ -57,10 +58,11 @@ function KeptCell({
 	title: string;
 	children: ReactNode;
 }) {
+	const tr = useTranslation();
 	if (kept === null) {
 		return (
 			<div className="spot-econ-cell" data-empty="true" title={title}>
-				<span className="dim">No saving</span>
+				<span className="dim">{tr("insights.steps.no_saving", "No saving")}</span>
 			</div>
 		);
 	}
@@ -76,7 +78,7 @@ function KeptCell({
 		>
 			<span className="spot-econ-net num">
 				{formatShare(kept)}
-				<span className="spot-steps-unit"> kept</span>
+				<span className="spot-steps-unit">{tr("insights.steps.kept_suffix", " kept")}</span>
 			</span>
 			<dl className="spot-econ-facts">{children}</dl>
 		</div>
@@ -85,6 +87,7 @@ function KeptCell({
 
 /** Tool × shaping steps × cut size: how much of each kind of cut's saving stays saved after fetch-backs. */
 export function Steps({ stats, stale }: { stats: SpotlightDashboardStats; stale: boolean }) {
+	const tr = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const all = toolsBySaving(stats).flatMap(tool => {
 		const rows = stepRows(stats.steps, tool);
@@ -96,33 +99,40 @@ export function Steps({ stats, stale }: { stats: SpotlightDashboardStats; stale:
 	return (
 		<Card
 			index={5}
-			title="Which cuts pay"
-			description="Share of each kind of cut's saving that stays saved after fetch-backs beyond the holdout baseline, by size"
+			title={tr("insights.steps.title", "Which cuts pay")}
+			description={tr(
+				"insights.steps.description",
+				"Share of each kind of cut's saving that stays saved after fetch-backs beyond the holdout baseline, by size",
+			)}
 			actions={
 				<span className="spot-econ-scale" aria-hidden="true">
 					<span className="num">0%</span>
 					<span className="spot-econ-ramp" />
-					<span className="num">100% kept</span>
+					<span className="num">{tr("insights.steps.full_kept", "100% kept")}</span>
 				</span>
 			}
 			stale={stale}
-			footer={`Scored and score-free cuts. Kept = (saved − fetch-back beyond the tool's holdout baseline) ÷ saved; fetched back is the share of cuts the agent came back for within 12 calls. Sizes are the tokens a cut saved against plain; step combinations under 10 cuts fold into "other". Cells under ${THIN_CUTS} cuts are dimmed.`}
+			footer={tr(
+				"insights.steps.footer",
+				'Scored and score-free cuts. Kept = (saved − fetch-back beyond the tool\'s holdout baseline) ÷ saved; fetched back is the share of cuts the agent came back for within 12 calls. Sizes are the tokens a cut saved against plain; step combinations under 10 cuts fold into "other". Cells under {thin} cuts are dimmed.',
+				{ thin: THIN_CUTS },
+			)}
 		>
 			{tools.length === 0 ? (
-				<div className="empty">No shortened results in this range.</div>
+				<div className="empty">{tr("insights.no_shortened", "No shortened results in this range.")}</div>
 			) : (
 				<>
 					<div className="spot-steps-scroll">
 						<table className="spot-econ spot-steps">
 							<thead>
 								<tr>
-									<th scope="col">Steps</th>
+									<th scope="col">{tr("insights.steps.steps", "Steps")}</th>
 									{SIZE_BINS.map(size => (
 										<th key={size} scope="col" className="num">
-											{size} <span className="dim">saved</span>
+											{size} <span className="dim">{tr("insights.saved_lower", "saved")}</span>
 										</th>
 									))}
-									<th scope="col">All sizes</th>
+									<th scope="col">{tr("insights.steps.all_sizes", "All sizes")}</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -167,17 +177,41 @@ export function Steps({ stats, stale }: { stats: SpotlightDashboardStats; stale:
 																		kept={cell.keptShare}
 																		cuts={cell.cuts}
 																		title={[
-																			`${tool} · ${row.steps} · ${size} saved: ${formatInteger(cell.cuts)} cuts`,
-																			`Saved ${formatCompact(cell.savedTokens)}, fetched back ${formatCompact(cell.recoveredTokens)}, ${formatCompact(cell.excessTokens)} beyond the baseline`,
-																			`Fetched back after ${formatShare(cell.fetchBackRate.value)} of cuts${interval === "" ? "" : ` (${interval})`}`,
+																			tr(
+																				"insights.steps.size_tip",
+																				"{tool} · {steps} · {size} saved: {cuts} cuts",
+																				{
+																					tool,
+																					steps: row.steps,
+																					size,
+																					cuts: formatInteger(cell.cuts),
+																				},
+																			),
+																			tr(
+																				"insights.steps.saved_tip",
+																				"Saved {saved}, fetched back {recovered}, {excess} beyond the baseline",
+																				{
+																					saved: formatCompact(cell.savedTokens),
+																					recovered: formatCompact(cell.recoveredTokens),
+																					excess: formatCompact(cell.excessTokens),
+																				},
+																			),
+																			tr(
+																				"insights.steps.fetch_tip",
+																				"Fetched back after {share} of cuts{interval}",
+																				{
+																					share: formatShare(cell.fetchBackRate.value),
+																					interval: interval === "" ? "" : ` (${interval})`,
+																				},
+																			),
 																		].join("\n")}
 																	>
 																		<div>
-																			<dt>cuts</dt>
+																			<dt>{tr("insights.cuts_lower", "cuts")}</dt>
 																			<dd className="num">{formatInteger(cell.cuts)}</dd>
 																		</div>
 																		<div>
-																			<dt>fetched back</dt>
+																			<dt>{tr("insights.fetched_back_lower", "fetched back")}</dt>
 																			<dd className="num">
 																				{formatShare(cell.fetchBackRate.value)}
 																			</dd>
@@ -190,14 +224,24 @@ export function Steps({ stats, stale }: { stats: SpotlightDashboardStats; stale:
 															<KeptCell
 																kept={totalKept}
 																cuts={total.cuts}
-																title={`${tool} · ${row.steps}: ${formatInteger(total.cuts)} cuts saved ${formatCompact(total.savedTokens)}, ${formatCompact(total.excessTokens)} fetched back beyond the baseline`}
+																title={tr(
+																	"insights.steps.total_tip",
+																	"{tool} · {steps}: {cuts} cuts saved {saved}, {excess} fetched back beyond the baseline",
+																	{
+																		tool,
+																		steps: row.steps,
+																		cuts: formatInteger(total.cuts),
+																		saved: formatCompact(total.savedTokens),
+																		excess: formatCompact(total.excessTokens),
+																	},
+																)}
 															>
 																<div>
-																	<dt>cuts</dt>
+																	<dt>{tr("insights.cuts_lower", "cuts")}</dt>
 																	<dd className="num">{formatInteger(total.cuts)}</dd>
 																</div>
 																<div>
-																	<dt>saved</dt>
+																	<dt>{tr("insights.saved_lower", "saved")}</dt>
 																	<dd className="num">{formatCompact(total.savedTokens)}</dd>
 																</div>
 															</KeptCell>

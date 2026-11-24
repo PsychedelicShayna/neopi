@@ -5,6 +5,7 @@
 
 import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { gitHelp as commandHelp } from "../cli/command-help";
 import { runGitTui } from "../cli/git-tui";
 import { Settings, settings } from "../config/settings";
@@ -32,7 +33,7 @@ export default class Git extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Git);
 		if (process.stdout.isTTY !== true || process.stdin.isTTY !== true) {
-			console.error(`${APP_NAME} git is interactive and requires a TTY`);
+			console.error(t("cli.commands.git.ttyRequired", { app: APP_NAME }));
 			process.exit(1);
 		}
 		// Load settings first so the user's configured theme/symbol preset apply

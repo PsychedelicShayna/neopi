@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { span } from "../native/describe";
@@ -213,7 +214,7 @@ export function modelBadge(ref: AgentRecordLike, observed: ObservableSession | u
 	const badge = resolveModelBadge(ref, observed);
 	if (!badge) return undefined;
 	const text = formatModelBadge(badge.model, badge.level);
-	return badge.fallback ? `${theme.fg("warning", "fallback →")} ${text}` : text;
+	return badge.fallback ? `${theme.fg("warning", t("overlays.agent_hub_renderer.fallback_badge"))} ${text}` : text;
 }
 
 /** A picker chip for the model that produced a row's work: label plus thinking-level colour token. */
@@ -243,7 +244,7 @@ export function modelBadgeSpans(ref: AgentRecordLike, observed: ObservableSessio
 	const badge = resolveModelBadge(ref, observed);
 	if (!badge) return undefined;
 	const spans: TspSpan[] = [];
-	if (badge.fallback) spans.push(span("fallback → ", "warning"));
+	if (badge.fallback) spans.push(span(t("overlays.agent_hub_renderer.fallback_span"), "warning"));
 	spans.push(span(sanitizeDisplaySingleLine(badge.model), "muted"));
 	if (showsThinkingLevel(badge.level)) {
 		spans.push(span(` ${theme.thinking[badge.level] ?? badge.level}`, thinkingToken(badge.level)));
@@ -254,7 +255,12 @@ export function modelBadgeSpans(ref: AgentRecordLike, observed: ObservableSessio
 export function formatMetricDuration(metrics: AgentMetrics): string | undefined {
 	const durationMs = metricNumber(metrics.durationMs);
 	if (durationMs <= 0) return undefined;
-	const label = metrics.durationKind === "active" ? "active" : metrics.durationKind === "span" ? "span" : "duration";
+	const label =
+		metrics.durationKind === "active"
+			? t("overlays.agent_hub_renderer.active_duration")
+			: metrics.durationKind === "span"
+				? "span"
+				: "duration";
 	return `${formatDuration(durationMs)} ${label}`;
 }
 
@@ -269,10 +275,10 @@ export function formatMetrics(metrics: AgentMetrics): string {
 	return formatMetricRow(
 		[
 			{ value: formatCost(metrics.cost) },
-			{ value: formatMetricDuration(metrics) ?? "time —" },
-			{ value: `${formatNumber(metrics.requests)} req` },
-			{ value: `${formatNumber(metrics.tools)} tools` },
-			{ value: `${formatNumber(metrics.tokens)} tok` },
+			{ value: formatMetricDuration(metrics) ?? t("overlays.agent_hub_renderer.time_missing") },
+			{ value: t("overlays.agent_hub_renderer.requests_metric", { requests: `${formatNumber(metrics.requests)}` }) },
+			{ value: t("overlays.agent_hub_renderer.tools_metric", { tools: `${formatNumber(metrics.tools)}` }) },
+			{ value: t("overlays.agent_hub_renderer.tokens_metric", { tokens: `${formatNumber(metrics.tokens)}` }) },
 		],
 		{ separator: theme.sep.dot },
 	);
@@ -282,10 +288,10 @@ export function formatMetrics(metrics: AgentMetrics): string {
 export function metricsText(metrics: AgentMetrics): string {
 	return [
 		formatCost(metrics.cost),
-		formatMetricDuration(metrics) ?? "time —",
-		`${formatNumber(metrics.requests)} req`,
-		`${formatNumber(metrics.tools)} tools`,
-		`${formatNumber(metrics.tokens)} tok`,
+		formatMetricDuration(metrics) ?? t("overlays.agent_hub_renderer.time_missing_compact"),
+		t("overlays.agent_hub_renderer.requests_metric_compact", { requests: `${formatNumber(metrics.requests)}` }),
+		t("overlays.agent_hub_renderer.tools_metric_compact", { tools: `${formatNumber(metrics.tools)}` }),
+		t("overlays.agent_hub_renderer.tokens_metric_compact", { tokens: `${formatNumber(metrics.tokens)}` }),
 	].join(theme.sep.dot);
 }
 
@@ -297,9 +303,13 @@ export function formatMetricColumns(metrics: AgentMetrics, age: string): string 
 		[
 			{ text: formatCost(metrics.cost) },
 			{ text: formatMetricDuration(metrics) ?? "—" },
-			{ text: `${formatNumber(metrics.requests)} req` },
-			{ text: `${formatNumber(metrics.tools)} tools` },
-			{ text: `${formatNumber(metrics.tokens)} tok` },
+			{
+				text: t("overlays.agent_hub_renderer.requests_metric_row", {
+					requests: `${formatNumber(metrics.requests)}`,
+				}),
+			},
+			{ text: t("overlays.agent_hub_renderer.tools_metric_row", { tools: `${formatNumber(metrics.tools)}` }) },
+			{ text: t("overlays.agent_hub_renderer.tokens_metric_row", { tokens: `${formatNumber(metrics.tokens)}` }) },
 			{ text: age },
 		],
 		[

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { UsageLimit, UsageReport, UsageResetCreditDetail, UsageResetCredits } from "@oh-my-pi/pi-ai";
 
 /** Include the usage tier in a limit title unless its label already names it. */
@@ -93,13 +94,17 @@ export function summarizeUsageResetCredits(
 		: (reset.credits?.find(credit => credit.usable !== false) ?? reset.credits?.[0]);
 	const unavailableReason =
 		reset.reason ??
-		(reset.cooldownUntil ? `cooldown until ${reset.cooldownUntil}` : undefined) ??
+		(reset.cooldownUntil
+			? t("overlays.usage_display.cooldown_until", { cooldownUntil: `${reset.cooldownUntil}` })
+			: undefined) ??
 		(selectedCredit?.blocking?.length
-			? `blocked by ${selectedCredit.blocking.map(formatUsageResetWindow).join(", ")}`
+			? t("overlays.usage_display.blocked_by", {
+					join: `${selectedCredit.blocking.map(formatUsageResetWindow).join(", ")}`,
+				})
 			: undefined) ??
 		(selectedCredit?.status && selectedCredit.status !== "available" ? selectedCredit.status : undefined) ??
-		(reset.eligible === false ? "not eligible" : undefined) ??
-		(bankedCount > 0 && redeemableCount === 0 ? "not usable right now" : undefined);
+		(reset.eligible === false ? t("overlays.usage_display.not_eligible") : undefined) ??
+		(bankedCount > 0 && redeemableCount === 0 ? t("overlays.usage_display.not_usable_now") : undefined);
 	return {
 		bankedCount,
 		redeemableCount,

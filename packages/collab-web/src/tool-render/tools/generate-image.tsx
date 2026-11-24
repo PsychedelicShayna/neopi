@@ -4,6 +4,7 @@
  * context), so the body merges them into the result before thumbnailing.
  */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, InvalidArg, Kv, KvGrid, Note, PathText, ResultImages, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps, ToolResultBlock, ToolResultLike } from "../types";
 import { detailsRecord, isRecord, normalizeWs, resultImagesOf, str, truncate } from "../util";
@@ -23,6 +24,7 @@ function withDetailImages(result: ToolResultLike | undefined): ToolResultLike | 
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const subject = str(args.subject);
 	const aspect = str(args.aspect_ratio);
 	const changes = Array.isArray(args.changes) ? args.changes.length : 0;
@@ -34,24 +36,27 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 				args.subject !== undefined && <InvalidArg what="subject" />
 			)}{" "}
 			{aspect && <Badge>{aspect}</Badge>}
-			{changes > 0 && <Badge tone="accent">edit ×{changes}</Badge>}
+			{changes > 0 && (
+				<Badge tone="accent">{t("guesttools.image.edit_count", "edit ×{count}", { count: changes })}</Badge>
+			)}
 		</>
 	);
 }
 
 const PROMPT_FIELDS = [
-	["subject", "subject"],
-	["action", "action"],
-	["scene", "scene"],
-	["composition", "composition"],
-	["lighting", "lighting"],
-	["style", "style"],
-	["text", "text"],
-	["aspect_ratio", "aspect"],
-	["image_size", "size"],
+	["subject", "guesttools.generate-image.subject", "subject"],
+	["action", "guesttools.generate-image.action", "action"],
+	["scene", "guesttools.generate-image.scene", "scene"],
+	["composition", "guesttools.generate-image.composition", "composition"],
+	["lighting", "guesttools.generate-image.lighting", "lighting"],
+	["style", "guesttools.generate-image.style", "style"],
+	["text", "guesttools.generate-image.text", "text"],
+	["aspect_ratio", "guesttools.generate-image.aspect_ratio", "aspect"],
+	["image_size", "guesttools.generate-image.image_size", "size"],
 ] as const;
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const changes = Array.isArray(args.changes) ? args.changes : null;
 	const inputs = Array.isArray(args.input) ? args.input : null;
 	const details = detailsRecord(result);
@@ -69,10 +74,10 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				{PROMPT_FIELDS.map(([arg, label]) => {
+				{PROMPT_FIELDS.map(([arg, messageKey, label]) => {
 					const value = args[arg];
 					return (
-						<Kv key={arg} k={label}>
+						<Kv key={arg} k={t(messageKey, label)}>
 							{value === undefined ? null : (str(value) ?? <InvalidArg what={label} />)}
 						</Kv>
 					);
@@ -81,7 +86,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{changes && changes.length > 0 && (
 				<div className="tv-list">
 					{changes.map((change, i) => (
-						<Row key={i} k={i === 0 ? "changes" : undefined}>
+						<Row key={i} k={i === 0 ? t("guesttools.label.changes", "changes") : undefined}>
 							{typeof change === "string" ? change : <InvalidArg what="change" />}
 						</Row>
 					))}
@@ -93,13 +98,13 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						const path = isRecord(input) ? str(input.path) : null;
 						const mime = isRecord(input) ? str(input.mime_type) : null;
 						return (
-							<Row key={i} k={i === 0 ? "input" : undefined}>
+							<Row key={i} k={i === 0 ? t("guesttools.label.input", "input") : undefined}>
 								{!isRecord(input) ? (
 									<InvalidArg what="input" />
 								) : path ? (
 									<PathText path={path} />
 								) : (
-									`base64 image${mime ? ` (${mime})` : ""}`
+									t("guesttools.image.base64", "base64 image{mime}", { mime: mime ? ` (${mime})` : "" })
 								)}
 							</Row>
 						);
@@ -107,12 +112,14 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				</div>
 			)}
 			{(provider || model) && <Badges items={[provider, model]} />}
-			{revised && <Note>revised: {truncate(revised, 400)}</Note>}
+			{revised && (
+				<Note>{t("guesttools.image.revised", "revised: {prompt}", { prompt: truncate(revised, 400) })}</Note>
+			)}
 			<ResultImages result={merged} />
 			{paths.length > 0 && (
 				<div className="tv-list">
 					{paths.map((p, i) => (
-						<Row key={i} k={i === 0 ? "saved" : undefined}>
+						<Row key={i} k={i === 0 ? t("guesttools.label.saved", "saved") : undefined}>
 							<PathText path={p} />
 						</Row>
 					))}

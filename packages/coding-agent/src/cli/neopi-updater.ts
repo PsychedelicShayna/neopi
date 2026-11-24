@@ -2,6 +2,7 @@ import { readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/pro
 import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { normalizeProfileName, resolveProfileEnv, setProfile } from "@oh-my-pi/pi-utils/dirs";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	defaultUpdateChannel,
 	getAgentDir,
@@ -20,6 +21,7 @@ export const FIRST_UPDATER_VERSION = "18.18.8";
 const FIRST_UPDATER_SOURCE_COMMIT = "d2774cb85c99459da0cf4d33a5fc9ccc40e9ea88";
 const RELEASES_URL = "https://api.github.com/repos/PsychedelicShayna/neopi/releases";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const LEGACY_CONFIRMATION = "INSTALL LEGACY";
 
 interface Release {
 	id: number;
@@ -70,7 +72,7 @@ function releaseChannel(release: Release): UpdateChannel {
 }
 function releaseVersion(tag: string): string {
 	const version = /^v?(\d+\.\d+\.\d+)(?:[-+].*)?$/.exec(tag)?.[1];
-	if (!version) throw new Error(`Unrecognized NeoPi release version: ${tag}`);
+	if (!version) throw new Error(t("cli.neopiUpdater.unrecognizedVersion", { tag }));
 	return version;
 }
 async function predatesUpdater(release: Release, fetcher: typeof fetch): Promise<boolean> {
@@ -113,7 +115,7 @@ async function readState(executable: string): Promise<UpdateState> {
 			(value.hold &&
 				(typeof value.hold.agentDir !== "string" || !["stable", "nightly"].includes(value.hold.channel)))
 		) {
-			throw new Error("Unsupported updater state; preserve this file before repairing it.");
+			throw new Error(t("cli.neopiUpdater.unsupportedState"));
 		}
 		if (value.recovery) {
 			const image = await stat(executable);
@@ -137,7 +139,9 @@ async function readState(executable: string): Promise<UpdateState> {
 		return value;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1 };
-		throw new Error(`Cannot read ${executable}.update.json: ${String(error)}`);
+		throw new Error(
+			t("cli.neopiUpdater.readStateFailed", { path: `${executable}.update.json`, error: String(error) }),
+		);
 	}
 }
 async function saveState(executable: string, state: UpdateState): Promise<void> {
@@ -166,9 +170,9 @@ async function releases(fetcher: typeof fetch): Promise<Release[]> {
 			headers: { Accept: "application/vnd.github+json", "User-Agent": `npi/${VERSION}` },
 			signal: AbortSignal.timeout(30_000),
 		});
-		if (!response.ok) throw new Error(`NeoPi GitHub release request failed: HTTP ${response.status}`);
+		if (!response.ok) throw new Error(t("cli.neopiUpdater.releaseRequestFailed", { status: response.status }));
 		const data: unknown = await response.json();
-		if (!Array.isArray(data)) throw new Error("Invalid NeoPi GitHub release response.");
+		if (!Array.isArray(data)) throw new Error(t("cli.neopiUpdater.invalidReleaseResponse"));
 		for (const raw of data) {
 			const release = raw as Release;
 			if (release.draft || !release.published_at) continue;
@@ -179,7 +183,7 @@ async function releases(fetcher: typeof fetch): Promise<Release[]> {
 				!Number.isFinite(Date.parse(release.published_at)) ||
 				!Array.isArray(release.assets)
 			) {
-				throw new Error("Invalid NeoPi release identity.");
+				throw new Error(t("cli.neopiUpdater.invalidReleaseIdentity"));
 			}
 			releaseVersion(release.tag_name);
 			for (const asset of release.assets) {
@@ -195,7 +199,7 @@ async function releases(fetcher: typeof fetch): Promise<Release[]> {
 					decodeURIComponent(segments[6] ?? "") !== asset.name ||
 					segments.length !== 7
 				) {
-					throw new Error(`Release asset is outside its NeoPi GitHub release: ${asset.name}`);
+					throw new Error(t("cli.neopiUpdater.assetOutsideRelease", { asset: asset.name }));
 				}
 			}
 			result.push(release);
@@ -204,7 +208,7 @@ async function releases(fetcher: typeof fetch): Promise<Release[]> {
 	}
 	const ids = new Set<number>();
 	for (const release of result) {
-		if (ids.has(release.id)) throw new Error(`Duplicate NeoPi release identity: ${release.id}`);
+		if (ids.has(release.id)) throw new Error(t("cli.neopiUpdater.duplicateReleaseIdentity", { id: release.id }));
 		ids.add(release.id);
 	}
 	// GitHub's array is creation-ordered, which is not publication order.
@@ -229,10 +233,11 @@ async function newerThanLocal(target: Release, options: UpdateOptions): Promise<
 
 async function confirmLegacy(message: string): Promise<boolean> {
 	if (!process.stdin.isTTY || !process.stdout.isTTY)
-		throw new Error(`${message}\nRun this command in an interactive terminal to confirm; nothing was replaced.`);
+		throw new Error(`${message}\n${t("cli.neopiUpdater.interactiveConfirmationRequired")}`);
 	const prompt = createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		return (await prompt.question(`${message}\nType INSTALL LEGACY to continue: `)).trim() === "INSTALL LEGACY";
+		const question = t("cli.neopiUpdater.confirmLegacy", { token: LEGACY_CONFIRMATION });
+		return (await prompt.question(`${message}\n${question}`)).trim() === LEGACY_CONFIRMATION;
 	} finally {
 		prompt.close();
 	}
@@ -305,7 +310,7 @@ function profileArguments(argv: readonly string[]): string[] {
 		const arg = argv[i]!;
 		if (arg === "--profile" || arg.startsWith("--profile=")) {
 			const value = arg === "--profile" ? argv[++i] : arg.slice("--profile=".length);
-			if (!value || value.startsWith("--")) throw new Error("--profile requires a profile name.");
+			if (!value || value.startsWith("--")) throw new Error(t("cli.neopiUpdater.profileNameRequired"));
 			profile = normalizeProfileName(value);
 			explicit = true;
 		} else args.push(arg);
@@ -317,21 +322,12 @@ function profileArguments(argv: readonly string[]): string[] {
 	return args;
 }
 
-const HELP =
-	"NeoPi binary updates (PsychedelicShayna/neopi GitHub releases only)\n" +
-	"  npi update                    Status, channel and rollback hold (offline)\n" +
-	"  npi update --check            Check selected channel without installing\n" +
-	"  npi update stable|nightly     Sync now, switch channel and release rollback hold\n" +
-	"  npi update rollback [N]       Step back N releases from the current cursor; hold auto-update\n" +
-	"  npi update source            Prompted source-fork integration workflow\n" +
-	"  npi update --plugins [--check] Update/check plugins (separate from binary updates)";
-
 /** Recovery entry: this graph deliberately excludes normal CLI, native startup and Settings. */
 export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}): Promise<void> {
 	const args = profileArguments(argv);
 	const print = options.print ?? console.log;
 	if (args[0] === "--help" || args[0] === "-h") {
-		print(HELP);
+		print(t("cli.neopiUpdater.help"));
 		return;
 	}
 	const command = args[0];
@@ -342,14 +338,14 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 		command !== "nightly" &&
 		command !== "rollback"
 	) {
-		throw new Error(`Unknown NeoPi update command: ${command}\n${HELP}`);
+		throw new Error(`${t("cli.neopiUpdater.unknownCommand", { command })}\n${t("cli.neopiUpdater.help")}`);
 	}
 	const steps = command === "rollback" ? Number(args[1] ?? 1) : 0;
 	if (
 		(command === "rollback" && (!Number.isSafeInteger(steps) || steps < 1 || !/^\d+$/.test(args[1] ?? "1"))) ||
 		args.length > (command === "rollback" ? 2 : command === undefined ? 0 : 1)
 	)
-		throw new Error(`Invalid update arguments.\n${HELP}`);
+		throw new Error(`${t("cli.neopiUpdater.invalidArguments")}\n${t("cli.neopiUpdater.help")}`);
 	const executable = await realpath(options.executablePath ?? process.execPath);
 	const agentDir = options.agentDir ?? getAgentDir();
 	for (const message of await recoverPendingUpdate(executable)) print(message);
@@ -365,7 +361,15 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 	const installed = await currentRelease(executable, state);
 	if (command === undefined) {
 		print(
-			`NeoPi ${options.version ?? VERSION}\nExecutable: ${executable}\nChannel: ${preferences.channel}\nAutomatic updates: ${preferences.mode}\nInstalled release: ${installed?.tag ?? "local/source build (not a tracked GitHub release)"}\nRollback cursor: ${installed?.tag ?? "current build"}\nRollback hold: ${state.hold ? "ON — automatic replacement paused; run npi update stable|nightly or change the channel" : "off"}`,
+			t("cli.neopiUpdater.status", {
+				version: options.version ?? VERSION,
+				executable,
+				channel: preferences.channel,
+				mode: preferences.mode,
+				installed: installed?.tag ?? t("cli.neopiUpdater.untrackedBuild"),
+				cursor: installed?.tag ?? t("cli.neopiUpdater.currentBuild"),
+				hold: state.hold ? t("cli.neopiUpdater.holdActive") : "off",
+			}),
 		);
 		return;
 	}
@@ -373,16 +377,19 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 		const latest = (await releases(options.fetcher ?? fetch)).find(
 			release => releaseChannel(release) === preferences.channel,
 		);
-		if (!latest) throw new Error(`No published NeoPi ${preferences.channel} releases found.`);
+		if (!latest) throw new Error(t("cli.neopiUpdater.noPublishedReleases", { channel: preferences.channel }));
 		print(
-			`Latest ${preferences.channel}: ${latest.tag_name}${(await predatesUpdater(latest, options.fetcher ?? fetch)) ? " (predates or cannot verify this updater; interactive acknowledgement required to install)" : ""}\nNo binary was replaced.${state.hold ? " Rollback hold is ON." : ""}`,
+			t("cli.neopiUpdater.checkResult", {
+				channel: preferences.channel,
+				tag: latest.tag_name,
+				legacy: (await predatesUpdater(latest, options.fetcher ?? fetch)) ? t("cli.neopiUpdater.checkLegacy") : "",
+				hold: state.hold ? t("cli.neopiUpdater.checkHoldActive") : "",
+			}),
 		);
 		return;
 	}
 	if (!options.executablePath && !isCompiledDestination(executable)) {
-		throw new Error(
-			"Binary replacement requires the dedicated compiled npi executable; Bun/source and package-manager runtimes are not update destinations.",
-		);
+		throw new Error(t("cli.neopiUpdater.compiledExecutableRequired"));
 	}
 	await withUpdateLock(executable, async () => {
 		const latestState = await readState(executable);
@@ -401,11 +408,10 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 							release => release.target_commitish === sha || release.tag_name.includes(sha.slice(0, 12)),
 						)
 					: -1;
-			if (current && index < 0)
-				throw new Error(`Rollback cursor ${current.tag} is no longer published; refusing to reset it silently.`);
+			if (current && index < 0) throw new Error(t("cli.neopiUpdater.cursorUnpublished", { tag: current.tag }));
 			target = history[index + steps];
 		} else target = history[0];
-		if (!target) throw new Error(`Not enough published ${channel} releases for this update/rollback.`);
+		if (!target) throw new Error(t("cli.neopiUpdater.insufficientPublishedReleases", { channel }));
 		if (command !== "rollback" && current?.id === target.id && current.tag === target.tag_name) {
 			const finish = async () => {
 				delete latestState.hold;
@@ -414,14 +420,21 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 			if (preferences.warning) await finish();
 			else await persistUpdateChannel(channel, agentDir, finish);
 			print(
-				`Already installed ${target.tag_name}; ${preferences.warning ? "unreadable config preserved" : `channel set to ${channel}`}; rollback hold released.`,
+				preferences.warning
+					? t("cli.neopiUpdater.alreadyInstalledConfigPreserved", { tag: target.tag_name })
+					: t("cli.neopiUpdater.alreadyInstalled", { tag: target.tag_name, channel }),
 			);
 			return;
 		}
 		if (await predatesUpdater(target, options.fetcher ?? fetch)) {
-			const warning = `WARNING: ${target.tag_name} predates or cannot be verified to include NeoPi's recovery updater (${FIRST_UPDATER_VERSION}, first source ${FIRST_UPDATER_SOURCE_COMMIT}). After installing it, npi update stable/nightly/rollback may no longer be available. Recovery requires the retained ${executable}.previous binary or manual NeoPi installation.`;
+			const warning = t("cli.neopiUpdater.legacyWarning", {
+				tag: target.tag_name,
+				firstVersion: FIRST_UPDATER_VERSION,
+				firstCommit: FIRST_UPDATER_SOURCE_COMMIT,
+				previousBinary: `${executable}.previous`,
+			});
 			if (!(await (options.confirmLegacy ?? confirmLegacy)(warning)))
-				throw new Error("Legacy release installation cancelled; nothing was replaced.");
+				throw new Error(t("cli.neopiUpdater.legacyInstallCancelled"));
 		}
 		const switchChannel = command === "rollback" || preferences.warning ? undefined : channel;
 		await applyRelease(
@@ -434,10 +447,15 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 			switchChannel,
 		);
 		const channelMessage = preferences.warning
-			? "Binary recovery succeeded; the unreadable config was preserved and its channel was not changed."
-			: `Channel set to ${channel}; rollback hold released.`;
+			? t("cli.neopiUpdater.recoveryConfigPreserved")
+			: t("cli.neopiUpdater.channelSet", { channel });
 		print(
-			`Installed ${target.tag_name} (${releaseChannel(target)}). Previous binary: ${executable}.previous.\n${command === "rollback" ? "Rollback hold ON; repeating rollback continues from this release." : channelMessage}\nExisting sessions keep running their loaded version; restart to use the installed build.`,
+			t("cli.neopiUpdater.installed", {
+				tag: target.tag_name,
+				channel: releaseChannel(target),
+				previousBinary: `${executable}.previous`,
+				result: command === "rollback" ? t("cli.neopiUpdater.rollbackHeld") : channelMessage,
+			}),
 		);
 	});
 }
@@ -483,12 +501,14 @@ export async function checkForAutomaticUpdate(
 		if (!changingChannel && !current && !(await newerThanLocal(target, adapters))) return;
 		if (await predatesUpdater(target, adapters.fetcher ?? fetch)) {
 			options.onMessage(
-				`${target.tag_name} predates or cannot be verified to include the recovery updater and was not installed automatically. Use npi update ${options.channel} for an interactive sync.`,
+				t("cli.neopiUpdater.automaticLegacySkipped", { tag: target.tag_name, channel: options.channel }),
 			);
 			return;
 		}
 		if (options.mode === "notify") {
-			options.onMessage(`NeoPi ${target.tag_name} available. Run npi update ${options.channel} to install.`);
+			options.onMessage(
+				t("cli.neopiUpdater.automaticAvailable", { tag: target.tag_name, channel: options.channel }),
+			);
 			return;
 		}
 		await applyRelease(
@@ -499,6 +519,6 @@ export async function checkForAutomaticUpdate(
 			false,
 			options.channel,
 		);
-		options.onMessage(`NeoPi ${target.tag_name} installed for the next launch. Existing sessions are unchanged.`);
+		options.onMessage(t("cli.neopiUpdater.automaticInstalled", { tag: target.tag_name }));
 	});
 }

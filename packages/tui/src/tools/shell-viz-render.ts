@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ShellVizPresentation, ShellVizRow, ShellVizSegment } from "@oh-my-pi/pi-wire";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { replaceTabs } from "../render/render-utils";
@@ -149,11 +150,11 @@ export function renderShellVisualization(
 			lines.push(
 				...joinPanes(
 					[
-						theme.fg("dim", "Original"),
+						theme.fg("dim", t("tools.shell_viz_render.original")),
 						...presentation.original.flatMap(row => rowLines(row, presentation, theme, pane)),
 					],
 					[
-						theme.fg("dim", "Pseudo"),
+						theme.fg("dim", t("tools.shell_viz_render.pseudo")),
 						...presentation.rows.flatMap(row => rowLines(row, presentation, theme, pane)),
 					],
 					width,
@@ -162,26 +163,25 @@ export function renderShellVisualization(
 			);
 		} else {
 			lines.push(
-				theme.fg("dim", "Split stacked (terminal too narrow for side-by-side)"),
-				theme.fg("dim", "Original"),
+				theme.fg("dim", t("tools.shell_viz_render.stacked")),
+				theme.fg("dim", t("tools.shell_viz_render.original")),
 			);
 			lines.push(
 				...presentation.original.flatMap(row => rowLines(row, presentation, theme, width)),
-				theme.fg("dim", "Pseudo"),
+				theme.fg("dim", t("tools.shell_viz_render.pseudo")),
 				...presentation.rows.flatMap(row => rowLines(row, presentation, theme, width)),
 			);
 		}
 	} else lines.push(...presentation.rows.flatMap(row => rowLines(row, presentation, theme, width)));
 	if (includeOutput && presentation.output) {
 		lines.push(
-			theme.fg("dim", "Output"),
+			theme.fg("dim", t("tools.common.output")),
 			...presentation.output
 				.trimEnd()
 				.split("\n")
 				.flatMap(line => wrapTextWithAnsi(shellVizText(line), width)),
 		);
 	}
-	if (presentation.timeline.trimmed)
-		lines.push(theme.fg("warning", "Replay history/output trimmed to retained limits"));
+	if (presentation.timeline.trimmed) lines.push(theme.fg("warning", t("tools.shell_viz_render.retained_limits")));
 	return lines.map(line => truncateToWidth(line, width));
 }

@@ -5,6 +5,7 @@
  * offscreen canvas; pan and zoom only blit it and redraw the brush.
  */
 
+import { useTranslation } from "../i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TraceSpanKind, TraceTrack } from "../types";
 import type { TimelineViewport } from "./TimelineCanvas";
@@ -79,6 +80,7 @@ function paintDensity(
 }
 
 export function Minimap({ tracks, scale, viewport, onViewportChange }: MinimapProps) {
+	const tr = useTranslation();
 	const colors = useTraceTheme();
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const [width, setWidth] = useState(800);
@@ -183,7 +185,7 @@ export function Minimap({ tracks, scale, viewport, onViewportChange }: MinimapPr
 			className="traces-minimap"
 			style={{ height: HEIGHT }}
 			role="slider"
-			aria-label="Timeline overview brush"
+			aria-label={tr("pages.minimap.timeline_overview_brush", "Timeline overview brush")}
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-valuenow={Math.round(((viewport.u0 - d0) / dSpan) * 100)}

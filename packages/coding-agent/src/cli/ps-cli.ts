@@ -17,15 +17,16 @@ import {
 	type PsBoard,
 	type PsScopeReport,
 	scopeHeader,
-	TABLE_HEADER,
 	TERMINAL_STATES,
 	tableCells,
+	tableHeader,
 	unitLabel,
 	unitName,
 } from "@oh-my-pi/pi-tui/apps/ps-data";
 import { type PsTopHost, runPsTop } from "@oh-my-pi/pi-tui/apps/ps-top";
 import { APP_NAME, formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { closeDaemonClient, daemonClient, probeDaemon } from "../daemon/client";
 import type { DaemonClient, DaemonSignal, UnitSnapshot } from "../daemon/protocol";
 import { isSharedBrowserUnit, restartSharedBrowser } from "../tools/browser/shared-daemon";
@@ -81,7 +82,7 @@ async function restartUnit(client: DaemonClient, unit: UnitSnapshot): Promise<Un
 async function stopUnit(client: DaemonClient, unit: UnitSnapshot, timeoutMs: number): Promise<UnitSnapshot> {
 	const current = (await client.request({ op: "stop", unit: unit.id, timeoutMs, generation: unit.generation })).unit;
 	if (current.generation !== unit.generation && !TERMINAL_STATES[current.state]) {
-		throw new Error(`${unitName(unit)} was restarted since it was listed and was left running; list it again`);
+		throw new Error(t("cli.commands.ps.generationChanged", { unit: unitName(unit) }));
 	}
 	return current;
 }
@@ -173,7 +174,7 @@ export async function runPsCommand(cmd: PsCommandArgs): Promise<void> {
 			return;
 		}
 		if (!cmd.name) {
-			console.error(chalk.red(`${cmd.action} requires a unit name or id. Run \`${APP_NAME} ps\` to list units.`));
+			console.error(chalk.red(t("cli.commands.ps.unitRequired", { action: cmd.action, bin: APP_NAME })));
 			process.exitCode = 1;
 			return;
 		}
@@ -201,7 +202,7 @@ async function runList(cmd: PsCommandArgs): Promise<void> {
 	}
 	console.log(daemonHeader(board.daemon));
 	if (board.reports.length === 0) {
-		console.log(chalk.dim("\nNo units."));
+		console.log(chalk.dim(`\n${t("cli.commands.ps.noUnits")}`));
 	}
 	for (const report of board.reports) {
 		console.log("");
@@ -209,7 +210,7 @@ async function runList(cmd: PsCommandArgs): Promise<void> {
 		printTable(report);
 	}
 	if (!cmd.flags.all) {
-		console.log(chalk.dim("\nUse --all to include other projects and sessions."));
+		console.log(chalk.dim(`\n${t("cli.commands.ps.allHint")}`));
 	}
 }
 
@@ -217,7 +218,8 @@ function printTable(report: PsScopeReport): void {
 	// Truncate to the terminal on a TTY; keep full lines when piped.
 	const maxWidth = process.stdout.isTTY ? (process.stdout.columns ?? 120) : Number.POSITIVE_INFINITY;
 	const cells = report.units.map(tableCells);
-	const widths = TABLE_HEADER.map((title, column) =>
+	const header = tableHeader();
+	const widths = header.map((title, column) =>
 		Math.max(title.length, ...cells.map(row => Bun.stringWidth(row[column]))),
 	);
 	const render = (row: string[]): string => {
@@ -225,7 +227,7 @@ function printTable(report: PsScopeReport): void {
 			`  ${row.map((cell, column) => cell + " ".repeat(Math.max(0, widths[column] - Bun.stringWidth(cell)))).join("  ")}`.trimEnd();
 		return Number.isFinite(maxWidth) ? truncateToWidth(line, maxWidth) : line;
 	};
-	console.log(chalk.dim(render([...TABLE_HEADER])));
+	console.log(chalk.dim(render([...header])));
 	for (const [index, row] of cells.entries()) {
 		const line = render(row);
 		console.log(TERMINAL_STATES[report.units[index].state] ? chalk.dim(line) : line);
@@ -248,21 +250,35 @@ async function runAction(cmd: PsCommandArgs, name: string): Promise<void> {
 					return;
 				}
 				console.log(unitLabel(current));
-				console.log(`  id:       ${current.id}`);
-				console.log(`  scope:    ${scopeHeader(current.scope)}`);
+				console.log(t("cli.commands.ps.infoId", { id: current.id }));
+				console.log(t("cli.commands.ps.infoScope", { scope: scopeHeader(current.scope) }));
 				const command = formatCommand(proc) ?? current.command;
-				if (command) console.log(`  command:  ${command}`);
+				if (command) console.log(t("cli.commands.ps.infoCommand", { command }));
 				const cwd = proc?.cwd ?? current.cwd;
-				if (cwd) console.log(`  cwd:      ${cwd}`);
+				if (cwd) console.log(t("cli.commands.ps.infoCwd", { cwd }));
 				if (!TERMINAL_STATES[current.state])
-					console.log(`  uptime:   ${formatDuration(Date.now() - current.startedAt)}`);
-				if (current.exitReason) console.log(`  exit:     ${current.exitReason}`);
-				console.log(`  restarts: ${current.restartCount} (policy: ${current.policy.restart})`);
+					console.log(
+						t("cli.commands.ps.infoUptime", { elapsed: formatDuration(Date.now() - current.startedAt) }),
+					);
+				if (current.exitReason) console.log(t("cli.commands.ps.infoExit", { reason: current.exitReason }));
 				console.log(
-					`  hold: ${current.policy.hold}  survive: ${current.policy.survive}  leases: ${current.leases}  pty: ${proc?.pty ?? false}  owner: ${current.owner ?? "-"}`,
+					t("cli.commands.ps.infoRestarts", { count: current.restartCount, policy: current.policy.restart }),
+				);
+				console.log(
+					t("cli.commands.ps.infoPolicy", {
+						hold: String(current.policy.hold),
+						survive: String(current.policy.survive),
+						leases: current.leases,
+						pty: String(proc?.pty ?? false),
+						owner: current.owner ?? "-",
+					}),
 				);
 				if (current.idleAt !== undefined)
-					console.log(`  idle:     stops in ${formatDuration(Math.max(0, current.idleAt - Date.now()))}`);
+					console.log(
+						t("cli.commands.ps.infoIdle", {
+							remaining: formatDuration(Math.max(0, current.idleAt - Date.now())),
+						}),
+					);
 				return;
 			}
 			case "logs":
@@ -271,36 +287,36 @@ async function runAction(cmd: PsCommandArgs, name: string): Promise<void> {
 			case "stop":
 			case "kill": {
 				const timeoutMs = cmd.action === "kill" ? KILL_GRACE_MS : Math.round((cmd.flags.timeout ?? 5) * 1000);
-				printUnitResult(cmd, cmd.action === "kill" ? "Killed" : "Stopped", await stopUnit(client, unit, timeoutMs));
+				printUnitResult(cmd, cmd.action === "kill" ? "killed" : "stopped", await stopUnit(client, unit, timeoutMs));
 				return;
 			}
 			case "restart":
-				printUnitResult(cmd, "Restarted", await restartUnit(client, unit));
+				printUnitResult(cmd, "restarted", await restartUnit(client, unit));
 				return;
 			case "send": {
 				const signalName = cmd.flags.signal?.toUpperCase();
 				const signal = SIGNALS.find(candidate => candidate === signalName);
 				if (signalName !== undefined && signal === undefined)
-					throw new Error(`Signal must be one of ${SIGNALS.join(", ")}`);
+					throw new Error(t("cli.commands.ps.signalChoice", { choices: SIGNALS.join(", ") }));
 				if (cmd.value === undefined && signal === undefined)
-					throw new Error("send requires input text or --signal");
+					throw new Error(t("cli.commands.ps.sendRequiresInput"));
 				const result = await client.request({
 					op: "send",
 					unit: unit.id,
 					data: cmd.value,
 					signal,
 				});
-				printUnitResult(cmd, "Sent to", result.unit);
+				printUnitResult(cmd, "sent", result.unit);
 				return;
 			}
 			case "mode": {
 				const mode = MODES.find(candidate => candidate === cmd.value);
-				if (!mode) throw new Error(`mode requires one of ${MODES.join(", ")}`);
-				printUnitResult(cmd, `Mode ${mode}:`, (await client.request({ op: "mode", unit: unit.id, mode })).unit);
+				if (!mode) throw new Error(t("cli.commands.ps.modeChoice", { choices: MODES.join(", ") }));
+				printUnitResult(cmd, "mode", (await client.request({ op: "mode", unit: unit.id, mode })).unit, mode);
 				return;
 			}
 			default:
-				throw new Error(`Unhandled action ${cmd.action}`);
+				throw new Error(t("cli.commands.ps.unhandled", { action: cmd.action }));
 		}
 	} catch (error) {
 		console.error(chalk.red(error instanceof Error ? error.message : String(error)));
@@ -308,9 +324,14 @@ async function runAction(cmd: PsCommandArgs, name: string): Promise<void> {
 	}
 }
 
-function printUnitResult(cmd: PsCommandArgs, verb: string, unit: UnitSnapshot): void {
+function printUnitResult(
+	cmd: PsCommandArgs,
+	result: "stopped" | "killed" | "restarted" | "sent" | "mode",
+	unit: UnitSnapshot,
+	mode?: (typeof MODES)[number],
+): void {
 	if (cmd.flags.json) console.log(JSON.stringify(unit, null, 2));
-	else console.log(`${verb} ${unitLabel(unit)}`);
+	else console.log(t(`cli.commands.ps.result.${result}`, { unit: unitLabel(unit), mode: mode ?? "" }));
 }
 
 async function runLogs(cmd: PsCommandArgs, client: DaemonClient, unit: UnitSnapshot): Promise<void> {

@@ -1,22 +1,34 @@
 /* global document, window, fetch */
 
 const byId = id => document.getElementById(id);
+const messages = JSON.parse(byId("editor-i18n").textContent);
+const locale = document.documentElement.lang;
+
+function t(key, values) {
+	const message = messages[key] ?? key;
+	return values
+		? message.replace(/\{([A-Za-z0-9_]+)\}/g, (placeholder, name) =>
+				Object.hasOwn(values, name) ? String(values[name]) : placeholder,
+			)
+		: message;
+}
+
 const board = byId("board");
 const inspector = byId("inspector");
 const scopeInput = byId("scope");
 const svgNS = "http://www.w3.org/2000/svg";
 const transitParts = [
-	["output", "Output"],
-	["input", "Fitted input"],
-	["reasoning", "Reasoning"],
-	["toolTrace", "Tool trace"],
-	["transcript", "Transcript"],
+	["output", t("output")],
+	["input", t("fittedInput")],
+	["reasoning", t("reasoning")],
+	["toolTrace", t("toolTrace")],
+	["transcript", t("transcript")],
 ];
 const modelShow = [
-	["", "Default"],
-	["always", "Always"],
-	["never", "Never"],
-	["final", "Final only"],
+	["", t("default")],
+	["always", t("always")],
+	["never", t("never")],
+	["final", t("finalOnly")],
 ];
 let source;
 let mixture;
@@ -52,12 +64,42 @@ function status(text, error = false) {
 	byId("feedback").toggleAttribute("data-error", error);
 }
 
+function findingMessage(item, doc) {
+	if (locale === "en") return item.message;
+	const key = `finding.${item.code}`;
+	if (!Object.hasOwn(messages, key)) return item.message;
+	const location = /^mixtures\[(\d+)\]\.(?:(members|edges)\[(\d+)\]\.?)?/.exec(item.path);
+	const definition = location && doc?.mixtures[Number(location[1])];
+	const member = location?.[2] === "members" ? definition?.members[Number(location[3])] : undefined;
+	const edge = location?.[2] === "edges" ? definition?.edges[Number(location[3])] : undefined;
+	const detailStart = item.message.indexOf(": ");
+	const values = {
+		name: definition?.name,
+		entry: definition?.entry,
+		member: member?.id,
+		role: member?.role,
+		model: member?.model,
+		fallback: member?.route?.fallback,
+		edge: edge && edgeId(edge),
+		from: edge?.from,
+		to: typeof edge?.to === "string" ? edge.to : undefined,
+		part: location && item.path.slice(location[0].length).match(/^x\.(.*)$/)?.[1],
+		envelope: edge?.envelope,
+		// These codes wrap an opaque parser/validator exception after the first colon. Keep that detail intact.
+		detail: detailStart < 0 ? undefined : item.message.slice(detailStart + 2),
+	};
+	for (const [, name] of messages[key].matchAll(/\{([A-Za-z0-9_]+)\}/g)) {
+		if (values[name] === undefined || values[name] === null) return item.message;
+	}
+	return t(key, values);
+}
+
 function findings(validation, toml, parseDiagnostics = []) {
 	const view = byId("findings");
 	view.replaceChildren();
 	for (const [label, diagnostics] of [
-		["Source warnings", source?.parseDiagnostics ?? []],
-		["Draft warnings", parseDiagnostics],
+		[t("sourceWarnings"), source?.parseDiagnostics ?? []],
+		[t("draftWarnings"), parseDiagnostics],
 	]) {
 		if (!diagnostics.length) continue;
 		const list = el("ul");
@@ -66,8 +108,8 @@ function findings(validation, toml, parseDiagnostics = []) {
 		view.append(el("h3", label), list);
 	}
 	for (const [key, label] of [
-		["errors", "Errors"],
-		["warnings", "Warnings"],
+		["errors", t("errors")],
+		["warnings", t("warnings")],
 	]) {
 		const items = validation?.[key];
 		if (!items?.length) continue;
@@ -75,7 +117,7 @@ function findings(validation, toml, parseDiagnostics = []) {
 		list.className = key;
 		for (const item of items) {
 			const row = el("li");
-			row.append(el("code", item.path), `: ${item.message}`);
+			row.append(el("code", item.path), `: ${findingMessage(item, source?.doc)}`);
 			list.append(row);
 		}
 		view.append(el("h3", label), list);
@@ -104,8 +146,8 @@ function controls() {
 	for (const id of ["add-model", "add-verdict", "connect", "mixture-settings"]) byId(id).disabled ||= !mixture;
 	byId("connect").disabled ||= !connecting && (selection.kind !== "member" || selection.item.kind === "verdict");
 	byId("connect").textContent = connecting
-		? `Cancel connection from ${selection.item.id}`
-		: "Connect from selected model";
+		? t("cancelConnection", { id: selection.item.id })
+		: t("connectFromModel");
 	byId("connect").setAttribute("aria-pressed", connecting);
 	inspector.inert = busy;
 	board.inert = busy;
@@ -115,13 +157,15 @@ function controls() {
 function changed() {
 	dirty = true;
 	findings();
-	status("Unsaved changes.");
+	status(t("unsavedChanges"));
 	controls();
 }
 
 async function request(route, method, value) {
+	const url = new URL(route, window.location.href);
+	url.searchParams.set("lang", locale);
 	const response = await fetch(
-		route,
+		url,
 		method && {
 			method,
 			headers: { "Content-Type": "application/json" },
@@ -130,7 +174,7 @@ async function request(route, method, value) {
 	);
 	const result = await response.json();
 	if (!response.ok)
-		throw Object.assign(new Error(result.error ?? "The request failed."), {
+		throw Object.assign(new Error(result.displayError ?? result.error ?? t("requestFailed")), {
 			code: result.code,
 			parseDiagnostics: result.parseDiagnostics,
 			validation: result.validation,
@@ -140,7 +184,7 @@ async function request(route, method, value) {
 
 async function load(scope) {
 	if (busy) return;
-	if (dirty && !window.confirm("Discard unsaved changes to this file?")) {
+	if (dirty && !window.confirm(t("discardChanges"))) {
 		scopeInput.value = source.scope;
 		return;
 	}
@@ -156,7 +200,7 @@ async function load(scope) {
 		connecting = false;
 		scopeInput.value = source.scope;
 		byId("source").textContent = source.sourcePath;
-		byId("source").title = `Workspace: ${source.cwd}\nDestination: ${source.sourcePath}`;
+		byId("source").title = t("sourceLocation", { cwd: source.cwd, destination: source.sourcePath });
 		byId("models").replaceChildren(
 			...source.models.map(name => {
 				const option = el("option");
@@ -168,12 +212,12 @@ async function load(scope) {
 		findings(source.validation, source.parseDiagnostics.length ? source.toml : undefined);
 		status(
 			source.readOnly
-				? `Read-only: ${source.readOnly}`
+				? t("readOnly", { reason: source.readOnly })
 				: source.parseDiagnostics.length
-					? "Loaded with source warnings. Saving requires confirmation."
+					? t("loadedWithWarnings")
 					: source.hash
-						? "Loaded MIXTURES.toml."
-						: "This scope has no MIXTURES.toml yet. Add a mixture to start.",
+						? t("loaded")
+						: t("noSource"),
 		);
 	} catch (error) {
 		if (source) scopeInput.value = source.scope;
@@ -191,7 +235,7 @@ async function submit(save) {
 		const details = invalid.closest("details");
 		if (details) details.open = true;
 		invalid.reportValidity();
-		status("Fix the invalid value before submitting the draft.", true);
+		status(t("fixInvalidDraft"), true);
 		return;
 	}
 	busy = true;
@@ -210,8 +254,8 @@ async function submit(save) {
 		} catch (error) {
 			if (!save || error.code !== "rewrite-loses-source") throw error;
 			const diagnostics = error.parseDiagnostics.join("\n");
-			if (!window.confirm(`${error.message}.\n\n${diagnostics}\n\nSave NeoPi's canonical form anyway?`)) {
-				status("Save cancelled. The source file was not changed.");
+			if (!window.confirm(t("confirmRewrite", { message: error.message, diagnostics }))) {
+				status(t("saveCancelled"));
 				return;
 			}
 			result = await send(true);
@@ -221,12 +265,8 @@ async function submit(save) {
 			source.parseDiagnostics = result.parseDiagnostics;
 			delete doc.warnings;
 			dirty = false;
-			status(
-				result.registered
-					? "Saved. The workspace roster is up to date."
-					: "Saved. Higher-priority definitions still take precedence.",
-			);
-		} else status("The draft passes NeoPi validation.");
+			status(t(result.registered ? "saved" : "savedShadowed"));
+		} else status(t("draftValid"));
 		findings(result.validation, result.toml, save ? [] : result.parseDiagnostics);
 	} catch (error) {
 		findings(error.validation, undefined, error.code === "rewrite-loses-source" ? [] : error.parseDiagnostics);
@@ -338,15 +378,12 @@ function renderGraph() {
 	board.replaceChildren();
 	const note = byId("graph-note");
 	if (!mixture?.members.length) {
-		const empty = el(
-			"p",
-			mixture ? "Add a model to give this mixture an entry point." : "Select or create a mixture to draw its flow.",
-		);
+		const empty = el("p", t(mixture ? "addEntryModel" : "selectOrCreateMixture"));
 		empty.className = "empty";
 		board.append(empty);
 		board.style.width = "";
 		board.style.height = "";
-		note.textContent = "A mixture starts at one model and passes state along directed handoffs.";
+		note.textContent = t("flowExplanation");
 		return;
 	}
 	const points = layout(mixture);
@@ -399,7 +436,7 @@ function renderGraph() {
 		node.className = "edge";
 		node.toggleAttribute("data-gated", Array.isArray(edge.to));
 		node.title = `${edge.from} → ${targets.join(", ")}${edge.when ? `: ${edge.when}` : ""}`;
-		node.setAttribute("aria-label", `Handoff: ${node.title}`);
+		node.setAttribute("aria-label", t("handoffDescription", { handoff: node.title }));
 		node.style.left = `${label.x}px`;
 		node.style.top = `${label.y}px`;
 		board.append(node);
@@ -407,7 +444,8 @@ function renderGraph() {
 	for (const member of mixture.members) {
 		const { x, y } = points.get(member.id);
 		const entry = member.id === mixture.entry;
-		const model = member.kind === "verdict" ? `${member.question.type} verdict` : member.model || "Choose a model";
+		const model =
+			member.kind === "verdict" ? t("verdictOfType", { type: member.question.type }) : member.model || t("chooseModel");
 		const node = button("", () => (connecting ? connectTo(member) : choose("member", member)), {
 			pressed: selection.item === member,
 		});
@@ -417,12 +455,12 @@ function renderGraph() {
 		node.title = `${member.id}: ${model}`;
 		node.style.left = `${x}px`;
 		node.style.top = `${y}px`;
-		node.append(el("strong", member.id), el("small", entry ? `Entry · ${model}` : model));
+		node.append(el("strong", member.id), el("small", entry ? t("entryLabel", { model }) : model));
 		board.append(node);
 	}
 	note.textContent = connecting
-		? `Choose a destination for ${selection.item.id}; choose the same model to create a loop.`
-		: "Select a node or handoff to edit it. The cyan entry receives the operator prompt.";
+		? t("chooseDestination", { id: selection.item.id })
+		: t("editNodeHint");
 }
 
 function field(label, value, apply, options = {}) {
@@ -506,10 +544,7 @@ function remove(target, item) {
 }
 
 function presets(root, target, key, title) {
-	const panel = details(
-		title,
-		"A mixture can override file presets of the same name. Preset names and template text are case-sensitive.",
-	);
+	const panel = details(title, t("presetsExplanation"));
 	const render = () => {
 		while (panel.children.length > 2) panel.lastElementChild.remove();
 		for (const [name, value] of Object.entries(target[key] ?? {})) {
@@ -518,7 +553,7 @@ function presets(root, target, key, title) {
 			row.append(
 				el("code", name),
 				field(
-					"Text",
+					t("text"),
 					value,
 					text => {
 						target[key][name] = text;
@@ -528,7 +563,7 @@ function presets(root, target, key, title) {
 			);
 			row.append(
 				button(
-					"Remove preset",
+					t("removePreset"),
 					() => {
 						delete target[key][name];
 						if (!Object.keys(target[key]).length) delete target[key];
@@ -541,11 +576,11 @@ function presets(root, target, key, title) {
 			panel.append(row);
 		}
 		panel.append(
-			button("Add preset", () => {
-				const name = window.prompt("Preset name")?.trim();
+			button(t("addPreset"), () => {
+				const name = window.prompt(t("presetName"))?.trim();
 				if (!name) return;
 				if (Object.hasOwn(target[key] ?? {}, name)) {
-					status(`The preset '${name}' already exists.`, true);
+					status(t("duplicatePreset", { name }), true);
 					return;
 				}
 				target[key] = { ...target[key], [name]: "" };
@@ -559,10 +594,10 @@ function presets(root, target, key, title) {
 }
 
 function settingsPanel() {
-	inspector.append(el("h2", "Mixture settings"));
+	inspector.append(el("h2", t("mixtureSettings")));
 	inspector.append(
 		field(
-			"Name",
+			t("name"),
 			mixture.name,
 			(value, input) => {
 				const name = value.trim();
@@ -571,10 +606,7 @@ function settingsPanel() {
 					source.doc.mixtures.some(item => item !== mixture && item.name === name)
 				) {
 					input.value = mixture.name;
-					status(
-						"Enter a unique mixture name using lowercase letters, digits, periods, underscores or hyphens.",
-						true,
-					);
+					status(t("invalidMixtureName"), true);
 					return false;
 				}
 				mixture.name = name;
@@ -584,67 +616,64 @@ function settingsPanel() {
 			{ commit: true },
 		),
 	);
-	property(inspector, "Description", mixture, "description", { multiline: true });
+	property(inspector, t("description"), mixture, "description", { multiline: true });
 	const models = mixture.members.filter(member => member.kind !== "verdict").map(member => [member.id, member.id]);
 	inspector.append(
 		field(
-			"Entry model",
+			t("entryModel"),
 			mixture.entry,
 			value => {
 				mixture.entry = value;
 				renderGraph();
 			},
-			{ choices: [["", "Choose an entry"], ...models] },
+			{ choices: [["", t("chooseEntry")], ...models] },
 		),
 	);
-	const limits = details(
-		"Limits",
-		"Blank values inherit the invoking session's MoA settings. Hard lifetime caps still apply.",
-	);
+	const limits = details(t("limits"), t("limitsExplanation"));
 	const draft = { ...mixture.limits };
 	const useLimits = () => {
 		if (Object.keys(draft).length) mixture.limits = draft;
 		else delete mixture.limits;
 	};
-	property(limits, "Maximum hops", draft, "maxHops", { numeric: "integer", min: 1, after: useLimits });
-	property(limits, "Spend budget (USD; 0 disables)", draft, "budgetUsd", {
+	property(limits, t("maxHops"), draft, "maxHops", { numeric: "integer", min: 1, after: useLimits });
+	property(limits, t("spendBudget"), draft, "budgetUsd", {
 		numeric: "decimal",
 		min: 0,
 		after: useLimits,
 	});
-	property(limits, "Wall clock (minutes)", draft, "wallClockMinutes", {
+	property(limits, t("wallClock"), draft, "wallClockMinutes", {
 		numeric: "decimal",
 		min: 0,
 		after: useLimits,
 	});
-	property(limits, "On limit", draft, "onLimit", {
+	property(limits, t("onLimit"), draft, "onLimit", {
 		choices: [
-			["", "Default"],
-			["pause", "Pause"],
-			["stop", "Stop"],
-			["judge", "Ask a final model"],
+			["", t("default")],
+			["pause", t("pause")],
+			["stop", t("stop")],
+			["judge", t("askFinalModel")],
 		],
 		after: useLimits,
 	});
-	property(limits, "Limit model", draft, "limitTarget", { choices: [["", "Default"], ...models], after: useLimits });
+	property(limits, t("limitModel"), draft, "limitTarget", { choices: [["", t("default")], ...models], after: useLimits });
 	inspector.append(limits);
-	presets(inspector, mixture, "roles", "Local role presets");
-	presets(inspector, mixture, "envelopes", "Local envelope presets");
+	presets(inspector, mixture, "roles", t("localRolePresets"));
+	presets(inspector, mixture, "envelopes", t("localEnvelopePresets"));
 	const gate = el("div");
 	gate.className = "gate";
 	gate.append(
-		check("Steering · M3", !!mixture.steering, () => {}, true),
+		check(t("steeringGate"), !!mixture.steering, () => {}, true),
 		check(
-			"Fan-out and join · M4",
+			t("fanOutGate"),
 			mixture.edges.some(edge => Array.isArray(edge.to)),
 			() => {},
 			true,
 		),
-		check("Gateway serving · M6", mixture.serve === true, () => {}, true),
+		check(t("gatewayGate"), mixture.serve === true, () => {}, true),
 	);
 	if (mixture.steering || mixture.serve)
 		gate.append(
-			button("Clear gated options", () => {
+			button(t("clearGated"), () => {
 				delete mixture.steering;
 				if (mixture.serve) delete mixture.serve;
 				changed();
@@ -654,9 +683,9 @@ function settingsPanel() {
 	inspector.append(gate);
 	inspector.append(
 		button(
-			"Delete mixture",
+			t("deleteMixture"),
 			() => {
-				if (!window.confirm(`Delete ${mixture.name} from this draft?`)) return;
+				if (!window.confirm(t("confirmDeleteMixture", { name: mixture.name }))) return;
 				const old = mixture;
 				mixture = source.doc.mixtures.find(item => item !== old);
 				remove(source.doc.mixtures, old);
@@ -668,9 +697,9 @@ function settingsPanel() {
 
 function stateParts(root, target, parts) {
 	const group = el("fieldset");
-	group.append(el("legend", "State parts"));
+	group.append(el("legend", t("stateParts")));
 	group.append(
-		check("Choose state explicitly", target.state !== undefined, explicit => {
+		check(t("explicitState"), target.state !== undefined, explicit => {
 			if (explicit) target.state = parts.map(([part]) => part);
 			else delete target.state;
 			for (const box of [...group.querySelectorAll("input")].slice(1)) {
@@ -699,8 +728,8 @@ function rubrics(root, target) {
 		rows.replaceChildren();
 		if (target.type === "noul" || target.type === undefined) {
 			for (const [key, label] of [
-				["true", "Yes rubric"],
-				["false", "No rubric"],
+				["true", t("yesRubric")],
+				["false", t("noRubric")],
 			])
 				rows.append(
 					field(
@@ -724,7 +753,7 @@ function rubrics(root, target) {
 			row.className = "presets";
 			row.append(
 				field(
-					score ? `Level ${key}` : key,
+					score ? t("scoreLevel", { level: key }) : key,
 					value,
 					text => {
 						target.criteria[key] = score ? text : text.trim() ? text : null;
@@ -734,7 +763,7 @@ function rubrics(root, target) {
 			);
 			row.append(
 				button(
-					"Remove rubric",
+					t("removeRubric"),
 					() => {
 						if (score) target.criteria.splice(Number(key), 1);
 						else delete target.criteria[key];
@@ -747,10 +776,10 @@ function rubrics(root, target) {
 			rows.append(row);
 		}
 		rows.append(
-			button(score ? "Add level" : "Add choice", () => {
+			button(t(score ? "addLevel" : "addChoice"), () => {
 				if (score) target.criteria.push("");
 				else {
-					const label = window.prompt("Choice label")?.trim();
+					const label = window.prompt(t("choiceLabel"))?.trim();
 					if (!label || Object.hasOwn(target.criteria, label)) return;
 					target.criteria = { ...target.criteria, [label]: null };
 				}
@@ -763,14 +792,14 @@ function rubrics(root, target) {
 	root.append(rows);
 }
 
-function condition(member, key, title, note) {
+function condition(member, key, title, note, addLabel) {
 	const panel = details(title, note);
 	const render = () => {
 		while (panel.children.length > 2) panel.lastElementChild.remove();
 		const target = member[key];
 		if (!target) {
 			panel.append(
-				button(`Add ${title.toLowerCase()}`, () => {
+				button(addLabel, () => {
 					member[key] = { instructions: "" };
 					changed();
 					render();
@@ -778,28 +807,28 @@ function condition(member, key, title, note) {
 			);
 			return;
 		}
-		property(panel, "Instructions", target, "instructions", { multiline: true, keepEmpty: true });
+		property(panel, t("instructions"), target, "instructions", { multiline: true, keepEmpty: true });
 		stateParts(
 			panel,
 			target,
 			transitParts.filter(([part]) => ["output", "input", "toolTrace"].includes(part)),
 		);
 		if (key === "route") {
-			property(panel, "Minimum confidence", target, "minConfidence", { numeric: "decimal", min: 0, max: 1 });
-			property(panel, "Fallback", target, "fallback", {
+			property(panel, t("minConfidence"), target, "minConfidence", { numeric: "decimal", min: 0, max: 1 });
+			property(panel, t("fallback"), target, "fallback", {
 				choices: [
-					["", "Default (pause)"],
-					["pause", "Pause"],
+					["", t("defaultPause")],
+					["pause", t("pause")],
 					...mixture.edges.filter(edge => edge.from === member.id).map(edge => [edgeId(edge), edgeId(edge)]),
 				],
 			});
 		} else {
-			property(panel, "Yes threshold", target, "threshold", { numeric: "decimal", min: 0, max: 1 });
+			property(panel, t("yesThreshold"), target, "threshold", { numeric: "decimal", min: 0, max: 1 });
 			rubrics(panel, target);
 		}
 		panel.append(
 			button(
-				"Remove condition",
+				t("removeCondition"),
 				() => {
 					delete member[key];
 					changed();
@@ -815,16 +844,16 @@ function condition(member, key, title, note) {
 }
 
 function memberPanel(member) {
-	inspector.append(el("h2", member.kind === "verdict" ? "Verdict node" : "Model node"));
+	inspector.append(el("h2", t(member.kind === "verdict" ? "verdictNode" : "modelNode")));
 	inspector.append(
 		field(
-			"Member ID",
+			t("memberId"),
 			member.id,
 			(value, input) => {
 				const id = value.trim();
 				if (!/^[a-z0-9][a-z0-9_-]*$/.test(id) || mixture.members.some(item => item !== member && item.id === id)) {
 					input.value = member.id;
-					status("Enter a unique member ID using lowercase letters, digits, underscores or hyphens.", true);
+					status(t("invalidMemberId"), true);
 					return false;
 				}
 				const old = member.id;
@@ -848,14 +877,14 @@ function memberPanel(member) {
 			{ commit: true },
 		),
 	);
-	property(inspector, "Description", member, "description", { multiline: true });
-	property(inspector, "Intermediate visibility", member, "show", { choices: modelShow });
+	property(inspector, t("description"), member, "description", { multiline: true });
+	property(inspector, t("intermediateVisibility"), member, "show", { choices: modelShow });
 	if (member.kind === "verdict") {
-		property(inspector, "Question type", member.question, "type", {
+		property(inspector, t("questionType"), member.question, "type", {
 			choices: [
-				["noul", "Yes/no"],
-				["choice", "Choice"],
-				["score", "Score"],
+				["noul", t("yesNo")],
+				["choice", t("choice")],
+				["score", t("score")],
 			],
 			after: () => {
 				const type = member.question.type;
@@ -865,17 +894,17 @@ function memberPanel(member) {
 				renderGraph();
 			},
 		});
-		property(inspector, "Question instructions", member.question, "instructions", {
+		property(inspector, t("questionInstructions"), member.question, "instructions", {
 			keepEmpty: true,
 			multiline: true,
 		});
 		rubrics(inspector, member.question);
 		stateParts(inspector, member, transitParts);
-		property(inspector, "Render envelope", member, "render", { multiline: true, placeholder: "verdict" });
+		property(inspector, t("renderEnvelope"), member, "render", { multiline: true, placeholder: "verdict" });
 	} else {
 		inspector.append(
 			button(
-				mixture.entry === member.id ? "Entry model" : "Set as entry",
+				t(mixture.entry === member.id ? "entryModel" : "setEntry"),
 				() => {
 					mixture.entry = member.id;
 					changed();
@@ -884,25 +913,25 @@ function memberPanel(member) {
 				{ disabled: mixture.entry === member.id },
 			),
 		);
-		property(inspector, "Model selector", member, "model", {
+		property(inspector, t("modelSelector"), member, "model", {
 			keepEmpty: true,
 			list: "models",
-			placeholder: "provider/model or @role",
+			placeholder: t("modelPlaceholder"),
 			after: renderGraph,
 		});
-		property(inspector, "Role preset", member, "role");
+		property(inspector, t("rolePreset"), member, "role");
 		inspector.append(
-			check("Use inline system prompt (overrides role preset)", member.systemPrompt !== undefined, enabled => {
+			check(t("useInlineSystemPrompt"), member.systemPrompt !== undefined, enabled => {
 				if (enabled) member.systemPrompt = "";
 				else delete member.systemPrompt;
 				renderInspector();
 			}),
 		);
 		if (member.systemPrompt !== undefined)
-			property(inspector, "System prompt", member, "systemPrompt", { keepEmpty: true, multiline: true });
+			property(inspector, t("systemPrompt"), member, "systemPrompt", { keepEmpty: true, multiline: true });
 		inspector.append(
 			field(
-				"Inherit outer prompt",
+				t("inheritPrompt"),
 				String(member.inherit ?? ""),
 				value => {
 					if (value === "") delete member.inherit;
@@ -910,32 +939,34 @@ function memberPanel(member) {
 				},
 				{
 					choices: [
-						["", "Default"],
-						["true", "Yes"],
-						["false", "No"],
+						["", t("default")],
+						["true", t("yes")],
+						["false", t("no")],
 					],
 				},
 			),
 		);
-		property(inspector, "Maximum output tokens", member, "maxTokens", { numeric: "integer", min: 1 });
+		property(inspector, t("maxOutputTokens"), member, "maxTokens", { numeric: "integer", min: 1 });
 		condition(
 			member,
 			"route",
-			"Routing",
-			"The judge chooses only when multiple outgoing handoffs are eligible. A single eligible handoff is taken directly.",
+			t("routing"),
+			t("routingExplanation"),
+			t("addRouting"),
 		);
 		condition(
 			member,
 			"terminate",
-			"Termination",
-			"Ask after this model's hop whether its output should finish the run.",
+			t("termination"),
+			t("terminationExplanation"),
+			t("addTermination"),
 		);
 		const gate = el("div");
 		gate.className = "gate";
-		gate.append(check("Caller tools · M3", member.tools !== false && member.tools !== undefined, () => {}, true));
+		gate.append(check(t("callerToolsGate"), member.tools !== false && member.tools !== undefined, () => {}, true));
 		if (member.tools !== false)
 			gate.append(
-				button("Set tools explicitly off", () => {
+				button(t("disableTools"), () => {
 					member.tools = false;
 					changed();
 					renderInspector();
@@ -945,9 +976,9 @@ function memberPanel(member) {
 	}
 	inspector.append(
 		button(
-			"Delete member",
+			t("deleteMember"),
 			() => {
-				if (!window.confirm(`Delete ${member.id} and its attached handoffs from this draft?`)) return;
+				if (!window.confirm(t("confirmDeleteMember", { id: member.id }))) return;
 				const deleted = new Set(
 					mixture.edges
 						.filter(
@@ -971,11 +1002,9 @@ function memberPanel(member) {
 }
 
 function edgePanel(edge) {
-	inspector.append(el("h2", "Handoff"), el("p", `${edge.from} → ${[edge.to].flat().join(", ")}`));
+	inspector.append(el("h2", t("handoff")), el("p", `${edge.from} → ${[edge.to].flat().join(", ")}`));
 	if (Array.isArray(edge.to)) {
-		inspector.append(
-			el("p", "Fan-out is not runnable until M4. Delete this handoff to replace it with sequential handoffs."),
-		);
+		inspector.append(el("p", t("fanOutHint")));
 	} else {
 		const fallback = mixture.members.find(member => member.id === edge.from)?.route;
 		const updateEdge = (key, value) => {
@@ -986,13 +1015,13 @@ function edgePanel(edge) {
 			renderGraph();
 		};
 		inspector.append(
-			field("Edge ID (optional)", edge.id, value => updateEdge("id", value.trim()), {
+			field(t("optionalEdgeId"), edge.id, value => updateEdge("id", value.trim()), {
 				commit: true,
 				placeholder: edgeId(edge),
 			}),
 		);
 		const edges = el("fieldset");
-		edges.append(el("legend", "Transit parts (choose at least one)"));
+		edges.append(el("legend", t("transitParts")));
 		for (const [part, label] of transitParts)
 			edges.append(
 				check(
@@ -1006,24 +1035,21 @@ function edgePanel(edge) {
 				),
 			);
 		inspector.append(edges);
-		const transcript = details(
-			"Transcript options",
-			"These settings include the accumulated completed hop outputs in the handoff.",
-		);
+		const transcript = details(t("transcriptOptions"), t("transcriptExplanation"));
 		for (const [title, key, options] of [
 			[
-				"Optimization",
+				t("optimization"),
 				"optimize",
 				{
 					choices: [
-						["", "Default"],
-						["verbatim", "Verbatim"],
-						["compact", "Compact"],
-						["snapcompact", "Snapcompact"],
+						["", t("default")],
+						["verbatim", t("verbatim")],
+						["compact", t("compact")],
+						["snapcompact", t("snapcompact")],
 					],
 				},
 			],
-			["Token budget", "budgetTokens", { numeric: "integer", min: 1 }],
+			[t("tokenBudget"), "budgetTokens", { numeric: "integer", min: 1 }],
 		]) {
 			transcript.append(
 				field(
@@ -1041,14 +1067,14 @@ function edgePanel(edge) {
 			);
 		}
 		inspector.append(transcript);
-		property(inspector, "When (routing rubric, not a filter)", edge, "when", { multiline: true, after: renderGraph });
-		property(inspector, "Envelope preset or template", edge, "envelope", { multiline: true, placeholder: "handoff" });
-		property(inspector, "Traversal cap", edge, "maxTraversals", { numeric: "integer", min: 0 });
-		property(inspector, "Visibility override", edge, "show", { choices: modelShow.slice(0, 3) });
+		property(inspector, t("whenRubric"), edge, "when", { multiline: true, after: renderGraph });
+		property(inspector, t("envelope"), edge, "envelope", { multiline: true, placeholder: "handoff" });
+		property(inspector, t("traversalCap"), edge, "maxTraversals", { numeric: "integer", min: 0 });
+		property(inspector, t("visibilityOverride"), edge, "show", { choices: modelShow.slice(0, 3) });
 	}
 	inspector.append(
 		button(
-			"Delete handoff",
+			t("deleteHandoff"),
 			() => {
 				const route = mixture.members.find(member => member.id === edge.from)?.route;
 				if (route?.fallback === edgeId(edge)) delete route.fallback;
@@ -1062,10 +1088,10 @@ function edgePanel(edge) {
 function renderInspector() {
 	inspector.replaceChildren();
 	if (selection.kind === "document" && source) {
-		inspector.append(el("h2", "File presets"), el("p", "Shared by mixtures declared in this file."));
-		presets(inspector, source.doc, "roles", "Role presets");
-		presets(inspector, source.doc, "envelopes", "Envelope presets");
-	} else if (!mixture) inspector.append(el("p", "Select a mixture to inspect its graph."));
+		inspector.append(el("h2", t("filePresets")), el("p", t("filePresetsExplanation")));
+		presets(inspector, source.doc, "roles", t("rolePresets"));
+		presets(inspector, source.doc, "envelopes", t("envelopePresets"));
+	} else if (!mixture) inspector.append(el("p", t("selectMixtureToInspect")));
 	else if (selection.kind === "member") memberPanel(selection.item);
 	else if (selection.kind === "edge") edgePanel(selection.item);
 	else settingsPanel();

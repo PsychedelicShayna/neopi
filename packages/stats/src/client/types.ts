@@ -82,3 +82,7 @@ export interface ModelDashboardStats {
 export interface CostDashboardStats {
 	costSeries: CostTimeSeriesPoint[];
 }
+
+export type Locale = "en" | "es";
+
+export type Translation = (key: string, english: string, values?: Readonly<Record<string, string | number>>) => string;

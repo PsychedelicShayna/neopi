@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, type OverlayHandle, replaceTabs } from "@oh-my-pi/pi-tui";
 import type { TspMenuEntry } from "@oh-my-pi/pi-wire";
@@ -178,25 +179,26 @@ export class BtwController {
 	}
 
 	#branchUnavailableReason(): string | undefined {
-		if (this.#branchInFlight) return "a branch is already in progress";
-		if ([...this.#injects.values()].includes("sending")) return "a /btw prompt is still sending";
-		if (this.#transitionCount > 0) return "a session operation is in progress";
+		if (this.#branchInFlight) return t("overlays.btw_controller.branch_in_progress_reason");
+		if ([...this.#injects.values()].includes("sending")) return t("overlays.btw_controller.branch_sending");
+		if (this.#transitionCount > 0) return t("overlays.btw_controller.branch_session_busy");
 		const request = this.#activeRequest;
 		const shown = this.#answerShown() || (request !== undefined && this.#notes.has(request.record.id));
-		if (!shown || request?.component.isBranchable() !== true) return "the answer is not ready";
+		if (!shown || request?.component.isBranchable() !== true)
+			return t("overlays.btw_controller.branch_answer_pending");
 		if (request.session !== this.ctx.session || this.ctx.focusedAgentId)
-			return "only main-session answers can be branched";
+			return t("overlays.btw_controller.branch_main_only");
 		// Inline branch promotion carries one pair; do not drop earlier side turns.
-		if (request.history?.length) return "multi-turn side conversations remain in BTW history";
+		if (request.history?.length) return t("overlays.btw_controller.branch_history_only");
 		if (!this.#lastQuestion || !this.#lastReplyText || !this.#lastAssistantMessage)
-			return "the answer is unavailable";
-		if (!this.#lastLeafId) return "the session has no branch point";
+			return t("overlays.btw_controller.branch_answer_missing");
+		if (!this.#lastLeafId) return t("overlays.btw_controller.branch_point_missing");
 		if (
 			this.#lastSessionId !== this.ctx.sessionManager.getSessionId() ||
 			this.#lastLeafId !== this.ctx.sessionManager.getLeafId()
 		)
-			return "the session changed since /btw started";
-		if (this.ctx.session.isStreaming) return "a turn is still running";
+			return t("overlays.btw_controller.branch_session_changed");
+		if (this.ctx.session.isStreaming) return t("overlays.btw_controller.branch_turn_active");
 		return undefined;
 	}
 
@@ -217,7 +219,7 @@ export class BtwController {
 		const inlineRequest = options?.historyRecordId === undefined ? this.#activeRequest : undefined;
 		try {
 			await copyToClipboard(replaceTabs(answer).trim());
-			this.ctx.showStatus("Copied /btw answer to clipboard");
+			this.ctx.showStatus(t("overlays.btw_controller.copied"));
 			if (options?.historyRecordId !== undefined) this.#historyPanel?.markCopied(options.historyRecordId, answer);
 			else if (inlineRequest && this.#visible && this.#activeRequest === inlineRequest)
 				inlineRequest.component.markCopied();
@@ -238,7 +240,9 @@ export class BtwController {
 	async handleBranch(): Promise<boolean> {
 		const unavailableReason = this.#branchUnavailableReason();
 		if (unavailableReason) {
-			this.ctx.showStatus(`/btw branch unavailable: ${unavailableReason}`, { dim: true });
+			this.ctx.showStatus(t("overlays.btw_controller.branch_unavailable", { part1: `${unavailableReason}` }), {
+				dim: true,
+			});
 			return false;
 		}
 		const request = this.#activeRequest;
@@ -255,7 +259,9 @@ export class BtwController {
 			await this.ctx.handleBtwBranch(question, assistantMessage, leafId, sessionId, images);
 			return true;
 		} catch (error) {
-			this.ctx.showError(sanitizeErrorLine(`Cannot branch /btw: ${toError(error).message}`));
+			this.ctx.showError(
+				sanitizeErrorLine(t("overlays.btw_controller.branch_failed", { part1: `${toError(error).message}` })),
+			);
 			return false;
 		} finally {
 			this.#branchInFlight = false;
@@ -265,7 +271,7 @@ export class BtwController {
 
 	handleEscape(): boolean {
 		if (this.#branchInFlight) {
-			this.ctx.showStatus("/btw branch is in progress", { dim: true });
+			this.ctx.showStatus(t("overlays.btw_controller.branch_in_progress"), { dim: true });
 			return true;
 		}
 		if (this.#focus !== undefined) {
@@ -370,13 +376,18 @@ export class BtwController {
 			this.#notes.get(record.id)?.refresh();
 			if (sent) return;
 			if (reason) {
-				this.ctx.showError(sanitizeErrorLine(`Cannot inject /btw prompt: ${reason}`));
+				this.ctx.showError(sanitizeErrorLine(t("overlays.btw_controller.inject_failed", { part1: `${reason}` })));
 				return;
 			}
 			const retry = appKey(this.ctx.keybindings, "app.btw.inject");
-			this.ctx.showStatus(retry ? `/btw prompt not sent · ${retry} to retry` : "/btw prompt not sent", {
-				dim: true,
-			});
+			this.ctx.showStatus(
+				retry
+					? t("overlays.btw_controller.not_sent_retry", { part1: `${retry}` })
+					: t("overlays.btw_controller.not_sent"),
+				{
+					dim: true,
+				},
+			);
 		};
 		const send = (): void => {
 			let admitted = false;
@@ -486,11 +497,7 @@ export class BtwController {
 	}
 
 	async flush(timeoutMs = 10_000): Promise<void> {
-		await withTimeout(
-			this.#drainWrites(),
-			timeoutMs,
-			"BTW history is still being saved. The session operation was stopped; retry when storage responds.",
-		);
+		await withTimeout(this.#drainWrites(), timeoutMs, t("overlays.btw_controller.history_save_pending"));
 	}
 
 	async #drainWrites(): Promise<void> {
@@ -503,7 +510,7 @@ export class BtwController {
 		if (failure) {
 			throw new Error(
 				sanitizeErrorLine(
-					`BTW history could not be saved: ${sanitizeErrorLine(failure)}. The session operation was stopped; retry after fixing storage. Unsaved answers remain in /btw.`,
+					t("overlays.btw_controller.history_save_stopped", { part1: `${sanitizeErrorLine(failure)}` }),
 					TRUNCATE_LENGTHS.RECAP,
 				),
 				{ cause: failure },
@@ -518,7 +525,7 @@ export class BtwController {
 			this.#transitionCount > 0 ||
 			(this.#activeRequest && getBtwLatestTurn(this.#activeRequest.record).status === "running")
 		) {
-			this.ctx.showStatus("Wait for the current /btw answer to finish or cancel it before moving.", { dim: true });
+			this.ctx.showStatus(t("overlays.btw_controller.move_busy"), { dim: true });
 			return false;
 		}
 		this.#transitionCount++;
@@ -555,7 +562,7 @@ export class BtwController {
 				(this.#sessionManager.getArtifactsDir() ?? undefined) !== artifactsDir ||
 				this.#historyScope !== scope
 			) {
-				throw new Error("The session changed while opening BTW history.");
+				throw new Error(t("overlays.btw_controller.history_session_changed"));
 			}
 			this.#storeSessionId = sessionId;
 			this.#storeArtifactsDir = artifactsDir;
@@ -601,7 +608,7 @@ export class BtwController {
 		if (signal?.aborted) return false;
 		const trimmedQuestion = question.trim();
 		if (this.#starting || this.#branchInFlight || this.#transitionCount > 0) {
-			this.ctx.showStatus("A /btw action is in progress. Please wait.", { dim: true });
+			this.ctx.showStatus(t("overlays.btw_controller.busy"), { dim: true });
 			return false;
 		}
 		const viewSession = this.ctx.focusedAgentId ? this.ctx.viewSession : this.ctx.session;
@@ -609,14 +616,11 @@ export class BtwController {
 		if (active && getBtwLatestTurn(active.record).status === "running") {
 			if (active.session !== viewSession) {
 				// Opening this view's store would dispose (cancel) the other view's live question.
-				this.ctx.showStatus(
-					"A /btw question is still running in another session view. Wait for it or cancel it first.",
-					{ dim: true },
-				);
+				this.ctx.showStatus(t("overlays.btw_controller.other_view_busy"), { dim: true });
 				return false;
 			}
 			if (trimmedQuestion && active.sessionId === this.#sessionManager.getSessionId()) {
-				this.ctx.showStatus("A /btw question is still running. Open /btw to view it or cancel it first.", {
+				this.ctx.showStatus(t("overlays.btw_controller.question_busy"), {
 					dim: true,
 				});
 				return false;
@@ -649,11 +653,11 @@ export class BtwController {
 				return false;
 			const previous = recordId ? store.getRecords().find(record => record.id === recordId) : undefined;
 			if (recordId && (!previous || getBtwLatestTurn(previous).status === "running")) {
-				this.ctx.showStatus("This side conversation is unavailable or still running.", { dim: true });
+				this.ctx.showStatus(t("overlays.btw_controller.conversation_unavailable"), { dim: true });
 				return false;
 			}
 			if (!viewSession.model) {
-				this.ctx.showError("No active model available for /btw.");
+				this.ctx.showError(t("overlays.btw_controller.no_model"));
 				return false;
 			}
 			await this.#sessionManager.ensureOnDisk();
@@ -724,7 +728,9 @@ export class BtwController {
 			void this.#runRequest(request);
 			return true;
 		} catch (error) {
-			this.ctx.showError(sanitizeErrorLine(`Cannot open /btw history: ${toError(error).message}`));
+			this.ctx.showError(
+				sanitizeErrorLine(t("overlays.btw_controller.history_open_failed", { part1: `${toError(error).message}` })),
+			);
 			return false;
 		} finally {
 			this.#starting = false;
@@ -832,7 +838,7 @@ export class BtwController {
 		if (request && this.#isActiveRequest(request) && getBtwLatestTurn(request.record).status === "running") {
 			if (this.ctx.ui.nativeRendering) {
 				if (!this.#notes.has(request.record.id)) {
-					this.ctx.showStatus("/btw is still answering in the background · /btw to reopen it", { dim: true });
+					this.ctx.showStatus(t("overlays.btw_controller.answer_background"), { dim: true });
 				}
 			} else {
 				request.component.setAnswer(getBtwLatestTurn(request.record).answer);
@@ -858,7 +864,11 @@ export class BtwController {
 				if (request.persisted) this.#failedWrites.set(request, toError(error));
 				logger.error("BTW history save failed", { error });
 				if (request.sessionId === request.sessionManager.getSessionId()) {
-					this.ctx.showError(sanitizeErrorLine(`Could not save /btw history: ${toError(error).message}`));
+					this.ctx.showError(
+						sanitizeErrorLine(
+							t("overlays.btw_controller.history_save_failed", { part1: `${toError(error).message}` }),
+						),
+					);
 				}
 				return false;
 			},
@@ -908,8 +918,8 @@ export class BtwController {
 				// Tern: an answer folded away or left only in history says it is ready.
 				if (this.ctx.ui.nativeRendering && !this.#historyOverlay) {
 					const note = this.#notes.get(request.record.id);
-					if (!note) this.ctx.showStatus("/btw answer ready · /btw to read it");
-					else if (note.folded) this.ctx.showStatus("/btw answer ready");
+					if (!note) this.ctx.showStatus(t("overlays.btw_controller.answer_read"));
+					else if (note.folded) this.ctx.showStatus(t("overlays.btw_controller.answer_ready"));
 				}
 				const copyText = request.component.getCopyText();
 				if (copyText !== undefined) {
@@ -981,19 +991,23 @@ export class BtwController {
 	/** A note's right-click entries: what can be done with its topic now; a press re-checks. */
 	#noteMenu(record: BtwHistoryRecord, folded: boolean): TspMenuEntry[] {
 		const entries: TspMenuEntry[] = [];
-		if (getBtwCopyText(record) !== undefined) entries.push({ id: "btw-copy", label: "Copy answer", icon: "copy" });
+		if (getBtwCopyText(record) !== undefined)
+			entries.push({ id: "btw-copy", label: t("overlays.btw_controller.copy_answer"), icon: "copy" });
 		if (this.#canSend(record)) entries.push({ id: "btw-inject", label: BTW_INJECT_LABEL });
 		const status = getBtwLatestTurn(record).status;
 		if (this.#activeRequest?.record.id === record.id) {
-			if (status === "running") entries.push({ id: "btw-stop", label: "Stop answer", icon: "stop" });
+			if (status === "running")
+				entries.push({ id: "btw-stop", label: t("overlays.btw_controller.stop_answer"), icon: "stop" });
 			else if (status === "complete" && !record.followUps?.length) {
-				entries.push({ id: "btw-branch", label: "Branch into chat", icon: "branch" });
+				entries.push({ id: "btw-branch", label: t("overlays.btw_controller.branch_chat"), icon: "branch" });
 			}
 		}
 		entries.push(
-			{ id: "btw-history", label: "Open in BTW history", icon: "history" },
+			{ id: "btw-history", label: t("overlays.btw_controller.open_history"), icon: "history" },
 			"-",
-			folded ? { id: "btw-expand", label: "Expand" } : { id: "btw-fold", label: "Fold to one line" },
+			folded
+				? { id: "btw-expand", label: t("overlays.btw_controller.expand") }
+				: { id: "btw-fold", label: t("overlays.btw_controller.fold_line") },
 		);
 		return entries;
 	}

@@ -18,6 +18,7 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { type ModelKind, type ModelPricingStatus, modelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME, formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { ConfigError } from "../config/config-file";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
@@ -96,7 +97,7 @@ function writeLine(line = ""): void {
 }
 
 function writeModelsConfigError(error: Error): void {
-	writeLine(chalk.yellow("Warning: models.yml validation failed — custom providers disabled"));
+	writeLine(chalk.yellow(t("cli.commands.models.config_warning")));
 	for (const line of error.message.split("\n")) {
 		writeLine(`  ${line}`);
 	}
@@ -228,9 +229,7 @@ export function renderProviderModels(
 
 	if (json) {
 		if (configError) {
-			process.stderr.write(
-				`Warning: models.yml validation failed — custom providers disabled\n${configError.message}\n`,
-			);
+			process.stderr.write(`${t("en", "cli.commands.models.config_warning")}\n${configError.message}\n`);
 		}
 		const output: ModelsJson = { models: filtered.slice().sort(byProviderThenId).map(toModelJson) };
 		writeLine(JSON.stringify(output));
@@ -242,11 +241,11 @@ export function renderProviderModels(
 	}
 
 	if (available.length === 0) {
-		writeLine("No models available. Set API keys in environment variables.");
+		writeLine(t("cli.commands.models.none_available"));
 		return;
 	}
 	if (filtered.length === 0) {
-		writeLine(`No models matching "${pattern}"`);
+		writeLine(t("cli.commands.models.no_matches", { pattern: String(pattern) }));
 		return;
 	}
 
@@ -270,18 +269,18 @@ export function renderProviderModels(
 			model.id,
 			formatLimit(model.contextWindow),
 			formatLimit(model.maxTokens),
-			model.thinking ? getSupportedEfforts(model).join(",") : model.reasoning ? "yes" : "-",
+			model.thinking ? getSupportedEfforts(model).join(",") : model.reasoning ? t("cli.commands.models.yes") : "-",
 			// Wire truth, not the declared `input`: the transport drops image parts for
 			// models the catalog marks text-only (`compat.stripImageInput`, #9697).
-			sendsImageInputOnWire(model) ? "yes" : "no",
+			t(sendsImageInputOnWire(model) ? "cli.commands.models.yes" : "cli.commands.models.no"),
 		]);
 		for (const line of boxTable(
 			[
-				{ header: "model" },
-				{ header: "context", align: "right" },
-				{ header: "max-out", align: "right" },
-				{ header: "thinking" },
-				{ header: "images" },
+				{ header: t("cli.commands.models.column_model") },
+				{ header: t("cli.commands.models.column_context"), align: "right" },
+				{ header: t("cli.commands.models.column_max_out"), align: "right" },
+				{ header: t("cli.commands.models.column_thinking") },
+				{ header: t("cli.commands.models.column_images") },
 			],
 			rows,
 		)) {
@@ -351,8 +350,10 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 			: undefined;
 
 	try {
+		const locale = json ? "en" : getLocale();
 		for (const { path: extPath, error } of extensionsResult.errors) {
-			process.stderr.write(`Failed to load extension: ${extPath}: ${error}\n`);
+			const message = t(locale, "cli.commands.models.extension_failed", { path: extPath, error: String(error) });
+			process.stderr.write(`${message}\n`);
 		}
 
 		// Mirror sdk.ts: drain pending provider registrations into the registry.
@@ -367,14 +368,18 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 		await modelRegistry.refreshRuntimeProviders(action === "refresh" ? "online" : "online-if-uncached");
 
 		for (const warning of modelRegistry.drainConfigWarnings()) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+			const message = t(locale, "cli.commands.models.warning", { message: warning });
+			process.stderr.write(`${chalk.yellow(message)}\n`);
 		}
 		// A failed fetch otherwise looks identical to a provider with no models.
 		for (const { provider, status, error } of modelRegistry.getRuntimeDiscoveryFailures()) {
 			const detail = error?.replace(/\s+/g, " ").trim();
-			process.stderr.write(
-				`${chalk.yellow(`Warning: ${provider} model discovery failed (${status}): ${detail}`)}\n`,
-			);
+			const message = t(locale, "cli.commands.models.discovery_failed", {
+				provider,
+				status: String(status),
+				detail: String(detail),
+			});
+			process.stderr.write(`${chalk.yellow(message)}\n`);
 		}
 		renderProviderModels(modelRegistry, action, pattern, json, kind);
 	} finally {
@@ -394,7 +399,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 
 	if (action === "find" && (!pattern || pattern.trim().length === 0)) {
 		process.stderr.write(
-			`\`${APP_NAME} models find\` requires a search substring, e.g. \`${APP_NAME} models find minimax\`\n`,
+			`${t(json ? "en" : getLocale(), "cli.commands.models.find_requires_query", { app: APP_NAME })}\n`,
 		);
 		process.exitCode = 1;
 		return;
@@ -407,7 +412,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 		const modelRegistry = new ModelRegistry(authStorage);
 
 		if (action === "refresh" && !json && process.stderr.isTTY) {
-			process.stderr.write("Refreshing models from all providers…\n");
+			process.stderr.write(`${t("cli.commands.models.refreshing")}\n`);
 		}
 		await modelRegistry.refresh(
 			action === "refresh" ? "online" : "online-if-uncached",

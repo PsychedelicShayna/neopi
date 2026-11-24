@@ -16,6 +16,7 @@ import {
 	ROOM_KEY_BYTES,
 	WRITE_TOKEN_BYTES,
 } from "@oh-my-pi/pi-wire";
+import { interpolate, type Translation } from "./i18n";
 
 export { COLLAB_PROTO, packEnvelope, rewriteEnvelopePeer, unpackEnvelope } from "@oh-my-pi/pi-wire";
 export type { ParsedCollabLink };
@@ -61,13 +62,34 @@ export function generateRoomId(): string {
 	return encodeBase64Url(bytes);
 }
 
+interface LinkFailure {
+	error: string;
+	localization: { key: string; english: string; values?: Readonly<Record<string, string | number>> };
+}
+
+function linkFailure(key: string, english: string, values?: LinkFailure["localization"]["values"]): LinkFailure {
+	return { error: interpolate(english, values), localization: { key, english, values } };
+}
+
+/** Join errors retain their raw validation message and localize only the guest display. */
+export class GuestLinkError extends Error {
+	constructor(private readonly failure: LinkFailure) {
+		super(failure.error);
+	}
+
+	localized(tr: Translation): string {
+		const { key, english, values } = this.failure.localization;
+		return tr(key, english, values);
+	}
+}
+
 /** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
-function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
+function normalizeRelayOrigin(relayUrl: string): { origin: string } | LinkFailure {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
 	} catch {
-		return { error: `Invalid relay URL: ${relayUrl}` };
+		return linkFailure("viewer.join.invalid_relay", "Invalid relay URL: {url}", { url: relayUrl });
 	}
 	let scheme: string;
 	switch (url.protocol) {
@@ -80,10 +102,15 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 			scheme = "ws:";
 			break;
 		default:
-			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
+			return linkFailure("viewer.join.unsupported_scheme", "Unsupported relay URL scheme: {scheme}", {
+				scheme: url.protocol,
+			});
 	}
 	if (scheme === "ws:" && !LOCAL_HOSTNAMES[url.hostname]) {
-		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
+		return linkFailure(
+			"viewer.join.require_secure",
+			"relay link must be wss:// (plain ws:// is only allowed for localhost)",
+		);
 	}
 	const port = url.port ? `:${url.port}` : "";
 	return { origin: `${scheme}//${url.hostname}${port}` };
@@ -120,7 +147,7 @@ export function formatCollabLink(relayUrl: string, roomId: string, key: Uint8Arr
 	return `${compact}/r/${roomId}.${keyText}`;
 }
 
-export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
+export function parseGuestLink(link: string): ParsedCollabLink | LinkFailure {
 	// Lenient input: terminals that open OSC 8 links through strict URL stacks
 	// (macOS Foundation) percent-encode the legacy second `#` to `%23`.
 	let text = link.trim().replace(/%23/gi, "#");
@@ -133,11 +160,11 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	try {
 		url = new URL(text);
 	} catch {
-		return { error: `Invalid collab link: ${link}` };
+		return linkFailure("viewer.join.invalid_link", "Invalid collab link: {link}", { link });
 	}
 	if ((url.protocol === "http:" || url.protocol === "https:") && url.hash) {
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		const parsed = parseCollabLink(inner);
+		const parsed = parseGuestLink(inner);
 		if (!("error" in parsed)) return parsed;
 	}
 	const normalized = normalizeRelayOrigin(url.origin);
@@ -148,21 +175,33 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 		// fragment. http(s) links are handled once above so invalid fragments
 		// fall through to direct relay validation instead of double-recursing.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
-		return { error: "Collab link must contain a /r/<roomId> path" };
+		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseGuestLink(inner);
+		return linkFailure("viewer.join.room_path", "Collab link must contain a /r/<roomId> path");
 	}
 	const roomId = match[1] as string;
 	// Key rides dot-joined in the path (`/r/<roomId>.<key>`); legacy links
 	// carry it in the fragment (`/r/<roomId>#<key>`).
 	const fragment = match[2] ?? (url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 	if (!fragment) {
-		return { error: "Collab link is missing the <key> part" };
+		return linkFailure("viewer.join.missing_key", "Collab link is missing the <key> part");
 	}
 	const secret = decodeBase64Url(fragment);
 	if (!secret || (secret.byteLength !== ROOM_KEY_BYTES && secret.byteLength !== ROOM_KEY_BYTES + WRITE_TOKEN_BYTES)) {
-		return { error: "Collab link key must be 32 (view) or 48 (full) base64url bytes" };
+		return linkFailure("viewer.join.key_size", "Collab link key must be 32 (view) or 48 (full) base64url bytes");
 	}
 	const key = secret.subarray(0, ROOM_KEY_BYTES);
 	const writeToken = secret.byteLength > ROOM_KEY_BYTES ? secret.subarray(ROOM_KEY_BYTES) : undefined;
 	return { wsUrl: `${normalized.origin}/r/${roomId}`, roomId, key, writeToken };
+}
+
+export function parseCollabLink(link: string): ParsedCollabLink | { error: string } {
+	const result = parseGuestLink(link);
+	return "error" in result ? { error: result.error } : result;
+}
+
+/** Client-facing parse boundary; the public parser keeps its original result shape. */
+export function requireGuestLink(link: string): ParsedCollabLink {
+	const result = parseGuestLink(link);
+	if ("error" in result) throw new GuestLinkError(result);
+	return result;
 }

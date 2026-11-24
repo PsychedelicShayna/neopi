@@ -1,6 +1,7 @@
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { PRODUCT_NAME, sanitizeText } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -306,13 +307,17 @@ const completeCloudLookup = completeOptions({ "--credential": [cloudCredential] 
 const CLOUD_SUBCOMMANDS: SubcommandDef[] = [
 	{
 		name: "scans",
-		description: "List cloud scan configurations",
+		get description() {
+			return t("commands.security.cloudScansDescription");
+		},
 		usage: "[--credential <id>]",
 		getArgumentCompletions: optionTail(completeOptions({ "--credential": [cloudCredential] })),
 	},
 	{
 		name: "start",
-		description: "Start a cloud scan",
+		get description() {
+			return t("commands.security.cloudStartDescription");
+		},
 		usage: "--repo-id <id> --repo-url <url> --environment <id> [--lookback <days|all>] [--credential <id>]",
 		getArgumentCompletions: optionTail(
 			completeOptions({
@@ -326,13 +331,17 @@ const CLOUD_SUBCOMMANDS: SubcommandDef[] = [
 	},
 	{
 		name: "status",
-		description: "Show a cloud scan’s status",
+		get description() {
+			return t("commands.security.cloudStatusDescription");
+		},
 		usage: "<configuration-id> [--credential <id>]",
 		getArgumentCompletions: optionTail(completeCloudLookup),
 	},
 	{
 		name: "pull",
-		description: "Import a cloud scan’s results",
+		get description() {
+			return t("commands.security.cloudPullDescription");
+		},
 		usage: "<configuration-id> [--credential <id>]",
 		getArgumentCompletions: optionTail(completeCloudLookup),
 	},
@@ -341,13 +350,17 @@ const CLOUD_SUBCOMMANDS: SubcommandDef[] = [
 export const SECURITY_SUBCOMMANDS: SubcommandDef[] = [
 	{
 		name: "plan",
-		description: "Create an immutable security scan plan",
+		get description() {
+			return t("commands.security.planDescription");
+		},
 		usage: "[options]",
 		getArgumentCompletions: optionTail(completePlanOptions),
 	},
 	{
 		name: "scan",
-		description: "Start a planned or newly planned native scan",
+		get description() {
+			return t("commands.security.scanDescription");
+		},
 		usage: "[plan-id | options]",
 		getArgumentCompletions: optionTail(async (active, runtime, previous) => {
 			if (previous[0]?.startsWith("secplan_")) return null;
@@ -359,39 +372,56 @@ export const SECURITY_SUBCOMMANDS: SubcommandDef[] = [
 	},
 	{
 		name: "status",
-		description: "Show native scan operation status",
+		get description() {
+			return t("commands.security.statusDescription");
+		},
 		usage: "[operation-id]",
 		arguments: [operationValues(false)],
 	},
 	{
 		name: "cancel",
-		description: "Cancel a running native scan",
+		get description() {
+			return t("commands.security.cancelDescription");
+		},
 		usage: "<operation-id>",
 		arguments: [operationValues(true)],
 	},
-	{ name: "scans", description: "List stored project security scans" },
+	{
+		name: "scans",
+		get description() {
+			return t("commands.security.scansDescription");
+		},
+	},
 	{
 		name: "cloud",
-		description: "List, start, inspect, or import cloud scans",
+		get description() {
+			return t("commands.security.cloudDescription");
+		},
 		usage: "[scans|start|status|pull]",
 		getArgumentCompletions: (prefix, runtime) =>
 			buildArgumentCompletions(CLOUD_SUBCOMMANDS, { optional: true, runtime })(prefix),
 	},
 	{
 		name: "show",
-		description: "Render a scan or security:// resource",
+		get description() {
+			return t("commands.security.showDescription");
+		},
 		usage: "<scan-id | security:// URI>",
 		arguments: [scanResourceValues(false)],
 	},
 	{
 		name: "import",
-		description: "Import SARIF or a Codex Security bundle",
+		get description() {
+			return t("commands.security.importDescription");
+		},
 		usage: "<path>",
 		arguments: [pathOrFileValues],
 	},
 	{
 		name: "export",
-		description: "Export a canonical bundle, SARIF, or report",
+		get description() {
+			return t("commands.security.exportDescription");
+		},
 		usage: "<scan-id> --output <path> [--format bundle|sarif|report]",
 		getArgumentCompletions: optionTail((active, runtime, previous) =>
 			previous.length === 0
@@ -401,19 +431,25 @@ export const SECURITY_SUBCOMMANDS: SubcommandDef[] = [
 	},
 	{
 		name: "validate",
-		description: `Validate one finding with ${PRODUCT_NAME}-native tools`,
+		get description() {
+			return t("commands.security.validateDescription", { product: PRODUCT_NAME });
+		},
 		usage: "<finding URI | scan-id finding-id>",
 		arguments: [scanResourceValues(true), findingIdValues],
 	},
 	{
 		name: "compare",
-		description: "Compare finding lineage across two scans",
+		get description() {
+			return t("commands.security.compareDescription");
+		},
 		usage: "<before-scan-id> <after-scan-id>",
 		arguments: [scanIdValues, scanIdValues],
 	},
 	{
 		name: "disposition",
-		description: "Set a finding disposition with rationale",
+		get description() {
+			return t("commands.security.dispositionDescription");
+		},
 		usage: "<scan-id> <finding-id> <status> [rationale]",
 		arguments: [scanIdValues, findingIdValues, argumentValues(...DISPOSITIONS), null],
 	},
@@ -434,13 +470,14 @@ function coordinatorFor(runtime: SlashCommandRuntime) {
 
 function requireToken(tokens: readonly string[], index: number, flag: string): string {
 	const value = tokens[index];
-	if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
+	if (!value || value.startsWith("--")) throw new Error(t("commands.security.flagNeedsValue", { flag }));
 	return value;
 }
 
 function parsePositiveCredential(value: string): number {
 	const credentialId = Number(value);
-	if (!Number.isSafeInteger(credentialId) || credentialId < 1) throw new Error(`Invalid credential id: ${value}`);
+	if (!Number.isSafeInteger(credentialId) || credentialId < 1)
+		throw new Error(t("commands.security.invalidCredential", { id: value }));
 	return credentialId;
 }
 
@@ -487,7 +524,7 @@ function parsePlanOptions(rest: string): SecurityPlanCliOptions {
 				credentialId = parsePositiveCredential(requireToken(tokens, ++index, token));
 				break;
 			default:
-				throw new Error(`Unknown security plan option: ${token}`);
+				throw new Error(t("commands.security.unknownPlanOption", { option: token }));
 		}
 	}
 	const common = { includePaths, excludePaths };
@@ -531,13 +568,13 @@ function findingTarget(value: string): { uri: string; scanId: string; findingId:
 	const uriMatch = trimmed.match(/^security:\/\/scans\/([^/]+)\/findings\/([^/]+)$/);
 	if (uriMatch) return { uri: trimmed, scanId: uriMatch[1]!, findingId: uriMatch[2]! };
 	const [scanId, findingId] = parseCommandArgs(trimmed);
-	if (!scanId || !findingId) throw new Error("validate requires a finding URI or <scan-id> <finding-id>");
+	if (!scanId || !findingId) throw new Error(t("commands.security.validateUsage"));
 	return { uri: `security://scans/${scanId}/findings/${findingId}`, scanId, findingId };
 }
 
 async function showResource(runtime: SlashCommandRuntime, rest: string): Promise<void> {
 	const raw = rest.trim();
-	if (!raw) throw new Error("show requires a scan id or security:// URI");
+	if (!raw) throw new Error(t("commands.security.showUsage"));
 	const uri = raw.startsWith("security://") ? raw : `security://scans/${scanIdFromInput(raw)}`;
 	const handler = new SecurityProtocolHandler(undefined, () => true);
 	const resource = await handler.resolve(parseInternalUrl(uri), { cwd: runtime.cwd });
@@ -546,7 +583,7 @@ async function showResource(runtime: SlashCommandRuntime, rest: string): Promise
 
 async function importResults(runtime: SlashCommandRuntime, rest: string): Promise<void> {
 	const [source] = parseCommandArgs(rest);
-	if (!source) throw new Error("import requires a SARIF file or Codex Security bundle directory");
+	if (!source) throw new Error(t("commands.security.importUsage"));
 	const store = await SecurityStore.openForCwd(runtime.cwd);
 	const absolute = path.resolve(runtime.cwd, source);
 	const stats = await fs.stat(absolute);
@@ -554,13 +591,13 @@ async function importResults(runtime: SlashCommandRuntime, rest: string): Promis
 		? await importCodexSecurityBundle(absolute, { repositoryRoot: store.repositoryRoot })
 		: await importSarifFile(absolute, { repositoryRoot: store.repositoryRoot });
 	await store.putBundle(bundle);
-	await runtime.output(`Imported ${bundle.findings.length} finding(s) as security scan ${bundle.scan.id}.`);
+	await runtime.output(t("commands.security.imported", { count: bundle.findings.length, id: bundle.scan.id }));
 }
 
 async function exportResults(runtime: SlashCommandRuntime, rest: string): Promise<void> {
 	const tokens = parseCommandArgs(rest);
 	const scanId = tokens[0];
-	if (!scanId) throw new Error("export requires <scan-id> --output <path> [--format bundle|sarif|report]");
+	if (!scanId) throw new Error(t("commands.security.exportUsage"));
 	let outputPath: string | undefined;
 	let format: (typeof EXPORT_FORMATS)[number] = "bundle";
 	for (let index = 1; index < tokens.length; index++) {
@@ -569,27 +606,27 @@ async function exportResults(runtime: SlashCommandRuntime, rest: string): Promis
 		else if (token === "--format") {
 			const value = requireToken(tokens, ++index, token);
 			const selected = EXPORT_FORMATS.find(candidate => candidate === value);
-			if (!selected) throw new Error(`Unknown export format: ${value}`);
+			if (!selected) throw new Error(t("commands.security.unknownExportFormat", { format: value }));
 			format = selected;
-		} else throw new Error(`Unknown export option: ${token}`);
+		} else throw new Error(t("commands.security.unknownExportOption", { option: token }));
 	}
-	if (!outputPath) throw new Error("export requires --output <path>");
+	if (!outputPath) throw new Error(t("commands.security.outputRequired"));
 	const store = await SecurityStore.openForCwd(runtime.cwd);
 	const bundle = await store.getBundle(scanIdFromInput(scanId));
-	if (!bundle) throw new Error(`Unknown security scan: ${scanId}`);
+	if (!bundle) throw new Error(t("commands.security.unknownScan", { id: scanId }));
 	let content: string;
 	if (format === "sarif") {
-		if (!bundle.sarif) throw new Error(`Security scan ${scanId} has no SARIF result`);
+		if (!bundle.sarif) throw new Error(t("commands.security.sarifUnavailable", { id: scanId }));
 		content = `${JSON.stringify(bundle.sarif, null, 2)}\n`;
 	} else if (format === "report") {
-		if (bundle.report === undefined) throw new Error(`Security scan ${scanId} has no report`);
+		if (bundle.report === undefined) throw new Error(t("commands.security.reportUnavailable", { id: scanId }));
 		content = bundle.report;
 	} else {
 		content = `${JSON.stringify(bundle, null, 2)}\n`;
 	}
 	const absolute = path.resolve(runtime.cwd, outputPath);
 	await writeSecurityFileAtomic(absolute, content, { hardenParent: false });
-	await runtime.output(`Exported security scan ${scanId} to ${shortenPath(absolute)}.`);
+	await runtime.output(t("commands.security.exported", { id: scanId, path: shortenPath(absolute) }));
 }
 
 interface CloudCliOptions {
@@ -627,7 +664,8 @@ function parseCloudOptions(rest: string, subcommand: string): CloudCliOptions {
 					break;
 				}
 				const days = Number(value);
-				if (!Number.isSafeInteger(days) || days < 1) throw new Error(`Invalid lookback: ${value}`);
+				if (!Number.isSafeInteger(days) || days < 1)
+					throw new Error(t("commands.security.invalidLookback", { value }));
 				options.lookbackDays = days;
 				break;
 			}
@@ -637,7 +675,7 @@ function parseCloudOptions(rest: string, subcommand: string): CloudCliOptions {
 					positionalConsumed = true;
 					break;
 				}
-				throw new Error(`Unknown security cloud option: ${token}`);
+				throw new Error(t("commands.security.unknownCloudOption", { option: token }));
 		}
 	}
 	return options;
@@ -670,17 +708,19 @@ async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): P
 			cloudConfigurationsFor(runtime.session).set(account.credentialId, configurations);
 			await runtime.output(
 				configurations.length === 0
-					? "No Codex Security cloud scan configurations are available for this account."
+					? t("commands.security.noCloudScans")
 					: configurations
 							.map(item =>
 								[
 									item.id,
-									item.state ?? "unknown",
-									item.currentStep ?? "unknown",
+									item.state ?? t("commands.security.unknown"),
+									item.currentStep ?? t("commands.security.unknown"),
 									`repo=${item.repositoryId}`,
 									`environment=${item.environmentId}`,
 									item.repositoryUrl,
-									item.remainingScans === undefined ? "" : `${item.remainingScans} scan(s) remaining`,
+									item.remainingScans === undefined
+										? ""
+										: t("commands.security.scansRemaining", { count: item.remainingScans }),
 								]
 									.filter(Boolean)
 									.join(" "),
@@ -691,7 +731,7 @@ async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): P
 		}
 		case "start": {
 			if (!options.repositoryId || !options.repositoryUrl || !options.environmentId) {
-				throw new Error("cloud start requires --repo-id, --repo-url, and --environment");
+				throw new Error(t("commands.security.cloudStartUsage"));
 			}
 			const configuration = await client.startScan({
 				repositoryId: options.repositoryId,
@@ -703,17 +743,17 @@ async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): P
 			const existing = cache.get(account.credentialId) ?? [];
 			cache.set(account.credentialId, [configuration, ...existing.filter(item => item.id !== configuration.id)]);
 			await runtime.output(
-				`Codex Security cloud scan ${configuration.id} started for ${configuration.repositoryUrl}. This consumes cloud scan allowance.`,
+				t("commands.security.cloudStarted", { id: configuration.id, repository: configuration.repositoryUrl }),
 			);
 			return;
 		}
 		case "status": {
-			if (!options.configurationId) throw new Error("cloud status requires a configuration id");
+			if (!options.configurationId) throw new Error(t("commands.security.cloudStatusUsage"));
 			await runtime.output(JSON.stringify(await client.getStats(options.configurationId), null, 2));
 			return;
 		}
 		case "pull": {
-			if (!options.configurationId) throw new Error("cloud pull requires a configuration id");
+			if (!options.configurationId) throw new Error(t("commands.security.cloudPullUsage"));
 			const store = await SecurityStore.openForCwd(runtime.cwd);
 			const bundle = await pullCodexSecurityCloudResults({
 				client,
@@ -721,23 +761,24 @@ async function handleCloudCommand(runtime: SlashCommandRuntime, rest: string): P
 				store,
 			});
 			await runtime.output(
-				`Imported ${bundle.findings.length} Codex Security cloud finding(s) as security scan ${bundle.scan.id}.`,
+				t("commands.security.cloudImported", { count: bundle.findings.length, id: bundle.scan.id }),
 			);
 			return;
 		}
 		default:
-			throw new Error("Usage: /security cloud <scans|start|status|pull>");
+			throw new Error(t("commands.security.cloudUsage"));
 	}
 }
 
 async function updateDisposition(runtime: SlashCommandRuntime, rest: string): Promise<void> {
 	const [scanId, findingId, status, ...rationaleParts] = parseCommandArgs(rest);
 	if (!scanId || !findingId || !status) {
-		throw new Error("disposition requires <scan-id> <finding-id> <status> [rationale]");
+		throw new Error(t("commands.security.dispositionUsage"));
 	}
-	if (!DISPOSITIONS.has(status as SecurityDispositionStatus)) throw new Error(`Unknown disposition: ${status}`);
+	if (!DISPOSITIONS.has(status as SecurityDispositionStatus))
+		throw new Error(t("commands.security.unknownDisposition", { status }));
 	const rationale = rationaleParts.join(" ").trim();
-	if (status !== "open" && !rationale) throw new Error(`${status} requires a rationale`);
+	if (status !== "open" && !rationale) throw new Error(t("commands.security.rationaleRequired", { status }));
 	const store = await SecurityStore.openForCwd(runtime.cwd);
 	const finding = await store.updateDisposition(scanId, findingId, {
 		status: status as SecurityDispositionStatus,
@@ -745,7 +786,9 @@ async function updateDisposition(runtime: SlashCommandRuntime, rest: string): Pr
 		updatedAt: new Date().toISOString(),
 		actor: "operator",
 	});
-	await runtime.output(`Finding ${finding.id} disposition is now ${finding.disposition.status}.`);
+	await runtime.output(
+		t("commands.security.dispositionChanged", { id: finding.id, status: finding.disposition.status }),
+	);
 }
 
 export async function handleSecurityCommand(
@@ -753,21 +796,23 @@ export async function handleSecurityCommand(
 	runtime: SlashCommandRuntime,
 ): Promise<SlashCommandResult> {
 	if (!cfgSecurityEnabled.get(runtime.settings)) {
-		return usage("Security is disabled. Enable security.enabled before using /security.", runtime);
+		return usage(t("commands.security.disabled"), runtime);
 	}
 	const { verb, rest } = parseSubcommand(command.args);
 	try {
 		switch (verb || "scans") {
 			case "plan": {
 				const plan = await preflight(runtime, rest);
-				await runtime.output(`Security plan ${plan.id} is ready. Fingerprint: ${plan.fingerprint}.`);
+				await runtime.output(t("commands.security.planReady", { id: plan.id, fingerprint: plan.fingerprint }));
 				return commandConsumed();
 			}
 			case "scan": {
 				const coordinator = coordinatorFor(runtime);
 				const planId = rest.trim().startsWith("secplan_") ? rest.trim() : (await preflight(runtime, rest)).id;
 				const operation = await coordinator.start({ planId });
-				await runtime.output(`Security scan ${operation.scanId} started as ${operation.operationId}.`);
+				await runtime.output(
+					t("commands.security.scanStarted", { id: operation.scanId, operation: operation.operationId }),
+				);
 				return commandConsumed();
 			}
 			case "status": {
@@ -775,7 +820,7 @@ export async function handleSecurityCommand(
 				const operationId = rest.trim();
 				if (operationId) {
 					const operation = await coordinator.status(operationId);
-					if (!operation) throw new Error(`Unknown security operation: ${operationId}`);
+					if (!operation) throw new Error(t("commands.security.unknownOperation", { id: operationId }));
 					await runtime.output(JSON.stringify(operation, null, 2));
 				} else {
 					await runtime.output(JSON.stringify(await coordinator.listOperations(), null, 2));
@@ -784,11 +829,11 @@ export async function handleSecurityCommand(
 			}
 			case "cancel": {
 				const operationId = rest.trim();
-				if (!operationId) throw new Error("cancel requires an operation id");
+				if (!operationId) throw new Error(t("commands.security.cancelUsage"));
 				await runtime.output(
 					(await coordinatorFor(runtime).cancel(operationId))
-						? `Cancellation requested for ${operationId}.`
-						: `No cancellable security operation ${operationId}.`,
+						? t("commands.security.cancelRequested", { id: operationId })
+						: t("commands.security.cannotCancel", { id: operationId }),
 				);
 				return commandConsumed();
 			}
@@ -796,9 +841,16 @@ export async function handleSecurityCommand(
 				const scans = await (await SecurityStore.openForCwd(runtime.cwd)).listScans();
 				await runtime.output(
 					scans.length === 0
-						? "No security scans are stored for this project."
+						? t("commands.security.noScans")
 						: scans
-								.map(scan => `${scan.id} ${scan.status} ${scan.findingCount} finding(s) ${scan.producer.name}`)
+								.map(scan =>
+									t("commands.security.scanRow", {
+										id: scan.id,
+										status: scan.status,
+										count: scan.findingCount,
+										producer: scan.producer.name,
+									}),
+								)
 								.join("\n"),
 				);
 				return commandConsumed();
@@ -824,7 +876,7 @@ export async function handleSecurityCommand(
 			}
 			case "compare": {
 				const [beforeScanId, afterScanId] = parseCommandArgs(rest);
-				if (!beforeScanId || !afterScanId) throw new Error("compare requires <before-scan-id> <after-scan-id>");
+				if (!beforeScanId || !afterScanId) throw new Error(t("commands.security.compareUsage"));
 				const report = await (await SecurityStore.openForCwd(runtime.cwd)).compare(beforeScanId, afterScanId);
 				await runtime.output(JSON.stringify(report, null, 2));
 				return commandConsumed();
@@ -836,13 +888,10 @@ export async function handleSecurityCommand(
 				await updateDisposition(runtime, rest);
 				return commandConsumed();
 			default:
-				return usage(
-					"Usage: /security <plan|scan|status|cancel|scans|cloud|show|import|export|validate|compare|disposition>",
-					runtime,
-				);
+				return usage(t("commands.security.usage"), runtime);
 		}
 	} catch (error) {
-		await runtime.output(`Security: ${errorMessage(error)}`);
+		await runtime.output(t("commands.security.error", { error: errorMessage(error) }));
 		return commandConsumed();
 	}
 }

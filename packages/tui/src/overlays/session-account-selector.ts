@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -29,10 +30,21 @@ function accountDetail(account: SessionPinAccount): string | undefined {
 	return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
+function sessionAccountItems(accounts: readonly SessionPinAccount[]): SelectItem[] {
+	return accounts.map(account => ({
+		value: String(account.credentialId),
+		label: account.label,
+		description: account.active ? t("overlaysModel.sessionAccount.active") : undefined,
+	}));
+}
+
 /** Account picker opened by `/session pin` for the current model provider. */
 export class SessionAccountSelectorComponent extends OverlayPanel {
 	#selectList: SelectList;
 	#sheet: SelectListSheet;
+	readonly #providerName: string;
+	readonly #accounts: readonly SessionPinAccount[];
+	#locale = getLocale();
 
 	constructor(
 		providerName: string,
@@ -40,17 +52,14 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		onSelect: (account: SessionPinAccount) => void,
 		onCancel: () => void,
 	) {
-		super(`Select a ${providerName} account for this session`, "omp.overlay.session-account");
-		const accountsByValue = new Map<string, SessionPinAccount>();
-		const items: SelectItem[] = accounts.map(account => {
-			const value = String(account.credentialId);
-			accountsByValue.set(value, account);
-			return {
-				value,
-				label: account.label,
-				description: account.active ? "active for this session" : undefined,
-			};
-		});
+		super(
+			t("overlaysModel.sessionAccount.title.terminal", { provider: providerName }),
+			"omp.overlay.session-account",
+		);
+		this.#providerName = providerName;
+		this.#accounts = accounts;
+		const accountsByValue = new Map(accounts.map(account => [String(account.credentialId), account] as const));
+		const items = sessionAccountItems(accounts);
 
 		this.#selectList = new SelectList(
 			items,
@@ -68,23 +77,37 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		this.addChild(this.#selectList);
 		// Natively the active account carries the picker's current check, so the
 		// row's detail is what tells accounts apart instead of "active for this session".
-		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: `${providerName} account`,
-			subtitle: "Pin the account this session sends its requests with",
+		this.#sheet = new SelectListSheet(this.#selectList, () => ({
+			title: t("overlaysModel.sessionAccount.title.picker", { provider: providerName }),
+			subtitle: t("overlaysModel.sessionAccount.subtitle"),
 			icon: "key-round",
-			noun: "accounts",
+			noun: t("overlaysModel.sessionAccount.noun"),
 			current: accounts.filter(account => account.active).map(account => String(account.credentialId)),
-			confirm: "Pin",
+			confirm: t("overlaysModel.sessionAccount.action.pin"),
 			decorate: item => {
 				const account = accountsByValue.get(item.value);
 				if (!account) return undefined;
 				const detail = accountDetail(account);
 				return { mark: { text: account.email ?? account.label, seed: account.label }, detail: detail ?? "" };
 			},
-		});
+		}));
+	}
+
+	#syncLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.title = t("overlaysModel.sessionAccount.title.terminal", { provider: this.#providerName });
+		this.#selectList.setItems(sessionAccountItems(this.#accounts));
+	}
+
+	override render(width: number): readonly string[] {
+		this.#syncLocale();
+		return super.render(width);
 	}
 
 	override describe(cx: DescribeContext): NativeNode | null {
+		this.#syncLocale();
 		return cx.supports("picker") ? this.#sheet.describe() : super.describe(cx);
 	}
 

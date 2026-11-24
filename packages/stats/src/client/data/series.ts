@@ -3,6 +3,7 @@
  * into dense chart series aligned to a bucket axis (see `bucketAxis`).
  */
 
+import type { Translation } from "../types";
 import type { ChartSeries } from "../charts/types";
 import { OTHER_COLOR, SERIES_COLORS } from "./colors";
 
@@ -101,4 +102,14 @@ export function pivotSeries<P extends { timestamp: number }>(
 		series.push({ key: "__other__", label: `Other (${tail.length})`, color: OTHER_COLOR, values: other });
 	}
 	return series;
+}
+
+/** Titles only: keep the grouped count, series key and numeric samples intact. */
+export function localizeGroupedSeries(series: ChartSeries[], tr: Translation): ChartSeries[] {
+	const other = series.at(-1);
+	if (other?.key !== "__other__") return series;
+	const count = /^Other \((\d+)\)$/.exec(other.label)?.[1];
+	if (count === undefined) return series;
+	const label = tr("pages.chart.other_group", "Other ({count})", { count });
+	return label === other.label ? series : [...series.slice(0, -1), { ...other, label }];
 }

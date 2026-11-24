@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { AdvisorConfig, AdvisorConfigScope } from "./advisor-config";
@@ -42,103 +43,168 @@ export interface DefinitionField {
 	choices?: readonly string[];
 }
 export const AGENT_DEFINITION_FIELDS: readonly DefinitionField[] = [
-	{ key: "name", label: "Name", kind: "text", description: "Unique agent identifier (main and sub are reserved)." },
+	{
+		key: "name",
+		get label() {
+			return t("overlays.agent_definition_fields.name_label");
+		},
+		kind: "text",
+		get description() {
+			return t("overlays.agent_definition_fields.name_description");
+		},
+	},
 	{
 		key: "description",
-		label: "Description",
+		get label() {
+			return t("overlays.agent_definition_fields.description_label");
+		},
 		kind: "text",
-		description: "When the delegating agent should choose this definition.",
+		get description() {
+			return t("overlays.agent_definition_fields.description_help");
+		},
 	},
 	{
 		key: "systemPrompt",
-		label: "Instructions / body",
+		get label() {
+			return t("overlays.agent_definition_fields.instructions_label");
+		},
 		kind: "text",
-		description: "Agent system instructions, stored as the Markdown body.",
+		get description() {
+			return t("overlays.agent_definition_fields.instructions_help");
+		},
 	},
 	{
 		key: "harness",
-		label: "Harness",
+		get label() {
+			return t("overlays.agent_definition_fields.harness_label");
+		},
 		kind: "choice",
 		choices: ["omp", "claude", "codex"],
-		description: "Runtime harness used to execute this agent.",
+		get description() {
+			return t("overlays.agent_definition_fields.harness_help");
+		},
 	},
 	{
 		key: "inherit",
-		label: "Inherits",
+		get label() {
+			return t("overlays.agent_definition_fields.inherit_label");
+		},
 		kind: "choice",
 		choices: AGENT_INHERITANCE_VALUES,
-		description:
-			"NeoPi prompt inheritance: all (default) keeps context files and the harness prompt, context keeps only files, system keeps only the harness prompt, none keeps neither. The agent's instructions always apply.",
+		get description() {
+			return t("overlays.agent_definition_fields.inherit_help");
+		},
 	},
 	{
 		key: "model",
-		label: "Models (fallback order)",
+		get label() {
+			return t("overlays.agent_definition_fields.models_label");
+		},
 		kind: "list",
-		description: "Prioritized provider/model selectors or @role aliases, with optional :effort suffix.",
+		get description() {
+			return t("overlays.agent_definition_fields.models_help");
+		},
 	},
 	{
 		key: "thinkingLevel",
-		label: "Thinking level",
+		get label() {
+			return t("overlays.agent_definition_fields.thinking_label");
+		},
 		kind: "choice",
 		choices: ["auto", "inherit", "off", "minimal", "low", "medium", "high", "xhigh", "max"],
-		description: "Thinking effort used by the agent.",
+		get description() {
+			return t("overlays.agent_definition_fields.thinking_help");
+		},
 	},
 	{
 		key: "prewalk",
-		label: "Prewalk",
+		get label() {
+			return t("settings.group.prewalk");
+		},
 		kind: "text",
-		description:
-			"true uses the default edit-time handoff target; false disables; a model selector chooses the handoff target.",
+		get description() {
+			return t("overlays.agent_definition_fields.prewalk_help");
+		},
 	},
 	{
 		key: "advisor",
-		label: "Advisor",
+		get label() {
+			return t("settings.group.advisor");
+		},
 		kind: "advisor",
-		description:
-			"true uses the advisor role; false disables; a model selector uses that model; ref selects a named advisor; inline attaches a private advisor definition.",
+		get description() {
+			return t("overlays.agent_definition_fields.advisor_help");
+		},
 	},
 	{
 		key: "spawns",
-		label: "Allowed child agents",
+		get label() {
+			return t("overlays.agent_definition_fields.spawns_label");
+		},
 		kind: "list",
-		description: "Agent names this agent may spawn, or * for every agent.",
+		get description() {
+			return t("overlays.agent_definition_fields.spawns_help");
+		},
 	},
 	{
 		key: "tools",
-		label: "Tools",
+		get label() {
+			return t("settings.tab.tools.label");
+		},
 		kind: "tools",
-		description: "Built-in tool allowlist. Omitted uses defaults; [] grants no tools.",
+		get description() {
+			return t("overlays.agent_definition_fields.tools_help");
+		},
 	},
 	{
 		key: "output",
-		label: "Structured output schema",
+		get label() {
+			return t("overlays.agent_definition_fields.output_label");
+		},
 		kind: "output",
-		description:
-			"Output JSON Schema or supported shorthand schema, including nested fields, required fields, constraints and unions.",
+		get description() {
+			return t("overlays.agent_definition_fields.output_help");
+		},
 	},
 	{
 		key: "structured",
-		label: "Always use structured output",
+		get label() {
+			return t("overlays.agent_definition_fields.structured_label");
+		},
 		kind: "boolean",
-		description: "Keep yield and the output schema even when task.structured is off.",
+		get description() {
+			return t("overlays.agent_definition_fields.structured_help");
+		},
 	},
 	{
 		key: "blocking",
-		label: "Blocking execution",
+		get label() {
+			return t("overlays.agent_definition_fields.blocking_label");
+		},
 		kind: "boolean",
-		description: "Wait for completion instead of launching in the background.",
+		get description() {
+			return t("overlays.agent_definition_fields.blocking_help");
+		},
 	},
 	{
 		key: "autoloadSkills",
-		label: "Autoload skills",
+		get label() {
+			return t("overlays.agent_definition_fields.autoload_label");
+		},
 		kind: "list",
-		description: "Skills automatically loaded for this agent.",
+		get description() {
+			return t("overlays.agent_definition_fields.autoload_help");
+		},
 	},
 	{
 		key: "readSummarize",
-		label: "Summarize file reads",
+		get label() {
+			return t("overlays.agent_definition_fields.read_summarize_label");
+		},
 		kind: "boolean",
-		description: "false makes read return verbatim file content instead of structural summaries.",
+		get description() {
+			return t("overlays.agent_definition_fields.read_summarize_help");
+		},
 	},
 ];
 const inlineAdvisorSchema = {

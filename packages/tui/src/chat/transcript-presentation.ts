@@ -3,6 +3,7 @@
  * {@link setTranscriptPresenters}; each presentable block draws from its
  * {@link TranscriptPresentationState}.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import { type Component, Container, ownDescription } from "../tui";
 import { theme } from "../theme";
@@ -421,10 +422,19 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 	if (block.type === "event") {
 		const { event } = block;
 		if (event.type === "ttsr_triggered") {
-			return plainHead("ttsr", "omp.notice.ttsr", "Rule", event.rules.map(rule => rule.name).join(", "));
+			return plainHead(
+				"ttsr",
+				"omp.notice.ttsr",
+				t("overlays.transcript_presentation.rule"),
+				event.rules.map(rule => rule.name).join(", "),
+			);
 		}
-		const reminder = `${countOf(event.todos.length, "incomplete todo")} - reminder ${event.attempt}/${event.maxAttempts}`;
-		return plainHead("todo", "omp.notice.todo", "Todos", reminder);
+		const reminder = t("overlays.transcript_presentation.reminder", {
+			countOf: `${countOf(event.todos.length, "incomplete todo")}`,
+			attempt: `${event.attempt}`,
+			maxAttempts: `${event.maxAttempts}`,
+		});
+		return plainHead("todo", "omp.notice.todo", t("settings.group.todos"), reminder);
 	}
 	const { message } = block;
 	if (message.role !== "custom") {
@@ -434,9 +444,12 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 		const color = message.excludeFromContext ? "dim" : bash ? "bashMode" : "pythonMode";
 		const prompt = bash ? "$" : language !== undefined ? `[${language}] >>>` : ">>>";
 		let terminal = theme.fg(color, theme.bold(`${prompt} ${source}`));
-		if (message.cancelled) terminal += theme.fg("muted", " cancelled");
+		if (message.cancelled) terminal += theme.fg("muted", t("overlays.transcript_presentation.cancelled"));
 		else if (message.exitCode !== undefined && message.exitCode !== 0) {
-			terminal += theme.fg("error", ` exit ${message.exitCode}`);
+			terminal += theme.fg(
+				"error",
+				t("overlays.transcript_presentation.exit_code", { exitCode: `${message.exitCode}` }),
+			);
 		}
 		return bash
 			? { terminal, name: "bash", role: "omp.bash", title: "Bash", target: source }
@@ -453,11 +466,11 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 			const notes = (message.details as AdvisorMessageDetails | undefined)?.notes ?? [];
 			const blockers = notes.filter(note => note.severity === "blocker").length;
 			const tally = `${countOf(notes.length, "note")}${blockers > 0 ? ` · ${countOf(blockers, "blocker")}` : ""}`;
-			return plainHead("advisor", "omp.advisor", "Advisor", tally);
+			return plainHead("advisor", "omp.advisor", t("settings.group.advisor"), tally);
 		}
 		case SKILL_PROMPT_MESSAGE_TYPE: {
 			const name = (message.details as SkillPromptDetails | undefined)?.name?.trim() || "unknown";
-			return plainHead("skill", "omp.skill", "Skill", name);
+			return plainHead("skill", "omp.skill", t("overlays.transcript_presentation.skill"), name);
 		}
 		case LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE: {
 			const files = (message.details as { files?: LateDiagnosticsFile[] } | undefined)?.files ?? [];
@@ -468,7 +481,7 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 				...plainHead(
 					"diagnostics",
 					"omp.diagnostics.late",
-					"Late diagnostics",
+					t("overlays.transcript_presentation.late_diagnostics"),
 					`${countOf(count, "diagnostic")}${summary ? ` · ${summary}` : ""}`,
 				),
 				glyph: theme.fg(errored ? "error" : "warning", errored ? theme.status.error : theme.status.warning),
@@ -478,7 +491,10 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 			const details = message.details as { jobId?: string; jobs?: { jobId?: string }[] } | undefined;
 			const jobs = details?.jobs?.length ? details.jobs : [details ?? {}];
 			const ids = jobs.map(job => job.jobId ?? "unknown").join(", ");
-			const title = jobs.length === 1 ? "Background job completed" : `${jobs.length} background jobs completed`;
+			const title =
+				jobs.length === 1
+					? t("overlays.transcript_presentation.job_completed")
+					: t("overlays.transcript_presentation.jobs_completed", { length: `${jobs.length}` });
 			return { ...plainHead("job", "omp.activity", title, ids), glyph: theme.fg("success", theme.status.success) };
 		}
 		case ASYNC_NOTIFY_MESSAGE_TYPE: {
@@ -486,7 +502,7 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 			const lines = reports.reduce((sum, report) => sum + report.lines.length + report.omitted, 0);
 			const target = `${reports.map(report => report.id).join(", ")} · ${countOf(lines, "line")}`;
 			return {
-				...plainHead("job", "omp.activity", "Background output", target),
+				...plainHead("job", "omp.activity", t("overlays.transcript_presentation.background_output"), target),
 				glyph: theme.fg("accent", theme.status.info),
 			};
 		}
@@ -498,7 +514,9 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 				daemon => daemon.state === "failed" || (daemon.exitCode !== undefined && daemon.exitCode !== 0),
 			);
 			const names = daemons.map(daemon => daemon.name).join(", ");
-			const title = failed ? "Supervised process failed" : "Supervised process completed";
+			const title = failed
+				? t("overlays.transcript_presentation.process_failed")
+				: t("overlays.transcript_presentation.process_completed");
 			return {
 				...plainHead(
 					"process",

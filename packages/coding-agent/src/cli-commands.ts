@@ -419,7 +419,7 @@ export function reservedTopLevelWordMessage(argv: readonly string[]): string | u
 	return undefined;
 }
 
-export type ResolvedCliArgv = { argv: string[] } | { error: string };
+export type ResolvedCliArgv = { argv: string[] } | { error: string; reservedWord: string };
 
 /**
  * Index of the first argv token that names a registered subcommand, skipping
@@ -482,7 +482,7 @@ function stripLaunchGlobalFlags(leading: readonly string[]): string[] {
 export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	const first = argv[0];
 	const reservedMessage = reservedTopLevelWordMessage(argv);
-	if (reservedMessage) return { error: reservedMessage };
+	if (first && reservedMessage) return { error: reservedMessage, reservedWord: first };
 	if (first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help") {
 		return { argv };
 	}

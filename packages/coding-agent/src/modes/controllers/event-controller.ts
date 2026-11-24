@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -141,11 +142,11 @@ function nativeTaskJobToast(message: { role: string; customType?: string; detail
 	const details = message.details as AsyncResultJob & { jobs?: AsyncResultJob[] };
 	const jobs = details.jobs && details.jobs.length > 0 ? details.jobs : [details];
 	if (!jobs.every(job => job.type === "task")) return;
-	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
+	if (jobs.length > 1) return t("overlays.event_controller.background_tasks_completed", { length: `${jobs.length}` });
 	const job = jobs[0]!;
 	const name = sanitizeText(job.label ?? job.jobId ?? "task").trim() || "task";
 	const took = typeof job.durationMs === "number" ? ` · ${formatDuration(job.durationMs)}` : "";
-	return `Background task ${name} completed${took}`;
+	return t("overlays.event_controller.background_task_completed", { name: `${name}`, took: `${took}` });
 }
 
 function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {
@@ -201,8 +202,10 @@ function formatAsyncWaitLabel(sources: WakeSources | undefined): string {
 		describeWaitedIds(sources?.jobs ?? [], "background job"),
 		describeWaitedIds(sources?.agents ?? [], "agent"),
 	].filter(part => part !== undefined);
-	if (parts.length > 0) return `Waiting for ${parts.join("; ")}`;
-	return sources?.queued ? "Delivering queued results" : "Waiting for background work";
+	if (parts.length > 0) return t("overlays.event_controller.waiting_for", { join: `${parts.join("; ")}` });
+	return sources?.queued
+		? t("overlays.event_controller.delivering_queued_results")
+		: t("overlays.event_controller.waiting_background");
 }
 
 /** Render args for a live card: the harness strips `i` from executed args, but the stored block keeps it. */
@@ -2432,7 +2435,9 @@ export class EventController {
 			// error stays full-fidelity for the transcript and for replays.
 			const detail = textContent ? previewLine(sanitizeText(textContent), TRUNCATE_LENGTHS.LINE) : "";
 			this.ctx.showWarning(
-				`Todo update failed${detail ? `: ${detail}` : ". Progress may be stale until todo succeeds."}`,
+				t("overlays.event_controller.todo_update_failed", {
+					value: `${detail ? `: ${detail}` : t("overlays.event_controller.todo_stale_progress")}`,
+				}),
 				{ hideWithToolActivity: true },
 			);
 		}
@@ -2523,7 +2528,10 @@ export class EventController {
 			const running = this.ctx.session.getAsyncJobSnapshot()?.running.length ?? 0;
 			if (running > 0) {
 				this.ctx.showStatus(
-					`Stopped waiting · ${running} background ${running === 1 ? "job" : "jobs"} still running (/jobs)`,
+					t("overlays.event_controller.stopped_waiting", {
+						running: `${running}`,
+						value: `${running === 1 ? "job" : t("overlays.event_controller.jobs_plural")}`,
+					}),
 				);
 			}
 		} else {
@@ -2637,8 +2645,7 @@ export class EventController {
 		if (this.ctx.yieldCompaction) {
 			const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
 			const userStopped = options?.interrupted || (last?.stopReason === "aborted" && isUserInterruptAbort(last));
-			if (userStopped)
-				this.ctx.restoreCompactionQueueToEditor("Run stopped: queued compaction returned to the editor");
+			if (userStopped) this.ctx.restoreCompactionQueueToEditor(t("overlays.event_controller.compaction_returned"));
 			else this.ctx.runYieldCompaction();
 		}
 		// The user stopped the run themselves: no prediction or toast for it.
@@ -2683,7 +2690,9 @@ export class EventController {
 	 * label carries no dangling whitespace.
 	 */
 	#maintenanceEscHint(): string {
-		return this.ctx.focusedAgentId ? "" : ` (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`;
+		return this.ctx.focusedAgentId
+			? ""
+			: t("overlays.event_controller.cancel_hint", { appKey: `${appKey(this.ctx.keybindings, "app.interrupt")}` });
 	}
 
 	async #handleAutoCompactionStart(
@@ -2698,22 +2707,22 @@ export class EventController {
 		this.ctx.statusContainer.disposeChildren();
 		const reasonText =
 			event.reason === "overflow"
-				? "Context overflow detected, "
+				? t("overlays.event_controller.context_overflow")
 				: event.reason === "incomplete"
-					? "Response incomplete, "
+					? t("overlays.event_controller.response_incomplete")
 					: event.reason === "idle"
-						? "Idle "
+						? t("overlays.event_controller.idle_prefix")
 						: "";
 		const actionLabel =
 			event.action === "remote"
-				? "Auto server compaction"
+				? t("overlays.event_controller.auto_server_compaction")
 				: event.action === "handoff"
-					? "Auto-handoff"
+					? t("overlays.event_controller.auto_handoff")
 					: event.action === "shake"
-						? "Auto-shake"
+						? t("overlays.event_controller.auto_shake")
 						: event.action === "snapcompact"
-							? "Auto-snapcompact"
-							: "Auto context-full maintenance";
+							? t("overlays.event_controller.auto_snapcompact")
+							: t("overlays.event_controller.auto_context_maintenance");
 		this.ctx.autoCompactionLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -2756,14 +2765,14 @@ export class EventController {
 		if (event.aborted) {
 			this.ctx.showStatus(
 				isHandoffAction
-					? "Auto-handoff cancelled"
+					? t("overlays.event_controller.handoff_cancelled")
 					: isRemoteAction
-						? "Auto server compaction cancelled"
+						? t("overlays.event_controller.server_compaction_cancelled")
 						: isShakeAction
-							? "Auto-shake cancelled"
+							? t("overlays.event_controller.shake_cancelled")
 							: isSnapcompactAction
-								? "Auto-snapcompact cancelled"
-								: "Auto context-full maintenance cancelled",
+								? t("overlays.event_controller.snapcompact_cancelled")
+								: t("overlays.event_controller.context_maintenance_cancelled"),
 			);
 		} else if (isShakeAction) {
 			// Shake produces no CompactionResult; rebuild on success, suppress benign skips.
@@ -2782,7 +2791,7 @@ export class EventController {
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
-				this.ctx.showStatus("Auto-shake completed");
+				this.ctx.showStatus(t("overlays.event_controller.shake_completed"));
 			}
 		} else if (event.result) {
 			this.ctx.lastAssistantUsage = undefined;
@@ -2807,16 +2816,16 @@ export class EventController {
 			this.ctx.statusLine.invalidate();
 			await this.ctx.reloadTodos();
 			this.ctx.ui.requestRender(true, { clearScrollback: true });
-			this.ctx.showStatus("Auto-handoff completed");
+			this.ctx.showStatus(t("overlays.event_controller.handoff_completed"));
 		} else if (event.skipped) {
 			// Benign skip: no model selected, no candidate models available, or nothing
 			// to compact yet. Not a failure — suppress the warning.
 		} else if (isSnapcompactAction) {
-			this.ctx.showWarning("Auto-snapcompact maintenance failed; continuing without maintenance");
+			this.ctx.showWarning(t("overlays.event_controller.snapcompact_failed"));
 		} else if (isRemoteAction) {
-			this.ctx.showWarning("Auto server compaction failed; continuing without maintenance");
+			this.ctx.showWarning(t("overlays.event_controller.server_compaction_failed"));
 		} else {
-			this.ctx.showWarning("Auto context-full maintenance failed; continuing without maintenance");
+			this.ctx.showWarning(t("overlays.event_controller.context_maintenance_failed"));
 		}
 		await this.ctx.flushCompactionQueue({ willRetry: event.willRetry });
 		this.#ensureWorkingLoaderWhileStreaming();
@@ -2849,20 +2858,30 @@ export class EventController {
 			this.ctx.clearPinnedError();
 		}
 		const retryStartMs = Date.now();
-		const retryLabel = `Retrying (${event.attempt}/${event.maxAttempts})`;
+		const retryLabel = t("overlays.event_controller.retrying", {
+			attempt: `${event.attempt}`,
+			maxAttempts: `${event.maxAttempts}`,
+		});
 		this.ctx.retryLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("warning", spinner),
 			text => theme.fg("muted", text),
 			() => {
 				const remaining = Math.max(0, event.delayMs - (Date.now() - retryStartMs));
-				return `${retryLabel} in ${formatDuration(remaining)}…${this.#maintenanceEscHint()}`;
+				return t("overlays.event_controller.retry_delay", {
+					retryLabel: `${retryLabel}`,
+					remaining: `${formatDuration(remaining)}`,
+					maintenanceEscHint: `${this.#maintenanceEscHint()}`,
+				});
 			},
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.retryLoader.setWorkingRow(
 			() => ({
-				label: `Retrying · attempt ${event.attempt} of ${event.maxAttempts}`,
+				label: t("overlays.event_controller.retry_attempt", {
+					attempt: `${event.attempt}`,
+					maxAttempts: `${event.maxAttempts}`,
+				}),
 				startedAt: retryStartMs,
 				variant: { kind: "retry", attempt: event.attempt, max: event.maxAttempts, delayMs: event.delayMs },
 				interruptKey: this.ctx.maintenanceInterruptKey(),
@@ -2918,12 +2937,20 @@ export class EventController {
 		if (!event.success) {
 			if (terminalFailurePinned) {
 				const terminalError = this.#restorePinnedErrorInline
-					? `Retry failed after ${event.attempt} attempts: ${event.finalError || pinnedError || "Unknown error"}`
+					? t("overlays.event_controller.retry_failed_inline", {
+							attempt: `${event.attempt}`,
+							value: `${event.finalError || pinnedError || t("tools.common.unknown_error")}`,
+						})
 					: (pinnedError ?? event.finalError);
 				if (terminalError) this.ctx.showPinnedError(terminalError);
 				this.#restorePinnedErrorInline = true;
 			} else {
-				this.ctx.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
+				this.ctx.showError(
+					t("overlays.event_controller.retry_failed", {
+						attempt: `${event.attempt}`,
+						value: `${event.finalError || t("tools.common.unknown_error")}`,
+					}),
+				);
 			}
 		}
 		this.#ensureWorkingLoaderWhileStreaming();
@@ -2936,13 +2963,15 @@ export class EventController {
 		const reason = event.reason
 			? `\n${previewLine(sanitizeText(event.reason), TRUNCATE_LENGTHS.LINE * PREVIEW_LIMITS.COLLAPSED_LINES)}`
 			: "";
-		this.ctx.showWarning(`Fallback: ${event.from} -> ${event.to}${reason}`);
+		this.ctx.showWarning(
+			t("overlays.event_controller.fallback", { from: `${event.from}`, to: `${event.to}`, reason: `${reason}` }),
+		);
 	}
 
 	async #handleRetryFallbackSucceeded(
 		event: Extract<AgentSessionEvent, { type: "retry_fallback_succeeded" }>,
 	): Promise<void> {
-		this.ctx.showStatus(`Fallback succeeded on ${event.model}`);
+		this.ctx.showStatus(t("overlays.event_controller.fallback_succeeded", { model: `${event.model}` }));
 	}
 
 	async #handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): Promise<void> {
@@ -3023,7 +3052,7 @@ export class EventController {
 		const sessionName = this.ctx.sessionManager.getSessionName();
 		TERMINAL.sendNotification({
 			title: sessionName || PRODUCT_NAME,
-			body: "Stopped with error",
+			body: t("tools.notification.stopped_with_error"),
 			type: "error",
 			actions: "focus",
 		});
@@ -3048,7 +3077,7 @@ export class EventController {
 		const sessionName = this.ctx.sessionManager.getSessionName();
 		TERMINAL.sendNotification({
 			title: sessionName || PRODUCT_NAME,
-			body: "Complete",
+			body: t("tools.notification.complete"),
 			type: "completion",
 			actions: "focus",
 		});

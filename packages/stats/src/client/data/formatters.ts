@@ -1,5 +1,5 @@
 import { format, formatDistanceToNow } from "@oh-my-pi/pi-utils/dates";
-import type { MessageStats } from "../types";
+import type { Locale, MessageStats, Translation } from "../types";
 
 /**
  * Every number on the dashboard uses one fixed locale. Labels, percents
@@ -83,18 +83,44 @@ export function formatTokensPerSecond(value: number | null): string {
 	return value.toFixed(1);
 }
 
-export function formatRelativeTime(timestamp: number): string {
+const relativeSpanish = new Intl.RelativeTimeFormat("es-419", { numeric: "always" });
+const absoluteSpanish = new Intl.DateTimeFormat("es-419", {
+	day: "numeric",
+	month: "short",
+	hour: "2-digit",
+	minute: "2-digit",
+	second: "2-digit",
+	hourCycle: "h23",
+});
+const relativeUnits = [
+	[365 * 86_400_000, "year"],
+	[30 * 86_400_000, "month"],
+	[86_400_000, "day"],
+	[3_600_000, "hour"],
+	[60_000, "minute"],
+	[1_000, "second"],
+] as const;
+
+export function formatRelativeTime(timestamp: number, locale: Locale = "en"): string {
+	if (locale === "es" && Number.isFinite(timestamp)) {
+		const elapsed = timestamp - Date.now();
+		for (const [duration, unit] of relativeUnits) {
+			if (Math.abs(elapsed) >= duration) return relativeSpanish.format(Math.round(elapsed / duration), unit);
+		}
+		return relativeSpanish.format(0, "second");
+	}
 	return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
 }
 
 /** Absolute local date and time to the second ("Sep 28, 14:03:22"). */
-export function formatTimestamp(timestamp: number): string {
+export function formatTimestamp(timestamp: number, locale: Locale = "en"): string {
+	if (locale === "es") return absoluteSpanish.format(timestamp);
 	return format(new Date(timestamp), "MMM d, HH:mm:ss");
 }
 
 /** Project folder as stored by ingest (`/work-pi/`), without the slashes. */
-export function formatFolder(folder: string): string {
-	return folder.replace(/^\/+|\/+$/g, "") || "(root)";
+export function formatFolder(folder: string, tr?: Translation): string {
+	return folder.replace(/^\/+|\/+$/g, "") || (tr?.("pages.projects.root", "(root)") ?? "(root)");
 }
 
 export function formatBytes(value: number): string {

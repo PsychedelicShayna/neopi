@@ -1,4 +1,5 @@
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SkillSearchHit } from "@oh-my-pi/pi-wire/skillshare";
 import type { InteractiveModeContext } from "../modes/types";
 import { parseSkillSpec, SkillshareClient } from "../skillshare/client";
@@ -25,13 +26,15 @@ import { clearSubmittedText } from "./helpers/draft";
 import { errorMessage, parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef } from "./types";
 
-const USAGE = [
-	"Skill registry (skills.omp.sh) commands:",
-	"  /skills search <query>                        Search the registry",
-	"  /skills install <@scope/name[@range]>… [-g]   Install into this project (-g: user-global)",
-	"  /skills installed                             List installed registry skills",
-	"  /skills update [@scope/name…] [-g]            Update within the ranges in skills.json",
-].join("\n");
+function skillsUsage() {
+	return [
+		t("commands.skills.guide"),
+		t("commands.skills.guideSearch"),
+		t("commands.skills.guideInstall"),
+		t("commands.skills.guideInstalled"),
+		t("commands.skills.guideUpdate"),
+	].join("\n");
+}
 
 const GLOBAL_FLAGS = ["--global", "-g"];
 const completeGlobalFlag = argumentValues(...GLOBAL_FLAGS);
@@ -102,7 +105,8 @@ function parseTargets(tokens: readonly string[]): { names: string[]; global: boo
 	for (const token of tokens) {
 		if (!token) continue;
 		if (GLOBAL_FLAGS.includes(token)) global = true;
-		else if (token.startsWith("-")) return { error: `Unknown option: ${token}\n\n${USAGE}` };
+		else if (token.startsWith("-"))
+			return { error: t("commands.skills.unknownOption", { option: token, usage: skillsUsage() }) };
 		else names.push(token);
 	}
 	return { names, global };
@@ -120,13 +124,14 @@ async function withClient<T>(run: (client: SkillshareClient) => Promise<T>): Pro
 function tuiHooks(ctx: InteractiveModeContext): SkillInstallHooks {
 	return {
 		warn: message => ctx.showWarning(message),
-		confirmScripts: request => ctx.showHookConfirm("Install skill with scripts?", formatScriptApproval(request)),
+		confirmScripts: request =>
+			ctx.showHookConfirm(t("commands.skills.confirmScripts"), formatScriptApproval(request)),
 	};
 }
 
 async function reportChanges(ctx: InteractiveModeContext, changes: SkillChange[]): Promise<void> {
 	if (changes.length === 0) {
-		ctx.showStatus("Registry skills are already up to date.");
+		ctx.showStatus(t("commands.skills.upToDate"));
 		return;
 	}
 	await ctx.refreshSkillState();
@@ -137,23 +142,45 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "skills",
 		icon: "skill",
-		description: "Search, install, and update skills from the skills.omp.sh registry",
+		get description() {
+			return t("commands.skills.description");
+		},
 		subcommands: [
-			{ name: "search", description: "Search the skill registry", usage: "<query>" },
+			{
+				name: "search",
+				get description() {
+					return t("commands.skills.searchDescription");
+				},
+				usage: "<query>",
+			},
 			{
 				name: "install",
-				description: "Install registry skills",
+				get description() {
+					return t("commands.skills.installDescription");
+				},
 				usage: "<@scope/name[@range]>… [--global]",
 				getArgumentCompletions: completeSkillTargets(true),
 			},
-			{ name: "installed", description: "List installed registry skills" },
+			{
+				name: "installed",
+				get description() {
+					return t("commands.skills.installedDescription");
+				},
+			},
 			{
 				name: "update",
-				description: "Update registry skills within their ranges",
+				get description() {
+					return t("commands.skills.updateDescription");
+				},
 				usage: "[@scope/name…] [--global]",
 				getArgumentCompletions: completeSkillTargets(false),
 			},
-			{ name: "help", description: "Show usage guide" },
+			{
+				name: "help",
+				get description() {
+					return t("commands.skills.helpDescription");
+				},
+			},
 		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
@@ -165,7 +192,7 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				switch (verb) {
 					case "search": {
 						if (!rest) {
-							ctx.showError("Usage: /skills search <query>");
+							ctx.showError(t("commands.skills.searchUsage"));
 							return;
 						}
 						const response = await withClient(client => client.search(rest));
@@ -180,10 +207,10 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 							return;
 						}
 						if (targets.names.length === 0) {
-							ctx.showError("Usage: /skills install <@scope/name[@range]>… [--global]");
+							ctx.showError(t("commands.skills.installUsage"));
 							return;
 						}
-						ctx.showStatus(`Installing ${targets.names.join(", ")}…`, { dim: true });
+						ctx.showStatus(t("commands.skills.installing", { skills: targets.names.join(", ") }), { dim: true });
 						const changes = await withClient(client =>
 							installSkillPackages(
 								client,
@@ -204,7 +231,7 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 							ctx.showError(targets.error);
 							return;
 						}
-						ctx.showStatus("Checking the registry for updates…", { dim: true });
+						ctx.showStatus(t("commands.skills.checkingUpdates"), { dim: true });
 						const changes = await withClient(client =>
 							updateSkillPackages(client, { names: targets.names, global: targets.global, cwd }, tuiHooks(ctx)),
 						);
@@ -213,14 +240,14 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					}
 					case "":
 					case "help":
-						ctx.showStatus(USAGE);
+						ctx.showStatus(skillsUsage());
 						return;
 					default:
-						ctx.showError(`Unknown /skills subcommand: ${verb}\n\n${USAGE}`);
+						ctx.showError(t("commands.skills.unknownSubcommand", { subcommand: verb, usage: skillsUsage() }));
 						return;
 				}
 			} catch (error) {
-				ctx.showError(`Skills: ${errorMessage(error)}`);
+				ctx.showError(t("commands.skills.error", { error: errorMessage(error) }));
 			}
 		},
 	},

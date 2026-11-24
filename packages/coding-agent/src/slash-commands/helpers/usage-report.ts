@@ -1,5 +1,6 @@
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { OAuthAccountIdentity } from "../../session/auth-storage";
 import { collapseSharedUsageReports, summarizeUsageResetCredits } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import type { SlashCommandRuntime } from "../types";
@@ -21,7 +22,10 @@ function formatUsageAmount(limit: UsageLimit): string {
 		amount.remainingFraction ??
 		(amount.usedFraction !== undefined ? Math.max(0, 1 - amount.usedFraction) : undefined);
 	const unit = amount.unit === "percent" ? "%" : ` ${amount.unit}`;
-	const usedText = used === undefined ? "unknown used" : `${used.toFixed(2)}${unit} used`;
+	const usedText =
+		used === undefined
+			? t("commands.usage.unknownUsed")
+			: t("commands.usage.amountUsed", { used: used.toFixed(2), unit });
 	const remainingText = remainingFraction === undefined ? "" : ` (${(remainingFraction * 100).toFixed(1)}% left)`;
 	return `${usedText}${remainingText}`;
 }
@@ -59,7 +63,13 @@ function renderUsageReports(
 ): string {
 	const displayReports = collapseSharedUsageReports(reports);
 	const latestFetchedAt = Math.max(...displayReports.map(report => report.fetchedAt ?? 0));
-	const lines = [`Usage${latestFetchedAt ? ` (${formatCoarseDuration(nowMs - latestFetchedAt)} ago)` : ""}`];
+	const lines = [
+		t("commands.usage.headingFetched", {
+			age: latestFetchedAt
+				? t("commands.usage.age", { duration: formatCoarseDuration(nowMs - latestFetchedAt) })
+				: "",
+		}),
+	];
 	const grouped = new Map<string, UsageReport[]>();
 	for (const report of displayReports) {
 		const providerReports = grouped.get(report.provider) ?? [];
@@ -73,7 +83,7 @@ function renderUsageReports(
 		lines.push("", formatProviderName(provider));
 		const reportingModels = usageModelSelectors.filter(selector => selector.startsWith(`${provider}/`));
 		if (reportingModels.length > 0) {
-			lines.push("  Models with usage data");
+			lines.push(t("commands.usage.modelsWithUsage"));
 			for (const selector of reportingModels) lines.push(`    ${sanitizeText(selector)}`);
 		}
 		const activeAccount = resolveActiveAccount?.(provider);
@@ -90,7 +100,7 @@ function renderUsageReports(
 						? report.metadata.email
 						: typeof report.metadata?.accountId === "string"
 							? report.metadata.accountId
-							: "account";
+							: t("commands.controller.accountLabel");
 				let resetLabel: string;
 				if (report.provider === "openai-codex") {
 					resetLabel = formatCodexUsageReportLabel(report, providerReports, resetIdentity);
@@ -103,31 +113,44 @@ function renderUsageReports(
 					resetLabel = sanitizeText(raw.replace(/[\r\n\t]+/g, " "));
 				}
 				const availability =
-					resets.redeemableCount === resets.bankedCount ? "available" : `${resets.redeemableCount} usable now`;
+					resets.redeemableCount === resets.bankedCount
+						? "available"
+						: t("commands.usage.usableNow", { count: resets.redeemableCount });
 				lines.push(
-					`- ${resetLabel}: ${resets.bankedCount} saved rate-limit reset${resets.bankedCount === 1 ? "" : "s"} — ${availability} — /usage reset to spend`,
+					t("commands.usage.savedResets", {
+						label: resetLabel,
+						count: resets.bankedCount,
+						plural: resets.bankedCount === 1 ? "" : "s",
+						availability,
+					}),
 				);
 				if (resets.soonestExpiry) {
 					const expiryMs = Date.parse(resets.soonestExpiry);
 					const remaining = expiryMs - nowMs;
 					if (remaining > 0) {
 						lines.push(
-							`  soonest expires in ${formatCoarseDuration(remaining)} (${resets.soonestExpiry.slice(0, 10)})`,
+							t("commands.usage.expires", {
+								duration: formatCoarseDuration(remaining),
+								date: resets.soonestExpiry.slice(0, 10),
+							}),
 						);
 					} else {
-						lines.push(`  expired (${resets.soonestExpiry.slice(0, 10)})`);
+						lines.push(t("commands.usage.expired", { date: resets.soonestExpiry.slice(0, 10) }));
 					}
 				}
 				if (resets.redeemableCount === 0 && resets.unavailableReason) {
 					const reason = sanitizeText(resets.unavailableReason.replace(/[\r\n\t]+/g, " "));
-					lines.push(`  unavailable: ${reason}`);
+					lines.push(t("commands.usage.resetUnavailable", { reason }));
 				}
 			}
 			if (report.limits.length === 0) {
-				const email = typeof report.metadata?.email === "string" ? report.metadata.email : "account";
+				const email =
+					typeof report.metadata?.email === "string"
+						? report.metadata.email
+						: t("commands.controller.accountLabel");
 				const label =
 					report.provider === "openai-codex" ? formatCodexUsageReportLabel(report, providerReports, email) : email;
-				lines.push(`- ${label}: no limits reported`);
+				lines.push(t("commands.usage.noLimits", { label }));
 				continue;
 			}
 			for (let index = 0; index < report.limits.length; index++) {
@@ -141,12 +164,15 @@ function renderUsageReports(
 						: "";
 				lines.push(`- ${limit.label}${tier}${formatWindowSuffix(limit.label, window)}`);
 				lines.push(
-					`  ${formatUsageReportAccount(report, providerReports, limit, index)}: ${formatUsageAmount(limit)}${inUse ? "  ← in use by this session" : ""}`,
+					`  ${formatUsageReportAccount(report, providerReports, limit, index)}: ${formatUsageAmount(limit)}${inUse ? t("commands.usage.inUse") : ""}`,
 				);
 				lines.push(`  ${renderAsciiBar(limit.amount.usedFraction)}`);
 				if (limit.window?.resetsAt && limit.window.resetsAt > nowMs) {
 					lines.push(
-						`  ${limit.window.resetLabel ?? "resets"} in ${formatCoarseDuration(limit.window.resetsAt - nowMs)}`,
+						t("commands.usage.resetTime", {
+							label: limit.window.resetLabel ?? t("commands.usage.resets"),
+							duration: formatCoarseDuration(limit.window.resetsAt - nowMs),
+						}),
 					);
 				}
 				if (limit.notes && limit.notes.length > 0)
@@ -189,14 +215,14 @@ export async function buildUsageReportText(runtime: SlashCommandRuntime): Promis
 	const stats = runtime.session.sessionManager.getUsageStatistics();
 	const orchestrationTokens = stats.orchestrationInput + stats.orchestrationOutput + stats.orchestrationCacheRead;
 	return [
-		"Usage",
-		`Input tokens: ${stats.input}`,
-		`Output tokens: ${stats.output}`,
-		`Cache read tokens: ${stats.cacheRead}`,
-		`Cache write tokens: ${stats.cacheWrite}`,
-		`Total tokens: ${stats.totalTokens}`,
-		...(orchestrationTokens > 0 ? [`Orchestration tokens: ${orchestrationTokens}`] : []),
-		`Premium requests: ${stats.premiumRequests}`,
-		`Cost: $${stats.cost.toFixed(6)}`,
+		t("commands.usage.heading"),
+		t("commands.usage.input", { count: stats.input }),
+		t("commands.usage.output", { count: stats.output }),
+		t("commands.usage.cacheRead", { count: stats.cacheRead }),
+		t("commands.usage.cacheWrite", { count: stats.cacheWrite }),
+		t("commands.usage.total", { count: stats.totalTokens }),
+		...(orchestrationTokens > 0 ? [t("commands.usage.orchestration", { count: orchestrationTokens })] : []),
+		t("commands.usage.premium", { count: stats.premiumRequests }),
+		t("commands.usage.cost", { cost: stats.cost.toFixed(6) }),
 	].join("\n");
 }

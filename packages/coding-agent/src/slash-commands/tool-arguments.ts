@@ -1,5 +1,6 @@
 import { areJsonValuesEqual, dereferenceJsonSchema, isJsonObject as isObject } from "@oh-my-pi/pi-ai";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { parseCommandArgs } from "../utils/command-args";
 
 type ObjectValue = Record<string, unknown>;
@@ -21,7 +22,7 @@ function parseJson(text: string): unknown {
 			frame.keyExpected = false;
 		} else if (token.startsWith('"') && frame?.keys && frame.keyExpected) {
 			const key: string = JSON.parse(token);
-			if (frame.keys.has(key)) throw new Error(`Duplicate tool argument key: ${key}`);
+			if (frame.keys.has(key)) throw new Error(t("commands.toolArguments.duplicateKey", { key }));
 			frame.keys.add(key);
 		}
 	}
@@ -61,15 +62,15 @@ function splitArguments(text: string, json: boolean): Segment[] {
 }
 
 function parseValue(text: string): unknown {
-	if (!text) throw new Error("Tool arguments need a value after '='.");
+	if (!text) throw new Error(t("commands.toolArguments.missingValue"));
 	if (text.startsWith("'")) {
 		if (!text.endsWith("'") || text.length < 2 || text.slice(1, -1).includes("'")) {
-			throw new Error("Unterminated or invalid tool argument quote.");
+			throw new Error(t("commands.toolArguments.invalidQuote"));
 		}
 		return parseCommandArgs(text, { strict: true })[0]!;
 	}
 	if (/^[\[{\"]/.test(text)) return parseJson(text);
-	if (/\s/.test(text)) throw new Error("Quote tool argument values containing spaces.");
+	if (/\s/.test(text)) throw new Error(t("commands.toolArguments.quoteSpaces"));
 	try {
 		return parseJson(text);
 	} catch {
@@ -80,20 +81,20 @@ function parseValue(text: string): unknown {
 /** Parse an object or key=value arguments. Quoted scalars stay strings; bare paths stay intact. */
 export function parseHumanToolArguments(text: string): Record<string, unknown> {
 	const trimmed = text.trim();
-	if (!trimmed) throw new Error("Provide a JSON object or key=value arguments. Use {} for a tool with no arguments.");
+	if (!trimmed) throw new Error(t("commands.toolArguments.expectedArguments"));
 	if (trimmed.startsWith("{")) {
 		const value = parseJson(trimmed);
-		if (!isObject(value)) throw new Error("Tool arguments must be a JSON object.");
+		if (!isObject(value)) throw new Error(t("commands.toolArguments.expectedObject"));
 		return value;
 	}
 	const args: ObjectValue = {};
 	for (const segment of splitArguments(trimmed, false)) {
 		if (!segment.text) continue;
 		const separator = segment.text.indexOf("=");
-		if (separator <= 0) throw new Error("Tool arguments must be a JSON object or key=value pairs.");
+		if (separator <= 0) throw new Error(t("commands.toolArguments.expectedPairs"));
 		const key = segment.text.slice(0, separator);
-		if (/\s|[\[\]{}'\"]/.test(key)) throw new Error(`Invalid tool argument key: ${key}`);
-		if (Object.hasOwn(args, key)) throw new Error(`Duplicate tool argument key: ${key}`);
+		if (/\s|[\[\]{}'\"]/.test(key)) throw new Error(t("commands.toolArguments.invalidKey", { key }));
+		if (Object.hasOwn(args, key)) throw new Error(t("commands.toolArguments.duplicateKey", { key }));
 		Object.defineProperty(args, key, {
 			value: parseValue(segment.text.slice(separator + 1)),
 			enumerable: true,

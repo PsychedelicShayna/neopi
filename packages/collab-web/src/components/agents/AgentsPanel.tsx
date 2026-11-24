@@ -1,3 +1,4 @@
+import { useTranslation } from "../../lib/i18n";
 import type {
 	AgentProgress,
 	AgentSnapshot,
@@ -36,6 +37,7 @@ function activityLine(
 	p: AgentProgress | undefined,
 	lc: SubagentLifecyclePayload | undefined,
 	now: number,
+	tr: (key: string, english: string) => string,
 ): string {
 	if (p?.currentTool) {
 		const start = toolStartMs(p);
@@ -43,8 +45,8 @@ function activityLine(
 		return p.currentTool;
 	}
 	if (p?.lastIntent) return p.lastIntent;
-	if (lc) return lc.status;
-	return agent.status;
+	if (lc) return tr(`agent.status.${lc.status}`, lc.status);
+	return tr(`agent.status.${agent.status}`, agent.status);
 }
 
 const AgentRow = memo(function AgentRow(props: {
@@ -55,6 +57,7 @@ const AgentRow = memo(function AgentRow(props: {
 	now: number;
 	onSelect(id: string | null): void;
 }): ReactNode {
+	const tr = useTranslation();
 	const { agent, payload, lifecycle, selected, now, onSelect } = props;
 	const p = payload?.progress;
 	return (
@@ -66,13 +69,13 @@ const AgentRow = memo(function AgentRow(props: {
 			<span className="ag-row-head">
 				<span className={`ag-dot ag-dot--${agent.status}`} />
 				<span className="ag-row-name">{agent.displayName}</span>
-				<span className="ag-chip">{agent.kind}</span>
+				<span className="ag-chip">{tr(`agent.kind.${agent.kind}`, agent.kind)}</span>
 			</span>
-			<span className="ag-row-activity">{activityLine(agent, p, lifecycle, now)}</span>
+			<span className="ag-row-activity">{activityLine(agent, p, lifecycle, now, tr)}</span>
 			<span className="ag-row-meta">
 				{p ? <span>{fmtTokens(p.tokens)} tok</span> : null}
 				{p ? <span>{fmtCost(p.cost)}</span> : null}
-				<span className="ag-row-meta-when">{relTime(agent.lastActivity)}</span>
+				<span className="ag-row-meta-when">{relTime(agent.lastActivity, tr)}</span>
 			</span>
 		</button>
 	);
@@ -87,6 +90,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 	onSelect(id: string | null): void;
 }): ReactNode {
 	const { agents, progress, lifecycle, selectedId, onSelect } = props;
+	const tr = useTranslation();
 	const now = useNow(1000);
 
 	const sorted = useMemo(() => {
@@ -104,7 +108,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 
 	return (
 		<div className="ag-panel">
-			<div className="ag-heading">Session</div>
+			<div className="ag-heading">{tr("agent.session", "Session")}</div>
 			{sorted.mains.map(agent => (
 				<AgentRow
 					key={agent.id}
@@ -117,7 +121,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 				/>
 			))}
 			<div className="ag-heading">
-				Subagents
+				{tr("agent.subagents", "Subagents")}
 				{sorted.subs.length > 0 && <span className="ag-heading-count">{sorted.subs.length}</span>}
 			</div>
 			{sorted.subs.map(agent => (
@@ -131,7 +135,9 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 					onSelect={onSelect}
 				/>
 			))}
-			{sorted.subs.length === 0 ? <div className="ag-empty">No subagents yet</div> : null}
+			{sorted.subs.length === 0 ? (
+				<div className="ag-empty">{tr("agent.no_subagents", "No subagents yet")}</div>
+			) : null}
 		</div>
 	);
 });

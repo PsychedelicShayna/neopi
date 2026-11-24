@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
@@ -77,7 +78,10 @@ export class AttachmentChipsBand implements Component {
 			let content: NativeNode;
 			let caption: string;
 			if (chip.kind === "paste") {
-				caption = chip.text.lineCount > 1 ? `+${chip.text.lineCount} lines` : `${chip.text.charCount} chars`;
+				caption =
+					chip.text.lineCount > 1
+						? t("overlays.attachment_chips.line_count", { lineCount: `${chip.text.lineCount}` })
+						: t("overlays.attachment_chips.char_count", { charCount: `${chip.text.charCount}` });
 				content = node("text", {
 					spans: [span(plainText(chip.text.content.split("\n", 4).join("\n")), "muted")],
 					wrap: "none",
@@ -140,7 +144,10 @@ export class AttachmentChipsBand implements Component {
 			bottomCaption = dims ? `${dims.width}x${dims.height}` : "";
 			interior = this.#imageInterior(chip.image, dims, chip.kind);
 		} else {
-			bottomCaption = chip.text.lineCount > 1 ? `+${chip.text.lineCount} lines` : `${chip.text.charCount} chars`;
+			bottomCaption =
+				chip.text.lineCount > 1
+					? t("overlays.attachment_chips.line_count", { lineCount: `${chip.text.lineCount}` })
+					: t("overlays.attachment_chips.char_count", { charCount: `${chip.text.charCount}` });
 			interior = this.#textInterior(chip.text);
 		}
 		const vertical = `${sgr}${theme.symbol("boxRound.vertical")}${RESET_FG}`;

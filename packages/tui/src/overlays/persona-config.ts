@@ -14,6 +14,7 @@
  * with a mode, inline or file source, and literal) and `live` (instruction
  * sets for the live voice model, including an immutable built-in default).
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildBrowserItems, ModelBrowser, type ModelBrowserSource } from "./model-browser";
 import { interruptKey } from "../chrome/keybinding-hints";
@@ -51,10 +52,18 @@ export const PERSONA_CONFIG_MODES: readonly PersonaConfigMode[] = [
 ];
 
 const MODE_DESCRIPTIONS: Record<PersonaConfigMode, string> = {
-	replace: "Replace the whole system prompt",
-	prepend: "Insert before the system prompt",
-	append: "Insert after the system prompt",
-	"literal-substitute": "Replace one literal inside the system prompt",
+	get replace() {
+		return t("overlaysModel.personaConfig.modeHelp.replace");
+	},
+	get prepend() {
+		return t("overlaysModel.personaConfig.modeHelp.prepend");
+	},
+	get append() {
+		return t("overlaysModel.personaConfig.modeHelp.append");
+	},
+	get ["literal-substitute"]() {
+		return t("overlaysModel.personaConfig.modeHelp.literalSubstitute");
+	},
 };
 
 export type PersonaSourceField = {
@@ -158,7 +167,7 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const PREVIEW_WIDTH = 60;
 
 function previewLineOrNone(text: string | undefined): string {
-	if (!text?.trim()) return "(none)";
+	if (!text?.trim()) return t("overlaysModel.personaConfig.none");
 	const first = replaceTabs(text.trim().split("\n", 1)[0] ?? "");
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
@@ -289,12 +298,18 @@ export class PersonaConfigOverlayComponent implements Component {
 		this.#showList();
 	}
 
-	get #noun(): string {
+	#getNoun(plural = false): string {
 		return this.#deps.variant === "personality"
-			? "personality"
+			? plural
+				? t("overlaysModel.personaConfig.noun.personalities")
+				: t("overlaysModel.personaConfig.noun.personality")
 			: this.#deps.variant === "live"
-				? "live persona"
-				: "persona";
+				? plural
+					? t("overlaysModel.personaConfig.noun.livePersonas")
+					: t("overlaysModel.personaConfig.noun.livePersona")
+				: plural
+					? t("overlaysModel.personaConfig.noun.personas")
+					: t("overlaysModel.personaConfig.noun.persona");
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -307,7 +322,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			active instanceof HookEditorComponent ||
 			("filterFocused" in active && active.filterFocused === true);
 		const footerLines = menuHintLines(
-			this.#footerNote?.text ?? `${this.#footerHint}${textFocused ? "" : " · ? help"}`,
+			this.#footerNote?.text ??
+				`${this.#footerHint}${textFocused ? "" : t("overlaysModel.personaConfig.helpSuffix")}`,
 			Math.max(1, width - 4),
 			textFocused ? "" : undefined,
 		);
@@ -315,11 +331,18 @@ export class PersonaConfigOverlayComponent implements Component {
 		this.#bodyRowsLast = bodyRows;
 		const heading =
 			this.#deps.variant === "personality"
-				? `Personalities · ${this.#cb.scopeLabel?.() ?? "project"} · Ctrl-S scope`
+				? t("overlaysModel.personaConfig.personalityHeading", {
+						scope: this.#cb.scopeLabel?.() ?? t("overlaysModel.personaConfig.project"),
+					})
 				: this.#deps.variant === "live"
-					? "Live personas"
-					: "Personas";
-		const title = `${heading} · active: ${this.#activeLabel()}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
+					? t("overlaysModel.personaConfig.liveHeading")
+					: t("overlaysModel.personaConfig.personasHeading");
+		const title = t("overlaysModel.personaConfig.title", {
+			heading,
+			active: this.#activeLabel(),
+			unsaved: this.#dirty ? t("overlaysModel.personaConfig.unsavedSuffix") : "",
+			preview: this.#screen === "list" && this.#previewFocused ? t("overlaysModel.personaConfig.previewSuffix") : "",
+		});
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -340,7 +363,9 @@ export class PersonaConfigOverlayComponent implements Component {
 
 	#activeLabel(): string {
 		if (this.#doc.active) return this.#doc.active;
-		return this.#deps.variant === "live" ? "default" : "off";
+		return this.#deps.variant === "live"
+			? t("overlaysModel.personaConfig.default")
+			: t("overlaysModel.personaConfig.off");
 	}
 
 	// ───────────────────────────── input ─────────────────────────────
@@ -358,7 +383,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (this.#saving) return;
 		if (matchesKey(data, "ctrl+s") && this.#cb.cycleScope) {
 			if (this.#dirty) {
-				this.#flash("Save your changes before switching scope.");
+				this.#flash(t("overlaysModel.personaConfig.saveBeforeScope"));
 				return;
 			}
 			this.#saving = true;
@@ -461,7 +486,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			}
 			if (entry && matchesKey(data, "y")) {
 				this.#yankedPersonality = { ...entry };
-				this.#flash(`Yanked ${entry.name}`, "success");
+				this.#flash(t("overlaysModel.personaConfig.yanked", { name: entry.name }), "success");
 				return;
 			}
 			if (matchesKey(data, "p") && this.#yankedPersonality) {
@@ -485,7 +510,7 @@ export class PersonaConfigOverlayComponent implements Component {
 							"content",
 							new HookEditorComponent(
 								this.#tui,
-								"Full system prompt preview",
+								t("overlaysModel.personaConfig.fullPromptPreview"),
 								text,
 								() => this.#showList(),
 								() => this.#showList(),
@@ -641,8 +666,8 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (contentRows < rows) {
 			window.push(
 				start + contentRows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
-					: theme.fg("dim", "  (end)"),
+					? theme.fg("dim", t("overlaysModel.personaConfig.more", { count: lines.length - contentRows - start }))
+					: theme.fg("dim", t("overlaysModel.personaConfig.end")),
 			);
 		}
 		return window;
@@ -664,7 +689,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			);
 		}
 		if (entry && this.#screen === "detail" && value === "sources") {
-			return wrap("Choose which crew activity the voice agent hears about with this persona.", bodyWidth).map(line =>
+			return wrap(t("overlaysModel.personaConfig.sourcesPreview"), bodyWidth).map(line =>
 				truncateToWidth(theme.fg("muted", line), bodyWidth),
 			);
 		}
@@ -677,11 +702,11 @@ export class PersonaConfigOverlayComponent implements Component {
 		if (entry) return this.#entryPreview(entry, bodyWidth);
 		const help =
 			value === "add"
-				? `Create a new ${this.#noun}, then fill in its definition.`
+				? t("overlaysModel.personaConfig.addPreview", { noun: this.#getNoun() })
 				: value === "save"
-					? `Write the ${this.#noun}s and apply the active selection.`
+					? t("overlaysModel.personaConfig.savePreview", { noun: this.#getNoun(true) })
 					: value === "close"
-						? "Close the editor. Unsaved changes ask for confirmation first."
+						? t("overlaysModel.personaConfig.closePreview")
 						: "";
 		return wrap(help, bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth));
 	}
@@ -690,25 +715,57 @@ export class PersonaConfigOverlayComponent implements Component {
 		const active = this.#isActive(entry);
 		const lines = [theme.bold(`${active ? "● " : ""}${entry.name}`), ""];
 		if (this.#deps.variant === "persona") {
-			lines.push(theme.fg("dim", `Mode: ${entry.mode}`));
-			lines.push(theme.fg("dim", `Source: ${entry.sourceKind === "file" ? `file ${entry.path}` : "inline"}`));
-			if (entry.mode === "literal-substitute") lines.push(theme.fg("dim", `Literal: ${entry.literal || "(none)"}`));
-			lines.push(theme.fg("dim", `Inherit to tasks: ${entry.inheritToTasks ? "yes" : "no"}`), "");
+			lines.push(theme.fg("dim", t("overlaysModel.personaConfig.modeValue", { mode: entry.mode })));
+			lines.push(
+				theme.fg(
+					"dim",
+					t("overlaysModel.personaConfig.sourceValue", {
+						source:
+							entry.sourceKind === "file"
+								? t("overlaysModel.personaConfig.fileValue", { path: entry.path })
+								: t("overlaysModel.personaConfig.inline"),
+					}),
+				),
+			);
+			if (entry.mode === "literal-substitute")
+				lines.push(
+					theme.fg(
+						"dim",
+						t("overlaysModel.personaConfig.literalValue", {
+							value: entry.literal || t("overlaysModel.personaConfig.none"),
+						}),
+					),
+				);
+			lines.push(
+				theme.fg(
+					"dim",
+					t("overlaysModel.personaConfig.inheritValue", {
+						state: entry.inheritToTasks
+							? t("overlaysModel.personaConfig.yes")
+							: t("overlaysModel.personaConfig.no"),
+					}),
+				),
+				"",
+			);
 		} else if (entry.editableBuiltin) {
-			lines.push(theme.fg("dim", "Default for /live-transcript · editable"), "");
+			lines.push(theme.fg("dim", t("overlaysModel.personaConfig.editableDefault")), "");
 		} else if (entry.builtin) {
 			lines.push(
 				theme.fg(
 					"dim",
 					this.#deps.variant === "personality"
-						? "Built-in preset · read-only · clone to customize"
-						: "Built-in default · read-only · clone to customize",
+						? t("overlaysModel.personaConfig.builtInPresetHint")
+						: t("overlaysModel.personaConfig.builtInDefaultHint"),
 				),
 				"",
 			);
 		}
 		if (this.#deps.variant === "live" || entry.sourceKind === "inline") {
-			lines.push(...(entry.content.trim() ? wrap(entry.content, bodyWidth) : [theme.fg("muted", "(empty)")]));
+			lines.push(
+				...(entry.content.trim()
+					? wrap(entry.content, bodyWidth)
+					: [theme.fg("muted", t("overlaysModel.personaConfig.empty"))]),
+			);
 		}
 		return lines.map(line => truncateToWidth(replaceTabs(line), bodyWidth));
 	}
@@ -739,8 +796,16 @@ export class PersonaConfigOverlayComponent implements Component {
 		}
 		this.#screen = screen;
 		this.#active = active;
-		const navigationHint = screen === "list" ? "Tab panes" : screen === "detail" ? "← parent / → open" : "← parent";
-		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
+		const navigationHint =
+			screen === "list"
+				? t("overlaysModel.personaConfig.tabPanes")
+				: screen === "detail"
+					? t("overlaysModel.personaConfig.parentOpen")
+					: t("overlaysModel.personaConfig.parent");
+		this.#footerHint =
+			active instanceof SelectList
+				? t("overlaysModel.personaConfig.navigationHint", { navigation: navigationHint, footer: footerHint })
+				: footerHint;
 		this.#footerNote = undefined;
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && saved?.previewFocused === true;
@@ -787,12 +852,18 @@ export class PersonaConfigOverlayComponent implements Component {
 	}
 
 	#entrySummary(entry: PersonaConfigEntry): string {
-		if (entry.editableBuiltin) return "default for /live-transcript";
-		if (entry.builtin) return "built-in default";
+		if (entry.editableBuiltin) return t("overlaysModel.personaConfig.defaultTranscript");
+		if (entry.builtin) return t("overlaysModel.personaConfig.builtInDefault");
 		if (this.#deps.variant === "personality")
-			return entry.builtin ? "Built-in preset" : `${entry.definitionScope ?? "new"} · ${entry.content.length} chars`;
-		if (this.#deps.variant !== "persona") return `${entry.content.length} chars`;
-		return `${entry.mode} · ${entry.sourceKind === "file" ? replaceTabs(entry.path) || "(no path)" : "inline"}`;
+			return entry.builtin
+				? t("overlaysModel.personaConfig.builtInPreset")
+				: t("overlaysModel.personaConfig.scopeLength", {
+						scope: entry.definitionScope ?? t("overlaysModel.personaConfig.new"),
+						count: entry.content.length,
+					});
+		if (this.#deps.variant !== "persona")
+			return t("overlaysModel.personaConfig.length", { count: entry.content.length });
+		return `${entry.mode} · ${entry.sourceKind === "file" ? replaceTabs(entry.path) || t("overlaysModel.personaConfig.noPath") : t("overlaysModel.personaConfig.inline")}`;
 	}
 
 	#sourcesSummary(entry: PersonaConfigEntry): string {
@@ -803,8 +874,8 @@ export class PersonaConfigOverlayComponent implements Component {
 			if (field.key.startsWith("advisorNotes.")) advisor = true;
 			else labels.push(field.label);
 		}
-		if (advisor) labels.push("Advisor notes");
-		return labels.join(", ") || "none";
+		if (advisor) labels.push(t("overlaysModel.personaConfig.advisorNotes"));
+		return labels.join(", ") || t("overlaysModel.personaConfig.noSources");
 	}
 
 	#validationError(): string | null {
@@ -815,17 +886,18 @@ export class PersonaConfigOverlayComponent implements Component {
 					? entry.name.trim() === entry.name && !!entry.name && !/[\x00-\x1f\x7f]/.test(entry.name)
 					: NAME_PATTERN.test(entry.name))
 			)
-				return `"${entry.name}": names may contain only letters, numbers, '.', '_' or '-'.`;
-			if (seen.has(entry.name)) return `Two ${this.#noun}s are named "${entry.name}".`;
+				return t("overlaysModel.personaConfig.nameCharacters", { name: entry.name });
+			if (seen.has(entry.name))
+				return t("overlaysModel.personaConfig.duplicateEntries", { noun: this.#getNoun(true), name: entry.name });
 			seen.add(entry.name);
 			if (entry.builtin && !entry.editableBuiltin) continue;
 			if (this.#deps.variant === "live" || entry.sourceKind === "inline") {
-				if (!entry.content.trim()) return `"${entry.name}" has empty content.`;
+				if (!entry.content.trim()) return t("overlaysModel.personaConfig.emptyContent", { name: entry.name });
 			} else if (!entry.path.trim()) {
-				return `"${entry.name}" has no file path.`;
+				return t("overlaysModel.personaConfig.missingPath", { name: entry.name });
 			}
 			if (this.#deps.variant === "persona" && entry.mode === "literal-substitute" && !entry.literal)
-				return `"${entry.name}" needs a literal to substitute.`;
+				return t("overlaysModel.personaConfig.missingLiteral", { name: entry.name });
 		}
 		return null;
 	}
@@ -834,11 +906,11 @@ export class PersonaConfigOverlayComponent implements Component {
 	#save(reshow: () => void): void {
 		const problem = this.#validationError();
 		if (problem) {
-			this.#flash(`Not saved — ${problem}`);
+			this.#flash(t("overlaysModel.personaConfig.notSaved", { error: problem }));
 			return;
 		}
 		this.#saving = true;
-		this.#flash("Saving — editing is paused until the write completes", "success");
+		this.#flash(t("overlaysModel.personaConfig.saving"), "success");
 		void this.#cb.save(this.#doc).then(
 			message => {
 				this.#saving = false;
@@ -849,7 +921,9 @@ export class PersonaConfigOverlayComponent implements Component {
 			},
 			err => {
 				this.#saving = false;
-				this.#flash(`Not saved — ${err instanceof Error ? err.message : String(err)}`);
+				this.#flash(
+					t("overlaysModel.personaConfig.notSaved", { error: err instanceof Error ? err.message : String(err) }),
+				);
 			},
 		);
 	}
@@ -863,14 +937,21 @@ export class PersonaConfigOverlayComponent implements Component {
 			value: `entry:${index}`,
 			label:
 				this.#pendingDelete === index
-					? `⚠ Delete "${entry.name}"?`
+					? t("overlaysModel.personaConfig.confirmDelete", { name: entry.name })
 					: `${this.#isActive(entry) ? "●" : "○"} ${entry.name}`,
 			description: this.#pendingDelete === index ? undefined : this.#entrySummary(entry),
 		}));
-		items.push({ value: "add", label: `+ New ${this.#noun}` });
-		if (this.#deps.generation) items.push({ value: "generate", label: `Generate ${this.#noun}` });
-		items.push({ value: "save", label: this.#cb.apply ? "Save" : "Save & apply" });
-		items.push({ value: "close", label: "Close" });
+		items.push({ value: "add", label: t("overlaysModel.personaConfig.newEntry", { noun: this.#getNoun() }) });
+		if (this.#deps.generation)
+			items.push({
+				value: "generate",
+				label: t("overlaysModel.personaConfig.generateEntry", { noun: this.#getNoun() }),
+			});
+		items.push({
+			value: "save",
+			label: this.#cb.apply ? t("overlaysModel.personaConfig.save") : t("overlaysModel.personaConfig.saveApply"),
+		});
+		items.push({ value: "close", label: t("overlaysModel.personaConfig.close") });
 
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedValue)
@@ -909,17 +990,17 @@ export class PersonaConfigOverlayComponent implements Component {
 			"list",
 			list,
 			this.#pendingDelete !== null
-				? "Delete again to confirm removal · any other key cancels"
+				? t("overlaysModel.personaConfig.confirmDeleteHint")
 				: this.#deps.variant === "personality"
-					? "Enter details · Space select · a apply · s save · c clone · y/p copy · e edit · Ctrl-G editor · v full prompt · Esc close"
-					: "Enter edit · Space active · Del×2 · s save · Esc close",
+					? t("overlaysModel.personaConfig.personalityListHint")
+					: t("overlaysModel.personaConfig.listHint"),
 		);
 	}
 
 	#requestClose(): void {
 		if (this.#dirty && !this.#closeArmed) {
 			this.#closeArmed = true;
-			this.#flash("Unsaved changes — press Esc again to discard them, or s to save & apply");
+			this.#flash(t("overlaysModel.personaConfig.unsavedChanges"));
 			return;
 		}
 		this.#cb.close();
@@ -929,7 +1010,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		const entry = this.#doc.entries[index];
 		if (!entry) return;
 		if (entry.builtin) {
-			this.#flash("Built-in presets cannot be deleted.");
+			this.#flash(t("overlaysModel.personaConfig.builtinDeleteError"));
 			return;
 		}
 		if (
@@ -937,7 +1018,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			entry.definitionScope &&
 			entry.definitionScope !== this.#cb.editingScope?.()
 		) {
-			this.#flash(`Inherited from ${entry.definitionScope}. Switch to that scope to delete it.`);
+			this.#flash(t("overlaysModel.personaConfig.deleteFromScope", { scope: entry.definitionScope }));
 			return;
 		}
 		if (this.#pendingDelete === index) {
@@ -989,7 +1070,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				.then(name => {
 					if (!name) return;
 					if (!NAME_PATTERN.test(name) || this.#doc.entries.some(entry => entry.name === name)) {
-						this.#flash("Invalid or duplicate name.");
+						this.#flash(t("overlaysModel.personaConfig.invalidName"));
 						return;
 					}
 					this.#doc.entries.push({
@@ -1024,7 +1105,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				return;
 			}
 			if (!NAME_PATTERN.test(name) || this.#doc.entries.some(entry => entry.name === name)) {
-				this.#flash(`Invalid or duplicate name: ${name}`);
+				this.#flash(t("overlaysModel.personaConfig.invalidNamedEntry", { name }));
 				return;
 			}
 			this.#doc.entries.push({
@@ -1042,7 +1123,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(this.#doc.entries.length - 1);
 		};
 		input.onEscape = () => this.#showList("add");
-		this.#setScreen("name", input, `Name the new ${this.#noun} · Enter create · Esc cancel`);
+		this.#setScreen("name", input, t("overlaysModel.personaConfig.newEntryHint", { noun: this.#getNoun() }));
 	}
 
 	#showGenerator(): void {
@@ -1054,7 +1135,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#generationModel = item.model;
 			const controller = new AbortController();
 			this.#generationAbort = controller;
-			this.#flash(`Loading references · ${interruptKey()} cancel`, "success");
+			this.#flash(t("overlaysModel.personaConfig.loadingReferences", { key: interruptKey() }), "success");
 			void deps
 				.references(this.#doc)
 				.then(references => {
@@ -1070,7 +1151,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				});
 		};
 		picker.onCancel = () => this.#showList("generate");
-		this.#setScreen("generator", picker, "Select Generator Model · Enter choose · Esc back · / search");
+		this.#setScreen("generator", picker, t("overlaysModel.personaConfig.generatorModelHint"));
 	}
 
 	#showReferences(selectedValue?: string): void {
@@ -1078,7 +1159,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			value: `reference:${reference.id}`,
 			label: `${this.#generationSelected.has(reference.id) ? "☑" : "☐"} ${reference.label}`,
 		}));
-		items.push({ value: "continue", label: "Continue to Describe Persona" });
+		items.push({ value: "continue", label: t("overlaysModel.personaConfig.describePersonaNext") });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedValue)
 			list.setSelectedIndex(
@@ -1094,11 +1175,11 @@ export class PersonaConfigOverlayComponent implements Component {
 				else this.#generationSelected.add(id);
 				this.#showReferences(item.value);
 			} else if (this.#generationSelected.size === 0) {
-				this.#flash("Select at least one reference, including the default template if desired.");
+				this.#flash(t("overlaysModel.personaConfig.selectReference"));
 			} else this.#showDescription();
 		};
 		list.onCancel = () => this.#showGenerator();
-		this.#setScreen("references", list, "Select Reference Models · Space toggle · Enter continue · Esc generator");
+		this.#setScreen("references", list, t("overlaysModel.personaConfig.referenceHint"));
 	}
 
 	#showDescription(): void {
@@ -1112,11 +1193,11 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#generationDescription = description;
 			const deps = this.#deps.generation;
 			const model = this.#generationModel;
-			if (!description.trim()) return this.#flash("Describe the persona to generate.");
+			if (!description.trim()) return this.#flash(t("overlaysModel.personaConfig.describePersona"));
 			if (!deps || !model) return this.#showGenerator();
 			const controller = new AbortController();
 			this.#generationAbort = controller;
-			this.#flash(`Generating persona · ${interruptKey()} cancel`, "success");
+			this.#flash(t("overlaysModel.personaConfig.generating", { key: interruptKey() }), "success");
 			void deps
 				.generate({
 					model,
@@ -1129,7 +1210,7 @@ export class PersonaConfigOverlayComponent implements Component {
 					if (controller.signal.aborted) return;
 					this.#generationAbort = undefined;
 					if (!content.trim()) {
-						this.#flash("Generator returned empty instructions.");
+						this.#flash(t("overlaysModel.personaConfig.emptyGenerator"));
 						return;
 					}
 					const fresh = this.#deps.newEntrySources?.();
@@ -1153,7 +1234,7 @@ export class PersonaConfigOverlayComponent implements Component {
 					this.#flash(error instanceof Error ? error.message : String(error));
 				});
 		};
-		this.#setScreen("description", input, "Describe Persona · Enter generate · Esc references");
+		this.#setScreen("description", input, t("overlaysModel.personaConfig.generatorDescriptionHint"));
 	}
 
 	// ───────────────────────────── detail ────────────────────────────
@@ -1171,66 +1252,133 @@ export class PersonaConfigOverlayComponent implements Component {
 			items.push(
 				{
 					value: "active",
-					label: "Use prompt for regular /live",
-					description: this.#isActive(entry) ? "● on" : "○ off",
+					label: t("overlaysModel.personaConfig.regularLive"),
+					description: this.#isActive(entry)
+						? t("overlaysModel.personaConfig.enabled")
+						: t("overlaysModel.personaConfig.disabled"),
 				},
-				{ value: "content", label: "System prompt", description: previewLineOrNone(entry.content) },
-				{ value: "liveModel", label: "Requested model", description: entry.liveModel || "Codex default" },
-				{ value: "liveVoice", label: "Voice", description: entry.liveVoice || "Codex default" },
-				{ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) },
-				{ value: "back", label: "Back" },
+				{
+					value: "content",
+					label: t("overlaysModel.personaConfig.systemPrompt"),
+					description: previewLineOrNone(entry.content),
+				},
+				{
+					value: "liveModel",
+					label: t("overlaysModel.personaConfig.requestedModel"),
+					description: entry.liveModel || t("overlaysModel.personaConfig.codexDefault"),
+				},
+				{
+					value: "liveVoice",
+					label: t("overlaysModel.personaConfig.voice"),
+					description: entry.liveVoice || t("overlaysModel.personaConfig.codexDefault"),
+				},
+				{
+					value: "sources",
+					label: t("overlaysModel.personaConfig.contextSources"),
+					description: this.#sourcesSummary(entry),
+				},
+				{ value: "back", label: t("overlaysModel.personaConfig.back") },
 			);
 		} else if (entry.builtin) {
 			items.push(
-				{ value: "active", label: "Active", description: this.#isActive(entry) ? "● on" : "○ off" },
-				{ value: "view", label: "Instructions", description: "read-only · Enter to view" },
+				{
+					value: "active",
+					label: t("overlaysModel.personaConfig.active"),
+					description: this.#isActive(entry)
+						? t("overlaysModel.personaConfig.enabled")
+						: t("overlaysModel.personaConfig.disabled"),
+				},
+				{
+					value: "view",
+					label: t("overlaysModel.personaConfig.instructions"),
+					description: t("overlaysModel.personaConfig.readOnlyHint"),
+				},
 			);
 			if (this.#deps.variant === "live") {
-				items.push({ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) });
+				items.push({
+					value: "sources",
+					label: t("overlaysModel.personaConfig.contextSources"),
+					description: this.#sourcesSummary(entry),
+				});
 			}
-			items.push({ value: "clone", label: "Clone to customize" }, { value: "back", label: "Back" });
+			items.push(
+				{ value: "clone", label: t("overlaysModel.personaConfig.cloneCustomize") },
+				{ value: "back", label: t("overlaysModel.personaConfig.back") },
+			);
 		} else {
 			items.push(
-				{ value: "name", label: "Name", description: entry.name },
-				{ value: "active", label: "Active", description: this.#isActive(entry) ? "● on" : "○ off" },
+				{ value: "name", label: t("overlaysModel.personaConfig.name"), description: entry.name },
+				{
+					value: "active",
+					label: t("overlaysModel.personaConfig.active"),
+					description: this.#isActive(entry)
+						? t("overlaysModel.personaConfig.enabled")
+						: t("overlaysModel.personaConfig.disabled"),
+				},
 			);
 			if (this.#deps.variant === "persona") {
 				items.push(
-					{ value: "mode", label: "Mode", description: entry.mode },
-					{ value: "source", label: "Source", description: entry.sourceKind },
+					{ value: "mode", label: t("overlaysModel.personaConfig.mode"), description: entry.mode },
+					{ value: "source", label: t("overlaysModel.personaConfig.source"), description: entry.sourceKind },
 				);
 				if (entry.sourceKind === "file") {
-					items.push({ value: "path", label: "File path", description: replaceTabs(entry.path) || "(none)" });
+					items.push({
+						value: "path",
+						label: t("overlaysModel.personaConfig.filePath"),
+						description: replaceTabs(entry.path) || t("overlaysModel.personaConfig.none"),
+					});
 				} else {
-					items.push({ value: "content", label: "Content", description: previewLineOrNone(entry.content) });
+					items.push({
+						value: "content",
+						label: t("overlaysModel.personaConfig.content"),
+						description: previewLineOrNone(entry.content),
+					});
 				}
 				if (entry.mode === "literal-substitute") {
-					items.push({ value: "literal", label: "Literal", description: replaceTabs(entry.literal) || "(none)" });
+					items.push({
+						value: "literal",
+						label: t("overlaysModel.personaConfig.literal"),
+						description: replaceTabs(entry.literal) || t("overlaysModel.personaConfig.none"),
+					});
 				}
 				items.push({
 					value: "inherit",
-					label: "Inherit to tasks",
-					description: entry.inheritToTasks ? "● on" : "○ off",
+					label: t("overlaysModel.personaConfig.inheritToTasks"),
+					description: entry.inheritToTasks
+						? t("overlaysModel.personaConfig.enabled")
+						: t("overlaysModel.personaConfig.disabled"),
 				});
 			} else if (this.#deps.variant === "personality") {
-				items.push({ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) });
+				items.push({
+					value: "content",
+					label: t("overlaysModel.personaConfig.instructions"),
+					description: previewLineOrNone(entry.content),
+				});
 			} else {
 				items.push(
-					{ value: "content", label: "Instructions", description: previewLineOrNone(entry.content) },
-					{ value: "sources", label: "Context sources", description: this.#sourcesSummary(entry) },
+					{
+						value: "content",
+						label: t("overlaysModel.personaConfig.instructions"),
+						description: previewLineOrNone(entry.content),
+					},
+					{
+						value: "sources",
+						label: t("overlaysModel.personaConfig.contextSources"),
+						description: this.#sourcesSummary(entry),
+					},
 					{
 						value: "append-protocol",
-						label: "Append client protocol lines",
+						label: t("overlaysModel.personaConfig.appendProtocol"),
 						description: entry.content.includes(this.#deps.protocolMarker ?? "<client-protocol>")
-							? "already present"
-							: "adds the label and delegation rules as plain text you can edit",
+							? t("overlaysModel.personaConfig.alreadyPresentLower")
+							: t("overlaysModel.personaConfig.appendProtocolDescription"),
 					},
 				);
 			}
 			items.push(
-				{ value: "clone", label: "Clone" },
-				{ value: "delete", label: `Delete this ${this.#noun}` },
-				{ value: "back", label: "Back" },
+				{ value: "clone", label: t("overlaysModel.personaConfig.clone") },
+				{ value: "delete", label: t("overlaysModel.personaConfig.deleteEntry", { noun: this.#getNoun() }) },
+				{ value: "back", label: t("overlaysModel.personaConfig.back") },
 			);
 		}
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -1255,11 +1403,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		};
 		list.onSelect = item => this.#onDetailSelect(index, item.value);
 		list.onCancel = () => this.#showList(`entry:${index}`);
-		this.#setScreen(
-			"detail",
-			list,
-			`Editing "${entry.name}" · Enter / click edit · Space toggle · s save & apply · Esc back`,
-		);
+		this.#setScreen("detail", list, t("overlaysModel.personaConfig.editHint", { name: entry.name }));
 	}
 
 	#onDetailSelect(index: number, field: string): void {
@@ -1303,27 +1447,27 @@ export class PersonaConfigOverlayComponent implements Component {
 				const protocol = this.#deps.protocolLinesText;
 				let note: { text: string; tone?: "success" | "warning" };
 				if (!protocol) {
-					note = { text: "Client protocol lines are unavailable." };
+					note = { text: t("overlaysModel.personaConfig.protocolUnavailable") };
 				} else if (entry.content.includes(marker)) {
-					note = { text: "Already present" };
+					note = { text: t("overlaysModel.personaConfig.alreadyPresent") };
 				} else {
 					entry.content = `${entry.content.trimEnd()}\n\n${protocol.trim()}\n`;
 					this.#dirty = true;
-					note = { text: "Client protocol lines appended — save to apply", tone: "success" };
+					note = { text: t("overlaysModel.personaConfig.protocolAppended"), tone: "success" };
 				}
 				this.#showDetail(index, field);
 				this.#flash(note.text, note.tone);
 				return;
 			}
 			case "path":
-				this.#showFieldEditor(index, "path", "Path relative to the agent directory");
+				this.#showFieldEditor(index, "path", t("overlaysModel.personaConfig.pathHint"));
 				return;
 			case "liveModel":
 			case "liveVoice":
-				this.#showFieldEditor(index, field, "Blank restores the Codex default");
+				this.#showFieldEditor(index, field, t("overlaysModel.personaConfig.codexDefaultHint"));
 				return;
 			case "literal":
-				this.#showFieldEditor(index, "literal", "Literal text in the system prompt to replace");
+				this.#showFieldEditor(index, "literal", t("overlaysModel.personaConfig.literalHint"));
 				return;
 			case "clone":
 				this.#showNewEntryEditor(entry.content, entry.name, index);
@@ -1352,12 +1496,17 @@ export class PersonaConfigOverlayComponent implements Component {
 		};
 		const choiceOptions = (field: Extract<PersonaSourceField, { kind: "choice" }>) => {
 			if (field.options.some(option => option.value === field.value)) return field.options;
-			return [{ value: field.value, label: `Custom (${field.value})` }, ...field.options];
+			return [
+				{ value: field.value, label: t("overlaysModel.personaConfig.custom", { value: field.value }) },
+				...field.options,
+			];
 		};
 		const items: SelectItem[] = fields.map(field => {
 			const enabled = isEnabled(field);
 			const controller = field.enabledBy ? fields.find(candidate => candidate.key === field.enabledBy) : undefined;
-			const dependency = controller ? `(needs ${controller.label})` : undefined;
+			const dependency = controller
+				? t("overlaysModel.personaConfig.requires", { label: controller.label })
+				: undefined;
 			const selectedLabel =
 				field.kind === "choice"
 					? (choiceOptions(field).find(option => option.value === field.value)?.label ?? field.value)
@@ -1370,7 +1519,7 @@ export class PersonaConfigOverlayComponent implements Component {
 				description: enabled ? undefined : dependency,
 			};
 		});
-		items.push({ value: "back", label: "Back" });
+		items.push({ value: "back", label: t("overlaysModel.personaConfig.back") });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedKey) {
 			list.setSelectedIndex(
@@ -1412,7 +1561,7 @@ export class PersonaConfigOverlayComponent implements Component {
 		list.onSelect = item => select(item.value);
 		list.onCancel = () => this.#showDetail(index, "sources");
 		this.#entryIndex = index;
-		this.#setScreen("sources", list, "↑↓ move · Space / Enter toggle or cycle · s save & apply · Esc back");
+		this.#setScreen("sources", list, t("overlaysModel.personaConfig.sourcesHint"));
 	}
 
 	#showNameEditor(index: number): void {
@@ -1424,7 +1573,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			const name = value.trim();
 			if (name && name !== entry.name) {
 				if (!NAME_PATTERN.test(name) || this.#doc.entries.some(other => other.name === name)) {
-					this.#flash(`Invalid or duplicate name: ${name}`);
+					this.#flash(t("overlaysModel.personaConfig.invalidNamedEntry", { name }));
 					return;
 				}
 				if (this.#doc.active === entry.name) this.#doc.active = name;
@@ -1434,7 +1583,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(index, "name");
 		};
 		input.onEscape = () => this.#showDetail(index, "name");
-		this.#setScreen("name", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("name", input, t("overlaysModel.personaConfig.nameHint"));
 	}
 
 	#showFieldEditor(index: number, field: "path" | "literal" | "liveModel" | "liveVoice", hint: string): void {
@@ -1448,7 +1597,7 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(index, field);
 		};
 		input.onEscape = () => this.#showDetail(index, field);
-		this.#setScreen(field, input, `${hint} · Enter save · Esc cancel`);
+		this.#setScreen(field, input, t("overlaysModel.personaConfig.saveFieldHint", { hint }));
 	}
 
 	#showModePicker(index: number): void {
@@ -1467,17 +1616,22 @@ export class PersonaConfigOverlayComponent implements Component {
 			this.#showDetail(index, "mode");
 		};
 		list.onCancel = () => this.#showDetail(index, "mode");
-		this.#setScreen("mode", list, "Enter / click choose · Esc back");
+		this.#setScreen("mode", list, t("overlaysModel.personaConfig.modeHint"));
 	}
 
 	#showContentEditor(index: number, readOnly = false): void {
 		const entry = this.#doc.entries[index];
 		if (!entry) return this.#showList();
-		const label = this.#deps.variant === "live" ? "Instructions" : "Content";
+		const label =
+			this.#deps.variant === "live"
+				? t("overlaysModel.personaConfig.instructions")
+				: t("overlaysModel.personaConfig.content");
 		const field = readOnly ? "view" : "content";
 		const editor = new HookEditorComponent(
 			this.#tui,
-			readOnly ? `${label} — ${entry.name} (read-only; changes are discarded)` : `${label} — ${entry.name}`,
+			readOnly
+				? t("overlaysModel.personaConfig.readOnlyHeading", { label, name: entry.name })
+				: `${label} — ${entry.name}`,
 			entry.content,
 			value => {
 				if (!readOnly) {
@@ -1584,10 +1738,10 @@ export class PersonaConfigOverlayComponent implements Component {
 							index,
 							state.context.screen,
 							state.context.screen === "path"
-								? "Path relative to the agent directory"
+								? t("overlaysModel.personaConfig.pathHint")
 								: state.context.screen === "literal"
-									? "Literal text in the system prompt to replace"
-									: "Blank restores the Codex default",
+									? t("overlaysModel.personaConfig.literalHint")
+									: t("overlaysModel.personaConfig.codexDefaultHint"),
 						);
 					else this.#showList();
 					break;
