@@ -218,8 +218,10 @@ let saving = false,
 	saveSaid = null; // saveSaid: what NeoPi answered to the last refused save
 /* What is known about the last save that did not end cleanly, for the next review to say:
    done  = preset text that step one of a two-step save did write (confirmed by NeoPi), possibly none;
-   state = 'refused' NeoPi answered and wrote nothing more · 'silent' no answer and the files could not be read since,
-           so it is not known what was written · 'read' no answer, but the files have been read again since. */
+   error = what NeoPi said went wrong inside it, or null when it said nothing at all. Neither is proof of what was
+           written: an answer can be lost, or the error can come after the write;
+   state = 'refused' NeoPi answered that it will not write this, so nothing more was written · 'silent' not every
+           file of that save has been read again since, so it is not known what was written · 'read' every one has. */
 let aftermath = null;
 const REVIEW_RETRY = 3000;
 const stepOneWrote = done =>
@@ -241,7 +243,23 @@ function landed(a) {
 	sync();
 	edited();
 	render();
-	toast(T("save.landed") + " " + savedSummary(a.list));
+	toast((a.error ? T("save.landed.error") : T("save.landed")) + " " + savedSummary(a.list));
+}
+/* Reads the disk again and answers one question: is every file of that save now known for certain? A file counts
+   only when the version this page holds for it is the one NeoPi lists right now: read again, or unchanged. A list
+   without the file behind it, or one file that would not load, is not an answer. */
+async function readBack(list) {
+	saving = true;
+	const listed = await reloadAll(false);
+	saving = false;
+	return (
+		listed &&
+		list.every(s => {
+			const f = fileOf(s.id),
+				now = srcOf(s.id);
+			return !!f && !!now && sameDisk(f.theirs ?? f.base, now);
+		})
+	);
 }
 /* What NeoPi refused at the moment of writing, per file, for as long as that draft stays exactly as it was sent. */
 const refusals = new Map();
@@ -251,12 +269,7 @@ async function openSave() {
 	if (trial) trialEnd();
 	endConnect();
 	pruneBad();
-	if (aftermath?.state === "silent") {
-		saving = true;
-		const read = await reloadAll(false);
-		saving = false;
-		if (read) aftermath.state = "read";
-	}
+	if (aftermath?.state === "silent" && (await readBack(aftermath.list))) aftermath.state = "read";
 	const changed = saveOrder(dirtyFiles()),
 		waiting = scratchList();
 	if (!changed.length) {
@@ -594,13 +607,20 @@ async function openSave() {
 			after.state === "refused"
 				? check("ok", T("save.split.done"), [stepOneWrote(after.done), " ", T("save.split.rest.no")])
 				: after.state === "read"
-					? check("unk", two ? T("save.split.read") : T("save.lost.read"), [
-							two && [stepOneWrote(after.done), " "],
-							T("save.lost.read.sub"),
-						])
+					? check(
+							"unk",
+							after.error
+								? two
+									? T("save.split.read.error")
+									: T("save.lost.read.error")
+								: two
+									? T("save.split.read")
+									: T("save.lost.read"),
+							[two && [stepOneWrote(after.done), " "], T("save.lost.read.sub")],
+						)
 					: check("no", two ? T("save.split.unknown") : T("save.lost.unknown"), [
 							two && [stepOneWrote(after.done), " "],
-							T("save.lost.unknown.sub"),
+							after.error ? T("save.lost.unknown.error") : T("save.lost.unknown.sub"),
 						]),
 		);
 	body.replaceChildren(
@@ -638,7 +658,7 @@ async function openSave() {
 		setTimeout(async function again() {
 			if (sheetEl?.firstChild !== sheet || saving) return;
 			const was = state(),
-				up = await reloadAll(false);
+				up = after?.state === "silent" ? await readBack(after.list) : await reloadAll(false);
 			if (sheetEl?.firstChild !== sheet || saving) return;
 			if ((silent && up) || state() !== was) return openSave();
 			setTimeout(again, REVIEW_RETRY);
@@ -777,20 +797,22 @@ async function doSave(drafts, proofs, check, go, note) {
 		sources = res.data.sources ?? sources;
 		return partialSheet(res.data, written);
 	}
-	/* No answer, or a failure inside NeoPi, is not proof that nothing was written. The files are read again before
-     anything is said: if they hold the draft, the save happened; otherwise the review shows what is still missing. */
+	/* No answer, or a failure inside NeoPi, is not proof that nothing was written. Every file of the save is read
+     again before anything is said: if they hold the draft, the save happened; if they are all known and something
+     is missing, the review shows what; and until they are all known, nothing is claimed and nothing can be saved. */
 	if (!res.status || res.status >= 500) {
-		const bases = new Map(list.map(s => [s.id, fileOf(s.id).base]));
-		saving = true;
-		const read = await reloadAll(false);
-		saving = false;
-		if (read && !dirty()) return landed({ list, bases });
-		if (!res.status) aftermath = { done: written, state: read ? "read" : "silent", list, bases };
-		saveSaid = !res.status
+		const bases = new Map(list.map(s => [s.id, fileOf(s.id).base])),
+			error = res.status ? (res.data?.error ?? T("save.failed.unknown")) : null;
+		const read = await readBack(list);
+		if (read && !dirty()) return landed({ list, bases, error });
+		aftermath = { done: written, state: read ? "read" : "silent", list, bases, error };
+		saveSaid = !error
 			? null
-			: written.length
-				? T("save.split.second", { error: res.data?.error ?? "" })
-				: (res.data?.error ?? T("save.failed"));
+			: !read
+				? T("save.said", { error })
+				: written.length
+					? T("save.split.second", { error })
+					: error;
 		render();
 		return openSave();
 	}
@@ -865,6 +887,7 @@ function partialSheet(data, done = []) {
 					onclick: async () => {
 						closeSheet();
 						if (await reloadAll(true)) toast(T("partial.reloaded"), { undo: true });
+						else toast(T("partial.reload.failed"), { bad: true });
 					},
 				},
 				T("partial.reload"),
