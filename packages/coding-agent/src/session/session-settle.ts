@@ -12,12 +12,12 @@ export type SessionSettleState = Pick<
 	"isRunActive" | "isStreaming" | "hasAdmittedSubmission" | "queuedMessageCount" | "hasPendingAsyncWork"
 >;
 
-/** {@link SessionSettleState} plus the owner-scoped background drain. */
+/** {@link SessionSettleState} plus the owner's wait for outstanding wake sources. */
 export type SessionSettleHost = SessionSettleState & Pick<AgentSession, "settleAsyncWork">;
 
 /**
  * True when no run is open, live, admitted or scheduled, no steer/follow-up is queued, and no
- * background job or delivery can re-wake the session. `scheduledTurn` reports a turn the session's
+ * background work can re-wake the session. `scheduledTurn` reports a turn the session's
  * owner has decided to start but not yet admitted (for example a scheduled goal continuation).
  */
 export function isSessionSettled(session: SessionSettleState, scheduledTurn?: () => boolean): boolean {
@@ -32,7 +32,7 @@ export function isSessionSettled(session: SessionSettleState, scheduledTurn?: ()
 }
 
 /**
- * Wait out owner-scoped background work that can still wake the session, then report whether
+ * Wait out background work that can still wake the session, then report whether
  * the session is settled. Only drains while no open, live or admitted run owns the session (that
  * run's own `agent_end` is the next check). `isCurrent` is rechecked after every await: once it
  * turns false the caller has been superseded and the answer is false. True means the activity is

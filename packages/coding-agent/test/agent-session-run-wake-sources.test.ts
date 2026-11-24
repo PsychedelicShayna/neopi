@@ -17,6 +17,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { isSessionSettled, waitForSessionSettlement } from "@oh-my-pi/pi-coding-agent/session/session-settle";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession run held open by a child agent", () => {
@@ -114,6 +115,30 @@ describe("AgentSession run held open by a child agent", () => {
 		expect(runEvents).toEqual(["pause:true", "end"]);
 		expect(runStates).toEqual(["running", "idle"]);
 		expect(session.isRunActive).toBe(false);
+	});
+
+	it("lets a peer-woken child finish while waiting for its idle parent to settle", async () => {
+		registerRunningChild();
+		expect(session.isRunActive).toBe(false);
+		expect(isSessionSettled(session)).toBe(false);
+
+		const childFinished = Promise.withResolvers<void>();
+		const finish = setImmediate(() => {
+			registry.setStatus("Child", "idle");
+			childFinished.resolve();
+		});
+		let checks = 0;
+		try {
+			const settled = await waitForSessionSettlement(session, {
+				// Stop a regressed microtask loop without depending on a timer it would starve.
+				isCurrent: () => ++checks < 100,
+			});
+			expect(settled).toBe(true);
+			expect(isSessionSettled(session)).toBe(true);
+			await childFinished.promise;
+		} finally {
+			clearImmediate(finish);
+		}
 	});
 
 	it("continues the run once with a notice naming a child that waits for Main's next message", async () => {
