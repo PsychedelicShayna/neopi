@@ -6,7 +6,14 @@ import {
 	type LayoutContent,
 	renderLayoutContent,
 } from "../components/layout/geometry";
-import { clampScrollOffset, scrollbarThumbRange, viewportRange } from "../components/scroll-viewport";
+import {
+	clampScrollOffset,
+	maxScrollOffset,
+	scrollOffsetForRow,
+	scrollbarThumbRange,
+	viewportRange,
+} from "../components/scroll-viewport";
+import { matchesKey } from "../keys";
 import { isRightPress, type MouseRoutable, type SgrMouseEvent } from "../mouse";
 import { theme } from "../theme/index";
 import type { Component } from "../tui";
@@ -21,6 +28,10 @@ export interface SidePanelSection {
 	readonly title: string;
 	/** Content at natural height. A component may also implement MouseRoutable. */
 	readonly content: LayoutContent;
+	/** Optional controls kept below the scrolling document. */
+	readonly footer?: LayoutContent;
+	/** Latest entry to reveal after rendering, with a key that changes on a new lifecycle event. */
+	followTarget?(): PanelFollowTarget | undefined;
 	/** Rendered as a title-only row when true. */
 	collapsed?: boolean;
 	/** Section order; lower first. Ties keep registration order. */
@@ -35,6 +46,9 @@ export interface SidePanelOptions {
 	onSecondaryClick?: () => void;
 	/** Left click on panel space no section row claims: gaps, the placeholder, below the document. */
 	onEmptyClick?: () => void;
+	onInput?: (data: string) => void;
+	/** Fixed text above the section controls, outside the scrollable document. */
+	hints?: () => readonly string[];
 }
 
 /** Section content that tracks the pointer and drops its hover when the pointer leaves the panel. */
@@ -68,11 +82,17 @@ interface RegisteredSection {
 /** What a document row belongs to, for hit-testing after scroll. */
 interface DocumentRowTag {
 	sectionId: string;
-	kind: "title" | "body" | "gap";
+	kind: "title" | "body" | "gap" | "footer";
 	bodyRow: number;
 }
 
 const PLACEHOLDER_TAG: DocumentRowTag = { sectionId: "", kind: "gap", bodyRow: 0 };
+
+interface PanelFollowTarget {
+	row: number;
+	edge: "start" | "end";
+	revision: string;
+}
 
 /**
  * Docked side-panel content: registered sections laid out as one logical
@@ -85,9 +105,15 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	readonly #onChange: () => void;
 	readonly #onSecondaryClick: (() => void) | undefined;
 	readonly #onEmptyClick: (() => void) | undefined;
+	readonly #onInput: ((data: string) => void) | undefined;
+	readonly #hints: SidePanelOptions["hints"];
 	readonly #sections = new Map<string, RegisteredSection>();
 	#nextSequence = 0;
 	#height: number | undefined;
+	#viewportHeight = 0;
+	#footerTags: readonly DocumentRowTag[] = [];
+	#followRevision: string | undefined;
+	#followOffset: number | undefined;
 	#scrollOffset = 0;
 	#documentRows = 0;
 	#rowTags: readonly DocumentRowTag[] = [];
@@ -97,6 +123,8 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		this.#onChange = options.onChange ?? (() => {});
 		this.#onSecondaryClick = options.onSecondaryClick;
 		this.#onEmptyClick = options.onEmptyClick;
+		this.#onInput = options.onInput;
+		this.#hints = options.hints;
 	}
 
 	/** Register or replace a section by id (keeping its place); returns an unregister function. */
@@ -128,6 +156,8 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		if (!entry) return;
 		if (isPointerAware(entry.section.content)) entry.section.content.pointerLeave();
 		this.#sections.delete(id);
+		this.#followRevision = undefined;
+		this.#followOffset = undefined;
 		this.#onChange();
 	}
 
@@ -150,11 +180,27 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 	}
 
 	scrollTo(offset: number): void {
-		const next = clampScrollOffset(offset, this.#documentRows, this.#height ?? this.#documentRows);
+		const next = clampScrollOffset(offset, this.#documentRows, this.#viewportHeight);
 		if (next === this.#scrollOffset) return;
 		this.pointerLeave();
 		this.#scrollOffset = next;
 		this.#onChange();
+	}
+
+	get viewportHeight(): number {
+		return this.#viewportHeight;
+	}
+
+	scrollToPercent(percent: number): void {
+		this.scrollTo(Math.round((maxScrollOffset(this.#documentRows, this.#viewportHeight) * percent) / 100));
+	}
+
+	capturesInput(data: string): boolean {
+		return this.#onInput !== undefined && matchesKey(data, "ctrl+c");
+	}
+
+	handleInput(data: string): void {
+		this.#onInput?.(data);
 	}
 
 	get scrollOffset(): number {
@@ -182,8 +228,18 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		this.#contentWidth = contentWidth;
 		const document: string[] = [];
 		const tags: DocumentRowTag[] = [];
+		const footer = [...(this.#hints?.() ?? [])];
+		const footerTags: DocumentRowTag[] = footer.map(() => PLACEHOLDER_TAG);
+		let follow: PanelFollowTarget | undefined;
 		for (const entry of this.#ordered()) {
 			const { section } = entry;
+			if (section.footer && contentWidth > 0) {
+				const lines = renderLayoutContent(section.footer, contentWidth, undefined);
+				for (let row = 0; row < lines.length; row++) {
+					footer.push(lines[row]!);
+					footerTags.push({ sectionId: section.id, kind: "footer", bodyRow: row });
+				}
+			}
 			let body: readonly string[] = [];
 			if (!section.collapsed) {
 				body = contentWidth > 0 ? renderLayoutContent(section.content, contentWidth, undefined) : [];
@@ -195,12 +251,17 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			entry.titleRows.setLines([this.#titleLine(section, contentWidth)]);
 			document.push(...entry.titleRows.render(contentWidth));
 			tags.push({ sectionId: section.id, kind: "title", bodyRow: 0 });
+			const target = section.collapsed ? undefined : section.followTarget?.();
+			if (target) follow = { ...target, row: document.length + target.row };
 			for (let row = 0; row < body.length; row++) {
 				document.push(body[row]!);
 				tags.push({ sectionId: section.id, kind: "body", bodyRow: row });
 			}
-			document.push("");
-			tags.push({ sectionId: section.id, kind: "gap", bodyRow: 0 });
+			// Fixed controls already separate the document from the panel below.
+			if (!section.footer) {
+				document.push("");
+				tags.push({ sectionId: section.id, kind: "gap", bodyRow: 0 });
+			}
 		}
 		if (document.length === 0) {
 			document.push(theme.fg("dim", truncateToWidth(PLACEHOLDER, contentWidth)));
@@ -208,17 +269,37 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		}
 		this.#documentRows = document.length;
 		this.#rowTags = tags;
-		const height = this.#height ?? document.length;
-		this.#scrollOffset = clampScrollOffset(this.#scrollOffset, document.length, height);
-		const range = viewportRange(document.length, height, this.#scrollOffset);
-		const overflows = document.length > height;
-		const thumb = overflows ? scrollbarThumbRange(height, document.length, this.#scrollOffset) : undefined;
+		const height = this.#height ?? document.length + footer.length;
+		const footerStart = Math.max(0, footer.length - height);
+		const bodyHeight = Math.max(0, height - footer.length);
+		this.#viewportHeight = bodyHeight;
+		this.#footerTags = footerTags.slice(footerStart);
+		if (follow) {
+			const offset = scrollOffsetForRow(this.#scrollOffset, follow.row, document.length, bodyHeight, follow.edge);
+			if (follow.revision !== this.#followRevision || this.#scrollOffset === this.#followOffset) {
+				this.#scrollOffset = offset;
+			}
+			this.#followOffset = offset;
+			this.#followRevision = follow.revision;
+		} else {
+			this.#followOffset = undefined;
+			this.#followRevision = undefined;
+		}
+		this.#scrollOffset = clampScrollOffset(this.#scrollOffset, document.length, bodyHeight);
+		const range = viewportRange(document.length, bodyHeight, this.#scrollOffset);
+		const thumb =
+			document.length > bodyHeight
+				? scrollbarThumbRange(bodyHeight, document.length, this.#scrollOffset)
+				: undefined;
 		const lines: string[] = [];
-		for (let row = 0; row < height; row++) {
+		for (let row = 0; row < bodyHeight; row++) {
 			const index = range.start + row;
 			const content = index < range.end ? (document[index] ?? "") : "";
 			const gutter = thumb && row >= thumb.start && row < thumb.end ? theme.fg("border", THUMB) : TRACK;
 			lines.push(safeWidth > 0 ? fitLayoutLine(content, contentWidth) + gutter : "");
+		}
+		for (let row = footerStart; row < footer.length; row++) {
+			lines.push(fitLayoutLine(footer[row]!, contentWidth) + TRACK);
 		}
 		return lines;
 	}
@@ -237,7 +318,10 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			if (event.motion) this.pointerLeave();
 			return;
 		}
-		const tag = this.#rowTags[line + this.#scrollOffset];
+		const tag =
+			line >= this.#viewportHeight
+				? this.#footerTags[line - this.#viewportHeight]
+				: this.#rowTags[line + this.#scrollOffset];
 		const entry = tag && tag.kind !== "gap" ? this.#sections.get(tag.sectionId) : undefined;
 		if (!tag || !entry) {
 			// Motion over empty space is a pointer leaving every section.
@@ -250,13 +334,14 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 			if (event.leftClick) this.toggleCollapsed(tag.sectionId);
 			return;
 		}
-		const content = entry.section.content;
+		const content = tag.kind === "footer" ? entry.section.footer : entry.section.content;
 		if (event.motion) {
+			if (tag.kind === "footer") this.pointerLeave();
 			for (const other of this.#sections.values()) {
 				if (other !== entry && isPointerAware(other.section.content)) other.section.content.pointerLeave();
 			}
 		}
-		if (isLayoutMouseRoutable(content)) content.routeMouse(event, tag.bodyRow, col);
+		if (content !== undefined && isLayoutMouseRoutable(content)) content.routeMouse(event, tag.bodyRow, col);
 	}
 
 	/** The pointer left the panel (or crossed onto non-section rows): sections drop hover state. */
@@ -270,6 +355,7 @@ export class SidePanel implements HeightConstrainedComponent, MouseRoutable {
 		for (const entry of this.#sections.values()) {
 			entry.titleRows.invalidate();
 			if (isLayoutComponent(entry.section.content)) entry.section.content.invalidate?.();
+			if (entry.section.footer && isLayoutComponent(entry.section.footer)) entry.section.footer.invalidate?.();
 		}
 	}
 

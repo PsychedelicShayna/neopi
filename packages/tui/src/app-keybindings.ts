@@ -373,7 +373,7 @@ export const KEYBINDINGS = {
 	},
 	"app.sidebar.toggle": {
 		defaultKeys: "alt+t",
-		description: "Side panel views: then t todo, a agents, i IRC (the shown view's key hides it)",
+		description: "Open and focus the side panel; then t Todo, a Agents, or i IRC",
 	},
 	"app.sidebar.scrollUp": {
 		defaultKeys: "alt+shift+up",

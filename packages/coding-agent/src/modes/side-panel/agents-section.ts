@@ -1,16 +1,26 @@
 import type { MouseRoutable, SgrMouseEvent } from "@oh-my-pi/pi-tui";
-import type { SidePanelPointerAware, SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
-import type { AgentRecordLike } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
-import { statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
+import type { SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
+import { modelChip, statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
+import type { AgentRecordLike, AgentStatus } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import { agentColored } from "@oh-my-pi/pi-tui/overlays/agent-identity";
 import { sanitizeDisplaySingleLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import type { ObservableSession } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { formatDuration } from "@oh-my-pi/pi-utils";
+import type { Settings } from "../../config/settings";
+import type { SidePanelViewSection } from "../controllers/side-panel-controller";
+import { cfgSidebarAgentAutoscroll, cfgSidebarAgentFilters, cfgSidebarAgentOrder } from "../settings";
 
 /** What the agents section needs from its host. */
 export interface AgentsSectionHost {
+	settings: Settings;
 	/** This UI's roster, already scoped to its root (the Agent Hub's list). */
 	agents(): readonly AgentRecordLike[];
+	observed(id: string): ObservableSession | undefined;
+	/** A live repaint tick is needed only while this section is on screen. */
+	visible(): boolean;
 	/** The agent whose transcript the main area shows, or undefined for the primary session. */
 	focusedAgentId(): string | undefined;
 	/** Show `id`'s transcript in the main area; the host surfaces focus failures. */
@@ -18,68 +28,270 @@ export interface AgentsSectionHost {
 	/** Return the main area to the primary session. */
 	returnToPrimary(): void;
 	requestRender(): void;
-	/** Roster change notifications (spawn, status, activity); returns the unsubscribe. */
-	onChange(listener: () => void): () => void;
+	/** Roster lifecycle and observed progress changes; returns the unsubscribe. */
+	onChange(listener: (event?: AgentRosterChange) => void): () => void;
 }
 
-/** Roster kinds the panel lists: subagents and advisors (advisors are read-only transcripts). */
+const FILTER_CONTROLS = [
+	["running", "Run"],
+	["idle", "Idle"],
+	["parked", "Park"],
+	["advisors", "Adv"],
+	["aborted", "End"],
+	["auto", "Auto"],
+] as const;
+
+type AgentControlId = (typeof FILTER_CONTROLS)[number][0];
+
+interface StatusChange {
+	status: AgentStatus;
+	createdAt: number;
+	at: number;
+	sequence: number;
+}
+
+interface AgentRosterChange {
+	type: "registered" | "status_changed" | "metadata_changed" | "removed";
+	ref: AgentRecordLike;
+}
+
+type AgentFollowTarget = { row: number; edge: "start" | "end"; revision: string };
+
 function isListed(ref: AgentRecordLike): boolean {
 	return ref.kind === "sub" || ref.kind === "advisor";
+}
+
+function compareChanges(a: StatusChange, b: StatusChange): number {
+	return a.at - b.at || a.sequence - b.sequence;
+}
+
+function elapsedClock(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const tail = String(seconds % 60).padStart(2, "0");
+	if (minutes < 60) return `${minutes}:${tail}`;
+	return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${tail}`;
+}
+
+/** The filter controls stay fixed below the document, even when no agent matches. */
+class AgentControls implements MouseRoutable {
+	readonly #host: AgentsSectionHost;
+	#selected: number | undefined;
+	#hits: { line: number; start: number; end: number; id: AgentControlId }[] = [];
+
+	constructor(host: AgentsSectionHost) {
+		this.#host = host;
+	}
+
+	render(width: number): readonly string[] {
+		const settings = this.#host.settings;
+		const enabled = cfgSidebarAgentFilters.get(settings);
+		const rows: string[] = [];
+		this.#hits = [];
+		let line = "";
+		let used = 0;
+		for (const [index, [id, label]] of FILTER_CONTROLS.entries()) {
+			const on = id === "auto" ? cfgSidebarAgentAutoscroll.get(settings) : enabled.includes(id);
+			const text = truncateToWidth(`${on ? "+" : "-"}${label}`, width, "");
+			const size = visibleWidth(text);
+			if (used > 0 && used + size + 1 > width) {
+				rows.push(line);
+				line = "";
+				used = 0;
+			}
+			if (used > 0) {
+				line += " ";
+				used++;
+			}
+			this.#hits.push({ line: rows.length, start: used, end: used + size, id });
+			used += size;
+			const styled = on ? theme.bold(theme.fg("accent", text)) : theme.fg("muted", text);
+			line += index === this.#selected ? theme.bgFill("selectedBg", styled) : styled;
+		}
+		rows.push(line);
+		return rows;
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (!event.leftClick) return;
+		const hit = this.#hits.find(cell => cell.line === line && col >= cell.start && col < cell.end);
+		if (hit) this.#toggle(hit.id);
+	}
+
+	move(delta: number): void {
+		const count = FILTER_CONTROLS.length;
+		this.#selected = ((this.#selected ?? (delta > 0 ? -1 : 0)) + delta + count) % count;
+		this.#host.requestRender();
+	}
+
+	toggleSelected(): void {
+		if (this.#selected !== undefined) this.#toggle(FILTER_CONTROLS[this.#selected]![0]);
+	}
+
+	reset(): void {
+		this.#selected = undefined;
+	}
+
+	invalidate(): void {}
+
+	#toggle(id: AgentControlId): void {
+		const settings = this.#host.settings;
+		if (id === "auto") cfgSidebarAgentAutoscroll.set(settings, !cfgSidebarAgentAutoscroll.get(settings));
+		else {
+			const current = cfgSidebarAgentFilters.get(settings);
+			cfgSidebarAgentFilters.set(
+				settings,
+				current.includes(id) ? current.filter(filter => filter !== id) : [...current, id],
+			);
+		}
+		this.#host.requestRender();
+	}
 }
 
 class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	readonly #host: AgentsSectionHost;
 	readonly #unsubscribe: () => void;
+	readonly #changes = new Map<string, StatusChange>();
+	#sequence = 0;
+	#tick: NodeJS.Timeout | undefined;
+	#target: AgentFollowTarget | undefined;
 	/** Agent id per rendered body row, from the last render. */
-	#rowIds: readonly (string | undefined)[] = [];
+	#rowIds: readonly string[] = [];
 	#hovered: string | undefined;
 	#pendingFocus: { id: string } | undefined;
 
 	constructor(host: AgentsSectionHost) {
 		this.#host = host;
-		this.#unsubscribe = host.onChange(() => host.requestRender());
+		this.#unsubscribe = host.onChange(event => {
+			if (event?.type === "removed") this.#changes.delete(event.ref.id);
+			else if (event && isListed(event.ref) && event.type !== "metadata_changed") {
+				this.#observe(event.ref, event.type);
+			}
+			if (host.visible()) host.requestRender();
+		});
+	}
+
+	#observe(ref: AgentRecordLike, event?: "registered" | "status_changed"): StatusChange {
+		const previous = event === "registered" ? undefined : this.#changes.get(ref.id);
+		if (previous?.status === ref.status && previous.createdAt === ref.createdAt) return previous;
+		const at = !previous && event !== "status_changed" && ref.status === "running" ? ref.createdAt : ref.lastActivity;
+		const change = { status: ref.status, createdAt: ref.createdAt, at, sequence: this.#sequence++ };
+		this.#changes.set(ref.id, change);
+		return change;
 	}
 
 	render(width: number): readonly string[] {
-		// Spawn order only: a status change (a click reviving a parked agent) must
-		// not move rows, or a second click on the same spot would hit another agent.
-		const agents = this.#host
-			.agents()
-			.filter(isListed)
-			.toSorted((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-		const ids: (string | undefined)[] = [];
+		const settings = this.#host.settings;
+		const filters = cfgSidebarAgentFilters.get(settings);
+		const newestAtTop = cfgSidebarAgentOrder.get(settings) === "newest-at-top";
+		const follow = cfgSidebarAgentAutoscroll.get(settings);
+		const agents = [];
+		for (const ref of this.#host.agents()) {
+			if (!isListed(ref)) continue;
+			const change = this.#observe(ref);
+			if (filters.includes(ref.kind === "advisor" ? "advisors" : ref.status)) agents.push({ ref, change });
+		}
+		agents.sort((a, b) => {
+			const parked = Number(b.ref.status === "parked") - Number(a.ref.status === "parked");
+			if (parked) return newestAtTop ? -parked : parked;
+			const chronology = compareChanges(a.change, b.change);
+			return newestAtTop || a.ref.status === "parked" ? -chronology : chronology;
+		});
+		this.#target = undefined;
+		const ids: string[] = [];
+		this.#rowIds = ids;
 		if (agents.length === 0) {
 			this.#hovered = undefined;
-			this.#rowIds = ids;
-			return [];
+			return [theme.fg("muted", truncateToWidth("No agents match these filters", width))];
 		}
 		const focused = this.#host.focusedAgentId();
+		const now = Date.now();
 		const lines: string[] = [];
-		for (const ref of agents) {
-			lines.push(this.#row(ref, width, ref.id === focused, ref.id === this.#hovered));
-			ids.push(ref.id);
+		let newest: StatusChange | undefined;
+		let live = false;
+		for (const { ref, change } of agents) {
+			const top = lines.length;
+			live ||= ref.status === "running";
+			this.#appendAgent(lines, ref, change, now, width, ref.id === focused);
+			for (let row = top; row < lines.length; row++) ids.push(ref.id);
+			if (follow && (!newest || compareChanges(change, newest) > 0)) {
+				newest = change;
+				this.#target = {
+					row: newestAtTop ? top : lines.length - 1,
+					edge: newestAtTop ? "start" : "end",
+					revision: `${newestAtTop}:${filters.join(",")}:${change.sequence}`,
+				};
+			}
 		}
-		// A hovered agent that left the roster no longer bands anything.
 		if (this.#hovered !== undefined && !ids.includes(this.#hovered)) this.#hovered = undefined;
-		lines.push(theme.fg("dim", truncateToWidth(focused ? "click again to return to main" : "click to view", width)));
-		ids.push(undefined);
-		this.#rowIds = ids;
+		if (live && !this.#tick) {
+			this.#tick = setTimeout(
+				() => {
+					this.#tick = undefined;
+					if (this.#host.visible()) this.#host.requestRender();
+				},
+				1000 - (now % 1000),
+			);
+			this.#tick.unref?.();
+		}
 		return lines;
 	}
 
-	#row(ref: AgentRecordLike, width: number, focused: boolean, hovered: boolean): string {
+	#appendAgent(
+		lines: string[],
+		ref: AgentRecordLike,
+		change: StatusChange,
+		now: number,
+		width: number,
+		focused: boolean,
+	): void {
+		const observed = this.#host.observed(ref.id);
+		const progress = observed?.progress;
+		const running = ref.status === "running";
+		const currentProgress =
+			running && observed?.status === "active" && observed.progressAt !== undefined ? progress : undefined;
+		const current = currentProgress?.currentTool;
+		const waitAt = current === "wait" ? currentProgress?.currentToolStartMs : undefined;
+		const duration = running
+			? currentProgress && observed?.progressAt !== undefined
+				? currentProgress.durationMs + Math.max(0, now - observed.progressAt)
+				: now - change.at
+			: (progress?.durationMs ?? ref.history?.metrics?.durationMs ?? change.at - ref.createdAt);
+		const name = agentColored(theme, ref.id, sanitizeDisplaySingleLine(ref.id));
+		const slug = modelChip(ref, observed)?.text;
 		const gutter = focused ? theme.fg("accent", "▍") : " ";
-		const name = sanitizeDisplaySingleLine(ref.id);
-		const role = ref.history?.agent;
-		const roleText = role && role !== ref.id ? theme.fg("muted", ` ${sanitizeDisplaySingleLine(role)}`) : "";
+		const model = slug ? theme.fg("muted", ` ${slug}`) : "";
 		const advisor = ref.kind === "advisor" ? theme.fg("warning", " read-only") : "";
-		const head = `${gutter}${statusGlyph(ref.status)} ${focused ? theme.bold(theme.fg("accent", name)) : name}${roleText}${advisor}`;
-		const activity = ref.activity ? sanitizeDisplaySingleLine(ref.activity) : "";
-		const room = width - visibleWidth(head) - 1;
-		const line = activity && room > 3 ? `${head} ${theme.fg("dim", truncateToWidth(activity, room))}` : head;
-		const fitted = truncateToWidth(line, width, "");
-		if (!hovered) return fitted;
-		return theme.bgFill("selectedBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))));
+		const header = `${gutter}${statusGlyph(ref.status)} ${focused ? theme.bold(name) : name}${model}${advisor}`;
+		const assignment =
+			progress?.assignment ?? observed?.description ?? progress?.task ?? (!running ? ref.activity : undefined);
+		const operation = current
+			? (currentProgress?.currentToolIntent ?? [current, currentProgress?.currentToolArgs].filter(Boolean).join(" "))
+			: running
+				? (currentProgress?.lastIntent ?? ref.activity ?? ref.status)
+				: ref.status;
+		const branch = theme.fg("dim", " ├ ");
+		const leaf = theme.fg("dim", " └ ");
+		const clock = theme.fg("muted", elapsedClock(duration));
+		const hovered = ref.id === this.#hovered;
+		const start = lines.length;
+		lines.push(
+			header,
+			`${branch}${clock}${assignment ? ` ${sanitizeDisplaySingleLine(assignment)}` : ""}`,
+			`${waitAt === undefined ? leaf : branch}${sanitizeDisplaySingleLine(operation)}`,
+		);
+		if (waitAt !== undefined) lines.push(`${leaf}${theme.fg("warning", `wait ${formatDuration(now - waitAt)}`)}`);
+		for (let row = start; row < lines.length; row++) {
+			const fitted = truncateToWidth(lines[row]!, width);
+			lines[row] = hovered
+				? theme.bgFill("selectedBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))))
+				: fitted;
+		}
+	}
+
+	followTarget(): AgentFollowTarget | undefined {
+		return this.#target;
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number): void {
@@ -111,9 +323,8 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		}
 	}
 
-	/** A click on panel space with no agent row: return to the primary session if an agent is shown. */
+	/** A click on panel space with no agent row returns to the primary session. */
 	clickEmpty(): void {
-		// Even before a parked agent finishes reviving, empty space cancels that focus request.
 		if (this.#host.focusedAgentId() === undefined && this.#pendingFocus === undefined) return;
 		this.#pendingFocus = undefined;
 		this.#host.returnToPrimary();
@@ -127,6 +338,7 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 
 	dispose(): void {
 		this.#unsubscribe();
+		clearTimeout(this.#tick);
 	}
 
 	#setHovered(id: string | undefined): void {
@@ -136,26 +348,36 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	}
 }
 
-/**
- * The Agents view of the side panel: a compact Agent Hub roster of this
- * session's subagents and advisors. Hovering bands a row; clicking one shows
- * that agent's transcript in the main area through the same focus path as the
- * hub and Ctrl+S, and clicking it again (or empty panel space) returns to the
- * primary session. The panel only navigates: messaging, revival and kill stay
- * in the hub with its permissions, and advisors stay read-only.
- */
-export class AgentsSection implements SidePanelSection {
+/** An Agent Hub jump list with its own live task tree and fixed filter controls. */
+export class AgentsSection implements SidePanelViewSection {
 	readonly id = "agents";
 	readonly title = "AGENTS";
 	readonly order = 10;
 	collapsed?: boolean;
 	readonly content: AgentsContent;
+	readonly footer: AgentControls;
 
 	constructor(host: AgentsSectionHost) {
 		this.content = new AgentsContent(host);
+		this.footer = new AgentControls(host);
 	}
 
-	/** Left click on panel space outside every section row. */
+	followTarget(): AgentFollowTarget | undefined {
+		return this.content.followTarget();
+	}
+
+	moveControl(delta: number): void {
+		this.footer.move(delta);
+	}
+
+	toggleControl(): void {
+		this.footer.toggleSelected();
+	}
+
+	resetControl(): void {
+		this.footer.reset();
+	}
+
 	clickEmpty(): void {
 		this.content.clickEmpty();
 	}

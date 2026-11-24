@@ -471,6 +471,9 @@ import {
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
 	cfgDisplayPinnedAgents,
+	cfgSidebarAgentAutoscroll,
+	cfgSidebarAgentFilters,
+	cfgSidebarAgentOrder,
 	cfgSidebarEnabled,
 	cfgSidebarSide,
 	cfgSidebarSplitAt,
@@ -589,6 +592,9 @@ const cfgLiveUiSettings = combine({
 	"sidebar.width.max": cfgSidebarWidthMax,
 	"sidebar.splitAt": cfgSidebarSplitAt,
 	"sidebar.view": cfgSidebarView,
+	"sidebar.agents.autoscroll": cfgSidebarAgentAutoscroll,
+	"sidebar.agents.filters": cfgSidebarAgentFilters,
+	"sidebar.agents.order": cfgSidebarAgentOrder,
 	"display.subagentLivePreview": cfgDisplaySubagentLivePreview,
 	"compaction.idleEnabled": cfgCompactionIdleEnabled,
 	"compaction.idleThresholdTokens": cfgCompactionIdleThresholdTokens,
@@ -2307,6 +2313,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		panel.registerView(
 			"agents",
 			new AgentsSection({
+				settings: this.settings,
+				observed: id => this.#observerRegistry.getSession(id),
+				visible: () => panel.visible && panel.view === "agents",
 				agents: () => {
 					const guest = this.collabGuest?.agentRegistry;
 					if (guest) return guest.list();
@@ -2322,7 +2331,22 @@ export class InteractiveMode implements InteractiveModeContext {
 					});
 				},
 				requestRender,
-				onChange: listener => AgentRegistry.global().onChange(listener),
+				onChange: listener => {
+					const registry = AgentRegistry.global();
+					const unsubscribeRegistry = registry.onChange(event => {
+						if (
+							event.type === "removed" ||
+							registry.isInRootTree(event.ref.id, registry.rootForSession(this.session))
+						) {
+							listener(event);
+						}
+					});
+					const unsubscribeObserver = this.#observerRegistry.onChange(() => listener());
+					return () => {
+						unsubscribeRegistry();
+						unsubscribeObserver();
+					};
+				},
 			}),
 		);
 		panel.registerView(
@@ -2664,6 +2688,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			settings: this.settings,
 			keybindings: this.keybindings,
 		});
+		this.#observerRegistry = new SessionObserverRegistry();
 		this.#registerSidePanelViews();
 		this.subagentContainer = new SubagentHudContainer(this);
 		this.btwContainer = new AnchoredLiveContainer();
@@ -2799,7 +2824,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
 		this.session.setPromptDropped?.(prompt => this.restoreDroppedPrompt(prompt));
-		this.#observerRegistry = new SessionObserverRegistry();
 	}
 
 	#handleJudgmentBatchProgress(progress: JudgmentBatchProgress): void {
@@ -4918,6 +4942,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			this.#sidePanelController.applySettings();
 		}
+		if (any("sidebar.agents.autoscroll", "sidebar.agents.filters", "sidebar.agents.order")) this.ui.requestRender();
 		if (any("display.subagentLivePreview")) {
 			this.#renderSubagentList();
 			this.ui.requestRender();
