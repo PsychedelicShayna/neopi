@@ -206,7 +206,7 @@ describe("xAI main-composer destination ownership", () => {
 		await mode.handleSTTToggle();
 		audio[0]!(null, new Float32Array([0.5]));
 		await mode.handleSTTToggle();
-		picked.resolve(choice === "send" ? "Send without a chain" : undefined);
+		picked.resolve(choice === "send" ? "without-chain" : undefined);
 		await completed.promise;
 		expect(mode.editor.getText()).toBe("NEW SPEECH");
 		if (choice === "send") expect(prompt.mock.calls[0]![0]).toBe("Original draft");
