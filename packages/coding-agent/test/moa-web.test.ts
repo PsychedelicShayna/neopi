@@ -282,6 +282,36 @@ describe("Mixture web editor", () => {
 		expect(await Bun.file(sourcePath).text()).toBe(DRAFT_THEN_EDIT_TOML);
 	});
 
+	it("uses one validation response schema and localizes the same findings in status and details", async () => {
+		const url = open();
+		const { doc, hash } = await getScope(url, "user");
+		const body = JSON.stringify({
+			scope: "user",
+			doc: { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] },
+			baseHash: hash,
+		});
+		const headers = { "Content-Type": "application/json", Origin: new URL(url).origin };
+		const present = async (route: string, method: "POST" | "PUT", lang: "en" | "es") =>
+			json<{ error: string; validation: Validation }>(
+				await request(url, `${route}?lang=${lang}`, { method, body, headers }),
+				422,
+			);
+
+		for (const [route, method] of [
+			["mixtures/draft", "POST"],
+			["mixtures", "PUT"],
+		] as const) {
+			const en = await present(route, method, "en");
+			const es = await present(route, method, "es");
+			expect(Object.keys(es)).toEqual(Object.keys(en));
+			const enIssue = en.validation.errors[0]!;
+			const esIssue = es.validation.errors[0]!;
+			expect(esIssue).toEqual({ ...enIssue, message: 'la entrada "missing" no corresponde a ningún miembro' });
+			expect(en.error).toContain(`mixtures[0].entry: ${enIssue.message}`);
+			expect(es.error).toContain(`mixtures[0].entry: ${esIssue.message}`);
+		}
+	});
+
 	it("refreshes the retained workspace roster and notifies after saving", async () => {
 		const ctx = context();
 		const workspace = await MixtureWorkspace.retain("web-editor", ctx);

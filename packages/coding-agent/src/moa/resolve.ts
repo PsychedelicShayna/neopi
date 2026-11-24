@@ -36,6 +36,7 @@ import {
 	isInlineTemplate,
 	LIMIT_ENVELOPE,
 } from "./envelopes";
+import { codedMixtureIssue } from "./findings";
 import { MIXTURE_API } from "./provider";
 import { cfgMoaSummaryModel } from "./settings";
 import type { MixtureIssue, ResolvedMember, ResolvedMixture, ToolPolicy } from "./types";
@@ -185,25 +186,23 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		if (rolePrompt === undefined && member.role !== undefined) {
 			rolePrompt = lookupPreset(member.role, definition.roles, presets.roles, BUNDLED_ROLES);
 			if (rolePrompt === undefined) {
-				issues.push({
-					code: "member.role.unresolved",
-					path: `${path}.role`,
-					message: `member ${member.id}: role preset "${member.role}" does not exist`,
-				});
+				issues.push(
+					codedMixtureIssue("member.role.unresolved", `${path}.role`, {
+						member: member.id,
+						role: member.role,
+					}),
+				);
 			}
 		} else if (rolePrompt === undefined) {
-			issues.push({
-				code: "member.prompt.missing",
-				path,
-				message: `member ${member.id} needs a system_prompt or a role`,
-			});
+			issues.push(codedMixtureIssue("member.prompt.missing", path, { member: member.id }));
 		}
 		if (!resolved.model) {
-			issues.push({
-				code: "member.model.unresolved",
-				path: `${path}.model`,
-				message: `member ${member.id}: model "${member.model}" does not resolve to an available model`,
-			});
+			issues.push(
+				codedMixtureIssue("member.model.unresolved", `${path}.model`, {
+					member: member.id,
+					model: member.model,
+				}),
+			);
 			return;
 		}
 		if (isMixtureApi(resolved.model)) {
@@ -249,11 +248,12 @@ export function resolveMixture(input: MixtureDefinition, ctx: ResolveMixtureCont
 		if (isInlineTemplate(reference) || envelopes[reference] !== undefined) return;
 		const preset = lookupPreset(reference, definition.envelopes, presets.envelopes, BUNDLED_ENVELOPES);
 		if (preset === undefined) {
-			issues.push({
-				code: "edge.envelope.unresolved",
-				path: `edges[${index}].envelope`,
-				message: `edge ${mixtureEdgeId(edge)}: envelope preset "${reference}" does not exist`,
-			});
+			issues.push(
+				codedMixtureIssue("edge.envelope.unresolved", `edges[${index}].envelope`, {
+					edge: mixtureEdgeId(edge),
+					envelope: reference,
+				}),
+			);
 			return;
 		}
 		envelopes[reference] = preset;

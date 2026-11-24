@@ -1,8 +1,8 @@
-import { mixtureEdgeId, type MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import type { MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { toError, withFileLock } from "@oh-my-pi/pi-utils";
-import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { ABSENT, type MixtureSource, readSource, SourceConflictError, writeSource } from "./authoring-files";
 import { parseMixturesDoc } from "./config";
+import { codedMixtureIssue } from "./findings";
 import { checkMixture, type MixtureRegistrationContext } from "./registration";
 import { serializeMixturesConfig } from "./toml";
 import type { MixtureIssue } from "./types";
@@ -99,34 +99,6 @@ export interface MixtureDefinitionReport {
 	revision?: string;
 }
 
-/** Format a coded save warning for the TUI without changing the shared finding. */
-export function formatMixtureWarning(issue: MixtureIssue, doc: MixturesConfigDoc): string {
-	if (getLocale() === "en") return issue.message;
-	const location = /^mixtures\[(\d+)\]\.(members|edges)\[(\d+)\](?:\.|$)/.exec(issue.path);
-	if (!location) return issue.message;
-	const mixture = doc.mixtures[Number(location[1])];
-	if (!mixture) return issue.message;
-	const index = Number(location[3]);
-	const key = `overlaysModel.moaWeb.editor.finding.${issue.code}`;
-	if (location[2] === "edges" && issue.code === "edge.x.reasoning.empty") {
-		const edge = mixture.edges[index];
-		if (edge) return t(key, { edge: mixtureEdgeId(edge), from: edge.from });
-	}
-	if (location[2] === "members") {
-		const member = mixture.members[index]?.id;
-		if (member !== undefined) {
-			switch (issue.code) {
-				case "member.show.final":
-				case "terminate.terminal":
-				case "unreachable":
-				case "fanout.branch.controls":
-					return t(key, { member });
-			}
-		}
-	}
-	return issue.message;
-}
-
 /** Report each definition using the same resolution and validation as registration. */
 export function validateMixtureDraft(
 	doc: MixturesConfigDoc,
@@ -153,13 +125,7 @@ export function validateMixtureDraft(
 				index,
 				name,
 				runnable: false,
-				errors: [
-					{
-						code: "validation.failed",
-						path: "",
-						message: `NeoPi could not validate this definition: ${toError(error).message}`,
-					},
-				],
+				errors: [codedMixtureIssue("validation.failed", "", { detail: toError(error).message })],
 				warnings: [],
 				unsupported: [],
 			};

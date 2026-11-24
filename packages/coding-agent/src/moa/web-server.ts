@@ -11,6 +11,7 @@ import {
 } from "./authoring";
 import { ABSENT, mixtureSources } from "./authoring-files";
 import { mixturesConfigFilePath } from "./config";
+import { formatMixtureIssue } from "./findings";
 import { isMixtureModel, MixtureCatalog } from "./provider";
 import { discoverRegistrableMixtures, type MixtureRegistrationContext } from "./registration";
 import { MAX_FILE_BYTES } from "./validate";
@@ -62,19 +63,8 @@ function serverText(locale: Locale, key: string, values?: TranslationValues): st
 	return t(locale, `${SERVER_MESSAGES}${key}`, values);
 }
 
-// Keep the existing protocol error and add presentation copy only for localized browser requests.
-function displayError(locale: Locale | undefined, key: string, values?: TranslationValues): { displayError?: string } {
-	return locale && locale !== "en" ? { displayError: serverText(locale, key, values) } : {};
-}
-
-function webError(
-	locale: Locale | undefined,
-	status: number,
-	key: string,
-	values?: TranslationValues,
-	details?: object,
-): Response {
-	return json({ error: serverText("en", key, values), ...details, ...displayError(locale, key, values) }, status);
+function webError(locale: Locale, status: number, key: string, values?: TranslationValues, details?: object): Response {
+	return json({ error: serverText(locale, key, values), ...details }, status);
 }
 
 function json(body: unknown, status = 200): Response {
@@ -85,15 +75,16 @@ function scopeOf(value: unknown): MixtureConfigScope | undefined {
 	return value === "project" || value === "user" ? value : undefined;
 }
 
-function findings(reports: MixtureDefinitionReport[]) {
-	return {
-		errors: reports.flatMap(({ index, errors }) =>
-			errors.map(issue => ({ ...issue, path: `mixtures[${index}].${issue.path}` })),
-		),
-		warnings: reports.flatMap(({ index, warnings }) =>
-			warnings.map(issue => ({ ...issue, path: `mixtures[${index}].${issue.path}` })),
-		),
-	};
+function findings(reports: MixtureDefinitionReport[], locale: Locale) {
+	const present = (key: "errors" | "warnings") =>
+		reports.flatMap(report =>
+			report[key].map(issue => ({
+				code: issue.code,
+				path: `mixtures[${report.index}].${issue.path}`,
+				message: formatMixtureIssue(issue, locale),
+			})),
+		);
+	return { errors: present("errors"), warnings: present("warnings") };
 }
 
 /** A capability URL bound to exactly one invoking workspace. Request bodies never choose the cwd or a path. */
@@ -126,7 +117,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 		async fetch(request, listener) {
 			const url = new URL(request.url);
 			const lang = url.searchParams.get("lang");
-			const locale = LOCALES.find(candidate => candidate === lang);
+			const locale = LOCALES.find(candidate => candidate === lang) ?? "en";
 			const origin = request.headers.get("origin");
 			const site = request.headers.get("sec-fetch-site");
 			if (
@@ -142,8 +133,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 			try {
 				if (request.method === "GET") {
 					if (route === "") {
-						const pageLocale = lang === null ? getLocale() : (locale ?? "en");
-						return new Response(editorPage(pageLocale), {
+						return new Response(editorPage(lang === null ? getLocale() : locale), {
 							headers: { ...HEADERS, "Content-Type": "text/html; charset=utf-8" },
 						});
 					}
@@ -182,7 +172,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 							scope,
 							sourcePath: source.path,
 							models,
-							validation: findings(validation),
+							validation: findings(validation, locale),
 						});
 					}
 				}
@@ -198,7 +188,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 				const doc = body.doc as unknown as MixturesConfigDoc;
 				if (draft) {
 					const result = draftMixtureSource({ kind: "document", doc }, context);
-					const validation = findings(result.validation);
+					const validation = findings(result.validation, locale);
 					const first = validation.errors[0];
 					if (first)
 						return webError(
@@ -253,7 +243,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 					return json({
 						hash: result.hash === ABSENT ? null : result.hash,
 						registered,
-						validation: findings(result.validation),
+						validation: findings(result.validation, locale),
 						toml: result.toml,
 						parseDiagnostics: result.parseDiagnostics,
 					});
@@ -263,31 +253,27 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 			} catch (error) {
 				if (error instanceof MixtureAuthoringError) {
 					const { validation: reports, ...details } = error.details;
-					const validation = reports && findings(reports);
+					const validation = reports && findings(reports, locale);
 					const issue = validation?.errors[0];
-					const message = issue ? `${error.message}: ${issue.path}: ${issue.message}` : error.message;
-					let localized: { displayError?: string } = {};
-					if (locale && locale !== "en") {
-						// Only infer the meaning of shared authoring errors with structured discriminators.
-						if (details.code === "rewrite-loses-source" && savePath)
-							localized = displayError(locale, "rewriteLosesSource", { path: savePath });
-						else if (details.current)
-							localized = displayError(locale, "reloadChangedSource", { path: details.current.path });
-						else if (details.source)
-							localized = displayError(locale, "readbackMismatch", { path: details.source.path });
-						else if (details.blocked && reports) {
-							const blocked = new Set(details.blocked);
-							const names = reports
-								.filter(report => blocked.has(report.index))
-								.map(report => report.name || serverText(locale, "unnamed"))
-								.join(", ");
-							localized = displayError(locale, "blockedSave", {
-								names,
-								detail: issue ? `: ${issue.path}: ${issue.message}` : "",
-							});
-						}
+					const detail = issue ? `: ${issue.path}: ${issue.message}` : "";
+					const payload = { ...details, validation };
+					if (details.code === "rewrite-loses-source" && savePath)
+						return webError(locale, error.status, "rewriteLosesSource", { path: savePath }, payload);
+					if (details.current) {
+						return webError(locale, error.status, "reloadChangedSource", { path: details.current.path }, payload);
 					}
-					return json({ error: message, ...details, validation, ...localized }, error.status);
+					if (details.source) {
+						return webError(locale, error.status, "readbackMismatch", { path: details.source.path }, payload);
+					}
+					if (details.blocked && reports) {
+						const blocked = new Set(details.blocked);
+						const names = reports
+							.filter(report => blocked.has(report.index))
+							.map(report => report.name || serverText(locale, "unnamed"))
+							.join(", ");
+						return webError(locale, error.status, "blockedSave", { names, detail }, payload);
+					}
+					return json({ error: error.message + detail, ...payload }, error.status);
 				}
 				return json({ error: toError(error).message }, 422);
 			}

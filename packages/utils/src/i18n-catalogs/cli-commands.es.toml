@@ -388,7 +388,7 @@
 "cli.command.gallery.flag.screenshot.description" = "Guarda la salida como capturas PNG con VHS en lugar de imprimirla en ANSI (requiere vhs)"
 "cli.command.gallery.flag.segment.description" = "Muestra un solo segmento de la barra de estado por nombre"
 "cli.command.gallery.flag.state.description" = "Muestra solo los estados indicados del ciclo de vida"
-"cli.command.gallery.flag.surface.description" = "Muestra solo elementos de tipo tool, composer o segment (puedes repetir la opción; valor predeterminado: todos)"
+"cli.command.gallery.flag.surface.description" = "Muestra solo elementos de tipo tool, composer o segment (puedes repetir la opción; el valor predeterminado `all` muestra todas las superficies)"
 "cli.command.gallery.flag.tool.description" = "Muestra una sola herramienta por nombre"
 "cli.command.gallery.flag.width.description" = "Ancho de salida en columnas"
 "cli.command.gc.description" = "Ejecuta la recolección de elementos no utilizados en el almacenamiento"

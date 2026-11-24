@@ -53,23 +53,19 @@ const COMPONENTS = [
 	{ key: "costCacheWrite", label: "Cache write", color: "#f5b54a" },
 ] as const satisfies readonly { key: keyof CostComponents; label: string; color: string }[];
 
-const SPANISH_DAY = new Intl.DateTimeFormat("es-419", { month: "short", day: "numeric" });
-const SPANISH_DAY_LONG = new Intl.DateTimeFormat("es-419", {
-	weekday: "short",
-	month: "short",
-	day: "numeric",
-	year: "numeric",
-});
-const LOCAL_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const LOCAL_DAY_LONG = new Intl.DateTimeFormat(undefined, {
-	weekday: "short",
-	month: "short",
-	day: "numeric",
-	year: "numeric",
-});
+function dayLabels(locale?: string) {
+	const day = { month: "short", day: "numeric" } as const;
+	return {
+		tick: new Intl.DateTimeFormat(locale, day),
+		tooltip: new Intl.DateTimeFormat(locale, { ...day, weekday: "short", year: "numeric" }),
+	};
+}
+
+const DAY_LABELS = { en: dayLabels(), es: dayLabels("es-419") };
 
 export function CostsRoute({ active, range }: CostsRouteProps) {
 	const locale = useLocale();
+	const days = DAY_LABELS[locale];
 	const tr = useTranslation();
 	const query = useQuery(["costs", range], ({ signal }) => getCostDashboardStats(range, signal), { enabled: active });
 	const meta = rangeMeta(range);
@@ -139,10 +135,8 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 								<div className="stack" style={{ gap: 12 }}>
 									<Chart
 										slots={view.buckets.length}
-										tickLabel={i => (locale === "es" ? SPANISH_DAY : LOCAL_DAY).format(view.buckets[i])}
-										tooltipTitle={i =>
-											(locale === "es" ? SPANISH_DAY_LONG : LOCAL_DAY_LONG).format(view.buckets[i])
-										}
+										tickLabel={i => days.tick.format(view.buckets[i])}
+										tooltipTitle={i => days.tooltip.format(view.buckets[i])}
 										series={series}
 										hidden={hidden}
 										height={280}

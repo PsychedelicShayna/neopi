@@ -52,9 +52,11 @@ export function getTemplate(locale: Locale = "en"): string {
 
 /** The small viewer dictionary is separate from the existing transcript JSON payload. */
 function localizeDocumentTemplate(locale: Locale): string {
-	if (locale === "en") return templateHtml;
+	const defaults = getCatalog("en");
 	const viewerStrings = Object.fromEntries(
-		Object.entries(getCatalog(locale)).filter(([key]) => key.startsWith(VIEWER_CATALOG_PREFIX)),
+		Object.entries(getCatalog(locale)).filter(
+			([key, value]) => key.startsWith(VIEWER_CATALOG_PREFIX) && value !== defaults[key],
+		),
 	);
 	const json = JSON.stringify(viewerStrings).replaceAll("<", "\\u003c");
 	return templateHtml

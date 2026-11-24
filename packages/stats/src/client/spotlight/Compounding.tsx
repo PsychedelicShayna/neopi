@@ -1,8 +1,7 @@
-import { format } from "@oh-my-pi/pi-utils/dates";
 import { useMemo, useState } from "react";
 import { getSpotlightSessionContext } from "../api";
 import { Chart, type ChartSeries, Legend, type SlotMarker } from "../charts";
-import { formatCompact, formatFolder, formatInteger, formatTimestamp } from "../data/formatters";
+import { formatCompact, formatFolder, formatInteger, formatStatsDate } from "../data/formatters";
 import { useQuery } from "../data/query";
 import { useLocale, useTranslation } from "../i18n";
 import type { SpotlightDashboardStats, SpotlightSessionContext, SpotlightSessionSummary, Translation } from "../types";
@@ -219,10 +218,7 @@ function ContextChart({ context, stale }: { context: SpotlightSessionContext; st
 				tooltipTitle={i =>
 					tr("insights.compounding.tooltip_title", "Request {index} · {time}", {
 						index: i + 1,
-						time:
-							locale === "es"
-								? formatTimestamp(points[i].timestamp, locale)
-								: format(new Date(points[i].timestamp), "MMM d HH:mm:ss"),
+						time: formatStatsDate(points[i].timestamp, "point", locale),
 					})
 				}
 				formatTooltip={formatInteger}

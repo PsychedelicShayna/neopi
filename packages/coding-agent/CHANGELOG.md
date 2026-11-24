@@ -34,7 +34,7 @@
 - `npi session lease --file <path>` checks the native single-writer gate without claiming it, including for untitled sessions with no turns, and reports a holder only when its live control instance attests ownership ([#833](https://github.com/PsychedelicShayna/neopi/issues/833)).
 - Restored the independently grantable `irc` tool and added named IRC groups to it and `/irc`, including membership management, an `everyone` broadcast group, and expiry reminders for one-member groups ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
-- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
+- Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, Mixtures validation messages, exported HTML, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
 - Switch interface languages live with `/language` or `/idioma` and Tab-complete the language name. Both spellings work in either language; the slash menu shows `/idioma` in English and `/language` in Spanish.
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
 

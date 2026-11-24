@@ -48,8 +48,8 @@ import {
 import { StatusLineDraftStore, statusLineDraftPath, withUsageTemplates } from "../../neopi/status-line-draft";
 import { renderComposerShapePreview } from "@oh-my-pi/pi-tui/overlays/composer-shape-preview";
 import { chainsConfigFilePath, discoverChains, loadChainsConfigFile, saveChainsConfigFile } from "../../chains/config";
-import { formatMixtureWarning } from "../../moa/authoring";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
+import { formatMixtureIssue } from "../../moa/findings";
 import { MixtureCatalog } from "../../moa/provider";
 import { discoverRegistrableMixtures, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { type MixtureConfigDeps, MixtureConfigOverlayComponent } from "@oh-my-pi/pi-tui/overlays/mixture-config";
@@ -1503,7 +1503,7 @@ export class SelectorController {
 						});
 						snapshots.set(scope, result.hash);
 						if (result.validation.warnings.length) {
-							const warnings = result.validation.warnings.map(issue => formatMixtureWarning(issue, doc));
+							const warnings = result.validation.warnings.map(issue => formatMixtureIssue(issue));
 							this.ctx.showWarning(warnings.join("; "));
 						}
 						this.ctx.showStatus(

@@ -64,36 +64,6 @@ function status(text, error = false) {
 	byId("feedback").toggleAttribute("data-error", error);
 }
 
-function findingMessage(item, doc) {
-	if (locale === "en") return item.message;
-	const key = `finding.${item.code}`;
-	if (!Object.hasOwn(messages, key)) return item.message;
-	const location = /^mixtures\[(\d+)\]\.(?:(members|edges)\[(\d+)\]\.?)?/.exec(item.path);
-	const definition = location && doc?.mixtures[Number(location[1])];
-	const member = location?.[2] === "members" ? definition?.members[Number(location[3])] : undefined;
-	const edge = location?.[2] === "edges" ? definition?.edges[Number(location[3])] : undefined;
-	const detailStart = item.message.indexOf(": ");
-	const values = {
-		name: definition?.name,
-		entry: definition?.entry,
-		member: member?.id,
-		role: member?.role,
-		model: member?.model,
-		fallback: member?.route?.fallback,
-		edge: edge && edgeId(edge),
-		from: edge?.from,
-		to: typeof edge?.to === "string" ? edge.to : undefined,
-		part: location && item.path.slice(location[0].length).match(/^x\.(.*)$/)?.[1],
-		envelope: edge?.envelope,
-		// These codes wrap an opaque parser/validator exception after the first colon. Keep that detail intact.
-		detail: detailStart < 0 ? undefined : item.message.slice(detailStart + 2),
-	};
-	for (const [, name] of messages[key].matchAll(/\{([A-Za-z0-9_]+)\}/g)) {
-		if (values[name] === undefined || values[name] === null) return item.message;
-	}
-	return t(key, values);
-}
-
 function findings(validation, toml, parseDiagnostics = []) {
 	const view = byId("findings");
 	view.replaceChildren();
@@ -117,7 +87,7 @@ function findings(validation, toml, parseDiagnostics = []) {
 		list.className = key;
 		for (const item of items) {
 			const row = el("li");
-			row.append(el("code", item.path), `: ${findingMessage(item, source?.doc)}`);
+			row.append(el("code", item.path), `: ${item.message}`);
 			list.append(row);
 		}
 		view.append(el("h3", label), list);
@@ -174,7 +144,7 @@ async function request(route, method, value) {
 	);
 	const result = await response.json();
 	if (!response.ok)
-		throw Object.assign(new Error(result.displayError ?? result.error ?? t("requestFailed")), {
+		throw Object.assign(new Error(result.error ?? t("requestFailed")), {
 			code: result.code,
 			parseDiagnostics: result.parseDiagnostics,
 			validation: result.validation,
