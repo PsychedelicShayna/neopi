@@ -60,7 +60,10 @@ function isMixtureApi(model: Model<Api>): boolean {
  * `getAvailable()` and then be in this pool. Never resolve against the pool
  * itself, so fuzzy or role matching cannot land on a different allowed model.
  */
-function allowedModels(ctx: ResolveMixtureContext, available: Model<Api>[]): (model: Model<Api>) => boolean {
+export function allowedModels(
+	ctx: Pick<ResolveMixtureContext, "settings">,
+	available: Model<Api>[],
+): (model: Model<Api>) => boolean {
 	const patterns = cfgEnabledModels.get(ctx.settings);
 	if (patterns.length === 0) return () => true;
 	const allowed = new Set(

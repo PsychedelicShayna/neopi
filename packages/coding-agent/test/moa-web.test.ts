@@ -9,8 +9,9 @@ import { type MixtureWebEditor, startMixtureWebEditor } from "@oh-my-pi/pi-codin
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import * as tern from "@oh-my-pi/pi-coding-agent/tools/browser/tern/user-page";
 import * as openUtils from "@oh-my-pi/pi-coding-agent/utils/open";
-import type { MixtureConfigScope, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
+import type { MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { createMoaFixture, createMoaSession, DRAFT_THEN_EDIT_TOML, type MoaFixture } from "./helpers/moa-setup";
 
@@ -19,24 +20,45 @@ interface Validation {
 	warnings: MixtureIssue[];
 }
 
+interface SourceRow {
+	id: string;
+	kind: "user" | "project";
+	path: string;
+	displayPath: string;
+	hash: string | null;
+	exists: boolean;
+	broken?: string;
+	readOnly?: string;
+	mixtures: { name: string; status: string | null; shadowedBy?: string; revision?: string; members: number }[];
+}
+
 interface Snapshot {
-	cwd: string;
-	scope: MixtureConfigScope;
-	sourcePath: string;
+	id: string;
+	path: string;
 	doc: MixturesConfigDoc;
 	hash: string | null;
-	models: string[];
+	text: string | null;
+	toml: string;
+	broken?: string;
+	parseDiagnostics: string[];
 	validation: Validation;
 }
 
 interface Saved {
-	hash: string | null;
-	validation: Validation;
-	registered: boolean;
+	files: Snapshot[];
+	sources: SourceRow[];
+	roster: { name: string; revision: string }[];
+}
+
+interface SaveFile {
+	sourceId: string;
+	baseHash: string | null;
+	doc: MixturesConfigDoc;
+	confirmCanonicalRewrite?: boolean;
 }
 
 function request(url: string, route: string, init?: RequestInit): Promise<Response> {
-	return fetch(new URL(route, url), { signal: AbortSignal.timeout(3_000), ...init });
+	return fetch(new URL(route, url), { signal: AbortSignal.timeout(5_000), ...init });
 }
 
 async function json<T>(response: Response, status = 200): Promise<T> {
@@ -45,29 +67,30 @@ async function json<T>(response: Response, status = 200): Promise<T> {
 	return body as T;
 }
 
-function getScope(url: string, scope: MixtureConfigScope): Promise<Snapshot> {
-	return request(url, `mixtures?scope=${scope}`).then(response => json<Snapshot>(response));
+async function sources(url: string): Promise<SourceRow[]> {
+	return (await json<{ sources: SourceRow[] }>(await request(url, "mixtures/sources"))).sources;
 }
 
-function write(
+function source(url: string, id: string): Promise<Snapshot> {
+	return request(url, `mixtures/source?id=${id}`).then(response => json<Snapshot>(response));
+}
+
+function send(
 	url: string,
+	route: string,
 	method: "POST" | "PUT",
-	body: {
-		scope: MixtureConfigScope;
-		doc: MixturesConfigDoc;
-		baseHash?: string | null;
-		confirmCanonicalRewrite?: boolean;
-	},
+	body: unknown,
 	origin: string | null = new URL(url).origin,
-): Promise<Response> {
+) {
 	const headers = new Headers({ "Content-Type": "application/json" });
 	if (origin !== null) headers.set("Origin", origin);
-	return request(url, method === "POST" ? "mixtures/draft" : "mixtures", {
-		method,
-		headers,
-		body: JSON.stringify(body),
-	});
+	return request(url, route, { method, headers, body: JSON.stringify(body) });
 }
+
+const save = (url: string, files: SaveFile[], origin?: string | null) =>
+	send(url, "mixtures/save", "PUT", { files }, origin);
+const draft = (url: string, sourceId: string, doc: MixturesConfigDoc) =>
+	send(url, "mixtures/draft", "POST", { sourceId, doc });
 
 // Use an explicit HTTP Host rather than relying on Fetch to forward this header.
 function statusForHost(url: string, host: string): Promise<number | undefined> {
@@ -113,275 +136,349 @@ describe("Mixture web editor", () => {
 		return editor.url;
 	}
 
-	it("serves the editor and its script only under the capability URL", async () => {
+	async function userAndProject(url: string) {
+		const list = await sources(url);
+		const user = list.find(row => row.kind === "user")!;
+		const project = list.find(row => row.path === path.join(fixture!.cwd, "MIXTURES.toml"))!;
+		return { list, user, project };
+	}
+
+	it("serves the page and every asset it loads only under the capability URL", async () => {
 		const url = open();
 		expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[^/]+\/$/);
 
 		const page = await request(url, "");
 		expect(page.status).toBe(200);
 		expect(page.headers.get("content-type")).toContain("text/html");
-		expect(await page.text()).toMatch(/<script\b[^>]*\bsrc=["'](?:\.\/)?editor\.js["']/i);
-		const script = await request(url, "editor.js");
-		expect(script.status).toBe(200);
-		expect(script.headers.get("content-type")).toContain("javascript");
-		expect((await script.text()).trim()).not.toBe("");
+		const scripts = [...(await page.text()).matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(
+			match => match[1]!,
+		);
+		expect(scripts.length).toBeGreaterThan(0);
+		for (const src of scripts) {
+			const script = await request(url, src);
+			expect(script.status, src).toBe(200);
+			expect(script.headers.get("content-type")).toContain("javascript");
+			expect((await script.text()).trim()).not.toBe("");
+		}
+		await json(await request(url, "assets/not-a-file.js"), 404);
+		await json(await request(url, "assets/constructor"), 404);
+		for (const route of ["/", `/${scripts[0]}`, "/mixtures/sources", "/not-the-token/bootstrap"]) {
+			await json(await request(url, route), 404);
+		}
+	});
 
-		for (const route of ["/", "/editor.js", "/mixtures?scope=user", "/not-the-token/mixtures?scope=user"]) {
-			const response = await request(url, route);
-			await json(response, 404);
+	it("serves the configured language to Studio without changing its script assets", async () => {
+		const locale = getLocale();
+		try {
+			setLocale("es");
+			const url = open();
+			const spanish = await (await request(url, "")).text();
+			expect(spanish).toContain('<html lang="es">');
+			expect(spanish).toContain("<title>Estudio de mezclas · NeoPi</title>");
+			const payload = /<script type="application\/json" id="editor-i18n">([^<]*)<\/script>/.exec(spanish);
+			expect(JSON.parse(payload![1]!)).toMatchObject({ "app.title": "Estudio de mezclas" });
+
+			const english = await (await request(url, "?lang=en")).text();
+			expect(english).toContain('<html lang="en">');
+			expect(english).toContain("<title>Mixture Studio · NeoPi</title>");
+			const scripts = (page: string) => page.match(/<script src="[^"]+"><\/script>/g);
+			expect(scripts(spanish)).toEqual(scripts(english));
+		} finally {
+			setLocale(locale);
 		}
 	});
 
 	it("rejects an unexpected Host, foreign Origin, and writes without Origin", async () => {
 		const url = open();
-		const target = new URL("mixtures?scope=project", url);
+		const target = new URL("mixtures/sources", url);
 		const foreign = "http://foreign.invalid";
-		const { doc } = await getScope(url, "user");
-		const body = { scope: "project" as const, doc, baseHash: null };
+		const { project } = await userAndProject(url);
+		const files = [{ sourceId: project.id, baseHash: null, doc: { mixtures: [] } }];
 
 		expect(await statusForHost(target.href, target.host)).toBe(200);
 		expect(await statusForHost(target.href, `foreign.invalid:${target.port}`)).toBe(403);
 
-		const read = await request(url, "mixtures?scope=project", { headers: { Origin: foreign } });
+		const read = await request(url, "mixtures/sources", { headers: { Origin: foreign } });
 		expect(read.headers.has("access-control-allow-origin")).toBe(false);
 		await json(read, 403);
-		for (const method of ["POST", "PUT"] as const) {
-			await json(await write(url, method, body, foreign), 403);
-			await json(await write(url, method, body, null), 403);
-		}
-		expect(await Bun.file(path.join(fixture!.cwd, "MIXTURES.toml")).exists()).toBe(false);
+		await json(await save(url, files, foreign), 403);
+		await json(await save(url, files, null), 403);
+		await json(
+			await send(url, "mixtures/draft", "POST", { sourceId: project.id, doc: { mixtures: [] } }, foreign),
+			403,
+		);
+		expect(await Bun.file(project.path).exists()).toBe(false);
 	});
 
-	it("previews and saves canonical graph TOML at the selected project or user source", async () => {
+	it("lists every source on the search path, ancestors included, without collapsing same-name mixtures", async () => {
+		const nested = path.join(fixture!.cwd, "pkg");
+		await fs.mkdir(nested);
+		await Bun.write(path.join(fixture!.cwd, ".git", "HEAD"), "ref: refs/heads/main\n");
+		await Bun.write(path.join(nested, "MIXTURES.toml"), DRAFT_THEN_EDIT_TOML);
+		const url = open(context(nested));
+
+		const list = await sources(url);
+		const userRow = list.find(row => row.kind === "user")!;
+		const leaf = list.find(row => row.path === path.join(nested, "MIXTURES.toml"))!;
+		expect(userRow.mixtures).toEqual([
+			expect.objectContaining({ name: "draft-then-edit", status: "shadowed", shadowedBy: leaf.id, members: 2 }),
+		]);
+		expect(leaf.mixtures).toEqual([expect.objectContaining({ name: "draft-then-edit", runnable: true })]);
+		expect(leaf.mixtures[0]!.shadowedBy).toBeUndefined();
+		expect(new Set(list.map(row => row.id)).size).toBe(list.length);
+		expect(list[0]!.kind).toBe("user");
+		expect(list.slice(1).every(row => row.kind === "project")).toBe(true);
+		expect(list.at(-1)!.path).toBe(leaf.path);
+		expect(list.some(row => row.path === path.join(fixture!.cwd, "MIXTURES.toml") && !row.exists)).toBe(true);
+	});
+
+	it("loads a source with its raw text, and flags a broken file instead of offering an empty graph", async () => {
 		const url = open();
-		const project = await getScope(url, "project");
-		const user = await getScope(url, "user");
-		expect(project).toMatchObject({
-			cwd: fixture!.cwd,
-			scope: "project",
-			sourcePath: path.join(fixture!.cwd, "MIXTURES.toml"),
-			doc: { mixtures: [] },
-			hash: null,
-		});
-		expect(user.sourcePath).toBe(path.join(fixture!.agentDir, "MIXTURES.toml"));
-		expect(user.scope).toBe("user");
-		expect(user.models).toContain("fake/writer");
-		expect(user.doc.mixtures.map(item => item.name)).toEqual(["draft-then-edit"]);
-		expect(user.hash).toMatch(/^[a-f0-9]{64}$/);
+		const { user, project } = await userAndProject(url);
+		const snapshot = await source(url, user.id);
+		expect(snapshot).toMatchObject({ text: DRAFT_THEN_EDIT_TOML, hash: user.hash, path: user.path });
+		expect(snapshot.doc.mixtures.map(item => item.name)).toEqual(["draft-then-edit"]);
+		expect(snapshot.broken).toBeUndefined();
+		expect(await source(url, project.id)).toMatchObject({ text: null, hash: null, doc: { mixtures: [] } });
 
-		const original = user.doc.mixtures[0]!;
-		const projectDoc = { mixtures: [{ ...original, name: "project-pipeline" }] };
-		const preview = await json<{ validation: Validation; toml: string }>(
-			await write(url, "POST", { scope: "project", doc: projectDoc }),
-		);
-		expect(preview.validation.errors).toEqual([]);
-		expect(Bun.TOML.parse(preview.toml)).toMatchObject({
-			mixtures: [{ name: "project-pipeline", entry: "writer" }],
-		});
-		expect(preview.toml).toContain('system_prompt = "Draft a complete answer."');
-		expect(await Bun.file(project.sourcePath).exists()).toBe(false);
-
-		const projectSave = await json<Saved>(
-			await write(url, "PUT", { scope: "project", doc: projectDoc, baseHash: project.hash }),
-		);
-		expect(projectSave.hash).toMatch(/^[a-f0-9]{64}$/);
-		expect(projectSave.validation.errors).toEqual([]);
-		expect(await Bun.file(project.sourcePath).text()).toBe(preview.toml);
-		expect(await getScope(url, "project")).toMatchObject({ doc: projectDoc, hash: projectSave.hash });
-		const stale = await json<{ error: string }>(
-			await write(url, "PUT", { scope: "project", doc: { mixtures: [] }, baseHash: project.hash }),
+		await Bun.write(project.path, "[[mixtures]\nname = ");
+		const broken = await source(url, project.id);
+		expect(broken.broken).toMatch(/^Invalid TOML/);
+		expect((await sources(url)).find(row => row.id === project.id)?.broken).toMatch(/^Invalid TOML/);
+		const refused = await json<{ code: string }>(
+			await save(url, [{ sourceId: project.id, baseHash: broken.hash, doc: { mixtures: [] } }]),
 			409,
 		);
-		expect(stale.error).toContain("changed since it was loaded");
-		expect(await Bun.file(user.sourcePath).text()).toBe(DRAFT_THEN_EDIT_TOML);
+		expect(refused.code).toBe("broken-source");
+		expect(await Bun.file(project.path).text()).toBe("[[mixtures]\nname = ");
 
-		const userDoc = { mixtures: [{ ...original, name: "user-pipeline" }] };
-		const userSave = await json<Saved>(await write(url, "PUT", { scope: "user", doc: userDoc, baseHash: user.hash }));
-		expect(userSave.hash).not.toBe(user.hash);
-		expect(await getScope(url, "user")).toMatchObject({ doc: userDoc, hash: userSave.hash });
-		expect(Bun.TOML.parse(await Bun.file(user.sourcePath).text())).toMatchObject({
-			mixtures: [{ name: "user-pipeline" }],
-		});
-		expect(await Bun.file(project.sourcePath).text()).toBe(preview.toml);
+		await json(await request(url, "mixtures/source?id=0123456789abcdef"), 404);
 	});
 
-	it("loads source the canonical codec cannot preserve and requires a hash-bound confirmation", async () => {
+	it("validates drafts without failing the request and reports what each member resolves to", async () => {
 		const url = open();
-		const sourcePath = (await getScope(url, "project")).sourcePath;
-		const original = `roles = false\nunknown_option = true\n\n${DRAFT_THEN_EDIT_TOML}`;
-		await Bun.write(sourcePath, original);
-		const { doc, hash, parseDiagnostics } = await json<Snapshot & { parseDiagnostics: string[] }>(
-			await request(url, "mixtures?scope=project"),
-		);
-		expect(doc.mixtures.map(item => item.name)).toEqual(["draft-then-edit"]);
-		expect(parseDiagnostics).toEqual([
-			expect.stringContaining("roles"),
-			expect.stringContaining("saving writes the canonical form"),
-		]);
-
-		const body = { scope: "project", doc, baseHash: hash } as const;
-		const refused = await json<{ code: string; parseDiagnostics: string[] }>(await write(url, "PUT", body), 409);
-		expect(refused).toMatchObject({ code: "rewrite-loses-source", parseDiagnostics });
-		expect(await Bun.file(sourcePath).text()).toBe(original);
-
-		const confirmed = { ...body, confirmCanonicalRewrite: true };
-		await Bun.write(sourcePath, `${original}\n# edited in another process`);
-		const stale = await json<{ error: string }>(await write(url, "PUT", confirmed), 409);
-		expect(stale.error).toContain("changed since it was loaded");
-		await Bun.write(sourcePath, original);
-
-		await json(await write(url, "PUT", confirmed));
-		expect(Bun.TOML.parse(await Bun.file(sourcePath).text())).toMatchObject({
-			mixtures: [{ name: "draft-then-edit" }],
+		const { user } = await userAndProject(url);
+		const { doc } = await source(url, user.id);
+		const bad = { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] };
+		const result = await json<{
+			validation: Validation;
+			reports: { members: Record<string, unknown> }[];
+			toml: string;
+		}>(await draft(url, user.id, bad));
+		expect(result.validation.errors).toContainEqual({
+			code: "entry.unresolved",
+			path: "mixtures[0].entry",
+			message: 'entry "missing" does not name a member',
 		});
-		expect(await Bun.file(sourcePath).text()).not.toContain("unknown_option");
+		expect(result.reports[0]!.members).toEqual({
+			writer: { model: "fake/writer" },
+			editor: { model: "fake/editor" },
+		});
+		expect(Bun.TOML.parse(result.toml)).toMatchObject({ mixtures: [{ entry: "missing" }] });
+		await json(await draft(url, "not-a-source", bad), 400);
+		expect(await Bun.file(user.path).text()).toBe(DRAFT_THEN_EDIT_TOML);
+	});
+
+	it("keeps the validation schema and localizes findings in draft details and the blocked-save status", async () => {
+		const url = open();
+		const { user } = await userAndProject(url);
+		const { doc } = await source(url, user.id);
+		const invalid = { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] };
+		const present = async (lang: "en" | "es") => {
+			const draft = await json<{ validation: Validation; toml: string }>(
+				await send(url, `mixtures/draft?lang=${lang}`, "POST", { sourceId: user.id, doc: invalid }),
+			);
+			const save = await json<{ error: string; files: { validation: Validation }[] }>(
+				await send(url, `mixtures/save?lang=${lang}`, "PUT", {
+					files: [{ sourceId: user.id, baseHash: user.hash, doc: invalid }],
+				}),
+				422,
+			);
+			return { draft, save };
+		};
+		const en = await present("en");
+		const es = await present("es");
+		expect(Object.keys(es.draft)).toEqual(Object.keys(en.draft));
+		expect(Object.keys(es.save)).toEqual(Object.keys(en.save));
+		expect(es.draft.toml).toBe(en.draft.toml);
+		const enIssue = en.draft.validation.errors[0]!;
+		const esIssue = es.draft.validation.errors[0]!;
+		expect(esIssue).toEqual({ ...enIssue, message: 'la entrada "missing" no corresponde a ningún miembro' });
+		expect(en.save.files[0]!.validation.errors[0]).toEqual(enIssue);
+		expect(es.save.files[0]!.validation.errors[0]).toEqual(esIssue);
+		expect(en.save.error).toContain(`mixtures[0].entry: ${enIssue.message}`);
+		expect(es.save.error).toContain(`mixtures[0].entry: ${esIssue.message}`);
+	});
+
+	it("moves a mixture between scopes in one save, refreshing the roster and every source", async () => {
+		const ctx = context();
+		const workspace = await MixtureWorkspace.retain("web-editor", ctx);
+		try {
+			const onSaved = vi.fn<(message: string) => void>();
+			const url = open(ctx, onSaved);
+			const { user, project } = await userAndProject(url);
+			const { doc } = await source(url, user.id);
+			const moved = { ...doc.mixtures[0]!, name: "project-pipeline" };
+
+			const result = await json<Saved>(
+				await save(url, [
+					{ sourceId: project.id, baseHash: null, doc: { mixtures: [moved] } },
+					{ sourceId: user.id, baseHash: user.hash, doc: { mixtures: [] } },
+				]),
+			);
+			expect(result.files.map(file => file.id)).toEqual([project.id, user.id]);
+			expect(result.files[1]).toMatchObject({ hash: null, text: null });
+			expect(await Bun.file(user.path).exists()).toBe(false);
+			expect(Bun.TOML.parse(await Bun.file(project.path).text())).toMatchObject({
+				mixtures: [{ name: "project-pipeline" }],
+			});
+			expect(result.roster.map(item => item.name)).toEqual(["project-pipeline"]);
+			expect(result.sources.find(row => row.id === project.id)?.mixtures).toEqual([
+				expect.objectContaining({ name: "project-pipeline", status: "registered" }),
+			]);
+			expect(ctx.registry.find("mixture", "draft-then-edit")).toBeUndefined();
+			expect(ctx.registry.find("mixture", "project-pipeline")).toBeDefined();
+			expect(onSaved).toHaveBeenCalledWith(expect.stringMatching(/saved.*roster/i));
+
+			const stale = await json<{ conflicts: { sourceId: string; current: Snapshot }[] }>(
+				await save(url, [{ sourceId: user.id, baseHash: user.hash, doc }]),
+				409,
+			);
+			expect(stale.conflicts).toEqual([
+				{ sourceId: user.id, current: expect.objectContaining({ hash: null, text: null }) },
+			]);
+			expect(await Bun.file(user.path).exists()).toBe(false);
+		} finally {
+			workspace.release();
+		}
+	});
+
+	it("refuses an invalid save per file and writes nothing", async () => {
+		const url = open();
+		const { user, project } = await userAndProject(url);
+		const { doc } = await source(url, user.id);
+		const invalid = { mixtures: [{ ...doc.mixtures[0]!, name: "broken", entry: "missing" }] };
+		const refused = await json<{ files: { sourceId: string; blocked: number[]; validation: Validation }[] }>(
+			await save(url, [
+				{ sourceId: project.id, baseHash: null, doc: invalid },
+				{ sourceId: user.id, baseHash: user.hash, doc: { mixtures: [] } },
+			]),
+			422,
+		);
+		expect(refused.files.map(file => [file.sourceId, file.blocked])).toEqual([[project.id, [0]]]);
+		expect(refused.files[0]!.validation.errors[0]!.path).toBe("mixtures[0].entry");
+		expect(await Bun.file(user.path).text()).toBe(DRAFT_THEN_EDIT_TOML);
+		expect(await Bun.file(project.path).exists()).toBe(false);
+		await json(await save(url, []), 400);
+		await json(await save(url, [{ sourceId: user.id, baseHash: "not-a-hash", doc }]), 400);
+	});
+
+	it("requires a hash-bound confirmation before dropping source the codec cannot keep", async () => {
+		const url = open();
+		const { project } = await userAndProject(url);
+		const original = `roles = false\nunknown_option = true\n\n${DRAFT_THEN_EDIT_TOML}`;
+		await Bun.write(project.path, original);
+		const { doc, hash, parseDiagnostics, text } = await source(url, project.id);
+		expect(text).toBe(original);
+		expect(parseDiagnostics).toEqual([expect.stringContaining("roles"), expect.stringContaining("canonical form")]);
+
+		const file = { sourceId: project.id, baseHash: hash, doc };
+		const refused = await json<{ code: string }>(await save(url, [file]), 409);
+		expect(refused.code).toBe("rewrite-loses-source");
+		expect(await Bun.file(project.path).text()).toBe(original);
+
+		await json(await save(url, [{ ...file, confirmCanonicalRewrite: true }]));
+		expect(await Bun.file(project.path).text()).not.toContain("unknown_option");
 	});
 
 	it("keeps two project working directories isolated despite sharing an agent directory", async () => {
 		const first = context();
 		const second = { ...first, cwd: temp.join("other-project") };
 		await fs.mkdir(second.cwd);
-		const firstSource = path.join(first.cwd, "MIXTURES.toml");
-		const secondSource = path.join(second.cwd, "MIXTURES.toml");
-		await Bun.write(firstSource, DRAFT_THEN_EDIT_TOML.replace("draft-then-edit", "first-project"));
 		const secondToml = DRAFT_THEN_EDIT_TOML.replace("draft-then-edit", "second-project");
-		await Bun.write(secondSource, secondToml);
-
+		await Bun.write(path.join(second.cwd, "MIXTURES.toml"), secondToml);
 		const firstUrl = open(first);
 		const secondUrl = open(second);
-		const firstDoc = await getScope(firstUrl, "project");
-		const secondDoc = await getScope(secondUrl, "project");
-		expect(firstDoc).toMatchObject({ cwd: first.cwd, sourcePath: firstSource });
-		expect(secondDoc).toMatchObject({ cwd: second.cwd, sourcePath: secondSource });
-		expect(firstDoc.doc.mixtures.map(item => item.name)).toEqual(["first-project"]);
-		expect(secondDoc.doc.mixtures.map(item => item.name)).toEqual(["second-project"]);
-		const doc = { mixtures: [{ ...firstDoc.doc.mixtures[0]!, name: "edited-first-project" }] };
-		await json(await write(firstUrl, "PUT", { scope: "project", doc, baseHash: firstDoc.hash }));
-		expect((await getScope(firstUrl, "project")).doc.mixtures.map(item => item.name)).toEqual([
-			"edited-first-project",
-		]);
-		expect(await getScope(secondUrl, "project")).toEqual(secondDoc);
-		expect(await Bun.file(secondSource).text()).toBe(secondToml);
-		expect(await Bun.file(path.join(first.agentDir, "MIXTURES.toml")).text()).toBe(DRAFT_THEN_EDIT_TOML);
+		const secondSources = await sources(secondUrl);
+		const secondProject = secondSources.find(row => row.kind === "project" && row.exists)!;
+
+		// Another launch's source id is not addressable here.
+		await json(await request(firstUrl, `mixtures/source?id=${secondProject.id}`), 404);
+		await json(
+			await save(firstUrl, [{ sourceId: secondProject.id, baseHash: secondProject.hash, doc: { mixtures: [] } }]),
+			409,
+		);
+		expect(await Bun.file(path.join(second.cwd, "MIXTURES.toml")).text()).toBe(secondToml);
 	});
 
-	it("returns core validation for an invalid draft and refuses to save it", async () => {
+	it("bootstraps models, roles, judges, defaults, presets and limits from the harness", async () => {
 		const url = open();
-		const { doc, hash, sourcePath } = await getScope(url, "user");
-		const body = { scope: "user" as const, doc: { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] } };
-		const result = await json<{ validation: Validation }>(await write(url, "POST", body), 422);
-		expect(result.validation.errors).toContainEqual({
-			code: "entry.unresolved",
-			path: "mixtures[0].entry",
-			message: 'entry "missing" does not name a member',
-		});
-		expect(await Bun.file(sourcePath).text()).toBe(DRAFT_THEN_EDIT_TOML);
-
-		const rejected = await json<{ error: string }>(await write(url, "PUT", { ...body, baseHash: hash }), 422);
-		expect(rejected.error).toContain('entry "missing" does not name a member');
-		expect(await Bun.file(sourcePath).text()).toBe(DRAFT_THEN_EDIT_TOML);
-	});
-
-	it("uses one validation response schema and localizes the same findings in status and details", async () => {
-		const url = open();
-		const { doc, hash } = await getScope(url, "user");
-		const body = JSON.stringify({
-			scope: "user",
-			doc: { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] },
-			baseHash: hash,
-		});
-		const headers = { "Content-Type": "application/json", Origin: new URL(url).origin };
-		const present = async (route: string, method: "POST" | "PUT", lang: "en" | "es") =>
-			json<{ error: string; validation: Validation }>(
-				await request(url, `${route}?lang=${lang}`, { method, body, headers }),
-				422,
-			);
-
-		for (const [route, method] of [
-			["mixtures/draft", "POST"],
-			["mixtures", "PUT"],
-		] as const) {
-			const en = await present(route, method, "en");
-			const es = await present(route, method, "es");
-			expect(Object.keys(es)).toEqual(Object.keys(en));
-			const enIssue = en.validation.errors[0]!;
-			const esIssue = es.validation.errors[0]!;
-			expect(esIssue).toEqual({ ...enIssue, message: 'la entrada "missing" no corresponde a ningún miembro' });
-			expect(en.error).toContain(`mixtures[0].entry: ${enIssue.message}`);
-			expect(es.error).toContain(`mixtures[0].entry: ${esIssue.message}`);
-		}
-	});
-
-	it("refreshes the retained workspace roster and notifies after saving", async () => {
-		const ctx = context();
-		const workspace = await MixtureWorkspace.retain("web-editor", ctx);
-		try {
-			const onSaved = vi.fn<(message: string) => void>();
-			const url = open(ctx, onSaved);
-			const { doc, hash } = await getScope(url, "user");
-			expect(ctx.registry.find("mixture", "draft-then-edit")).toBeDefined();
-			const updated = { mixtures: [{ ...doc.mixtures[0]!, name: "live-pipeline" }] };
-			const saved = await json<Saved>(await write(url, "PUT", { scope: "user", doc: updated, baseHash: hash }));
-			expect(saved.registered).toBe(true);
-			expect(ctx.registry.find("mixture", "draft-then-edit")).toBeUndefined();
-			expect(ctx.registry.find("mixture", "live-pipeline")).toBeDefined();
-			expect(onSaved).toHaveBeenCalledTimes(1);
-			expect(onSaved).toHaveBeenCalledWith(expect.stringMatching(/saved.*roster/i));
-
-			const discovered = await json<{ cwd: string; mixtures: { name: string; revision: string }[] }>(
-				await request(url, "mixtures/discovered"),
-			);
-			expect(discovered).toEqual({
-				cwd: ctx.cwd,
-				mixtures: [{ name: "live-pipeline", revision: expect.stringMatching(/\S/) }],
-			});
-		} finally {
-			workspace.release();
-		}
+		const boot = await json<{
+			cwd: string;
+			selected: string | null;
+			models: { selector: string; role?: true; resolved?: string | null }[];
+			defaults: Record<string, unknown>;
+			bundled: { envelopes: Record<string, string>; roles: Record<string, string>; partial: string };
+			limits: Record<string, number>;
+		}>(await request(url, "bootstrap"));
+		expect(boot.cwd).toBe(fixture!.cwd);
+		expect(boot.selected).toBeNull();
+		const firstConcrete = boot.models.findIndex(model => !model.role);
+		expect(boot.models.slice(0, firstConcrete).every(model => model.selector.startsWith("@"))).toBe(true);
+		expect(boot.models.slice(firstConcrete).map(model => model.selector)).toContain("fake/writer");
+		expect(boot.models.some(model => model.selector.startsWith("mixture/"))).toBe(false);
+		expect(boot.defaults).toMatchObject({ maxHops: 24, hardMaxHops: 200, onLimit: "pause", threshold: 0.5 });
+		expect(Object.keys(boot.bundled.envelopes)).toContain("handoff");
+		expect(Object.keys(boot.bundled.roles)).toContain("judge");
+		expect(boot.bundled.partial.trim()).not.toBe("");
+		expect(boot.limits).toMatchObject({ members: 32, edges: 128, fileBytes: 4 * 1024 * 1024 });
 	});
 
 	it.each([
 		["/moa web", "project"],
 		["/moa web user", "user"],
-	] as const)("opens a real editor at the requested scope for %s", async (command, scope) => {
-		const settings = Settings.isolated();
-		const session = await createMoaSession(fixture!, { settings });
-		const dock = vi.spyOn(tern, "openTernPage").mockResolvedValue(null);
-		const browser = vi.spyOn(openUtils, "openPath").mockImplementation(() => {});
-		try {
-			const statuses: string[] = [];
-			const errors: string[] = [];
-			const ctx = createInteractiveModeContext({
-				session,
-				sessionManager: session.sessionManager,
-				settings,
-				showStatus: message => {
-					statuses.push(message);
-				},
-				showError: message => {
-					errors.push(message);
-				},
-			});
-			expect(await executeBuiltinSlashCommand(command, { ctx })).toBe(true);
-			expect(errors).toEqual([]);
-			expect(dock).toHaveBeenCalledTimes(1);
-			const url = dock.mock.calls[0]![0];
-			expect(dock).toHaveBeenCalledWith(url, "beside");
-			expect(browser).toHaveBeenCalledTimes(1);
-			expect(browser).toHaveBeenCalledWith(url);
-			expect(statuses.join("\n")).toContain(url);
-			const snapshot = await json<Snapshot>(await request(url, "mixtures"));
-			expect(snapshot.cwd).toBe(fixture!.cwd);
-			expect(snapshot.scope).toBe(scope);
-			const { doc: userDoc } = await getScope(url, "user");
-			const doc = { mixtures: [{ ...userDoc.mixtures[0]!, name: "launched-editor" }] };
-			await json<Saved>(await write(url, "PUT", { scope, doc, baseHash: snapshot.hash }));
-			expect(session.getRegisteredMixture("launched-editor")).toBeDefined();
-			expect(statuses.at(-1)).toContain(`Saved ${scope} MIXTURES.toml and refreshed the mixture roster`);
-		} finally {
-			browser.mockRestore();
-			dock.mockRestore();
-			await session.dispose();
-		}
-	});
+	] as const)(
+		"opens a real editor at the requested scope for %s and saves into the session's roster",
+		async (command, scope) => {
+			const settings = Settings.isolated();
+			const session = await createMoaSession(fixture!, { settings });
+			const dock = vi.spyOn(tern, "openTernPage").mockResolvedValue(null);
+			const browser = vi.spyOn(openUtils, "openPath").mockImplementation(() => {});
+			try {
+				const statuses: string[] = [];
+				const errors: string[] = [];
+				const ctx = createInteractiveModeContext({
+					session,
+					sessionManager: session.sessionManager,
+					settings,
+					showStatus: message => {
+						statuses.push(message);
+					},
+					showError: message => {
+						errors.push(message);
+					},
+				});
+				expect(await executeBuiltinSlashCommand(command, { ctx })).toBe(true);
+				expect(errors).toEqual([]);
+				expect(dock).toHaveBeenCalledTimes(1);
+				const url = dock.mock.calls[0]![0];
+				expect(dock).toHaveBeenCalledWith(url, "beside");
+				expect(browser).toHaveBeenCalledTimes(1);
+				expect(browser).toHaveBeenCalledWith(url);
+				expect(statuses.join("\n")).toContain(url);
+				const { user, project } = await userAndProject(url);
+				const boot = await json<{ initialSourceId: string }>(await request(url, "bootstrap"));
+				expect(boot.initialSourceId).toBe(scope === "user" ? user.id : project.id);
+				const { doc } = await source(url, user.id);
+				const renamed = { mixtures: [{ ...doc.mixtures[0]!, name: "launched-editor" }] };
+				await json<Saved>(await save(url, [{ sourceId: user.id, baseHash: user.hash, doc: renamed }]));
+				expect(session.getRegisteredMixture("launched-editor")).toBeDefined();
+				expect(statuses.at(-1)).toMatch(/Saved .*MIXTURES\.toml and refreshed the mixture roster/);
+			} finally {
+				browser.mockRestore();
+				dock.mockRestore();
+				await session.dispose();
+			}
+		},
+	);
 });

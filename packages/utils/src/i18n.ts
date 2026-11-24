@@ -12,6 +12,7 @@ import cliCommandsEn from "./i18n-catalogs/cli-commands.en.toml" with { type: "t
 import cliCommandsEs from "./i18n-catalogs/cli-commands.es.toml" with { type: "text" };
 import commandsEn from "./i18n-catalogs/commands.en.toml" with { type: "text" };
 import commandsEs from "./i18n-catalogs/commands.es.toml" with { type: "text" };
+import moaStudioEs from "./i18n-catalogs/moa-studio.es.toml" with { type: "text" };
 import overlaysModelEn from "./i18n-catalogs/overlays-model.en.toml" with { type: "text" };
 import overlaysModelEs from "./i18n-catalogs/overlays-model.es.toml" with { type: "text" };
 import overlaysEn from "./i18n-catalogs/overlays.en.toml" with { type: "text" };
@@ -62,6 +63,7 @@ const spanish = Object.fromEntries(
 			cliEs,
 			cliCommandsEs,
 			commandsEs,
+			moaStudioEs,
 			overlaysModelEs,
 			overlaysEs,
 			toolsEs,

@@ -9,6 +9,9 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { truncateToTokens } from "./budget";
 
+/** A terminate condition's `threshold` when the definition sets none. */
+export const DEFAULT_TERMINATE_THRESHOLD = 0.5;
+
 export function decisionState(
 	parts: Record<string, string | undefined>,
 	cap: number,
@@ -49,7 +52,7 @@ export function describeOutcome(
 	}
 	if (decision.kind === "terminate") {
 		if (answer.type !== "noul") throw new Error("termination judgment did not return a probability");
-		return `${answer.noul >= (extra.floor ?? 0.5) ? "yes" : "no"} ${answer.noul.toFixed(2)}`;
+		return `${answer.noul >= (extra.floor ?? DEFAULT_TERMINATE_THRESHOLD) ? "yes" : "no"} ${answer.noul.toFixed(2)}`;
 	}
 	// Mixture verdict questions are text-only: choice, score, or probability.
 	if (answer.type === "box") throw new Error("mixture judgment unexpectedly returned a bounding box");

@@ -15,6 +15,7 @@
 
 ### Added
 
+- `/moa web` now edits every mixture NeoPi reads for the workspace. A sidebar that opens when you hover the left edge lists them by user and project file, and lets you rename them or move and copy them between scopes. Saving checks each file for edits made since it was loaded and reports a conflict instead of continuing. A move writes the receiving file before removing the original, so an interrupted save can leave a duplicate rather than lose the mixture at the points the tests interrupt it.
 - Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
 - Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
 - `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
@@ -39,6 +40,7 @@
 - Switch interface languages live with `/language` or `/idioma` and Tab-complete the language name. Both spellings work in either language; the slash menu shows `/idioma` in English and `/language` in Spanish.
 - The Alt+T side panel shows Agents filters, navigation hints, and sorting controls in English or Spanish.
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
+- Mixture Studio follows the interface language, including Spanish labels, controls, and validation findings.
 
 - Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).
 - Choose session-start Chronicler consent with `chronicler.enabled: ask`, set recording limits by addressing Luna as `@chronicler`, see her blue-bordered notes, and read her optional editorial notes in atom front matter.
