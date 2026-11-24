@@ -6,6 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadMixtureSource, MixtureAuthoringError, saveMixtureSources } from "@oh-my-pi/pi-coding-agent/moa/authoring";
 import { ABSENT, type MixtureSource, mixtureSources } from "@oh-my-pi/pi-coding-agent/moa/authoring-files";
 import type { MixtureRegistrationContext } from "@oh-my-pi/pi-coding-agent/moa/registration";
+import type { MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createMoaFixture, DRAFT_THEN_EDIT_TOML, type MoaFixture } from "./helpers/moa-setup";
 
@@ -193,6 +194,133 @@ describe("transactional mixture save", () => {
 		expect(error.details.outcomes?.map(outcome => outcome.state)).toEqual(["original", "original"]);
 		expect(await Bun.file(user.path).text()).toBe(DRAFT_THEN_EDIT_TOML);
 		expect(await Bun.file(project.path).text()).toBe(projectText);
+	});
+
+	describe("a kill at any write, including during rollback, never loses a definition", () => {
+		/** Definitions are told apart by description, which survives renames. */
+		async function descriptionsOnDisk(): Promise<string[]> {
+			const found = new Set<string>();
+			for (const file of [user, project])
+				for (const mixture of (await loadMixtureSource(file, ctx)).doc.mixtures)
+					if (mixture.description) found.add(mixture.description);
+			return [...found].sort();
+		}
+
+		/** Record what is on disk after every rename or unlink lands, failing those listed (after they land). */
+		function recordWrites(failAt: ReadonlySet<number>) {
+			const states: string[][] = [];
+			const rename = fs.rename;
+			const unlink = fs.unlink;
+			const after = async () => {
+				states.push(await descriptionsOnDisk());
+				if (failAt.has(states.length))
+					throw Object.assign(new Error("EIO: simulated failure after the write landed"), { code: "EIO" });
+			};
+			vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+				await rename(...args);
+				await after();
+			});
+			vi.spyOn(fs, "unlink").mockImplementation(async (...args: Parameters<typeof fs.unlink>) => {
+				await unlink(...args);
+				await after();
+			});
+			return states;
+		}
+
+		type Case = {
+			userDoc: MixturesConfigDoc;
+			projectDoc: MixturesConfigDoc;
+			userFinal: MixturesConfigDoc;
+			projectFinal: MixturesConfigDoc;
+		};
+
+		async function base() {
+			return (await loadMixtureSource(user, ctx)).doc.mixtures[0]!;
+		}
+
+		const cases: Record<string, () => Promise<Case>> = {
+			"a swap of two differently named mixtures": async () => {
+				const x = { ...(await base()), description: "x" };
+				const y = { ...x, name: "other", description: "y" };
+				return {
+					userDoc: { mixtures: [x] },
+					projectDoc: { mixtures: [y] },
+					userFinal: { mixtures: [y] },
+					projectFinal: { mixtures: [x] },
+				};
+			},
+			"a swap of two versions of the same name": async () => {
+				const v1 = { ...(await base()), description: "v1" };
+				const v2 = { ...v1, description: "v2" };
+				return {
+					userDoc: { mixtures: [v1] },
+					projectDoc: { mixtures: [v2] },
+					userFinal: { mixtures: [v2] },
+					projectFinal: { mixtures: [v1] },
+				};
+			},
+			"a move away plus another mixture renamed onto the freed name": async () => {
+				const x = { ...(await base()), description: "x" };
+				const w = { ...x, name: "w", description: "w" };
+				return {
+					userDoc: { mixtures: [x] },
+					projectDoc: { mixtures: [w] },
+					userFinal: { mixtures: [{ ...w, name: x.name }] },
+					projectFinal: { mixtures: [x] },
+				};
+			},
+		};
+
+		for (const [label, make] of Object.entries(cases)) {
+			it(label, async () => {
+				const scenario = await make();
+				const everything = [...scenario.userDoc.mixtures, ...scenario.projectDoc.mixtures]
+					.map(mixture => mixture.description!)
+					.sort();
+				const seed = async () => {
+					const userHash = (await loadMixtureSource(user, ctx)).hash;
+					const projectHash = (await loadMixtureSource(project, ctx)).hash;
+					return saveMixtureSources(
+						[
+							{ source: user, baseHash: userHash, doc: scenario.userDoc },
+							{ source: project, baseHash: projectHash, doc: scenario.projectDoc },
+						],
+						ctx,
+					);
+				};
+				const attempt = async (failAt: ReadonlySet<number>) => {
+					const [seededUser, seededProject] = await seed();
+					const states = recordWrites(failAt);
+					const outcome = await saveMixtureSources(
+						[
+							{ source: user, baseHash: seededUser!.hash, doc: scenario.userFinal },
+							{ source: project, baseHash: seededProject!.hash, doc: scenario.projectFinal },
+						],
+						ctx,
+					).then(
+						() => "saved",
+						(error: unknown) => {
+							expect(error).toBeInstanceOf(MixtureAuthoringError);
+							return "failed";
+						},
+					);
+					vi.restoreAllMocks();
+					for (const [index, state] of states.entries())
+						expect(state, `${label}: after write ${index + 1}, failing ${[...failAt]}`).toEqual(everything);
+					expect(await descriptionsOnDisk()).toEqual(everything);
+					return { outcome, writes: states.length };
+				};
+
+				const clean = await attempt(new Set());
+				expect(clean.outcome).toBe("saved");
+				expect(clean.writes).toBeGreaterThanOrEqual(3);
+				// Fail each write once, then each write and the first rollback write after it.
+				for (let at = 1; at <= clean.writes; at++) {
+					expect((await attempt(new Set([at]))).outcome).toBe("failed");
+					await attempt(new Set([at, at + 1]));
+				}
+			});
+		}
 	});
 
 	it("keeps the gaining file when the losing file cannot be restored, so the moved mixture survives", async () => {

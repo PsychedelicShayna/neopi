@@ -823,6 +823,9 @@ const STRINGS = {
 	"save.chk.absent.sub": "It is created by this save.",
 	"save.chk.both": "Check what came in from disk",
 	"save.chk.both.sub": "The diff on the left shows exactly what this save changes in their version.",
+	"save.chk.broken": "NeoPi can no longer read this file",
+	"save.chk.broken.sub":
+		"{why}. Nothing is written to it. Fix the file outside the editor: this page notices when it can be read again, and your draft stays here meanwhile.",
 	"save.chk.carried": "{names} cannot run in this build",
 	"save.chk.carried.sub":
 		"You did not change it, so it is written back exactly as it was and stays out of the model pickers.",
@@ -842,6 +845,8 @@ const STRINGS = {
 	"save.chk.proof": "Reads back as the same mixtures",
 	"save.chk.proof.sub": "After writing, NeoPi reads the file again and compares it with this draft.",
 	"save.chk.proved": "Read back from {path}: identical.",
+	"save.chk.readOnly": "This file cannot be written from here any more",
+	"save.chk.readOnly.sub": "{why}. Move its mixtures into another file from the list, or copy your draft.",
 	"save.chk.refused": "NeoPi refused to write this file",
 	"save.chk.refused.sub": "Nothing was written. Click a problem to go to it.",
 	"save.chk.typos": "A field holds something that is not a number",
@@ -849,6 +854,7 @@ const STRINGS = {
 	"save.chk.unreachable": "NeoPi could not check this file",
 	"save.chk.valid": "NeoPi accepts every mixture you changed",
 	"save.chk.valid.sub": "Checked the way registration checks them.",
+	"save.copyMine": "Copy my draft of this file",
 	"save.done": "Saved",
 	"save.failed": "The save did not go through. Nothing was written.",
 	"save.file.creates": "new file",

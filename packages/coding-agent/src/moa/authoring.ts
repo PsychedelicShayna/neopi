@@ -277,6 +277,8 @@ interface PlannedWrite extends MixtureFileWrite {
 	writtenHash: string;
 	/** Every hash this batch wrote, or attempted to write, to this file. */
 	wrote: string[];
+	/** Multi-file saves: the final document plus every definition the file loses (see {@link stagedContent}). */
+	staged?: { content: string | Uint8Array | null; hash: string };
 	before?: SourceRead;
 	current?: MixtureSourceSnapshot;
 }
@@ -284,7 +286,7 @@ interface PlannedWrite extends MixtureFileWrite {
 /** One replacement of one file; a file can take two (staged, then final). */
 interface WriteStep {
 	plan: PlannedWrite;
-	content: string | null;
+	content: string | Uint8Array | null;
 	hash: string;
 }
 
@@ -292,18 +294,41 @@ interface WriteStep {
  * The file's final document plus every definition (and preset) on disk that the final document drops.
  * Writing every file's staged form before any final form means each definition is on disk somewhere
  * after every single write, so a crash mid-batch can duplicate a mixture but never lose one.
+ *
+ * Definitions are kept by content, not name: when the final document reuses the name of a different
+ * definition on disk (a same-name swap between scopes, or a rename onto a moved-away name), the staged
+ * file briefly holds both. NeoPi refuses duplicate names at registration, but both stay on disk. A preset
+ * table cannot hold two texts under one key, so a multi-file save that rewrites a preset in place is
+ * refused before anything is written.
  */
-function stagedContent(plan: PlannedWrite): string | null {
+function stagedContent(plan: PlannedWrite): { content: string | Uint8Array | null; hash: string } {
 	const disk = plan.current!.doc;
 	const final = plan.draft.doc;
-	const kept = new Set(final.mixtures.map(mixture => mixture.name));
-	const envelopes = { ...disk.envelopes, ...final.envelopes };
-	const roles = { ...disk.roles, ...final.roles };
+	const kept = new Set(final.mixtures.map(mixture => structure(mixture)));
+	const rewritten: string[] = [];
+	const merge = (kind: "envelopes" | "roles") => {
+		const merged: Record<string, string> = { ...disk[kind] };
+		for (const [key, text] of Object.entries(final[kind] ?? {})) {
+			if (Object.hasOwn(merged, key) && merged[key] !== text) rewritten.push(`${kind}.${key}`);
+			merged[key] = text;
+		}
+		return merged;
+	};
+	const envelopes = merge("envelopes");
+	const roles = merge("roles");
+	if (rewritten.length > 0)
+		throw new MixtureAuthoringError(
+			422,
+			`${plan.source.path}: this save changes ${rewritten.join(", ")} while moving mixtures between files; save the preset change and the move as separate steps`,
+		);
 	const staged: MixturesConfigDoc = {
 		...(Object.keys(envelopes).length ? { envelopes } : {}),
 		...(Object.keys(roles).length ? { roles } : {}),
-		mixtures: [...final.mixtures, ...disk.mixtures.filter(mixture => !kept.has(mixture.name))],
+		mixtures: [...final.mixtures, ...disk.mixtures.filter(mixture => !kept.has(structure(mixture)))],
 	};
+	// Nothing gained: the file's own bytes are already the staged form (no canonical rewrite, no write).
+	if (plan.before!.state === "file" && structure(staged) === structure(withoutWarnings(disk)))
+		return { content: plan.before!.bytes, hash: plan.before!.hash };
 	let toml: string;
 	try {
 		toml = serializeMixturesConfig(staged);
@@ -315,7 +340,7 @@ function stagedContent(plan: PlannedWrite): string | null {
 			422,
 			`${plan.source.path} would briefly exceed NeoPi's ${MAX_FILE_BYTES}-byte cap while this save moves mixtures; save these moves one at a time`,
 		);
-	return toml || null;
+	return toml ? { content: toml, hash: digest(toml) } : { content: null, hash: ABSENT };
 }
 
 function names(list: readonly { source: MixtureSource }[]): string {
@@ -355,34 +380,83 @@ async function observe(plan: PlannedWrite): Promise<MixtureFileOutcome> {
 	};
 }
 
-/** What a written (or attempted) file holds now, restoring its original only when the file still holds exactly something this batch wrote. */
-async function rollBack(plan: PlannedWrite): Promise<MixtureFileOutcome> {
-	const seen = await observe(plan);
-	const { source, before } = plan;
-	if ((seen.state !== "saved" && seen.state !== "staged") || readHash(before!) === null) return seen;
+/** Replace a file this batch holds the lock for, expecting `expected`, then report what it holds. */
+async function rewrite(
+	plan: PlannedWrite,
+	content: string | Uint8Array | null,
+	hash: string,
+	expected: string,
+	mode?: number,
+): Promise<MixtureFileOutcome> {
+	plan.wrote.push(hash);
 	try {
-		const restore = before!.state === "file" ? before!.bytes : null;
-		await writeSource(
-			source,
-			restore,
-			seen.hash!,
-			MAX_FILE_BYTES,
-			before!.state === "file" ? before!.mode : undefined,
-		);
+		await writeSource(plan.source, content, expected, MAX_FILE_BYTES, mode);
 	} catch {
-		// The re-read below reports whatever the failed restore left behind.
+		// The re-read below reports whatever the failed write left behind.
 	}
 	return observe(plan);
 }
 
 /**
+ * Undo a failed batch so that every intermediate state still holds every definition the files held
+ * before it (a kill during the undo must not lose a mixture either):
+ * 1. Files holding their final content go back to their staged content, which only adds definitions.
+ * 2. Only when every file is confirmed as original or staged (its staged form is a superset of both its
+ *    original and its final content) do files return to their originals; in any order, each restore keeps
+ *    every definition on disk, because whatever a file gained is still in the staged or original file it
+ *    came from. The first restore that cannot be confirmed stops the undo; everything left keeps what it holds.
+ */
+async function unwind(plans: readonly PlannedWrite[]): Promise<MixtureFileOutcome[]> {
+	const seen = new Map<PlannedWrite, MixtureFileOutcome>();
+	for (const plan of plans) seen.set(plan, await observe(plan));
+	for (const plan of plans) {
+		const now = seen.get(plan)!;
+		if (now.state === "saved" && plan.staged && plan.staged.hash !== now.hash)
+			seen.set(plan, await rewrite(plan, plan.staged.content, plan.staged.hash, now.hash!));
+	}
+	const settled = (plan: PlannedWrite) => {
+		const now = seen.get(plan)!;
+		return (
+			now.state === "original" ||
+			now.state === "staged" ||
+			(now.state === "saved" && (!plan.staged || plan.staged.hash === now.hash))
+		);
+	};
+	if (plans.every(settled)) {
+		for (const plan of [...plans].reverse()) {
+			const now = seen.get(plan)!;
+			const before = plan.before!;
+			const original = readHash(before);
+			if (now.state === "original" || original === null) continue;
+			const outcome = await rewrite(
+				plan,
+				before.state === "file" ? before.bytes : null,
+				original,
+				now.hash!,
+				before.state === "file" ? before.mode : undefined,
+			);
+			seen.set(plan, outcome);
+			if (outcome.state !== "original") break;
+		}
+	}
+	return plans.map(plan => seen.get(plan)!);
+}
+
+/**
  * All-or-nothing save of one or more sources. A multi-file save writes in two phases: every file first
- * gains its new and edited definitions while keeping the ones it loses, then the losses are written, so
- * killing the process between any two writes duplicates a moved mixture at worst and never loses one
- * (swaps included).
- * Every file is locked, hash-checked and validated before anything is written. If a write fails, each
- * file this batch touched is re-read under the lock and restored only when it still holds exactly what
- * the batch wrote; anything else is left as it is and reported per file (`partial`).
+ * gains its new and edited definitions while keeping the ones it loses (by content, so same-name versions
+ * coexist briefly), then the losses are written. Killing the process between any two writes, including
+ * during an undo ({@link unwind}), can duplicate a moved mixture but never loses one (swaps included).
+ * Every file is locked, hash-checked and validated before anything is written. If a write fails, the
+ * batch is undone through the staged state and each file is restored only when it still holds exactly
+ * what the batch wrote; anything else is left as it is and reported per file (`partial`).
+ *
+ * Known limits:
+ * - Writers that do not take the file lock (an editor, git) can still change a file between the last
+ *   hash check and the rename; the window is narrow, not closed.
+ * - After a kill, the staged duplicates stay on disk until the next save; NeoPi refuses a name declared
+ *   twice in one file at registration, so such a mixture is unregistered until the duplicate is removed.
+ * - Durability across power loss is POSIX-only (Windows cannot fsync directories).
  *
  * An invalid definition may be written only when an identical definition was already on disk, and
  * already invalid, in some file of the batch: imports NeoPi cannot run yet can be carried and moved,
@@ -491,8 +565,9 @@ export async function saveMixtureSources(
 
 		const steps: WriteStep[] = [];
 		for (const plan of plans) {
-			const content = plans.length > 1 ? stagedContent(plan) : plan.content;
-			const hash = content === null ? ABSENT : digest(content);
+			const { content, hash } =
+				plans.length > 1 ? stagedContent(plan) : { content: plan.content, hash: plan.writtenHash };
+			if (plans.length > 1) plan.staged = { content, hash };
 			if (hash !== plan.current!.hash) steps.push({ plan, content, hash });
 		}
 		for (const plan of plans) {
@@ -501,7 +576,7 @@ export async function saveMixtureSources(
 		}
 
 		const expected = new Map(plans.map(plan => [plan, plan.current!.hash] as const));
-		for (const [index, step] of steps.entries()) {
+		for (const step of steps) {
 			const { plan } = step;
 			plan.wrote.push(step.hash);
 			try {
@@ -509,20 +584,7 @@ export async function saveMixtureSources(
 				expected.set(plan, step.hash);
 			} catch (error) {
 				// The failed write may have landed too: a rename can take effect before its directory fsync throws.
-				// Undo files from the most recently touched back. Once any file cannot be confirmed back to its
-				// original, the rest keep what this batch wrote: they may hold the only copy of a moved mixture.
-				const touched: PlannedWrite[] = [];
-				for (const done of steps.slice(0, index + 1).reverse())
-					if (!touched.includes(done.plan)) touched.push(done.plan);
-				const byFile = new Map<PlannedWrite, MixtureFileOutcome>();
-				let restoring = true;
-				for (const file of touched) {
-					const outcome = restoring ? await rollBack(file) : await observe(file);
-					if (outcome.state !== "original") restoring = false;
-					byFile.set(file, outcome);
-				}
-				const outcomes: MixtureFileOutcome[] = [];
-				for (const file of plans) outcomes.push(byFile.get(file) ?? (await observe(file)));
+				const outcomes = await unwind(plans);
 				const partial = outcomes.some(outcome => outcome.state !== "original");
 				const reason = toError(error).message;
 				throw new MixtureAuthoringError(

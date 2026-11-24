@@ -201,7 +201,8 @@ function jumpTo(sid, m, rest) {
 	if (at.kind !== "mix" || at.field) goIssue(at);
 }
 let saving = false,
-	confirmedLoss = new Set();
+	confirmedLoss = new Set(),
+	saveSaid = null; // saveSaid: what NeoPi answered to the last refused save
 /* What NeoPi refused at the moment of writing, per file, for as long as that draft stays exactly as it was sent. */
 const refusals = new Map();
 async function openSave() {
@@ -334,7 +335,37 @@ async function openSave() {
 				),
 			);
 		}
-		if (f.theirs) {
+		const now = srcOf(s.id) ?? s;
+		const copyMine = () =>
+			h(
+				"div",
+				{ class: "fixes row" },
+				h(
+					"button",
+					{
+						class: "btn small",
+						type: "button",
+						onclick: () => copyText(tomlOf(sent), T("gone.copied", { path: s.displayPath })),
+					},
+					icon("copy", 12),
+					T("save.copyMine"),
+				),
+			);
+		/* A file NeoPi cannot read any more is not something to merge with: nothing is written to it, and the draft waits. */
+		if (f.theirs?.broken) {
+			block();
+			checks.push(check("no", T("save.chk.broken"), T("save.chk.broken.sub", { why: f.theirs.broken }), copyMine()));
+		} else if (!writable(now)) {
+			block();
+			checks.push(
+				check(
+					"no",
+					T("save.chk.readOnly"),
+					T("save.chk.readOnly.sub", { why: now.readOnly ?? f.base.broken ?? "?" }),
+					copyMine(),
+				),
+			);
+		} else if (f.theirs) {
 			block();
 			checks.push(check("no", T("save.chk.conflict"), T("save.chk.conflict.sub"), conflictActions(s)));
 		} else
@@ -476,7 +507,10 @@ async function openSave() {
 				),
 		].filter(Boolean),
 	);
+	const said = saveSaid;
+	saveSaid = null;
 	note.textContent = blockers ? T("save.note.blocked") : T("save.note");
+	if (said) note.replaceChildren(h("span", { style: { color: "var(--err)" } }, said));
 	go.disabled = blockers > 0;
 	go.onclick = () => doSave(drafts, proofs, check, go, note);
 	if (!blockers) go.focus();
@@ -539,6 +573,18 @@ async function doSave(drafts, proofs, check, go, note) {
 		for (const c of res.data.conflicts) if (fileOf(c.sourceId)) fileOf(c.sourceId).theirs = c.current;
 		render();
 		return openSave(); // the review now shows the conflict and the ways out
+	}
+	/* Refused for a reason about the file itself. The page looks at the files again, so the review can say what is
+     the matter and what to do, next to NeoPi's own words. */
+	if (res.status === 409 && res.data?.code) {
+		if (res.data.code === "rewrite-loses-source")
+			for (const r of res.data.files ?? []) {
+				const f = fileOf(r.sourceId);
+				if (f) f.base = { ...f.base, parseDiagnostics: r.parseDiagnostics ?? [] };
+			}
+		else await reloadAll(false);
+		saveSaid = res.data.error ?? null;
+		return openSave();
 	}
 	if (res.status === 422 && res.data?.files?.length) {
 		for (const r of res.data.files) {
@@ -717,6 +763,7 @@ function untouchedSince(m, original, homeDoc) {
 /* Take their version of everything I did not touch, keep mine where I did, and keep theirs too wherever dropping it
    would lose something they wrote. Returns notes, one per thing worth a look; the Save review shows them. */
 function mergeTheirs(sid) {
+	if (!fileOf(sid)?.theirs || fileOf(sid).theirs.broken) return [];
 	const f = fileOf(sid),
 		base = f.base.doc ?? {},
 		theirs = adopt(f.theirs.doc, sid),
@@ -969,7 +1016,9 @@ async function reloadAll(force) {
 				follow(s.id, snap);
 				reloaded.push(s.displayPath);
 				if (s.id === openSid) replacedOpen = true;
-			} else f.theirs = snap;
+			} else if (!snap.broken && sameDisk(snap, f.base))
+				f.theirs = null; // back to the version this draft was written against
+			else f.theirs = snap;
 		}
 		for (const sid of gone2) {
 			files.delete(sid);
