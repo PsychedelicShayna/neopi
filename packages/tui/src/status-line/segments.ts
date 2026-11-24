@@ -330,7 +330,7 @@ export const DEFAULT_LIVE_METER_TEMPLATE = "Mic {mic}  Out {output}";
 function liveMeterPieces(ctx: SegmentContext): { text: string; color?: ThemeColor }[] | null {
 	if (!ctx.live || ctx.live.phase === "disconnected") return null;
 	const configured = ctx.options.liveMeter?.template;
-	const template = typeof configured === "string" && configured.trim() ? configured : DEFAULT_LIVE_METER_TEMPLATE;
+	const template = typeof configured === "string" && configured.trim() ? configured : t("status.live.meter");
 	const pieces: { text: string; color?: ThemeColor }[] = [];
 	for (const part of parseBarTemplate(template, LIVE_METER_TEMPLATE_TOKENS)) {
 		if ("text" in part) {
@@ -365,7 +365,7 @@ const liveMeterSegment: StatusLineSegment = {
 /** Display name of the active model (`Claude ` prefix dropped). */
 function modelDisplayName(ctx: SegmentContext): string {
 	const state = ctx.session.state;
-	const modelName = state.model?.name || state.model?.id || "no-model";
+	const modelName = state.model?.name || state.model?.id || t("status.model.none");
 	return modelName.startsWith("Claude ") ? modelName.slice(7) : modelName;
 }
 
@@ -394,11 +394,11 @@ function modelThinkingDisplay(ctx: SegmentContext): string {
 		const resolved = ctx.session.autoResolvedThinkingLevel();
 		return resolved
 			? (theme.thinking[resolved as keyof Theme["thinking"]] ?? resolved)
-			: `${theme.thinking.autoPending} auto`;
+			: t("status.model.auto", { icon: theme.thinking.autoPending });
 	}
 	const level = state.thinkingLevel ?? ThinkingLevel.Off;
 	return level === ThinkingLevel.Off
-		? `${theme.status.disabled} off`
+		? t("status.model.off", { icon: theme.status.disabled })
 		: (theme.thinking[level as keyof Theme["thinking"]] ?? level);
 }
 
@@ -514,7 +514,7 @@ function describeGoalMode(ctx: SegmentContext, mode: { enabled: boolean; paused:
 		default:
 			break;
 	}
-	let label = "Goal";
+	let label = t("status.mode.goal");
 	if (ctx.goalStatusInFooter === true && goal) label += ` ${formatGoalBudget(goal.tokensUsed, goal.tokenBudget)}`;
 	const token = color === "accent" ? accentToken(ctx, color) : color;
 	return segView([span(label, token)], icon, toneOf(color));
@@ -547,7 +547,7 @@ function renderGoalMode(ctx: SegmentContext, mode: { enabled: boolean; paused: b
 			break;
 	}
 
-	const parts: string[] = [withIcon(icon, "Goal")];
+	const parts: string[] = [withIcon(icon, t("status.mode.goal"))];
 	const showBudget = ctx.goalStatusInFooter === true;
 	if (showBudget && goal) {
 		parts.push(formatGoalBudget(goal.tokensUsed, goal.tokenBudget));
@@ -577,11 +577,11 @@ function formatLoopLimit(
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
-		const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : " (paused)";
+		const pauseSuffix = theme.icon.pause ? ` ${theme.icon.pause}` : t("status.mode.pause_suffix");
 
 		const plan = ctx.planMode;
 		if (plan && (plan.enabled || plan.paused)) {
-			const label = plan.paused ? `Plan${pauseSuffix}` : "Plan";
+			const label = plan.paused ? t("status.mode.plan_suffix", { suffix: pauseSuffix }) : t("status.mode.plan");
 			const content = withIcon(theme.icon.plan, label);
 			return {
 				content: plan.paused ? theme.fg("warning", content) : accentFg(ctx, "accent", content),
@@ -610,8 +610,7 @@ const modeSegment: StatusLineSegment = {
 		if (loop) {
 			const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
 			const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const label = `Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`;
+			const label = t(`status.mode.loop.${loop.state}`);
 			const parts = [withIcon(icon, label)];
 			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
 			if (limit) parts.push(limit);
@@ -627,8 +626,8 @@ const modeSegment: StatusLineSegment = {
 		const plan = ctx.planMode;
 		if (plan && (plan.enabled || plan.paused)) {
 			return plan.paused
-				? segView([span("Plan (paused)", "warning")], "plan", "warning")
-				: segView([span("Plan", accentToken(ctx, "accent"))], "plan");
+				? segView([span(t("status.mode.plan_paused"), "warning")], "plan", "warning")
+				: segView([span(t("status.mode.plan"), accentToken(ctx, "accent"))], "plan");
 		}
 		if (ctx.prewalk?.enabled) return segView([span("Prewalk", accentToken(ctx, "accent"))], "prewalk");
 		const goal = ctx.goalMode;
@@ -637,8 +636,8 @@ const modeSegment: StatusLineSegment = {
 		const loop = ctx.loopMode;
 		if (loop) {
 			const paused = loop.state === "paused";
-			const stateLabel = loop.state === "waiting" ? "next prompt repeats" : loop.state;
-			const parts = [`Loop${loop.state === "waiting" ? ":" : ""} ${stateLabel}`];
+			const label = t(`status.mode.loop.${loop.state}`);
+			const parts = [label];
 			const limit = formatLoopLimit(loop.limit, ctx.now?.getTime());
 			if (limit) parts.push(limit);
 			if (loop.condition) parts.push(summarizeLoopCondition(loop.condition, TRUNCATE_LENGTHS.SHORT));
@@ -1157,13 +1156,19 @@ const collabSegment: StatusLineSegment = {
 	render(ctx) {
 		if (!ctx.collab) return { content: "", visible: false };
 		const participants = `${ctx.collab.participantCount}`;
-		const label = ctx.collab.role === "host" ? `⇄ collab:${participants}` : `⇄ collab guest:${participants}`;
+		const label =
+			ctx.collab.role === "host"
+				? t("status.collab.ansi_host", { count: participants })
+				: t("status.collab.ansi_guest", { count: participants });
 		return { content: accentFg(ctx, "accent", label), visible: true };
 	},
 	describe(ctx) {
 		if (!ctx.collab) return null;
 		const participants = `${ctx.collab.participantCount}`;
-		const label = ctx.collab.role === "host" ? `collab:${participants}` : `collab guest:${participants}`;
+		const label =
+			ctx.collab.role === "host"
+				? t("status.collab.host", { count: participants })
+				: t("status.collab.guest", { count: participants });
 		return segView([span(label, accentToken(ctx, "accent"))], "collab");
 	},
 };
@@ -1172,14 +1177,14 @@ const streamSegment: StatusLineSegment = {
 	id: "stream",
 	render(ctx) {
 		const badges: string[] = [];
-		if (ctx.stream) badges.push(`● LIVE ${ctx.stream.viewers}`);
+		if (ctx.stream) badges.push(t("status.stream.ansi_live", { count: ctx.stream.viewers }));
 		if (ctx.recording) badges.push("● REC");
 		if (badges.length === 0) return { content: "", visible: false };
 		return { content: theme.fg("thinkingHigh", badges.join(" ")), visible: true };
 	},
 	describe(ctx) {
 		const badges: string[] = [];
-		if (ctx.stream) badges.push(`LIVE ${ctx.stream.viewers}`);
+		if (ctx.stream) badges.push(t("status.stream.live", { count: ctx.stream.viewers }));
 		if (ctx.recording) badges.push("REC");
 		if (badges.length === 0) return null;
 		return segView([span(badges.join(" "), "thinkingHigh")], "live", "error");
@@ -1191,12 +1196,12 @@ const streamSegment: StatusLineSegment = {
  * (`showcmd`), and the Visual selection size. Hidden entirely when `tui.vimMode` is off, so it
  * costs nothing for everyone else. `tui.vimModeDisplay` picks the mode's presentation.
  */
-const VIM_MODE_LABELS: Record<NonNullable<SegmentContext["vim"]>["mode"], string> = {
-	insert: "INSERT",
-	normal: "NORMAL",
-	visual: "VISUAL",
-	"visual-line": "V-LINE",
-	replace: "REPLACE",
+const VIM_MODE_LABEL_KEYS: Record<NonNullable<SegmentContext["vim"]>["mode"], string> = {
+	insert: "status.vim.insert",
+	normal: "status.vim.normal",
+	visual: "status.vim.visual",
+	"visual-line": "status.vim.visual-line",
+	replace: "status.vim.replace",
 };
 
 /**
@@ -1225,7 +1230,8 @@ const vimSegment: StatusLineSegment = {
 	render(ctx) {
 		const vim = ctx.vim;
 		if (!vim || vim.display === "none") return { content: "", visible: false };
-		let label = vim.display === "icon" ? theme.symbol(VIM_MODE_ICON_KEYS[vim.mode]) : VIM_MODE_LABELS[vim.mode];
+		let label =
+			vim.display === "icon" ? theme.symbol(VIM_MODE_ICON_KEYS[vim.mode]) : t(VIM_MODE_LABEL_KEYS[vim.mode]);
 		// The selection height rides along in both presentations — it is the one part of the
 		// indicator with no other on-screen source.
 		if (vim.selectedLines > 1) label += ` ${vim.selectedLines}L`;
@@ -1243,7 +1249,9 @@ const vimSegment: StatusLineSegment = {
 		if (vim.display === "icon") {
 			if (lines) spans.push(span(lines, color));
 		} else {
-			spans.push(span(lines ? `${VIM_MODE_LABELS[vim.mode]} ${lines}` : VIM_MODE_LABELS[vim.mode], color));
+			spans.push(
+				span(lines ? `${t(VIM_MODE_LABEL_KEYS[vim.mode])} ${lines}` : t(VIM_MODE_LABEL_KEYS[vim.mode]), color),
+			);
 		}
 		if (vim.pending) spans.push(span(` ${vim.pending}`, "muted"));
 		return segView(spans, vim.display === "icon" ? `vim-${vim.mode}` : undefined, toneOf(color));
@@ -1277,6 +1285,8 @@ function usageBarWindowLabel(windowId: string): string {
 /** Shared label for a quota widget in both the bar and its configurator. */
 export function usageBarLabel(bar: UsageBarSelector): string {
 	const window = usageBarWindowLabel(bar.windowId);
+	const displayWindow =
+		window === "wk" || window === "day" || window === "mo" ? t(`status.usage.period.${window}`) : window;
 	const tier = bar.tier?.trim().toLowerCase();
 	const provider =
 		bar.provider === "anthropic"
@@ -1285,7 +1295,7 @@ export function usageBarLabel(bar: UsageBarSelector): string {
 				? "OA"
 				: truncateToWidth(sanitizeStatusText(bar.provider), TRUNCATE_LENGTHS.SHORT);
 	const tierLabel = tier ? sanitizeStatusText(tier[0]!.toUpperCase() + tier.slice(1)) : undefined;
-	return tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${window}`) : `${provider} ${window}`;
+	return tierLabel ? (window === "wk" ? tierLabel : `${tierLabel} ${displayWindow}`) : `${provider} ${displayWindow}`;
 }
 
 function usageBarContent(
@@ -1310,14 +1320,15 @@ function usageBarContent(
 			)
 				continue;
 			const fraction = resolveUsedFraction(limit);
-			if (fraction === undefined || !Number.isFinite(fraction)) return { label, value: "n/a", color: "dim" };
+			if (fraction === undefined || !Number.isFinite(fraction))
+				return { label, value: t("status.usage.unavailable"), color: "dim" };
 			const percent = Math.round(fraction * 100);
 			const elapsed = Math.max(0, (ctx.now?.getTime() ?? Date.now()) - report.fetchedAt);
-			const age = elapsed < 60_000 ? "now" : formatDuration(Math.floor(elapsed / 60_000) * 60_000);
+			const age = elapsed < 60_000 ? t("status.usage.now") : formatDuration(Math.floor(elapsed / 60_000) * 60_000);
 			return { label, value: `${percent}%`, color: pickUsageColor(percent), age };
 		}
 	}
-	return { label, value: "n/a", color: "dim" };
+	return { label, value: t("status.usage.unavailable"), color: "dim" };
 }
 
 /** Placeholders a usage-bar template may contain; all other text renders literally. */

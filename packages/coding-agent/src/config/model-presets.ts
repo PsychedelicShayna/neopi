@@ -15,6 +15,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentSession } from "../session/agent-session";
 import { cfgDefaultThinkingLevel } from "../session/settings";
 import { pickDefaultAvailableModel, resolveModelRoleValue } from "./model-resolver";
@@ -32,20 +33,20 @@ type PresetLookup = { kind: "found"; preset: ModelPreset } | { kind: "missing" }
 
 /** Validate one raw `modelPresets` entry; hand-edited config can hold anything. */
 function parseModelPreset(raw: unknown): ModelPreset | string {
-	if (!isRecord(raw)) return "it is not a mapping";
+	if (!isRecord(raw)) return t("overlaysModel.preset.notMapping");
 	const roles = raw.modelRoles;
-	if (!isRecord(roles)) return "`modelRoles` is missing or not a mapping";
+	if (!isRecord(roles)) return t("overlaysModel.preset.invalidRoles");
 	const modelRoles: Record<string, string> = {};
 	for (const role of Object.keys(roles)) {
 		const value = roles[role];
-		if (typeof value !== "string" || value.trim() === "") return `role \`${role}\` is not a model selector`;
+		if (typeof value !== "string" || value.trim() === "") return t("overlaysModel.preset.invalidRole", { role });
 		modelRoles[role] = value;
 	}
 	const level = raw.defaultThinkingLevel;
 	if (level === undefined) return { modelRoles };
 	const thinking = typeof level === "string" ? parseConfiguredThinkingLevel(level) : undefined;
 	if (thinking === undefined || !isDefaultThinkingLevel(thinking)) {
-		return "`defaultThinkingLevel` is not a thinking level";
+		return t("overlaysModel.preset.invalidThinking");
 	}
 	return { modelRoles, defaultThinkingLevel: thinking };
 }
@@ -103,7 +104,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
  */
 export function saveModelPreset(settings: Settings, name: string): ModelPreset {
 	if (!isValidModelPresetName(name)) {
-		throw new Error(`Invalid preset name "${name}": use a letter, then letters, digits, - or _`);
+		throw new Error(t("overlaysModel.preset.invalidName", { name }));
 	}
 	const modelRoles: Record<string, string> = {};
 	for (const [role, selector] of Object.entries(settings.getModelRoles())) {
@@ -144,22 +145,16 @@ export function modelPresetShadowOwner(
 	return owned && owned.source !== "global" ? owned.source : undefined;
 }
 
-const SOURCE_LABELS: Record<SettingProvenance, string> = {
-	env: "environment",
-	runtime: "command line",
-	session: "session settings",
-	role: "active role",
-	overlay: "--config file",
-	project: "project config",
-	global: "global config",
-	default: "default",
-};
+function sourceLabel(source: SettingProvenance): string {
+	return t(`overlaysModel.preset.source.${source}`);
+}
 
 /** Status line after saving `name`, naming the higher layer whose same-name preset still wins, if any. */
 export function modelPresetSavedMessage(settings: Settings, name: string): string {
 	const owner = modelPresetShadowOwner(settings, name);
-	if (owner === undefined) return `Saved model preset "${name}"`;
-	return `Saved model preset "${name}" to the global config, but the ${SOURCE_LABELS[owner]} still defines a preset of the same name, which takes precedence`;
+	return owner === undefined
+		? t("overlaysModel.preset.saved", { name })
+		: t("overlaysModel.preset.savedShadowed", { name, source: sourceLabel(owner) });
 }
 
 /** Serialize default-role mutations with the model hub's assign/unassign paths. */
@@ -246,12 +241,12 @@ function resolveLiveDefault(
 		preset.defaultThinkingLevel ?? parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
 	if (!roleValue) {
 		const model = pickAutomaticDefault(session, candidates);
-		return model ? { model, thinkingLevel: fallbackLevel } : "no model with configured credentials is available";
+		return model ? { model, thinkingLevel: fallbackLevel } : t("overlaysModel.preset.noModel");
 	}
 	const resolved = resolveModelRoleValue(roleValue, candidates, { settings });
-	if (!resolved.model) return `default model \`${roleValue}\` is not available`;
+	if (!resolved.model) return t("overlaysModel.preset.modelUnavailable", { model: roleValue });
 	if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
-		return `no credentials for ${resolved.model.provider}/${resolved.model.id}`;
+		return t("overlaysModel.preset.noCredentials", { provider: resolved.model.provider, model: resolved.model.id });
 	}
 	return {
 		model: resolved.model,
@@ -354,16 +349,19 @@ async function applyModelPresetLocked(
 		};
 		const resolved = resolveModelRoleValue(presetDefault, candidates, { settings, roleLookup });
 		if (!resolved.model)
-			return { kind: "unavailable", reason: `default model \`${presetDefault}\` is not available` };
+			return { kind: "unavailable", reason: t("overlaysModel.preset.modelUnavailable", { model: presetDefault }) };
 		if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
 			return {
 				kind: "unavailable",
-				reason: `no credentials for ${resolved.model.provider}/${resolved.model.id}`,
+				reason: t("overlaysModel.preset.noCredentials", {
+					provider: resolved.model.provider,
+					model: resolved.model.id,
+				}),
 			};
 		}
 	} else if (!pickAutomaticDefault(session, candidates)) {
 		// No `default` to apply and nothing to fall back to: refuse before writing.
-		return { kind: "unavailable", reason: "no model with configured credentials is available" };
+		return { kind: "unavailable", reason: t("overlaysModel.preset.noModel") };
 	}
 
 	writePresetRoles(settings, preset);
@@ -392,7 +390,7 @@ async function applyModelPresetLocked(
 }
 
 function describeRoleValue(value: string | undefined): string {
-	return value ?? "(unset)";
+	return value ?? t("overlaysModel.preset.unset");
 }
 
 /** One line per role (and the thinking level) the preset could not set, for status output. */
@@ -400,13 +398,21 @@ export function describeShadowedRoles(
 	shadowed: readonly ModelPresetShadowedRole[],
 	thinking?: ModelPresetShadowedThinking,
 ): string[] {
-	const lines = shadowed.map(
-		entry =>
-			`${entry.role}: ${describeRoleValue(entry.actual)} from ${SOURCE_LABELS[entry.source]} (preset: ${describeRoleValue(entry.expected)})`,
+	const lines = shadowed.map(entry =>
+		t("overlaysModel.preset.shadowedRole", {
+			role: entry.role,
+			actual: describeRoleValue(entry.actual),
+			source: sourceLabel(entry.source),
+			expected: describeRoleValue(entry.expected),
+		}),
 	);
 	if (thinking) {
 		lines.push(
-			`defaultThinkingLevel: ${describeRoleValue(thinking.actual)} from ${SOURCE_LABELS[thinking.source]} (preset: ${thinking.expected})`,
+			t("overlaysModel.preset.shadowedThinking", {
+				actual: describeRoleValue(thinking.actual),
+				source: sourceLabel(thinking.source),
+				expected: thinking.expected,
+			}),
 		);
 	}
 	return lines;
@@ -421,19 +427,20 @@ export function isCleanModelPresetSwitch(result: ModelPresetSwitchResult): boole
 export function formatModelPresetSwitch(name: string, result: ModelPresetSwitchResult): string {
 	switch (result.kind) {
 		case "missing":
-			return `Preset not found: ${name}`;
+			return t("overlaysModel.preset.missing", { name });
 		case "invalid":
-			return `Preset "${name}" is malformed: ${result.reason}`;
+			return t("overlaysModel.preset.invalid", { name, reason: result.reason });
 		case "unavailable":
-			return `Preset "${name}" not applied: ${result.reason}`;
+			return t("overlaysModel.preset.unavailable", { name, reason: result.reason });
 		case "failed":
-			return `Preset "${name}" roles saved, but the model was not switched: ${result.reason}`;
+			return t("overlaysModel.preset.switchFailed", { name, reason: result.reason });
 		case "switched": {
 			const thinking = result.thinkingLevel ? ` · ${result.thinkingLevel}` : "";
 			const model = `${result.model.provider}/${result.model.id}${thinking}`;
 			const elsewhere = describeShadowedRoles(result.shadowed, result.shadowedThinking);
-			if (elsewhere.length === 0) return `Switched to preset "${name}" (${model})`;
-			return `Switched to preset "${name}" (${model}); still set elsewhere: ${elsewhere.join("; ")}`;
+			return elsewhere.length === 0
+				? t("overlaysModel.preset.switched", { name, model })
+				: t("overlaysModel.preset.switchedShadowed", { name, model, elsewhere: elsewhere.join("; ") });
 		}
 	}
 }

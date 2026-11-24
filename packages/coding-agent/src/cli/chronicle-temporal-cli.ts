@@ -5,6 +5,7 @@
 import * as path from "node:path";
 import { getAgentDir, getProjectDir } from "@oh-my-pi/pi-utils";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { cfgChroniclerIndexDiagnosticLimit, cfgChroniclerRecallRanker } from "../chronicler/settings";
 import { parseTimeBound, type TimeBound } from "../chronicler/temporal/calendar";
 import {
@@ -61,7 +62,7 @@ function bound(value: string | undefined, flag: string): TimeBound | undefined {
 	try {
 		return parseTimeBound(value);
 	} catch {
-		throw new CliUsageError(`--${flag} must be an ISO time or a YYYY[-MM[-DD]] prefix: ${value}`);
+		throw new CliUsageError(t("cli.commands.chronicle.invalidTime", { flag, value }));
 	}
 }
 
@@ -106,9 +107,11 @@ export async function runChronicleIndex(flags: ChronicleIndexFlags): Promise<num
 }
 
 export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<number> {
-	if (!flags.query.trim()) throw new CliUsageError("recall needs a query");
+	if (!flags.query.trim()) throw new CliUsageError(t("cli.commands.chronicle.recall.queryRequired"));
 	if (flags.resolution !== undefined && !(RESOLUTION_LEVELS as readonly string[]).includes(flags.resolution)) {
-		throw new CliUsageError(`--resolution must be one of ${RESOLUTION_LEVELS.join(", ")}`);
+		throw new CliUsageError(
+			t("cli.commands.chronicle.recall.invalidResolution", { levels: RESOLUTION_LEVELS.join(", ") }),
+		);
 	}
 	if (
 		flags.ranker !== undefined &&
@@ -116,7 +119,7 @@ export async function runChronicleRecall(flags: ChronicleRecallFlags): Promise<n
 		flags.ranker !== "lexical" &&
 		flags.ranker !== "judge"
 	) {
-		throw new CliUsageError("--ranker must be model, lexical or judge");
+		throw new CliUsageError(t("cli.commands.chronicle.recall.invalidRanker"));
 	}
 	const agentDir = flags.agentDir ?? getAgentDir();
 	const settings = await Settings.init({ cwd: getProjectDir(), agentDir });

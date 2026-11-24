@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import type { Settings } from "../config/settings";
 import { DEFAULT_EDGE_ENVELOPE, type EnvelopeContext, isInlineTemplate, renderEnvelope } from "./envelopes";
+import { codedMixtureIssue } from "./findings";
 import { cfgMoaHardMaxHops, cfgMoaOnLimit } from "./settings";
 import type { MixtureIssue, ResolvedMixture } from "./types";
 
@@ -394,11 +395,11 @@ function templateIssues(template: string, path: string, errors: MixtureIssue[]):
 		renderEnvelope(template, SAMPLE_CONTEXT);
 		return true;
 	} catch (error) {
-		errors.push({
-			code: "edge.envelope.compile",
-			path,
-			message: `envelope does not compile: ${error instanceof Error ? error.message : String(error)}`,
-		});
+		errors.push(
+			codedMixtureIssue("edge.envelope.compile", path, {
+				detail: error instanceof Error ? error.message : String(error),
+			}),
+		);
 		return false;
 	}
 }
@@ -415,28 +416,20 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 
 	// E1
 	if (!NAME_PATTERN.test(definition.name)) {
-		errors.push({
-			code: "name.invalid",
-			path: "name",
-			message: `mixture name "${definition.name}" must match [a-z0-9][a-z0-9._-]*`,
-		});
+		errors.push(codedMixtureIssue("name.invalid", "name", { name: definition.name }));
 	}
 	if ((ctx.names ?? []).filter(name => name === definition.name).length > 1) {
-		errors.push({ code: "name.duplicate", path: "name", message: `mixture name "${definition.name}" is not unique` });
+		errors.push(codedMixtureIssue("name.duplicate", "name", { name: definition.name }));
 	}
 
 	// E3
 	if (definition.members.length === 0) {
-		errors.push({ code: "members.empty", path: "members", message: "a mixture needs at least one member" });
+		errors.push(codedMixtureIssue("members.empty", "members"));
 	}
 	const seenIds = new Set<string>();
 	definition.members.forEach((member, index) => {
 		if (!MEMBER_ID_PATTERN.test(member.id) || seenIds.has(member.id)) {
-			errors.push({
-				code: "member.id",
-				path: `members[${index}].id`,
-				message: `member id "${member.id}" must match [a-z0-9][a-z0-9_-]* and be unique`,
-			});
+			errors.push(codedMixtureIssue("member.id", `members[${index}].id`, { member: member.id }));
 		}
 		seenIds.add(member.id);
 	});
@@ -444,17 +437,9 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	// E5
 	const entry = graph.members.get(definition.entry);
 	if (!entry) {
-		errors.push({
-			code: "entry.unresolved",
-			path: "entry",
-			message: `entry "${definition.entry}" does not name a member`,
-		});
+		errors.push(codedMixtureIssue("entry.unresolved", "entry", { entry: definition.entry }));
 	} else if (entry.kind === "verdict") {
-		errors.push({
-			code: "entry.verdict",
-			path: "entry",
-			message: `entry "${definition.entry}" is a verdict member; the entry must be a model member`,
-		});
+		errors.push(codedMixtureIssue("entry.verdict", "entry", { entry: definition.entry }));
 	}
 
 	// E6, E7, E8, E9
@@ -472,20 +457,12 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 			}
 		}
 		if (graph.members.get(edge.from)?.kind === "verdict") {
-			errors.push({
-				code: "edge.from_verdict",
-				path: `${path}.from`,
-				message: `edge ${id}: verdict member ${edge.from} cannot have outgoing edges`,
-			});
+			errors.push(codedMixtureIssue("edge.from_verdict", `${path}.from`, { edge: id, from: edge.from }));
 		}
 		const keys = Object.keys(edge.x);
 		for (const key of keys) {
 			if (!KNOWN_PARTS.has(key)) {
-				errors.push({
-					code: "edge.x.unknown_part",
-					path: `${path}.x.${key}`,
-					message: `edge ${id}: unknown transit part "${key}"`,
-				});
+				errors.push(codedMixtureIssue("edge.x.unknown_part", `${path}.x.${key}`, { edge: id, part: key }));
 			}
 		}
 		const declared = declaredParts(edge);
@@ -510,7 +487,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 			}
 		}
 		if (edgeIds.has(id)) {
-			errors.push({ code: "edge.id.duplicate", path: `${path}.id`, message: `edge id "${id}" is not unique` });
+			errors.push(codedMixtureIssue("edge.id.duplicate", `${path}.id`, { edge: id }));
 		}
 		edgeIds.add(id);
 	});
@@ -524,18 +501,10 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	definition.members.forEach((member, index) => {
 		const terminal = !graph.outgoing.has(member.id);
 		if (terminal && member.show === "never") {
-			warnings.push({
-				code: "member.show.final",
-				path: `members[${index}].show`,
-				message: `member ${member.id} is terminal; its output is always shown as the answer`,
-			});
+			warnings.push(codedMixtureIssue("member.show.final", `members[${index}].show`, { member: member.id }));
 		}
 		if (member.kind !== "verdict" && terminal && member.terminate) {
-			warnings.push({
-				code: "terminate.terminal",
-				path: `members[${index}].terminate`,
-				message: `member ${member.id} has no outgoing edges; terminate has nothing to stop`,
-			});
+			warnings.push(codedMixtureIssue("terminate.terminal", `members[${index}].terminate`, { member: member.id }));
 		}
 		const resolvedMember = resolved.members[member.id];
 		if (
@@ -555,11 +524,12 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	definition.edges.forEach((edge, index) => {
 		const source = resolved.members[edge.from];
 		if (edge.x.reasoning && source?.kind === "model" && !source.model.reasoning) {
-			warnings.push({
-				code: "edge.x.reasoning.empty",
-				path: `edges[${index}].x.reasoning`,
-				message: `edge ${mixtureEdgeId(edge)}: ${edge.from}'s model exposes no reasoning`,
-			});
+			warnings.push(
+				codedMixtureIssue("edge.x.reasoning.empty", `edges[${index}].x.reasoning`, {
+					edge: mixtureEdgeId(edge),
+					from: edge.from,
+				}),
+			);
 		}
 	});
 
@@ -576,11 +546,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		}
 		definition.members.forEach((member, index) => {
 			if (reachable.has(member.id)) return;
-			warnings.push({
-				code: "unreachable",
-				path: `members[${index}]`,
-				message: `member ${member.id} has no path from the entry`,
-			});
+			warnings.push(codedMixtureIssue("unreachable", `members[${index}]`, { member: member.id }));
 		});
 	}
 	// E11/E12/E18: decisions must have a valid graph and meaningful rubrics.
@@ -592,45 +558,29 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 				(member.question.type === "choice" && Object.keys(member.question.criteria).length < 2) ||
 				(member.question.type === "score" && member.question.criteria.length < 2)
 			) {
-				errors.push({
-					code: "verdict.question",
-					path: `${path}.question`,
-					message: `verdict ${member.id}: choice or score criteria require at least two options`,
-				});
+				errors.push(codedMixtureIssue("verdict.question", `${path}.question`, { member: member.id }));
 			}
 			return;
 		}
 		if (outgoing.length > 1 && !member.route) {
-			errors.push({
-				code: "route.required",
-				path,
-				message: `member ${member.id} needs a route for multiple outgoing edges`,
-			});
+			errors.push(codedMixtureIssue("route.required", path, { member: member.id }));
 		}
 		if (!member.route) return;
 		if (outgoing.length === 0) {
-			errors.push({
-				code: "route.options",
-				path: `${path}.route`,
-				message: `member ${member.id} has no edges to route to`,
-			});
+			errors.push(codedMixtureIssue("route.options", `${path}.route`, { member: member.id }));
 		}
 		const fallback = member.route.fallback;
 		if (fallback && fallback !== "pause" && !outgoing.some(edge => mixtureEdgeId(edge) === fallback)) {
-			errors.push({
-				code: "route.fallback",
-				path: `${path}.route.fallback`,
-				message: `route fallback "${fallback}" is not an outgoing edge or pause`,
-			});
+			errors.push(codedMixtureIssue("route.fallback", `${path}.route.fallback`, { fallback }));
 		}
 		if (outgoing.length > 1) {
 			for (const edge of outgoing) {
 				if (edge.when !== undefined) continue;
-				warnings.push({
-					code: "route.when.missing",
-					path: `edges[${definition.edges.indexOf(edge)}].when`,
-					message: `edge ${mixtureEdgeId(edge)} has no route rubric`,
-				});
+				warnings.push(
+					codedMixtureIssue("route.when.missing", `edges[${definition.edges.indexOf(edge)}].when`, {
+						edge: mixtureEdgeId(edge),
+					}),
+				);
 			}
 		}
 	});
@@ -646,11 +596,11 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		if (isFanoutEdge(edge)) return;
 		const member = resolved.members[edge.to];
 		if (member?.kind === "model" && !member.model.input.includes("image")) {
-			errors.push({
-				code: "x.transcript.snapcompact.vision",
-				path: `edges[${index}].x.transcript`,
-				message: `target ${edge.to} does not accept images for snapcompact`,
-			});
+			errors.push(
+				codedMixtureIssue("x.transcript.snapcompact.vision", `edges[${index}].x.transcript`, {
+					to: edge.to,
+				}),
+			);
 		}
 	});
 
@@ -658,11 +608,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 	if ((definition.limits?.onLimit ?? cfgMoaOnLimit.get(ctx.settings)) === "judge") {
 		const target = definition.limits?.limitTarget;
 		if (!target || !graph.members.has(target) || graph.members.get(target)?.kind === "verdict") {
-			errors.push({
-				code: "limits.target",
-				path: "limits.limit_target",
-				message: `on_limit = judge requires a model-member limits.limit_target`,
-			});
+			errors.push(codedMixtureIssue("limits.target", "limits.limit_target"));
 		}
 	}
 
@@ -683,11 +629,7 @@ export function validateMixture(resolved: ResolvedMixture, ctx: ValidateMixtureC
 		if (!branches.has(member.id)) return;
 		const controls = member.kind !== "verdict" && (member.route || member.terminate);
 		if (controls || graph.outgoing.has(member.id)) {
-			warnings.push({
-				code: "fanout.branch.controls",
-				path: `members[${index}]`,
-				message: `member ${member.id} is a fan-out branch; its route, terminate, and outgoing edges are ignored there`,
-			});
+			warnings.push(codedMixtureIssue("fanout.branch.controls", `members[${index}]`, { member: member.id }));
 		}
 	});
 

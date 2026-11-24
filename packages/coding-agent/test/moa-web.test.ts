@@ -11,6 +11,7 @@ import * as tern from "@oh-my-pi/pi-coding-agent/tools/browser/tern/user-page";
 import * as openUtils from "@oh-my-pi/pi-coding-agent/utils/open";
 import type { MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { getLocale, setLocale } from "@oh-my-pi/pi-utils/i18n";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { createMoaFixture, createMoaSession, DRAFT_THEN_EDIT_TOML, type MoaFixture } from "./helpers/moa-setup";
 
@@ -166,6 +167,27 @@ describe("Mixture web editor", () => {
 		}
 	});
 
+	it("serves the configured language to Studio without changing its script assets", async () => {
+		const locale = getLocale();
+		try {
+			setLocale("es");
+			const url = open();
+			const spanish = await (await request(url, "")).text();
+			expect(spanish).toContain('<html lang="es">');
+			expect(spanish).toContain("<title>Estudio de mezclas · NeoPi</title>");
+			const payload = /<script type="application\/json" id="editor-i18n">([^<]*)<\/script>/.exec(spanish);
+			expect(JSON.parse(payload![1]!)).toMatchObject({ "app.title": "Estudio de mezclas" });
+
+			const english = await (await request(url, "?lang=en")).text();
+			expect(english).toContain('<html lang="en">');
+			expect(english).toContain("<title>Mixture Studio · NeoPi</title>");
+			const scripts = (page: string) => page.match(/<script src="[^"]+"><\/script>/g);
+			expect(scripts(spanish)).toEqual(scripts(english));
+		} finally {
+			setLocale(locale);
+		}
+	});
+
 	it("rejects an unexpected Host, foreign Origin, and writes without Origin", async () => {
 		const url = open();
 		const target = new URL("mixtures/sources", url);
@@ -255,6 +277,37 @@ describe("Mixture web editor", () => {
 		expect(Bun.TOML.parse(result.toml)).toMatchObject({ mixtures: [{ entry: "missing" }] });
 		await json(await draft(url, "not-a-source", bad), 400);
 		expect(await Bun.file(user.path).text()).toBe(DRAFT_THEN_EDIT_TOML);
+	});
+
+	it("keeps the validation schema and localizes findings in draft details and the blocked-save status", async () => {
+		const url = open();
+		const { user } = await userAndProject(url);
+		const { doc } = await source(url, user.id);
+		const invalid = { mixtures: [{ ...doc.mixtures[0]!, entry: "missing" }] };
+		const present = async (lang: "en" | "es") => {
+			const draft = await json<{ validation: Validation; toml: string }>(
+				await send(url, `mixtures/draft?lang=${lang}`, "POST", { sourceId: user.id, doc: invalid }),
+			);
+			const save = await json<{ error: string; files: { validation: Validation }[] }>(
+				await send(url, `mixtures/save?lang=${lang}`, "PUT", {
+					files: [{ sourceId: user.id, baseHash: user.hash, doc: invalid }],
+				}),
+				422,
+			);
+			return { draft, save };
+		};
+		const en = await present("en");
+		const es = await present("es");
+		expect(Object.keys(es.draft)).toEqual(Object.keys(en.draft));
+		expect(Object.keys(es.save)).toEqual(Object.keys(en.save));
+		expect(es.draft.toml).toBe(en.draft.toml);
+		const enIssue = en.draft.validation.errors[0]!;
+		const esIssue = es.draft.validation.errors[0]!;
+		expect(esIssue).toEqual({ ...enIssue, message: 'la entrada "missing" no corresponde a ningún miembro' });
+		expect(en.save.files[0]!.validation.errors[0]).toEqual(enIssue);
+		expect(es.save.files[0]!.validation.errors[0]).toEqual(esIssue);
+		expect(en.save.error).toContain(`mixtures[0].entry: ${enIssue.message}`);
+		expect(es.save.error).toContain(`mixtures[0].entry: ${esIssue.message}`);
 	});
 
 	it("moves a mixture between scopes in one save, refreshing the roster and every source", async () => {

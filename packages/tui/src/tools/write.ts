@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { HighlightStream } from "@oh-my-pi/pi-natives";
@@ -16,13 +17,13 @@ import {
 	formatDiagnostics,
 	formatErrorDetail,
 	formatExpandHint,
-	formatMoreItems,
 	PREVIEW_LIMITS,
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
+	formatMoreItems,
 } from "../render/render-utils";
 import type { CoordinationDetails } from "./wait";
 import {
@@ -198,7 +199,10 @@ function writeContentOf(args: unknown): string {
 
 function formatLineCountSuffix(lineCount: number, uiTheme: Theme): string {
 	if (lineCount <= 0) return "";
-	return uiTheme.fg("dim", ` · ${lineCount} line${lineCount === 1 ? "" : "s"}`);
+	return uiTheme.fg(
+		"dim",
+		t(lineCount === 1 ? "tools.write.lines_dot.one" : "tools.write.lines_dot.many", { count: lineCount }),
+	);
 }
 
 function normalizeDisplayText(text: unknown): string {
@@ -373,7 +377,12 @@ function formatStreamingContent(
 
 		const rows: string[] = [];
 		if (hidden > 0) {
-			rows.push(uiTheme.fg("dim", `… (${hidden} earlier line${hidden === 1 ? "" : "s"})`));
+			rows.push(
+				uiTheme.fg(
+					"dim",
+					t(hidden === 1 ? "tools.write.earlier_lines.one" : "tools.write.earlier_lines.many", { count: hidden }),
+				),
+			);
 		}
 		for (let i = 0; i < visibleLines.length; i++) {
 			const lineNum = startIndex + i + 1;
@@ -462,7 +471,7 @@ interface WriteUrlCard {
 const WRITE_URL_CARDS: Record<string, WriteUrlCard> = {
 	agent: {
 		detailsKey: "message",
-		activity: target => ({ label: "Message", detail: target === "all" ? "broadcast" : target }),
+		activity: target => ({ label: "Message", detail: target === "all" ? t("tools.write.broadcast") : target }),
 		render: (_url, target, content, result, details, options, uiTheme) =>
 			renderAgentWrite(
 				target,
@@ -564,7 +573,7 @@ function writeToolHead(
 ): NativeToolHead {
 	const lineCount = countLines(content);
 	const badges: { text: string; tone?: TspTone }[] = [];
-	if (details?.madeExecutable) badges.push({ text: "executable", tone: "success" });
+	if (details?.madeExecutable) badges.push({ text: t("tools.write.executable"), tone: "success" });
 	const diagnostics = diagnosticsBadge([details?.diagnostics]);
 	if (diagnostics) badges.push(diagnostics);
 	return {
@@ -572,7 +581,10 @@ function writeToolHead(
 		target: rawPath ? sanitizeText(displayPath(rawPath)) : undefined,
 		targetKind: "path",
 		href: fileHref(details?.resolvedPath),
-		meta: lineCount > 0 ? [`${lineCount} line${lineCount === 1 ? "" : "s"}`] : undefined,
+		meta:
+			lineCount > 0
+				? [t(lineCount === 1 ? "tools.write.lines.one" : "tools.write.lines.many", { count: lineCount })]
+				: undefined,
 		badges: badges.length > 0 ? badges : undefined,
 	};
 }
@@ -675,7 +687,7 @@ export const writeToolRenderer = {
 				return {
 					header,
 					// The label ends with the args: once the content is complete the write is just running.
-					footerMeta: body && !options?.argsComplete ? uiTheme.fg("dim", "streaming") : undefined,
+					footerMeta: body && !options?.argsComplete ? uiTheme.fg("dim", t("tools.common.streaming")) : undefined,
 					sections: bodyLines.length > 0 ? [{ content: wrapWritePreviewRows(bodyLines, contentWidth) }] : [],
 					phase: "pending",
 					borderColor: "borderMuted",
@@ -742,7 +754,7 @@ export const writeToolRenderer = {
 		const lineSuffix = formatLineCountSuffix(lineCount, uiTheme);
 		const execSuffix =
 			!isPartial && result.details?.madeExecutable
-				? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", "made executable!")}`
+				? `${uiTheme.fg("dim", " · ")}${uiTheme.fg("success", t("tools.write.made_executable"))}`
 				: "";
 		const header = renderStatusLine(
 			{

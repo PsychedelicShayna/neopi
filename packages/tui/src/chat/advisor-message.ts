@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component } from "../tui";
 import { Disclosure } from "../components/disclosure";
 import { visibleWidth } from "../utils";
@@ -65,7 +66,10 @@ class AdvisorHeader implements Component {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
 		const uiTheme = this.#uiTheme;
-		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
+		const tag = uiTheme.fg(
+			"customMessageLabel",
+			uiTheme.bold(t("overlays.advisor_message.advisor_tag", { info: `${uiTheme.status.info}` })),
+		);
 		const lines = [
 			truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width, Ellipsis.Unicode),
 		];
@@ -104,7 +108,9 @@ class AdvisorNotes implements Component {
 			const uiTheme = this.#uiTheme;
 			const rail = uiTheme.fg("dim", uiTheme.symbol("advisor.rail"));
 			const hidden = this.#hidden;
-			lines.push(`  ${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
+			lines.push(
+				`  ${rail} ${uiTheme.fg("dim", t("overlays.advisor_message.hidden_notes", { hidden: `${hidden}`, value: `${hidden === 1 ? "note" : "notes"}` }))}`,
+			);
 		}
 		const rendered = lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
 		this.#cache = { width, lines: rendered };
@@ -157,10 +163,38 @@ const RANKS: readonly AdvisorRank[] = ["blocker", "concern", "nit", "note"];
 
 /** Each rank's native look, GitHub-alert style: card/icon tone, Tern icon name, label and its span style. */
 const RANK_LOOK: Record<AdvisorRank, { tone: TspTone; icon: string; label: string; style: string }> = {
-	blocker: { tone: "error", icon: "octagon-alert", label: "Blocker", style: "error strong" },
-	concern: { tone: "warning", icon: "warn", label: "Concern", style: "warning strong" },
-	nit: { tone: "neutral", icon: "lightbulb", label: "Nit", style: "strong" },
-	note: { tone: "neutral", icon: "info", label: "Note", style: "strong" },
+	blocker: {
+		tone: "error",
+		icon: "octagon-alert",
+		get label() {
+			return t("overlays.advisor_message.blocker");
+		},
+		style: "error strong",
+	},
+	concern: {
+		tone: "warning",
+		icon: "warn",
+		get label() {
+			return t("overlays.advisor_message.concern");
+		},
+		style: "warning strong",
+	},
+	nit: {
+		tone: "neutral",
+		icon: "lightbulb",
+		get label() {
+			return t("overlays.advisor_message.nit");
+		},
+		style: "strong",
+	},
+	note: {
+		tone: "neutral",
+		icon: "info",
+		get label() {
+			return t("overlays.advisor_message.note");
+		},
+		style: "strong",
+	},
 };
 
 function rankOf(entry: AdvisorNote): AdvisorRank {
@@ -218,7 +252,16 @@ export function createAdvisorMessageCard(
 	const notes = details?.notes ?? [];
 	const blockers = notes.filter(note => note.severity === "blocker").length;
 	const meta: string[] = [`${notes.length} ${notes.length === 1 ? "note" : "notes"}`];
-	if (blockers > 0) meta.push(uiTheme.fg("error", `${blockers} blocker${blockers === 1 ? "" : "s"}`));
+	if (blockers > 0)
+		meta.push(
+			uiTheme.fg(
+				"error",
+				t("overlays.advisor_message.blocker_count", {
+					blockers: `${blockers}`,
+					plural: `${blockers === 1 ? "" : "s"}`,
+				}),
+			),
+		);
 	let override: boolean | undefined;
 	let lastGlobal = getExpanded();
 	const expanded = (): boolean => {
@@ -240,7 +283,9 @@ export function createAdvisorMessageCard(
 			[
 				node("icon", { name: look.icon, tone: look.tone }),
 				text(tallySpans(notes), { grow: 1 }),
-				text([span(sources.size === 1 && sole ? sole : "Advisor", "dim")], { role: "omp.advisor.source" }),
+				text([span(sources.size === 1 && sole ? sole : t("settings.group.advisor"), "dim")], {
+					role: "omp.advisor.source",
+				}),
 			],
 			"head",
 		);

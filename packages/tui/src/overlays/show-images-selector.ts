@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -13,11 +14,19 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 	#sheet: SelectListSheet;
 
 	constructor(currentValue: boolean, onSelect: (show: boolean) => void, onCancel: () => void) {
-		super("Show Images", "omp.overlay.show-images");
+		super(t("overlays.show_images_selector.show_images_title"), "omp.overlay.show-images");
 
 		const items: SelectItem[] = [
-			{ value: "yes", label: "Yes", description: "Show images inline in terminal" },
-			{ value: "no", label: "No", description: "Show text placeholder instead" },
+			{
+				value: "yes",
+				label: t("overlays.show_images_selector.yes"),
+				description: t("overlays.show_images_selector.show_inline_description"),
+			},
+			{
+				value: "no",
+				label: t("overlays.show_images_selector.no"),
+				description: t("overlays.show_images_selector.text_placeholder_description"),
+			},
 		];
 
 		// Create selector
@@ -36,7 +45,7 @@ export class ShowImagesSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Show images",
+			title: t("overlays.show_images_selector.show_images_title_2"),
 			icon: "image",
 			noun: "options",
 			current: [currentValue ? "yes" : "no"],

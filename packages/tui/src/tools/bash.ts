@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { getProjectDir, jsonContainerEnd, sanitizeText, spillUrl } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
@@ -365,36 +366,44 @@ function bashStatsParts(
 	const wallTimeMs = details?.wallTimeMs;
 	const statsParts: string[] = [];
 	if (details?.async?.state === "running") {
-		statsParts.push(`Backgrounded: ${details.async.jobId}`);
+		statsParts.push(t("tools.bash.backgrounded", { job: details.async.jobId }));
 	}
 	if (details?.service) {
 		const service = details.service;
-		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
-		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
-		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
+		statsParts.push(t("tools.bash.service", { name: service.name }), t("tools.bash.state", { state: service.state }));
+		statsParts.push(
+			t(
+				service.ready
+					? "tools.bash.ready_yes"
+					: service.timedOut
+						? "tools.bash.ready_timed_out"
+						: "tools.bash.ready_no",
+			),
+		);
+		if (service.pid !== undefined) statsParts.push(t("tools.bash.pid", { pid: service.pid }));
 	}
 	if (wallTimeMs !== undefined) {
-		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
+		statsParts.push(t("tools.bash.wall", { seconds: formatWallTimeSeconds(wallTimeMs) }));
 	}
 	if (timeoutDisabled) {
-		statsParts.push("Timeout: disabled");
+		statsParts.push(t("tools.bash.timeout_disabled"));
 	}
 	if (typeof timeoutSeconds === "number") {
 		statsParts.push(
 			requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
-				? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
-				: `Timeout: ${timeoutSeconds}s`,
+				? t("tools.bash.timeout_clamped", { seconds: timeoutSeconds, requested: requestedTimeoutSeconds })
+				: t("tools.bash.timeout", { seconds: timeoutSeconds }),
 		);
 	}
 	if (artifactId) {
-		statsParts.push(`Full output: ${spillUrl(artifactId)}`);
+		statsParts.push(t("tools.common.full_output", { path: spillUrl(artifactId) }));
 	}
 	const minimized = details?.meta?.minimized;
 	if (minimized) {
-		statsParts.push(`Minimized: ${formatMinimizedMeta(minimized)}`);
+		statsParts.push(t("tools.bash.minimized", { details: formatMinimizedMeta(minimized) }));
 	}
 	if (isError && typeof details?.exitCode === "number") {
-		statsParts.push(`Exit: ${details.exitCode}`);
+		statsParts.push(t("tools.bash.exit", { code: details.exitCode }));
 	}
 	return statsParts;
 }
@@ -419,7 +428,7 @@ function shellToolHead(
 		targetKind: intent ? "text" : undefined,
 		command,
 		exit,
-		note: settled && details?.timedOut === true ? "timed out" : undefined,
+		note: settled && details?.timedOut === true ? t("tools.common.timed_out") : undefined,
 	};
 }
 
@@ -434,16 +443,22 @@ function callIntent(args: unknown): string | undefined {
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
 function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
-	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
+	if (details?.async?.state === "running") parts.push(t("tools.bash.job_bare", { id: details.async.jobId }));
 	const service = details?.service;
 	if (service) {
-		parts.push(`Service ${service.name}`, service.state);
-		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
-		if (service.pid !== undefined) parts.push(`PID ${service.pid}`);
+		parts.push(t("tools.bash.service_bare", { name: service.name }), service.state);
+		parts.push(
+			service.ready
+				? t("tools.bash.ready")
+				: service.timedOut
+					? t("tools.bash.ready_timeout")
+					: t("tools.bash.not_ready"),
+		);
+		if (service.pid !== undefined) parts.push(t("tools.bash.pid_bare", { pid: service.pid }));
 	}
-	if (artifactId) parts.push(`Artifact ${artifactId}`);
+	if (artifactId) parts.push(t("tools.bash.artifact", { artifactId }));
 	const minimized = details?.meta?.minimized;
-	if (minimized) parts.push(`Minimized ${formatMinimizedMeta(minimized)}`);
+	if (minimized) parts.push(t("tools.bash.minimized_bare", { details: formatMinimizedMeta(minimized) }));
 	return parts;
 }
 
@@ -538,7 +553,12 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						footerMeta:
 							elapsedMs === undefined || elapsedMs < 1000
 								? undefined
-								: uiTheme.fg("dim", `elapsed ${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`),
+								: uiTheme.fg(
+										"dim",
+										t("tools.bash.elapsed", {
+											duration: formatDuration(Math.floor(elapsedMs / 1000) * 1000),
+										}),
+									),
 						sections: [{ content: capPreviewLines(commandLines, uiTheme, { expanded: options.expanded }) }],
 					};
 				},
@@ -675,7 +695,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						isError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
-						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
+						statsParts.unshift(t("tools.bash.elapsed", { duration: formatDuration(elapsedSecond * 1000) }));
 					}
 					const footerMeta =
 						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
@@ -732,7 +752,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 									{ expanded },
 								),
 							},
-							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
+							{ label: uiTheme.fg("toolTitle", t("tools.common.output")), content: outputLines },
 						],
 					};
 

@@ -4,6 +4,7 @@
  * selection. Hand-rolled fixed-row virtualization (32px rows, spacer divs).
  */
 
+import { useTranslation } from "../i18n";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { formatDurationMs } from "../data/formatters";
 import { EmptyState } from "../ui";
@@ -59,6 +60,7 @@ export const TranscriptList = memo(function TranscriptList({
 	matchIds,
 	traceStart,
 }: TranscriptListProps) {
+	const tr = useTranslation();
 	const colors = useTraceTheme();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [scrollTop, setScrollTop] = useState(0);
@@ -140,7 +142,9 @@ export const TranscriptList = memo(function TranscriptList({
 					})}
 				</div>
 			</div>
-			{rows.length === 0 && <EmptyState title="No matching events" />}
+			{rows.length === 0 && (
+				<EmptyState title={tr("pages.transcriptlist.no_matching_events", "No matching events")} />
+			)}
 		</div>
 	);
 });

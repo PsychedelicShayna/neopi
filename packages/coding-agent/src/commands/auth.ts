@@ -21,6 +21,7 @@ import {
 import { getAgentDbPath, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Args, CliUsageError, Command } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { authHelp as commandHelp } from "../cli/command-help";
 import { resolveAuthBrokerConfig } from "../session/auth-broker-config";
 
@@ -66,10 +67,10 @@ export function exportAuthCredentials(store: Pick<AuthCredentialStore, "listAuth
 }
 
 function parseCredential(value: unknown, where: string): AuthCredential {
-	if (!isRecord(value)) throw new AuthTransferError(`${where}: credential is not an object.`);
+	if (!isRecord(value)) throw new AuthTransferError(t("cli.commands.auth.invalid.credential_object", { where }));
 	if (value.type === "api_key") {
 		if (typeof value.key !== "string" || value.key.length === 0) {
-			throw new AuthTransferError(`${where}: API key credential has no key.`);
+			throw new AuthTransferError(t("cli.commands.auth.invalid.api_key", { where }));
 		}
 		return value.source === "login"
 			? { type: "api_key", key: value.key, source: "login" }
@@ -77,44 +78,48 @@ function parseCredential(value: unknown, where: string): AuthCredential {
 	}
 	if (value.type === "oauth") {
 		if (typeof value.access !== "string" || typeof value.refresh !== "string" || typeof value.expires !== "number") {
-			throw new AuthTransferError(
-				`${where}: OAuth credential needs string access/refresh tokens and a numeric expires.`,
-			);
+			throw new AuthTransferError(t("cli.commands.auth.invalid.oauth_fields", { where }));
 		}
 		if (value.refresh === REMOTE_REFRESH_SENTINEL) {
-			throw new AuthTransferError(
-				`${where}: OAuth credential has no refresh token (it comes from an auth-broker snapshot).`,
-			);
+			throw new AuthTransferError(t("cli.commands.auth.invalid.oauth_refresh", { where }));
 		}
 		// Required fields are checked above; the optional identity fields are
 		// carried as stored so the target store derives the same account identity.
 		return value as OAuthCredential;
 	}
-	throw new AuthTransferError(`${where}: unknown credential type ${JSON.stringify(value.type)}.`);
+	throw new AuthTransferError(
+		t("cli.commands.auth.invalid.credential_type", { where, type: String(JSON.stringify(value.type)) }),
+	);
 }
 
 /**
  * Parse and validate an `omp auth export` document. Throws
  * {@link AuthTransferError} naming the first offending entry.
  */
-export function parseAuthExport(text: string, source = "credential file"): AuthExport {
+export function parseAuthExport(text: string, source = t("cli.commands.auth.credential_file")): AuthExport {
 	let value: unknown;
 	try {
 		value = JSON.parse(text);
 	} catch {
-		throw new AuthTransferError(`${source} is not valid JSON.`);
+		throw new AuthTransferError(t("cli.commands.auth.invalid.json", { source }));
 	}
-	if (!isRecord(value)) throw new AuthTransferError(`${source} is not an \`omp auth export\` document.`);
+	if (!isRecord(value)) throw new AuthTransferError(t("cli.commands.auth.invalid.document", { source }));
 	if (value.version !== AUTH_EXPORT_VERSION) {
 		throw new AuthTransferError(
-			`${source} has export version ${JSON.stringify(value.version)}; this omp reads version ${AUTH_EXPORT_VERSION}.`,
+			t("cli.commands.auth.invalid.version", {
+				source,
+				version: String(JSON.stringify(value.version)),
+				expected: AUTH_EXPORT_VERSION,
+			}),
 		);
 	}
-	if (!Array.isArray(value.credentials)) throw new AuthTransferError(`${source} has no credentials array.`);
+	if (!Array.isArray(value.credentials)) {
+		throw new AuthTransferError(t("cli.commands.auth.invalid.credentials", { source }));
+	}
 	const credentials = value.credentials.map((entry: unknown, index): AuthExportEntry => {
 		const where = `${source}: credentials[${index}]`;
 		if (!isRecord(entry) || typeof entry.provider !== "string" || entry.provider.length === 0) {
-			throw new AuthTransferError(`${where} has no provider.`);
+			throw new AuthTransferError(t("cli.commands.auth.invalid.provider", { where }));
 		}
 		return {
 			provider: entry.provider,
@@ -179,30 +184,39 @@ export default class Auth extends Command {
 		}),
 	};
 
-	static examples = [
-		"# Write every stored credential to a file (keep it secret)\n  omp auth export > credentials.json",
-		"# Merge them into this machine's credential store\n  omp auth import credentials.json",
-		"# Copy credentials to another machine over SSH\n  omp auth export | ssh host omp auth import -",
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.auth.example.export")}\n  omp auth export > credentials.json`,
+			`# ${t("cli.commands.auth.example.import")}\n  omp auth import credentials.json`,
+			`# ${t("cli.commands.auth.example.ssh")}\n  omp auth export | ssh host omp auth import -`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, argv } = await this.parse(Auth);
 		const action = args.action;
 		if (action === "export" && argv.length > 1) {
-			throw new CliUsageError(`Unexpected argument "${argv[1]}". Usage: omp auth export`);
+			throw new CliUsageError(
+				t("cli.commands.auth.error.unexpected_argument", { arg: String(argv[1]), usage: "omp auth export" }),
+			);
 		}
 		if (action === "import" && !args.file) {
-			throw new CliUsageError("Missing credential file. Usage: omp auth import <file|->");
+			throw new CliUsageError(t("cli.commands.auth.error.missing_file"));
 		}
 		if (action === "import" && argv.length > 2) {
-			throw new CliUsageError(`Unexpected argument "${argv[2]}". Usage: omp auth import <file|->`);
+			throw new CliUsageError(
+				t("cli.commands.auth.error.unexpected_argument", {
+					arg: String(argv[2]),
+					usage: "omp auth import <file|->",
+				}),
+			);
 		}
 
 		const broker = await resolveAuthBrokerConfig();
 		if (broker) {
 			process.stderr.write(
-				`${chalk.red(`error: omp uses the auth broker at ${broker.url}; credentials live there, not in this machine's agent.db.`)}\n` +
-					"Run this on the broker host, or disable the broker (`omp config reset auth.broker.url`) first.\n",
+				`${chalk.red(t("cli.commands.auth.error.broker_in_use", { url: broker.url }))}\n` +
+					`${t("cli.commands.auth.error.broker_hint")}\n`,
 			);
 			process.exitCode = 1;
 			return;
@@ -219,7 +233,7 @@ export default class Auth extends Command {
 			const oauthCount = data.credentials.filter(entry => entry.credential.type === "oauth").length;
 			if (oauthCount > 0) {
 				process.stderr.write(
-					`${chalk.yellow(`warning: this output holds live secrets, including ${oauthCount} OAuth refresh token(s). Providers that rotate refresh tokens on use accept only the newest one: once the importing machine refreshes, this machine may be signed out of those accounts.`)}\n`,
+					`${chalk.yellow(t("cli.commands.auth.warning.live_secrets", { count: oauthCount }))}\n`,
 				);
 			}
 			process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
@@ -232,7 +246,7 @@ export default class Auth extends Command {
 			text = file === "-" ? await Bun.stdin.text() : await Bun.file(file).text();
 		} catch (error) {
 			if (!isEnoent(error)) throw error;
-			process.stderr.write(`${chalk.red(`error: credential file not found: ${file}`)}\n`);
+			process.stderr.write(`${chalk.red(t("cli.commands.auth.error.file_not_found", { file }))}\n`);
 			process.exitCode = 1;
 			return;
 		}
@@ -241,7 +255,9 @@ export default class Auth extends Command {
 			data = parseAuthExport(text, file === "-" ? "stdin" : file);
 		} catch (error) {
 			if (!(error instanceof AuthTransferError)) throw error;
-			process.stderr.write(`${chalk.red(`error: ${error.message}`)}\n`);
+			process.stderr.write(
+				`${chalk.red(t("cli.commands.auth.error.invalid_export", { message: error.message }))}\n`,
+			);
 			process.exitCode = 1;
 			return;
 		}
@@ -250,8 +266,11 @@ export default class Auth extends Command {
 			const summary = await importAuthCredentials(store, data);
 			process.stderr.write(
 				summary.imported === 0
-					? "No credentials to import.\n"
-					: `Imported ${summary.imported} credential(s) for ${summary.providers.join(", ")}.\n`,
+					? `${t("cli.commands.auth.import.empty")}\n`
+					: `${t("cli.commands.auth.import.summary", {
+							count: summary.imported,
+							providers: summary.providers.join(", "),
+						})}\n`,
 			);
 		} finally {
 			store.close();

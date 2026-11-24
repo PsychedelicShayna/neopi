@@ -1,3 +1,5 @@
+import { interpolate, type Translation } from "./i18n";
+
 /** Small pure formatting helpers shared across collab-web components. */
 
 /** HTML-escape text destined for `dangerouslySetInnerHTML`. */
@@ -41,17 +43,20 @@ export function fmtDuration(ms: number): string {
 }
 
 /** "now", "42s ago", "5m ago", "3h ago", "2d ago". Input: epoch ms. */
-export function relTime(tsMs: number): string {
+export function relTime(
+	tsMs: number,
+	tr: Translation = (_key, english, values) => interpolate(english, values),
+): string {
 	if (!Number.isFinite(tsMs)) return "";
 	const delta = Date.now() - tsMs;
-	if (delta < 10_000) return "now";
+	if (delta < 10_000) return tr("viewer.agent_age.now", "now");
 	const s = Math.floor(delta / 1000);
-	if (s < 60) return `${s}s ago`;
+	if (s < 60) return tr("viewer.agent_age.seconds", "{count}s ago", { count: s });
 	const min = Math.floor(s / 60);
-	if (min < 60) return `${min}m ago`;
+	if (min < 60) return tr("viewer.agent_age.minutes", "{count}m ago", { count: min });
 	const h = Math.floor(min / 60);
-	if (h < 24) return `${h}h ago`;
-	return `${Math.floor(h / 24)}d ago`;
+	if (h < 24) return tr("viewer.agent_age.hours", "{count}h ago", { count: h });
+	return tr("viewer.agent_age.days", "{count}d ago", { count: Math.floor(h / 24) });
 }
 
 /** "73%" from a 0–100 percent; em dash for null/non-finite. */

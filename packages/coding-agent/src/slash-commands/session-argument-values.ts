@@ -3,6 +3,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { IrcBus } from "../irc/bus";
 import { AgentRegistry } from "../registry/agent-registry";
 import { ensurePersistedRoster, sessionFileBelongsToRoot } from "../registry/persisted-agents";
@@ -64,7 +65,7 @@ export async function completeSessionPinArguments(prefix: string, runtime?: TuiS
 		rows.push({
 			value: `${position} `,
 			label: `${position}. ${label}`,
-			description: account.active ? "Current account" : undefined,
+			description: account.active ? t("commands.arguments.currentAccount") : undefined,
 			preserveInputOnSubmit: !query,
 			submitsCommand: true,
 		});
@@ -151,7 +152,11 @@ export function todoTargetCompletions(includePhases: boolean) {
 			for (const phase of runtime?.ctx.todoPhases ?? []) {
 				const value = phase.name.toLowerCase();
 				if (!value.includes(query) || rows.has(value) || /[\r\n]/.test(value)) continue;
-				rows.set(value, { value: `${phase.name} `, label: oneLine(phase.name), description: "Phase" });
+				rows.set(value, {
+					value: `${phase.name} `,
+					label: oneLine(phase.name),
+					description: t("commands.arguments.phase"),
+				});
 			}
 		}
 		const items = [...rows.values()].map(row => ({
@@ -161,7 +166,12 @@ export function todoTargetCompletions(includePhases: boolean) {
 		}));
 		if (includePhases && "all".startsWith(query)) {
 			// The handlers use a bare verb for "all"; a literal `all` can name a task.
-			items.push({ value: "", label: "all (no target)", submitsCommand: true, preserveInputOnSubmit: true });
+			items.push({
+				value: "",
+				label: t("commands.arguments.allNoTarget"),
+				submitsCommand: true,
+				preserveInputOnSubmit: true,
+			});
 		}
 		return items.length ? items : null;
 	};

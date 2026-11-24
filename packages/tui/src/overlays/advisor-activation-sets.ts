@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { SelectList, type SelectItem, type SelectListNavigationState } from "../components/select-list";
 import { MenuKeyReader } from "../components/menu-navigation";
 import { menuHintLines } from "../components/menu-hints";
@@ -111,13 +112,23 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 			if (!entry.visible && !selected) continue;
 			if (id) represented.add(id);
 			const flags = [
-				!entry.visible ? "OUT OF SCOPE — remove reference" : undefined,
-				!entry.fileEnabled ? "file disabled (set cannot enable file)" : undefined,
+				!entry.visible ? t("overlaysModel.advisorActivationSets.outOfScope") : undefined,
+				!entry.fileEnabled ? t("overlaysModel.advisorActivationSets.fileDisabled") : undefined,
 				entry.unavailableReason,
-				!id ? "legacy: ID assigned on Save" : undefined,
+				!id ? t("overlaysModel.advisorActivationSets.legacyId") : undefined,
 				this.#ids !== null
-					? `set overrides own ${entry.advisor.enabled === false ? "off" : "on"} flag`
-					: `own flag ${entry.advisor.enabled === false ? "off" : "on"}`,
+					? t("overlaysModel.advisorActivationSets.overrideFlag", {
+							state:
+								entry.advisor.enabled === false
+									? t("overlaysModel.advisorActivationSets.flagOff")
+									: t("overlaysModel.advisorActivationSets.flagOn"),
+						})
+					: t("overlaysModel.advisorActivationSets.ownFlag", {
+							state:
+								entry.advisor.enabled === false
+									? t("overlaysModel.advisorActivationSets.flagOff")
+									: t("overlaysModel.advisorActivationSets.flagOn"),
+						}),
 			]
 				.filter(Boolean)
 				.join(" · ");
@@ -130,14 +141,14 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 			if (!represented.has(id))
 				items.push({
 					value: `missing:${id}`,
-					label: `[x] MISSING advisor · ${sanitizeDisplayLine(id)} · Space removes reference`,
+					label: t("overlaysModel.advisorActivationSets.missingAdvisor", { id: sanitizeDisplayLine(id) }),
 				});
 		}
 		items.push(
-			{ value: "create", label: "Create empty activation set (no advisors selected)" },
-			{ value: "clear", label: "Clear activation set (use per-advisor flags)" },
-			{ value: "save", label: "Save role activation set" },
-			{ value: "back", label: "Back" },
+			{ value: "create", label: t("overlaysModel.advisorActivationSets.createEmpty") },
+			{ value: "clear", label: t("overlaysModel.advisorActivationSets.clearActivationSet") },
+			{ value: "save", label: t("overlaysModel.advisorActivationSets.saveRoleSet") },
+			{ value: "back", label: t("overlaysModel.advisorActivationSets.back") },
 		);
 		const list = new SelectList(items, 20, getSelectListTheme(), { search: "always", activateOnSpace: false });
 		if (navigation) list.restoreNavigation(navigation);
@@ -199,10 +210,14 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 			this.#discardArmed = false;
 			this.#list = this.#buildList(this.#list.navigationState());
 			this.#cb.notify(
-				`Saved ${this.#scope} role ${this.#role} advisor activation set.${assigned.length > 0 ? " New advisor IDs saved; normal main sessions reload WATCHDOG changes automatically. Return to advisor configuration and press a for a manual reload." : ""}`,
+				t("overlaysModel.advisorActivationSets.savedRoleSet", {
+					scope: this.#scope,
+					role: this.#role,
+					extra: assigned.length > 0 ? t("overlaysModel.advisorActivationSets.newIdsSaved") : "",
+				}),
 			);
 		} catch (error) {
-			this.#cb.notify(`Advisor activation set: ${String(error)}`);
+			this.#cb.notify(t("overlaysModel.advisorActivationSets.error", { error: String(error) }));
 		} finally {
 			this.#busy = false;
 			this.#cb.requestRender();
@@ -224,39 +239,63 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 			candidate => `entry:${candidate.key}` === this.#list.getSelectedItem()?.value,
 		);
 		return [
-			`Scope: ${this.#scope === "user" ? "User" : this.#scope === "session" ? "Session" : "Project .omp"} · role: ${sanitizeDisplayLine(this.#role)}`,
+			t("overlaysModel.advisorActivationSets.scopeRole", {
+				scope:
+					this.#scope === "user"
+						? t("overlaysModel.advisorActivationSets.scopeUser")
+						: this.#scope === "session"
+							? t("overlaysModel.advisorActivationSets.scopeSession")
+							: t("overlaysModel.advisorActivationSets.scopeProjectOmp"),
+				role: sanitizeDisplayLine(this.#role),
+			}),
 			this.#ids === null
-				? "No role set: use ordinary settings / per-advisor flags."
-				: "Activation set replaces individual enabled flags; empty means no advisors.",
+				? t("overlaysModel.advisorActivationSets.noRoleSet")
+				: t("overlaysModel.advisorActivationSets.setReplacesFlags"),
 			this.#state.inherited && !this.#dirty
-				? `Inherited from ${shortenPath(this.#state.source)}; editing creates a local set. Clear masks the inherited role set.`
-				: `Source: ${this.#dirty ? "unsaved draft" : shortenPath(this.#state.source)}`,
+				? t("overlaysModel.advisorActivationSets.inherited", { source: shortenPath(this.#state.source) })
+				: t("overlaysModel.advisorActivationSets.source", {
+						source: this.#dirty
+							? t("overlaysModel.advisorActivationSets.unsavedDraft")
+							: shortenPath(this.#state.source),
+					}),
 			this.#state.globalEnabled
-				? "Global advisor switch is on; whole-file gates still apply."
-				: "Global advisor switch is OFF; this set cannot turn advisors on.",
+				? t("overlaysModel.advisorActivationSets.globalSwitchOn")
+				: t("overlaysModel.advisorActivationSets.globalSwitchOff"),
 			...(this.#state.effectiveNote ? [this.#state.effectiveNote] : []),
 			...(entry
 				? [
-						`Stable ID: ${sanitizeDisplayLine(entry.advisor.id ?? "(assigned on Save)")}`,
-						`Advisor source: ${sanitizeDisplayLine(shortenPath(entry.path))}`,
+						t("overlaysModel.advisorActivationSets.stableId", {
+							id: sanitizeDisplayLine(
+								entry.advisor.id ?? t("overlaysModel.advisorActivationSets.assignedOnSave"),
+							),
+						}),
+						t("overlaysModel.advisorActivationSets.advisorSource", {
+							path: sanitizeDisplayLine(shortenPath(entry.path)),
+						}),
 					]
 				: []),
-			...(this.#discardArmed ? ["Unsaved changes: Esc again discards; s saves."] : []),
+			...(this.#discardArmed ? [t("overlaysModel.advisorActivationSets.discardHint")] : []),
 		].map(sanitizeDisplayLine);
 	}
 
 	render(width: number): readonly string[] {
-		const hints = menuHintLines(
-			"Space/Enter toggle · c create empty · Backspace clear set · s save · / filter · Esc back",
-			Math.max(1, width - 4),
-		);
+		const hints = menuHintLines(t("overlaysModel.advisorActivationSets.terminalHint"), Math.max(1, width - 4));
 		const summary = this.#summary().flatMap(line =>
 			Bun.wrapAnsi(line, Math.max(1, width - 4), { hard: true }).split("\n"),
 		);
 		this.#listTop = summary.length + 2;
 		this.#list.setMaxVisible(Math.max(1, (process.stdout.rows || 40) - summary.length - hints.length - 5));
 		return [
-			topBorder(width, `Role advisor activation set${this.#busy ? " · saving" : this.#dirty ? " · unsaved" : ""}`),
+			topBorder(
+				width,
+				t("overlaysModel.advisorActivationSets.heading", {
+					state: this.#busy
+						? t("overlaysModel.advisorActivationSets.savingSuffix")
+						: this.#dirty
+							? t("overlaysModel.advisorActivationSets.unsavedSuffix")
+							: "",
+				}),
+			),
 			...summary.map(line => row(line, width)),
 			divider(width),
 			...this.#list.render(width - 4).map(line => row(line, width)),
@@ -271,17 +310,20 @@ export class AdvisorActivationSetOverlayComponent implements Component {
 	describe(_cx: DescribeContext): NativeNode {
 		return overlayCard(
 			"omp.overlay.advisor-activation-set",
-			`Role ${sanitizeDisplayLine(this.#role)} advisor activation set`,
+			t("overlaysModel.advisorActivationSets.roleHeading", { role: sanitizeDisplayLine(this.#role) }),
 			[
 				...this.#summary().map(line => text(line, { wrap: "word" })),
 				picker({
-					...selectListPicker(this.#list, { title: `Role ${sanitizeDisplayLine(this.#role)}`, searchable: true }),
+					...selectListPicker(this.#list, {
+						title: t("overlaysModel.advisorActivationSets.roleTitle", { role: sanitizeDisplayLine(this.#role) }),
+						searchable: true,
+					}),
 					actions: [
-						pickerAction("toggle", "Toggle", "space"),
-						pickerAction("create", "Create empty", "c"),
-						pickerAction("clear", "Clear set", "backspace"),
-						pickerAction("save", "Save", "s"),
-						pickerAction("close", "Back", "escape"),
+						pickerAction("toggle", t("overlaysModel.advisorActivationSets.toggle"), "space"),
+						pickerAction("create", t("overlaysModel.advisorActivationSets.createEmptyShort"), "c"),
+						pickerAction("clear", t("overlaysModel.advisorActivationSets.clearSet"), "backspace"),
+						pickerAction("save", t("overlaysModel.advisorActivationSets.save"), "s"),
+						pickerAction("close", t("overlaysModel.advisorActivationSets.back"), "escape"),
 					],
 				}),
 			],

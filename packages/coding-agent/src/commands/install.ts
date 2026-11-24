@@ -22,6 +22,7 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { installHelp as commandHelp } from "../cli/command-help";
 import { type PluginAction, type PluginCommandArgs, runPluginCommand } from "../cli/plugin-cli";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -67,7 +68,7 @@ export default class Install extends Command {
 		const targets = Array.isArray(args.targets) ? args.targets : args.targets ? [args.targets] : [];
 
 		if (targets.length === 0) {
-			process.stderr.write(`Usage: ${APP_NAME} install <path | npm-spec | name@marketplace> [...]\n`);
+			process.stderr.write(t("cli.commands.install.usage", { app: APP_NAME }));
 			process.exit(1);
 		}
 

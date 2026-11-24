@@ -5,6 +5,7 @@
  * let the adapter tear the UI down. The standalone TUI auto-renders on input,
  * so no manual render wiring is needed.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem } from "../components/select-list";
 import { selectStandaloneItem } from "./standalone-picker";
 
@@ -20,6 +21,6 @@ export async function selectSetupModel(
 	return selectStandaloneItem(title, items, {
 		currentValue,
 		maxVisible: 10,
-		picker: { icon: "model", noun: "models" },
+		picker: { icon: "model", noun: t("cli.commands.setup.model_picker.models") },
 	});
 }

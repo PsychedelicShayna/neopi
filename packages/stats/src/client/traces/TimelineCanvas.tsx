@@ -6,6 +6,7 @@
  * click-to-select, double-click-to-zoom.
  */
 
+import { LocalizedText, useTranslation } from "../i18n";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -226,6 +227,7 @@ export function TimelineCanvas({
 	traceStart,
 	autoFocus = true,
 }: TimelineCanvasProps) {
+	const tr = useTranslation();
 	const colors = useTraceTheme();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -523,8 +525,10 @@ export function TimelineCanvas({
 									onClick={() => onToggleCollapse(block.track.id)}
 									aria-label={
 										collapsed.has(block.track.id)
-											? `Expand ${block.track.label}`
-											: `Collapse ${block.track.label}`
+											? tr("pages.timelinecanvas.expand_name", "Expand {name}", { name: block.track.label })
+											: tr("pages.timelinecanvas.collapse_name", "Collapse {name}", {
+													name: block.track.label,
+												})
 									}
 									className="traces-chevron"
 								>
@@ -548,7 +552,7 @@ export function TimelineCanvas({
 								className="traces-gutter-lane"
 								style={{ top: lane.y, left: 20 + block.depth * 14, lineHeight: `${LANE_H}px` }}
 							>
-								{lane.label}
+								{tr(`pages.trace_lane.${lane.kind}`, lane.label)}
 							</div>
 						))}
 					</div>
@@ -564,7 +568,10 @@ export function TimelineCanvas({
 					style={cssSize}
 					tabIndex={0}
 					role="application"
-					aria-label="Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection."
+					aria-label={tr(
+						"pages.timelinecanvas.trace_timeline_w_and_s_zoom_a",
+						"Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection.",
+					)}
 					onPointerDown={handlePointerDown}
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerUp}
@@ -862,7 +869,12 @@ function renderTooltip(hover: Hit, traceStart: number, ref: React.RefObject<HTML
 			<div className="traces-tooltip-title truncate">{span.label}</div>
 			<div className="muted num">
 				{formatDurationMs(span.end - span.start)} · {new Date(span.start).toLocaleTimeString()} (
-				{formatOffset(span.start - traceStart)}){span.unterminated ? " · unterminated" : ""}
+				{formatOffset(span.start - traceStart)})
+				{span.unterminated ? (
+					<LocalizedText messageKey="pages.timelinecanvas.unterminated" english={" · unterminated"} />
+				) : (
+					""
+				)}
 			</div>
 			{span.kind === "model" && (
 				<div className="muted num">

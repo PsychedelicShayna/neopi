@@ -2,6 +2,7 @@
  * Display text for context entries. Each header has an ANSI-string form (`render`)
  * and a span form (`describe`); keep the twins visually identical.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { CONTEXT_PRESENTATION } from "../chrome/context-presentation";
@@ -68,7 +69,7 @@ export function entryBodyText(entry: ContextViewEntry, limit = Number.POSITIVE_I
 export function tokenEstimate(item: ContextViewEntry | ContextThinkingGroup): string {
 	// A grouped entry shares its group's estimate, which the group heading shows.
 	if ("thinkingGroup" in item && item.thinkingGroup) return "—";
-	if (item.interrupted) return "N/A · Interrupted";
+	if (item.interrupted) return t("overlays.context_viewer_format.interrupted");
 	return `${item.tokens.toLocaleString("en-US")} ${item.tokens === 1 ? "token" : "tokens"}`;
 }
 
@@ -98,8 +99,11 @@ export function groupHeaderLine(group: ContextThinkingGroup, category: ContextCa
 export function previewHint(selected: boolean): string {
 	const confirm = selected ? editorKey("tui.select.confirm") : "";
 	return (
-		theme.fg("dim", "  … more") +
-		(confirm ? theme.fg("dim", " · ") + theme.fg("accent", `${confirm} View Content`) : "")
+		theme.fg("dim", t("overlays.context_viewer_format.more")) +
+		(confirm
+			? theme.fg("dim", " · ") +
+				theme.fg("accent", t("overlays.context_viewer_format.view_content", { confirm: `${confirm}` }))
+			: "")
 	);
 }
 

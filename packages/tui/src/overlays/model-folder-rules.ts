@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getEffectiveTokenCost, getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import type { ModelBrowserPerf } from "./model-browser";
@@ -19,15 +20,33 @@ export const MODEL_FOLDER_ATTRIBUTES = {
 
 type Attribute = keyof typeof MODEL_FOLDER_ATTRIBUTES;
 const OPERATORS = {
-	">=": "At least",
-	"<=": "At most",
-	">": "Greater than",
-	"<": "Less than",
-	"==": "Equals",
-	"!=": "Does not equal",
-	"~=": "Case-insensitive regex",
-	in: "Contains text or belongs to a comma-separated list",
-	"*=": "Glob",
+	get ">="() {
+		return t("overlaysModel.folderRules.operator.atLeast");
+	},
+	get "<="() {
+		return t("overlaysModel.folderRules.operator.atMost");
+	},
+	get ">"() {
+		return t("overlaysModel.folderRules.operator.greater");
+	},
+	get "<"() {
+		return t("overlaysModel.folderRules.operator.less");
+	},
+	get "=="() {
+		return t("overlaysModel.folderRules.operator.equal");
+	},
+	get "!="() {
+		return t("overlaysModel.folderRules.operator.unequal");
+	},
+	get "~="() {
+		return t("overlaysModel.folderRules.operator.regex");
+	},
+	get in() {
+		return t("overlaysModel.folderRules.operator.contains");
+	},
+	get "*="() {
+		return t("overlaysModel.folderRules.operator.glob");
+	},
 } as const;
 type Operator = keyof typeof OPERATORS;
 
@@ -71,29 +90,40 @@ function allowsOperator(attribute: Attribute, operator: Operator): boolean {
 
 function decodeValue(value: string, kind: "text" | "number" | "boolean"): Scalar {
 	const text = value.trim();
-	if (!text) throw new Error("Enter a comparison value.");
+	if (!text) throw new Error(t("overlaysModel.folderRules.error.value"));
 	if (kind === "text") return text.toLowerCase();
 	if (kind === "boolean") {
 		if (text === "true") return true;
 		if (text === "false") return false;
-		throw new Error("Enter true or false.");
+		throw new Error(t("overlaysModel.folderRules.error.boolean"));
 	}
 	const number = Number(text);
-	if (!Number.isFinite(number)) throw new Error("Enter a finite number.");
+	if (!Number.isFinite(number)) throw new Error(t("overlaysModel.folderRules.error.finite"));
 	return number;
 }
 
 function compileComparison(condition: ModelFolderCondition): (fact: Scalar) => boolean {
 	const { attribute, operator, value } = condition;
 	const kind = MODEL_FOLDER_ATTRIBUTES[attribute].kind;
-	if (!allowsOperator(attribute, operator)) throw new Error(`Operator ${operator} cannot compare ${kind} values.`);
+	if (!allowsOperator(attribute, operator))
+		throw new Error(
+			t("overlaysModel.folderRules.error.operatorKind", {
+				operator,
+				kind:
+					kind === "text"
+						? t("overlaysModel.folderRules.kind.text")
+						: kind === "number"
+							? t("overlaysModel.folderRules.kind.number")
+							: t("overlaysModel.folderRules.kind.boolean"),
+			}),
+		);
 	if (operator === "~=") {
-		if (!value.trim()) throw new Error("Enter a regular expression.");
+		if (!value.trim()) throw new Error(t("overlaysModel.folderRules.error.regex"));
 		let regex: RegExp;
 		try {
 			regex = new RegExp(value, "i");
 		} catch {
-			throw new Error("Invalid regular expression.");
+			throw new Error(t("overlaysModel.folderRules.error.invalidRegex"));
 		}
 		return fact => typeof fact === "string" && regex.test(fact);
 	}
@@ -151,10 +181,11 @@ export function validateModelFolderRules(raw: unknown): void {
 		!("clauses" in raw) ||
 		!Array.isArray(raw.clauses)
 	) {
-		throw new Error("Folder rules need an ingest toggle and a list of clauses.");
+		throw new Error(t("overlaysModel.folderRules.error.rulesShape"));
 	}
 	for (const clause of raw.clauses as unknown[]) {
-		if (!Array.isArray(clause) || clause.length === 0) throw new Error("Each folder rule clause needs a condition.");
+		if (!Array.isArray(clause) || clause.length === 0)
+			throw new Error(t("overlaysModel.folderRules.error.emptyClause"));
 		for (const condition of clause as unknown[]) {
 			if (
 				!condition ||
@@ -169,7 +200,7 @@ export function validateModelFolderRules(raw: unknown): void {
 				typeof condition.value !== "string" ||
 				("invert" in condition && condition.invert !== undefined && typeof condition.invert !== "boolean")
 			)
-				throw new Error("Each folder condition needs an attribute, operator, and value.");
+				throw new Error(t("overlaysModel.folderRules.error.conditionShape"));
 			compileComparison(condition as ModelFolderCondition);
 		}
 	}

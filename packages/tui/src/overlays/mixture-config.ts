@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
@@ -60,7 +61,7 @@ export interface MixtureConfigCallbacks {
 
 function preview(text: string | undefined, width: number): string {
 	const first = sanitizeDisplayLine(text?.trim().split("\n", 1)[0] ?? "");
-	return first ? truncateToWidth(first, width) : "(none)";
+	return first ? truncateToWidth(first, width) : t("overlaysModel.mixtureConfig.none");
 }
 
 const DECISION_PARTS = ["output", "input", "toolTrace"] as const;
@@ -209,7 +210,17 @@ export class MixtureConfigOverlayComponent implements Component {
 	render(width: number): readonly string[] {
 		const height = Math.max(14, process.stdout.rows || 40);
 		this.#bodyRows = Math.max(3, height - 4);
-		const title = `Mixture configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : this.#pendingApply ? "  ◐ saved, not applied" : ""}`;
+		const title = t("overlaysModel.mixtureConfig.heading", {
+			scope:
+				this.#scope === "user"
+					? t("overlaysModel.mixtureConfig.scope.user")
+					: t("overlaysModel.mixtureConfig.scope.project"),
+			state: this.#dirty
+				? t("overlaysModel.mixtureConfig.unsavedSuffix")
+				: this.#pendingApply
+					? t("overlaysModel.mixtureConfig.pendingApplySuffix")
+					: "",
+		});
 		this.#split.setNarrowPane(this.#screen === "list" && this.#previewFocused ? "right" : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(this.#bodyRows);
@@ -217,8 +228,15 @@ export class MixtureConfigOverlayComponent implements Component {
 		const left = geometry.left?.width ?? 0;
 		this.#top.setLines([geometry.mode === "split" ? topBorderSplit(width, title, left) : topBorder(width, title)]);
 		this.#divider.setLines([geometry.mode === "split" ? dividerSplit(width, left) : divider(width)]);
-		const status = this.#dirty ? "● unsaved · " : this.#pendingApply ? "◐ saved, not applied · " : "";
-		const pane = this.#screen === "list" ? `${this.#previewFocused ? "Preview" : "List"} · ` : "";
+		const status = this.#dirty
+			? t("overlaysModel.mixtureConfig.unsavedStatus")
+			: this.#pendingApply
+				? t("overlaysModel.mixtureConfig.pendingApplyStatus")
+				: "";
+		const pane =
+			this.#screen === "list"
+				? `${this.#previewFocused ? t("overlaysModel.mixtureConfig.preview") : t("overlaysModel.mixtureConfig.list")} · `
+				: "";
 		this.#footerRow.setLines([row(theme.fg("dim", status + pane + sanitizeDisplayLine(this.#footer)), width)]);
 		this.#bottom.setLines([bottomBorder(width)]);
 		this.#frame.setHeight(this.#bodyRows + 4);
@@ -358,30 +376,34 @@ export class MixtureConfigOverlayComponent implements Component {
 		const value = this.#active instanceof SelectList ? (this.#active.getSelectedItem()?.value ?? "") : "";
 		const index = /^mixture:(\d+)$/.exec(value);
 		const mixture = index ? this.#doc.mixtures[Number(index[1])] : undefined;
-		if (!mixture) return [...warnings, theme.fg("muted", "Choose a mixture to see its members and graph.")];
+		if (!mixture) return [...warnings, theme.fg("muted", t("overlaysModel.mixtureConfig.chooseMixture"))];
 		const lines = [
 			theme.bold(sanitizeDisplayLine(mixture.name)),
 			preview(mixture.description, width),
 			"",
-			`Entry: ${sanitizeDisplayLine(mixture.entry)}`,
+			t("overlaysModel.mixtureConfig.entry", { member: sanitizeDisplayLine(mixture.entry) }),
 			"",
-			"Members:",
+			t("overlaysModel.mixtureConfig.membersHeading"),
 		];
 		for (const member of mixture.members) {
 			lines.push(
-				`  ${sanitizeDisplayLine(member.id)} · ${member.kind === "verdict" ? "verdict" : sanitizeDisplayLine(member.model || "(choose model)")}`,
+				`  ${sanitizeDisplayLine(member.id)} · ${member.kind === "verdict" ? t("overlaysModel.mixtureConfig.verdict") : sanitizeDisplayLine(member.model || t("overlaysModel.mixtureConfig.chooseModel"))}`,
 			);
 		}
-		lines.push("", "Flow:");
+		lines.push("", t("overlaysModel.mixtureConfig.flow"));
 		for (const edge of mixture.edges) {
 			const destination = isFanoutEdge(edge) ? `[${edge.to.join(", ")}] ⇢ ${edge.join}` : edge.to;
 			const label = edge.id ? ` · ${edge.id}` : "";
 			lines.push(
 				`  ${sanitizeDisplayLine(edge.from)} → ${sanitizeDisplayLine(destination)}${sanitizeDisplayLine(label)}`,
 			);
-			lines.push(`    handoff: ${Object.keys(edge.x).join(", ") || "(no parts)"}`);
+			lines.push(
+				t("overlaysModel.mixtureConfig.handoff", {
+					parts: Object.keys(edge.x).join(", ") || t("overlaysModel.mixtureConfig.noParts"),
+				}),
+			);
 		}
-		if (mixture.edges.length === 0) lines.push("  (no edges — the entry member ends the run)");
+		if (mixture.edges.length === 0) lines.push(t("overlaysModel.mixtureConfig.noEdges"));
 		return [...warnings, ...lines.map(line => truncateToWidth(line, width))];
 	}
 
@@ -443,15 +465,18 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#shortcut = shortcut;
 		const navigation =
 			screen === "list"
-				? "←/→ panes · Tab pane"
+				? t("overlaysModel.mixtureConfig.paneNavigation")
 				: screen === "discard"
-					? "←/Esc keep editing"
+					? t("overlaysModel.mixtureConfig.keepEditingNavigation")
 					: context.page === "thinking"
-						? "←/→ effort"
+						? t("overlaysModel.mixtureConfig.effortNavigation")
 						: context.page !== "field" && this.#openers.size > 0
-							? "← parent / → open"
-							: "← parent";
-		this.#footer = active instanceof SelectList ? `${navigation} · / search · ${footer}` : footer;
+							? t("overlaysModel.mixtureConfig.parentOpenNavigation")
+							: t("overlaysModel.mixtureConfig.parentNavigation");
+		this.#footer =
+			active instanceof SelectList
+				? t("overlaysModel.mixtureConfig.navigationHint", { navigation, footer })
+				: footer;
 		this.#previewScroll = saved?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && (saved?.previewFocused ?? false);
 		this.#navigationContext = context;
@@ -520,27 +545,39 @@ export class MixtureConfigOverlayComponent implements Component {
 			value: `mixture:${index}`,
 			label:
 				this.#pendingDelete === index
-					? `⚠ Delete ${mixture.name}?`
+					? t("overlaysModel.mixtureConfig.deleteMixture", { name: mixture.name })
 					: `${active === mixture.name ? "●" : "○"} ${mixture.name}`,
 			description:
 				this.#pendingDelete === index
-					? "Delete again to confirm"
-					: `${mixture.members.length} members · ${mixture.edges.length} edges`,
+					? t("overlaysModel.mixtureConfig.confirmDelete")
+					: t("overlaysModel.mixtureConfig.mixtureSummary", {
+							members: mixture.members.length,
+							edges: mixture.edges.length,
+						}),
 		}));
 		items.push(
-			{ value: "new", label: "+ Create mixture" },
-			{ value: "scope", label: `Scope: ${this.#scope}`, description: `→ ${this.#otherScope()}` },
-			{ value: "save", label: "Save only" },
-			{ value: "apply", label: "Save & apply" },
-			{ value: "close", label: "Close" },
+			{ value: "new", label: t("overlaysModel.mixtureConfig.createMixture") },
+			{
+				value: "scope",
+				label: t("overlaysModel.mixtureConfig.scopeLabel", {
+					scope:
+						this.#scope === "user"
+							? t("overlaysModel.mixtureConfig.scope.user")
+							: t("overlaysModel.mixtureConfig.scope.project"),
+				}),
+				description: `→ ${this.#otherScope() === "user" ? t("overlaysModel.mixtureConfig.scope.user") : t("overlaysModel.mixtureConfig.scope.project")}`,
+			},
+			{ value: "save", label: t("overlaysModel.mixtureConfig.saveOnly") },
+			{ value: "apply", label: t("overlaysModel.mixtureConfig.saveApply") },
+			{ value: "close", label: t("overlaysModel.mixtureConfig.close") },
 		);
 		this.#menu(
 			"list",
 			items,
 			selected,
 			this.#pendingDelete !== null
-				? "Delete again to confirm · any other key cancels"
-				: "Enter edit · Space activate · Del delete · s save · a apply · Esc close",
+				? t("overlaysModel.mixtureConfig.deleteHint")
+				: t("overlaysModel.mixtureConfig.listHint"),
 			value => this.#onListSelect(value),
 			() => this.#close(),
 			(data, list) => {
@@ -571,11 +608,19 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#menu(
 			"discard",
 			[
-				{ value: "keep", label: "Keep editing", description: "Return to the mixture list" },
-				{ value: "discard", label: "Discard changes and close", description: "Unsaved changes will be lost" },
+				{
+					value: "keep",
+					label: t("overlaysModel.mixtureConfig.keepEditing"),
+					description: t("overlaysModel.mixtureConfig.returnToList"),
+				},
+				{
+					value: "discard",
+					label: t("overlaysModel.mixtureConfig.discardClose"),
+					description: t("overlaysModel.mixtureConfig.changesLost"),
+				},
 			],
 			"keep",
-			"Unsaved changes · Enter choose · Esc keep editing",
+			t("overlaysModel.mixtureConfig.discardHint"),
 			value => {
 				if (value === "discard") this.#cb.close();
 				else this.#showList();
@@ -611,7 +656,7 @@ export class MixtureConfigOverlayComponent implements Component {
 
 	async #apply(): Promise<void> {
 		if (!this.#dirty && !this.#pendingApply) {
-			this.#cb.notify("Nothing new to apply.");
+			this.#cb.notify(t("overlaysModel.mixtureConfig.nothingToApply"));
 			return;
 		}
 		this.#pendingOperations++;
@@ -632,7 +677,7 @@ export class MixtureConfigOverlayComponent implements Component {
 		}
 		if (value === "scope") {
 			if (this.#dirty) {
-				this.#cb.notify("Unsaved changes — save or close before switching scope.");
+				this.#cb.notify(t("overlaysModel.mixtureConfig.saveBeforeScope"));
 				return;
 			}
 			const scope = this.#otherScope();
@@ -681,7 +726,7 @@ export class MixtureConfigOverlayComponent implements Component {
 
 	#newMixture(): void {
 		this.#editText(
-			"New mixture name",
+			t("overlaysModel.mixtureConfig.newMixtureName"),
 			"",
 			value => {
 				const name = value.trim();
@@ -707,7 +752,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			if (accepted !== false && this.#active === input) cancel();
 		};
 		input.onEscape = cancel;
-		this.#setScreen("input", input, `${label} · Enter save · Esc cancel`);
+		this.#setScreen("input", input, t("overlaysModel.mixtureConfig.editTextHint", { label }));
 	}
 
 	#editLong(label: string, current: string, save: (value: string) => void, back: () => void): void {
@@ -722,7 +767,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			back,
 			{ externalEditor: this.#deps.externalEditor, menuHistory: true },
 		);
-		this.#setScreen("editor", editor, "Ctrl+Q save · Ctrl+G external editor · Esc cancel");
+		this.#setScreen("editor", editor, t("overlaysModel.mixtureConfig.editorHint"));
 	}
 
 	#choose(
@@ -736,7 +781,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			"choice",
 			values,
 			selected,
-			`${label} · Enter choose · Esc cancel`,
+			t("overlaysModel.mixtureConfig.chooseHint", { label }),
 			value => {
 				save(value);
 				back();
@@ -754,37 +799,53 @@ export class MixtureConfigOverlayComponent implements Component {
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		const items: SelectItem[] = [
-			{ value: "name", label: "Name", description: mixture.name },
-			{ value: "description", label: "Description", description: preview(mixture.description, 55) },
-			{ value: "entry", label: "Entry member", description: mixture.entry },
+			{ value: "name", label: t("overlaysModel.mixtureConfig.name"), description: mixture.name },
+			{
+				value: "description",
+				label: t("overlaysModel.mixtureConfig.description"),
+				description: preview(mixture.description, 55),
+			},
+			{ value: "entry", label: t("overlaysModel.mixtureConfig.entryMember"), description: mixture.entry },
 			{
 				value: "members",
-				label: `Members (${mixture.members.length})`,
+				label: t("overlaysModel.mixtureConfig.membersLabel", { count: mixture.members.length }),
 				description: mixture.members.map(member => member.id).join(" → "),
 			},
 			{
 				value: "edges",
-				label: `Edges (${mixture.edges.length})`,
+				label: t("overlaysModel.mixtureConfig.edgesLabel", { count: mixture.edges.length }),
 				description: mixture.edges.map(mixtureEdgeId).join(", "),
 			},
 			{
 				value: "limits",
-				label: "Limits",
-				description: mixture.limits ? `${mixture.limits.maxHops ?? "default"} hops` : "defaults",
+				label: t("overlaysModel.mixtureConfig.limits"),
+				description: mixture.limits
+					? t("overlaysModel.mixtureConfig.limitHops", {
+							count: mixture.limits.maxHops ?? t("overlaysModel.mixtureConfig.defaultLower"),
+						})
+					: t("overlaysModel.mixtureConfig.defaults"),
 			},
-			{ value: "roles", label: "Role presets", description: `${Object.keys(mixture.roles ?? {}).length} local` },
+			{
+				value: "roles",
+				label: t("overlaysModel.mixtureConfig.rolePresets"),
+				description: t("overlaysModel.mixtureConfig.localPresets", {
+					count: Object.keys(mixture.roles ?? {}).length,
+				}),
+			},
 			{
 				value: "envelopes",
-				label: "Envelope presets",
-				description: `${Object.keys(mixture.envelopes ?? {}).length} local`,
+				label: t("overlaysModel.mixtureConfig.envelopePresets"),
+				description: t("overlaysModel.mixtureConfig.localPresets", {
+					count: Object.keys(mixture.envelopes ?? {}).length,
+				}),
 			},
-			{ value: "back", label: "Back to mixtures" },
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToMixtures") },
 		];
 		this.#menu(
 			"mixture",
 			items,
 			selected,
-			`Editing ${mixture.name} · Enter select · Esc back`,
+			t("overlaysModel.mixtureConfig.editMixtureHint", { name: mixture.name }),
 			undefined,
 			() => this.#showList(`mixture:${index}`),
 			undefined,
@@ -793,7 +854,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					switch (value) {
 						case "name":
 							this.#editText(
-								"Mixture name",
+								t("overlaysModel.mixtureConfig.mixtureName"),
 								mixture.name,
 								text => {
 									if (text.trim()) {
@@ -806,7 +867,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "description":
 							this.#editText(
-								"Description",
+								t("overlaysModel.mixtureConfig.description"),
 								mixture.description ?? "",
 								text => {
 									mixture.description = text.trim() || undefined;
@@ -817,7 +878,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "entry":
 							this.#choose(
-								"Entry member",
+								t("overlaysModel.mixtureConfig.entryMember"),
 								mixture.members
 									.filter(member => member.kind !== "verdict")
 									.map(member => ({ value: member.id, label: member.id })),
@@ -857,18 +918,21 @@ export class MixtureConfigOverlayComponent implements Component {
 		const items: SelectItem[] = mixture.members.map((member, position) => ({
 			value: `member:${position}`,
 			label: `${mixture.entry === member.id ? "◆" : "○"} ${member.id}`,
-			description: member.kind === "verdict" ? "verdict" : member.model || "select a model",
+			description:
+				member.kind === "verdict"
+					? t("overlaysModel.mixtureConfig.verdict")
+					: member.model || t("overlaysModel.mixtureConfig.modelMissing"),
 		}));
 		items.push(
-			{ value: "add", label: "+ Add model member" },
-			{ value: "verdict", label: "+ Add verdict member" },
-			{ value: "back", label: "Back to mixture" },
+			{ value: "add", label: t("overlaysModel.mixtureConfig.addModelMember") },
+			{ value: "verdict", label: t("overlaysModel.mixtureConfig.addVerdictMember") },
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToMixture") },
 		);
 		this.#menu(
 			"members",
 			items,
 			selected,
-			"Enter edit · Delete remove member and its edges · Alt+↑↓ reorder · Esc back",
+			t("overlaysModel.mixtureConfig.membersHint"),
 			undefined,
 			() => this.#showMixture(index, "members"),
 			(data, list) => {
@@ -911,7 +975,7 @@ export class MixtureConfigOverlayComponent implements Component {
 						else this.#showMember(index, position);
 					} else if (value === "add")
 						this.#editText(
-							"Member id",
+							t("overlaysModel.mixtureConfig.memberId"),
 							"",
 							text => {
 								const id = text.trim();
@@ -924,7 +988,7 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "verdict")
 						this.#editText(
-							"Verdict member id",
+							t("overlaysModel.mixtureConfig.verdictMemberId"),
 							"",
 							text => {
 								const id = text.trim();
@@ -976,40 +1040,74 @@ export class MixtureConfigOverlayComponent implements Component {
 		const member = this.#modelMember(index, position);
 		if (!member) return this.#showMembers(index);
 		const items: SelectItem[] = [
-			{ value: "id", label: "Member id", description: member.id },
-			{ value: "model", label: "Model", description: member.model || "(select model)" },
-			{ value: "description", label: "Description", description: preview(member.description, 50) },
-			{ value: "role", label: "Role prompt", description: preview(member.systemPrompt, 50) },
-			{ value: "rolePreset", label: "Role preset", description: member.role ?? "(none)" },
+			{ value: "id", label: t("overlaysModel.mixtureConfig.memberId"), description: member.id },
+			{
+				value: "model",
+				label: t("overlaysModel.mixtureConfig.model"),
+				description: member.model || t("overlaysModel.mixtureConfig.selectModel"),
+			},
+			{
+				value: "description",
+				label: t("overlaysModel.mixtureConfig.description"),
+				description: preview(member.description, 50),
+			},
+			{
+				value: "role",
+				label: t("overlaysModel.mixtureConfig.rolePrompt"),
+				description: preview(member.systemPrompt, 50),
+			},
+			{
+				value: "rolePreset",
+				label: t("overlaysModel.mixtureConfig.rolePreset"),
+				description: member.role ?? t("overlaysModel.mixtureConfig.none"),
+			},
 			{
 				value: "inherit",
-				label: "Inherit outer instructions",
-				description: member.inherit === undefined ? "automatic" : member.inherit ? "yes" : "no",
+				label: t("overlaysModel.mixtureConfig.inherit"),
+				description:
+					member.inherit === undefined
+						? t("overlaysModel.mixtureConfig.automaticLower")
+						: member.inherit
+							? t("overlaysModel.mixtureConfig.yesLower")
+							: t("overlaysModel.mixtureConfig.noLower"),
 			},
 			{
 				value: "tools",
-				label: "Tools",
-				description: member.tools === true ? "all" : Array.isArray(member.tools) ? member.tools.join(", ") : "off",
+				label: t("overlaysModel.mixtureConfig.tools"),
+				description:
+					member.tools === true
+						? t("overlaysModel.mixtureConfig.allLower")
+						: Array.isArray(member.tools)
+							? member.tools.join(", ")
+							: t("overlaysModel.mixtureConfig.offLower"),
 			},
-			{ value: "show", label: "Show", description: member.show ?? "default" },
+			{
+				value: "show",
+				label: t("overlaysModel.mixtureConfig.show"),
+				description: member.show ?? t("overlaysModel.mixtureConfig.defaultLower"),
+			},
 			{
 				value: "maxTokens",
-				label: "Maximum output tokens",
-				description: String(member.maxTokens ?? "model default"),
+				label: t("overlaysModel.mixtureConfig.maximumOutputTokens"),
+				description: String(member.maxTokens ?? t("overlaysModel.mixtureConfig.modelDefaultLower")),
 			},
-			{ value: "route", label: "Route instructions", description: preview(member.route?.instructions, 50) },
+			{
+				value: "route",
+				label: t("overlaysModel.mixtureConfig.routeInstructions"),
+				description: preview(member.route?.instructions, 50),
+			},
 			{
 				value: "terminate",
-				label: "Termination instructions",
+				label: t("overlaysModel.mixtureConfig.terminationInstructions"),
 				description: preview(member.terminate?.instructions, 50),
 			},
-			{ value: "back", label: "Back to members" },
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToMembers") },
 		];
 		this.#menu(
 			"member",
 			items,
 			selected,
-			`Member ${member.id} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.memberHint", { id: member.id }),
 			undefined,
 			() => this.#showMembers(index, `member:${position}`),
 			undefined,
@@ -1019,7 +1117,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					switch (value) {
 						case "id":
 							this.#editText(
-								"Member id",
+								t("overlaysModel.mixtureConfig.memberId"),
 								member.id,
 								text => this.#renameMember(this.#mixture(index)!, member, text.trim()),
 								back,
@@ -1030,7 +1128,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "description":
 							this.#editText(
-								"Member description",
+								t("overlaysModel.mixtureConfig.memberDescription"),
 								member.description ?? "",
 								text => {
 									member.description = text.trim() || undefined;
@@ -1041,7 +1139,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "role":
 							this.#editLong(
-								"Role prompt",
+								t("overlaysModel.mixtureConfig.rolePrompt"),
 								member.systemPrompt ?? "",
 								text => {
 									member.systemPrompt = text || undefined;
@@ -1052,7 +1150,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "rolePreset":
 							this.#editText(
-								"Role preset name",
+								t("overlaysModel.mixtureConfig.rolePresetName"),
 								member.role ?? "",
 								text => {
 									member.role = text.trim() || undefined;
@@ -1063,11 +1161,11 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "inherit":
 							this.#choose(
-								"Inherit outer instructions",
+								t("overlaysModel.mixtureConfig.inherit"),
 								[
-									{ value: "default", label: "Automatic" },
-									{ value: "yes", label: "Yes" },
-									{ value: "no", label: "No" },
+									{ value: "default", label: t("overlaysModel.mixtureConfig.automatic") },
+									{ value: "yes", label: t("overlaysModel.mixtureConfig.yes") },
+									{ value: "no", label: t("overlaysModel.mixtureConfig.no") },
 								],
 								member.inherit === undefined ? "default" : member.inherit ? "yes" : "no",
 								choice => {
@@ -1082,7 +1180,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "show":
 							this.#choose(
-								"Show hop",
+								t("overlaysModel.mixtureConfig.showHop"),
 								["default", "always", "never", "final"].map(choice => ({ value: choice, label: choice })),
 								member.show ?? "default",
 								choice => {
@@ -1094,7 +1192,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "maxTokens":
 							this.#editNumber(
-								"Maximum output tokens",
+								t("overlaysModel.mixtureConfig.maximumOutputTokens"),
 								member.maxTokens,
 								number => {
 									member.maxTokens = number;
@@ -1129,37 +1227,64 @@ export class MixtureConfigOverlayComponent implements Component {
 		if (!member || !mixture) return this.#showMembers(index);
 		const question = member.question;
 		const items: SelectItem[] = [
-			{ value: "id", label: "Member id", description: member.id },
-			{ value: "description", label: "Description", description: preview(member.description, 50) },
-			{ value: "show", label: "Show", description: member.show ?? "default" },
-			{ value: "type", label: "Question type", description: question.type },
-			{ value: "instructions", label: "Question instructions", description: preview(question.instructions, 50) },
+			{ value: "id", label: t("overlaysModel.mixtureConfig.memberId"), description: member.id },
+			{
+				value: "description",
+				label: t("overlaysModel.mixtureConfig.description"),
+				description: preview(member.description, 50),
+			},
+			{
+				value: "show",
+				label: t("overlaysModel.mixtureConfig.show"),
+				description: member.show ?? t("overlaysModel.mixtureConfig.defaultLower"),
+			},
+			{ value: "type", label: t("overlaysModel.mixtureConfig.questionType"), description: question.type },
+			{
+				value: "instructions",
+				label: t("overlaysModel.mixtureConfig.questionInstructions"),
+				description: preview(question.instructions, 50),
+			},
 			{
 				value: "state",
-				label: "Judge context",
-				description: member.state?.join(", ") || "topic + available transit",
+				label: t("overlaysModel.mixtureConfig.judgeContext"),
+				description: member.state?.join(", ") || t("overlaysModel.mixtureConfig.topicTransit"),
 			},
-			{ value: "render", label: "Answer template", description: preview(member.render, 50) },
+			{
+				value: "render",
+				label: t("overlaysModel.mixtureConfig.answerTemplate"),
+				description: preview(member.render, 50),
+			},
 		];
 		if (question.type === "choice" || question.type === "score")
 			items.push({
 				value: "criteria",
-				label: question.type === "choice" ? "Options and rubrics" : "Ordered score levels",
+				label:
+					question.type === "choice"
+						? t("overlaysModel.mixtureConfig.optionsRubrics")
+						: t("overlaysModel.mixtureConfig.orderedScoreLevels"),
 				description: String(
 					question.type === "choice" ? Object.keys(question.criteria).length : question.criteria.length,
 				),
 			});
 		else
 			items.push(
-				{ value: "true", label: "Yes criterion", description: preview(question.criteria?.true, 50) },
-				{ value: "false", label: "No criterion", description: preview(question.criteria?.false, 50) },
+				{
+					value: "true",
+					label: t("overlaysModel.mixtureConfig.yesCriterion"),
+					description: preview(question.criteria?.true, 50),
+				},
+				{
+					value: "false",
+					label: t("overlaysModel.mixtureConfig.noCriterion"),
+					description: preview(question.criteria?.false, 50),
+				},
 			);
-		items.push({ value: "back", label: "Back to members" });
+		items.push({ value: "back", label: t("overlaysModel.mixtureConfig.backToMembers") });
 		this.#menu(
 			"verdict",
 			items,
 			selected,
-			`Verdict ${member.id} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.verdictHint", { id: member.id }),
 			undefined,
 			() => this.#showMembers(index, `member:${position}`),
 			undefined,
@@ -1169,7 +1294,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					switch (value) {
 						case "id":
 							this.#editText(
-								"Verdict id",
+								t("overlaysModel.mixtureConfig.verdictId"),
 								member.id,
 								text => this.#renameMember(mixture, member, text.trim()),
 								back,
@@ -1177,7 +1302,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "description":
 							this.#editText(
-								"Verdict description",
+								t("overlaysModel.mixtureConfig.verdictDescription"),
 								member.description ?? "",
 								text => {
 									member.description = text.trim() || undefined;
@@ -1188,7 +1313,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "show":
 							this.#choose(
-								"Show verdict",
+								t("overlaysModel.mixtureConfig.showVerdict"),
 								["default", "always", "never", "final"].map(option => ({
 									value: option,
 									label: option,
@@ -1203,7 +1328,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "type":
 							this.#choose(
-								"Question type",
+								t("overlaysModel.mixtureConfig.questionType"),
 								["noul", "choice", "score"].map(option => ({
 									value: option,
 									label: option,
@@ -1225,7 +1350,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "instructions":
 							this.#editLong(
-								"Verdict question",
+								t("overlaysModel.mixtureConfig.verdictQuestion"),
 								question.instructions,
 								text => {
 									member.question.instructions = text.trim();
@@ -1236,7 +1361,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "state":
 							this.#showDecisionState(
-								"Verdict judge context",
+								t("overlaysModel.mixtureConfig.verdictJudgeContext"),
 								TRANSIT_PART_NAMES,
 								member.state,
 								state => {
@@ -1248,7 +1373,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "render":
 							this.#editLong(
-								"Verdict answer template",
+								t("overlaysModel.mixtureConfig.verdictAnswerTemplate"),
 								member.render ?? "",
 								text => {
 									member.render = text || undefined;
@@ -1265,7 +1390,9 @@ export class MixtureConfigOverlayComponent implements Component {
 						case "false":
 							if (question.type !== "noul") break;
 							this.#editLong(
-								`${value === "true" ? "Yes" : "No"} criterion`,
+								value === "true"
+									? t("overlaysModel.mixtureConfig.yesCriterion")
+									: t("overlaysModel.mixtureConfig.noCriterion"),
 								question.criteria?.[value] ?? "",
 								text => {
 									if (member.question.type !== "noul") return;
@@ -1299,11 +1426,11 @@ export class MixtureConfigOverlayComponent implements Component {
 					label: name,
 					description: preview(rubric ?? undefined, 50),
 				})),
-				{ value: "__add", label: "+ Add option" },
-				{ value: "__back", label: "Back to verdict" },
+				{ value: "__add", label: t("overlaysModel.mixtureConfig.addOption") },
+				{ value: "__back", label: t("overlaysModel.mixtureConfig.backToVerdict") },
 			],
 			selected,
-			"Choice options · Enter edit · Delete remove · Esc back",
+			t("overlaysModel.mixtureConfig.optionsHint"),
 			undefined,
 			() => this.#showVerdict(index, position, "criteria"),
 			(data, list) => {
@@ -1320,12 +1447,12 @@ export class MixtureConfigOverlayComponent implements Component {
 					if (value === "__back") return this.#showVerdict(index, position, "criteria");
 					if (value === "__add")
 						this.#editText(
-							"Choice option name",
+							t("overlaysModel.mixtureConfig.choiceOptionName"),
 							"",
 							text => {
 								const name = text.trim();
 								if (!name || Object.hasOwn(criteria, name)) {
-									this.#cb.notify("Enter a new, unique option name");
+									this.#cb.notify(t("overlaysModel.mixtureConfig.uniqueOption"));
 									return false;
 								}
 								criteria[name] = null;
@@ -1350,12 +1477,16 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#menu(
 			"choice-option",
 			[
-				{ value: "name", label: "Option name", description: name },
-				{ value: "rubric", label: "Rubric", description: preview(criteria[name] ?? undefined, 50) },
-				{ value: "back", label: "Back to options" },
+				{ value: "name", label: t("overlaysModel.mixtureConfig.optionName"), description: name },
+				{
+					value: "rubric",
+					label: t("overlaysModel.mixtureConfig.rubric"),
+					description: preview(criteria[name] ?? undefined, 50),
+				},
+				{ value: "back", label: t("overlaysModel.mixtureConfig.backToOptions") },
 			],
 			undefined,
-			`Option ${name} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.optionHint", { name }),
 			undefined,
 			() => this.#showChoiceCriteria(index, position, name),
 			undefined,
@@ -1363,12 +1494,12 @@ export class MixtureConfigOverlayComponent implements Component {
 				open: value => {
 					if (value === "name")
 						this.#editText(
-							"Choice option name",
+							t("overlaysModel.mixtureConfig.choiceOptionName"),
 							name,
 							text => {
 								const updated = text.trim();
 								if (!updated || (updated !== name && Object.hasOwn(criteria, updated))) {
-									this.#cb.notify("Enter a new, unique option name");
+									this.#cb.notify(t("overlaysModel.mixtureConfig.uniqueOption"));
 									return false;
 								}
 								if (updated !== name) {
@@ -1384,7 +1515,7 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "rubric")
 						this.#editLong(
-							"Choice rubric (empty uses the option name)",
+							t("overlaysModel.mixtureConfig.rubricHint"),
 							criteria[name] ?? "",
 							text => {
 								criteria[name] = text.trim() || null;
@@ -1408,14 +1539,14 @@ export class MixtureConfigOverlayComponent implements Component {
 			[
 				...question.criteria.map((level, number) => ({
 					value: String(number),
-					label: `Level ${number + 1}`,
+					label: t("overlaysModel.mixtureConfig.level", { number: number + 1 }),
 					description: preview(level, 50),
 				})),
-				{ value: "add", label: "+ Add level" },
-				{ value: "back", label: "Back to verdict" },
+				{ value: "add", label: t("overlaysModel.mixtureConfig.addLevel") },
+				{ value: "back", label: t("overlaysModel.mixtureConfig.backToVerdict") },
 			],
 			undefined,
-			"Score levels · lowest to highest · Enter edit · Delete remove · Esc back",
+			t("overlaysModel.mixtureConfig.scoreLevelsHint"),
 			value => {
 				if (value === "add") {
 					question.criteria = [...question.criteria, ""];
@@ -1434,7 +1565,7 @@ export class MixtureConfigOverlayComponent implements Component {
 				)
 					return false;
 				if (question.criteria.length <= 2) {
-					this.#cb.notify("A score question needs at least two levels");
+					this.#cb.notify(t("overlaysModel.mixtureConfig.twoScoreLevels"));
 					return true;
 				}
 				question.criteria = question.criteria.filter((_, at) => at !== Number(value)) as [
@@ -1450,7 +1581,7 @@ export class MixtureConfigOverlayComponent implements Component {
 				open: value => {
 					const number = Number(value);
 					this.#editLong(
-						`Level ${number + 1}`,
+						t("overlaysModel.mixtureConfig.level", { number: number + 1 }),
 						question.criteria[number] ?? "",
 						text => {
 							question.criteria = question.criteria.map((level, at) =>
@@ -1477,10 +1608,10 @@ export class MixtureConfigOverlayComponent implements Component {
 			"decision-state",
 			[
 				...parts.map(part => ({ value: part, label: `${state?.includes(part) ? "[x]" : "[ ]"} ${part}` })),
-				{ value: "back", label: "Done" },
+				{ value: "back", label: t("overlaysModel.mixtureConfig.done") },
 			],
 			undefined,
-			`${label} · Space / Enter toggle · Esc back`,
+			t("overlaysModel.mixtureConfig.stateHint", { label }),
 			value => {
 				if (value === "back") return back();
 				const part = value as (typeof parts)[number];
@@ -1505,19 +1636,31 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#menu(
 			"route",
 			[
-				{ value: "instructions", label: "Choice instructions", description: preview(route?.instructions, 50) },
-				{ value: "state", label: "Judge context", description: route?.state?.join(", ") || "topic + output" },
+				{
+					value: "instructions",
+					label: t("overlaysModel.mixtureConfig.choiceInstructions"),
+					description: preview(route?.instructions, 50),
+				},
+				{
+					value: "state",
+					label: t("overlaysModel.mixtureConfig.judgeContext"),
+					description: route?.state?.join(", ") || t("overlaysModel.mixtureConfig.topicOutput"),
+				},
 				{
 					value: "confidence",
-					label: "Native confidence floor",
-					description: String(route?.minConfidence ?? "setting default"),
+					label: t("overlaysModel.mixtureConfig.nativeConfidenceFloor"),
+					description: String(route?.minConfidence ?? t("overlaysModel.mixtureConfig.settingDefaultLower")),
 				},
-				{ value: "fallback", label: "Fallback", description: route?.fallback ?? "none" },
-				{ value: "remove", label: "Remove route condition" },
-				{ value: "back", label: "Back to member" },
+				{
+					value: "fallback",
+					label: t("overlaysModel.mixtureConfig.fallback"),
+					description: route?.fallback ?? t("overlaysModel.mixtureConfig.noneLower"),
+				},
+				{ value: "remove", label: t("overlaysModel.mixtureConfig.removeRouteCondition") },
+				{ value: "back", label: t("overlaysModel.mixtureConfig.backToMember") },
 			],
 			selected,
-			`Route from ${member.id} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.routeHint", { id: member.id }),
 			value => {
 				if (value === "remove") {
 					this.#previousVisitSnapshot = this.navigationSnapshot();
@@ -1534,7 +1677,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					switch (value) {
 						case "instructions":
 							this.#editLong(
-								"Choice instructions",
+								t("overlaysModel.mixtureConfig.choiceInstructions"),
 								route?.instructions ?? "",
 								text => {
 									member.route = { ...(member.route ?? { instructions: "" }), instructions: text.trim() };
@@ -1545,7 +1688,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "state":
 							this.#showDecisionState(
-								"Route judge context",
+								t("overlaysModel.mixtureConfig.routeJudgeContext"),
 								DECISION_PARTS,
 								route?.state,
 								state => {
@@ -1557,11 +1700,11 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "confidence":
 							this.#editNumber(
-								"Native confidence floor (0–1)",
+								t("overlaysModel.mixtureConfig.confidenceFloorRange"),
 								route?.minConfidence,
 								number => {
 									if (number !== undefined && number > 1) {
-										this.#cb.notify("Confidence floor must be between 0 and 1");
+										this.#cb.notify(t("overlaysModel.mixtureConfig.confidenceRangeError"));
 										return false;
 									}
 									member.route = { ...(member.route ?? { instructions: "" }), minConfidence: number };
@@ -1572,10 +1715,10 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "fallback":
 							this.#choose(
-								"Route fallback",
+								t("overlaysModel.mixtureConfig.routeFallback"),
 								[
-									{ value: "", label: "None" },
-									{ value: "pause", label: "Pause" },
+									{ value: "", label: t("overlaysModel.mixtureConfig.noneCaps") },
+									{ value: "pause", label: t("overlaysModel.mixtureConfig.pause") },
 									...mixture.edges
 										.filter(edge => edge.from === member.id)
 										.map(edge => ({
@@ -1614,22 +1757,34 @@ export class MixtureConfigOverlayComponent implements Component {
 			[
 				{
 					value: "instructions",
-					label: "Termination condition",
+					label: t("overlaysModel.mixtureConfig.terminateCondition"),
 					description: preview(terminate?.instructions, 50),
 				},
-				{ value: "state", label: "Judge context", description: terminate?.state?.join(", ") || "topic + output" },
+				{
+					value: "state",
+					label: t("overlaysModel.mixtureConfig.judgeContext"),
+					description: terminate?.state?.join(", ") || t("overlaysModel.mixtureConfig.topicOutput"),
+				},
 				{
 					value: "threshold",
-					label: "Yes-probability threshold",
+					label: t("overlaysModel.mixtureConfig.yesProbabilityThreshold"),
 					description: String(terminate?.threshold ?? "0.5"),
 				},
-				{ value: "true", label: "Yes criterion", description: preview(terminate?.criteria?.true, 50) },
-				{ value: "false", label: "No criterion", description: preview(terminate?.criteria?.false, 50) },
-				{ value: "remove", label: "Remove termination condition" },
-				{ value: "back", label: "Back to member" },
+				{
+					value: "true",
+					label: t("overlaysModel.mixtureConfig.yesCriterion"),
+					description: preview(terminate?.criteria?.true, 50),
+				},
+				{
+					value: "false",
+					label: t("overlaysModel.mixtureConfig.noCriterion"),
+					description: preview(terminate?.criteria?.false, 50),
+				},
+				{ value: "remove", label: t("overlaysModel.mixtureConfig.removeTerminateCondition") },
+				{ value: "back", label: t("overlaysModel.mixtureConfig.backToMember") },
 			],
 			selected,
-			`Termination at ${member.id} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.terminationHint", { id: member.id }),
 			value => {
 				if (value === "remove") {
 					this.#previousVisitSnapshot = this.navigationSnapshot();
@@ -1645,7 +1800,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					const again = () => this.#showTerminate(index, position, value);
 					if (value === "instructions")
 						this.#editLong(
-							"Termination condition",
+							t("overlaysModel.mixtureConfig.terminateCondition"),
 							terminate?.instructions ?? "",
 							text => {
 								member.terminate = { ...(member.terminate ?? { instructions: "" }), instructions: text.trim() };
@@ -1655,7 +1810,7 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "state")
 						this.#showDecisionState(
-							"Termination judge context",
+							t("overlaysModel.mixtureConfig.terminateJudgeContext"),
 							DECISION_PARTS,
 							terminate?.state,
 							state => {
@@ -1666,11 +1821,11 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "threshold")
 						this.#editNumber(
-							"Yes-probability threshold (0–1)",
+							t("overlaysModel.mixtureConfig.yesProbabilityRange"),
 							terminate?.threshold,
 							number => {
 								if (number !== undefined && number > 1) {
-									this.#cb.notify("Termination threshold must be between 0 and 1");
+									this.#cb.notify(t("overlaysModel.mixtureConfig.terminateThresholdRangeError"));
 									return false;
 								}
 								member.terminate = { ...(member.terminate ?? { instructions: "" }), threshold: number };
@@ -1680,7 +1835,9 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "true" || value === "false")
 						this.#editLong(
-							`${value === "true" ? "Yes" : "No"} criterion`,
+							value === "true"
+								? t("overlaysModel.mixtureConfig.yesCriterion")
+								: t("overlaysModel.mixtureConfig.noCriterion"),
 							terminate?.criteria?.[value] ?? "",
 							text => {
 								member.terminate = {
@@ -1712,7 +1869,7 @@ export class MixtureConfigOverlayComponent implements Component {
 				if (!value) return save(undefined);
 				const number = Number(value);
 				if (!Number.isFinite(number) || number < 0) {
-					this.#cb.notify(`${label}: enter a non-negative number`);
+					this.#cb.notify(t("overlaysModel.mixtureConfig.nonNegativeNumber", { label }));
 					return false;
 				}
 				return save(number);
@@ -1740,7 +1897,7 @@ export class MixtureConfigOverlayComponent implements Component {
 			}
 		};
 		browser.onCancel = () => this.#showMember(index, position, "model");
-		this.#setScreen("model", browser, "/ search · Enter choose · ←/Esc back");
+		this.#setScreen("model", browser, t("overlaysModel.mixtureConfig.modelHint"));
 	}
 
 	#assignMemberModel(index: number, position: number, selector: string, effort: string): void {
@@ -1754,8 +1911,11 @@ export class MixtureConfigOverlayComponent implements Component {
 	#showThinking(index: number, position: number, selector: string, efforts: readonly string[]): void {
 		this.#preparePage({ page: "thinking", index, position, selector, efforts });
 		this.#choose(
-			"Thinking effort",
-			[{ value: "", label: "Model default" }, ...efforts.map(effort => ({ value: effort, label: effort }))],
+			t("overlaysModel.mixtureConfig.thinkingEffort"),
+			[
+				{ value: "", label: t("overlaysModel.mixtureConfig.modelDefault") },
+				...efforts.map(effort => ({ value: effort, label: effort })),
+			],
 			"",
 			effort => this.#assignMemberModel(index, position, selector, effort),
 			() => this.#showModelPicker(index, position),
@@ -1769,19 +1929,25 @@ export class MixtureConfigOverlayComponent implements Component {
 		const all = this.#deps.availableToolNames;
 		const selected = new Set(member.tools === true ? all : Array.isArray(member.tools) ? member.tools : []);
 		const items: SelectItem[] = [
-			{ value: "off", label: `${member.tools === false ? "[x]" : "[ ]"} Off` },
-			{ value: "all", label: `${member.tools === true ? "[x]" : "[ ]"} All` },
+			{
+				value: "off",
+				label: t("overlaysModel.mixtureConfig.toolOff", { mark: member.tools === false ? "[x]" : "[ ]" }),
+			},
+			{
+				value: "all",
+				label: t("overlaysModel.mixtureConfig.toolAll", { mark: member.tools === true ? "[x]" : "[ ]" }),
+			},
 			...all.map(name => ({
 				value: name,
 				label: `${selected.has(name) && member.tools !== false ? "[x]" : "[ ]"} ${name}`,
 			})),
-			{ value: "done", label: "Done" },
+			{ value: "done", label: t("overlaysModel.mixtureConfig.done") },
 		];
 		this.#menu(
 			"tools",
 			items,
 			items[Math.min(cursor, items.length - 1)]?.value,
-			"Space / Enter toggle · Done or Esc return",
+			t("overlaysModel.mixtureConfig.toolsHint"),
 			value => {
 				if (value === "done") return this.#showMember(index, position, "tools");
 				if (value === "off") member.tools = false;
@@ -1812,12 +1978,15 @@ export class MixtureConfigOverlayComponent implements Component {
 			label: mixtureEdgeId(edge),
 			description: Object.keys(edge.x).join(", "),
 		}));
-		items.push({ value: "add", label: "+ Add edge" }, { value: "back", label: "Back to mixture" });
+		items.push(
+			{ value: "add", label: t("overlaysModel.mixtureConfig.addEdge") },
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToMixture") },
+		);
 		this.#menu(
 			"edges",
 			items,
 			selected,
-			"Enter edit · Delete remove · Alt+↑↓ reorder · Esc back",
+			t("overlaysModel.mixtureConfig.edgesHint"),
 			value => {
 				if (value !== "add") {
 					this.#showMixture(index, "edges");
@@ -1825,7 +1994,7 @@ export class MixtureConfigOverlayComponent implements Component {
 				}
 				const from = mixture.members[0]?.id;
 				const to = mixture.members[1]?.id;
-				if (!from || !to) return this.#cb.notify("Add at least two members before connecting them.");
+				if (!from || !to) return this.#cb.notify(t("overlaysModel.mixtureConfig.twoMembersForEdge"));
 				mixture.edges.push({ from, to, x: { output: true } });
 				this.#touch();
 				this.#showEdge(index, mixture.edges.length - 1);
@@ -1873,21 +2042,41 @@ export class MixtureConfigOverlayComponent implements Component {
 		const mixture = this.#mixture(index);
 		if (!edge || !mixture) return this.#showEdges(index);
 		const items: SelectItem[] = [
-			{ value: "id", label: "Edge id", description: edge.id ?? "(derived from endpoints)" },
-			{ value: "from", label: "From", description: edge.from },
-			{ value: "to", label: "To", description: edge.to },
-			{ value: "x", label: "Transit parts", description: Object.keys(edge.x).join(", ") },
-			{ value: "envelope", label: "Envelope", description: preview(edge.envelope, 50) },
-			{ value: "when", label: "When", description: preview(edge.when, 50) },
-			{ value: "show", label: "Show source hop", description: edge.show ?? "member default" },
-			{ value: "maxTraversals", label: "Maximum traversals", description: String(edge.maxTraversals ?? "default") },
-			{ value: "back", label: "Back to edges" },
+			{
+				value: "id",
+				label: t("overlaysModel.mixtureConfig.edgeId"),
+				description: edge.id ?? t("overlaysModel.mixtureConfig.derivedId"),
+			},
+			{ value: "from", label: t("overlaysModel.mixtureConfig.from"), description: edge.from },
+			{ value: "to", label: t("overlaysModel.mixtureConfig.to"), description: edge.to },
+			{
+				value: "x",
+				label: t("overlaysModel.mixtureConfig.transitParts"),
+				description: Object.keys(edge.x).join(", "),
+			},
+			{
+				value: "envelope",
+				label: t("overlaysModel.mixtureConfig.envelope"),
+				description: preview(edge.envelope, 50),
+			},
+			{ value: "when", label: t("overlaysModel.mixtureConfig.when"), description: preview(edge.when, 50) },
+			{
+				value: "show",
+				label: t("overlaysModel.mixtureConfig.showSourceHop"),
+				description: edge.show ?? t("overlaysModel.mixtureConfig.memberDefault"),
+			},
+			{
+				value: "maxTraversals",
+				label: t("overlaysModel.mixtureConfig.maximumTraversals"),
+				description: String(edge.maxTraversals ?? t("overlaysModel.mixtureConfig.defaultLower")),
+			},
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToEdges") },
 		];
 		this.#menu(
 			"edge",
 			items,
 			selected,
-			`Edge ${mixtureEdgeId(edge)} · Enter edit · Esc back`,
+			t("overlaysModel.mixtureConfig.edgeHint", { id: mixtureEdgeId(edge) }),
 			undefined,
 			() => this.#showEdges(index, `edge:${position}`),
 			undefined,
@@ -1897,7 +2086,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					switch (value) {
 						case "id":
 							this.#editText(
-								"Edge id (blank derives from endpoints)",
+								t("overlaysModel.mixtureConfig.edgeIdHint"),
 								edge.id ?? "",
 								text => {
 									const oldId = mixtureEdgeId(edge);
@@ -1911,7 +2100,9 @@ export class MixtureConfigOverlayComponent implements Component {
 						case "from":
 						case "to":
 							this.#choose(
-								`${value} member`,
+								value === "from"
+									? t("overlaysModel.mixtureConfig.fromMember")
+									: t("overlaysModel.mixtureConfig.toMember"),
 								mixture.members.map(member => ({ value: member.id, label: member.id })),
 								edge[value],
 								id => {
@@ -1928,7 +2119,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "envelope":
 							this.#editLong(
-								"Envelope template or preset name",
+								t("overlaysModel.mixtureConfig.envelopeTemplate"),
 								edge.envelope ?? "",
 								text => {
 									edge.envelope = text.trim() || undefined;
@@ -1939,7 +2130,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "when":
 							this.#editLong(
-								"Edge condition",
+								t("overlaysModel.mixtureConfig.edgeCondition"),
 								edge.when ?? "",
 								text => {
 									edge.when = text.trim() || undefined;
@@ -1950,7 +2141,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "show":
 							this.#choose(
-								"Show source hop",
+								t("overlaysModel.mixtureConfig.showSourceHop"),
 								["default", "always", "never"].map(choice => ({ value: choice, label: choice })),
 								edge.show ?? "default",
 								choice => {
@@ -1962,7 +2153,7 @@ export class MixtureConfigOverlayComponent implements Component {
 							break;
 						case "maxTraversals":
 							this.#editNumber(
-								"Maximum traversals",
+								t("overlaysModel.mixtureConfig.maximumTraversals"),
 								edge.maxTraversals,
 								number => {
 									edge.maxTraversals = number;
@@ -1987,12 +2178,12 @@ export class MixtureConfigOverlayComponent implements Component {
 			value: part,
 			label: `${edge.x[part] ? "[x]" : "[ ]"} ${part}${part === "transcript" && edge.x.transcript && edge.x.transcript !== true ? ` (${edge.x.transcript.optimize ?? "verbatim"})` : ""}`,
 		}));
-		items.push({ value: "back", label: "Done" });
+		items.push({ value: "back", label: t("overlaysModel.mixtureConfig.done") });
 		this.#menu(
 			"transit",
 			items,
 			selected,
-			"Space / Enter toggle parts · Transcript opens optimization settings · Esc back",
+			t("overlaysModel.mixtureConfig.transitHint"),
 			value => {
 				if (value === "back") return this.#showEdge(index, position, "x");
 				const part = value as Exclude<TransitPartName, "transcript">;
@@ -2017,12 +2208,20 @@ export class MixtureConfigOverlayComponent implements Component {
 		this.#menu(
 			"transcript",
 			[
-				{ value: "mode", label: "Optimization", description: spec ? optimize : "off" },
-				{ value: "budget", label: "Token budget", description: String(budget ?? "setting default") },
-				{ value: "back", label: "Back to transit parts" },
+				{
+					value: "mode",
+					label: t("overlaysModel.mixtureConfig.optimization"),
+					description: spec ? optimize : t("overlaysModel.mixtureConfig.offLower"),
+				},
+				{
+					value: "budget",
+					label: t("overlaysModel.mixtureConfig.tokenBudget"),
+					description: String(budget ?? t("overlaysModel.mixtureConfig.settingDefaultLower")),
+				},
+				{ value: "back", label: t("overlaysModel.mixtureConfig.backToTransitParts") },
 			],
 			selected,
-			"Transcript transit · Enter edit · Esc back",
+			t("overlaysModel.mixtureConfig.transcriptHint"),
 			undefined,
 			() => this.#showTransit(index, position, "transcript"),
 			undefined,
@@ -2031,12 +2230,12 @@ export class MixtureConfigOverlayComponent implements Component {
 					const back = () => this.#showTranscript(index, position, value);
 					if (value === "mode")
 						this.#choose(
-							"Transcript optimization",
+							t("overlaysModel.mixtureConfig.transcriptOptimization"),
 							[
-								{ value: "off", label: "Off" },
-								{ value: "verbatim", label: "Verbatim; omit older hops" },
-								{ value: "compact", label: "Compact; summarize older hops" },
-								{ value: "snapcompact", label: "Snapcompact; preserve history frames" },
+								{ value: "off", label: t("overlaysModel.mixtureConfig.off") },
+								{ value: "verbatim", label: t("overlaysModel.mixtureConfig.verbatim") },
+								{ value: "compact", label: t("overlaysModel.mixtureConfig.compact") },
+								{ value: "snapcompact", label: t("overlaysModel.mixtureConfig.snapcompact") },
 							],
 							spec ? optimize : "off",
 							mode => {
@@ -2052,11 +2251,11 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "budget")
 						this.#editNumber(
-							"Transcript token budget",
+							t("overlaysModel.mixtureConfig.transcriptBudget"),
 							budget,
 							number => {
 								if (number !== undefined && (!Number.isInteger(number) || number < 1)) {
-									this.#cb.notify("Transcript budget must be a positive integer");
+									this.#cb.notify(t("overlaysModel.mixtureConfig.transcriptBudgetError"));
 									return false;
 								}
 								edge.x.transcript = { optimize, budgetTokens: number };
@@ -2076,22 +2275,38 @@ export class MixtureConfigOverlayComponent implements Component {
 		if (!mixture) return this.#showList();
 		const limits = mixture.limits ?? {};
 		const items: SelectItem[] = [
-			{ value: "maxHops", label: "Maximum hops", description: String(limits.maxHops ?? "default") },
-			{ value: "budgetUsd", label: "Budget (USD)", description: String(limits.budgetUsd ?? "setting default") },
+			{
+				value: "maxHops",
+				label: t("overlaysModel.mixtureConfig.maximumHops"),
+				description: String(limits.maxHops ?? t("overlaysModel.mixtureConfig.defaultLower")),
+			},
+			{
+				value: "budgetUsd",
+				label: t("overlaysModel.mixtureConfig.budgetUsd"),
+				description: String(limits.budgetUsd ?? t("overlaysModel.mixtureConfig.settingDefaultLower")),
+			},
 			{
 				value: "wallClockMinutes",
-				label: "Wall clock (minutes)",
-				description: String(limits.wallClockMinutes ?? "setting default"),
+				label: t("overlaysModel.mixtureConfig.wallClock"),
+				description: String(limits.wallClockMinutes ?? t("overlaysModel.mixtureConfig.settingDefaultLower")),
 			},
-			{ value: "onLimit", label: "On limit", description: limits.onLimit ?? "setting default" },
-			{ value: "limitTarget", label: "Limit judge member", description: limits.limitTarget ?? "none" },
-			{ value: "back", label: "Back to mixture" },
+			{
+				value: "onLimit",
+				label: t("overlaysModel.mixtureConfig.onLimit"),
+				description: limits.onLimit ?? t("overlaysModel.mixtureConfig.settingDefaultLower"),
+			},
+			{
+				value: "limitTarget",
+				label: t("overlaysModel.mixtureConfig.judgeMember"),
+				description: limits.limitTarget ?? t("overlaysModel.mixtureConfig.noneLower"),
+			},
+			{ value: "back", label: t("overlaysModel.mixtureConfig.backToMixture") },
 		];
 		this.#menu(
 			"limits",
 			items,
 			selected,
-			"Enter edit · Esc back",
+			t("overlaysModel.mixtureConfig.editBackHint"),
 			undefined,
 			() => this.#showMixture(index, "limits"),
 			undefined,
@@ -2101,9 +2316,9 @@ export class MixtureConfigOverlayComponent implements Component {
 					const back = () => this.#showLimits(index, value);
 					if (value === "onLimit")
 						this.#choose(
-							"On limit",
+							t("overlaysModel.mixtureConfig.onLimit"),
 							[
-								{ value: "default", label: "Setting default" },
+								{ value: "default", label: t("overlaysModel.mixtureConfig.settingDefault") },
 								...["stop", "pause", "judge"].map(choice => ({ value: choice, label: choice })),
 							],
 							limits.onLimit ?? "default",
@@ -2116,9 +2331,9 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "limitTarget")
 						this.#choose(
-							"Limit target",
+							t("overlaysModel.mixtureConfig.limitTarget"),
 							[
-								{ value: "", label: "None" },
+								{ value: "", label: t("overlaysModel.mixtureConfig.noneCaps") },
 								...mixture.members
 									.filter(member => member.kind !== "verdict")
 									.map(member => ({ value: member.id, label: member.id })),
@@ -2132,7 +2347,11 @@ export class MixtureConfigOverlayComponent implements Component {
 						);
 					else if (value === "maxHops" || value === "budgetUsd" || value === "wallClockMinutes")
 						this.#editNumber(
-							value,
+							value === "maxHops"
+								? t("overlaysModel.mixtureConfig.field.maxHops")
+								: value === "budgetUsd"
+									? t("overlaysModel.mixtureConfig.field.budgetUsd")
+									: t("overlaysModel.mixtureConfig.field.wallClockMinutes"),
 							limits[value],
 							number => {
 								(mixture.limits ??= {})[value] = number;
@@ -2156,12 +2375,15 @@ export class MixtureConfigOverlayComponent implements Component {
 			label: name,
 			description: preview(presets[name], 50),
 		}));
-		items.push({ value: "__add", label: "+ Add preset" }, { value: "__back", label: "Back" });
+		items.push(
+			{ value: "__add", label: t("overlaysModel.mixtureConfig.addPreset") },
+			{ value: "__back", label: t("overlaysModel.mixtureConfig.back") },
+		);
 		this.#menu(
 			"presets",
 			items,
 			selected,
-			"Enter edit text · Delete remove · Esc back",
+			t("overlaysModel.mixtureConfig.presetsHint"),
 			undefined,
 			() => this.#showMixture(index, kind),
 			(data, list) => {
@@ -2178,7 +2400,7 @@ export class MixtureConfigOverlayComponent implements Component {
 					if (value === "__back") return this.#showMixture(index, kind);
 					if (value === "__add")
 						this.#editText(
-							"Preset name",
+							t("overlaysModel.mixtureConfig.presetName"),
 							"",
 							text => {
 								const name = text.trim();
@@ -2202,7 +2424,13 @@ export class MixtureConfigOverlayComponent implements Component {
 		const mixture = this.#mixture(index);
 		if (!mixture) return this.#showList();
 		this.#editLong(
-			`${kind} / ${name}`,
+			t("overlaysModel.mixtureConfig.presetHeading", {
+				kind:
+					kind === "roles"
+						? t("overlaysModel.mixtureConfig.presets.roles")
+						: t("overlaysModel.mixtureConfig.presets.envelopes"),
+				name,
+			}),
 			mixture[kind]?.[name] ?? "",
 			content => {
 				(mixture[kind] ??= {})[name] = content;

@@ -1,5 +1,6 @@
 /** `web_search` — provider-backed web search with synthesized answer and sources. */
 import type { ReactNode } from "react";
+import { type Translation, useTranslation } from "../../lib/i18n";
 import { Badge, Badges, InvalidArg, Kv, KvGrid, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, normalizeWs, num, replaceTabs, resultTextOf, str, truncate } from "../util";
@@ -12,16 +13,16 @@ function getDomain(url: string): string {
 	}
 }
 
-function formatAge(seconds: unknown): string {
+function formatAge(seconds: unknown, t: Translation): string {
 	const s = num(seconds);
 	if (s === null || s < 0) return "";
 	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m ago`;
+	if (m < 60) return t("guesttools.web.age_minutes", "{count}m ago", { count: m });
 	const h = Math.floor(m / 60);
-	if (h < 24) return `${h}h ago`;
+	if (h < 24) return t("guesttools.web.age_hours", "{count}h ago", { count: h });
 	const d = Math.floor(h / 24);
-	if (d < 365) return `${d}d ago`;
-	return `${Math.floor(d / 365)}y ago`;
+	if (d < 365) return t("guesttools.web.age_days", "{count}d ago", { count: d });
+	return t("guesttools.web.age_years", "{count}y ago", { count: Math.floor(d / 365) });
 }
 
 /** Most excerpt lines shown under a source when the provider returned no synthesized answer. */
@@ -72,10 +73,11 @@ function SourceRow({
 	/** Show the source's page excerpt under it (no synthesized answer to read instead). */
 	excerpt?: boolean;
 }): ReactNode {
+	const t = useTranslation();
 	const url = str(source.url) ?? "";
-	const title = str(source.title)?.trim() || url || "Untitled";
+	const title = str(source.title)?.trim() || url || t("guesttools.web.untitled", "Untitled");
 	const domain = url ? getDomain(url) : "";
-	const age = formatAge(source.ageSeconds) || (str(source.publishedDate) ?? "");
+	const age = formatAge(source.ageSeconds, t) || (str(source.publishedDate) ?? "");
 	const lines = excerpt ? excerptLines(source.snippet) : [];
 	return (
 		<Row k={String(index + 1)}>
@@ -98,6 +100,7 @@ function SourceRow({
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const query = str(args.query);
 	const recency = str(args.recency);
 	const limit = num(args.limit);
@@ -127,10 +130,10 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		const outTok = num(usage.outputTokens);
 		const totalTok = num(usage.totalTokens);
 		const searchReqs = num(usage.searchRequests);
-		if (inTok !== null) usageParts.push(`in ${inTok}`);
-		if (outTok !== null) usageParts.push(`out ${outTok}`);
-		if (totalTok !== null) usageParts.push(`total ${totalTok}`);
-		if (searchReqs !== null) usageParts.push(`search ${searchReqs}`);
+		if (inTok !== null) usageParts.push(t("guesttools.web.input_tokens", "in {count}", { count: inTok }));
+		if (outTok !== null) usageParts.push(t("guesttools.web.output_tokens", "out {count}", { count: outTok }));
+		if (totalTok !== null) usageParts.push(t("guesttools.web.total_tokens", "total {count}", { count: totalTok }));
+		if (searchReqs !== null) usageParts.push(t("guesttools.web.searches", "search {count}", { count: searchReqs }));
 	}
 
 	return (
@@ -140,14 +143,17 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					recency && `recency=${recency}`,
 					limit !== null && `limit=${limit}`,
 					numResults !== null && `results=${numResults}`,
-					response && `${sources.length} source${sources.length === 1 ? "" : "s"}`,
+					response &&
+						(sources.length === 1
+							? t("guesttools.count.source.one", "{count} source", { count: sources.length })
+							: t("guesttools.count.source.many", "{count} sources", { count: sources.length })),
 				]}
 			/>
 			{(query !== null || providerInfo || usageParts.length > 0) && (
 				<KvGrid>
-					{query !== null && <Kv k="query">{query}</Kv>}
-					{providerInfo && <Kv k="provider">{providerInfo}</Kv>}
-					{usageParts.length > 0 && <Kv k="usage">{usageParts.join(" · ")}</Kv>}
+					{query !== null && <Kv k={t("guesttools.label.query", "query")}>{query}</Kv>}
+					{providerInfo && <Kv k={t("guesttools.label.provider", "provider")}>{providerInfo}</Kv>}
+					{usageParts.length > 0 && <Kv k={t("guesttools.label.usage", "usage")}>{usageParts.join(" · ")}</Kv>}
 				</KvGrid>
 			)}
 			{errorMsg && !resultTextOf(result) && <Note tone="err">{errorMsg}</Note>}

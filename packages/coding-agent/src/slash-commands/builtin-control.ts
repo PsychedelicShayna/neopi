@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { type PauseWorkStatus, runPauseScreen } from "@oh-my-pi/pi-tui/overlays/pause-screen";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { LIVE_MODEL_OPTIONS } from "../live/protocol";
 import { cfgLiveModel } from "../live/settings";
 import { eventAudioCommand } from "../event-audio/observer";
@@ -53,14 +54,36 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "sounds",
 		icon: "voice",
-		description: "Enable, silence or reload owner-assigned event sounds for this session",
+		get description() {
+			return t("commands.control.chimeDescription");
+		},
 		allowArgs: true,
 		inlineHint: "[on|off|reload|status]",
 		subcommands: [
-			{ name: "on", description: "Enable assigned event sounds for this session" },
-			{ name: "off", description: "Stop event sounds immediately" },
-			{ name: "reload", description: "Reread curated assignments and changed audio" },
-			{ name: "status", description: "Show mappings, playback and dropped events" },
+			{
+				name: "on",
+				get description() {
+					return t("commands.control.chimeOnDescription");
+				},
+			},
+			{
+				name: "off",
+				get description() {
+					return t("commands.control.chimeOffDescription");
+				},
+			},
+			{
+				name: "reload",
+				get description() {
+					return t("commands.control.chimeReloadDescription");
+				},
+			},
+			{
+				name: "status",
+				get description() {
+					return t("commands.control.chimeStatusDescription");
+				},
+			},
 		],
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
@@ -74,26 +97,28 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "force",
 		icon: "hammer",
-		description: "Force next turn to use a specific tool",
+		get description() {
+			return t("commands.control.forceDescription");
+		},
 		aliases: ["force:"],
 		inlineHint: "<tool-name> [prompt]",
 		allowArgs: true,
 		getTuiArgumentCompletions: (prefix, runtime) => completeArguments(prefix, runtime, activeToolValues, null),
 		getTuiAutocompleteDescription: runtime => {
 			const count = runtime.ctx.session.getActiveToolNames().length;
-			return count === 0 ? "Force: no active tools" : `Force: ${count} active tools`;
+			return count === 0 ? t("commands.control.noActiveTools") : t("commands.control.activeTools", { count });
 		},
 		handle: async (command, runtime) => {
 			const spaceIdx = command.args.indexOf(" ");
 			const toolName = spaceIdx === -1 ? command.args : command.args.slice(0, spaceIdx);
 			const prompt = spaceIdx === -1 ? "" : command.args.slice(spaceIdx + 1).trim();
-			if (!toolName) return usage("Usage: /force:<tool-name> [prompt]", runtime);
+			if (!toolName) return usage(t("commands.control.forceUsage"), runtime);
 			try {
 				runtime.session.setForcedToolChoice(toolName);
 			} catch (err) {
 				return usage(errorMessage(err), runtime);
 			}
-			await runtime.output(`Next turn forced to use ${toolName}.`);
+			await runtime.output(t("commands.control.toolForced", { tool: toolName }));
 			return prompt ? { prompt } : commandConsumed();
 		},
 		handleTui: (command, runtime) => {
@@ -102,14 +127,14 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const prompt = spaceIdx === -1 ? "" : command.args.slice(spaceIdx + 1).trim();
 
 			if (!toolName) {
-				runtime.ctx.showError("Usage: /force:<tool-name> [prompt]");
+				runtime.ctx.showError(t("commands.control.forceUsage"));
 				clearSubmittedText(runtime);
 				return;
 			}
 
 			try {
 				runtime.ctx.session.setForcedToolChoice(toolName);
-				runtime.ctx.showStatus(`Next turn forced to use ${toolName}.`);
+				runtime.ctx.showStatus(t("commands.control.toolForced", { tool: toolName }));
 			} catch (error) {
 				runtime.ctx.showError(errorMessage(error));
 				clearSubmittedText(runtime);
@@ -125,13 +150,17 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live",
 		icon: "voice",
-		description: "Start realtime voice mode or choose the model it requests",
+		get description() {
+			return t("commands.control.liveDescription");
+		},
 		allowArgs: true,
 		inlineHint: "[model [slug]]",
 		subcommands: [
 			{
 				name: "model",
-				description: "Show or set the model requested for the next live call",
+				get description() {
+					return t("commands.control.liveModelDescription");
+				},
 				usage: "[slug]",
 				arguments: [
 					prefix => liveModelValues(prefix)?.map(item => ({ ...item, preserveInputOnSubmit: true })) ?? null,
@@ -145,7 +174,10 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				try {
 					if (rest) cfgLiveModel.set(runtime.ctx.settings, rest);
 					runtime.ctx.showStatus(
-						`Requested live model: ${cfgLiveModel.get(runtime.ctx.settings)} (${rest ? "applies to the next live call" : "the service does not report which model answers"})`,
+						t("commands.control.liveModel", {
+							model: cfgLiveModel.get(runtime.ctx.settings),
+							detail: rest ? t("commands.control.liveModelNext") : t("commands.control.liveModelUnknown"),
+						}),
 					);
 				} catch (error) {
 					runtime.ctx.showError(errorMessage(error));
@@ -153,7 +185,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			if (verb) {
-				runtime.ctx.showError("Usage: /live [model [slug]]");
+				runtime.ctx.showError(t("commands.control.liveUsage"));
 				return;
 			}
 			await runtime.ctx.handleLiveCommand();
@@ -162,7 +194,9 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "live-transcript",
 		icon: "voice",
-		description: "Start or stop experimental voice mode with transcript-aware handoffs",
+		get description() {
+			return t("commands.control.voiceDescription");
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleLiveCommand("transcript");
@@ -171,7 +205,9 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "record",
 		icon: "export",
-		description: `Start or stop recording this screen to a replayable file (${APP_NAME} play)`,
+		get description() {
+			return t("commands.control.recordDescription", { app: APP_NAME });
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.toggleRecording();
@@ -180,7 +216,9 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "pause",
 		icon: "pause",
-		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		get description() {
+			return t("commands.control.freezeDescription");
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			const ctx = runtime.ctx;
@@ -190,23 +228,47 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "forget-approvals",
 		icon: "trash",
-		description: "Forget every file and folder approval Ask and remember has recorded",
+		get description() {
+			return t("commands.control.forgetDescription");
+		},
 		handle: async (_command, runtime) => {
 			clearApprovalGrants(runtime.settings.getAgentDir());
-			await runtime.output("Remembered approvals forgotten; the next read or write asks again.");
+			await runtime.output(t("commands.control.approvalsForgotten"));
 			return commandConsumed();
 		},
 	},
 	{
 		name: "monitor",
 		icon: "eye",
-		description: "Open a tmux session with one live pane per subagent and advisor",
+		get description() {
+			return t("commands.control.monitorDescription");
+		},
 		inlineHint: "[on|off|status|configure]",
 		subcommands: [
-			{ name: "on", description: "Start the monitor session (default)" },
-			{ name: "off", description: "Close the monitor session and its panes" },
-			{ name: "status", description: "Show the monitor session and its panes" },
-			{ name: "configure", description: "Configure monitor layout, counts, and pane sizes" },
+			{
+				name: "on",
+				get description() {
+					return t("commands.control.monitorOnDescription");
+				},
+			},
+			{
+				name: "off",
+				get description() {
+					return t("commands.control.monitorOffDescription");
+				},
+			},
+			{
+				name: "status",
+				get description() {
+					return t("commands.control.monitorStatusDescription");
+				},
+			},
+			{
+				name: "configure",
+				get description() {
+					return t("commands.control.monitorConfigureDescription");
+				},
+			},
 		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
@@ -220,28 +282,29 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				}
 				if (action === "off") {
 					const stopped = await stopAgentMonitor(ctx.session);
-					ctx.showStatus(stopped ? "Agent monitor closed." : "The agent monitor is not running.");
+					ctx.showStatus(stopped ? t("commands.control.monitorClosed") : t("commands.control.monitorNotRunning"));
 					return;
 				}
 				if (action === "status") {
 					const manager = agentMonitorFor(ctx.session);
 					if (!manager) {
-						ctx.showStatus("The agent monitor is not running. /monitor on starts it.");
+						ctx.showStatus(t("commands.control.monitorStartHint"));
 						return;
 					}
 					const status = manager.status();
 					const panes =
-						status.panes.map(pane => `${pane.agentId} (${pane.paneId})`).join(", ") || "no agent panes";
-					ctx.showStatus(`Agent monitor: tmux session ${status.sessionName} · ${panes}`);
+						status.panes.map(pane => `${pane.agentId} (${pane.paneId})`).join(", ") ||
+						t("commands.control.noPanes");
+					ctx.showStatus(t("commands.control.monitorStatus", { session: status.sessionName, panes }));
 					return;
 				}
 				if (action !== "on") {
-					ctx.showError("Usage: /monitor [on|off|status|configure]");
+					ctx.showError(t("commands.control.monitorUsage"));
 					return;
 				}
 				const status = await startAgentMonitor(ctx.session, ctx.settings);
 				ctx.showStatus(
-					`Agent monitor running in tmux session ${status.sessionName}. View it from another terminal: tmux attach -t ${status.sessionName}`,
+					t("commands.control.monitorStarted", { session: status.sessionName, target: status.sessionName }),
 				);
 			} catch (error) {
 				ctx.showError(errorMessage(error));
@@ -252,7 +315,9 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "quit",
 		aliases: ["q"],
 		icon: "power",
-		description: "Quit the application",
+		get description() {
+			return t("commands.control.quitDescription");
+		},
 		handleTui: shutdownHandlerTui,
 	},
 ];

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, getKeybindings, Spacer, Text } from "@oh-my-pi/pi-tui";
@@ -63,7 +64,11 @@ import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { boundPromptTitle, HookEditorComponent, type HookEditorOptions } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { extensionLinkClicksAvailable } from "@oh-my-pi/pi-tui/render/extension-links";
-import { HookSelectorComponent, type HookSelectorSlider } from "@oh-my-pi/pi-tui/overlays/hook-selector";
+import {
+	HookSelectorComponent,
+	type HookSelectorOptionInput,
+	type HookSelectorSlider,
+} from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { ComposerOwner, InteractiveModeContext, InteractiveSelectorDialogOptions } from "../../modes/types";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -84,18 +89,18 @@ const ASK_PASSTHROUGH_ACTIONS = ["app.stt.toggle", "app.dictation.toggle"] as co
  * the keys, so the host can't know its bindings: advertise the defaults.
  */
 function guestAskHelpText(enterAction: string, extra = ""): string {
-	return `${formatKeyHints(["up", "down"])} navigate  ${formatKeyHint("enter")} ${enterAction}  ${extra}${formatKeyHint("escape")} cancel`;
+	return t("overlays.extension_ui_controller.navigation_help", {
+		items: `${formatKeyHints(["up", "down"])}`,
+		value: `${formatKeyHint("enter")}`,
+		enterAction: `${enterAction}`,
+		extra: `${extra}`,
+		value2: `${formatKeyHint("escape")}`,
+	});
 }
 
 const ASK_OTHER_OPTION = "Other (type your own)";
 const ASK_CHAT_OPTION = "Chat about this";
 const ASK_NEXT_OPTION = "Next →";
-/** What an inline ask warns while sending the composer's draft would skip it. */
-const ASK_SKIP_NOTICE = "Sending your message skips these questions";
-/** The empty composer's placeholder under an ask whose sending skips it. */
-const ASK_SKIP_HINT = "↑ answer the questions above, or type here to skip them";
-/** The empty composer's placeholder under an ask that stays open past a message (`ExtensionUIDialogOptions.detach`). */
-const ASK_STEER_HINT = "↑ answer the questions above · a message sent from here reaches the agent and keeps them open";
 
 /** The ask shown above the composer and what the composer's keys can do with it; see `#mountAsk`. */
 interface MountedAsk {
@@ -309,11 +314,17 @@ export class ExtensionUiController {
 		this.ctx.session.setUsageFallbackConfirmer?.((confirmation, signal) => {
 			const reserve =
 				confirmation.remainingPercent === undefined
-					? "inside the configured reserve margin"
-					: `${confirmation.remainingPercent.toFixed(1)}% remaining`;
+					? t("overlays.extension_ui_controller.reserve_margin")
+					: t("overlays.extension_ui_controller.reserve_remaining", {
+							toFixed: `${confirmation.remainingPercent.toFixed(1)}`,
+						});
 			return this.showHookConfirm(
-				"Coding-plan reserve reached",
-				`${confirmation.from} has ${reserve}. Switch to ${confirmation.to}? Choose No to keep using the current plan.`,
+				t("overlays.extension_ui_controller.reserve_reached"),
+				t("overlays.extension_ui_controller.reserve_switch", {
+					from: `${confirmation.from}`,
+					reserve: `${reserve}`,
+					to: `${confirmation.to}`,
+				}),
 				{ signal },
 			);
 		});
@@ -374,7 +385,7 @@ export class ExtensionUiController {
 				await this.ctx.session.reload();
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
-				this.ctx.showStatus("Reloaded session");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.session_reloaded"));
 			},
 			applyRuntimeModelLoadout: loadout => this.ctx.session.applyRuntimeModelLoadout(loadout),
 			invalidatePromptCache: () => this.ctx.session.invalidatePromptCache(),
@@ -404,7 +415,11 @@ export class ExtensionUiController {
 
 				this.ctx.present([
 					new Spacer(1),
-					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
+					new Text(
+						`${theme.fg("accent", t("overlays.extension_ui_controller.new_session", { success: `${theme.status.success}` }))}`,
+						1,
+						1,
+					),
 				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
@@ -422,7 +437,7 @@ export class ExtensionUiController {
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
 				this.ctx.editor.setDraft(result.selectedText, result.selectedImages);
-				this.ctx.showStatus("Branched to new session");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.session_branched"));
 
 				return { cancelled: false };
 			},
@@ -438,7 +453,7 @@ export class ExtensionUiController {
 				if (result.editorText && !this.ctx.editor.getText().trim()) {
 					this.ctx.editor.setDraft(result.editorText, result.editorImages);
 				}
-				this.ctx.showStatus("Navigated to selected point");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.navigated_to_point"));
 
 				return { cancelled: false };
 			},
@@ -515,7 +530,9 @@ export class ExtensionUiController {
 				container.addChild(new Text(line, 1, 0));
 			}
 			if (content.length > MAX_WIDGET_LINES) {
-				container.addChild(new Text(theme.fg("muted", "... (widget truncated)"), 1, 0));
+				container.addChild(
+					new Text(theme.fg("muted", t("overlays.extension_ui_controller.widget_truncated")), 1, 0),
+				);
 			}
 			return container;
 		}
@@ -601,7 +618,7 @@ export class ExtensionUiController {
 				await this.ctx.session.reload();
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
-				this.ctx.showStatus("Reloaded session");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.session_reloaded_again"));
 			},
 			applyRuntimeModelLoadout: loadout => this.ctx.session.applyRuntimeModelLoadout(loadout),
 			invalidatePromptCache: () => this.ctx.session.invalidatePromptCache(),
@@ -628,7 +645,11 @@ export class ExtensionUiController {
 
 				this.ctx.present([
 					new Spacer(1),
-					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
+					new Text(
+						`${theme.fg("accent", t("overlays.extension_ui_controller.new_session_again", { success: `${theme.status.success}` }))}`,
+						1,
+						1,
+					),
 				]);
 				await this.ctx.reloadTodos();
 				this.ctx.ui.requestRender(true, { clearScrollback: true });
@@ -646,7 +667,7 @@ export class ExtensionUiController {
 				await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 				await this.ctx.reloadTodos();
 				this.ctx.editor.setDraft(result.selectedText, result.selectedImages);
-				this.ctx.showStatus("Branched to new session");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.session_branched_again"));
 
 				return { cancelled: false };
 			},
@@ -662,7 +683,7 @@ export class ExtensionUiController {
 				if (result.editorText && !this.ctx.editor.getText().trim()) {
 					this.ctx.editor.setDraft(result.editorText, result.editorImages);
 				}
-				this.ctx.showStatus("Navigated to selected point");
+				this.ctx.showStatus(t("overlays.extension_ui_controller.navigated_to_point_again"));
 
 				return { cancelled: false };
 			},
@@ -724,7 +745,11 @@ export class ExtensionUiController {
 	 * Show a tool error in the chat.
 	 */
 	showToolError(toolName: string, error: string): void {
-		const errorText = new Text(`Tool "${toolName}" error: ${error}`, 1, 0).setStyleFn(t => theme.fg("error", t));
+		const errorText = new Text(
+			t("overlays.extension_ui_controller.tool_error", { toolName: `${toolName}`, error: `${error}` }),
+			1,
+			0,
+		).setStyleFn(t => theme.fg("error", t));
 		this.ctx.present(errorText);
 	}
 
@@ -961,7 +986,9 @@ export class ExtensionUiController {
 		const ask = this.#ask;
 		if (!ask || this.ctx.isBtwFocused) return undefined;
 		if (this.askHoldsKeys() && ask.component instanceof HtmlFormDialog) return ask.component.keyHints();
-		return ask.keepsOpenOnSteer ? ASK_STEER_HINT : ASK_SKIP_HINT;
+		return ask.keepsOpenOnSteer
+			? t("overlays.extension_ui_controller.ask_steer_hint")
+			: t("overlays.extension_ui_controller.ask_skip_hint");
 	}
 
 	/** Whether an ask waits above the composer while the keys are away from the composer (it draws faint). */
@@ -1040,9 +1067,13 @@ export class ExtensionUiController {
 	#skipNotice(): string | undefined {
 		if (!this.#draftSkipsAsk()) return undefined;
 		const back = this.ctx.keybindings.getKeys("app.thinking.cycle")[0];
+		const notice = t("overlays.extension_ui_controller.ask_skip_notice");
 		return this.ctx.ui.getFocused() === this.ctx.editor && back
-			? `${ASK_SKIP_NOTICE} · ${formatKeyHint(back)} answers them`
-			: ASK_SKIP_NOTICE;
+			? t("overlays.extension_ui_controller.ask_back_hint", {
+					notice,
+					back: formatKeyHint(back),
+				})
+			: notice;
 	}
 
 	/**
@@ -1060,7 +1091,7 @@ export class ExtensionUiController {
 				// The draft pipeline (text, Vim modes, submit): editor-slot shortcuts stay off for the key that crossed over.
 				draftEditor.handleDraftEdit(keyData);
 			},
-			hint: "Finish or clear the current prompt to answer",
+			hint: t("overlays.extension_ui_controller.finish_prompt_hint"),
 			syncPresentation: blocked => {
 				if (this.ctx.ui.getFocused() !== draftEditor) draftEditor.focused = blocked;
 			},
@@ -1281,7 +1312,12 @@ export class ExtensionUiController {
 					selectionMarker: "checkbox",
 					checkedIndices,
 					markableCount: rows.length,
-					helpText: guestAskHelpText("toggle", canSubmit ? `${ASK_NEXT_OPTION} continue  ` : ""),
+					helpText: guestAskHelpText(
+						"toggle",
+						canSubmit
+							? t("overlays.extension_ui_controller.continue_hint", { ASK_NEXT_OPTION: `${ASK_NEXT_OPTION}` })
+							: "",
+					),
 				},
 				signal,
 			);
@@ -1340,7 +1376,7 @@ export class ExtensionUiController {
 		this.#nextDialog = {
 			family: "ask",
 			kind: "ask",
-			title: "Ask",
+			title: t("overlays.extension_ui_controller.ask_title"),
 			convert: value => controlAnswerToAskResult(questions, value),
 		};
 		const prompt = { kind: "question", msg: questions[0]?.question } as const;
@@ -1390,7 +1426,7 @@ export class ExtensionUiController {
 				): boolean => {
 					// A detached ask leaves the composer's place to another dialog holding it.
 					if (!slot.composerInPlace()) {
-						this.ctx.showStatus("Finish the open prompt first");
+						this.ctx.showStatus(t("overlays.extension_ui_controller.finish_open_prompt"));
 						return false;
 					}
 					promptEditor = new HookEditorComponent(
@@ -1593,7 +1629,10 @@ export class ExtensionUiController {
 						selectionMarker: "checkbox",
 						checkedIndices,
 						markableCount: question.options.length,
-						helpText: guestAskHelpText("toggle", hasAnswer ? "Next → continue  " : ""),
+						helpText: guestAskHelpText(
+							"toggle",
+							hasAnswer ? t("overlays.extension_ui_controller.next_continue_hint") : "",
+						),
 					},
 					signal,
 				);
@@ -1604,7 +1643,10 @@ export class ExtensionUiController {
 				if (choice.value === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
 						host,
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", displayQuestion) },
+						{
+							kind: "editor",
+							title: boundPromptTitle(t("overlays.extension_ui_controller.custom_answer"), displayQuestion),
+						},
 						signal,
 					);
 					if (input.kind === "unavailable") return "unavailable";
@@ -1644,7 +1686,13 @@ export class ExtensionUiController {
 				if (choice.value === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
 						host,
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", displayQuestion) },
+						{
+							kind: "editor",
+							title: boundPromptTitle(
+								t("overlays.extension_ui_controller.custom_answer_guest"),
+								displayQuestion,
+							),
+						},
 						signal,
 					);
 					if (input.kind === "unavailable") return "unavailable";
@@ -1685,7 +1733,7 @@ export class ExtensionUiController {
 	 */
 	showHookSelector(
 		title: string,
-		options: ExtensionUISelectItem[],
+		options: HookSelectorOptionInput[],
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider; kind?: BlockedKind },
 	): Promise<string | undefined> {
@@ -1756,10 +1804,18 @@ export class ExtensionUiController {
 		message: string,
 		dialogOptions?: InteractiveSelectorDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions, {
-			kind: "permission",
-		});
-		return result === "Yes";
+		const result = await this.showHookSelector(
+			`${title}\n${message}`,
+			[
+				{ value: "yes", label: t("overlays.confirm.yes") },
+				{ value: "no", label: t("overlays.confirm.no") },
+			],
+			dialogOptions,
+			{
+				kind: "permission",
+			},
+		);
+		return result === "yes";
 	}
 
 	/**
@@ -1981,9 +2037,14 @@ export class ExtensionUiController {
 	}
 
 	showExtensionError(extensionPath: string, error: string): void {
-		const errorText = new Text(`Extension "${extensionPath}" error: ${error}`, 1, 0).setStyleFn(t =>
-			theme.fg("error", t),
-		);
+		const errorText = new Text(
+			t("overlays.extension_ui_controller.extension_error", {
+				extensionPath: `${extensionPath}`,
+				error: `${error}`,
+			}),
+			1,
+			0,
+		).setStyleFn(t => theme.fg("error", t));
 		this.ctx.present(errorText);
 	}
 	async #handleInteractiveCompact(instructionsOrOptions: string | CompactOptions | undefined): Promise<void> {
@@ -2010,7 +2071,7 @@ export class ExtensionUiController {
 	 */
 	#rejectGuestExtensionTurn(): boolean {
 		if (!this.ctx.collabGuest) return false;
-		this.ctx.showStatus("Extension-initiated turns are host-only during a collab session");
+		this.ctx.showStatus(t("overlays.extension_ui_controller.extension_turns_host_only"));
 		return true;
 	}
 
@@ -2036,7 +2097,11 @@ export class ExtensionUiController {
 				this.#applyCustomMessageDisplay(wasStreaming, normalized, silentAppend ? messageCountBefore : undefined);
 			})
 			.catch((err: unknown) => {
-				this.ctx.showError(`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`);
+				this.ctx.showError(
+					t("overlays.extension_ui_controller.send_message_failed", {
+						message: `${err instanceof Error ? err.message : String(err)}`,
+					}),
+				);
 			});
 	};
 
@@ -2049,7 +2114,11 @@ export class ExtensionUiController {
 		}
 		const task = this.ctx.session.sendUserMessage(content, options);
 		task.catch((err: unknown) => {
-			this.ctx.showError(`Extension sendUserMessage failed: ${err instanceof Error ? err.message : String(err)}`);
+			this.ctx.showError(
+				t("overlays.extension_ui_controller.send_user_message_failed", {
+					message: `${err instanceof Error ? err.message : String(err)}`,
+				}),
+			);
 		});
 		return task;
 	};
@@ -2174,7 +2243,12 @@ export class ExtensionUiController {
 				return;
 			}
 			if (actor && actor.humanNow() !== actor.humanAtAdmission) {
-				this.ctx.showStatus(`⌁ ${actor.label}#${actor.connectionId} backed off (you were interacting)`);
+				this.ctx.showStatus(
+					t("overlays.extension_ui_controller.actor_backed_off", {
+						label: `${actor.label}`,
+						connectionId: `${actor.connectionId}`,
+					}),
+				);
 				settle(undefined);
 				this.#advanceDialogQueue();
 				return;

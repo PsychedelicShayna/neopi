@@ -8,6 +8,7 @@
  * - Tab / Arrow Right: Next tab (wraps around)
  * - Shift+Tab / Arrow Left: Previous tab (wraps around)
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "../app-keybindings";
 import { getMenuSearchVimMode, MenuKeyReader } from "./menu-navigation";
 import { compactText, styledSpans, styleSpans } from "../native/spans";
@@ -206,7 +207,10 @@ export class TabBar implements Component {
 			parts.push(
 				node("text", {
 					spans: styleSpans(
-						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+						t("overlays.tab_bar.tab_cycle_hint", {
+							value: `${getMenuSearchVimMode() ? "h/l" : "←/→"}`,
+							value2: `${formatKeyHint("tab")}`,
+						}),
 						this.#theme.hint,
 					),
 				}),
@@ -280,7 +284,10 @@ export class TabBar implements Component {
 				chunks.push({ text: "  " });
 				chunks.push({
 					text: this.#theme.hint(
-						`(${getMenuSearchVimMode() ? "h/l" : "←/→"} tabs · ${formatKeyHint("tab")} cycle)`,
+						t("overlays.tab_bar.tab_cycle_hint", {
+							value: `${getMenuSearchVimMode() ? "h/l" : "←/→"}`,
+							value2: `${formatKeyHint("tab")}`,
+						}),
 					),
 				});
 			}

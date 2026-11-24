@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { SummaryResult } from "@oh-my-pi/pi-natives";
 import { formatNumberedLine } from "./hashline-format";
 import { LINE_RANGE_CHUNK_SOURCE, parseLineRanges } from "./line-ranges";
@@ -346,14 +347,18 @@ interface ReadUrlCard {
 const READ_URL_CARDS: Record<string, ReadUrlCard> = {
 	proc: {
 		label: "Process",
-		rootDetail: "jobs & services",
+		get rootDetail() {
+			return t("tools.read.jobs_services");
+		},
 		detailsKey: "proc",
 		render: (_url, target, result, details, options, uiTheme) =>
 			renderProcRead(target, result, details?.proc, options, uiTheme),
 	},
 	cfg: {
 		label: "Config",
-		rootDetail: "all settings",
+		get rootDetail() {
+			return t("tools.cfg_render.all_settings");
+		},
 		detailsKey: "cfg",
 		render: (url, _target, result, details, options, uiTheme) =>
 			renderCfgRead(splitInternalUrlSel(url).path, result, details?.cfg, options, uiTheme),
@@ -492,10 +497,10 @@ function readNativeHead(
 		target += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 	}
 	const meta: string[] = [];
-	if (suffix) meta.push(`corrected from ${shortenPath(suffix.from)}`);
+	if (suffix) meta.push(t("tools.read.corrected", { path: shortenPath(suffix.from) }));
 	if (details?.summary) {
 		const n = details.summary.elidedSpans;
-		meta.push(`summary: ${n} elided span${n === 1 ? "" : "s"}`);
+		meta.push(t(n === 1 ? "tools.read.summary.one" : "tools.read.summary.many", { count: n }));
 	}
 	const conflicts = details?.conflictCount ?? 0;
 	return {
@@ -505,7 +510,16 @@ function readNativeHead(
 		href: fileHref(linkPath ?? details?.resolvedPath ?? details?.displayTarget ?? readSourceFsPath(details)),
 		meta,
 		badges:
-			conflicts > 0 ? [{ text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}`, tone: "warning" }] : undefined,
+			conflicts > 0
+				? [
+						{
+							text: t(conflicts === 1 ? "tools.read.conflict.one" : "tools.read.conflict.many", {
+								count: conflicts,
+							}),
+							tone: "warning",
+						},
+					]
+				: undefined,
 	};
 }
 
@@ -630,7 +644,7 @@ export const readToolRenderer = {
 
 		if (result.isError) {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
-			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
+			const errorText = (rawErrorText || t("tools.common.unknown_error")).replace(/^Error:\s*/, "");
 			const rawPath =
 				typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 			const filePath =
@@ -670,14 +684,19 @@ export const readToolRenderer = {
 		const fallback = details?.truncation;
 		if (details?.resolvedPath) {
 			warningLines.push(
-				uiTheme.fg("dim", wrapBrackets(`Resolved path: ${shortenPath(details.resolvedPath)}`, uiTheme)),
+				uiTheme.fg(
+					"dim",
+					wrapBrackets(t("tools.read.resolved_path", { path: shortenPath(details.resolvedPath) }), uiTheme),
+				),
 			);
 		}
 		if (truncation) {
 			if (fallback?.firstLineExceedsLimit) {
-				let warning = `First line exceeds ${formatBytes(fallback.outputBytes ?? fallback.totalBytes)} limit`;
+				let warning = t("tools.read.first_line_limit", {
+					limit: formatBytes(fallback.outputBytes ?? fallback.totalBytes),
+				});
 				if (truncation.artifactId) {
-					warning += `. ${formatFullOutputReference(truncation.artifactId)}`;
+					warning += `. ${formatFullOutputReference(truncation.artifactId, undefined, getLocale())}`;
 				}
 				warningLines.push(uiTheme.fg("warning", wrapBrackets(warning, uiTheme)));
 			} else {
@@ -694,7 +713,9 @@ export const readToolRenderer = {
 				suffixResolution: suffix,
 				fallbackLabel: "image",
 			});
-			const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
+			const correction = suffix
+				? ` ${uiTheme.fg("dim", t("tools.read.corrected_inline", { path: shortenPath(suffix.from) }))}`
+				: "";
 			const header = renderStatusLine(
 				{ icon: suffix ? "warning" : "success", title: "Read", description: `${displayPath}${correction}` },
 				uiTheme,
@@ -708,8 +729,8 @@ export const readToolRenderer = {
 				phase: "success",
 				sections: [
 					{
-						label: uiTheme.fg("toolTitle", "Details"),
-						content: lines.length > 0 ? lines : [uiTheme.fg("dim", "(image)")],
+						label: uiTheme.fg("toolTitle", t("tools.common.details")),
+						content: lines.length > 0 ? lines : [uiTheme.fg("dim", t("tools.common.image"))],
 					},
 				],
 			}));
@@ -726,7 +747,9 @@ export const readToolRenderer = {
 			suffixResolution: suffix,
 			offset: args?.offset,
 		});
-		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
+		const correction = suffix
+			? ` ${uiTheme.fg("dim", t("tools.read.corrected_inline", { path: shortenPath(suffix.from) }))}`
+			: "";
 		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
 		if (args?.offset !== undefined || args?.limit !== undefined) {
 			const startLine = args.offset ?? 1;
@@ -734,11 +757,14 @@ export const readToolRenderer = {
 			title += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 		}
 		if (details?.summary) {
-			title += ` (summary: ${details.summary.elidedSpans} elided span${details.summary.elidedSpans === 1 ? "" : "s"})`;
+			title += t(
+				details.summary.elidedSpans === 1 ? "tools.read.summary_inline.one" : "tools.read.summary_inline.many",
+				{ count: details.summary.elidedSpans },
+			);
 		}
 		if (details?.conflictCount && details.conflictCount > 0) {
 			const n = details.conflictCount;
-			title += ` ${uiTheme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
+			title += ` ${uiTheme.fg("warning", t(n === 1 ? "tools.read.conflict_warn.one" : "tools.read.conflict_warn.many", { count: n }))}`;
 		}
 		const isMarkdown = readResultIsMarkdown(details, args);
 		let cachedWidth: number | undefined;
@@ -821,7 +847,7 @@ export const readToolRenderer = {
 		}
 
 		if (result.isError) {
-			const message = (resultText(result) || "Unknown error").replace(/^Error:\s*/, "");
+			const message = (resultText(result) || t("tools.common.unknown_error")).replace(/^Error:\s*/, "");
 			return inlineErrorView(readNativeHead(rawPath, args, details, linkPath), message);
 		}
 
@@ -832,9 +858,10 @@ export const readToolRenderer = {
 		const firstLineTooLong = truncation !== undefined && fallback?.firstLineExceedsLimit === true;
 		const foot = footnoteText(
 			compact([
-				details?.resolvedPath !== undefined && `resolved ${shortenPath(details.resolvedPath)}`,
+				details?.resolvedPath !== undefined &&
+					t("tools.read.resolved", { path: shortenPath(details.resolvedPath) }),
 				firstLineTooLong &&
-					`First line exceeds ${formatBytes(fallback.outputBytes ?? fallback.totalBytes)} limit${truncation.artifactId ? `. ${formatFullOutputReference(truncation.artifactId)}` : ""}`,
+					`${t("tools.read.first_line_limit", { limit: formatBytes(fallback.outputBytes ?? fallback.totalBytes) })}${truncation.artifactId ? `. ${formatFullOutputReference(truncation.artifactId, undefined, getLocale())}` : ""}`,
 			]),
 			firstLineTooLong ? { artifactError: details?.meta?.artifactError } : details?.meta,
 		);

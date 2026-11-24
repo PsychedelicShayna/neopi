@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Stack } from "../components/layout/stack";
 import { isRightPress, routeSgrMouseInput } from "../mouse";
 import { theme } from "../theme/index";
@@ -35,7 +36,7 @@ export class SidePanelFullscreenComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const rows = Math.max(2, this.#options.rows());
-		this.#title.setLines([theme.bold(theme.fg("accent", "Side panel"))]);
+		this.#title.setLines([theme.bold(theme.fg("accent", t("overlays.side_panel.title")))]);
 		this.#stack.setHeight(rows);
 		return this.#stack.render(width);
 	}

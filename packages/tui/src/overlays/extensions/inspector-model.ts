@@ -4,6 +4,7 @@
  * Discovery `Extension.raw` stays the capability record. Live session tools
  * are joined here at render time — the same seam as {@link snapshotMcpRuntime}.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { arkToWireSchema, isArkSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { normalizePathForComparison, parseFrontmatter } from "@oh-my-pi/pi-utils";
@@ -192,12 +193,16 @@ export function toolParamsFromSchema(schema: unknown): ToolParamView[] {
 		const record = spec && typeof spec === "object" ? (spec as Record<string, unknown>) : {};
 		const isRequired = required.has(name);
 		const defaultVal =
-			record.default !== undefined ? `Default: ${sanitizeDisplayLine(String(record.default))}` : null;
+			record.default !== undefined
+				? t("overlays.inspector_model.default_value", { default: `${sanitizeDisplayLine(String(record.default))}` })
+				: null;
 		params.push({
 			name: sanitizeDisplayLine(name),
 			type: paramType(record),
 			required: isRequired,
-			flag: isRequired ? "Required" : (defaultVal ?? "Optional"),
+			flag: isRequired
+				? t("overlays.inspector_model.required")
+				: (defaultVal ?? t("overlays.inspector_model.optional")),
 			description: typeof record.description === "string" ? sanitizeDisplayField(record.description) : undefined,
 		});
 	}
@@ -273,8 +278,9 @@ export function formatExtensionListHint(ext: Extension, lives: LiveToolRecord[] 
 	switch (ext.kind) {
 		case "tool": {
 			if (lives.length > 1) {
-				detail = `${lives.length} tools`;
-				if (lives.every(tool => tool.hidden)) detail = `hidden · ${detail}`;
+				detail = t("overlays.inspector_model.tool_count", { length: `${lives.length}` });
+				if (lives.every(tool => tool.hidden))
+					detail = t("overlays.inspector_model.hidden_detail", { detail: `${detail}` });
 			} else if (lives[0]?.hidden) {
 				detail = "hidden";
 			}
@@ -314,7 +320,7 @@ export function toolInspectorData(
 		return {
 			description: sanitizeDisplayField(description),
 			params: [],
-			runtimeDetail: `${lives.length} tools`,
+			runtimeDetail: t("overlays.inspector_model.tool_count", { length: `${lives.length}` }),
 			factory: lives.map(live => ({
 				...live,
 				name: sanitizeDisplayLine(live.name),
@@ -389,7 +395,7 @@ export function skillInspectorData(ext: Extension): {
 	const globs = stringArray(frontmatter.globs) ?? stringArray(raw.globs);
 	let runtimeDetail: string | undefined;
 	if (hidden) runtimeDetail = "hidden";
-	else if (alwaysApply) runtimeDetail = "always";
+	else if (alwaysApply) runtimeDetail = t("overlays.inspector_model.always");
 	else if (globs) runtimeDetail = globs.join(", ");
 	return {
 		description: stringField(frontmatter, "description") ?? sanitizeDisplayField(ext.description),
@@ -466,19 +472,21 @@ export function contextInspectorData(ext: Extension): { content: string; runtime
 export function enablementLabel(state: ExtensionState, reason?: string, shadowedBy?: string): string {
 	switch (state) {
 		case "active":
-			return "Active";
+			return t("overlays.inspector_model.active");
 		case "disabled": {
 			const reasonText =
 				reason === "provider-disabled"
-					? "provider disabled"
+					? t("overlays.inspector_model.provider_disabled")
 					: reason === "user-opt-in"
-						? "~/ config not enabled"
+						? t("overlays.inspector_model.user_config_disabled")
 						: reason === "item-disabled"
-							? "manually disabled"
-							: "unknown";
-			return `Disabled (${reasonText})`;
+							? t("overlays.inspector_model.manually_disabled")
+							: t("overlays.inspector_model.unknown");
+			return t("overlays.inspector_model.disabled_reason", { reasonText: `${reasonText}` });
 		}
 		case "shadowed":
-			return `Shadowed${shadowedBy ? ` by ${sanitizeDisplayText(shadowedBy)}` : ""}`;
+			return t("overlays.inspector_model.shadowed", {
+				value: `${shadowedBy ? t("overlays.inspector_model.shadowed_by_suffix", { shadowedBy: `${sanitizeDisplayText(shadowedBy)}` }) : ""}`,
+			});
 	}
 }

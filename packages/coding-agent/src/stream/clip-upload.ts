@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type ClipUploadResponse, STREAM_ROUTES } from "@oh-my-pi/pi-wire";
 import { parseRecording, type RecordingHeader } from "./recording";
 
@@ -24,7 +25,7 @@ export interface ClipUploadOptions {
 export async function uploadClip(options: ClipUploadOptions): Promise<ClipUploadResponse> {
 	const base = new URL(options.serverUrl);
 	if (base.protocol !== "https:" && base.protocol !== "http:") {
-		throw new Error(`clip server URL must use http or https: ${options.serverUrl}`);
+		throw new Error(t("cli.commands.clip.error.server_url_protocol", { url: options.serverUrl }));
 	}
 	const { header } = parseRecording(options.recording);
 	const stamped: RecordingHeader = {
@@ -48,7 +49,7 @@ export async function uploadClip(options: ClipUploadOptions): Promise<ClipUpload
 			payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
 				? payload.error
 				: response.statusText;
-		throw new Error(`clip upload failed (${response.status}): ${reason}`);
+		throw new Error(t("cli.commands.clip.error.upload_failed", { status: response.status, reason }));
 	}
 	if (
 		!payload ||
@@ -58,7 +59,7 @@ export async function uploadClip(options: ClipUploadOptions): Promise<ClipUpload
 		typeof payload.id !== "string" ||
 		typeof payload.url !== "string"
 	) {
-		throw new Error("clip upload failed: unexpected server response");
+		throw new Error(t("cli.commands.clip.error.unexpected_response"));
 	}
 	return { id: payload.id, url: payload.url };
 }

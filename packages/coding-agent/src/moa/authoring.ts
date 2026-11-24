@@ -12,6 +12,7 @@ import {
 	writeSource,
 } from "./authoring-files";
 import { parseMixturesDoc } from "./config";
+import { codedMixtureIssue } from "./findings";
 import { checkMixture, type MixtureRegistrationContext } from "./registration";
 import { serializeMixturesConfig } from "./toml";
 import type { MixtureIssue } from "./types";
@@ -171,13 +172,7 @@ export function validateMixtureDraft(
 				index,
 				name,
 				runnable: false,
-				errors: [
-					{
-						code: "validation.failed",
-						path: "",
-						message: `NeoPi could not validate this definition: ${toError(error).message}`,
-					},
-				],
+				errors: [codedMixtureIssue("validation.failed", "", { detail: toError(error).message })],
 				warnings: [],
 				unsupported: [],
 				members: {},

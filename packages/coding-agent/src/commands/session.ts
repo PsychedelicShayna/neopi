@@ -12,6 +12,7 @@
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sessionHelp as commandHelp } from "../cli/command-help";
 import { resolveSessionFileArg } from "../cli/session-arg";
 import { ControlClient } from "../control/client";
@@ -43,9 +44,9 @@ const USAGE: Record<SessionAction, string> = {
 };
 
 const UNPACK_NOTE: Record<UnpackMode, string> = {
-	created: "Unpacked session",
-	replaced: "Replaced the local copy of this session",
-	forked: "The local copy of this session diverged; unpacked as a fork",
+	created: "cli.commands.session.unpack_created",
+	replaced: "cli.commands.session.unpack_replaced",
+	forked: "cli.commands.session.unpack_forked",
 };
 
 function isSessionAction(value: string): value is SessionAction {
@@ -140,80 +141,88 @@ export default class Session extends Command {
 		file: Flags.string({ description: "Inspect the lifetime lease of this exact session file (lease; always JSON)" }),
 	};
 
-	static examples = [
-		"# Pack a session with its artifacts and image blobs\n  omp session pack ~/.omp/agent/sessions/<project>/<file>.jsonl /tmp/session.tar",
-		"# Unpack it on another machine; prints the session file path\n  omp session unpack /tmp/session.tar --cwd ~/src/project",
-		"# Mark the local copy stale; resuming it later forks it\n  omp session moved <file>.jsonl --to cloud",
-		"# List which of these sessions a running omp owns, without taking ownership (`--` keeps ids starting with `-` from parsing as options)\n  omp session lease --json -- <id> <id>",
-		"# Inspect a session file's lifetime lease and identify its live holder\n  npi session lease --file /path/to/session.jsonl",
-	];
+	static get examples() {
+		return [
+			`# ${t("cli.commands.session.example.pack")}\n  omp session pack ~/.omp/agent/sessions/<project>/<file>.jsonl /tmp/session.tar`,
+			`# ${t("cli.commands.session.example.unpack")}\n  omp session unpack /tmp/session.tar --cwd ~/src/project`,
+			`# ${t("cli.commands.session.example.moved")}\n  omp session moved <file>.jsonl --to cloud`,
+			`# ${t("cli.commands.session.example.lease")}\n  omp session lease --json -- <id> <id>`,
+			`# ${t("cli.commands.session.example.file_lease")}\n  npi session lease --file /path/to/session.jsonl`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags, argv } = await this.parse(Session);
 		const action = args.action ?? "";
-		if (!isSessionAction(action)) throw new CliUsageError(`Unknown action: ${action}`);
+		if (!isSessionAction(action)) throw new CliUsageError(t("cli.commands.session.unknown_action", { action }));
 		const usage = USAGE[action];
 		if (action === "lease") {
 			if (flags.cwd !== undefined || flags.to !== undefined) {
-				throw new CliUsageError(`--cwd and --to do not apply to lease. Usage: ${usage}`);
+				throw new CliUsageError(t("cli.commands.session.lease_flags", { usage }));
 			}
 			const sessionIds = argv.slice(1);
 			if (flags.file !== undefined) {
 				if (flags.file.length === 0 || sessionIds.length !== 0) {
-					throw new CliUsageError(
-						`--file needs one non-empty path and cannot be combined with session ids. Usage: ${usage}`,
-					);
+					throw new CliUsageError(t("cli.commands.session.file_path_required", { usage }));
 				}
 				process.stdout.write(`${JSON.stringify(await querySessionFileLease(flags.file))}\n`);
 				return;
 			}
-			if (sessionIds.length === 0) throw new CliUsageError(`Missing session id. Usage: ${usage}`);
+			if (sessionIds.length === 0) throw new CliUsageError(t("cli.commands.session.id_required", { usage }));
 			printSessionLeases(sessionIds, flags.json === true);
 			return;
 		}
-		if (flags.json) throw new CliUsageError(`--json only applies to lease. Usage: ${usage}`);
-		if (flags.file !== undefined) throw new CliUsageError(`--file only applies to lease. Usage: ${usage}`);
+		if (flags.json) throw new CliUsageError(t("cli.commands.session.json_lease_only", { usage }));
+		if (flags.file !== undefined) throw new CliUsageError(t("cli.commands.session.file_lease_only", { usage }));
 		if (argv.length > (action === "pack" ? 3 : 2)) {
-			throw new CliUsageError(`Unexpected argument "${argv.at(-1)}". Usage: ${usage}`);
+			throw new CliUsageError(
+				t("cli.commands.session.unexpected_argument", { argument: String(argv.at(-1)), usage }),
+			);
 		}
 		const source = args.source;
-		if (!source) throw new CliUsageError(`Missing ${action === "unpack" ? "archive" : "session"}. Usage: ${usage}`);
+		if (!source) {
+			const key =
+				action === "unpack" ? "cli.commands.session.archive_required" : "cli.commands.session.session_required";
+			throw new CliUsageError(t(key, { usage }));
+		}
 		if (action !== "unpack" && flags.cwd !== undefined) {
-			throw new CliUsageError(`--cwd only applies to unpack. Usage: ${usage}`);
+			throw new CliUsageError(t("cli.commands.session.cwd_unpack_only", { usage }));
 		}
 		if (action !== "moved" && flags.to !== undefined) {
-			throw new CliUsageError(`--to only applies to moved. Usage: ${usage}`);
+			throw new CliUsageError(t("cli.commands.session.to_moved_only", { usage }));
 		}
 
 		try {
 			switch (action) {
 				case "pack": {
-					if (!args.output) throw new CliUsageError(`Missing output archive path. Usage: ${usage}`);
+					if (!args.output) throw new CliUsageError(t("cli.commands.session.output_required", { usage }));
 					const result = await packSession(await this.#resolveSession(source), args.output);
 					if (result.missingBlobs.length > 0) {
 						process.stderr.write(
-							`${chalk.yellow(`warning: ${result.missingBlobs.length} referenced blob(s) are missing from the local blob store and were not packed; those images will not load after unpacking.`)}\n`,
+							`${chalk.yellow(t("cli.commands.session.blobs_missing", { count: result.missingBlobs.length }))}\n`,
 						);
 					}
 					process.stdout.write(`${result.archivePath}\n`);
 					return;
 				}
 				case "unpack": {
-					if (!flags.cwd) throw new CliUsageError(`Missing --cwd <dir>. Usage: ${usage}`);
+					if (!flags.cwd) throw new CliUsageError(t("cli.commands.session.cwd_required", { usage }));
 					const result = await unpackSession(source, { cwd: flags.cwd });
-					process.stderr.write(`${chalk.dim(`${UNPACK_NOTE[result.mode]} (${result.id}).`)}\n`);
+					process.stderr.write(`${chalk.dim(t(UNPACK_NOTE[result.mode], { id: result.id }))}\n`);
 					process.stdout.write(`${result.sessionFile}\n`);
 					return;
 				}
 				case "moved": {
-					if (flags.to === undefined) throw new CliUsageError(`Missing --to <label>. Usage: ${usage}`);
+					if (flags.to === undefined) throw new CliUsageError(t("cli.commands.session.to_required", { usage }));
 					await markSessionMoved(await this.#resolveSession(source), flags.to);
 					return;
 				}
 			}
 		} catch (error) {
 			if (error instanceof SessionTransferError || error instanceof SessionMoveRefusedError) {
-				process.stderr.write(`${chalk.red(`error: ${error.message}`)}\n`);
+				process.stderr.write(
+					`${chalk.red(t("cli.commands.session.transfer_error", { message: error.message }))}\n`,
+				);
 				process.exitCode = 1;
 				return;
 			}

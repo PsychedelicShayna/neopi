@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { isReadableUrlPath, readSelectorRangeStart } from "./read";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
@@ -13,11 +14,11 @@ import { renderStatusLine, urlHyperlink } from "../render";
 import { framedToolCard } from "../render/tool-card";
 import {
 	formatExpandHint,
-	formatMoreItems,
 	formatStatusIcon,
 	getDomain,
 	PREVIEW_LIMITS,
 	sanitizeDisplayLines,
+	formatMoreItems,
 } from "../render/render-utils";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledArtifactReference } from "./output-meta";
@@ -163,11 +164,11 @@ export function describeReadUrlResult(result: {
 	const details = result.details;
 	if (result.isError || !details) {
 		const urlText = details?.finalUrl ?? details?.url ?? "";
-		const message = plainText(resultText(result) || "No response data").replace(/^Error:\s*/, "");
+		const message = plainText(resultText(result) || t("tools.common.no_response")).replace(/^Error:\s*/, "");
 		return {
 			tool: readUrlHead(urlText),
 			tone: "error",
-			body: [errorText(message.trim() || "Read failed")],
+			body: [errorText(message.trim() || t("tools.fetch.read_failed"))],
 		};
 	}
 
@@ -186,27 +187,34 @@ export function describeReadUrlResult(result: {
 		[
 			plainText(details.contentType || "unknown"),
 			details.method ? plainText(details.method) : "",
-			`${contentLines.length} line${contentLines.length === 1 ? "" : "s"}`,
-			`${contentBody.trim().length} chars`,
+			t(contentLines.length === 1 ? "tools.fetch.lines.one" : "tools.fetch.lines.many", {
+				count: contentLines.length,
+			}),
+			t("tools.fetch.characters", { count: contentBody.trim().length }),
 			hidden > 0 ? formatMoreItems(hidden, "line") : "",
 			...details.notes.map(note => plainText(note)),
 		].filter(Boolean),
 	);
 	return {
-		tool: readUrlHead(details.finalUrl, redirected ? [`from ${plainText(getDomain(details.url))}`] : []),
+		tool: readUrlHead(
+			details.finalUrl,
+			redirected ? [t("tools.fetch.domain", { site: plainText(getDomain(details.url)) })] : [],
+		),
 		tone: truncated ? "warning" : undefined,
 		body: compact([
 			shown.length > 0
 				? text([span(plainText(shown.map(line => line.trimEnd()).join("\n")), "dim")], { wrap: "word" })
-				: noteText("(no content)"),
+				: noteText(t("tools.common.no_content")),
 			stats,
 			truncated
 				? text(
 						[
 							span(
 								truncation?.artifactId
-									? `Output truncated · ${formatFullOutputReference(truncation.artifactId)}`
-									: "Output truncated",
+									? t("tools.fetch.truncated_with_link", {
+											reference: formatFullOutputReference(truncation.artifactId, undefined, getLocale()),
+										})
+									: t("tools.common.output_truncated"),
 								"warning",
 							),
 						],
@@ -227,7 +235,7 @@ export function renderReadUrlResult(
 
 	if (result.isError || !details) {
 		const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
-		const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
+		const errorText = (rawErrorText || t("tools.common.no_response")).replace(/^Error:\s*/, "");
 		const urlText = details?.finalUrl ?? details?.url ?? "";
 		const description = urlText ? formatReadUrlDescription(urlText) : undefined;
 		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
@@ -268,14 +276,16 @@ export function renderReadUrlResult(
 	];
 	if (hasRedirect) {
 		metadataLines.push(
-			`${uiTheme.fg("muted", "Final URL:")} ${formatReadUrlMetadataValue(details.finalUrl, uiTheme)}`,
+			`${uiTheme.fg("muted", t("tools.fetch.final_url"))} ${formatReadUrlMetadataValue(details.finalUrl, uiTheme)}`,
 		);
 	}
-	const lineLabel = `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+	const lineLabel = t(lineCount === 1 ? "tools.fetch.lines.one" : "tools.fetch.lines.many", { count: lineCount });
 	metadataLines.push(`${uiTheme.fg("muted", "Lines:")} ${lineLabel}`);
 	metadataLines.push(`${uiTheme.fg("muted", "Chars:")} ${charCount}`);
 	if (truncated) {
-		metadataLines.push(`${formatStatusIcon("warning", uiTheme)} ${uiTheme.fg("warning", "Output truncated")}`);
+		metadataLines.push(
+			`${formatStatusIcon("warning", uiTheme)} ${uiTheme.fg("warning", t("tools.common.output_truncated"))}`,
+		);
 		if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
 	}
 	if (hasNotes) {
@@ -303,10 +313,12 @@ export function renderReadUrlResult(
 				contentPreviewLines =
 					previewLines.length > 0
 						? previewLines.map(line => uiTheme.fg("dim", line))
-						: [uiTheme.fg("dim", "(no content)")];
+						: [uiTheme.fg("dim", t("tools.common.no_content"))];
 				if (remaining > 0) {
 					const hint = formatExpandHint(uiTheme, expanded, true);
-					contentPreviewLines.push(uiTheme.fg("muted", `… ${remaining} more lines${hint ? ` ${hint}` : ""}`));
+					contentPreviewLines.push(
+						uiTheme.fg("muted", `${t("tools.fetch.more_lines", { count: remaining })}${hint ? ` ${hint}` : ""}`),
+					);
 				}
 				lastExpanded = expanded;
 			}
@@ -315,8 +327,8 @@ export function renderReadUrlResult(
 				header,
 				phase: truncated ? "warning" : "success",
 				sections: [
-					{ label: uiTheme.fg("toolTitle", "Metadata"), content: metadataLines },
-					{ label: uiTheme.fg("toolTitle", "Content Preview"), content: contentPreviewLines },
+					{ label: uiTheme.fg("toolTitle", t("tools.common.metadata")), content: metadataLines },
+					{ label: uiTheme.fg("toolTitle", t("tools.fetch.content_preview")), content: contentPreviewLines },
 				],
 				applyBg: false,
 			};

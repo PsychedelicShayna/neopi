@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
 import { completeSpawnTypes, createAgentLauncher, parseSpawnArguments } from "../neopi/agent-launcher";
 import { clearSubmittedText } from "./helpers/draft";
@@ -7,7 +8,9 @@ import type { SlashCommandSpec } from "./types";
 export const SPAWN_COMMAND: SlashCommandSpec = {
 	name: "spawn",
 	icon: "agents",
-	description: "Launch an agent from its definition or edit its launch settings",
+	get description() {
+		return t("commands.spawn.description");
+	},
 	allowArgs: true,
 	getTuiInlineHint: prefix => (prefix.trim() ? null : "<type>[spec] [assignment]"),
 	inlineHint: "[type[spec] [assignment]]",
@@ -15,9 +18,7 @@ export const SPAWN_COMMAND: SlashCommandSpec = {
 	handle: async (command, runtime) => {
 		const input = parseSpawnArguments(command.args);
 		if (!input?.assignment.trim()) {
-			await runtime.output(
-				"Use /spawn <type>[spec] <assignment>. The launcher and assignment editor require the TUI.",
-			);
+			await runtime.output(t("commands.spawn.usage"));
 			return commandConsumed({ failed: true });
 		}
 		try {

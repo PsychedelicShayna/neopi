@@ -3,6 +3,14 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { MixtureConfigScope, MixturesConfigDoc } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRecord, logger, toError } from "@oh-my-pi/pi-utils";
+import {
+	getCatalogOverrides,
+	getLocale,
+	LOCALES,
+	type Locale,
+	t,
+	type TranslationValues,
+} from "@oh-my-pi/pi-utils/i18n";
 import { formatModelString, resolveModelRoleValue } from "../config/model-resolver";
 import { formatModelRoleAlias, getKnownRoleIds, getRoleInfo, roleCandidatePool } from "../config/model-roles";
 import { judgeRoleChain } from "../judgment";
@@ -19,6 +27,7 @@ import { ABSENT, type MixtureSource, mixtureSources, sourceId } from "./authorin
 import { discoverMixtures, MIXTURES_FILE_NAME } from "./config";
 import { DEFAULT_TERMINATE_THRESHOLD } from "./decisions";
 import { BUNDLED_ENVELOPES, BUNDLED_ROLES, moaPartsPartial } from "./envelopes";
+import { formatMixtureIssue } from "./findings";
 import { isMixtureModel, MixtureCatalog } from "./provider";
 import { discoverRegistrableMixtures, type MixtureRegistrationContext } from "./registration";
 import { allowedModels } from "./resolve";
@@ -58,7 +67,8 @@ const MAX_BATCH_FILES = 16;
 // JSON can spell a single TOML character as a six-byte Unicode escape; a move carries two files.
 const MAX_REQUEST_BYTES = 2 * 6 * MAX_FILE_BYTES + 64 * 1024;
 const HASH = /^[a-f0-9]{64}$/;
-const SESSION_GONE = "The invoking session changed. Run /moa web again.";
+const STUDIO_MESSAGES = "overlaysModel.moaWeb.studio.";
+const SERVER_MESSAGES = "overlaysModel.moaWeb.server.";
 const HEADERS = {
 	"Cache-Control": "no-store",
 	"Content-Security-Policy":
@@ -66,6 +76,34 @@ const HEADERS = {
 	"Referrer-Policy": "no-referrer",
 	"X-Content-Type-Options": "nosniff",
 };
+
+function studioPage(locale: Locale): Response {
+	const messages = Object.fromEntries(
+		Object.entries(getCatalogOverrides(locale))
+			.filter(([key]) => key.startsWith(STUDIO_MESSAGES))
+			.map(([key, value]) => [key.slice(STUDIO_MESSAGES.length), value]),
+	);
+	// Leave the English browser table as the per-key fallback. Escape the inert data block's HTML delimiter.
+	const substitutions: Record<string, string> = {
+		locale,
+		pageTitle: Bun.escapeHTML(serverText(locale, "pageTitle")),
+		editorMessages: JSON.stringify(messages).replaceAll("<", "\\u003c"),
+	};
+	return new Response(
+		editorPage.replace(/\{\{(\w+)\}\}/g, (marker, key: string) => substitutions[key] ?? marker),
+		{
+			headers: { ...HEADERS, "Content-Type": "text/html; charset=utf-8" },
+		},
+	);
+}
+
+function serverText(locale: Locale, key: string, values?: TranslationValues): string {
+	return t(locale, `${SERVER_MESSAGES}${key}`, values);
+}
+
+function webError(locale: Locale, status: number, key: string, values?: TranslationValues): Response {
+	return json({ error: serverText(locale, key, values) }, status);
+}
 
 function json(body: unknown, status = 200): Response {
 	return Response.json(body, { status, headers: HEADERS });
@@ -80,24 +118,25 @@ function issuePath(index: number, path: string): string {
 	return path ? `mixtures[${index}].${path}` : `mixtures[${index}]`;
 }
 
-function findings(reports: readonly MixtureDefinitionReport[]) {
-	return {
-		errors: reports.flatMap(({ index, errors }) =>
-			errors.map(issue => ({ ...issue, path: issuePath(index, issue.path) })),
-		),
-		warnings: reports.flatMap(({ index, warnings }) =>
-			warnings.map(issue => ({ ...issue, path: issuePath(index, issue.path) })),
-		),
-	};
+function findings(reports: readonly MixtureDefinitionReport[], locale: Locale) {
+	const present = (key: "errors" | "warnings") =>
+		reports.flatMap(({ index, [key]: issues }) =>
+			issues.map(issue => ({
+				code: issue.code,
+				path: issuePath(index, issue.path),
+				message: formatMixtureIssue(issue, locale),
+			})),
+		);
+	return { errors: present("errors"), warnings: present("warnings") };
 }
 
-function snapshotJson(snapshot: MixtureSourceSnapshot) {
+function snapshotJson(snapshot: MixtureSourceSnapshot, locale: Locale) {
 	const { hash, validation, ...rest } = snapshot;
 	return {
 		...rest,
 		displayPath: shortenPath(snapshot.path),
 		hash: wireHash(hash),
-		validation: findings(validation),
+		validation: findings(validation, locale),
 		reports: validation,
 	};
 }
@@ -261,24 +300,23 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 	}
 
 	/** Parse and check the save body; returns the writes or an error response. */
-	async function saveRequest(body: unknown): Promise<MixtureFileWrite[] | Response> {
+	async function saveRequest(body: unknown, locale: Locale): Promise<MixtureFileWrite[] | Response> {
 		const files = isRecord(body) ? body.files : undefined;
 		if (!Array.isArray(files) || files.length === 0 || files.length > MAX_BATCH_FILES)
-			return json({ error: `A save needs 1 to ${MAX_BATCH_FILES} files` }, 400);
+			return webError(locale, 400, "saveBatchSize", { max: MAX_BATCH_FILES });
 		const known = await sources();
 		const writes: MixtureFileWrite[] = [];
 		for (const file of files) {
-			if (!isRecord(file)) return json({ error: "Each file must be an object" }, 400);
+			if (!isRecord(file)) return webError(locale, 400, "saveFileObject");
 			const source = known.find(candidate => candidate.id === file.sourceId);
-			if (!source)
-				return json({ error: "A file in this save is no longer on NeoPi's search path; reload the page" }, 409);
+			if (!source) return webError(locale, 409, "saveFileUnknown");
 			const { baseHash, doc, confirmCanonicalRewrite } = file;
 			if (baseHash !== null && (typeof baseHash !== "string" || !HASH.test(baseHash)))
-				return json({ error: `${source.path}: the hash from the last load is required` }, 400);
+				return webError(locale, 400, "sourceHashRequired", { path: source.path });
 			if (!isRecord(doc) || !Array.isArray(doc.mixtures))
-				return json({ error: `${source.path}: a mixture document is required` }, 400);
+				return webError(locale, 400, "sourceDocumentRequired", { path: source.path });
 			if (confirmCanonicalRewrite !== undefined && typeof confirmCanonicalRewrite !== "boolean")
-				return json({ error: "confirmCanonicalRewrite must be a boolean" }, 400);
+				return webError(locale, 400, "confirmationBoolean");
 			writes.push({
 				source,
 				baseHash: baseHash ?? ABSENT,
@@ -289,8 +327,8 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 		return writes;
 	}
 
-	async function save(writes: MixtureFileWrite[]): Promise<Response> {
-		if (!current()) return json({ error: SESSION_GONE }, 410);
+	async function save(writes: MixtureFileWrite[], locale: Locale): Promise<Response> {
+		if (!current()) return webError(locale, 410, "sessionChanged");
 		let snapshots: MixtureSourceSnapshot[];
 		try {
 			snapshots = await saveMixtureSources(writes, context);
@@ -299,18 +337,55 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 			const { conflicts, files, partial, outcomes, code } = error.details;
 			const body: Record<string, unknown> = { error: error.message };
 			if (code) body.code = code;
-			if (conflicts)
+			if (conflicts) {
 				body.conflicts = conflicts.map(conflict => ({
 					sourceId: conflict.sourceId,
-					current: snapshotJson(conflict.current),
+					current: snapshotJson(conflict.current, locale),
 				}));
-			if (files)
-				body.files = files.map(file => ({
-					sourceId: file.sourceId,
-					...(file.validation ? { validation: findings(file.validation) } : {}),
-					...(file.blocked ? { blocked: file.blocked } : {}),
-					...(file.parseDiagnostics ? { parseDiagnostics: file.parseDiagnostics } : {}),
-				}));
+				body.error = serverText(locale, "reloadChangedSource", {
+					path: conflicts.map(conflict => conflict.current.path).join(", "),
+				});
+			}
+			if (files) {
+				const blockedNames: string[] = [];
+				let firstBlocked: { path: string; message: string } | undefined;
+				body.files = files.map(file => {
+					const validation = file.validation && findings(file.validation, locale);
+					if (file.blocked && file.validation) {
+						for (const report of file.validation) {
+							if (!file.blocked.includes(report.index)) continue;
+							blockedNames.push(report.name || serverText(locale, "unnamed"));
+							const issue = report.errors[0];
+							if (issue && !firstBlocked)
+								firstBlocked = {
+									path: issuePath(report.index, issue.path),
+									message: formatMixtureIssue(issue, locale),
+								};
+						}
+					}
+					return {
+						sourceId: file.sourceId,
+						...(validation ? { validation } : {}),
+						...(file.blocked ? { blocked: file.blocked } : {}),
+						...(file.parseDiagnostics ? { parseDiagnostics: file.parseDiagnostics } : {}),
+					};
+				});
+				if (blockedNames.length) {
+					body.error = serverText(locale, "blockedSave", {
+						names: blockedNames.join(", "),
+						detail: firstBlocked ? `: ${firstBlocked.path}: ${firstBlocked.message}` : "",
+					});
+				} else if (code === "rewrite-loses-source") {
+					body.error = serverText(locale, "rewriteLosesSource", {
+						path: writes
+							.filter(write => files.some(file => file.sourceId === write.source.id))
+							.map(write => write.source.path)
+							.join(", "),
+					});
+				} else if (files.some(file => file.parseDiagnostics?.length)) {
+					body.error = serverText(locale, "unrepresentableDraft");
+				}
+			}
 			if (outcomes) {
 				// Something may have reached disk: the roster and the sidebar follow the files as they are now.
 				body.partial = partial === true;
@@ -328,9 +403,14 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 			.flatMap(source => source.mixtures)
 			.filter(mixture => mixture.status === "shadowed" || mixture.status === "unregistered");
 		const paths = writes.map(write => shortenPath(write.source.path)).join(", ");
-		const message = hidden.length
-			? `Saved ${paths}; ${hidden.map(mixture => mixture.name).join(", ")} ${hidden.length > 1 ? "are" : "is"} not the registered definition.`
-			: `Saved ${paths} and refreshed the mixture roster.`;
+		const message = serverText(
+			getLocale(),
+			hidden.length ? (hidden.length > 1 ? "savedHiddenMany" : "savedHidden") : "saved",
+			{
+				paths,
+				names: hidden.map(mixture => mixture.name).join(", "),
+			},
+		);
 		if (current()) {
 			try {
 				onSaved?.(message);
@@ -338,7 +418,7 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 				logger.warn("Could not display mixture editor save status", { error: toError(error).message });
 			}
 		}
-		return json({ files: snapshots.map(snapshotJson), sources: list, roster });
+		return json({ files: snapshots.map(snapshot => snapshotJson(snapshot, locale)), sources: list, roster });
 	}
 
 	const server = Bun.serve({
@@ -348,6 +428,8 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 		maxRequestBodySize: MAX_REQUEST_BYTES,
 		async fetch(request, listener) {
 			const url = new URL(request.url);
+			const lang = url.searchParams.get("lang");
+			const locale = LOCALES.find(candidate => candidate === lang) ?? "en";
 			const origin = request.headers.get("origin");
 			const site = request.headers.get("sec-fetch-site");
 			if (
@@ -355,55 +437,51 @@ export function startMixtureWebEditor(options: MixtureWebEditorOptions): Mixture
 				(origin !== null && origin !== listener.url.origin) ||
 				(site !== null && site !== "same-origin" && site !== "none")
 			)
-				return json({ error: "Foreign origin refused" }, 403);
-			if (!url.pathname.startsWith(prefix)) return json({ error: "Not found" }, 404);
-			if (!current()) return json({ error: SESSION_GONE }, 410);
+				return webError(locale, 403, "foreignOrigin");
+			if (!url.pathname.startsWith(prefix)) return webError(locale, 404, "notFound");
+			if (!current()) return webError(locale, 410, "sessionChanged");
 			const route = url.pathname.slice(prefix.length);
 			try {
 				if (request.method === "GET") {
-					if (route === "")
-						return new Response(editorPage, {
-							headers: { ...HEADERS, "Content-Type": "text/html; charset=utf-8" },
-						});
+					if (route === "") return studioPage(lang === null ? getLocale() : locale);
 					if (route.startsWith("assets/")) {
 						const name = route.slice("assets/".length);
 						const asset = Object.hasOwn(editorAssets, name) ? editorAssets[name] : undefined;
-						if (!asset) return json({ error: "Not found" }, 404);
+						if (!asset) return webError(locale, 404, "notFound");
 						return new Response(asset.body, { headers: { ...HEADERS, "Content-Type": asset.type } });
 					}
 					if (route === "bootstrap") return json(bootstrap());
 					if (route === "mixtures/sources") return json({ sources: await listSources() });
 					if (route === "mixtures/source") {
 						const source = await sourceById(url.searchParams.get("id"));
-						if (!source)
-							return json({ error: "That file is not on NeoPi's search path for this workspace" }, 404);
-						return json(snapshotJson(await loadMixtureSource(source, context)));
+						if (!source) return webError(locale, 404, "sourceNotEditable");
+						return json(snapshotJson(await loadMixtureSource(source, context), locale));
 					}
-					return json({ error: "Not found" }, 404);
+					return webError(locale, 404, "notFound");
 				}
 				const draft = request.method === "POST" && route === "mixtures/draft";
 				if (!draft && !(request.method === "PUT" && route === "mixtures/save"))
-					return json({ error: "Not found" }, 404);
-				if (origin !== listener.url.origin) return json({ error: "Same-origin request required" }, 403);
+					return webError(locale, 404, "notFound");
+				if (origin !== listener.url.origin) return webError(locale, 403, "sameOriginRequired");
 				if (request.headers.get("content-type")?.split(";", 1)[0] !== "application/json")
-					return json({ error: "JSON body required" }, 415);
+					return webError(locale, 415, "jsonRequired");
 				const body: unknown = await request.json().catch(() => null);
 				if (draft) {
 					if (!isRecord(body) || !(await sourceById(body.sourceId)))
-						return json({ error: "A sourceId from mixtures/sources is required" }, 400);
+						return webError(locale, 400, "sourceIdRequired");
 					if (!isRecord(body.doc) || !Array.isArray(body.doc.mixtures))
-						return json({ error: "A mixture document is required" }, 400);
+						return webError(locale, 400, "documentRequired");
 					const result = draftMixtureSource(body.doc as unknown as MixturesConfigDoc, context);
 					return json({
 						toml: result.toml,
 						parseDiagnostics: result.parseDiagnostics,
-						validation: findings(result.validation),
+						validation: findings(result.validation, locale),
 						reports: result.validation,
 					});
 				}
-				const writes = await saveRequest(body);
+				const writes = await saveRequest(body, locale);
 				if (writes instanceof Response) return writes;
-				const pending = saved.then(() => save(writes));
+				const pending = saved.then(() => save(writes, locale));
 				saved = pending.catch(() => {});
 				return await pending;
 			} catch (error) {

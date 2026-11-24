@@ -2,6 +2,7 @@
  * Owns the `/cleanse` overlay lifecycle: mounts the {@link CleansePanelComponent}
  * above the editor and drives the shared cleanse core against it.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { runCleanse } from "../../cleanse";
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { CleanseBoardModel } from "@oh-my-pi/pi-tui/apps/cleanse-board";
@@ -25,8 +26,7 @@ interface ParsedCleanseArgs {
 	error?: string;
 }
 
-const CLEANSE_USAGE = "Usage: /cleanse [request] [--all] [--tests] [-n <agents>] [-m <model>]";
-const CUSTOM_REQUEST_OPTION = "Describe what to fix…";
+const cleanseUsage = () => t("overlays.cleanse_command_controller.usage");
 
 export class CleanseCommandController {
 	#active: CleanseRun | undefined;
@@ -48,21 +48,23 @@ export class CleanseCommandController {
 	handleCancel(): boolean {
 		const run = this.#active;
 		if (!run || run.settled) return false;
-		run.abortController.abort(new Error("Cleanse interrupted"));
+		run.abortController.abort(new Error(t("overlays.cleanse_command_controller.interrupted")));
 		return true;
 	}
 
 	dispose(): void {
 		const run = this.#active;
 		if (!run) return;
-		run.abortController.abort(new Error("Cleanse interrupted"));
+		run.abortController.abort(new Error(t("overlays.cleanse_command_controller.interrupted")));
 		this.#close(run);
 	}
 
 	async start(args: string): Promise<void> {
 		if (this.#active) {
 			this.ctx.showStatus(
-				`A /cleanse run is already active — ${appKey(this.ctx.keybindings, "app.interrupt")} cancels it.`,
+				t("overlays.cleanse_command_controller.already_active", {
+					part1: `${appKey(this.ctx.keybindings, "app.interrupt")}`,
+				}),
 			);
 			return;
 		}
@@ -119,25 +121,33 @@ export class CleanseCommandController {
 	}
 
 	async #pickTarget(checkers: readonly CleanseCheckerDescriptor[]): Promise<CleanseTargetChoice> {
-		const allOption = `Run all ${checkers.length} discovered checker${checkers.length === 1 ? "" : "s"}`;
-		const labels = checkers.map(checker => `${checker.label} — ${checker.command}`);
-		const choice = await this.ctx.showHookSelector("Select what to cleanse", [
-			allOption,
-			...labels,
-			CUSTOM_REQUEST_OPTION,
+		const allLabel = t("overlays.cleanse_command_controller.run_all", {
+			part1: `${checkers.length}`,
+			part2: `${checkers.length === 1 ? "" : "s"}`,
+		});
+		const choice = await this.ctx.showHookSelector(t("overlays.cleanse_command_controller.select"), [
+			{ value: "all", label: allLabel },
+			...checkers.map(checker => ({
+				value: `checker:${checker.id}`,
+				label: `${checker.label} — ${checker.command}`,
+			})),
+			{ value: "request", label: t("overlays.cleanse_command_controller.describe_fix") },
 		]);
 		if (choice === undefined) return { kind: "cancel" };
-		if (choice === allOption) return { kind: "all" };
-		if (choice === CUSTOM_REQUEST_OPTION) {
+		if (choice === "all") return { kind: "all" };
+		if (choice === "request") {
 			const request = await this.#promptRequest();
 			return request === null ? { kind: "cancel" } : { kind: "request", request };
 		}
-		const checker = checkers[labels.indexOf(choice)];
+		const checker = checkers.find(checker => `checker:${checker.id}` === choice);
 		return checker ? { kind: "checker", id: checker.id } : { kind: "cancel" };
 	}
 
 	async #promptRequest(): Promise<string | null> {
-		const answer = await this.ctx.showHookInput("Describe what to detect and fix", 'e.g. "ts errors"');
+		const answer = await this.ctx.showHookInput(
+			t("overlays.cleanse_command_controller.describe"),
+			t("overlays.cleanse_command_controller.example"),
+		);
 		const trimmed = answer?.trim();
 		return trimmed ? trimmed : null;
 	}
@@ -164,14 +174,14 @@ function parseCleanseArgs(args: string): ParsedCleanseArgs {
 			parsed.includeTests = true;
 		} else if (token === "--agents" || token === "-n") {
 			const value = Number(tokens[++i]);
-			if (!Number.isInteger(value) || value <= 0) return { ...parsed, error: CLEANSE_USAGE };
+			if (!Number.isInteger(value) || value <= 0) return { ...parsed, error: cleanseUsage() };
 			parsed.maxAgents = value;
 		} else if (token === "--model" || token === "-m") {
 			const value = tokens[++i];
-			if (!value) return { ...parsed, error: CLEANSE_USAGE };
+			if (!value) return { ...parsed, error: cleanseUsage() };
 			parsed.model = value;
 		} else if (token.startsWith("-") && token.length > 1 && !/^-\d/.test(token)) {
-			return { ...parsed, error: CLEANSE_USAGE };
+			return { ...parsed, error: cleanseUsage() };
 		} else {
 			requestParts.push(token);
 		}

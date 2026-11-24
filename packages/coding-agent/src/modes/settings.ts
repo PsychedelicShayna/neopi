@@ -2,7 +2,7 @@ import { defaultUpdateChannel } from "../cli/update-config";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
-import { getLocaleNames, LOCALES, setLocale } from "@oh-my-pi/pi-utils/i18n";
+import { getLocaleNames, LOCALES, setLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
@@ -676,7 +676,7 @@ export const cfgTuiCodexResetFireworks = register({
 		group: "Display",
 		label: "Codex Reset Fireworks",
 		get description() {
-			return `Celebrate unscheduled Codex weekly usage resets and newly banked saved resets with a top-third fireworks overlay that remains until ${formatKeyHint("escape")}`;
+			return t("settings.dynamic.tui.codexResetFireworks", { escape: formatKeyHint("escape") });
 		},
 	},
 });
@@ -790,8 +790,7 @@ export const cfgTuiMouse = register({
 		group: "Display",
 		label: "Mouse Click-to-Focus",
 		get description() {
-			const shift = formatKeyHint("shift");
-			return `Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target, and clicks on extension-owned links reach their extension (the link-hint key picks them without the mouse). Native text selection becomes ${shift}+drag while on, and mouse capture stops wheel scrolling — the terminal reports wheel ticks to omp instead — so scroll with the terminal's keyboard scrollback keys, or turn this off`;
+			return t("settings.dynamic.tui.mouse", { shift: formatKeyHint("shift") });
 		},
 	},
 });
@@ -1259,7 +1258,7 @@ export const cfgTuiVimMode = register({
 		group: "Input",
 		label: "Vim Navigation and Editing",
 		get description() {
-			return `Opt in to Vim navigation across menus, pickers, lists and viewers, plus modal prompt and search editing. ${formatKeyHint("escape")} leaves Insert mode; Normal mode has hjkl, 0, $, ^, w, b, e, gg, G, counts, x/D/C, dd/yy, p and u; operators take motions or text objects (diw, ca(, dap); v/V start a Visual selection that y copies and d deletes. Off by default; ordinary navigation and text editing remain available`;
+			return t("settings.dynamic.tui.vimMode", { escape: formatKeyHint("escape") });
 		},
 	},
 });
@@ -1338,7 +1337,10 @@ export const cfgComposerRecallClearedDrafts = register({
 		group: "Input",
 		label: "Recall Cleared Drafts",
 		get description() {
-			return `Keep drafts cleared with ${formatKeyHint("ctrl+c")} in local ${formatKeyHints(["up", "down"])} history until exit; disabling affects future clears`;
+			return t("settings.dynamic.composer.recallClearedDrafts", {
+				clear: formatKeyHint("ctrl+c"),
+				history: formatKeyHints(["up", "down"]),
+			});
 		},
 	},
 });
@@ -1353,7 +1355,7 @@ export const cfgDoubleEscapeAction = register({
 		group: "Input",
 		label: "Double-Escape Action",
 		get description() {
-			return `What pressing ${formatKeyHint("escape")} twice with an empty editor does: open the transcript rewind selector, open the session tree, or nothing`;
+			return t("settings.dynamic.doubleEscapeAction", { escape: formatKeyHint("escape") });
 		},
 	},
 });
@@ -1440,7 +1442,10 @@ export const cfgSpellingAutocomplete = register({
 		group: "Input",
 		label: "Word Autocomplete",
 		get description() {
-			return `Show predicted word completions as inline hints: ${formatKeyHint("tab")} accepts with a space, ${formatKeyHint("right")} without`;
+			return t("settings.dynamic.spelling.autocomplete", {
+				tab: formatKeyHint("tab"),
+				right: formatKeyHint("right"),
+			});
 		},
 		options: [
 			{ value: "off", label: "Off", description: "No word completion" },
@@ -1471,7 +1476,10 @@ export const cfgComposerPredictions = register({
 		group: "Input",
 		label: "Composer Predictions",
 		get description() {
-			return `After a completed turn, ask the active model to predict your next message and show it as ghost text in the empty composer; ${formatKeyHint("tab")} or ${formatKeyHint("right")} inserts it without sending. Extra usage: every completed turn sends one more billed request over the whole conversation (counted in /stats)`;
+			return t("settings.dynamic.composer.predictions", {
+				tab: formatKeyHint("tab"),
+				right: formatKeyHint("right"),
+			});
 		},
 	},
 });
@@ -1485,7 +1493,7 @@ export const cfgComposerPredictionAlternatives = register({
 		group: "Input",
 		label: "Prediction Alternatives",
 		get description() {
-			return `Ask for up to four distinct predictions instead of one, most likely first. The ghost text shows the first one your draft matches; after inserting one, press ${formatKeyHint("tab")} again to pick another. The same single request returns a few more output tokens`;
+			return t("settings.dynamic.composer.predictionAlternatives", { tab: formatKeyHint("tab") });
 		},
 		condition: "composerPredictionsEnabled",
 	},
@@ -1666,7 +1674,11 @@ export const cfgMagicKeywordsEnabled = register({
 		tab: "interaction",
 		group: "Magic Keywords",
 		label: "Magic Keywords",
-		description: `Enable hidden notices for standalone ${MAGIC_KEYWORDS.map(keyword => keyword.word).join(", ")} keywords`,
+		get description() {
+			return t("settings.dynamic.magicKeywords.enabled", {
+				keywords: MAGIC_KEYWORDS.map(keyword => keyword.word).join(", "),
+			});
+		},
 	},
 });
 

@@ -16,6 +16,7 @@
  * The overlay edits an in-memory {@link ChainsConfigDoc} and only touches disk +
  * the live chains through the host `save` callback.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -76,8 +77,12 @@ export interface ChainConfigDeps {
 
 const PREVIEW_WIDTH = 60;
 
+function scopeLabel(scope: ChainConfigScope): string {
+	return scope === "user" ? t("overlaysModel.chainConfig.scope.user") : t("overlaysModel.chainConfig.scope.project");
+}
+
 function previewLineOrNone(text: string | undefined): string {
-	if (!text?.trim()) return "(none)";
+	if (!text?.trim()) return t("overlaysModel.chainConfig.none");
 	const first = text.trim().split("\n", 1)[0] ?? "";
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
@@ -89,7 +94,7 @@ function commitTools(selected: ReadonlySet<string>, all: readonly string[]): str
 }
 
 function formatStepTools(tools: readonly string[] | undefined): string {
-	return tools && tools.length > 0 ? tools.join(", ") : "no tools";
+	return tools && tools.length > 0 ? tools.join(", ") : t("overlaysModel.chainConfig.noTools");
 }
 
 /** Steps that run; `enabled: false` keeps a step in the chain without running it. */
@@ -247,13 +252,17 @@ export class ChainConfigOverlayComponent implements Component {
 		const height = Math.max(14, process.stdout.rows || 40);
 		const editing = this.#active instanceof Input || this.#active instanceof HookEditorComponent;
 		const hints = menuHintLines(
-			`${this.#footerHint}${editing ? "" : " · / filter · ? help"}`,
+			`${this.#footerHint}${editing ? "" : t("overlaysModel.chainConfig.listHintSuffix")}`,
 			Math.max(1, width - 4),
 			editing ? "" : undefined,
 		);
 		const bodyRows = Math.max(3, height - 3 - hints.length);
 		this.#bodyRowsLast = bodyRows;
-		const title = `Chain configuration · ${this.#scope}${this.#dirty ? "  ● unsaved" : ""}${this.#screen === "list" && this.#previewFocused ? " · Preview" : ""}`;
+		const title = t("overlaysModel.chainConfig.heading", {
+			scope: scopeLabel(this.#scope),
+			unsaved: this.#dirty ? t("overlaysModel.chainConfig.unsavedSuffix") : "",
+			preview: this.#screen === "list" && this.#previewFocused ? t("overlaysModel.chainConfig.previewSuffix") : "",
+		});
 		this.#split.setNarrowPane(this.#screen === "list" ? undefined : "left");
 		this.#split.setSplitAt(this.#screen === "list" ? 0 : Number.MAX_SAFE_INTEGER);
 		this.#split.setHeight(bodyRows);
@@ -442,8 +451,8 @@ export class ChainConfigOverlayComponent implements Component {
 		if (contentRows < rows) {
 			window.push(
 				start + contentRows < lines.length
-					? theme.fg("dim", `  ↓ ${lines.length - contentRows - start} more`)
-					: theme.fg("dim", "  (end)"),
+					? theme.fg("dim", t("overlaysModel.chainConfig.more", { count: lines.length - contentRows - start }))
+					: theme.fg("dim", t("overlaysModel.chainConfig.end")),
 			);
 		}
 		return window;
@@ -455,7 +464,7 @@ export class ChainConfigOverlayComponent implements Component {
 		// until a successful save rewrites the file without them.
 		const warnings = this.#doc.warnings?.length
 			? [
-					theme.fg("warning", "⚠ Config problems — dropped while loading:"),
+					theme.fg("warning", t("overlaysModel.chainConfig.configProblems")),
 					...sanitizeDisplayWarnings(this.#doc.warnings).flatMap(warning =>
 						wrap(warning, bodyWidth).map(line => theme.fg("warning", line)),
 					),
@@ -471,30 +480,37 @@ export class ChainConfigOverlayComponent implements Component {
 		}
 		const help =
 			value === "add"
-				? "Create a new chain, then add the steps its text passes through, top to bottom."
+				? t("overlaysModel.chainConfig.createPreview")
 				: value === "scope"
-					? `Switch between the project and user CHAINS.yml. Currently editing the ${this.#scope}-level file.`
+					? t("overlaysModel.chainConfig.scopePreview", { scope: scopeLabel(this.#scope) })
 					: value === "save"
-						? "Write this scope's CHAINS.yml and reload the live chains without a restart."
+						? t("overlaysModel.chainConfig.savePreview")
 						: value === "close"
-							? "Close the editor. Unsaved changes are discarded."
+							? t("overlaysModel.chainConfig.closePreview")
 							: "";
 		return [...warnings, ...wrap(help, bodyWidth).map(line => truncateToWidth(theme.fg("muted", line), bodyWidth))];
 	}
 
 	#chainPreview(chain: ChainConfig, bodyWidth: number): string[] {
-		const lines = [theme.bold(chain.name || "(unnamed)"), ""];
+		const lines = [theme.bold(chain.name || t("overlaysModel.chainConfig.unnamed")), ""];
 		const description = chain.description?.trim();
-		lines.push(...(description ? wrap(description, bodyWidth) : [theme.fg("muted", "(no description)")]));
+		lines.push(
+			...(description
+				? wrap(description, bodyWidth)
+				: [theme.fg("muted", t("overlaysModel.chainConfig.noDescription"))]),
+		);
 		const enabled = enabledStepCount(chain);
-		const count = enabled === chain.steps.length ? `${enabled}` : `${enabled} of ${chain.steps.length} on`;
-		lines.push("", theme.fg("dim", `Steps (${count}):`));
+		const count =
+			enabled === chain.steps.length
+				? `${enabled}`
+				: t("overlaysModel.chainConfig.enabledTotal", { enabled, total: chain.steps.length });
+		lines.push("", theme.fg("dim", t("overlaysModel.chainConfig.stepsHeading", { count })));
 		if (chain.steps.length === 0) {
-			lines.push(theme.fg("muted", "  (none — a chain needs at least one step)"));
+			lines.push(theme.fg("muted", t("overlaysModel.chainConfig.noSteps")));
 		}
 		for (const [index, step] of chain.steps.entries()) {
-			const off = step.enabled === false ? theme.fg("muted", " (off)") : "";
-			lines.push(`  ${index + 1}. ${step.name || "(unnamed)"}${off}`);
+			const off = step.enabled === false ? theme.fg("muted", t("overlaysModel.chainConfig.offSuffix")) : "";
+			lines.push(`  ${index + 1}. ${step.name || t("overlaysModel.chainConfig.unnamed")}${off}`);
 			lines.push(theme.fg("dim", `     ${this.#stepModelLabel(step)} · ${formatStepTools(step.tools)}`));
 			lines.push(theme.fg("muted", `     ${previewLineOrNone(step.prompt)}`));
 		}
@@ -540,8 +556,15 @@ export class ChainConfigOverlayComponent implements Component {
 		this.#screen = screen;
 		this.#active = active;
 		const navigationHint =
-			screen === "thinking" ? "←/→ effort" : screen === "list" ? "←/→, Tab panes" : "← parent / → open";
-		this.#footerHint = active instanceof SelectList ? `${navigationHint} · ${footerHint} · / search` : footerHint;
+			screen === "thinking"
+				? t("overlaysModel.chainConfig.effortNavigation")
+				: screen === "list"
+					? t("overlaysModel.chainConfig.paneNavigation")
+					: t("overlaysModel.chainConfig.parentNavigation");
+		this.#footerHint =
+			active instanceof SelectList
+				? t("overlaysModel.chainConfig.listNavigation", { navigation: navigationHint, footer: footerHint })
+				: footerHint;
 		this.#previewScroll = savedList?.previewScroll ?? 0;
 		this.#previewFocused = screen === "list" && savedList?.previewFocused === true;
 		this.#previewLayoutDirty = true;
@@ -569,14 +592,19 @@ export class ChainConfigOverlayComponent implements Component {
 	#stepModelLabel(step: ChainStep): string {
 		const model = step.model?.trim();
 		if (model) return model;
-		return this.#defaultModelLabel ? `@prose (default · ${this.#defaultModelLabel})` : "@prose (default)";
+		return this.#defaultModelLabel
+			? t("overlaysModel.chainConfig.roleWithModel", { model: this.#defaultModelLabel })
+			: t("overlaysModel.chainConfig.defaultRole");
 	}
 
 	#chainSummary(chain: ChainConfig): string {
 		const total = chain.steps.length;
 		const enabled = enabledStepCount(chain);
-		const noun = `step${total === 1 ? "" : "s"}`;
-		const count = enabled === total ? `${total} ${noun}` : `${enabled} of ${total} ${noun} on`;
+		const noun = total === 1 ? t("overlaysModel.chainConfig.step") : t("overlaysModel.chainConfig.steps");
+		const count =
+			enabled === total
+				? t("overlaysModel.chainConfig.stepTotal", { total, noun })
+				: t("overlaysModel.chainConfig.stepTotalEnabled", { enabled, total, noun });
 		const description = chain.description?.trim();
 		return description ? `${count} · ${previewLineOrNone(description)}` : count;
 	}
@@ -587,11 +615,15 @@ export class ChainConfigOverlayComponent implements Component {
 	 */
 	#validationError(): string | null {
 		for (const chain of this.#doc.chains) {
-			const name = chain.name || "(unnamed)";
-			if (chain.steps.length === 0) return `Chain "${name}" has no steps — add one before saving.`;
+			const name = chain.name || t("overlaysModel.chainConfig.unnamed");
+			if (chain.steps.length === 0) return t("overlaysModel.chainConfig.missingSteps", { name });
 			for (const [index, step] of chain.steps.entries()) {
 				if (!step.prompt.trim()) {
-					return `Chain "${name}" step ${index + 1} ("${step.name || "(unnamed)"}") has an empty prompt.`;
+					return t("overlaysModel.chainConfig.emptyPrompt", {
+						name,
+						index: index + 1,
+						step: step.name || t("overlaysModel.chainConfig.unnamed"),
+					});
 				}
 			}
 		}
@@ -604,13 +636,21 @@ export class ChainConfigOverlayComponent implements Component {
 		const items: SelectItem[] = this.#doc.chains.map((chain, index) => ({
 			value: `chain:${index}`,
 			label:
-				this.#pendingDeleteChain === index ? `⚠ Delete "${chain.name || "(unnamed)"}"?` : chain.name || "(unnamed)",
+				this.#pendingDeleteChain === index
+					? t("overlaysModel.chainConfig.confirmDelete", {
+							name: chain.name || t("overlaysModel.chainConfig.unnamed"),
+						})
+					: chain.name || t("overlaysModel.chainConfig.unnamed"),
 			description: this.#pendingDeleteChain === index ? undefined : this.#chainSummary(chain),
 		}));
-		items.push({ value: "add", label: "+ New chain" });
-		items.push({ value: "scope", label: `Scope: ${this.#scope}`, description: `→ ${this.#otherScope()}` });
-		items.push({ value: "save", label: "Save & apply" });
-		items.push({ value: "close", label: "Close" });
+		items.push({ value: "add", label: t("overlaysModel.chainConfig.newChain") });
+		items.push({
+			value: "scope",
+			label: t("overlaysModel.chainConfig.scopeLabel", { scope: scopeLabel(this.#scope) }),
+			description: `→ ${scopeLabel(this.#otherScope())}`,
+		});
+		items.push({ value: "save", label: t("overlaysModel.chainConfig.saveApply") });
+		items.push({ value: "close", label: t("overlaysModel.chainConfig.close") });
 
 		// The split frame supplies the list's viewport height.
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
@@ -636,15 +676,17 @@ export class ChainConfigOverlayComponent implements Component {
 		};
 		list.onSelect = item =>
 			void this.#onListSelect(item.value).catch(err => {
-				this.#cb.notify(`Chain config: ${err instanceof Error ? err.message : String(err)}`);
+				this.#cb.notify(
+					t("overlaysModel.chainConfig.error", { error: err instanceof Error ? err.message : String(err) }),
+				);
 			});
 		list.onCancel = () => this.#cb.close();
 		this.#setScreen(
 			"list",
 			list,
 			this.#pendingDeleteChain !== null
-				? "Delete again to confirm removal · any other key cancels"
-				: "Enter/Space edit · Del×2 removes · Esc close",
+				? t("overlaysModel.chainConfig.confirmDeleteHint")
+				: t("overlaysModel.chainConfig.listFooter"),
 			selectedValue,
 		);
 	}
@@ -668,7 +710,7 @@ export class ChainConfigOverlayComponent implements Component {
 		}
 		if (value === "scope") {
 			if (this.#dirty) {
-				this.#cb.notify('Unsaved changes — "Save & apply" or Close before switching scope.');
+				this.#cb.notify(t("overlaysModel.chainConfig.saveBeforeScope"));
 				return;
 			}
 			const next = this.#otherScope();
@@ -692,7 +734,7 @@ export class ChainConfigOverlayComponent implements Component {
 		if (value === "save") {
 			const problem = this.#validationError();
 			if (problem) {
-				this.#cb.notify(`Not saved — ${problem}`);
+				this.#cb.notify(t("overlaysModel.chainConfig.notSaved", { problem }));
 				return;
 			}
 			this.#pendingOperations++;
@@ -730,7 +772,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(this.#doc.chains.length - 1);
 		};
 		input.onEscape = () => this.#showList();
-		this.#setScreen("chainName", input, "Name the new chain · Enter create · Esc cancel");
+		this.#setScreen("chainName", input, t("overlaysModel.chainConfig.newChainHint"));
 	}
 
 	// ───────────────────────────── chain detail ──────────────────────
@@ -744,20 +786,24 @@ export class ChainConfigOverlayComponent implements Component {
 			return;
 		}
 		const items: SelectItem[] = [
-			{ value: "name", label: "Name", description: chain.name },
-			{ value: "description", label: "Description", description: previewLineOrNone(chain.description) },
+			{ value: "name", label: t("overlaysModel.chainConfig.name"), description: chain.name },
+			{
+				value: "description",
+				label: t("overlaysModel.chainConfig.description"),
+				description: previewLineOrNone(chain.description),
+			},
 		];
 		for (const [stepIndex, step] of chain.steps.entries()) {
 			items.push({
 				value: `step:${stepIndex}`,
-				label: `${step.enabled === false ? "[ ]" : "[x]"} ${stepIndex + 1}. ${step.name || "(unnamed)"} — ${this.#stepModelLabel(step)}`,
+				label: `${step.enabled === false ? "[ ]" : "[x]"} ${stepIndex + 1}. ${step.name || t("overlaysModel.chainConfig.unnamed")} — ${this.#stepModelLabel(step)}`,
 				description: `${formatStepTools(step.tools)} · ${previewLineOrNone(step.prompt)}`,
 			});
 		}
 		items.push(
-			{ value: "addStep", label: "+ Add step" },
-			{ value: "delete", label: "Delete this chain" },
-			{ value: "back", label: "Back" },
+			{ value: "addStep", label: t("overlaysModel.chainConfig.addStep") },
+			{ value: "delete", label: t("overlaysModel.chainConfig.deleteChain") },
+			{ value: "back", label: t("overlaysModel.chainConfig.back") },
 		);
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField) {
@@ -796,12 +842,7 @@ export class ChainConfigOverlayComponent implements Component {
 		};
 		list.onSelect = item => this.#onChainSelect(index, item.value);
 		list.onCancel = () => this.#showList(`chain:${index}`);
-		this.#setScreen(
-			"chain",
-			list,
-			`Editing "${chain.name}" · Enter / click edit · Space turns a step on/off · Alt+↑↓ or [ ] reorder steps · Delete removes a step · Esc back`,
-			selectedField,
-		);
+		this.#setScreen("chain", list, t("overlaysModel.chainConfig.editChainHint", { name: chain.name }), selectedField);
 	}
 
 	#moveStep(chainIndex: number, stepIndex: number, delta: number): void {
@@ -866,7 +907,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(index, "name");
 		};
 		input.onEscape = () => this.#showChain(index, "name");
-		this.#setScreen("chainName", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("chainName", input, t("overlaysModel.chainConfig.nameHint"));
 	}
 
 	#showDescriptionEditor(index: number): void {
@@ -884,7 +925,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showChain(index, "description");
 		};
 		input.onEscape = () => this.#showChain(index, "description");
-		this.#setScreen("description", input, "Describe this chain · Enter save · Esc cancel");
+		this.#setScreen("description", input, t("overlaysModel.chainConfig.descriptionHint"));
 	}
 
 	#showNewStepEditor(chainIndex: number): void {
@@ -908,7 +949,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showStep(chainIndex, chain.steps.length - 1);
 		};
 		input.onEscape = () => this.#showChain(chainIndex, "addStep");
-		this.#setScreen("stepName", input, "Name the new step · Enter create · Esc cancel");
+		this.#setScreen("stepName", input, t("overlaysModel.chainConfig.newStepHint"));
 	}
 
 	// ───────────────────────────── step detail ───────────────────────
@@ -926,27 +967,30 @@ export class ChainConfigOverlayComponent implements Component {
 			return;
 		}
 		const items: SelectItem[] = [
-			{ value: "name", label: "Name", description: step.name },
-			{ value: "model", label: "Model", description: this.#stepModelLabel(step) },
+			{ value: "name", label: t("overlaysModel.chainConfig.name"), description: step.name },
+			{ value: "model", label: t("overlaysModel.chainConfig.model"), description: this.#stepModelLabel(step) },
 		];
-		if (step.model?.trim()) items.push({ value: "resetModel", label: "Reset model to @prose default" });
+		if (step.model?.trim()) items.push({ value: "resetModel", label: t("overlaysModel.chainConfig.resetModel") });
 		items.push(
-			{ value: "tools", label: "Tools", description: formatStepTools(step.tools) },
+			{ value: "tools", label: t("overlaysModel.chainConfig.tools"), description: formatStepTools(step.tools) },
 			{
 				value: "context",
-				label: "Transcript context",
+				label: t("overlaysModel.chainConfig.transcriptContext"),
 				description: step.context
-					? "on — the step reads the session transcript with the draft"
-					: "off — the step sees only the draft",
+					? t("overlaysModel.chainConfig.contextOn")
+					: t("overlaysModel.chainConfig.contextOff"),
 			},
 			{
 				value: "systemPrompt",
-				label: "System prompt",
-				description: step.systemPrompt === undefined ? "(bundled default)" : previewLineOrNone(step.systemPrompt),
+				label: t("overlaysModel.chainConfig.systemPrompt"),
+				description:
+					step.systemPrompt === undefined
+						? t("overlaysModel.chainConfig.bundledDefault")
+						: previewLineOrNone(step.systemPrompt),
 			},
-			{ value: "prompt", label: "Prompt", description: previewLineOrNone(step.prompt) },
-			{ value: "delete", label: "Delete this step" },
-			{ value: "back", label: "Back" },
+			{ value: "prompt", label: t("overlaysModel.chainConfig.prompt"), description: previewLineOrNone(step.prompt) },
+			{ value: "delete", label: t("overlaysModel.chainConfig.deleteStep") },
+			{ value: "back", label: t("overlaysModel.chainConfig.back") },
 		);
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		if (selectedField) {
@@ -974,7 +1018,7 @@ export class ChainConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"step",
 			list,
-			`Step ${stepIndex + 1} "${step.name}" · Enter / click edit · Esc back to the chain`,
+			t("overlaysModel.chainConfig.editStepHint", { index: stepIndex + 1, name: step.name }),
 			selectedField,
 		);
 	}
@@ -1041,7 +1085,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#showStep(chainIndex, stepIndex, "name");
 		};
 		input.onEscape = () => this.#showStep(chainIndex, stepIndex, "name");
-		this.#setScreen("stepName", input, "Type a name · Enter save · Esc cancel");
+		this.#setScreen("stepName", input, t("overlaysModel.chainConfig.nameHint"));
 	}
 
 	#showModelPicker(chainIndex: number, stepIndex: number): void {
@@ -1072,7 +1116,7 @@ export class ChainConfigOverlayComponent implements Component {
 			}
 		};
 		picker.onCancel = () => this.#showStep(chainIndex, stepIndex, "model");
-		this.#setScreen("model", picker, "/ search · Enter / click twice picks · h / Esc back");
+		this.#setScreen("model", picker, t("overlaysModel.chainConfig.modelHint"));
 	}
 
 	#setStepModel(chainIndex: number, stepIndex: number, selector: string | undefined): void {
@@ -1088,7 +1132,7 @@ export class ChainConfigOverlayComponent implements Component {
 
 	#showThinkingPicker(chainIndex: number, stepIndex: number, selector: string, efforts: readonly string[]): void {
 		this.#thinking = { selector, efforts: [...efforts] };
-		const items: SelectItem[] = [{ value: "", label: "(model default thinking)" }];
+		const items: SelectItem[] = [{ value: "", label: t("overlaysModel.chainConfig.defaultThinking") }];
 		for (const effort of efforts) items.push({ value: effort, label: effort });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.onSelect = item => {
@@ -1096,7 +1140,7 @@ export class ChainConfigOverlayComponent implements Component {
 			this.#setStepModel(chainIndex, stepIndex, item.value ? `${selector}:${item.value}` : selector);
 		};
 		list.onCancel = () => this.#showModelPicker(chainIndex, stepIndex);
-		this.#setScreen("thinking", list, `Thinking effort for ${selector} · Enter / click pick · Esc back`);
+		this.#setScreen("thinking", list, t("overlaysModel.chainConfig.thinkingHint", { model: selector }));
 	}
 
 	#showToolsEditor(chainIndex: number, stepIndex: number, selected: Set<string>, cursor: number): void {
@@ -1106,7 +1150,7 @@ export class ChainConfigOverlayComponent implements Component {
 			value: name,
 			label: `${selected.has(name) ? "[x]" : "[ ]"} ${name}`,
 		}));
-		items.push({ value: "__done", label: "Done" });
+		items.push({ value: "__done", label: t("overlaysModel.chainConfig.done") });
 		const list = new SelectList(items, Math.max(1, items.length), getSelectListTheme(), { search: "always" });
 		list.setSelectedIndex(cursor);
 		list.onSelectionChange = () => this.#cb.requestRender();
@@ -1133,7 +1177,7 @@ export class ChainConfigOverlayComponent implements Component {
 			);
 		};
 		list.onCancel = commit;
-		this.#setScreen("tools", list, "Enter / click toggle · select Done or Esc to apply (empty = no tools)");
+		this.#setScreen("tools", list, t("overlaysModel.chainConfig.toolsHint"));
 	}
 
 	#showPromptEditor(chainIndex: number, stepIndex: number): void {
@@ -1144,7 +1188,7 @@ export class ChainConfigOverlayComponent implements Component {
 		}
 		const editor = new HookEditorComponent(
 			this.#tui,
-			`Prompt — ${step.name}`,
+			t("overlaysModel.chainConfig.promptHeading", { name: step.name }),
 			step.prompt,
 			value => {
 				step.prompt = value;
@@ -1165,7 +1209,7 @@ export class ChainConfigOverlayComponent implements Component {
 		}
 		const editor = new HookEditorComponent(
 			this.#tui,
-			`System prompt — ${step.name}`,
+			t("overlaysModel.chainConfig.systemPromptHeading", { name: step.name }),
 			step.systemPrompt ?? this.#deps.defaultSystemPrompt,
 			value => {
 				step.systemPrompt = value;

@@ -19,6 +19,7 @@ import type { Terminal, TerminalAppearance, TerminalAppearanceRequestToken } fro
 import type { RenderScheduler } from "@oh-my-pi/pi-tui/tui";
 import { formatBytes, getProjectDir, logger, TempDir } from "@oh-my-pi/pi-utils";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
@@ -120,7 +121,7 @@ class DrainScheduler implements RenderScheduler {
 	/** Run queued callbacks until no render work remains. */
 	drain(): void {
 		for (let rounds = 0; this.#immediate.length > 0 || this.#renders.size > 0; rounds++) {
-			if (rounds > 100) throw new Error("render scheduler did not settle after 100 drain rounds");
+			if (rounds > 100) throw new Error(t("cli.commands.render.schedulerUnsettled"));
 			const immediate = this.#immediate;
 			this.#immediate = [];
 			for (const callback of immediate) callback();
@@ -167,7 +168,7 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.getAll()[0];
-		if (!model) throw new Error("No models available in the bundled catalog");
+		if (!model) throw new Error(t("cli.commands.render.noModels"));
 
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: [], tools: [], messages: [] } }),
@@ -224,10 +225,20 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 			const rows = mode.chatContainer.render(width).length;
 			const report = [
 				`session  ${sourcePath}`,
-				`         ${formatBytes(sourceSize)}, ${entries.length} entries, ${messageCount} messages, ${rows} transcript rows @ ${width}x${height}`,
+				`         ${t("cli.commands.render.size", {
+					bytes: formatBytes(sourceSize),
+					entries: entries.length,
+					messages: messageCount,
+					rows,
+					width,
+					height,
+				})}`,
 				`open     ${formatMs(openMs)}`,
-				`replay   ${formatMs(replayMs)}  (transcript build + component construction)`,
-				`paint    ${formatMs(paintMs)}  (full frame compose + emit: ${formatBytes(paintBytes)}, ${terminal.writes} writes)`,
+				`replay   ${formatMs(replayMs)}  (${t("cli.commands.render.replay")})`,
+				`paint    ${formatMs(paintMs)}  (${t("cli.commands.render.paint", {
+					bytes: formatBytes(paintBytes),
+					writes: terminal.writes,
+				})})`,
 			];
 			if (repaints.length > 0) {
 				const times = repaints.map(r => r.ms);
@@ -236,7 +247,13 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 				const max = Math.max(...times);
 				const bytesPer = repaints[0]!.bytes;
 				report.push(
-					`repaint  ${formatMs(avg)} avg over ${repaints.length} (min ${formatMs(min)}, max ${formatMs(max)}), ${formatBytes(bytesPer)}/frame`,
+					`repaint  ${t("cli.commands.render.repaintTiming", {
+						average: formatMs(avg),
+						count: repaints.length,
+						minimum: formatMs(min),
+						maximum: formatMs(max),
+						bytes: formatBytes(bytesPer),
+					})}`,
 				);
 			}
 			process.stderr.write(`${report.join("\n")}\n`);

@@ -44,6 +44,23 @@ beforeEach(() => setKeybindings(KeybindingsManager.inMemory()));
 afterEach(() => setKeybindings(KeybindingsManager.inMemory()));
 
 describe("hook callback prompt navigation", () => {
+	it("returns distinct values for equal display labels in terminal and native pickers", () => {
+		const picks: string[] = [];
+		const selector = new HookSelectorComponent(
+			"Choose",
+			[
+				{ label: "Enviar sin cadena", value: "chain:Enviar sin cadena" },
+				{ label: "Enviar sin cadena", value: "without-chain" },
+			],
+			value => picks.push(value),
+			() => {},
+		);
+		selector.handleInput("\r");
+		selector.handleInput("\x1b[B");
+		selector.handleNativeEvent({ type: "action", key: PICKER_KEY, act: "confirm", mods: [] });
+		expect(picks).toEqual(["chain:Enviar sin cadena", "without-chain"]);
+	});
+
 	for (const outline of [false, true]) {
 		it(`uses visible wrapped options for half/page motions and line-only scroll (${outline ? "outlined" : "plain"})`, () => {
 			const options = Array.from({ length: 20 }, (_, index) => {

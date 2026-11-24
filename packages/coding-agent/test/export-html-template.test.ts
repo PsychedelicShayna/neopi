@@ -85,6 +85,22 @@ describe("HTML export template", () => {
 		expect(html).toBe(await runProbe([process.execPath, probePath]));
 	});
 
+	test("embeds locale copy separately from the unchanged session payload marker", () => {
+		for (const locale of ["en", "es"] as const) {
+			const { document } = parseHTML(getTemplate(locale));
+			expect(document.documentElement?.getAttribute("lang")).toBe(locale);
+			expect(document.querySelector("#session-data")?.textContent).toBe("{{SESSION_DATA}}");
+			const dictionary = JSON.parse(document.querySelector("#viewer-i18n")?.textContent ?? "");
+			if (locale === "en") {
+				expect(dictionary).toEqual({});
+				expect(document.title).toBe("Session Export");
+			} else {
+				expect(dictionary["tools.export.title"]).toBe(document.title);
+				expect(document.title).not.toBe("Session Export");
+			}
+		}
+	});
+
 	test("resolves file-loader assets without parsing Windows drive letters as URLs", () => {
 		expect(resolveBundledHtmlAssetPath("C:\\exports\\viewer.js", "/module")).toBe("C:\\exports\\viewer.js");
 		expect(resolveBundledHtmlAssetPath("/exports/viewer.js", "/module")).toBe("/exports/viewer.js");

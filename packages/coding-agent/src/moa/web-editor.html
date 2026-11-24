@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{locale}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mixture Studio · NeoPi</title>
+<title>{{pageTitle}}</title>
 <link rel="icon" href="data:,">
 <!--
   Mixture Studio: the browser editor behind /moa web.
@@ -808,6 +808,7 @@ body.stacked .toasts{justify-items:center}
   <div class="edge" id="edge"></div>
 </main>
 <div id="layer"><div class="toasts" id="toasts"></div></div>
+<script type="application/json" id="editor-i18n">{{editorMessages}}</script>
 <script src="assets/web-editor-strings.js"></script>
 <script src="assets/web-editor-core.js"></script>
 <script src="assets/web-editor-graph.js"></script>

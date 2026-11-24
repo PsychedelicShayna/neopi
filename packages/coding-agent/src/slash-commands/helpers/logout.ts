@@ -1,4 +1,5 @@
 import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
 
@@ -16,13 +17,13 @@ function nonEmpty(value: string | undefined): string | undefined {
 
 function oauthLabel(row: StoredAuthCredential): string {
 	const credential = row.credential;
-	if (credential.type !== "oauth") return `API key #${row.id}`;
+	if (credential.type !== "oauth") return t("commands.auth.apiKeyNumber", { id: row.id });
 	const base =
 		nonEmpty(credential.email) ??
 		nonEmpty(credential.accountId) ??
 		nonEmpty(credential.projectId) ??
 		nonEmpty(credential.enterpriseUrl) ??
-		`OAuth credential #${row.id}`;
+		t("commands.auth.credential", { id: row.id });
 	// Two subscriptions (orgs) can share one email — the org is the only
 	// user-visible way to tell which row a logout will remove.
 	const org = nonEmpty(credential.orgName) ?? nonEmpty(credential.orgId);
@@ -31,7 +32,7 @@ function oauthLabel(row: StoredAuthCredential): string {
 
 function oauthDetail(row: StoredAuthCredential, label: string): string {
 	const credential = row.credential;
-	if (credential.type === "api_key") return `stored API key #${row.id}`;
+	if (credential.type === "api_key") return t("commands.auth.storedApiKeyNumber", { id: row.id });
 	const parts: string[] = [];
 	const email = nonEmpty(credential.email);
 	const accountId = nonEmpty(credential.accountId);

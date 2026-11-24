@@ -1,5 +1,6 @@
 /** `lsp` — language-server queries: diagnostics, definitions, references, hover, rename, … */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import type { Tone } from "../parts";
 import { Badge, InvalidArg, Kv, KvGrid, Output, PathText, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -65,12 +66,13 @@ function severityTone(severity: string): Tone | undefined {
 }
 
 /** Kv row for an optional arg: hidden when absent, InvalidArg when mistyped. */
-function ArgKv({ k, raw, val }: { k: string; raw: unknown; val: ReactNode }): ReactNode {
+function ArgKv({ k, label, raw, val }: { k: string; label: string; raw: unknown; val: ReactNode }): ReactNode {
 	if (raw === undefined) return null;
-	return <Kv k={k}>{val == null || val === false ? <InvalidArg what={k} /> : val}</Kv>;
+	return <Kv k={label}>{val == null || val === false ? <InvalidArg what={k} /> : val}</Kv>;
 }
 
 function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): ReactNode {
+	const t = useTranslation();
 	const errMatch = text.match(/(\d+)\s+error\(s\)/);
 	const warnMatch = text.match(/(\d+)\s+warning\(s\)/);
 	const shown = rows.slice(0, MAX_ROWS);
@@ -80,12 +82,16 @@ function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): Reac
 				<span className="tv-badges">
 					{errMatch && (
 						<Badge tone="err">
-							{errMatch[1]} error{errMatch[1] === "1" ? "" : "s"}
+							{errMatch[1] === "1"
+								? t("guesttools.count.error.one", "{count} error", { count: errMatch[1] })
+								: t("guesttools.count.error.many", "{count} errors", { count: errMatch[1] })}
 						</Badge>
 					)}
 					{warnMatch && (
 						<Badge tone="warn">
-							{warnMatch[1]} warning{warnMatch[1] === "1" ? "" : "s"}
+							{warnMatch[1] === "1"
+								? t("guesttools.count.warning.one", "{count} warning", { count: warnMatch[1] })
+								: t("guesttools.count.warning.many", "{count} warnings", { count: warnMatch[1] })}
 						</Badge>
 					)}
 				</span>
@@ -99,7 +105,9 @@ function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): Reac
 				))}
 				{rows.length > shown.length && (
 					<Row>
-						<span className="tv-faint">… {rows.length - shown.length} more</span>
+						<span className="tv-faint">
+							{t("guesttools.output.more_rows", "… {count} more", { count: rows.length - shown.length })}
+						</span>
 					</Row>
 				)}
 			</div>
@@ -108,6 +116,7 @@ function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): Reac
 }
 
 function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNode {
+	const t = useTranslation();
 	const refMatch = text.match(/(\d+)\s+reference\(s\)/);
 	const shown = rows.slice(0, MAX_ROWS);
 	return (
@@ -115,7 +124,9 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 			{refMatch && (
 				<span className="tv-badges">
 					<Badge tone="accent">
-						{refMatch[1]} reference{refMatch[1] === "1" ? "" : "s"}
+						{refMatch[1] === "1"
+							? t("guesttools.count.reference.one", "{count} reference", { count: refMatch[1] })
+							: t("guesttools.count.reference.many", "{count} references", { count: refMatch[1] })}
 					</Badge>
 				</span>
 			)}
@@ -127,7 +138,9 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 				))}
 				{rows.length > shown.length && (
 					<Row>
-						<span className="tv-faint">… {rows.length - shown.length} more</span>
+						<span className="tv-faint">
+							{t("guesttools.output.more_rows", "… {count} more", { count: rows.length - shown.length })}
+						</span>
 					</Row>
 				)}
 			</div>
@@ -136,6 +149,7 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const action = str(args.action);
 	const file = str(args.file);
 	const line = num(args.line);
@@ -144,10 +158,12 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 	const newName = str(args.new_name);
 	return (
 		<>
-			<Badge tone="accent">{action ? action.replace(/_/g, " ") : "request"}</Badge>
-			{file === "*" && <Badge>workspace</Badge>}
+			<Badge tone="accent">{action ? action.replace(/_/g, " ") : t("guesttools.label.request", "request")}</Badge>
+			{file === "*" && <Badge>{t("guesttools.label.workspace", "workspace")}</Badge>}
 			{file && file !== "*" && <PathText path={file} from={line} />}
-			{!file && line != null && <span className="tv-faint">line {line}</span>}
+			{!file && line != null && (
+				<span className="tv-faint">{t("guesttools.lsp.line_number", "line {line}", { line })}</span>
+			)}
 			{symbol && <span className="tv-pattern">{truncate(normalizeWs(symbol), 48)}</span>}
 			{query && <span className="tv-muted">{truncate(normalizeWs(query), 48)}</span>}
 			{newName && <span className="tv-muted">→ {truncate(normalizeWs(newName), 48)}</span>}
@@ -156,6 +172,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const details = detailsRecord(result);
 	const file = str(args.file);
 	const line = num(args.line);
@@ -178,26 +195,71 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<ArgKv k="action" raw={args.action} val={str(args.action)?.replace(/_/g, " ")} />
+				<ArgKv
+					k="action"
+					label={t("guesttools.label.action", "action")}
+					raw={args.action}
+					val={str(args.action)?.replace(/_/g, " ")}
+				/>
 				<ArgKv
 					k="file"
+					label={t("guesttools.label.file", "file")}
 					raw={args.file}
-					val={file === "*" ? <Badge>workspace</Badge> : file && <PathText path={file} from={line} />}
+					val={
+						file === "*" ? (
+							<Badge>{t("guesttools.label.workspace", "workspace")}</Badge>
+						) : (
+							file && <PathText path={file} from={line} />
+						)
+					}
 				/>
-				{!file && <ArgKv k="line" raw={args.line} val={line} />}
-				<ArgKv k="symbol" raw={args.symbol} val={symbol && truncate(normalizeWs(symbol), 120)} />
-				<ArgKv k="query" raw={args.query} val={query && truncate(normalizeWs(query), 120)} />
-				<ArgKv k="new name" raw={args.new_name} val={newName && truncate(normalizeWs(newName), 120)} />
-				<ArgKv k="apply" raw={args.apply} val={apply == null ? null : apply ? "yes" : "no"} />
-				<ArgKv k="timeout" raw={args.timeout} val={timeout != null && `${timeout}s`} />
+				{!file && <ArgKv k="line" label={t("guesttools.label.line", "line")} raw={args.line} val={line} />}
+				<ArgKv
+					k="symbol"
+					label={t("guesttools.label.symbol", "symbol")}
+					raw={args.symbol}
+					val={symbol && truncate(normalizeWs(symbol), 120)}
+				/>
+				<ArgKv
+					k="query"
+					label={t("guesttools.label.query", "query")}
+					raw={args.query}
+					val={query && truncate(normalizeWs(query), 120)}
+				/>
+				<ArgKv
+					k="new name"
+					label={t("guesttools.label.new_name", "new name")}
+					raw={args.new_name}
+					val={newName && truncate(normalizeWs(newName), 120)}
+				/>
+				<ArgKv
+					k="apply"
+					label={t("guesttools.label.apply", "apply")}
+					raw={args.apply}
+					val={apply == null ? null : apply ? t("guesttools.yes", "yes") : t("guesttools.no", "no")}
+				/>
+				<ArgKv
+					k="timeout"
+					label={t("guesttools.label.timeout", "timeout")}
+					raw={args.timeout}
+					val={timeout != null && `${timeout}s`}
+				/>
 				{args.payload !== undefined && payload == null && (
-					<Kv k="payload">
+					<Kv k={t("guesttools.label.payload", "payload")}>
 						<InvalidArg what="payload" />
 					</Kv>
 				)}
-				{serverName && <Kv k="server">{serverName}</Kv>}
+				{serverName && <Kv k={t("guesttools.label.server", "server")}>{serverName}</Kv>}
 			</KvGrid>
-			{payload && <Output text={payload} lang="json" variant="code" maxLines={8} title="payload" />}
+			{payload && (
+				<Output
+					text={payload}
+					lang="json"
+					variant="code"
+					maxLines={8}
+					title={t("guesttools.label.payload", "payload")}
+				/>
+			)}
 			{diags.length > 0 ? (
 				<DiagnosticRows text={text} rows={diags} />
 			) : locs.length > 0 ? (

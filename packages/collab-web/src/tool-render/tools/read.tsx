@@ -1,5 +1,6 @@
 /** `read` — file/URL/archive reads: path + selector summary, highlighted content, image thumbnails. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, Kv, KvGrid, PathText, ResultImages, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, languageFromPath, num, shortenPath, str } from "../util";
@@ -67,30 +68,37 @@ function Summary(props: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const { path } = readArgs(args);
 	const d = readDetails(detailsRecord(result));
 	const conflictBadge = d.conflictCount !== null && d.conflictCount > 0 && (
 		<Badge tone="warn">
-			{d.conflictCount} conflict{d.conflictCount === 1 ? "" : "s"}
+			{d.conflictCount === 1
+				? t("guesttools.count.conflict.one", "{count} conflict", { count: d.conflictCount })
+				: t("guesttools.count.conflict.many", "{count} conflicts", { count: d.conflictCount })}
 		</Badge>
 	);
 	const elidedBadge = d.elidedSpans !== null && d.elidedSpans > 0 && (
 		<Badge>
-			{d.elidedSpans} elided span{d.elidedSpans === 1 ? "" : "s"}
+			{d.elidedSpans === 1
+				? t("guesttools.count.elided.one", "{count} elided span", { count: d.elidedSpans })
+				: t("guesttools.count.elided.many", "{count} elided spans", { count: d.elidedSpans })}
 		</Badge>
 	);
-	const truncatedBadge = d.truncated && <Badge tone="warn">truncated</Badge>;
+	const truncatedBadge = d.truncated && <Badge tone="warn">{t("guesttools.status.truncated", "truncated")}</Badge>;
 	const resolved = d.suffixTo ?? d.resolvedPath;
 	return (
 		<>
 			{(resolved !== null || d.suffixFrom !== null) && (
 				<KvGrid>
 					{resolved !== null && (
-						<Kv k="resolved">
+						<Kv k={t("guesttools.label.resolved", "resolved")}>
 							<PathText path={resolved} />
 						</Kv>
 					)}
-					{d.suffixFrom !== null && <Kv k="corrected from">{shortenPath(d.suffixFrom)}</Kv>}
+					{d.suffixFrom !== null && (
+						<Kv k={t("guesttools.label.corrected_from", "corrected from")}>{shortenPath(d.suffixFrom)}</Kv>
+					)}
 				</KvGrid>
 			)}
 			<Badges items={[conflictBadge, elidedBadge, truncatedBadge]} />

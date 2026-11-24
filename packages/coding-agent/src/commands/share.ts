@@ -9,6 +9,7 @@
 
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { shareHelp as commandHelp } from "../cli/command-help";
 import { Settings } from "../config/settings";
 import { shareSession } from "../export/share";
@@ -54,7 +55,7 @@ export default class Share extends Command {
 			}
 		}
 		if (!sm) {
-			process.stderr.write(`Session "${sessionArg}" not found.\n`);
+			process.stderr.write(`${t("cli.commands.share.notFound", { session: sessionArg })}\n`);
 			process.exitCode = 1;
 			return;
 		}
@@ -74,9 +75,9 @@ export default class Share extends Command {
 			store: flags.gist ? "gist" : cfgShareStore.get(settings),
 			obfuscator,
 		});
-		const lines = [`Share URL: ${result.url}`];
-		if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
-		if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
+		const lines = [t("cli.commands.share.url", { url: result.url })];
+		if (result.gistUrl) lines.push(t("cli.commands.share.gist", { url: result.gistUrl }));
+		if (result.truncated) lines.push(t("cli.commands.share.truncated"));
 		console.log(lines.join("\n"));
 	}
 }

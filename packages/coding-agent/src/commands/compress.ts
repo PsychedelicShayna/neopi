@@ -1,5 +1,6 @@
 import { APP_NAME, postmortem } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { compressHelp as commandHelp } from "../cli/command-help";
 import { CliUsageError } from "../cli/usage-error";
 import { runCompressCommand } from "../compress";
@@ -28,10 +29,10 @@ export default class Compress extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Compress);
 		const files = args.files ?? [];
-		if (files.length === 0) throw new CliUsageError("compress requires at least one file or glob pattern");
-		if (flags.rounds <= 0) throw new CliUsageError("--rounds must be a positive integer");
-		if (flags.agents <= 0) throw new CliUsageError("--agents must be a positive integer");
-		if (flags.inPlace && flags.out) throw new CliUsageError("--in-place and --out are mutually exclusive");
+		if (files.length === 0) throw new CliUsageError(t("cli.commands.compress.noFiles"));
+		if (flags.rounds <= 0) throw new CliUsageError(t("cli.commands.compress.invalidRounds"));
+		if (flags.agents <= 0) throw new CliUsageError(t("cli.commands.compress.invalidAgents"));
+		if (flags.inPlace && flags.out) throw new CliUsageError(t("cli.commands.compress.conflictingOutput"));
 		const result = await runCompressCommand({
 			files,
 			model: flags.model,

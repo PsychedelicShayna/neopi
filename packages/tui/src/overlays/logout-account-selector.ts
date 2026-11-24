@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, ScrollView, TruncatedText } from "../index";
 import { compileMenuRegex } from "../menu-search";
 import { theme } from "../theme/theme";
@@ -47,6 +48,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	#pickerItems: readonly TspPickerItem[] | undefined;
 	readonly #providerName: string;
 	readonly #accounts: readonly LogoutAccount[];
+	#locale = getLocale();
 
 	constructor(
 		providerName: string,
@@ -54,7 +56,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		onSelect: (account: LogoutAccount) => void,
 		onCancel: () => void,
 	) {
-		super(`Select ${providerName} account to log out`, "omp.overlay.logout");
+		super(t("overlaysModel.logoutAccount.title.terminal", { provider: providerName }), "omp.overlay.logout");
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		this.#providerName = providerName;
@@ -71,6 +73,17 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 
 		this.#listContainer = new Container();
 		this.addChild(this.#listContainer);
+		this.#updateList();
+	}
+
+	#syncLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.title = t("overlaysModel.logoutAccount.title.terminal", { provider: this.#providerName });
+		this.#nativeItems = undefined;
+		this.#nativeHints = undefined;
+		this.#pickerItems = undefined;
 		this.#updateList();
 	}
 
@@ -92,7 +105,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		for (let i = startIndex; i < endIndex; i++) {
 			const account = items[i];
 			if (!account) continue;
-			const activeTag = account.active ? theme.fg("muted", " (active)") : "";
+			const activeTag = account.active ? theme.fg("muted", ` (${t("overlaysModel.logoutAccount.active")})`) : "";
 			const detail = account.detail ? theme.fg("dim", `  ${account.detail}`) : "";
 			if (i === this.#menu.selectedIndex) {
 				rows.push(`${theme.fg("accent", `${theme.nav.cursor} ${account.label}`)}${activeTag}${detail}`);
@@ -113,7 +126,9 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		}
 
 		if (total === 0) {
-			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
+			this.#listContainer.addChild(
+				new TruncatedText(theme.fg("muted", t("overlaysModel.logoutAccount.empty")), 0, 0),
+			);
 		}
 		if (this.#search.focused || this.#menu.query) {
 			this.#listContainer.addChild(
@@ -124,7 +139,11 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		this.#listContainer.addChild(
 			new MenuHints(
 				() =>
-					`${editorKeys("tui.select.up", "tui.select.down")} select · / search · ${formatKeyHint("enter")} log out account · ${editorKey("tui.select.cancel")} cancel · ? help`,
+					t("overlaysModel.logoutAccount.footer", {
+						select: editorKeys("tui.select.up", "tui.select.down"),
+						enter: formatKeyHint("enter"),
+						cancel: editorKey("tui.select.cancel"),
+					}),
 				text => theme.fg("muted", text),
 				"jk gg/G C-u d e y",
 			),
@@ -151,6 +170,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	}
 
 	override render(width: number): readonly string[] {
+		this.#syncLocale();
 		return this.#help.render(super.render(width), width);
 	}
 
@@ -184,13 +204,14 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
+		this.#syncLocale();
 		if (this.#help.open) return this.#help.describe();
 		if (cx.supports("picker")) {
 			this.#pickerRoot ??= dockedPicker({
-				title: `${this.#providerName} accounts`,
-				subtitle: compileMenuRegex(this.#search.value)?.error ?? "Pick the account to sign out",
+				title: t("overlaysModel.logoutAccount.title.picker", { provider: this.#providerName }),
+				subtitle: compileMenuRegex(this.#search.value)?.error ?? t("overlaysModel.logoutAccount.subtitle"),
 				icon: "key-round",
-				noun: "accounts",
+				noun: t("overlaysModel.logoutAccount.noun"),
 				size: "md",
 				layout: "cards",
 				preview: "none",
@@ -200,14 +221,20 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 					id: String(account.credentialId),
 					label: account.label,
 					...(account.detail ? { detail: account.detail } : {}),
-					badges: [{ text: account.type === "oauth" ? "login" : "api key" }],
+					badges: [{ text: t(`overlaysModel.logoutAccount.badge.${account.type}`) }],
 				}))),
 				current: this.#accounts.filter(account => account.active).map(account => String(account.credentialId)),
 				selected: this.#menu.selectedKey ?? null,
-				empty: "No stored accounts to log out",
+				empty: t("overlaysModel.logoutAccount.empty"),
 				actions: [
-					pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }),
-					{ ...CLOSE_ACTION, label: this.#search.focused ? "Back to list" : "Close" },
+					pickerAction("confirm", t("overlaysModel.logoutAccount.action.signOut"), "enter", {
+						primary: true,
+						danger: true,
+					}),
+					{
+						...CLOSE_ACTION,
+						label: t(`overlaysModel.logoutAccount.action.${this.#search.focused ? "back" : "close"}`),
+					},
 				],
 			});
 			return this.#pickerRoot;
@@ -219,7 +246,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				{
 					label: account.label,
 					detail: account.detail || undefined,
-					value: account.active ? [span("active", "muted")] : undefined,
+					value: account.active ? [span(t("overlaysModel.logoutAccount.active"), "muted")] : undefined,
 				},
 				undefined,
 				String(account.credentialId),
@@ -230,16 +257,16 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: compileMenuRegex(this.#search.value)?.error ?? "No stored accounts to log out",
+					empty: compileMenuRegex(this.#search.value)?.error ?? t("overlaysModel.logoutAccount.empty"),
 					max: { lines: LOGOUT_SELECTOR_MAX_VISIBLE },
 				},
 				this.#nativeItems,
 				"list",
 			),
 			(this.#nativeHints ??= hintsRow([
-				actionHint(["tui.select.up", "tui.select.down"], "select"),
-				{ keys: ["enter"], label: "log out account" },
-				actionHint("tui.select.cancel", "cancel"),
+				actionHint(["tui.select.up", "tui.select.down"], t("overlaysModel.logoutAccount.hint.select")),
+				{ keys: ["enter"], label: t("overlaysModel.logoutAccount.hint.signOut") },
+				actionHint("tui.select.cancel", t("overlaysModel.logoutAccount.hint.cancel")),
 			])),
 		]);
 		return this.#nativeRoot;

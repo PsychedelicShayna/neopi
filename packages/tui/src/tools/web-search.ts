@@ -1,3 +1,5 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { formatCount } from "./localized-count";
 import type { NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer";
 /**
  * Web Search TUI Rendering
@@ -11,9 +13,7 @@ import type { RenderResultOptions } from "./renderer";
 import { getMarkdownTheme, type Theme } from "../theme/theme";
 import {
 	formatAge,
-	formatCount,
 	formatExpandHint,
-	formatMoreItems,
 	formatStatusIcon,
 	getDomain,
 	PREVIEW_LIMITS,
@@ -22,6 +22,7 @@ import {
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
 	clipCollapsed,
+	formatMoreItems,
 } from "../render/render-utils";
 import { renderStatusLine, renderTreeList, urlHyperlink } from "../render";
 import { framedToolCard } from "../render/tool-card";
@@ -62,10 +63,10 @@ function renderFallbackText(contentText: string, expanded: boolean, theme: Theme
 
 	const headerIcon = formatStatusIcon("warning", theme);
 	const expandHint = formatExpandHint(theme, expanded, remaining > 0);
-	let text = `${headerIcon} ${theme.fg("dim", "Response")}${expandHint}`;
+	let text = `${headerIcon} ${theme.fg("dim", t("tools.web_search.response"))}${expandHint}`;
 
 	if (displayLines.length === 0) {
-		text += `\n ${theme.fg("dim", theme.tree.last)} ${theme.fg("muted", "No response data")}`;
+		text += `\n ${theme.fg("dim", theme.tree.last)} ${theme.fg("muted", t("tools.common.no_response"))}`;
 		return new Text(text, 0, 0);
 	}
 
@@ -91,7 +92,7 @@ export interface SearchRenderDetails {
 /** Render a web search failure as a framed error panel, matching the success layout. */
 function renderSearchErrorPanel(message: string, providerLabel: string | undefined, theme: Theme): Component {
 	const header = renderStatusLine({ icon: "error", title: "Web Search", description: providerLabel }, theme);
-	const body = theme.fg("error", `Error: ${replaceTabs(message)}`);
+	const body = theme.fg("error", t("tools.web_search.error", { message: replaceTabs(message) }));
 	return framedToolCard(theme, () => ({
 		header,
 		phase: "error",
@@ -170,10 +171,13 @@ export function renderSearchResult(
 	const metaLines: string[] = [`${theme.fg("muted", "Provider:")} ${theme.fg("text", providerInfo)}`];
 	if (response.usage) {
 		const usageParts: string[] = [];
-		if (response.usage.inputTokens !== undefined) usageParts.push(`in ${response.usage.inputTokens}`);
-		if (response.usage.outputTokens !== undefined) usageParts.push(`out ${response.usage.outputTokens}`);
+		if (response.usage.inputTokens !== undefined)
+			usageParts.push(t("tools.web_search.input", { count: response.usage.inputTokens }));
+		if (response.usage.outputTokens !== undefined)
+			usageParts.push(t("tools.web_search.output", { count: response.usage.outputTokens }));
 		if (response.usage.totalTokens !== undefined) usageParts.push(`total ${response.usage.totalTokens}`);
-		if (response.usage.searchRequests !== undefined) usageParts.push(`search ${response.usage.searchRequests}`);
+		if (response.usage.searchRequests !== undefined)
+			usageParts.push(t("tools.web_search.search", { count: response.usage.searchRequests }));
 		if (usageParts.length > 0)
 			metaLines.push(`${theme.fg("muted", "Usage:")} ${theme.fg("text", usageParts.join(theme.sep.dot))}`);
 	}
@@ -200,7 +204,7 @@ export function renderSearchResult(
 				];
 			}
 		} else if (renderedAnswer.length === 0) {
-			answerLines = [theme.fg("muted", "No answer text returned")];
+			answerLines = [theme.fg("muted", t("tools.web_search.no_answer"))];
 		} else if (args?.maxAnswerLines !== undefined && !expanded) {
 			// CLI compact mode (`npi q`) caps the answer; the TUI passes no cap and shows it in full.
 			// `renderedAnswer` is the Markdown component's shared cache — slice copies before appending.
@@ -226,7 +230,7 @@ export function renderSearchResult(
 							? src.title
 							: typeof src.url === "string" && src.url.trim()
 								? src.url
-								: "Untitled";
+								: t("tools.common.untitled");
 					const url = typeof src.url === "string" ? src.url : "";
 					const domain = url ? getDomain(url) : "";
 					const age =
@@ -264,12 +268,14 @@ export function renderSearchResult(
 							},
 						]
 					: []),
-				...(answerLines ? [{ label: theme.fg("toolTitle", "Answer"), content: answerLines }] : []),
+				...(answerLines
+					? [{ label: theme.fg("toolTitle", t("tools.web_search.answer")), content: answerLines }]
+					: []),
 				{
-					label: theme.fg("toolTitle", "Sources"),
-					content: sourceTree.length > 0 ? sourceTree : [theme.fg("muted", "No sources returned")],
+					label: theme.fg("toolTitle", t("tools.web_search.sources")),
+					content: sourceTree.length > 0 ? sourceTree : [theme.fg("muted", t("tools.web_search.no_sources"))],
 				},
-				{ label: theme.fg("toolTitle", "Metadata"), content: metaLines },
+				{ label: theme.fg("toolTitle", t("tools.common.metadata")), content: metaLines },
 			],
 		};
 	});
@@ -303,7 +309,8 @@ function searchHead(query: string | undefined, meta?: string, badge?: { text: st
 /** One cited source row: domain-initial mark, linked title, muted `domain · age`. */
 function sourceRow(src: SearchResponse["sources"][number], index: number): NativeChild {
 	const url = typeof src.url === "string" ? src.url : "";
-	const title = typeof src.title === "string" && src.title.trim() ? src.title : url.trim() ? url : "Untitled";
+	const title =
+		typeof src.title === "string" && src.title.trim() ? src.title : url.trim() ? url : t("tools.common.untitled");
 	const domain = url ? getDomain(url) : "";
 	const age =
 		formatAge(src.ageSeconds).replace(/ ago$/, "") ||
@@ -351,7 +358,7 @@ function describeSearchResult(
 		return {
 			tool: searchHead(argQuery, label),
 			tone: "error",
-			body: [errorText(plainText(details.error).trim() || "Web search failed")],
+			body: [errorText(plainText(details.error).trim() || t("tools.web_search.failed"))],
 		};
 	}
 
@@ -361,7 +368,7 @@ function describeSearchResult(
 		return {
 			tool: searchHead(argQuery),
 			tone: "warning",
-			body: [noteText(rawText || "No response data")],
+			body: [noteText(rawText || t("tools.common.no_response"))],
 		};
 	}
 
@@ -379,10 +386,11 @@ function describeSearchResult(
 	if (authShort) providerInfo += ` (${authShort})`;
 	const usage = response.usage;
 	const usageParts: string[] = [];
-	if (usage?.inputTokens !== undefined) usageParts.push(`in ${usage.inputTokens}`);
-	if (usage?.outputTokens !== undefined) usageParts.push(`out ${usage.outputTokens}`);
+	if (usage?.inputTokens !== undefined) usageParts.push(t("tools.web_search.input", { count: usage.inputTokens }));
+	if (usage?.outputTokens !== undefined) usageParts.push(t("tools.web_search.output", { count: usage.outputTokens }));
 	if (usage?.totalTokens !== undefined) usageParts.push(`total ${usage.totalTokens}`);
-	if (usage?.searchRequests !== undefined) usageParts.push(`search ${usage.searchRequests}`);
+	if (usage?.searchRequests !== undefined)
+		usageParts.push(t("tools.web_search.search", { count: usage.searchRequests }));
 	const tooltip = plainText([providerInfo, usageParts.join(" · ")].filter(Boolean).join("\n"));
 	const badge = response.model ? { text: plainText(response.model), title: tooltip } : undefined;
 
@@ -394,13 +402,13 @@ function describeSearchResult(
 					{ ...md(plainText(answer), { title: tooltip }), key: "answer" },
 					sources.length > 0
 						? node("col", { role: "omp.tool.files" }, sources.map(sourceRow), "sources")
-						: noteText("No sources returned"),
+						: noteText(t("tools.web_search.no_sources")),
 				]
 			: sources.length > 0
 				? // No synthesized answer: the result text is the model-facing numbered listing of these
 					// sources, so list each source once with its excerpt instead of rendering that text.
 					[node("col", { gap: "sm" }, sources.map(sourceResult), "results")]
-				: [noteText(rawText || "No answer text returned"), noteText("No sources returned")],
+				: [noteText(rawText || t("tools.web_search.no_answer")), noteText(t("tools.web_search.no_sources"))],
 	};
 }
 
@@ -418,7 +426,7 @@ export const webSearchToolRenderer = {
 		_options: RenderResultOptions,
 		args?: SearchRenderArgs,
 	): NativeToolView | undefined {
-		return searchResultMemo.get(result, [args?.query ?? ""], () => describeSearchResult(result, args));
+		return searchResultMemo.get(result, [getLocale(), args?.query ?? ""], () => describeSearchResult(result, args));
 	},
 	mergeCallAndResult: true,
 } satisfies ToolRenderer<{ query?: string; [key: string]: unknown }, SearchRenderDetails>;

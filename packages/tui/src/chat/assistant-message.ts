@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { presentNarrationAsAnswer } from "@oh-my-pi/pi-ai/utils/narration";
 import { type Component, Container } from "../tui";
@@ -95,9 +96,11 @@ function nativeEmbedRuns(source: string, streaming: boolean): EmbedSegment[] {
 
 /** The native head of a finished thinking block: "Thought for 12s", or "Thought" when it was never seen streaming. */
 function thoughtLabel(clock: { start: number; end?: number } | undefined): string {
-	if (clock?.end === undefined) return "Thought";
+	if (clock?.end === undefined) return t("overlays.assistant_message.thought");
 	const ms = clock.end - clock.start;
-	return `Thought for ${ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : formatDuration(ms)}`;
+	return t("overlays.assistant_message.thought_duration", {
+		value: `${ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : formatDuration(ms)}`,
+	});
 }
 
 type ThinkingContentBlock = Extract<AssistantMessage["content"][number], { type: "thinking" }>;
@@ -820,7 +823,7 @@ export class AssistantMessageComponent extends Container {
 	#thinkingDotsLabel(): string {
 		const glyph = THINKING_DOTS_FRAMES[this.#thinkingDotsFrame % THINKING_DOTS_FRAMES.length] ?? "…";
 		const coloredGlyph = theme.fg("thinkingText", glyph);
-		const thinkingLabel = theme.fg("muted", " Thinking");
+		const thinkingLabel = theme.fg("muted", t("overlays.assistant_message.thinking"));
 		const rate = Math.min(SPEED_MAX, sharedSpeedTracker.getSpeed());
 		// The numeric badge ("<total> · <rate> toks/s") only renders while this block
 		// is genuinely streaming provider tokens. A block that has observed no token
@@ -838,7 +841,7 @@ export class AssistantMessageComponent extends Container {
 		// gray until the rarely-hit SPEED_MAX ceiling.
 		const ratio = Math.sqrt(rate / SPEED_MAX);
 		const hex = lerpHex(theme.getColorHex("dim"), theme.getAccentColorHex(), ratio);
-		const rateText = ` · ${rate.toFixed(1)} toks/s`;
+		const rateText = t("overlays.assistant_message.token_rate", { toFixed: `${rate.toFixed(1)}` });
 		const rateSpan = theme.getColorMode() === "truecolor" ? chalk.hex(hex)(rateText) : theme.fg("muted", rateText);
 		return coloredGlyph + thinkingLabel + totalSpan + rateSpan;
 	}
@@ -1099,7 +1102,10 @@ export class AssistantMessageComponent extends Container {
 					// Hidden (Ctrl+T): only the live "Thinking…" head shows; a finished thought leaves nothing.
 					if (this.#hideThinkingBlock && !thinkingLive) continue;
 					const tokens = thinkingLive ? this.#thinkingTokens : (clock?.tokens ?? 0);
-					const title = tokens > 0 ? `${formatNumber(tokens)} tokens` : undefined;
+					const title =
+						tokens > 0
+							? t("overlays.assistant_message.token_count", { tokens: `${formatNumber(tokens)}` })
+							: undefined;
 					// Live: starburst · "Thinking…" · ticking timer · tok/s. Done: "Thought for 12s".
 					const head = thinkingLive
 						? node(
@@ -1107,7 +1113,7 @@ export class AssistantMessageComponent extends Container {
 								{ gap: "sm", title },
 								[
 									node("spinner", { style: "starburst", role: "omp.thinking.spin" }),
-									text([span("Thinking…", "muted")]),
+									text([span(t("overlays.assistant_message.thinking_progress"), "muted")]),
 									elapsed(performance.now() - (this.#thinkingClock.get(index)?.start ?? performance.now())),
 									...(rate >= 0.05 ? [node("rate", { value: rate, unit: "tok/s" })] : []),
 								],
@@ -1171,7 +1177,7 @@ export class AssistantMessageComponent extends Container {
 			children.push(
 				node(
 					"badge",
-					{ text: "↺ rewound", tone: "muted", role: "omp.assistant.rewound-tag" },
+					{ text: t("overlays.assistant_message.rewound"), tone: "muted", role: "omp.assistant.rewound-tag" },
 					undefined,
 					"rewound",
 				),
@@ -1189,8 +1195,8 @@ export class AssistantMessageComponent extends Container {
 						{
 							name: "copy",
 							role: "omp.turn.copy",
-							title: "Copy answer",
-							aria: "Copy answer",
+							title: t("overlays.btw_controller.copy_answer"),
+							aria: t("overlays.btw_controller.copy_answer"),
 							actions: { click: "copy-answer" },
 						},
 						undefined,
@@ -1210,7 +1216,11 @@ export class AssistantMessageComponent extends Container {
 			this.#turnUsage && answered && at !== undefined && !this.#rewound && hasTranscriptActions()
 				? {
 						actions: {
-							hold: turnHoldEntries("assistant", { id: "copy-answer", label: "Copy reply", icon: "copy" }),
+							hold: turnHoldEntries("assistant", {
+								id: "copy-answer",
+								label: t("overlays.assistant_message.copy_reply"),
+								icon: "copy",
+							}),
 						},
 					}
 				: {};
@@ -1235,7 +1245,15 @@ export class AssistantMessageComponent extends Container {
 				"section",
 				{
 					role: "omp.assistant.recovered",
-					head: [span(`↻ Recovered after ${attempt} ${attempt === 1 ? "retry" : "retries"}`, "muted")],
+					head: [
+						span(
+							t("overlays.assistant_message.recovered_after_retries", {
+								attempt: `${attempt}`,
+								value: `${attempt === 1 ? t("overlays.assistant_message.retry_noun") : "retries"}`,
+							}),
+							"muted",
+						),
+					],
 					collapsible: true,
 					collapsed: true,
 				},
@@ -1257,13 +1275,13 @@ export class AssistantMessageComponent extends Container {
 		const code = /^(\d{3})\s+/.exec(lines[0] ?? "");
 		if (code) lines[0] = lines[0]!.slice(code[0].length);
 		const detail = lines.filter((line, index) => !lines.slice(index + 1).some(next => next.startsWith(line)));
-		const errorText = detail.join("\n") || "Unknown error";
+		const errorText = detail.join("\n") || t("tools.common.unknown_error");
 		const children: NativeChild[] = [
 			node(
 				"row",
 				{ gap: "sm" },
 				[
-					text([span("Request failed", "error strong")]),
+					text([span(t("overlays.assistant_message.request_failed"), "error strong")]),
 					...(code ? [node("badge", { text: code[1]!, tone: "error", role: "omp.error.code" })] : []),
 				],
 				"head",
@@ -1288,9 +1306,24 @@ export class AssistantMessageComponent extends Container {
 					"row",
 					{ gap: "sm", role: "omp.error.actions" },
 					[
-						button("retry", "Retry", ["F5"], "Retry the failed turn"),
-						button("copy-error", "Copy error", [], "Copy the error message"),
-						button("switch-model", "Switch model", ["⌥P"], "Pick another model for this session"),
+						button(
+							"retry",
+							t("overlays.assistant_message.retry"),
+							["F5"],
+							t("overlays.assistant_message.retry_description"),
+						),
+						button(
+							"copy-error",
+							t("overlays.assistant_message.copy_error"),
+							[],
+							t("overlays.assistant_message.copy_error_description"),
+						),
+						button(
+							"switch-model",
+							t("overlays.assistant_message.switch_model"),
+							["⌥P"],
+							t("overlays.assistant_message.switch_model_description"),
+						),
 					],
 					"actions",
 				),
@@ -1647,13 +1680,14 @@ export class AssistantMessageComponent extends Container {
 			const shot = this.#pageShots.get(embed.src);
 			if (shot) nodes.push(this.#nativeImages.get(slot, shot, "image/png"));
 			else if (shot === undefined) {
-				label += " — capturing…";
+				label += t("overlays.assistant_message.capturing");
 				this.#awaitPageShot(embed);
 			}
 		}
 		const spans = [span(label, "muted")];
-		if (url?.startsWith("file:")) spans.push(span(" "), fileLinkSpan(Bun.fileURLToPath(url), "Visit", "link"));
-		else if (url) spans.push(span(" "), urlLinkSpan(url, "Visit"));
+		if (url?.startsWith("file:"))
+			spans.push(span(" "), fileLinkSpan(Bun.fileURLToPath(url), t("overlays.assistant_message.visit"), "link"));
+		else if (url) spans.push(span(" "), urlLinkSpan(url, t("overlays.assistant_message.visit")));
 		nodes.push(node("text", { spans, truncate: "end" }, undefined, `${slot}.visit`));
 		return nodes;
 	}
@@ -1847,7 +1881,10 @@ export class AssistantMessageComponent extends Container {
 			new WidthAwareText(
 				contentWidth =>
 					formatErrorBlock(message, contentWidth, maxRows, (line, index) =>
-						theme.fg("error", index === 0 ? `Error: ${line}` : line),
+						theme.fg(
+							"error",
+							index === 0 ? t("overlays.assistant_message.error_line", { line: `${line}` }) : line,
+						),
 					),
 				1,
 				0,
@@ -1973,7 +2010,18 @@ export class AssistantMessageComponent extends Container {
 				continue;
 			}
 			this.#contentContainer.addChild(
-				new Text(theme.fg("toolOutput", linkedImageText(`[Image: ${image.mimeType}]`, image, sourcePath)), 1, 0),
+				new Text(
+					theme.fg(
+						"toolOutput",
+						linkedImageText(
+							t("overlays.assistant_message.image", { mimeType: `${image.mimeType}` }),
+							image,
+							sourcePath,
+						),
+					),
+					1,
+					0,
+				),
 			);
 		}
 	}

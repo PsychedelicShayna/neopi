@@ -29,6 +29,7 @@
  * surface of the transcript's own blocks with `pick`/`drop` marks in place of
  * the dotted outline (see `describeScreen`).
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
 	type Component,
@@ -185,12 +186,13 @@ interface MarkTagged {
 }
 
 /** The page's first row while older history is unreplayed: `a` loads it. */
-const EARLIER_TURNS = node(
-	"row",
-	{ role: "omp.rewind.earlier", gap: "xs", align: "center" },
-	[kbd("a"), text([span("load earlier turns", "muted")])],
-	"earlier",
-);
+const earlierTurns = () =>
+	node(
+		"row",
+		{ role: "omp.rewind.earlier", gap: "xs", align: "center" },
+		[kbd("a"), text([span(t("overlays.rewind_selector.load_earlier"), "muted")])],
+		"earlier",
+	);
 
 /** Blank columns between branch-strip columns. */
 const STRIP_GAP = 2;
@@ -198,8 +200,18 @@ const STRIP_GAP = 2;
 const SLIDE_MS = 160;
 
 const NORMAL_MOTION_HINTS: readonly NativeHint[] = [
-	{ keys: ["tab", "shift+tab"], label: "context" },
-	{ keys: ["?"], label: "help" },
+	{
+		keys: ["tab", "shift+tab"],
+		get label() {
+			return t("overlays.native_hint.context");
+		},
+	},
+	{
+		keys: ["?"],
+		get label() {
+			return t("overlays.native_hint.help");
+		},
+	},
 	{ keys: [], label: "↑/↓ ←/→ Home/End PgUp/PgDn" },
 ];
 
@@ -234,10 +246,7 @@ export class RewindSelectorComponent implements Component {
 	#slideTimer: NodeJS.Timeout | undefined;
 	readonly #keys = new MenuKeyReader();
 	readonly #search = new MenuSearchField();
-	readonly #help = new MenuHelp(
-		undefined,
-		"Left/Right switch branches at a fork, or jump between user turns. Enter rewinds; Space never rewinds.",
-	);
+	readonly #help = new MenuHelp(undefined, () => t("overlays.rewind_selector.navigation_help"));
 	#width = 0;
 	#pageStarts: number[] = [];
 	#pageEnds: number[] = [];
@@ -288,7 +297,7 @@ export class RewindSelectorComponent implements Component {
 		private readonly deps: RewindSelectorDeps,
 	) {
 		this.#entries = entries;
-		this.#search.input.placeholder = "words…";
+		this.#search.input.placeholder = t("overlays.rewind_selector.search_placeholder");
 		const tail = recentTranscriptEntries(entries);
 		this.#truncated = tail.length < entries.length;
 		this.#builder = this.#replay(tail);
@@ -958,11 +967,15 @@ export class RewindSelectorComponent implements Component {
 					page.push(this.#marked(blocks[i]!, picked ? "pick" : undefined, "main", index));
 			}
 			if (matches.length === 0) {
-				page.push(text([span(`No turns match "${filter}"`, "muted")], { role: "omp.rewind.empty" }));
+				page.push(
+					text([span(t("overlays.rewind_selector.no_turns_match", { filter: `${filter}` }), "muted")], {
+						role: "omp.rewind.empty",
+					}),
+				);
 			}
 			return page;
 		}
-		if (this.#truncated) page.push(EARLIER_TURNS);
+		if (this.#truncated) page.push(earlierTurns());
 		const columns = this.#stripColumns();
 		const anchor = this.#targets[this.#selected];
 		if (columns.length === 0 || !anchor) {
@@ -1027,14 +1040,22 @@ export class RewindSelectorComponent implements Component {
 		const below = targets.length - picked - 1;
 		const spans = [
 			span(`${theme.icon.rewind} `, "accent"),
-			span(target.isUserTurn ? "Rewind to here" : "Continue from here", "accent strong"),
+			span(
+				target.isUserTurn ? t("overlays.rewind_selector.rewind_here") : t("overlays.rewind_selector.continue_here"),
+				"accent strong",
+			),
 		];
-		if (target.isUserTurn) spans.push(span(`${theme.sep.dot}the prompt returns to the editor`, "dim"));
+		if (target.isUserTurn)
+			spans.push(span(t("overlays.rewind_selector.prompt_returns", { dot: `${theme.sep.dot}` }), "dim"));
 		spans.push(
 			span(
 				below > 0
-					? `${theme.sep.dot}${below} turn${below === 1 ? "" : "s"} below dropped`
-					: `${theme.sep.dot}nothing below to drop`,
+					? t("overlays.rewind_selector.turns_dropped", {
+							dot: `${theme.sep.dot}`,
+							below: `${below}`,
+							plural: `${below === 1 ? "" : "s"}`,
+						})
+					: t("overlays.rewind_selector.nothing_to_drop", { dot: `${theme.sep.dot}` }),
 				"dim",
 			),
 		);
@@ -1099,12 +1120,18 @@ export class RewindSelectorComponent implements Component {
 		if (this.#help.open) return this.#help.describe();
 		const filter = this.#filter;
 		const columns = filter === undefined ? this.#stripColumns() : [];
-		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}`;
+		const memo = `${getLocale()}|${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}|${this.#search.focused}|${this.#search.value}|${this.#search.cursor}`;
 		if (this.#bar?.memo === memo && this.#bar.targets === this.#targets) return this.#bar.node;
 
-		const title = text([span(`${theme.icon.rewind} `, "accent"), span("Rewind", "strong")], { wrap: "none" });
-		const upDown = actionHint(["tui.select.up", "tui.select.down"], "step");
-		const rewind = actionButton("Rewind here", "rewind", { keys: "enter", tone: "accent" });
+		const title = text(
+			[span(`${theme.icon.rewind} `, "accent"), span(t("overlays.rewind_selector.rewind"), "strong")],
+			{ wrap: "none" },
+		);
+		const upDown = actionHint(["tui.select.up", "tui.select.down"], t("overlays.native_hint.step"));
+		const rewind = actionButton(t("overlays.rewind_selector.rewind_button"), "rewind", {
+			keys: "enter",
+			tone: "accent",
+		});
 		let children: NativeChild[];
 		if (filter === undefined && !this.#search.focused) {
 			const column = columns[this.#activeVariant - 1];
@@ -1115,12 +1142,16 @@ export class RewindSelectorComponent implements Component {
 				text([span(`${at + 1}/${of}`, "dim")], { wrap: "none" }),
 				hintsRow([
 					upDown,
-					{ keys: ["left", "right"], label: columns.length > 0 ? "branches" : "user turns" },
-					{ keys: ["/", "f"], label: "search" },
+					{
+						keys: ["left", "right"],
+						label:
+							columns.length > 0 ? t("overlays.native_hint.branches") : t("overlays.rewind_selector.user_turns"),
+					},
+					{ keys: ["/", "f"], label: t("overlays.rewind_selector.search") },
 					...NORMAL_MOTION_HINTS,
-					this.#truncated ? { keys: ["a"], label: "earlier turns" } : undefined,
+					this.#truncated ? { keys: ["a"], label: t("overlays.rewind_selector.earlier_turns") } : undefined,
 				]),
-				actionBar([null, actionButton("Cancel", "cancel", { keys: "escape" }), rewind]),
+				actionBar([null, actionButton(t("tui.components.loader.cancel"), "cancel", { keys: "escape" }), rewind]),
 			];
 		} else {
 			const matches = this.#filterMatches();
@@ -1134,7 +1165,7 @@ export class RewindSelectorComponent implements Component {
 				text(
 					[
 						matches.length === 0
-							? span("no matches", "error")
+							? span(t("overlays.rewind_selector.no_matches"), "error")
 							: span(`${at >= 0 ? at + 1 : "-"}/${matches.length}`, "dim"),
 					],
 					{ wrap: "none" },
@@ -1142,19 +1173,21 @@ export class RewindSelectorComponent implements Component {
 				hintsRow(
 					this.#search.focused
 						? [
-								{ keys: ["enter"], label: "confirm search" },
-								{ keys: ["escape"], label: "clear search" },
+								{ keys: ["enter"], label: t("overlays.rewind_selector.confirm_search") },
+								{ keys: ["escape"], label: t("overlays.rewind_selector.clear_search") },
 							]
 						: [
 								upDown,
-								{ keys: ["left", "right"], label: "user turns" },
-								{ keys: ["/", "f"], label: "search" },
+								{ keys: ["left", "right"], label: t("overlays.rewind_selector.user_turns") },
+								{ keys: ["/", "f"], label: t("overlays.rewind_selector.search") },
 								...NORMAL_MOTION_HINTS,
 							],
 				),
 				actionBar([
-					actionButton("Show all", "clear-filter"),
-					actionButton(this.#search.focused ? "Back to list" : "Close", "cancel", { keys: "escape" }),
+					actionButton(t("overlays.rewind_selector.show_all"), "clear-filter"),
+					actionButton(this.#search.focused ? t("tui.picker.back_to_list") : t("tui.picker.close"), "cancel", {
+						keys: "escape",
+					}),
 					rewind,
 				]),
 			];
@@ -1231,8 +1264,17 @@ export class RewindSelectorComponent implements Component {
 		const position = this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : "";
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const leftRight = formatKeyHints(["left", "right"]);
-		const lateral = columns.length > 0 ? `${leftRight} branches` : `${leftRight} user turns`;
-		const keys = `${upDown} step · ${lateral} · Tab context · / or f search · Enter rewind · ${this.#truncated ? "a earlier turns · " : ""}${expandKeyHint()} expand · ${editorKey("tui.select.cancel")} close · ? help`;
+		const lateral =
+			columns.length > 0
+				? t("overlays.rewind_selector.branches_hint", { leftRight: `${leftRight}` })
+				: t("overlays.rewind_selector.user_turns_hint", { leftRight: `${leftRight}` });
+		const keys = t("overlays.rewind_selector.navigation_hint", {
+			upDown: `${upDown}`,
+			lateral: `${lateral}`,
+			value: `${this.#truncated ? t("overlays.rewind_selector.earlier_hint") : ""}`,
+			expandKeyHint: `${expandKeyHint()}`,
+			editorKey: `${editorKey("tui.select.cancel")}`,
+		});
 		return {
 			header: [this.#header()],
 			body: {
@@ -1246,7 +1288,7 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	#header(): string {
-		return `${theme.icon.rewind} ${theme.bold("Rewind")}${theme.sep.dot}${theme.fg("dim", "pick the point to continue from")}`;
+		return `${theme.icon.rewind} ${theme.bold(t("overlays.rewind_selector.rewind"))}${theme.sep.dot}${theme.fg("dim", t("overlays.rewind_selector.pick_point"))}`;
 	}
 
 	/** Only the matching items of the current path, concatenated; no branch strip. */
@@ -1268,15 +1310,21 @@ export class RewindSelectorComponent implements Component {
 		const selected = matches.indexOf(this.#selected);
 		const composed = composeOutlineColumn(rows, 0, rows.length, targets, selected, contentWidth, undefined);
 		this.#recordPageGeometry(rows, targets, selected);
-		const lines = matches.length > 0 ? composed.lines : [theme.fg("muted", `  No items match "${query}"`)];
+		const lines =
+			matches.length > 0
+				? composed.lines
+				: [theme.fg("muted", t("overlays.rewind_selector.no_items_match", { query: `${query}` }))];
 		const count =
 			matches.length === 0
-				? theme.fg("error", "no matches")
+				? theme.fg("error", t("overlays.rewind_selector.no_matches"))
 				: theme.fg("dim", `${selected >= 0 ? selected + 1 : "-"}/${matches.length}`);
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const keys = this.#search.focused
-			? "Enter confirm search · Esc clear search"
-			: `${upDown} step · ←/→ user turns · / or f search · Enter rewind · ${editorKey("tui.select.cancel")} close · ? help`;
+			? t("overlays.rewind_selector.search_hint")
+			: t("overlays.rewind_selector.navigation_hint_short", {
+					upDown: `${upDown}`,
+					editorKey: `${editorKey("tui.select.cancel")}`,
+				});
 		return {
 			header: [this.#header()],
 			body: {

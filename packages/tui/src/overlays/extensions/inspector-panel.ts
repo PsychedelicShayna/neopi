@@ -5,6 +5,7 @@
  * identity → runtime/enablement → description → origin →
  * kind-specific surface → contents → boring config.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as os from "node:os";
 import type { TspSpan, TspText } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
@@ -155,7 +156,10 @@ export class InspectorPanel implements Component {
 
 	render(width: number): readonly string[] {
 		if (!this.#extension) {
-			return [theme.fg("muted", "Select an extension"), theme.fg("dim", "to view details")];
+			return [
+				theme.fg("muted", t("overlays.inspector_panel.select_extension")),
+				theme.fg("dim", t("overlays.inspector_panel.view_details")),
+			];
 		}
 		this.#width = width;
 		this.#toolFrame = snapshotToolRuntimeSource(this.#toolSource);
@@ -171,20 +175,34 @@ export class InspectorPanel implements Component {
 	describePreview(): NativeNode[] {
 		const ext = this.#extension;
 		if (!ext) {
-			return [text([span("Select an extension to view details", "muted")], { wrap: "word" })];
+			return [text([span(t("overlays.inspector_panel.select_extension_details"), "muted")], { wrap: "word" })];
 		}
 		this.#toolFrame = snapshotToolRuntimeSource(this.#toolSource);
 		const view = this.#nativeKindView(ext);
 		const name = sanitizeDisplayLine(ext.displayName);
 		const title = sanitizeDisplayLineField(view.title);
-		const levelLabel = ext.source.level === "user" ? "User" : ext.source.level === "project" ? "Project" : "Native";
+		const levelLabel =
+			ext.source.level === "user"
+				? t("overlays.inspector_panel.source_user")
+				: ext.source.level === "project"
+					? t("overlays.inspector_panel.source_project")
+					: t("overlays.inspector_panel.source_native");
 		const filePath = sanitizeDisplayText(ext.path);
 		const facts = kv([
 			...view.runtime,
-			["Status", view.health && ext.state === "active" ? undefined : this.#nativeStatus(ext)],
-			["Origin", `via ${sanitizeDisplayLine(ext.source.providerName)} (${levelLabel})`],
 			[
-				"Path",
+				t("overlays.inspector_panel.status"),
+				view.health && ext.state === "active" ? undefined : this.#nativeStatus(ext),
+			],
+			[
+				t("overlays.inspector_panel.origin"),
+				t("overlays.inspector_panel.origin_provider", {
+					providerName: `${sanitizeDisplayLine(ext.source.providerName)}`,
+					levelLabel: `${levelLabel}`,
+				}),
+			],
+			[
+				t("overlays.inspector_panel.path"),
 				[
 					span(
 						sanitizeDisplayText(shortenPath(ext.path, os.homedir())),
@@ -256,12 +274,21 @@ export class InspectorPanel implements Component {
 	}
 
 	#nativeMore(hidden: number, noun: string): NativeNode {
-		return text([span(`… ${hidden} more ${noun} (${expandKeyHint()} to expand)`, "dim")]);
+		return text([
+			span(
+				t("overlays.inspector_panel.more_items_expand", {
+					hidden: `${hidden}`,
+					noun: `${noun}`,
+					expandKeyHint: `${expandKeyHint()}`,
+				}),
+				"dim",
+			),
+		]);
 	}
 
 	/** Tool/argument rows: name, type and required flag, then the description. */
 	#nativeParams(params: ToolParamView[]): NativeNode {
-		if (params.length === 0) return text([span("(no arguments)", "dim")]);
+		if (params.length === 0) return text([span(t("overlays.inspector_panel.no_arguments"), "dim")]);
 		return node("kv", {
 			items: params.map(param => ({
 				k: [span(param.name, "accent mono")],
@@ -294,7 +321,15 @@ export class InspectorPanel implements Component {
 				description ? text(sanitizeDisplayText(description), { wrap: "word" }) : undefined,
 				inline
 					? this.#nativeParams(params)
-					: text([span(`${params.length} args (${expandKeyHint()} to expand)`, "dim")]),
+					: text([
+							span(
+								t("overlays.inspector_panel.args_expand", {
+									length: `${params.length}`,
+									expandKeyHint: `${expandKeyHint()}`,
+								}),
+								"dim",
+							),
+						]),
 			]),
 			{ gap: "xs" },
 		);
@@ -322,7 +357,7 @@ export class InspectorPanel implements Component {
 						description: data.description,
 						sections: [
 							this.#nativeSection(
-								"Tools",
+								t("settings.tab.tools.label"),
 								data.factory.map(tool =>
 									this.#nativeCatalogEntry(tool.name, tool.label, tool.description, tool.parameters),
 								),
@@ -335,41 +370,52 @@ export class InspectorPanel implements Component {
 					...base,
 					title: data.label,
 					description: data.description,
-					sections: [this.#nativeSection("Arguments", [this.#nativeParams(data.params)])],
+					sections: [
+						this.#nativeSection(t("overlays.inspector_panel.arguments"), [this.#nativeParams(data.params)]),
+					],
 				};
 			}
 			case "rule": {
 				const data = ruleInspectorData(ext, this.#source);
 				const applies = kv([
-					["always", data.alwaysApply ? [span("always", "accent")] : undefined],
+					["always", data.alwaysApply ? [span(t("overlays.inspector_panel.always"), "accent")] : undefined],
 					["globs", data.globs?.join(", ")],
 					["condition", this.#nativeList(data.condition)],
 					["ast", this.#nativeList(data.astCondition)],
 					["scope", this.#nativeList(data.scope)],
-					["agents", this.#nativeList(data.agents)],
+					[t("tools.count.agent.many"), this.#nativeList(data.agents)],
 					["interrupt", data.interruptMode ? [span(data.interruptMode, "dim")] : undefined],
 				]);
 				return {
 					...base,
 					description: data.description,
-					sections: [this.#nativeSection("Applies", [applies ?? text([span("(no apply conditions)", "dim")])])],
-					preview: { heading: "Rule", text: data.content },
+					sections: [
+						this.#nativeSection(t("overlays.inspector_panel.applies"), [
+							applies ?? text([span(t("overlays.inspector_panel.no_apply_conditions"), "dim")]),
+						]),
+					],
+					preview: { heading: t("overlays.inspector_panel.rule"), text: data.content },
 				};
 			}
 			case "skill": {
 				const data = skillInspectorData(ext);
 				const surface = kv([
-					["apply", data.alwaysApply ? [span("always apply", "accent")] : undefined],
+					["apply", data.alwaysApply ? [span(t("overlays.inspector_panel.always_apply"), "accent")] : undefined],
 					["globs", data.globs?.join(", ")],
 				]);
 				return {
 					...base,
 					description: data.description,
 					runtime: data.hidden
-						? [["Visibility", [span("hidden", "warning"), span("  omitted from the system-prompt skill list")]]]
+						? [
+								[
+									t("overlays.inspector_panel.visibility"),
+									[span("hidden", "warning"), span(t("overlays.inspector_panel.omitted_skill_list"))],
+								],
+							]
 						: [],
 					sections: surface ? [keyed(surface, "surface")] : [],
-					preview: { heading: "Instruction", text: data.content },
+					preview: { heading: t("overlays.inspector_panel.instruction"), text: data.content },
 				};
 			}
 			case "slash-command": {
@@ -379,12 +425,13 @@ export class InspectorPanel implements Component {
 					["hint", data.argumentHint ? [span(sanitizeDisplayText(data.argumentHint), "dim")] : undefined],
 				]);
 				if (facts) invocation.push(facts);
-				if (data.usesArguments) invocation.push(text([span("accepts $ARGUMENTS", "dim")]));
+				if (data.usesArguments)
+					invocation.push(text([span(t("overlays.inspector_panel.accepts_arguments"), "dim")]));
 				return {
 					...base,
 					description: data.description,
-					sections: [this.#nativeSection("Invocation", invocation)],
-					preview: { heading: "Template", text: data.body },
+					sections: [this.#nativeSection(t("overlays.inspector_panel.invocation"), invocation)],
+					preview: { heading: t("overlays.inspector_panel.template"), text: data.body },
 				};
 			}
 			case "hook": {
@@ -396,20 +443,23 @@ export class InspectorPanel implements Component {
 				return {
 					...base,
 					description: ext.description,
-					sections: [this.#nativeSection("Hook", facts ? [facts] : [])],
+					sections: [this.#nativeSection(t("overlays.inspector_panel.hook"), facts ? [facts] : [])],
 				};
 			}
 			case "prompt":
 				return {
 					...base,
 					description: ext.description,
-					preview: { heading: "Prompt", text: promptInspectorData(ext).content },
+					preview: {
+						heading: t("settings.option.loop.mode.prompt.label"),
+						text: promptInspectorData(ext).content,
+					},
 				};
 			case "context-file":
 				return {
 					...base,
 					description: ext.description,
-					preview: { heading: "Preview", text: contextInspectorData(ext).content },
+					preview: { heading: t("overlays.inspector_panel.preview"), text: contextInspectorData(ext).content },
 				};
 			case "instruction": {
 				const data = instructionInspectorData(ext);
@@ -417,8 +467,8 @@ export class InspectorPanel implements Component {
 				return {
 					...base,
 					description: ext.description,
-					sections: files ? [this.#nativeSection("Applies", [files])] : [],
-					preview: { heading: "Instruction", text: data.content },
+					sections: files ? [this.#nativeSection(t("overlays.inspector_panel.applies"), [files])] : [],
+					preview: { heading: t("overlays.inspector_panel.instruction"), text: data.content },
 				};
 			}
 			default:
@@ -426,7 +476,11 @@ export class InspectorPanel implements Component {
 					...base,
 					description: ext.description,
 					sections: ext.trigger
-						? [this.#nativeSection("Trigger", [text([span(sanitizeDisplayText(ext.trigger), "accent mono")])])]
+						? [
+								this.#nativeSection(t("overlays.inspector_panel.trigger"), [
+									text([span(sanitizeDisplayText(ext.trigger), "accent mono")]),
+								]),
+							]
 						: [],
 				};
 		}
@@ -439,7 +493,16 @@ export class InspectorPanel implements Component {
 		const shown = items.slice(0, cap).map(item => sanitizeDisplayText(item));
 		const hidden = items.length - shown.length;
 		const spans: TspSpan[] = [span(shown.join("\n"), "accent")];
-		if (hidden > 0) spans.push(span(`\n… ${hidden} more (${expandKeyHint()} to expand)`, "dim"));
+		if (hidden > 0)
+			spans.push(
+				span(
+					t("overlays.inspector_panel.more_expand_newline", {
+						hidden: `${hidden}`,
+						expandKeyHint: `${expandKeyHint()}`,
+					}),
+					"dim",
+				),
+			);
 		return spans;
 	}
 
@@ -450,7 +513,11 @@ export class InspectorPanel implements Component {
 				isDiscoveredMcpServer(ext.raw) && ext.raw.command
 					? shortenPath(sanitizeDisplayText(ext.raw.command), os.homedir())
 					: undefined;
-			return { runtime: [], sections: [], config: [["Command", command ? [span(command, "mono")] : undefined]] };
+			return {
+				runtime: [],
+				sections: [],
+				config: [[t("overlays.inspector_panel.command"), command ? [span(command, "mono")] : undefined]],
+			};
 		}
 		const snap = isDiscoveredMcpServer(ext.raw)
 			? snapshotMcpRuntime(ext.raw, this.#mcpSource, { enabled: ext.state !== "disabled" })
@@ -458,7 +525,7 @@ export class InspectorPanel implements Component {
 		const health: MCPConnectionHealth = snap?.health ?? "disconnected";
 		const runtime: [string, TspText | undefined][] = [
 			[
-				"Health",
+				t("overlays.inspector_panel.health"),
 				[
 					span(`${MCP_HEALTH_GLYPH[health]()} ${formatMcpHealthLabel(health)}`, MCP_HEALTH_STYLE[health]),
 					span(`  ${snap?.transport ?? "stdio"}`, "muted"),
@@ -467,8 +534,12 @@ export class InspectorPanel implements Component {
 		];
 		if (snap?.implementationName) {
 			const version = snap.implementationVersion ? ` ${snap.implementationVersion}` : "";
-			runtime.push(["Server", [span(`${snap.implementationName}${version}`, "dim")]]);
-			if (snap.websiteUrl) runtime.push(["Website", [span(snap.websiteUrl, "dim", { href: snap.websiteUrl })]]);
+			runtime.push([t("overlays.inspector_panel.server"), [span(`${snap.implementationName}${version}`, "dim")]]);
+			if (snap.websiteUrl)
+				runtime.push([
+					t("overlays.inspector_panel.website"),
+					[span(snap.websiteUrl, "dim", { href: snap.websiteUrl })],
+				]);
 		}
 		const sections: NativeNode[] = [];
 		if (snap && snap.tools.length > 0) {
@@ -477,10 +548,12 @@ export class InspectorPanel implements Component {
 				this.#nativeCatalogEntry(tool.name, tool.title, tool.description, tool.parameters),
 			);
 			if (hidden > 0) entries.push(this.#nativeMore(hidden, "tools"));
-			sections.push(this.#nativeSection("Tools", entries));
+			sections.push(this.#nativeSection(t("settings.tab.tools.label"), entries));
 		}
-		if (snap && snap.resources.length > 0) sections.push(this.#nativeNameList("Resources", snap.resources));
-		if (snap && snap.prompts.length > 0) sections.push(this.#nativeNameList("Prompts", snap.prompts));
+		if (snap && snap.resources.length > 0)
+			sections.push(this.#nativeNameList(t("overlays.inspector_panel.resources"), snap.resources));
+		if (snap && snap.prompts.length > 0)
+			sections.push(this.#nativeNameList(t("overlays.inspector_panel.prompts"), snap.prompts));
 		return {
 			title: snap?.title,
 			description: snap?.description,
@@ -489,10 +562,21 @@ export class InspectorPanel implements Component {
 			health: true,
 			sections,
 			config: [
-				["Command", snap?.command ? [span(shortenPath(snap.command, os.homedir()), "mono")] : undefined],
+				[
+					t("overlays.inspector_panel.command"),
+					snap?.command ? [span(shortenPath(snap.command, os.homedir()), "mono")] : undefined,
+				],
 				["URL", snap?.url ? [span(snap.url, "mono", { href: snap.url })] : undefined],
-				["Args", snap?.args && snap.args.length > 0 ? [span(snap.args.join(" "), "mono dim")] : undefined],
-				["Env vars", snap && snap.envCount > 0 ? [span(`${snap.envCount} defined`, "dim")] : undefined],
+				[
+					t("tools.common.args"),
+					snap?.args && snap.args.length > 0 ? [span(snap.args.join(" "), "mono dim")] : undefined,
+				],
+				[
+					t("overlays.inspector_panel.env_vars"),
+					snap && snap.envCount > 0
+						? [span(t("overlays.inspector_panel.defined_count", { envCount: `${snap.envCount}` }), "dim")]
+						: undefined,
+				],
 			],
 		};
 	}
@@ -556,7 +640,13 @@ export class InspectorPanel implements Component {
 		if (shadowed) {
 			const config: string[] = [];
 			if (isDiscoveredMcpServer(ext.raw) && ext.raw.command) {
-				this.#pushLabeled(config, "Command", shortenPath(ext.raw.command, os.homedir()), width, "success");
+				this.#pushLabeled(
+					config,
+					t("overlays.inspector_panel.command"),
+					shortenPath(ext.raw.command, os.homedir()),
+					width,
+					"success",
+				);
 			}
 			if (config.length > 0) config.push("");
 			return { description: undefined, surface: [], contents: [], config };
@@ -590,18 +680,33 @@ export class InspectorPanel implements Component {
 					this.#pushParams(toolsBody, params, width, "    ");
 				} else if (params.length > 0) {
 					collapsedArgs = true;
-					toolsBody.push(`    ${theme.fg("dim", `${params.length} args`)}`);
+					toolsBody.push(
+						`    ${theme.fg("dim", t("overlays.inspector_panel.args_count", { length: `${params.length}` }))}`,
+					);
 				}
 				toolsBody.push("");
 			}
 			if (hidden > 0) {
-				toolsBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
+				toolsBody.push(
+					theme.fg(
+						"dim",
+						t("overlays.inspector_panel.more_expand_indented", {
+							hidden: `${hidden}`,
+							expandKeyHint: `${expandKeyHint()}`,
+						}),
+					),
+				);
 				toolsBody.push("");
 			} else if (collapsedArgs) {
-				toolsBody.push(theme.fg("dim", `  … args (${expandKeyHint()} to expand)`));
+				toolsBody.push(
+					theme.fg(
+						"dim",
+						t("overlays.inspector_panel.args_expand_indented", { expandKeyHint: `${expandKeyHint()}` }),
+					),
+				);
 				toolsBody.push("");
 			}
-			contents.push(...this.#section("Tools", toolsBody, width));
+			contents.push(...this.#section(t("settings.tab.tools.label"), toolsBody, width));
 		}
 
 		if (snap && snap.resources.length > 0) {
@@ -614,10 +719,18 @@ export class InspectorPanel implements Component {
 				resourcesBody.push(`  ${theme.fg("accent", resource.name)}`);
 			}
 			if (hidden > 0) {
-				resourcesBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
+				resourcesBody.push(
+					theme.fg(
+						"dim",
+						t("overlays.inspector_panel.more_expand_indented", {
+							hidden: `${hidden}`,
+							expandKeyHint: `${expandKeyHint()}`,
+						}),
+					),
+				);
 			}
 			resourcesBody.push("");
-			contents.push(...this.#section("Resources", resourcesBody, width));
+			contents.push(...this.#section(t("overlays.inspector_panel.resources"), resourcesBody, width));
 		}
 
 		if (snap && snap.prompts.length > 0) {
@@ -630,18 +743,39 @@ export class InspectorPanel implements Component {
 				promptsBody.push(`  ${theme.fg("accent", prompt.name)}`);
 			}
 			if (hidden > 0) {
-				promptsBody.push(theme.fg("dim", `  … ${hidden} more (${expandKeyHint()} to expand)`));
+				promptsBody.push(
+					theme.fg(
+						"dim",
+						t("overlays.inspector_panel.more_expand_indented", {
+							hidden: `${hidden}`,
+							expandKeyHint: `${expandKeyHint()}`,
+						}),
+					),
+				);
 			}
 			promptsBody.push("");
-			contents.push(...this.#section("Prompts", promptsBody, width));
+			contents.push(...this.#section(t("overlays.inspector_panel.prompts"), promptsBody, width));
 		}
 
 		if (snap?.command)
-			this.#pushLabeled(config, "Command", shortenPath(snap.command, os.homedir()), width, "success");
+			this.#pushLabeled(
+				config,
+				t("overlays.inspector_panel.command"),
+				shortenPath(snap.command, os.homedir()),
+				width,
+				"success",
+			);
 		if (snap?.url) this.#pushLabeled(config, "URL", snap.url, width, "success");
-		if (snap?.args && snap.args.length > 0) this.#pushLabeled(config, "Args", snap.args.join(" "), width, "dim");
+		if (snap?.args && snap.args.length > 0)
+			this.#pushLabeled(config, t("tools.common.args"), snap.args.join(" "), width, "dim");
 		if (snap && snap.envCount > 0) {
-			this.#pushLabeled(config, "Env vars", `${snap.envCount} defined`, width, "dim");
+			this.#pushLabeled(
+				config,
+				t("overlays.inspector_panel.env_vars"),
+				t("overlays.inspector_panel.defined_count", { envCount: `${snap.envCount}` }),
+				width,
+				"dim",
+			);
 		}
 		if (config.length > 0) config.push("");
 
@@ -677,15 +811,22 @@ export class InspectorPanel implements Component {
 					this.#pushParams(factoryBody, params, width, "    ");
 				} else if (params.length > 0) {
 					collapsedArgs = true;
-					factoryBody.push(`    ${theme.fg("dim", `${params.length} args`)}`);
+					factoryBody.push(
+						`    ${theme.fg("dim", t("overlays.inspector_panel.args_count", { length: `${params.length}` }))}`,
+					);
 				}
 				factoryBody.push("");
 			}
 			if (collapsedArgs) {
-				factoryBody.push(theme.fg("dim", `  … args (${expandKeyHint()} to expand)`));
+				factoryBody.push(
+					theme.fg(
+						"dim",
+						t("overlays.inspector_panel.args_expand_indented", { expandKeyHint: `${expandKeyHint()}` }),
+					),
+				);
 				factoryBody.push("");
 			}
-			surface.push(...this.#section("Tools", factoryBody, width));
+			surface.push(...this.#section(t("settings.tab.tools.label"), factoryBody, width));
 			return { description: data.description, surface, contents: [], config: [] };
 		}
 		if (lives.length === 0 && data.params.length === 0) {
@@ -693,7 +834,7 @@ export class InspectorPanel implements Component {
 		}
 		const argsBody: string[] = [];
 		this.#pushParams(argsBody, data.params, width, "  ");
-		surface.push(...this.#section("Arguments", argsBody, width));
+		surface.push(...this.#section(t("overlays.inspector_panel.arguments"), argsBody, width));
 		return {
 			title: data.label,
 			description: data.description,
@@ -708,23 +849,23 @@ export class InspectorPanel implements Component {
 		const data = ruleInspectorData(ext, this.#source);
 		const surface: string[] = [];
 		const appliesBody: string[] = [];
-		if (data.alwaysApply) appliesBody.push(`  ${theme.fg("accent", "always")}`);
+		if (data.alwaysApply) appliesBody.push(`  ${theme.fg("accent", t("overlays.inspector_panel.always"))}`);
 		if (data.globs) this.#pushLabeled(appliesBody, "globs", data.globs.join(", "), width);
 		if (data.condition) this.#pushLabeledList(appliesBody, "condition", data.condition, width);
 		if (data.astCondition) this.#pushLabeledList(appliesBody, "ast", data.astCondition, width);
 		if (data.scope) this.#pushLabeledList(appliesBody, "scope", data.scope, width);
-		if (data.agents) this.#pushLabeledList(appliesBody, "agents", data.agents, width);
+		if (data.agents) this.#pushLabeledList(appliesBody, t("tools.count.agent.many"), data.agents, width);
 		if (data.interruptMode) this.#pushLabeled(appliesBody, "interrupt", data.interruptMode, width, "dim");
 		if (!data.alwaysApply && !data.globs && !data.condition && !data.astCondition && !data.agents) {
-			appliesBody.push(theme.fg("dim", "  (no apply conditions)"));
+			appliesBody.push(theme.fg("dim", t("overlays.inspector_panel.no_apply_conditions_indented")));
 		}
 		appliesBody.push("");
-		surface.push(...this.#section("Applies", appliesBody, width));
+		surface.push(...this.#section(t("overlays.inspector_panel.applies"), appliesBody, width));
 		return {
 			description: data.description,
 			surface,
 			contents: [],
-			preview: { heading: "Rule", text: data.content },
+			preview: { heading: t("overlays.inspector_panel.rule"), text: data.content },
 			config: [],
 		};
 	}
@@ -736,14 +877,14 @@ export class InspectorPanel implements Component {
 		if (data.hidden) {
 			this.#pushWrapped(
 				runtimeExtra,
-				`${theme.fg("warning", "hidden")}    omitted from the system-prompt skill list`,
+				t("overlays.inspector_panel.hidden_omitted_skill_list", { fg: `${theme.fg("warning", "hidden")}` }),
 				width,
 				"  ",
 			);
 			runtimeExtra.push(divider(width));
 		}
 		const surface: string[] = [];
-		if (data.alwaysApply) surface.push(`  ${theme.fg("accent", "always apply")}`);
+		if (data.alwaysApply) surface.push(`  ${theme.fg("accent", t("overlays.inspector_panel.always_apply"))}`);
 		if (data.globs) this.#pushLabeled(surface, "globs", data.globs.join(", "), width);
 		if (surface.length > 0) surface.push("");
 		return {
@@ -751,7 +892,7 @@ export class InspectorPanel implements Component {
 			runtimeExtra: runtimeExtra.length > 0 ? runtimeExtra : undefined,
 			surface,
 			contents: [],
-			preview: { heading: "Instruction", text: data.content },
+			preview: { heading: t("overlays.inspector_panel.instruction"), text: data.content },
 			config: [],
 		};
 	}
@@ -762,14 +903,15 @@ export class InspectorPanel implements Component {
 		const invocationBody: string[] = [];
 		invocationBody.push(`  ${theme.fg("accent", `/${sanitizeDisplayText(ext.name)}`)}`);
 		if (data.argumentHint) this.#pushLabeled(invocationBody, "hint", data.argumentHint, this.#width, "dim");
-		if (data.usesArguments) invocationBody.push(`  ${theme.fg("dim", "accepts $ARGUMENTS")}`);
+		if (data.usesArguments)
+			invocationBody.push(`  ${theme.fg("dim", t("overlays.inspector_panel.accepts_arguments"))}`);
 		invocationBody.push("");
-		surface.push(...this.#section("Invocation", invocationBody, this.#width));
+		surface.push(...this.#section(t("overlays.inspector_panel.invocation"), invocationBody, this.#width));
 		return {
 			description: data.description,
 			surface,
 			contents: [],
-			preview: { heading: "Template", text: data.body },
+			preview: { heading: t("overlays.inspector_panel.template"), text: data.body },
 			config: [],
 		};
 	}
@@ -781,7 +923,7 @@ export class InspectorPanel implements Component {
 		if (data.hookType) this.#pushLabeled(hookBody, "when", data.hookType, this.#width);
 		if (data.tool) this.#pushLabeled(hookBody, "tool", data.tool, this.#width);
 		hookBody.push("");
-		surface.push(...this.#section("Hook", hookBody, this.#width));
+		surface.push(...this.#section(t("overlays.inspector_panel.hook"), hookBody, this.#width));
 		return { description: ext.description, surface, contents: [], config: [] };
 	}
 
@@ -791,7 +933,7 @@ export class InspectorPanel implements Component {
 			description: ext.description,
 			surface: [],
 			contents: [],
-			preview: { heading: "Prompt", text: data.content },
+			preview: { heading: t("settings.option.loop.mode.prompt.label"), text: data.content },
 			config: [],
 		};
 	}
@@ -802,7 +944,7 @@ export class InspectorPanel implements Component {
 			description: ext.description,
 			surface: [],
 			contents: [],
-			preview: { heading: "Preview", text: data.content },
+			preview: { heading: t("overlays.inspector_panel.preview"), text: data.content },
 			config: [],
 		};
 	}
@@ -814,13 +956,13 @@ export class InspectorPanel implements Component {
 			const filesBody: string[] = [];
 			this.#pushLabeled(filesBody, "files", data.applyTo, this.#width);
 			filesBody.push("");
-			surface.push(...this.#section("Applies", filesBody, this.#width));
+			surface.push(...this.#section(t("overlays.inspector_panel.applies"), filesBody, this.#width));
 		}
 		return {
 			description: ext.description,
 			surface,
 			contents: [],
-			preview: { heading: "Instruction", text: data.content },
+			preview: { heading: t("overlays.inspector_panel.instruction"), text: data.content },
 			config: [],
 		};
 	}
@@ -829,7 +971,7 @@ export class InspectorPanel implements Component {
 		const surface: string[] = [];
 		if (ext.trigger) {
 			const triggerBody: string[] = [`  ${theme.fg("accent", ext.trigger)}`, ""];
-			surface.push(...this.#section("Trigger", triggerBody, this.#width));
+			surface.push(...this.#section(t("overlays.inspector_panel.trigger"), triggerBody, this.#width));
 		}
 		return { description: ext.description, surface, contents: [], config: [] };
 	}
@@ -878,18 +1020,34 @@ export class InspectorPanel implements Component {
 		} else {
 			lines.push(...wrapped.slice(0, MCP_INLINE_DESC_LINES));
 			lines.push(
-				theme.fg("dim", `  … ${wrapped.length - MCP_INLINE_DESC_LINES} more (${expandKeyHint()} to expand)`),
+				theme.fg(
+					"dim",
+					t("overlays.inspector_panel.more_expand_indented_2", {
+						value: `${wrapped.length - MCP_INLINE_DESC_LINES}`,
+						expandKeyHint: `${expandKeyHint()}`,
+					}),
+				),
 			);
 		}
 		lines.push("");
 	}
 
 	#pushOrigin(lines: string[], ext: Extension, width: number): void {
-		lines.push(theme.fg("muted", "Origin:"));
-		const levelLabel = ext.source.level === "user" ? "User" : ext.source.level === "project" ? "Project" : "Native";
+		lines.push(theme.fg("muted", t("overlays.inspector_panel.origin_label")));
+		const levelLabel =
+			ext.source.level === "user"
+				? t("overlays.inspector_panel.source_user")
+				: ext.source.level === "project"
+					? t("overlays.inspector_panel.source_project")
+					: t("overlays.inspector_panel.source_native");
 		this.#pushWrapped(
 			lines,
-			theme.italic(`via ${sanitizeDisplayText(ext.source.providerName)} (${levelLabel})`),
+			theme.italic(
+				t("overlays.inspector_panel.origin_provider", {
+					providerName: `${sanitizeDisplayText(ext.source.providerName)}`,
+					levelLabel: `${levelLabel}`,
+				}),
+			),
 			width,
 			"  ",
 		);
@@ -921,9 +1079,24 @@ export class InspectorPanel implements Component {
 		const hidden = items.length - shown.length;
 		const indent = "             ";
 		if (hidden > 0) {
-			this.#pushLabeled(lines, label, `${items.length} patterns`, width, "dim");
+			this.#pushLabeled(
+				lines,
+				label,
+				t("overlays.inspector_panel.pattern_count", { length: `${items.length}` }),
+				width,
+				"dim",
+			);
 			for (const item of shown) this.#pushWrapped(lines, item, width, indent);
-			lines.push(theme.fg("dim", `${indent}… ${hidden} more (${expandKeyHint()} to expand)`));
+			lines.push(
+				theme.fg(
+					"dim",
+					t("overlays.inspector_panel.more_expand_indent", {
+						indent: `${indent}`,
+						hidden: `${hidden}`,
+						expandKeyHint: `${expandKeyHint()}`,
+					}),
+				),
+			);
 			return;
 		}
 		this.#pushLabeled(lines, label, shown[0] ?? "", width);
@@ -932,7 +1105,7 @@ export class InspectorPanel implements Component {
 
 	#pushParams(lines: string[], params: ToolParamView[], width: number, indent: string): void {
 		if (params.length === 0) {
-			lines.push(`${indent}${theme.fg("dim", "(no arguments)")}`);
+			lines.push(`${indent}${theme.fg("dim", t("overlays.inspector_panel.no_arguments"))}`);
 			return;
 		}
 		for (const param of params) {
@@ -959,7 +1132,7 @@ export class InspectorPanel implements Component {
 
 	#pushPreview(lines: string[], text: string, width: number, budget: number): void {
 		if (!text) {
-			lines.push(theme.fg("dim", "  (empty)"));
+			lines.push(theme.fg("dim", t("overlays.inspector_panel.empty_indented")));
 			return;
 		}
 		const wrapped: string[] = [];
@@ -975,7 +1148,15 @@ export class InspectorPanel implements Component {
 		}
 		const shownBudget = Math.max(1, budget - 1);
 		lines.push(...wrapped.slice(0, shownBudget));
-		lines.push(theme.fg("dim", `  … ${wrapped.length - shownBudget} more (${expandKeyHint()} to expand)`));
+		lines.push(
+			theme.fg(
+				"dim",
+				t("overlays.inspector_panel.more_expand_indented_2", {
+					value: `${wrapped.length - shownBudget}`,
+					expandKeyHint: `${expandKeyHint()}`,
+				}),
+			),
+		);
 	}
 
 	#highlightMarkdown(line: string): string {

@@ -3,6 +3,7 @@
  * card heads, error views, notes and notices. No layout: every helper returns
  * semantic nodes/spans only, with ANSI-free, sanitized text.
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { ansi, code, compact, keyed, node, row, span, text } from "../native/describe";
@@ -180,8 +181,8 @@ export function statsText(parts: readonly string[]): NativeNode | undefined {
 export function truncationNotice(meta: OutputMeta | undefined): NativeNode | undefined {
 	if (!meta?.truncation && !meta?.artifactError) return undefined;
 	const parts: string[] = [];
-	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source));
-	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError));
+	if (meta.truncation) parts.push(formatTruncationMetaNotice(meta.truncation, meta.source, getLocale()));
+	if (meta.artifactError) parts.push(formatArtifactErrorNotice(meta.artifactError, getLocale()));
 	return text([span(parts.join(". "), "warning")], { wrap: "word", role: "omp.tool.notice" });
 }
 
@@ -191,8 +192,8 @@ export function truncationNotice(meta: OutputMeta | undefined): NativeNode | und
  */
 export function footnoteText(parts: readonly string[], meta?: OutputMeta): NativeNode | undefined {
 	const all = parts.map(part => plainText(part)).filter(part => part.length > 0);
-	if (meta?.truncation) all.push(formatTruncationMetaNotice(meta.truncation, meta.source));
-	if (meta?.artifactError) all.push(formatArtifactErrorNotice(meta.artifactError));
+	if (meta?.truncation) all.push(formatTruncationMetaNotice(meta.truncation, meta.source, getLocale()));
+	if (meta?.artifactError) all.push(formatArtifactErrorNotice(meta.artifactError, getLocale()));
 	if (all.length === 0) return undefined;
 	const notice = meta?.truncation !== undefined || meta?.artifactError !== undefined;
 	return {
@@ -211,13 +212,13 @@ export const RUN_INPUT_PREVIEW_LINES = 6;
  */
 export type RunState = "running" | "background" | "done" | "failed" | "cancelled" | "timed-out";
 
-const RUN_STATE: Record<RunState, { readonly word: string; readonly tone: TspTone }> = {
-	running: { word: "Running", tone: "pending" },
-	background: { word: "In background", tone: "pending" },
-	done: { word: "Done", tone: "success" },
-	failed: { word: "Failed", tone: "error" },
-	cancelled: { word: "Cancelled", tone: "muted" },
-	"timed-out": { word: "Timed out", tone: "warning" },
+const RUN_STATE: Record<RunState, { readonly key: string; readonly tone: TspTone }> = {
+	running: { key: "tools.run.running", tone: "pending" },
+	background: { key: "tools.run.background", tone: "pending" },
+	done: { key: "tools.run.done", tone: "success" },
+	failed: { key: "tools.run.failed", tone: "error" },
+	cancelled: { key: "tools.run.cancelled", tone: "muted" },
+	"timed-out": { key: "tools.run.timed_out", tone: "warning" },
 };
 
 /** Inputs of {@link runFoot}. */
@@ -241,12 +242,13 @@ export interface RunFootInput {
 export function runFoot(input: RunFootInput): NativeNode {
 	const failedWithCode = input.state === "failed" && input.exitCode !== undefined && input.exitCode !== 0;
 	const state = failedWithCode
-		? { word: `exit ${input.exitCode}`, tone: RUN_STATE.failed.tone }
-		: RUN_STATE[input.state];
+		? { word: t("tools.run.exit", { code: input.exitCode! }), tone: RUN_STATE.failed.tone }
+		: { word: t(RUN_STATE[input.state].key), tone: RUN_STATE[input.state].tone };
 	const facts = (input.facts ?? []).map(fact => plainText(fact).trim()).filter(fact => fact.length > 0);
 	const notices: string[] = [];
-	if (input.meta?.truncation) notices.push(formatTruncationMetaNotice(input.meta.truncation, input.meta.source));
-	if (input.meta?.artifactError) notices.push(formatArtifactErrorNotice(input.meta.artifactError));
+	if (input.meta?.truncation)
+		notices.push(formatTruncationMetaNotice(input.meta.truncation, input.meta.source, getLocale()));
+	if (input.meta?.artifactError) notices.push(formatArtifactErrorNotice(input.meta.artifactError, getLocale()));
 	const factSpans: TspSpan[] = [];
 	if (facts.length > 0) factSpans.push(span(facts.join(" · "), "muted"));
 	for (const notice of notices) {
@@ -380,7 +382,7 @@ export function diagnosticsSection(
 	return node(
 		"section",
 		{
-			head: [span("Diagnostics")],
+			head: [span(t("tools.common.diagnostics"))],
 			tone: diagnostics.errored ? "error" : "warning",
 			role: "omp.tool.diagnostics",
 		},

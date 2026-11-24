@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { node, text } from "../native/describe";
@@ -18,13 +19,18 @@ export class RecapNotice extends Container {
 		super();
 		this.#recap = recap;
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(`※ recap: ${recap}`, 1, 0).setStyleFn(line => theme.fg("dim", theme.italic(line))));
+		this.addChild(
+			new Text(t("overlays.recap_notice.recap", { recap: `${recap}` }), 1, 0).setStyleFn(line =>
+				theme.fg("dim", theme.italic(line)),
+			),
+		);
 	}
 
 	override describe(): NativeNode {
-		return node("row", { gap: "sm", align: "start", role: "omp.recap", title: "Recap while you were away" }, [
-			node("icon", { name: "history" }, undefined, "icon"),
-			text(this.#recap, { wrap: "word" }),
-		]);
+		return node(
+			"row",
+			{ gap: "sm", align: "start", role: "omp.recap", title: t("overlays.recap_notice.away_recap") },
+			[node("icon", { name: "history" }, undefined, "icon"), text(this.#recap, { wrap: "word" })],
+		);
 	}
 }

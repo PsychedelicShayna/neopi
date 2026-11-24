@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import { type PortableBundle, validatePortableBundle } from "./portable-bundle";
 
 export interface FlashCommandArgs {
@@ -174,13 +175,16 @@ export function partitionPath(device: string, index: number): string {
 
 export function assessDevice(info: DeviceInfo, force: boolean): { ok: true } | { ok: false; reason: string } {
 	if (info.type !== "disk" && !(force && info.type === "loop")) {
-		return { ok: false, reason: `${info.path} is a ${info.type}, not a whole disk` };
+		return { ok: false, reason: t("cli.commands.flash.notWholeDisk", { path: info.path, type: info.type }) };
 	}
 	if (info.unsafeUsers && info.unsafeUsers.length > 0) {
-		return { ok: false, reason: `${info.path} has active mounts or holders: ${info.unsafeUsers.join(", ")}` };
+		return {
+			ok: false,
+			reason: t("cli.commands.flash.inUse", { path: info.path, users: info.unsafeUsers.join(", ") }),
+		};
 	}
 	if (!info.removable && !force) {
-		return { ok: false, reason: `${info.path} reports as non-removable; refusing without --force` };
+		return { ok: false, reason: t("cli.commands.flash.nonRemovable", { path: info.path }) };
 	}
 	return { ok: true };
 }
@@ -269,7 +273,7 @@ function promptLine(question: string, hidden: boolean): Promise<string> {
 				return;
 			}
 			for (const byte of chunk) {
-				if (byte === 0x03) return finish(new FlashError("Interrupted"));
+				if (byte === 0x03) return finish(new FlashError(t("cli.commands.flash.interrupted")));
 				if (byte === 0x0d || byte === 0x0a) return finish();
 				if (byte === 0x7f || byte === 0x08) {
 					if (value.length > 0) {
@@ -318,12 +322,14 @@ async function run(
 
 async function mustRun(argv: readonly string[], options: { stdinData?: string } = {}): Promise<void> {
 	const result = await run(argv, options);
-	if (!result.ok) throw new FlashError(`${argv[0]} exited with code ${result.code}`);
+	if (!result.ok)
+		throw new FlashError(t("cli.commands.flash.commandFailed", { command: String(argv[0]), code: result.code }));
 }
 
 async function capture(argv: readonly string[]): Promise<string> {
 	const result = await run(argv, { capture: true });
-	if (!result.ok) throw new FlashError(`${argv[0]} exited with code ${result.code}`);
+	if (!result.ok)
+		throw new FlashError(t("cli.commands.flash.commandFailed", { command: String(argv[0]), code: result.code }));
 	return result.stdout;
 }
 
@@ -355,18 +361,25 @@ async function inspectDevice(device: string): Promise<DeviceInfo> {
 		device,
 	]);
 	const row = (JSON.parse(raw) as { blockdevices?: LsblkRow[] }).blockdevices?.[0];
-	if (!row) throw new FlashError(`lsblk returned nothing for ${device}`);
+	if (!row) throw new FlashError(t("cli.commands.flash.noDevice", { device }));
 	const unsafeUsers: string[] = [];
 	const rootMounts = Array.isArray(row.mountpoints) ? row.mountpoints.filter(Boolean).map(String) : [];
 	if (rootMounts.length > 0) {
-		unsafeUsers.push(`${typeof row.path === "string" ? row.path : device} mounted at ${rootMounts.join(",")}`);
+		unsafeUsers.push(
+			t("cli.commands.flash.mountedAt", {
+				path: typeof row.path === "string" ? row.path : device,
+				mounts: rootMounts.join(","),
+			}),
+		);
 	}
 	const inspectChildren = (children: readonly LsblkRow[] | undefined): void => {
 		for (const child of children ?? []) {
 			const childPath = typeof child.path === "string" ? child.path : "(unknown)";
 			const mounts = Array.isArray(child.mountpoints) ? child.mountpoints.filter(Boolean).map(String) : [];
-			if (mounts.length > 0) unsafeUsers.push(`${childPath} mounted at ${mounts.join(",")}`);
-			if (child.type !== "part") unsafeUsers.push(`${childPath} holder (${String(child.type)})`);
+			if (mounts.length > 0)
+				unsafeUsers.push(t("cli.commands.flash.mountedAt", { path: childPath, mounts: mounts.join(",") }));
+			if (child.type !== "part")
+				unsafeUsers.push(t("cli.commands.flash.holder", { path: childPath, type: String(child.type) }));
 			inspectChildren(child.children);
 		}
 	};
@@ -384,12 +397,10 @@ async function inspectDevice(device: string): Promise<DeviceInfo> {
 async function resolvePayloadUser(flagUser: string | undefined): Promise<PayloadUser> {
 	const name = flagUser ?? process.env.SUDO_USER;
 	if (!name || name === "root") {
-		throw new FlashError(
-			"Cannot determine payload owner. Run via sudo from your own account, or pass --user <name>.",
-		);
+		throw new FlashError(t("cli.commands.flash.ownerRequired"));
 	}
 	const fields = (await capture(["getent", "passwd", name])).split(":");
-	if (!fields[5]) throw new FlashError(`No home directory in passwd entry for ${name}`);
+	if (!fields[5]) throw new FlashError(t("cli.commands.flash.homeMissing", { name }));
 	return { name, home: fields[5] };
 }
 
@@ -433,7 +444,7 @@ export async function copySelected(
 		try {
 			target = await fs.realpath(source);
 		} catch {
-			skipped.push(`${source} (dangling symlink)`);
+			skipped.push(t("cli.commands.flash.danglingSymlink", { path: source }));
 			return;
 		}
 		if (source.endsWith(".db")) {
@@ -446,7 +457,7 @@ export async function copySelected(
 	if (stat.isDirectory()) {
 		const real = await fs.realpath(source);
 		if (seen.has(real)) {
-			skipped.push(`${source} (symlink cycle)`);
+			skipped.push(t("cli.commands.flash.symlinkCycle", { path: source }));
 			return;
 		}
 		seen.add(real);
@@ -462,7 +473,7 @@ export async function copySelected(
 		return;
 	}
 	if (!stat.isFile()) {
-		skipped.push(`${source} (special file)`);
+		skipped.push(t("cli.commands.flash.specialFile", { path: source }));
 		return;
 	}
 	await fs.copyFile(source, destination);
@@ -511,7 +522,7 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 	const sourceAgent = path.join(sourceOmp, "agent");
 	const skipped: string[] = [];
 	const warnings: string[] = [];
-	if (!(await exists(sourceAgent))) throw new FlashError(`${sourceAgent} does not exist; nothing to carry`);
+	if (!(await exists(sourceAgent))) throw new FlashError(t("cli.commands.flash.agentMissing", { path: sourceAgent }));
 
 	try {
 		for (const entry of PORTABLE_AGENT_MANIFEST) {
@@ -522,12 +533,10 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 			const source = path.join(sourceRoot, entry.source);
 			const destination = path.join(destinationRoot, entry.source);
 			if (!(await exists(source))) {
-				if (entry.required) throw new FlashError(`Required portable profile entry is missing: ${source}`);
+				if (entry.required) throw new FlashError(t("cli.commands.flash.requiredEntryMissing", { path: source }));
 				skipped.push(`${entry.root}/${entry.source}`);
 				if (entry.source === "secret-placeholder.key") {
-					warnings.push(
-						"no secret-placeholder.key: previously obfuscated placeholders in seeded memories/config will not decode on the stick",
-					);
+					warnings.push("cli.commands.flash.warnings.secretKeyMissing");
 				}
 				continue;
 			}
@@ -546,8 +555,7 @@ async function stagePayload(user: PayloadUser): Promise<StagedPayload> {
 		const ymlExists = await exists(yml);
 		const yamlExists = await exists(yaml);
 		const configPath = ymlExists ? yml : yamlExists ? yaml : yml;
-		if (ymlExists && yamlExists)
-			warnings.push("config.yaml is shadowed by canonical config.yml; only config.yml received symbolPreset: ascii");
+		if (ymlExists && yamlExists) warnings.push("cli.commands.flash.warnings.configShadowed");
 		await fs.writeFile(configPath, forceAsciiSymbolPreset(await fs.readFile(configPath, "utf8").catch(() => "")));
 
 		const entries = await walkManifest(stagedHome);
@@ -569,17 +577,19 @@ export async function verifyPayload(root: string, entries: readonly PayloadManif
 		try {
 			const stat = await fs.lstat(absolute);
 			if (entry.type === "symlink") {
-				if (!stat.isSymbolicLink()) errors.push(`${entry.path}: expected symlink`);
+				if (!stat.isSymbolicLink()) errors.push(t("cli.commands.flash.expectedSymlink", { path: entry.path }));
 				else if (
 					createHash("sha256")
 						.update(await fs.readlink(absolute))
 						.digest("hex") !== entry.sha256
 				) {
-					errors.push(`${entry.path}: symlink digest mismatch`);
+					errors.push(t("cli.commands.flash.symlinkDigestMismatch", { path: entry.path }));
 				}
-			} else if (!stat.isFile()) errors.push(`${entry.path}: expected file`);
-			else if ((stat.mode & 0o777) !== entry.mode) errors.push(`${entry.path}: mode mismatch`);
-			else if ((await sha256(absolute)) !== entry.sha256) errors.push(`${entry.path}: digest mismatch`);
+			} else if (!stat.isFile()) errors.push(t("cli.commands.flash.expectedFile", { path: entry.path }));
+			else if ((stat.mode & 0o777) !== entry.mode)
+				errors.push(t("cli.commands.flash.modeMismatch", { path: entry.path }));
+			else if ((await sha256(absolute)) !== entry.sha256)
+				errors.push(t("cli.commands.flash.digestMismatch", { path: entry.path }));
 		} catch (error) {
 			errors.push(`${entry.path}: ${String(error)}`);
 		}
@@ -588,7 +598,7 @@ export async function verifyPayload(root: string, entries: readonly PayloadManif
 }
 
 export function parseFlashState(value: unknown): FlashState {
-	if (!value || typeof value !== "object") throw new FlashError("Invalid NeoPi flash state");
+	if (!value || typeof value !== "object") throw new FlashError(t("cli.commands.flash.invalidState"));
 	const state = value as FlashState;
 	if (
 		state.schemaVersion !== 1 ||
@@ -609,7 +619,7 @@ export function parseFlashState(value: unknown): FlashState {
 			warning => !warning || typeof warning.message !== "string" || !FLASH_PHASES.includes(warning.phase),
 		)
 	) {
-		throw new FlashError("Invalid NeoPi flash state schema");
+		throw new FlashError(t("cli.commands.flash.invalidStateSchema"));
 	}
 	return state;
 }
@@ -623,13 +633,17 @@ export async function readFlashState(bootMount: string): Promise<{ state: FlashS
 				() => true,
 				(error: NodeJS.ErrnoException) => {
 					if (error.code === "ENOENT") return false;
-					throw new FlashError(`Cannot inspect flash state ${statePath}: ${String(error)}`);
+					throw new FlashError(
+						t("cli.commands.flash.stateInspectionFailed", { path: statePath, error: String(error) }),
+					);
 				},
 			),
 		),
 	);
 	if (hasCurrent && hasLegacy) {
-		throw new FlashError(`Both ${STATE_FILENAME} and ${LEGACY_STATE_FILENAME} exist; refusing ambiguous flash state`);
+		throw new FlashError(
+			t("cli.commands.flash.ambiguousState", { current: STATE_FILENAME, legacy: LEGACY_STATE_FILENAME }),
+		);
 	}
 	const statePath = hasCurrent ? currentPath : hasLegacy ? legacyPath : null;
 	if (!statePath) return null;
@@ -637,7 +651,7 @@ export async function readFlashState(bootMount: string): Promise<{ state: FlashS
 		return { state: parseFlashState(JSON.parse(await fs.readFile(statePath, "utf8"))), path: statePath };
 	} catch (error) {
 		if (error instanceof FlashError) throw error;
-		throw new FlashError(`Cannot read flash state ${statePath}: ${String(error)}`);
+		throw new FlashError(t("cli.commands.flash.stateReadFailed", { path: statePath, error: String(error) }));
 	}
 }
 
@@ -666,7 +680,7 @@ async function probeState(device: string): Promise<FlashState | null> {
 		}
 	} catch (error) {
 		if (error instanceof FlashError) throw error;
-		process.stderr.write(chalk.yellow(`flash: state probe failed: ${String(error)}\n`));
+		process.stderr.write(chalk.yellow(t("cli.commands.flash.stateProbeFailed", { error: String(error) })));
 		return null;
 	}
 }
@@ -697,7 +711,7 @@ async function createAndMount(
 ): Promise<MountedTarget> {
 	const esp = partitionPath(device.path, 2);
 	const luks = partitionPath(device.path, 3);
-	logStep("Partitioning GPT");
+	logStep(t("cli.commands.flash.steps.partition"));
 	await mustRun(["wipefs", "--all", device.path]);
 	await mustRun(["sgdisk", "--zap-all", device.path]);
 	await mustRun([
@@ -745,14 +759,29 @@ async function createAndMount(
 	for (const [offset] of PARTITION_TYPE_GUIDS.entries()) {
 		const partitionInfo = await capture(["sgdisk", "-i", String(offset + 1), device.path]);
 		if (!partitionTypeMatches(partitionInfo, offset + 1)) {
-			throw new FlashError(`partitioned postcondition failed: partition ${offset + 1} type differs`);
+			throw new FlashError(
+				t("cli.commands.flash.postconditionFailed", {
+					phase: "partitioned",
+					message: t("cli.commands.flash.partitionTypeMismatch", { partition: offset + 1 }),
+				}),
+			);
 		}
 	}
 	if ((await capture(["blkid", "-o", "value", "-s", "TYPE", esp])) !== "vfat") {
-		throw new FlashError("formatted postcondition failed: ESP is not FAT32");
+		throw new FlashError(
+			t("cli.commands.flash.postconditionFailed", {
+				phase: "formatted",
+				message: t("cli.commands.flash.espNotFat32"),
+			}),
+		);
 	}
 	if (!/Version:\s+2\b/.test(await capture(["cryptsetup", "luksDump", luks]))) {
-		throw new FlashError("formatted postcondition failed: root is not LUKS2");
+		throw new FlashError(
+			t("cli.commands.flash.postconditionFailed", {
+				phase: "formatted",
+				message: t("cli.commands.flash.rootNotLuks2"),
+			}),
+		);
 	}
 	const state: FlashState = {
 		schemaVersion: 1,
@@ -790,15 +819,15 @@ async function resumeAndMount(
 		state.binarySha256 !== bundle.manifest.binary.sha256 ||
 		state.nativeSha256 !== bundle.manifest.native.sha256
 	) {
-		throw new FlashError("Resume identity, user, or portable bundle does not match the recorded flash state");
+		throw new FlashError(t("cli.commands.flash.resumeIdentity"));
 	}
 	const esp = partitionPath(device.path, 2);
 	const luks = partitionPath(device.path, 3);
 	if ((await capture(["blkid", "-o", "value", "-s", "UUID", esp])) !== state.espUuid) {
-		throw new FlashError("Resume refused: ESP UUID does not match the recorded state");
+		throw new FlashError(t("cli.commands.flash.resumeEsp"));
 	}
 	if ((await capture(["blkid", "-o", "value", "-s", "UUID", luks])) !== state.luksUuid) {
-		throw new FlashError("Resume refused: LUKS UUID does not match the recorded state");
+		throw new FlashError(t("cli.commands.flash.resumeLuks"));
 	}
 	const mapperName = `${MAPPER_NAME_PREFIX}-${process.pid.toString(36)}`;
 	await mustRun(["cryptsetup", "open", "--key-file=-", luks, mapperName], { stdinData: passphrase });
@@ -813,9 +842,9 @@ async function resumeAndMount(
 	await mustRun(["mount", esp, boot]);
 	teardown.mounts.push(boot);
 	const recorded = await readFlashState(boot);
-	if (!recorded) throw new FlashError("Resume refused: flash state disappeared after mounting the ESP");
+	if (!recorded) throw new FlashError(t("cli.commands.flash.resumeDisappeared"));
 	if (JSON.stringify(recorded.state) !== JSON.stringify(state)) {
-		throw new FlashError("Resume refused: flash state changed between probe and mount");
+		throw new FlashError(t("cli.commands.flash.resumeChanged"));
 	}
 	state = recorded.state;
 	if (path.basename(recorded.path) === LEGACY_STATE_FILENAME) {
@@ -825,19 +854,19 @@ async function resumeAndMount(
 	return { root, boot, mapperName, mapperPath, esp, luks, state };
 }
 
-function recordWarning(target: MountedTarget, phase: FlashPhase, message: string): void {
-	target.state.warnings.push({ phase, message });
-	process.stderr.write(chalk.yellow(`flash: ${message}\n`));
+function recordWarning(target: MountedTarget, phase: FlashPhase, key: string, values?: TranslationValues): void {
+	target.state.warnings.push({ phase, message: t("en", key, values) });
+	process.stderr.write(chalk.yellow(`flash: ${t(key, values)}\n`));
 }
 
 async function phaseBaseInstalled(target: MountedTarget): Promise<void> {
-	logStep("Installing base system");
+	logStep(t("cli.commands.flash.steps.base"));
 	await mustRun(["pacstrap", "-c", "-K", target.root, ...STICK_PACKAGES]);
 	await fs.writeFile(path.join(target.root, "etc/fstab"), `${await capture(["genfstab", "-U", target.root])}\n`);
 }
 
 async function phaseSystemConfigured(target: MountedTarget): Promise<void> {
-	logStep("Configuring initramfs, locale, and services");
+	logStep(t("cli.commands.flash.steps.system"));
 	await fs.writeFile(path.join(target.root, "etc/hostname"), `${STICK_HOSTNAME}\n`);
 	await fs.writeFile(path.join(target.root, "etc/vconsole.conf"), "KEYMAP=us\nFONT=ter-132b\n");
 	const localeGenPath = path.join(target.root, "etc/locale.gen");
@@ -845,7 +874,8 @@ async function phaseSystemConfigured(target: MountedTarget): Promise<void> {
 	await fs.writeFile(localeGenPath, localeGen.replace(/^#\s*(en_US\.UTF-8 UTF-8)\b.*$/m, "$1"));
 	await fs.writeFile(path.join(target.root, "etc/locale.conf"), "LANG=en_US.UTF-8\n");
 	const locale = await run(["arch-chroot", target.root, "locale-gen"]);
-	if (!locale.ok) recordWarning(target, "system-configured", `locale-gen exited with ${locale.code}`);
+	if (!locale.ok)
+		recordWarning(target, "system-configured", "cli.commands.flash.warnings.localeGenExit", { code: locale.code });
 	await fs.rm(path.join(target.root, "etc/localtime"), { force: true });
 	await fs.symlink("/usr/share/zoneinfo/UTC", path.join(target.root, "etc/localtime"));
 	const mkinitcpioPath = path.join(target.root, "etc/mkinitcpio.conf");
@@ -855,7 +885,7 @@ async function phaseSystemConfigured(target: MountedTarget): Promise<void> {
 }
 
 async function phaseBootloaderInstalled(target: MountedTarget, device: DeviceInfo): Promise<void> {
-	logStep("Installing BIOS and UEFI GRUB");
+	logStep(t("cli.commands.flash.steps.bootloader"));
 	const defaultsPath = path.join(target.root, "etc/default/grub");
 	await fs.writeFile(
 		defaultsPath,
@@ -871,14 +901,22 @@ async function phaseBootloaderInstalled(target: MountedTarget, device: DeviceInf
 		"--removable",
 		"--no-nvram",
 	]);
-	if (!bios.ok && !efi.ok) throw new FlashError("both GRUB targets failed; the stick cannot boot");
-	if (!bios.ok) recordWarning(target, "bootloader-installed", `BIOS GRUB install exited with ${bios.code}`);
-	if (!efi.ok) recordWarning(target, "bootloader-installed", `UEFI GRUB install exited with ${efi.code}`);
+	if (!bios.ok && !efi.ok) throw new FlashError(t("cli.commands.flash.grubFailed"));
+	if (!bios.ok)
+		recordWarning(target, "bootloader-installed", "cli.commands.flash.warnings.grubInstallExit", {
+			target: "BIOS",
+			code: bios.code,
+		});
+	if (!efi.ok)
+		recordWarning(target, "bootloader-installed", "cli.commands.flash.warnings.grubInstallExit", {
+			target: "UEFI",
+			code: efi.code,
+		});
 	await mustRun(["arch-chroot", target.root, "grub-mkconfig", "-o", "/boot/grub/grub.cfg"]);
 }
 
 async function phaseUserCreated(target: MountedTarget, user: PayloadUser): Promise<void> {
-	logStep(`Creating payload user ${user.name}`);
+	logStep(t("cli.commands.flash.steps.user", { user: user.name }));
 	if ((await run(["arch-chroot", target.root, "getent", "passwd", user.name])).code !== 0) {
 		await mustRun([
 			"arch-chroot",
@@ -909,7 +947,7 @@ async function phaseUserCreated(target: MountedTarget, user: PayloadUser): Promi
 }
 
 async function phasePayloadInstalled(target: MountedTarget, user: PayloadUser, payload: StagedPayload): Promise<void> {
-	logStep("Installing bounded portable profile");
+	logStep(t("cli.commands.flash.steps.payload"));
 	for (const warning of payload.warnings) recordWarning(target, "payload-installed", warning);
 	const home = path.join(target.root, "home", user.name);
 	await fs.mkdir(home, { recursive: true });
@@ -918,13 +956,11 @@ async function phasePayloadInstalled(target: MountedTarget, user: PayloadUser, p
 	});
 	const errors = await verifyPayload(home, payload.entries);
 	if (errors.length > 0)
-		throw new FlashError(`Payload verification failed:\n${errors.map(error => `  ${error}`).join("\n")}`);
-	if (copied.code === 23 || copied.code === 24) {
-		recordWarning(
-			target,
-			"payload-installed",
-			`rsync exited with ${copied.code}, but every staged payload entry verified`,
+		throw new FlashError(
+			t("cli.commands.flash.payloadVerificationFailed", { errors: errors.map(error => `  ${error}`).join("\n") }),
 		);
+	if (copied.code === 23 || copied.code === 24) {
+		recordWarning(target, "payload-installed", "cli.commands.flash.warnings.rsyncExit", { code: copied.code });
 	}
 	await fs.mkdir(path.join(home, ".omp"), { recursive: true });
 	await fs.copyFile(
@@ -935,7 +971,7 @@ async function phasePayloadInstalled(target: MountedTarget, user: PayloadUser, p
 }
 
 async function phaseRamModeInstalled(target: MountedTarget, bundle: PortableBundle): Promise<void> {
-	logStep("Installing portable bundle and RAM launcher");
+	logStep(t("cli.commands.flash.steps.ram"));
 	const bundleDest = path.join(target.root, "usr/local/lib/npi-portable");
 	await fs.rm(bundleDest, { recursive: true, force: true });
 	await fs.mkdir(path.dirname(bundleDest), { recursive: true });
@@ -960,32 +996,36 @@ async function verifyPhase(
 	payload: StagedPayload,
 ): Promise<void> {
 	const fail = (message: string): never => {
-		throw new FlashError(`${phase} postcondition failed: ${message}`);
+		throw new FlashError(t("cli.commands.flash.postconditionFailed", { phase, message }));
 	};
 	if (phase === "base-installed") {
-		if (!(await exists(path.join(target.root, "usr/bin/pacman")))) fail("usr/bin/pacman is missing");
-		if (!(await exists(path.join(target.boot, "vmlinuz-linux")))) fail("boot/vmlinuz-linux is missing");
+		if (!(await exists(path.join(target.root, "usr/bin/pacman"))))
+			fail(t("cli.commands.flash.packageManagerMissing"));
+		if (!(await exists(path.join(target.boot, "vmlinuz-linux")))) fail(t("cli.commands.flash.kernelMissing"));
 	} else if (phase === "system-configured") {
 		if (!(await fs.readFile(path.join(target.root, "etc/mkinitcpio.conf"), "utf8")).includes(STICK_HOOKS))
-			fail("HOOKS differ");
-		if (!(await exists(path.join(target.boot, "initramfs-linux.img")))) fail("initramfs-linux.img is missing");
+			fail(t("cli.commands.flash.hooksMismatch"));
+		if (!(await exists(path.join(target.boot, "initramfs-linux.img"))))
+			fail(t("cli.commands.flash.initramfsMissing"));
 		const locales = await run(["arch-chroot", target.root, "localedef", "--list-archive"], { capture: true });
 		if (!locales.ok || !locales.stdout.toLowerCase().split(/\s+/).includes("en_us.utf8"))
-			fail("en_US.UTF-8 locale is missing");
+			fail(t("cli.commands.flash.localeMissing"));
 		for (const service of ["NetworkManager", "systemd-timesyncd"]) {
 			if (!(await run(["arch-chroot", target.root, "systemctl", "is-enabled", service])).ok)
-				fail(`${service} is disabled`);
+				fail(t("cli.commands.flash.serviceDisabled", { service }));
 		}
 	} else if (phase === "bootloader-installed") {
 		const bios = await exists(path.join(target.boot, "grub/i386-pc/core.img"));
 		const efi = await exists(path.join(target.boot, "EFI/BOOT/BOOTX64.EFI"));
-		if (!bios && !efi) fail("neither BIOS nor UEFI loader exists");
+		if (!bios && !efi) fail(t("cli.commands.flash.loaderMissing"));
 		const grub = await fs.readFile(path.join(target.boot, "grub/grub.cfg"), "utf8");
-		if (!grub.includes(`cryptdevice=UUID=${target.state.luksUuid}:omproot`)) fail("grub.cfg lacks cryptdevice");
+		if (!grub.includes(`cryptdevice=UUID=${target.state.luksUuid}:omproot`))
+			fail(t("cli.commands.flash.cryptdeviceMissing"));
 	} else if (phase === "user-created") {
-		if (!(await run(["arch-chroot", target.root, "getent", "passwd", user.name])).ok) fail("user is missing");
+		if (!(await run(["arch-chroot", target.root, "getent", "passwd", user.name])).ok)
+			fail(t("cli.commands.flash.userMissing"));
 		if (!(await exists(path.join(target.root, "etc/systemd/system/getty@tty1.service.d/autologin.conf"))))
-			fail("autologin is missing");
+			fail(t("cli.commands.flash.autologinMissing"));
 	} else if (phase === "payload-installed") {
 		const errors = await verifyPayload(path.join(target.root, "home", user.name), payload.entries);
 		if (errors.length > 0) fail(errors.join("; "));
@@ -993,7 +1033,8 @@ async function verifyPhase(
 		const wrapper = path.join(target.root, "usr/local/bin/npi");
 		const bundleRoot = path.join(target.root, "usr/local/lib/npi-portable");
 		const manifestPath = path.join(bundleRoot, "manifest.json");
-		if (!(await exists(wrapper)) || !(await exists(manifestPath))) fail("wrapper or bundle manifest is missing");
+		if (!(await exists(wrapper)) || !(await exists(manifestPath)))
+			fail(t("cli.commands.flash.wrapperOrManifestMissing"));
 		const installedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
 			binary?: { filename?: string; sha256?: string };
 			native?: { filename?: string; sha256?: string };
@@ -1003,39 +1044,41 @@ async function verifyPhase(
 		const nativeFilename = installedManifest.native?.filename;
 		const wrapperFilename = installedManifest.wrapper?.filename;
 		if (!binaryFilename || !nativeFilename || !wrapperFilename) {
-			throw new FlashError("ram-mode-installed postcondition failed: bundle manifest lacks filenames");
+			return fail(t("cli.commands.flash.manifestFilenamesMissing"));
 		}
 		if (
 			installedManifest.binary?.sha256 !== target.state.binarySha256 ||
 			installedManifest.native?.sha256 !== target.state.nativeSha256
 		) {
-			fail("installed bundle manifest differs from flash state");
+			fail(t("cli.commands.flash.manifestMismatch"));
 		}
 		if ((await sha256(path.join(bundleRoot, binaryFilename))) !== target.state.binarySha256) {
-			fail("installed executable digest differs");
+			fail(t("cli.commands.flash.binaryMismatch"));
 		}
 		if ((await sha256(path.join(bundleRoot, nativeFilename))) !== target.state.nativeSha256) {
-			fail("installed native digest differs");
+			fail(t("cli.commands.flash.nativeMismatch"));
 		}
 		if ((await sha256(wrapper)) !== installedManifest.wrapper?.sha256) {
-			fail("installed wrapper digest differs");
+			fail(t("cli.commands.flash.wrapperMismatch"));
 		}
 		if ((await fs.readlink(path.join(target.root, "usr/local/libexec/npi-portable"))) !== "../lib/npi-portable/npi")
-			fail("libexec link differs");
+			fail(t("cli.commands.flash.libexecLinkMismatch"));
 	} else if (phase === "partitioned") {
 		for (const [offset] of PARTITION_TYPE_GUIDS.entries()) {
 			if (!partitionTypeMatches(await capture(["sgdisk", "-i", String(offset + 1), device.path]), offset + 1)) {
-				fail(`partition ${offset + 1} type differs`);
+				fail(t("cli.commands.flash.partitionTypeMismatch", { partition: offset + 1 }));
 			}
 		}
 	} else if (phase === "formatted") {
-		if ((await capture(["blkid", "-o", "value", "-s", "TYPE", target.esp])) !== "vfat") fail("ESP is not FAT32");
-		if (!/Version:\s+2\b/.test(await capture(["cryptsetup", "luksDump", target.luks]))) fail("root is not LUKS2");
+		if ((await capture(["blkid", "-o", "value", "-s", "TYPE", target.esp])) !== "vfat")
+			fail(t("cli.commands.flash.espNotFat32"));
+		if (!/Version:\s+2\b/.test(await capture(["cryptsetup", "luksDump", target.luks])))
+			fail(t("cli.commands.flash.rootNotLuks2"));
 	} else if (
 		phase === "complete" &&
 		FLASH_PHASES.slice(0, -1).some(required => !target.state.completedPhases.includes(required))
 	) {
-		fail("an earlier phase is incomplete");
+		fail(t("cli.commands.flash.earlierPhaseIncomplete"));
 	}
 }
 
@@ -1059,7 +1102,7 @@ async function runRemainingPhases(
 		const phase = nextIncompletePhase(target.state.completedPhases);
 		if (!phase) return;
 		if (phase === "partitioned" || phase === "formatted") {
-			throw new FlashError(`Cannot resume before the formatted checkpoint (${phase} is incomplete)`);
+			throw new FlashError(t("cli.commands.flash.resumeBeforeFormatted", { phase }));
 		}
 		await actions[phase]?.();
 		await verifyPhase(phase, target, device, user, payload);
@@ -1074,7 +1117,7 @@ async function isMounted(target: string): Promise<boolean> {
 
 async function unwind(teardown: Teardown): Promise<void> {
 	if (teardown.mountRoot && teardown.mounts.length > 0) {
-		process.stderr.write(`\n${chalk.cyan("==>")} Unmounting and flushing the stick; do not unplug.\n`);
+		process.stderr.write(`\n${chalk.cyan("==>")} ${t("cli.commands.flash.unmounting")}\n`);
 		await runQuiet(["gpgconf", "--homedir", path.join(teardown.mountRoot, "etc/pacman.d/gnupg"), "--kill", "all"]);
 		await runQuiet(["fuser", "-k", "-TERM", "-m", teardown.mountRoot]);
 		await Bun.sleep(1500);
@@ -1082,7 +1125,7 @@ async function unwind(teardown: Teardown): Promise<void> {
 	for (const mount of [...teardown.mounts].reverse()) {
 		const code = await runQuiet(["umount", "-R", mount]);
 		if (code !== 0 && (await isMounted(mount))) {
-			process.stderr.write(`flash: could not unmount ${mount}; run sudo umount -R ${mount} after holders exit\n`);
+			process.stderr.write(`${t("cli.commands.flash.unmountFailed", { mount })}\n`);
 		}
 	}
 	if (teardown.mapperName && (!teardown.mountRoot || !(await isMounted(teardown.mountRoot)))) {
@@ -1093,11 +1136,12 @@ async function unwind(teardown: Teardown): Promise<void> {
 }
 
 async function flash(cmd: FlashCommandArgs): Promise<void> {
-	if (process.getuid?.() !== 0) throw new FlashError(`flash partitions a disk; run: sudo npi flash ${cmd.device}`);
+	if (process.getuid?.() !== 0) throw new FlashError(t("cli.commands.flash.needsRoot", { device: cmd.device }));
 	const missing = missingHostTools(tool => Bun.which(tool));
 	if (missing.length > 0) {
 		throw new FlashError(
-			`Missing host tools:\n${missing.map(([tool, pkg]) => `  ${tool} (pacman -S ${pkg})`).join("\n")}`,
+			t("cli.commands.flash.missingTools") +
+				`\n${missing.map(([tool, pkg]) => `  ${tool} (pacman -S ${pkg})`).join("\n")}`,
 		);
 	}
 	const bundle = await validatePortableBundle();
@@ -1107,38 +1151,44 @@ async function flash(cmd: FlashCommandArgs): Promise<void> {
 	if (!verdict.ok) throw new FlashError(verdict.reason);
 	const previousState = await probeState(device.path);
 	if (!cmd.flags.resume && previousState?.completedPhases.includes("complete") && !cmd.flags.force) {
-		throw new FlashError("this device already holds a finished NeoPi stick; pass --force to re-flash");
+		throw new FlashError(t("cli.commands.flash.alreadyComplete"));
 	}
 	if (!cmd.flags.resume && previousState && !cmd.flags.force) {
-		throw new FlashError(`this device holds an incomplete NeoPi flash; run sudo npi flash --resume ${device.path}`);
+		throw new FlashError(t("cli.commands.flash.incomplete", { device: device.path }));
 	}
-	if (cmd.flags.resume && !previousState)
-		throw new FlashError("--resume requested, but no readable NeoPi flash state exists");
+	if (cmd.flags.resume && !previousState) throw new FlashError(t("cli.commands.flash.noResumeState"));
 	if (!(await exists(bundle.wrapperPath)))
-		throw new FlashError(`RAM wrapper is missing from this build: ${bundle.wrapperPath}`);
+		throw new FlashError(t("cli.commands.flash.ramWrapperMissing", { path: bundle.wrapperPath }));
 	const payload = await stagePayload(user).catch(error => {
-		throw error instanceof FlashError ? error : new FlashError(`Cannot stage portable payload: ${String(error)}`);
+		throw error instanceof FlashError
+			? error
+			: new FlashError(t("cli.commands.flash.stagingFailed", { error: String(error) }));
 	});
 	const teardown: Teardown = { mounts: [], payloadRoot: payload.root };
 	try {
 		if (payload.skipped.length > 0) {
-			process.stderr.write(`Portable payload skipped absent optional paths: ${payload.skipped.join(", ")}\n`);
+			process.stderr.write(`${t("cli.commands.flash.skippedAbsentPaths", { paths: payload.skipped.join(", ") })}\n`);
 		}
 
 		const sizeGib = (device.sizeBytes / 1024 ** 3).toFixed(1);
 		process.stderr.write(
-			`\n${chalk.red.bold("ALL DATA WILL BE DESTROYED")} on ${chalk.bold(device.path)}\n` +
-				`  model: ${device.model}\n  size: ${sizeGib} GiB\n  removable: ${device.removable ? "yes" : "no (--force)"}\n\n`,
+			t("cli.commands.flash.confirmationWarning", {
+				warning: chalk.red.bold(t("cli.commands.flash.destroy")),
+				path: chalk.bold(device.path),
+				model: device.model,
+				size: sizeGib,
+				removable: device.removable ? t("cli.commands.flash.removableYes") : t("cli.commands.flash.removableNo"),
+			}),
 		);
-		const typed = await promptLine(`Type the device path (${device.path}) to continue: `, false);
+		const typed = await promptLine(t("cli.commands.flash.confirmDevice", { path: device.path }), false);
 		if (!confirmationMatches(typed, device.path)) {
-			throw new FlashError(`Confirmation mismatch ("${typed.trim()}" != "${device.path}"); aborting`);
+			throw new FlashError(t("cli.commands.flash.confirmationMismatch", { typed: typed.trim(), path: device.path }));
 		}
-		const passphrase = await promptLine("LUKS passphrase for the stick: ", true);
-		if (!passphrase) throw new FlashError("Empty passphrase; aborting");
+		const passphrase = await promptLine(t("cli.commands.flash.luksPassphrase"), true);
+		if (!passphrase) throw new FlashError(t("cli.commands.flash.passphraseEmpty"));
 		if (!cmd.flags.resume) {
-			const confirmed = await promptLine("Confirm passphrase: ", true);
-			if (passphrase !== confirmed) throw new FlashError("Passphrases do not match; aborting");
+			const confirmed = await promptLine(t("cli.commands.flash.confirmPassphrase"), true);
+			if (passphrase !== confirmed) throw new FlashError(t("cli.commands.flash.passphraseMismatch"));
 		}
 
 		const target = cmd.flags.resume
@@ -1147,17 +1197,19 @@ async function flash(cmd: FlashCommandArgs): Promise<void> {
 		try {
 			await runRemainingPhases(target, device, user, bundle, payload);
 		} catch (error) {
-			process.stderr.write(`Resume with: sudo npi flash --resume ${device.path}\n`);
+			process.stderr.write(`${t("cli.commands.flash.resume", { device: device.path })}\n`);
 			throw error;
 		}
 	} finally {
 		await unwind(teardown);
 	}
 	process.stderr.write(
-		`\n${chalk.green("Done.")} ${device.path} is complete and safe to unplug. Boot, unlock, then run npi.\n`,
+		t("cli.commands.flash.completed", { done: chalk.green(t("cli.commands.flash.done")), path: device.path }),
 	);
 	if (payload.skipped.length > 0) {
-		process.stderr.write(`Skipped optional payload entries: ${payload.skipped.join(", ")}\n`);
+		process.stderr.write(
+			`${t("cli.commands.flash.skippedOptionalEntries", { paths: payload.skipped.join(", ") })}\n`,
+		);
 	}
 }
 

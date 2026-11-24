@@ -10,6 +10,7 @@
 
 import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
 import { formatCompact } from "../data/formatters";
+import { useTranslation } from "../i18n";
 import type { ChartKind, ChartSeries, ReferenceLine, SlotMarker } from "./types";
 import { useWidth } from "./useWidth";
 
@@ -72,9 +73,10 @@ export function Chart({
 	references,
 	markers,
 	onSelect,
-	emptyLabel = "No data in this range",
+	emptyLabel,
 	tooltipExtra,
 }: ChartProps) {
+	const tr = useTranslation();
 	const [ref, width] = useWidth<HTMLDivElement>();
 	const [hover, setHover] = useState<number | null>(null);
 	const patternId = useId().replace(/:/g, "");
@@ -387,7 +389,11 @@ export function Chart({
 				</svg>
 			)}
 
-			{layout.empty && <div className="chart-empty">{emptyLabel}</div>}
+			{layout.empty && (
+				<div className="chart-empty">
+					{emptyLabel === undefined ? tr("insights.chart.empty", "No data in this range") : emptyLabel}
+				</div>
+			)}
 
 			{hover !== null && !layout.empty && (
 				<div
@@ -410,7 +416,7 @@ export function Chart({
 					))}
 					{withTotal && hoverRows.length > 1 && (
 						<div className="chart-tooltip-row chart-tooltip-total">
-							<span className="chart-tooltip-label">Total</span>
+							<span className="chart-tooltip-label">{tr("insights.chart.total", "Total")}</span>
 							<span className="chart-tooltip-value">{(formatTooltip ?? format)(total)}</span>
 						</div>
 					)}

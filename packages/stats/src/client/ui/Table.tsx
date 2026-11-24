@@ -16,6 +16,7 @@ export interface Column<T> {
 	wrap?: boolean;
 	/** Header tooltip. */
 	title?: string;
+	titleKey?: string;
 }
 
 export type SortDir = "asc" | "desc";
@@ -94,7 +95,11 @@ export function Table<T>({
 										data-sortable={column.sort !== undefined}
 										data-sorted={sorted}
 										style={column.width !== undefined ? { width: column.width } : undefined}
-										title={column.title}
+										title={
+											column.titleKey && column.title !== undefined
+												? tr(column.titleKey, column.title)
+												: column.title
+										}
 										onClick={() => toggleSort(column)}
 										aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
 									>

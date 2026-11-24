@@ -44,11 +44,15 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 	// Honor mode-specific copy: ACP clients receive concise text-mode
 	// descriptions/hints when the spec sets `acpDescription` / `acpInputHint`,
 	// otherwise fall back to the unified `description` / `inlineHint`.
-	const hint = command.acpInputHint ?? command.inlineHint;
 	return {
 		name: command.name,
-		description: command.acpDescription ?? command.description,
-		input: hint ? { hint } : undefined,
+		get description() {
+			return command.acpDescription ?? command.description;
+		},
+		get input() {
+			const hint = command.acpInputHint ?? command.inlineHint;
+			return hint ? { hint } : undefined;
+		},
 	};
 });
 

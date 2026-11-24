@@ -1,5 +1,5 @@
 import { format, formatDistanceToNow } from "@oh-my-pi/pi-utils/dates";
-import type { MessageStats } from "../types";
+import type { Locale, MessageStats, Translation } from "../types";
 
 /**
  * Every number on the dashboard uses one fixed locale. Labels, percents
@@ -83,18 +83,35 @@ export function formatTokensPerSecond(value: number | null): string {
 	return value.toFixed(1);
 }
 
-export function formatRelativeTime(timestamp: number): string {
-	return formatDistanceToNow(new Date(timestamp), { addSuffix: true });
+const STATS_DATE_PATTERNS = {
+	time: { en: "HH:mm", es: "HH:mm" },
+	day: { en: "MMM d", es: "d MMM" },
+	bucket: { en: "MMM d HH:mm", es: "d MMM, HH:mm" },
+	detail: { en: "MMM d, HH:mm:ss", es: "d MMM, HH:mm:ss" },
+	point: { en: "MMM d HH:mm:ss", es: "d MMM, HH:mm:ss" },
+} as const;
+const SPANISH_MONTH = new Intl.DateTimeFormat("es-419", { month: "short", timeZone: "UTC" });
+const STATS_MONTHS = {
+	en: undefined,
+	es: Array.from({ length: 12 }, (_, month) => SPANISH_MONTH.format(Date.UTC(2024, month, 1))),
+};
+
+export function formatStatsDate(timestamp: number, kind: keyof typeof STATS_DATE_PATTERNS, locale: Locale): string {
+	return format(timestamp, STATS_DATE_PATTERNS[kind][locale], STATS_MONTHS[locale]);
+}
+
+export function formatRelativeTime(timestamp: number, locale: Locale = "en"): string {
+	return formatDistanceToNow(timestamp, { addSuffix: true, locale });
 }
 
 /** Absolute local date and time to the second ("Sep 28, 14:03:22"). */
-export function formatTimestamp(timestamp: number): string {
-	return format(new Date(timestamp), "MMM d, HH:mm:ss");
+export function formatTimestamp(timestamp: number, locale: Locale = "en"): string {
+	return formatStatsDate(timestamp, "detail", locale);
 }
 
 /** Project folder as stored by ingest (`/work-pi/`), without the slashes. */
-export function formatFolder(folder: string): string {
-	return folder.replace(/^\/+|\/+$/g, "") || "(root)";
+export function formatFolder(folder: string, tr?: Translation): string {
+	return folder.replace(/^\/+|\/+$/g, "") || (tr?.("pages.projects.root", "(root)") ?? "(root)");
 }
 
 export function formatBytes(value: number): string {

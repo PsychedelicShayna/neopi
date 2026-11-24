@@ -1,3 +1,4 @@
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
@@ -67,26 +68,30 @@ export function formatLocation(snapshot: DebugSessionSnapshot | undefined): stri
 	return `${snapshot.source.path}:${snapshot.line}${snapshot.column !== undefined ? `:${snapshot.column}` : ""}`;
 }
 
-/** Formats the debugger session snapshot for model and terminal output. */
+/** Formats the debugger session snapshot in its model-facing English form. */
 export function formatSessionSnapshot(snapshot: DebugSessionSnapshot): string[] {
+	return formatSnapshot(snapshot, "en");
+}
+
+function formatSnapshot(snapshot: DebugSessionSnapshot, locale: Locale): string[] {
 	const lines = [
-		`Session ${snapshot.id}`,
-		`Adapter: ${snapshot.adapter}`,
-		`Status: ${snapshot.status}`,
+		t(locale, "tools.debug.session_line", { value: snapshot.id }),
+		t(locale, "tools.debug.adapter_line", { value: snapshot.adapter }),
+		t(locale, "tools.debug.status_line", { value: snapshot.status }),
 		`CWD: ${snapshot.cwd}`,
 	];
-	if (snapshot.program) lines.push(`Program: ${snapshot.program}`);
-	if (snapshot.stopReason) lines.push(`Stop reason: ${snapshot.stopReason}`);
-	if (snapshot.frameName) lines.push(`Frame: ${snapshot.frameName}`);
+	if (snapshot.program) lines.push(t(locale, "tools.debug.program_line", { value: snapshot.program }));
+	if (snapshot.stopReason) lines.push(t(locale, "tools.debug.stop_line", { value: snapshot.stopReason }));
+	if (snapshot.frameName) lines.push(t(locale, "tools.debug.frame_line", { value: snapshot.frameName }));
 	if (snapshot.instructionPointerReference) {
-		lines.push(`Instruction pointer: ${snapshot.instructionPointerReference}`);
+		lines.push(t(locale, "tools.debug.pointer_line", { value: snapshot.instructionPointerReference }));
 	}
 	const location = formatLocation(snapshot);
-	if (location) lines.push(`Location: ${location}`);
+	if (location) lines.push(t(locale, "tools.debug.location_line", { location }));
 	if (snapshot.needsConfigurationDone) {
-		lines.push("Configuration: pending configurationDone; set breakpoints, then continue.");
+		lines.push(t(locale, "tools.debug.pending_line"));
 	}
-	if (snapshot.exitCode !== undefined) lines.push(`Exit code: ${snapshot.exitCode}`);
+	if (snapshot.exitCode !== undefined) lines.push(t(locale, "tools.debug.exit_line", { value: snapshot.exitCode }));
 	return lines;
 }
 
@@ -137,27 +142,24 @@ function describeDebugResult(
 ): NativeToolView {
 	const [action, target] = debugCallParts(args, result.details?.action ?? "debug");
 	const output = resultText(result);
-	if (result.isError) return errorView("Debug", output || "Debug failed", action, target);
+	if (result.isError) return errorView("Debug", output || t("tools.debug.failed"), action, target);
 	const snapshot = result.details?.snapshot;
 	const body: NativeChild[] = [];
 	let sessionRows = 0;
 	if (snapshot) {
 		const location = formatLocation(snapshot);
 		const rows: [string, string | undefined][] = [
-			["Session", snapshot.id],
-			["Adapter", snapshot.adapter],
-			["Status", snapshot.status],
+			[t("tools.debug.session"), snapshot.id],
+			[t("tools.debug.adapter"), snapshot.adapter],
+			[t("tools.common.status"), snapshot.status],
 			["CWD", snapshot.cwd],
-			["Program", snapshot.program],
-			["Stop reason", snapshot.stopReason],
-			["Frame", snapshot.frameName],
-			["Instruction pointer", snapshot.instructionPointerReference],
-			["Location", location ?? undefined],
-			[
-				"Configuration",
-				snapshot.needsConfigurationDone ? "pending configurationDone; set breakpoints, then continue." : undefined,
-			],
-			["Exit code", snapshot.exitCode !== undefined ? String(snapshot.exitCode) : undefined],
+			[t("tools.debug.program"), snapshot.program],
+			[t("tools.debug.stop_reason"), snapshot.stopReason],
+			[t("tools.debug.frame"), snapshot.frameName],
+			[t("tools.debug.instruction_pointer"), snapshot.instructionPointerReference],
+			[t("tools.debug.location"), location ?? undefined],
+			[t("tools.debug.configuration"), snapshot.needsConfigurationDone ? t("tools.debug.pending") : undefined],
+			[t("tools.debug.exit_code"), snapshot.exitCode !== undefined ? String(snapshot.exitCode) : undefined],
 		];
 		const grid = kv(rows);
 		if (grid) {
@@ -165,7 +167,7 @@ function describeDebugResult(
 			sessionRows = rows.filter(([, value]) => value).length;
 		}
 	}
-	body.push(output ? ansi(output) : noteText("No output"));
+	body.push(output ? ansi(output) : noteText(t("tools.common.no_output_plain")));
 	return {
 		head: toolHead("Debug", action, target),
 		body,
@@ -197,9 +199,9 @@ export const debugToolRenderer = {
 				: formatStatusIcon(options.isPartial ? "running" : "error", theme, options.spinnerFrame);
 			const header = `${statusIcon} Debug ${action}`;
 			const summaryLines = result.details?.snapshot
-				? formatSessionSnapshot(result.details.snapshot).map(line => replaceTabs(line))
+				? formatSnapshot(result.details.snapshot, getLocale()).map(line => replaceTabs(line))
 				: [];
-			const text = result.content.find(block => block.type === "text")?.text ?? "No output";
+			const text = result.content.find(block => block.type === "text")?.text ?? t("tools.common.no_output_plain");
 			const rawLines = replaceTabs(text).split("\n");
 			const previewLimit = options.expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
 			const displayedLines = rawLines
@@ -208,15 +210,20 @@ export const debugToolRenderer = {
 			const remaining = rawLines.length - displayedLines.length;
 			if (remaining > 0) {
 				displayedLines.push(
-					theme.fg("muted", `… ${remaining} more lines ${formatExpandHint(theme, options.expanded, true)}`),
+					theme.fg(
+						"muted",
+						t("tools.debug.more_lines", { remaining, hint: formatExpandHint(theme, options.expanded, true) }),
+					),
 				);
 			}
 			return {
 				header,
 				phase: options.isPartial ? "partial" : result.isError ? "error" : "success",
 				sections: [
-					...(summaryLines.length > 0 ? [{ label: theme.fg("toolTitle", "Session"), content: summaryLines }] : []),
-					{ label: theme.fg("toolTitle", "Output"), content: displayedLines },
+					...(summaryLines.length > 0
+						? [{ label: theme.fg("toolTitle", t("tools.debug.session")), content: summaryLines }]
+						: []),
+					{ label: theme.fg("toolTitle", t("tools.common.output")), content: displayedLines },
 				],
 				applyBg: false,
 			};
@@ -231,7 +238,7 @@ export const debugToolRenderer = {
 		_options: RenderResultOptions,
 		args?: DebugRenderArgs,
 	): NativeToolView | undefined {
-		return debugResultMemo.get(result, [], () => describeDebugResult(result, args));
+		return debugResultMemo.get(result, [getLocale()], () => describeDebugResult(result, args));
 	},
 	mergeCallAndResult: true,
 	inline: true,

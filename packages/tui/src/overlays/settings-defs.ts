@@ -1,5 +1,6 @@
 /** Schema-independent display definitions for the settings overlay. */
-import { getCatalogOverrides, getLocale, type Locale } from "@oh-my-pi/pi-utils/i18n";
+import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+import { getCatalogOverrides, getLocale, t, type Locale, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import type { SymbolKey } from "../theme/symbols";
 import type { EntryProvenance } from "../theme/provenance";
 
@@ -155,6 +156,10 @@ export interface SettingsDisplayEntry {
 	type: string;
 	defaultValue: unknown;
 	ui?: AnyUiMetadata;
+	/** Runtime values for placeholders in a catalog description. */
+	descriptionValues?: TranslationValues;
+	/** A host-specific note following the setting description, including any leading space. */
+	descriptionSuffix?: () => string;
 	enumValues?: readonly string[];
 	credential?: boolean;
 	condition?: () => boolean;
@@ -263,10 +268,20 @@ export type SettingDef =
 	| ProviderLimitsSettingDef
 	| MultiSelectSettingDef;
 
-function resolveOptions(ui: AnyUiMetadata): OptionList | "runtime" | undefined {
-	if (!ui.options) return undefined;
-	if (ui.options === "runtime") return "runtime";
-	return ui.options;
+const OPTION_DESCRIPTION_VALUES = { app_name: APP_NAME };
+
+/** Localize only the displayed label and prose; the option value is a configuration literal. */
+export function localizeSettingOption(path: string, option: SubmenuOption): SubmenuOption {
+	if (getLocale() === "en") return option;
+	const catalog = getCatalogOverrides();
+	const key = `settings.option.${path}.${option.value.replaceAll(".", "_")}`;
+	const label =
+		catalog[`${key}.label`] ??
+		(option.label === option.value ? catalog[`settings.value.${option.value}`] : undefined) ??
+		option.label;
+	const descriptionKey = `${key}.description`;
+	const description = catalog[descriptionKey] ? t(descriptionKey, OPTION_DESCRIPTION_VALUES) : option.description;
+	return label === option.label && description === option.description ? option : { ...option, label, description };
 }
 
 function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
@@ -275,15 +290,17 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 
 	const schemaType = entry.type;
 	const condition = entry.condition;
-	const catalog = getLocale() === "es" ? getCatalogOverrides("es") : undefined;
+	const catalog = getLocale() === "en" ? undefined : getCatalogOverrides();
+	const descriptionKey = `settings.setting.${path}.description`;
+	const description = catalog?.[descriptionKey] ? t(descriptionKey, entry.descriptionValues) : ui.description;
 	const base = {
 		path,
 		defaultValue: entry.defaultValue,
 		schemaType,
 		label: catalog?.[`settings.setting.${path}.label`] ?? ui.label,
 		provenance: ui.provenance,
-		description: catalog?.[`settings.setting.${path}.description`] ?? ui.description,
-		warning: ui.warning,
+		description: description + (entry.descriptionSuffix?.() ?? ""),
+		warning: catalog?.[`settings.setting.${path}.warning`] ?? ui.warning,
 		tab: ui.tab,
 		group: ui.group,
 		condition,
@@ -293,7 +310,10 @@ function entryToSettingDef(entry: SettingsDisplayEntry): SettingDef | null {
 		return { ...base, type: "boolean" };
 	}
 
-	const options = resolveOptions(ui);
+	const options =
+		ui.options === "runtime" || getLocale() === "en"
+			? ui.options
+			: ui.options?.map(option => localizeSettingOption(path, option));
 
 	if (schemaType === "enum") {
 		if (options === undefined) {

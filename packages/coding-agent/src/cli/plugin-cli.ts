@@ -7,6 +7,7 @@
 import * as path from "node:path";
 import { APP_NAME, getPluginsNodeModules, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { resolveOrDefaultProjectRegistryPath } from "../discovery/helpers";
 import { PluginManager, parseSettingValue, validateSetting } from "../extensibility/plugins";
 import { setInstalledPluginEnabled } from "../extensibility/plugins/toggle";
@@ -89,8 +90,8 @@ export function parsePluginArgs(args: string[]): PluginCommandArgs | undefined {
 
 	const action = args[1];
 	if (!VALID_ACTIONS.includes(action as PluginAction)) {
-		console.error(chalk.red(`Unknown plugin command: ${action}`));
-		console.error(`Valid commands: ${VALID_ACTIONS.join(", ")}`);
+		console.error(chalk.red(t("cli.commands.plugin.unknownCommand", { command: action })));
+		console.error(t("cli.commands.config.validCommands", { commands: VALID_ACTIONS.join(", ") }));
 		process.exit(1);
 	}
 
@@ -124,12 +125,12 @@ export function parsePluginArgs(args: string[]): PluginCommandArgs | undefined {
 			if (s === "user" || s === "project") {
 				result.flags.scope = s;
 			} else {
-				console.error(chalk.red(`Invalid --scope value: "${s}". Must be "user" or "project".`));
+				console.error(chalk.red(t("cli.commands.plugin.invalidScope", { scope: s })));
 				process.exit(1);
 			}
 		} else if (arg === "--scope") {
 			// --scope with no value following
-			console.error(chalk.red(`--scope requires a value: "user" or "project".`));
+			console.error(chalk.red(t("cli.commands.plugin.missingScope")));
 			process.exit(1);
 		} else if (!arg.startsWith("-")) {
 			result.args.push(arg);
@@ -152,7 +153,7 @@ export { classifyInstallTarget } from "./classify-install-target";
  */
 function refuseDryRun(flags: { dryRun?: boolean }, command: string): void {
 	if (!flags.dryRun) return;
-	console.error(chalk.red(`--dry-run is not supported by '${APP_NAME} plugin ${command}'. Nothing was changed.`));
+	console.error(chalk.red(t("cli.commands.plugin.refuseDryRun", { bin: APP_NAME, command })));
 	process.exit(1);
 }
 
@@ -224,15 +225,21 @@ async function handleMarketplace(args: string[], flags: PluginCommandArgs["flags
 		case "add": {
 			const source = args[1];
 			if (!source) {
-				console.error(chalk.red(`Usage: ${APP_NAME} plugin marketplace add <source>`));
+				console.error(chalk.red(t("cli.commands.plugin.usageMarketplaceAdd", { bin: APP_NAME })));
 				process.exit(1);
 			}
 			refuseDryRun(flags, "marketplace add");
 			try {
 				await manager.addMarketplace(source);
-				console.log(chalk.green(`${theme.status.success} Added marketplace: ${source}`));
+				console.log(
+					chalk.green(`${theme.status.success} ${t("cli.commands.plugin.marketplaceAdded", { source })}`),
+				);
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to add marketplace: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.marketplaceAddFailed", { error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			break;
@@ -241,15 +248,21 @@ async function handleMarketplace(args: string[], flags: PluginCommandArgs["flags
 		case "rm": {
 			const name = args[1];
 			if (!name) {
-				console.error(chalk.red(`Usage: ${APP_NAME} plugin marketplace remove <name>`));
+				console.error(chalk.red(t("cli.commands.plugin.usageMarketplaceRemove", { bin: APP_NAME })));
 				process.exit(1);
 			}
 			refuseDryRun(flags, "marketplace remove");
 			try {
 				await manager.removeMarketplace(name);
-				console.log(chalk.green(`${theme.status.success} Removed marketplace: ${name}`));
+				console.log(
+					chalk.green(`${theme.status.success} ${t("cli.commands.plugin.marketplaceRemoved", { name })}`),
+				);
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to remove marketplace: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.marketplaceRemoveFailed", { error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			break;
@@ -260,36 +273,50 @@ async function handleMarketplace(args: string[], flags: PluginCommandArgs["flags
 				const name = args[1];
 				if (name) {
 					await manager.updateMarketplace(name);
-					console.log(chalk.green(`${theme.status.success} Updated marketplace: ${name}`));
+					console.log(
+						chalk.green(`${theme.status.success} ${t("cli.commands.plugin.marketplaceUpdated", { name })}`),
+					);
 				} else {
 					const results = await manager.updateAllMarketplaces();
-					console.log(chalk.green(`${theme.status.success} Updated ${results.length} marketplace(s)`));
+					console.log(
+						chalk.green(
+							`${theme.status.success} ${t("cli.commands.plugin.marketplacesUpdated", { count: results.length })}`,
+						),
+					);
 				}
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to update marketplace: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.marketplaceUpdateFailed", { error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			break;
 		}
 		default: {
 			if (subcommand !== "list") {
-				console.error(chalk.red(`Unknown marketplace subcommand: ${subcommand}`));
-				console.error(chalk.dim("Valid subcommands: add, remove, update, list"));
+				console.error(chalk.red(t("cli.commands.plugin.unknownMarketplaceSubcommand", { command: subcommand })));
+				console.error(chalk.dim(t("cli.commands.plugin.marketplaceSubcommands")));
 				process.exit(1);
 			}
 			try {
 				const marketplaces = await manager.listMarketplaces();
 				if (marketplaces.length === 0) {
-					console.log(chalk.dim("No marketplaces configured"));
-					console.log(chalk.dim(`\nAdd one with: ${APP_NAME} plugin marketplace add <source>`));
+					console.log(chalk.dim(t("cli.commands.plugin.noMarketplaces")));
+					console.log(chalk.dim(t("cli.commands.plugin.addMarketplaceHint", { bin: APP_NAME })));
 					return;
 				}
-				console.log(chalk.bold("Configured Marketplaces:\n"));
+				console.log(chalk.bold(t("cli.commands.plugin.configuredMarketplaces")));
 				for (const mp of marketplaces) {
 					console.log(`  ${chalk.cyan(mp.name)}  ${chalk.dim(mp.sourceUri)}`);
 				}
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to list marketplaces: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.marketplaceListFailed", { error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			break;
@@ -304,11 +331,23 @@ async function handleDiscover(args: string[], _flags: PluginCommandArgs["flags"]
 		const plugins = await manager.listAvailablePlugins(marketplace);
 
 		if (plugins.length === 0) {
-			console.log(chalk.dim(marketplace ? `No plugins found in ${marketplace}` : "No plugins available"));
+			console.log(
+				chalk.dim(
+					marketplace
+						? t("cli.commands.plugin.noPluginsInMarketplace", { marketplace })
+						: t("cli.commands.plugin.noneAvailable"),
+				),
+			);
 			return;
 		}
 
-		console.log(chalk.bold(`Available Plugins${marketplace ? ` (${marketplace})` : ""}:\n`));
+		console.log(
+			chalk.bold(
+				marketplace
+					? t("cli.commands.plugin.availableInMarketplace", { marketplace })
+					: t("cli.commands.plugin.availablePlugins"),
+			),
+		);
 		for (const plugin of plugins) {
 			console.log(`  ${chalk.cyan(plugin.name)}${plugin.version ? `@${plugin.version}` : ""}`);
 			if (plugin.description) {
@@ -316,7 +355,9 @@ async function handleDiscover(args: string[], _flags: PluginCommandArgs["flags"]
 			}
 		}
 	} catch (err) {
-		console.error(chalk.red(`${theme.status.error} Failed to discover plugins: ${err}`));
+		console.error(
+			chalk.red(`${theme.status.error} ${t("cli.commands.plugin.discoverFailed", { error: String(err) })}`),
+		);
 		process.exit(1);
 	}
 }
@@ -331,9 +372,7 @@ async function handleUpgrade(
 		if (args.length === 0) {
 			if (flags.scope) {
 				console.error(
-					chalk.yellow(
-						`Warning: --scope is ignored when upgrading all plugins. Use '${APP_NAME} plugin upgrade <id> --scope ${flags.scope}' to target a specific plugin and scope.`,
-					),
+					chalk.yellow(t("cli.commands.plugin.ignoreBulkScope", { bin: APP_NAME, scope: flags.scope })),
 				);
 			}
 			if (flags.dryRun) {
@@ -342,7 +381,7 @@ async function handleUpgrade(
 			}
 			const results = await manager.upgradeAllPlugins();
 			if (results.length === 0) {
-				console.log("All marketplace plugins are up to date.");
+				console.log(t("cli.commands.plugin.upToDate"));
 			} else {
 				for (const r of results) {
 					console.log(chalk.green(`  ${r.pluginId} (${r.scope}): ${r.from} -> ${r.to}`));
@@ -364,7 +403,11 @@ async function handleUpgrade(
 				if (uniqueCandidates.length > 1) {
 					console.error(
 						chalk.red(
-							`${bareName} is installed from ${uniqueCandidates.length} marketplaces. Qualify it: ${uniqueCandidates.join(", ")}`,
+							t("cli.commands.plugin.ambiguousMarketplace", {
+								name: bareName,
+								count: uniqueCandidates.length,
+								candidates: uniqueCandidates.join(", "),
+							}),
 						),
 					);
 					process.exit(1);
@@ -380,16 +423,32 @@ async function handleUpgrade(
 				await previewMarketplaceReinstall(manager, pluginId, flags.scope);
 			} else if (flags.scope) {
 				const result = await manager.upgradePlugin(pluginId, flags.scope);
-				console.log(chalk.green(`Upgraded ${pluginId} (${flags.scope}) to ${result.version}`));
+				console.log(
+					chalk.green(
+						t("cli.commands.plugin.upgradedScoped", {
+							plugin: pluginId,
+							scope: flags.scope,
+							version: result.version,
+						}),
+					),
+				);
 			} else {
 				const entries = await manager.upgradePluginAcrossScopes(pluginId);
 				for (const entry of entries) {
-					console.log(chalk.green(`Upgraded ${pluginId} (${entry.scope}) to ${entry.version}`));
+					console.log(
+						chalk.green(
+							t("cli.commands.plugin.upgradedScoped", {
+								plugin: pluginId,
+								scope: entry.scope,
+								version: entry.version,
+							}),
+						),
+					);
 				}
 			}
 		}
 	} catch (err) {
-		console.error(chalk.red(`Failed to upgrade: ${err}`));
+		console.error(chalk.red(t("cli.commands.plugin.upgradeFailed", { error: String(err) })));
 		process.exit(1);
 	}
 }
@@ -401,11 +460,15 @@ async function handleUpgrade(
 async function previewMarketplaceUpgradeAll(manager: MarketplaceManager): Promise<void> {
 	const updates = await manager.previewUpgradeAllPlugins();
 	if (updates.length === 0) {
-		console.log(chalk.dim("[dry-run] All marketplace plugins are up to date"));
+		console.log(chalk.dim(t("cli.commands.plugin.dryRunUpToDate")));
 		return;
 	}
 	for (const u of updates) {
-		console.log(chalk.dim(`[dry-run] Would upgrade ${u.pluginId} (${u.scope}): ${u.from} -> ${u.to}`));
+		console.log(
+			chalk.dim(
+				t("cli.commands.plugin.wouldUpgrade", { plugin: u.pluginId, scope: u.scope, from: u.from, to: u.to }),
+			),
+		);
 	}
 }
 
@@ -421,9 +484,27 @@ async function previewMarketplaceReinstall(
 ): Promise<void> {
 	for (const row of await manager.previewUpgradePlugin(pluginId, scope)) {
 		const label = `${pluginId} (${row.scope})`;
-		const line = row.to
-			? `Would ${row.change} ${label}: ${row.from ?? "?"} -> ${row.to}`
-			: `Would reinstall ${label} from ${row.from ?? "?"}; the new version is known only after fetching its source`;
+		const from = row.from ?? "?";
+		let line: string;
+		if (!row.to) {
+			line = t("cli.commands.plugin.wouldReinstallUnknown", { label, from });
+		} else {
+			const versions = { label, from, to: row.to };
+			switch (row.change) {
+				case "upgrade":
+					line = t("cli.commands.plugin.previewUpgrade", versions);
+					break;
+				case "reinstall":
+					line = t("cli.commands.plugin.previewReinstall", versions);
+					break;
+				case "downgrade":
+					line = t("cli.commands.plugin.previewDowngrade", versions);
+					break;
+				default:
+					line = t("cli.commands.plugin.previewUnknownChange", { ...versions, change: String(row.change) });
+					break;
+			}
+		}
 		console.log(chalk.dim(`[dry-run] ${line}`));
 	}
 }
@@ -438,17 +519,20 @@ async function upgradePackagePlugin(
 		try {
 			await manager.validateUpgrade(name);
 		} catch (err) {
-			console.error(chalk.red(`Failed to upgrade ${name}: ${err instanceof Error ? err.message : err}`));
+			console.error(
+				chalk.red(
+					t("cli.commands.plugin.upgradeNamedFailed", {
+						name,
+						error: err instanceof Error ? err.message : String(err),
+					}),
+				),
+			);
 			process.exit(1);
 		}
 		refuseDryRun(flags, `upgrade ${name}`);
 	}
 	if (flags.scope === "project") {
-		console.error(
-			chalk.yellow(
-				`Warning: --scope is only supported for marketplace plugins (name@marketplace). Ignoring for ${name}.`,
-			),
-		);
+		console.error(chalk.yellow(t("cli.commands.plugin.ignoreUpgradeScope", { name })));
 	}
 	try {
 		const { from, plugin, changed } = await manager.upgrade(name);
@@ -457,14 +541,31 @@ async function upgradePackagePlugin(
 				JSON.stringify({ upgraded: plugin.name, from: from ?? null, to: plugin.version, changed }, null, 2),
 			);
 		} else if (!changed) {
-			console.log(chalk.green(`${plugin.name} is up to date (${plugin.version})`));
+			console.log(
+				chalk.green(t("cli.commands.plugin.packageUpToDate", { name: plugin.name, version: plugin.version })),
+			);
 		} else if (from === plugin.version) {
-			console.log(chalk.green(`Upgraded ${plugin.name} to a new revision (${plugin.version})`));
+			console.log(
+				chalk.green(t("cli.commands.plugin.upgradedRevision", { name: plugin.name, version: plugin.version })),
+			);
 		} else {
-			console.log(chalk.green(`Upgraded ${plugin.name}${from ? ` from ${from}` : ""} to ${plugin.version}`));
+			console.log(
+				chalk.green(
+					from
+						? t("cli.commands.plugin.upgradedFrom", { name: plugin.name, from, version: plugin.version })
+						: t("cli.commands.plugin.upgraded", { name: plugin.name, version: plugin.version }),
+				),
+			);
 		}
 	} catch (err) {
-		console.error(chalk.red(`Failed to upgrade ${name}: ${err instanceof Error ? err.message : err}`));
+		console.error(
+			chalk.red(
+				t("cli.commands.plugin.upgradeNamedFailed", {
+					name,
+					error: err instanceof Error ? err.message : String(err),
+				}),
+			),
+		);
 		process.exit(1);
 	}
 }
@@ -473,7 +574,7 @@ function printLinkPreview(pluginPath: string, json?: boolean): void {
 	if (json) {
 		console.log(JSON.stringify({ dryRun: true, action: "link", path: pluginPath }, null, 2));
 	} else {
-		console.log(chalk.dim(`[dry-run] Would link ${pluginPath}`));
+		console.log(chalk.dim(t("cli.commands.plugin.wouldLink", { path: pluginPath })));
 	}
 }
 
@@ -483,8 +584,8 @@ async function handleInstall(
 	flags: { json?: boolean; force?: boolean; dryRun?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
 	if (packages.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin install <source>[features] ...`));
-		console.error(chalk.dim("Examples:"));
+		console.error(chalk.red(t("cli.commands.plugin.usageInstall", { bin: APP_NAME })));
+		console.error(chalk.dim(t("cli.commands.plugin.examples")));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install @oh-my-pi/exa`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install name@marketplace`));
 		console.error(chalk.dim(`  ${APP_NAME} plugin install github:user/repo`));
@@ -510,13 +611,17 @@ async function handleInstall(
 						if (flags.json) {
 							console.log(JSON.stringify(preview, null, 2));
 						} else {
-							console.log(chalk.dim(`[dry-run] Would install ${spec}`));
+							console.log(chalk.dim(t("cli.commands.plugin.wouldInstall", { spec })));
 						}
 					},
 				);
 				if (handled) continue;
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.installFailed", { spec, error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			try {
@@ -526,11 +631,15 @@ async function handleInstall(
 				});
 				console.log(
 					chalk.green(
-						`${theme.status.success} Installed ${target.name} from ${target.marketplace} (${entry.version})`,
+						`${theme.status.success} ${t("cli.commands.plugin.marketplaceInstalled", { name: target.name, marketplace: target.marketplace, version: entry.version })}`,
 					),
 				);
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.installFailed", { spec, error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			continue;
@@ -541,18 +650,10 @@ async function handleInstall(
 			// node_modules tree so source edits show up without a reinstall. Matches
 			// `npi plugin link <path>` so users can use either verb interchangeably.
 			if (flags.scope) {
-				console.error(
-					chalk.yellow(
-						`Warning: --scope is only supported for marketplace installs (name@marketplace). Ignoring for ${spec}.`,
-					),
-				);
+				console.error(chalk.yellow(t("cli.commands.plugin.ignoreInstallScope", { spec })));
 			}
 			if (flags.force) {
-				console.error(
-					chalk.yellow(
-						`Warning: --force has no effect for local path installs (link is already idempotent). Ignoring for ${spec}.`,
-					),
-				);
+				console.error(chalk.yellow(t("cli.commands.plugin.ignoreLocalForce", { spec })));
 			}
 			if (flags.dryRun) {
 				printLinkPreview(spec, flags.json);
@@ -563,13 +664,21 @@ async function handleInstall(
 				if (flags.json) {
 					console.log(JSON.stringify(result, null, 2));
 				} else {
-					console.log(chalk.green(`${theme.status.success} Linked ${result.name} from ${spec}`));
+					console.log(
+						chalk.green(
+							`${theme.status.success} ${t("cli.commands.plugin.linked", { name: result.name, path: spec })}`,
+						),
+					);
 					if (result.manifest.description) {
 						console.log(chalk.dim(`  ${result.manifest.description}`));
 					}
 				}
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.installFailed", { spec, error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			continue;
@@ -577,11 +686,7 @@ async function handleInstall(
 
 		// --scope only applies to marketplace installs; warn when it would be silently no-op'd for npm.
 		if (flags.scope) {
-			console.error(
-				chalk.yellow(
-					`Warning: --scope is only supported for marketplace installs (name@marketplace). Ignoring for ${spec}.`,
-				),
-			);
+			console.error(chalk.yellow(t("cli.commands.plugin.ignoreInstallScope", { spec })));
 		}
 
 		// npm path
@@ -592,11 +697,19 @@ async function handleInstall(
 				console.log(JSON.stringify(result, null, 2));
 			} else {
 				if (flags.dryRun) {
-					console.log(chalk.dim(`[dry-run] Would install ${spec}`));
+					console.log(chalk.dim(t("cli.commands.plugin.wouldInstall", { spec })));
 				} else {
-					console.log(chalk.green(`${theme.status.success} Installed ${result.name}@${result.version}`));
+					console.log(
+						chalk.green(
+							`${theme.status.success} ${t("cli.commands.plugin.installed", { name: result.name, version: result.version })}`,
+						),
+					);
 					if (result.enabledFeatures && result.enabledFeatures.length > 0) {
-						console.log(chalk.dim(`  Features: ${result.enabledFeatures.join(", ")}`));
+						console.log(
+							chalk.dim(
+								t("cli.commands.plugin.enabledFeatures", { features: result.enabledFeatures.join(", ") }),
+							),
+						);
 					}
 					if (result.manifest.description) {
 						console.log(chalk.dim(`  ${result.manifest.description}`));
@@ -604,7 +717,9 @@ async function handleInstall(
 				}
 			}
 		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to install ${spec}: ${err}`));
+			console.error(
+				chalk.red(`${theme.status.error} ${t("cli.commands.plugin.installFailed", { spec, error: String(err) })}`),
+			);
 			process.exit(1);
 		}
 	}
@@ -616,7 +731,7 @@ async function handleUninstall(
 	flags: { json?: boolean; dryRun?: boolean; scope?: "user" | "project" },
 ): Promise<void> {
 	if (packages.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin uninstall <package> ...`));
+		console.error(chalk.red(t("cli.commands.plugin.usageUninstall", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -642,7 +757,7 @@ async function handleUninstall(
 			} else if (candidates.length > 1) {
 				console.error(
 					chalk.red(
-						`${theme.status.error} ${rawName} is installed from ${candidates.length} marketplaces. Qualify it: ${candidates.join(", ")}`,
+						`${theme.status.error} ${t("cli.commands.plugin.ambiguousMarketplace", { name: rawName, count: candidates.length, candidates: candidates.join(", ") })}`,
 					),
 				);
 				process.exit(1);
@@ -656,7 +771,11 @@ async function handleUninstall(
 				try {
 					await mktMgr.uninstallPlugin(name, flags.scope, { dryRun: true });
 				} catch (err) {
-					console.error(chalk.red(`${theme.status.error} Failed to uninstall ${name}: ${err}`));
+					console.error(
+						chalk.red(
+							`${theme.status.error} ${t("cli.commands.plugin.uninstallFailed", { name, error: String(err) })}`,
+						),
+					);
 					process.exit(1);
 				}
 			}
@@ -672,7 +791,7 @@ async function handleUninstall(
 					}),
 				);
 			} else {
-				console.log(chalk.dim(`[dry-run] Would uninstall ${name}`));
+				console.log(chalk.dim(t("cli.commands.plugin.wouldUninstall", { name })));
 			}
 			continue;
 		}
@@ -681,9 +800,13 @@ async function handleUninstall(
 			// Exact match against installed marketplace plugin IDs (name@marketplace)
 			try {
 				await mktMgr.uninstallPlugin(name, flags.scope);
-				console.log(chalk.green(`${theme.status.success} Uninstalled ${name}`));
+				console.log(chalk.green(`${theme.status.success} ${t("cli.commands.plugin.uninstalled", { name })}`));
 			} catch (err) {
-				console.error(chalk.red(`${theme.status.error} Failed to uninstall ${name}: ${err}`));
+				console.error(
+					chalk.red(
+						`${theme.status.error} ${t("cli.commands.plugin.uninstallFailed", { name, error: String(err) })}`,
+					),
+				);
 				process.exit(1);
 			}
 			continue;
@@ -693,7 +816,7 @@ async function handleUninstall(
 		// unknown name would otherwise print a success line having removed nothing.
 		const npmPlugins = await manager.list();
 		if (!npmPlugins.some(p => p.name === name)) {
-			console.error(chalk.red(`${theme.status.error} ${rawName} is not installed`));
+			console.error(chalk.red(`${theme.status.error} ${t("cli.commands.plugin.notInstalled", { name: rawName })}`));
 			process.exit(1);
 		}
 
@@ -702,10 +825,14 @@ async function handleUninstall(
 			if (flags.json) {
 				console.log(JSON.stringify({ uninstalled: name }));
 			} else {
-				console.log(chalk.green(`${theme.status.success} Uninstalled ${name}`));
+				console.log(chalk.green(`${theme.status.success} ${t("cli.commands.plugin.uninstalled", { name })}`));
 			}
 		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to uninstall ${name}: ${err}`));
+			console.error(
+				chalk.red(
+					`${theme.status.error} ${t("cli.commands.plugin.uninstallFailed", { name, error: String(err) })}`,
+				),
+			);
 			process.exit(1);
 		}
 	}
@@ -722,13 +849,13 @@ async function handleList(manager: PluginManager, flags: { json?: boolean }): Pr
 	}
 
 	if (npmPlugins.length === 0 && mktPlugins.length === 0) {
-		console.log(chalk.dim("No plugins installed"));
-		console.log(chalk.dim(`\nInstall plugins with: ${APP_NAME} plugin install <package>`));
+		console.log(chalk.dim(t("cli.commands.plugin.noneInstalled")));
+		console.log(chalk.dim(t("cli.commands.plugin.installHint", { bin: APP_NAME })));
 		return;
 	}
 
 	if (npmPlugins.length > 0) {
-		console.log(chalk.bold("npm Plugins:\n"));
+		console.log(chalk.bold(t("cli.commands.plugin.npmPlugins")));
 		for (const plugin of npmPlugins) {
 			const status = plugin.enabled ? chalk.green(theme.status.enabled) : chalk.dim(theme.status.disabled);
 			const nameVersion = `${plugin.name}@${plugin.version}`;
@@ -737,7 +864,9 @@ async function handleList(manager: PluginManager, flags: { json?: boolean }): Pr
 				console.log(chalk.dim(`  ${plugin.manifest.description}`));
 			}
 			if (plugin.enabledFeatures && plugin.enabledFeatures.length > 0) {
-				console.log(chalk.dim(`  Features: ${plugin.enabledFeatures.join(", ")}`));
+				console.log(
+					chalk.dim(t("cli.commands.plugin.enabledFeatures", { features: plugin.enabledFeatures.join(", ") })),
+				);
 			}
 			if (plugin.manifest.features) {
 				const availableFeatures = Object.keys(plugin.manifest.features);
@@ -746,7 +875,7 @@ async function handleList(manager: PluginManager, flags: { json?: boolean }): Pr
 					const featureDisplay = availableFeatures
 						.map(f => (enabledSet.has(f) ? chalk.green(f) : chalk.dim(f)))
 						.join(", ");
-					console.log(chalk.dim(`  Available: [${featureDisplay}]`));
+					console.log(chalk.dim(t("cli.commands.plugin.availableFeatures", { features: featureDisplay })));
 				}
 			}
 		}
@@ -754,11 +883,11 @@ async function handleList(manager: PluginManager, flags: { json?: boolean }): Pr
 
 	if (mktPlugins.length > 0) {
 		if (npmPlugins.length > 0) console.log();
-		console.log(chalk.bold("Marketplace Plugins:\n"));
+		console.log(chalk.bold(t("cli.commands.plugin.marketplacePlugins")));
 		for (const plugin of mktPlugins) {
 			const entry = plugin.entries[0];
 			const version = entry?.version ?? "unknown";
-			const shadowLabel = plugin.shadowedBy ? chalk.dim(" [shadowed]") : "";
+			const shadowLabel = plugin.shadowedBy ? chalk.dim(t("cli.commands.plugin.shadowed")) : "";
 			const scopeLabel = chalk.dim(` (${plugin.scope})`);
 			console.log(`  ${plugin.id} (${version})${scopeLabel}${shadowLabel}`);
 		}
@@ -771,7 +900,7 @@ async function handleLink(
 	flags: { json?: boolean; dryRun?: boolean },
 ): Promise<void> {
 	if (paths.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin link <path>`));
+		console.error(chalk.red(t("cli.commands.plugin.usageLink", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -786,10 +915,14 @@ async function handleLink(
 		if (flags.json) {
 			console.log(JSON.stringify(result, null, 2));
 		} else {
-			console.log(chalk.green(`${theme.status.success} Linked ${result.name} from ${paths[0]}`));
+			console.log(
+				chalk.green(
+					`${theme.status.success} ${t("cli.commands.plugin.linked", { name: result.name, path: paths[0] })}`,
+				),
+			);
 		}
 	} catch (err) {
-		console.error(chalk.red(`${theme.status.error} Failed to link: ${err}`));
+		console.error(chalk.red(`${theme.status.error} ${t("cli.commands.plugin.linkFailed", { error: String(err) })}`));
 		process.exit(1);
 	}
 }
@@ -806,7 +939,7 @@ async function handleDoctor(
 		return;
 	}
 
-	console.log(chalk.bold("Plugin Health Check\n"));
+	console.log(chalk.bold(t("cli.commands.plugin.healthCheck")));
 
 	for (const check of checks) {
 		const icon =
@@ -817,7 +950,7 @@ async function handleDoctor(
 					: chalk.red(theme.status.error);
 		console.log(`${icon} ${check.name}: ${check.message}`);
 		if (check.fixed) {
-			console.log(chalk.dim(`  ${theme.nav.cursor} Fixed`));
+			console.log(chalk.dim(`  ${theme.nav.cursor} ${t("cli.commands.plugin.fixed")}`));
 		}
 	}
 
@@ -827,11 +960,12 @@ async function handleDoctor(
 	const fixed = checks.filter(c => c.fixed).length;
 
 	console.log("");
-	console.log(`Summary: ${ok} ok, ${warnings} warnings, ${errors} errors${fixed > 0 ? `, ${fixed} fixed` : ""}`);
+	const fixedNote = fixed > 0 ? t("cli.commands.plugin.fixedSummary", { count: fixed }) : "";
+	console.log(t("cli.commands.plugin.healthSummary", { ok, warnings, errors, fixedNote }));
 
 	if (errors > 0) {
 		if (!flags.fix) {
-			console.log(chalk.dim("\nRun with --fix to attempt automatic repair"));
+			console.log(chalk.dim(t("cli.commands.plugin.fixHint")));
 		}
 		process.exit(1);
 	}
@@ -843,9 +977,7 @@ async function handleFeatures(
 	flags: { json?: boolean; enable?: string; disable?: string; set?: string; dryRun?: boolean },
 ): Promise<void> {
 	if (args.length === 0) {
-		console.error(
-			chalk.red(`Usage: ${APP_NAME} plugin features <plugin> [--enable f1,f2] [--disable f1] [--set f1,f2]`),
-		);
+		console.error(chalk.red(t("cli.commands.plugin.usageFeatures", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -853,7 +985,7 @@ async function handleFeatures(
 	const plugin = await manager.getPlugin(pluginName, { path: path.join(getPluginsNodeModules(), pluginName) });
 
 	if (!plugin) {
-		console.error(chalk.red(`Plugin "${pluginName}" not found`));
+		console.error(chalk.red(t("cli.commands.plugin.notFound", { name: pluginName })));
 		process.exit(1);
 	}
 
@@ -890,7 +1022,9 @@ async function handleFeatures(
 
 		refuseDryRun(flags, "features");
 		await manager.setEnabledFeatures(pluginName, [...currentFeatures]);
-		console.log(chalk.green(`${theme.status.success} Updated features for ${pluginName}`));
+		console.log(
+			chalk.green(`${theme.status.success} ${t("cli.commands.plugin.updatedFeatures", { name: pluginName })}`),
+		);
 	}
 
 	// Display current state
@@ -911,10 +1045,10 @@ async function handleFeatures(
 		return;
 	}
 
-	console.log(chalk.bold(`Features for ${pluginName}:\n`));
+	console.log(chalk.bold(t("cli.commands.plugin.features", { name: pluginName })));
 
 	if (!plugin.manifest.features || Object.keys(plugin.manifest.features).length === 0) {
-		console.log(chalk.dim("  No optional features available"));
+		console.log(chalk.dim(t("cli.commands.plugin.noFeatures")));
 		return;
 	}
 
@@ -922,7 +1056,7 @@ async function handleFeatures(
 	for (const [name, feat] of Object.entries(plugin.manifest.features)) {
 		const enabled = enabledSet.has(name);
 		const icon = enabled ? chalk.green(theme.status.enabled) : chalk.dim(theme.status.disabled);
-		const defaultLabel = feat.default ? chalk.dim(" (default)") : "";
+		const defaultLabel = feat.default ? chalk.dim(t("cli.commands.plugin.defaultFeature")) : "";
 		console.log(`${icon} ${name}${defaultLabel}`);
 		if (feat.description) {
 			console.log(chalk.dim(`    ${feat.description}`));
@@ -936,9 +1070,7 @@ async function handleConfig(
 	flags: { json?: boolean; local?: boolean; dryRun?: boolean },
 ): Promise<void> {
 	if (args.length === 0) {
-		console.error(
-			chalk.red(`Usage: ${APP_NAME} plugin config <list|get|set|delete|validate> <plugin> [key] [value]`),
-		);
+		console.error(chalk.red(t("cli.commands.plugin.usageConfig", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -951,14 +1083,14 @@ async function handleConfig(
 	}
 
 	if (!pluginName) {
-		console.error(chalk.red("Plugin name required"));
+		console.error(chalk.red(t("cli.commands.plugin.nameRequired")));
 		process.exit(1);
 	}
 
 	const plugin = await manager.getPlugin(pluginName);
 
 	if (!plugin) {
-		console.error(chalk.red(`Plugin "${pluginName}" not found`));
+		console.error(chalk.red(t("cli.commands.plugin.notFound", { name: pluginName })));
 		process.exit(1);
 	}
 
@@ -972,16 +1104,17 @@ async function handleConfig(
 				return;
 			}
 
-			console.log(chalk.bold(`Settings for ${pluginName}:\n`));
+			console.log(chalk.bold(t("cli.commands.plugin.settings", { name: pluginName })));
 
 			if (Object.keys(schema).length === 0) {
-				console.log(chalk.dim("  No settings defined"));
+				console.log(chalk.dim(t("cli.commands.plugin.noSettings")));
 				return;
 			}
 
 			for (const [k, s] of Object.entries(schema)) {
 				const value = settings[k] ?? s.default;
-				const displayValue = s.secret && value ? "********" : String(value ?? chalk.dim("(not set)"));
+				const displayValue =
+					s.secret && value ? "********" : String(value ?? chalk.dim(t("cli.commands.config.notSet")));
 				console.log(`  ${k}: ${displayValue}`);
 				if (s.description) {
 					console.log(chalk.dim(`    ${s.description}`));
@@ -995,7 +1128,7 @@ async function handleConfig(
 
 		case "get": {
 			if (!key) {
-				console.error(chalk.red("Key required"));
+				console.error(chalk.red(t("cli.commands.plugin.keyRequired")));
 				process.exit(1);
 			}
 
@@ -1014,7 +1147,7 @@ async function handleConfig(
 
 		case "set": {
 			if (!key) {
-				console.error(chalk.red("Key required"));
+				console.error(chalk.red(t("cli.commands.plugin.keyRequired")));
 				process.exit(1);
 			}
 
@@ -1036,25 +1169,25 @@ async function handleConfig(
 
 			refuseDryRun(flags, "config set");
 			await manager.setPluginSetting(pluginName, key, value);
-			console.log(chalk.green(`${theme.status.success} Set ${key}`));
+			console.log(chalk.green(`${theme.status.success} ${t("cli.commands.plugin.set", { key })}`));
 			break;
 		}
 
 		case "delete": {
 			if (!key) {
-				console.error(chalk.red("Key required"));
+				console.error(chalk.red(t("cli.commands.plugin.keyRequired")));
 				process.exit(1);
 			}
 
 			refuseDryRun(flags, "config delete");
 			await manager.deletePluginSetting(pluginName, key);
-			console.log(chalk.green(`${theme.status.success} Deleted ${key}`));
+			console.log(chalk.green(`${theme.status.success} ${t("cli.commands.plugin.deleted", { key })}`));
 			break;
 		}
 
 		default:
-			console.error(chalk.red(`Unknown config subcommand: ${subcommand}`));
-			console.error(chalk.dim("Valid subcommands: list, get, set, delete, validate"));
+			console.error(chalk.red(t("cli.commands.plugin.unknownConfigSubcommand", { subcommand })));
+			console.error(chalk.dim(t("cli.commands.plugin.configSubcommands")));
 			process.exit(1);
 	}
 }
@@ -1108,7 +1241,7 @@ async function handleConfigValidate(manager: PluginManager, flags: { json?: bool
 	}
 
 	if (results.length === 0) {
-		console.log(chalk.green(`${theme.status.success} All settings valid`));
+		console.log(chalk.green(`${theme.status.success} ${t("cli.commands.plugin.validSettings")}`));
 	} else {
 		for (const { plugin, key, error } of results) {
 			console.log(chalk.red(`${theme.status.error} ${plugin}.${key}: ${error}`));
@@ -1140,11 +1273,10 @@ async function handleSetEnabled(
 	enabled: boolean,
 ): Promise<void> {
 	const action = enabled ? "enable" : "disable";
-	const pastTense = enabled ? "Enabled" : "Disabled";
 	const jsonKey = enabled ? "enabled" : "disabled";
 
 	if (plugins.length === 0) {
-		console.error(chalk.red(`Usage: ${APP_NAME} plugin ${action} <plugin> ...`));
+		console.error(chalk.red(t("cli.commands.plugin.usageToggle", { bin: APP_NAME, action })));
 		process.exit(1);
 	}
 
@@ -1165,10 +1297,16 @@ async function handleSetEnabled(
 			if (flags.json) {
 				console.log(JSON.stringify({ [jsonKey]: name }));
 			} else {
-				console.log(chalk.green(`${theme.status.success} ${pastTense} ${name}`));
+				const message = enabled
+					? t("cli.commands.plugin.enabled", { name })
+					: t("cli.commands.plugin.disabled", { name });
+				console.log(chalk.green(`${theme.status.success} ${message}`));
 			}
 		} catch (err) {
-			console.error(chalk.red(`${theme.status.error} Failed to ${action} ${name}: ${err}`));
+			const message = enabled
+				? t("cli.commands.plugin.enableFailed", { name, error: String(err) })
+				: t("cli.commands.plugin.disableFailed", { name, error: String(err) });
+			console.error(chalk.red(`${theme.status.error} ${message}`));
 			process.exit(1);
 		}
 	}
@@ -1179,50 +1317,50 @@ async function handleSetEnabled(
 // =============================================================================
 
 export function printPluginHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} plugin`)} - Plugin lifecycle management
+	console.log(`${chalk.bold(`${APP_NAME} plugin`)} - ${t("cli.commands.plugin.help.title")}
 
-${chalk.bold("Commands:")}
-  install <source>[features]     Install plugins from npm, GitHub, or git URL
-  uninstall <pkg>                Remove plugins
-  list                           Show installed plugins
-  link <path>                    Link local plugin for development
-  doctor                         Check plugin health
-  features <pkg>                 View/modify enabled features
-  config <cmd> <pkg> [key] [val] Manage plugin settings
-  enable <pkg>                   Enable a disabled plugin
-  disable <pkg>                  Disable plugin without uninstalling
-  marketplace <cmd>            Manage marketplace sources (add, remove, update, list)
-  discover [marketplace]        Browse available marketplace plugins
+${chalk.bold(t("cli.config.help.commands"))}
+  install <source>[features]     ${t("cli.commands.plugin.help.install")}
+  uninstall <pkg>                ${t("cli.commands.plugin.help.uninstall")}
+  list                           ${t("cli.commands.plugin.help.list")}
+  link <path>                    ${t("cli.commands.plugin.help.link")}
+  doctor                         ${t("cli.commands.plugin.help.doctor")}
+  features <pkg>                 ${t("cli.commands.plugin.help.features")}
+  config <cmd> <pkg> [key] [val] ${t("cli.commands.plugin.help.config")}
+  enable <pkg>                   ${t("cli.commands.plugin.help.enable")}
+  disable <pkg>                  ${t("cli.commands.plugin.help.disable")}
+  marketplace <cmd>            ${t("cli.commands.plugin.help.marketplace")}
+  discover [marketplace]        ${t("cli.commands.plugin.help.discover")}
 
-${chalk.bold("Feature Syntax:")}
-  pkg                Install with default features
-  pkg[feat1,feat2]   Install with specific features
-  pkg[*]             Install with all features
-  pkg[]              Install with no optional features
+${chalk.bold(t("cli.commands.plugin.help.featureSyntax"))}
+  pkg                ${t("cli.commands.plugin.help.defaultFeatures")}
+  pkg[feat1,feat2]   ${t("cli.commands.plugin.help.specificFeatures")}
+  pkg[*]             ${t("cli.commands.plugin.help.allFeatures")}
+  pkg[]              ${t("cli.commands.plugin.help.noFeatures")}
 
-${chalk.bold("Sources:")}
-  pkg, pkg@1.2.3                  npm package (optionally pinned)
-  github:user/repo[#ref]          GitHub shorthand (also gitlab:, bitbucket:, codeberg:, sourcehut:)
-  https://github.com/user/repo    Full git URL (https, ssh, or git protocol)
-  name@marketplace                Marketplace plugin (see marketplace command)
-  ./path, ../path, /abs, ~/path   Local plugin directory (symlinked, same as plugin link)
+${chalk.bold(t("cli.commands.plugin.help.sources"))}
+  pkg, pkg@1.2.3                  ${t("cli.commands.plugin.help.npmSource")}
+  github:user/repo[#ref]          ${t("cli.commands.plugin.help.githubSource")}
+  https://github.com/user/repo    ${t("cli.commands.plugin.help.gitUrl")}
+  name@marketplace                ${t("cli.commands.plugin.help.marketplaceSource")}
+  ./path, ../path, /abs, ~/path   ${t("cli.commands.plugin.help.localSource")}
 
-${chalk.bold("Config Subcommands:")}
-  config list <pkg>              List all settings
-  config get <pkg> <key>         Get a setting value
-  config set <pkg> <key> <val>   Set a setting value
-  config delete <pkg> <key>      Delete a setting
-  config validate                Validate all plugin settings
+${chalk.bold(t("cli.commands.plugin.help.configCommands"))}
+  config list <pkg>              ${t("cli.commands.plugin.help.configList")}
+  config get <pkg> <key>         ${t("cli.commands.plugin.help.configGet")}
+  config set <pkg> <key> <val>   ${t("cli.config.help.set")}
+  config delete <pkg> <key>      ${t("cli.commands.plugin.help.configDelete")}
+  config validate                ${t("cli.commands.plugin.help.configValidate")}
 
-${chalk.bold("Options:")}
-  --json           Output as JSON
-  --fix            Attempt automatic fixes (doctor)
-  --force          Overwrite without prompting (install)
-  --scope <scope>  Install scope: user (default) or project (install name@marketplace)
-  --dry-run        Preview changes without applying (install, uninstall, link, upgrade of marketplace plugins)
-  -l, --local      Use project-local overrides
+${chalk.bold(t("cli.config.help.options"))}
+  --json           ${t("cli.config.help.json")}
+  --fix            ${t("cli.commands.plugin.help.fix")}
+  --force          ${t("cli.commands.plugin.help.force")}
+  --scope <scope>  ${t("cli.commands.plugin.help.scope")}
+  --dry-run        ${t("cli.commands.plugin.help.dryRun")}
+  -l, --local      ${t("cli.commands.plugin.help.local")}
 
-${chalk.bold("Examples:")}
+${chalk.bold(t("cli.commands.plugin.examples"))}
   ${APP_NAME} plugin install @oh-my-pi/exa[search]
   ${APP_NAME} plugin list --json
   ${APP_NAME} plugin features my-plugin --enable search,web

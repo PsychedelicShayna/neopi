@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Input } from "../components/input";
 import type { SelectItem } from "../components/select-list";
 import { sanitizeDisplayWarning } from "../render/render-utils";
@@ -61,7 +62,28 @@ function label(schema: ModelConfigFieldSchema): string {
 		? schema.enum.map(String).join(" / ")
 		: "const" in schema
 			? String(schema.const)
-			: (schema.type ?? "value");
+			: displayType(schema.type);
+}
+
+function displayType(type: string | undefined): string {
+	switch (type) {
+		case "string":
+			return t("overlaysModel.modelConfigFields.type.string");
+		case "number":
+			return t("overlaysModel.modelConfigFields.type.number");
+		case "integer":
+			return t("overlaysModel.modelConfigFields.type.integer");
+		case "boolean":
+			return t("overlaysModel.modelConfigFields.type.boolean");
+		case "object":
+			return t("overlaysModel.modelConfigFields.type.object");
+		case "array":
+			return t("overlaysModel.modelConfigFields.type.array");
+		case "null":
+			return t("overlaysModel.modelConfigFields.type.null");
+		default:
+			return type ?? t("overlaysModel.modelConfigFields.value");
+	}
 }
 
 /** Navigates known objects, records, arrays and union branches without editing YAML/JSON text. */
@@ -78,7 +100,7 @@ export class ModelConfigFields {
 	}
 
 	get heading(): string {
-		return this.#levels.at(-1)?.path.join(".") || "Fields";
+		return this.#levels.at(-1)?.path.join(".") || t("overlaysModel.modelConfigFields.heading");
 	}
 	get atRoot(): boolean {
 		return this.#levels.length === 1 && !this.#choices;
@@ -154,14 +176,16 @@ export class ModelConfigFields {
 				value: `field:${key}`,
 				label: key,
 				description: sanitizeDisplayWarning(
-					`${entry === undefined ? "unset" : JSON.stringify(entry)}${child.schema ? "" : " · read-only"}`,
+					`${entry === undefined ? t("overlaysModel.modelConfigFields.unset") : JSON.stringify(entry)}${child.schema ? "" : t("overlaysModel.modelConfigFields.readOnlySuffix")}`,
 				),
 			};
 		});
-		if (schema.type === "array") items.push({ value: "append", label: "+ Add item", description: "" });
+		if (schema.type === "array")
+			items.push({ value: "append", label: t("overlaysModel.modelConfigFields.addItem"), description: "" });
 		else if (object(schema.additionalProperties))
-			items.push({ value: "append", label: "+ Add key", description: "" });
-		if (level.path.length) items.push({ value: "back", label: "Back", description: "" });
+			items.push({ value: "append", label: t("overlaysModel.modelConfigFields.addKey"), description: "" });
+		if (level.path.length)
+			items.push({ value: "back", label: t("overlaysModel.modelConfigFields.back"), description: "" });
 		return items;
 	}
 
@@ -192,9 +216,10 @@ export class ModelConfigFields {
 				current.push(undefined);
 				this.#open(path, schema.items ?? {});
 			} else
-				this.#textInput("New key", "", name => {
-					if (!name) throw new Error("A key is required.");
-					if (object(current) && Object.hasOwn(current, name)) throw new Error("This key already exists.");
+				this.#textInput(t("overlaysModel.modelConfigFields.newKey"), "", name => {
+					if (!name) throw new Error(t("overlaysModel.modelConfigFields.requiredKey"));
+					if (object(current) && Object.hasOwn(current, name))
+						throw new Error(t("overlaysModel.modelConfigFields.duplicateKey"));
 					const path = [...level.path, name];
 					this.input = undefined;
 					this.#open(path, object(schema.additionalProperties) ? schema.additionalProperties : {});
@@ -251,7 +276,7 @@ export class ModelConfigFields {
 					!Number.isFinite(Number(text)) ||
 					(schema.type === "integer" && !Number.isInteger(Number(text)))
 				)
-					throw new Error("Enter a finite number of the required type.");
+					throw new Error(t("overlaysModel.modelConfigFields.finiteNumber"));
 				next = Number(text);
 			}
 			this.#set(path, next);

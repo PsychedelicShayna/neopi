@@ -4,10 +4,13 @@ import {
 	type SessionTrace,
 	SessionTraceView,
 	type TraceEntryLoader,
+	TraceLocaleScope,
 	TraceThemeRoot,
 } from "@oh-my-pi/omp-stats/client/traces";
 import traceStyles from "@oh-my-pi/omp-stats/client/traces/traces.css" with { type: "text" };
+import { useCallback } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { useLanguage, useTranslation } from "../lib/i18n";
 
 /** Embedded transcripts and trace consumed by the standalone export element. */
 export interface ExportTraceSessionData {
@@ -121,7 +124,7 @@ export class OmpSessionTraceElement extends HTMLElement {
 		}
 	};
 
-	#loadEntry: TraceEntryLoader = async (file, entryId, signal) => {
+	#loadEntry = async (file: string, entryId: string, signal: AbortSignal, missingMessage: string) => {
 		if (signal.aborted) throw new DOMException("Entry load aborted", "AbortError");
 		let entries = this.#entries.get(file);
 		if (!entries) {
@@ -130,7 +133,7 @@ export class OmpSessionTraceElement extends HTMLElement {
 			this.#entries.set(file, entries);
 		}
 		const entry = entries.get(entryId);
-		if (!entry) throw new Error("This entry is not present in the exported snapshot.");
+		if (!entry) throw new Error(missingMessage);
 		return { entry };
 	};
 
@@ -149,20 +152,46 @@ export class OmpSessionTraceElement extends HTMLElement {
 		this.#root ??= createRoot(this.#mount);
 		this.#root.render(
 			<TraceThemeRoot.Provider value={this}>
-				{this.#data?.trace ? (
-					<SessionTraceView
-						trace={this.#data.trace}
-						view={this.getAttribute("view") === "full" ? "full" : "timeline"}
-						loadEntry={this.#loadEntry}
-						onNavigate={this.#navigate}
-						embedded
-					/>
-				) : (
-					<p role="status">No trace data in this export.</p>
-				)}
+				<ExportTraceContent
+					trace={this.#data?.trace}
+					view={this.getAttribute("view") === "full" ? "full" : "timeline"}
+					loadEntry={this.#loadEntry}
+					onNavigate={this.#navigate}
+				/>
 			</TraceThemeRoot.Provider>,
 		);
 	}
+}
+
+function ExportTraceContent({
+	trace,
+	view,
+	loadEntry,
+	onNavigate,
+}: {
+	trace?: SessionTrace;
+	view: "full" | "timeline";
+	loadEntry: (
+		file: string,
+		entryId: string,
+		signal: AbortSignal,
+		missingMessage: string,
+	) => Promise<{ entry: unknown }>;
+	onNavigate: (trackId: string, entryId: string) => void;
+}) {
+	const t = useTranslation();
+	const locale = useLanguage();
+	const missingMessage = t("guesttools.trace.missing_entry", "This entry is not present in the exported snapshot.");
+	const localizedLoadEntry = useCallback<TraceEntryLoader>(
+		(file, entryId, signal) => loadEntry(file, entryId, signal, missingMessage),
+		[loadEntry, missingMessage],
+	);
+	if (!trace) return <p role="status">{t("guesttools.trace.no_data", "No trace data in this export.")}</p>;
+	return (
+		<TraceLocaleScope locale={locale}>
+			<SessionTraceView trace={trace} view={view} loadEntry={localizedLoadEntry} onNavigate={onNavigate} embedded />
+		</TraceLocaleScope>
+	);
 }
 
 if (!customElements.get("omp-session-trace")) {

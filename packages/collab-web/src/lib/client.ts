@@ -1,3 +1,4 @@
+import { interpolate } from "./i18n";
 /**
  * Guest-side session replica for the collab web client.
  *
@@ -27,7 +28,7 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import { takeAutoRejoin } from "@oh-my-pi/pi-wire";
 import { importRoomKey } from "./codec";
-import { COLLAB_PROTO, encodeBase64Url, parseCollabLink } from "./link";
+import { COLLAB_PROTO, encodeBase64Url, requireGuestLink } from "./link";
 import { CollabSocket } from "./socket";
 
 export type ConnectionPhase = "connecting" | "waiting" | "live" | "reconnecting" | "ended";
@@ -45,6 +46,7 @@ export interface Notice {
 	id: number;
 	level: "info" | "warning" | "error";
 	message: string;
+	localization?: { key: string; english: string; values?: Readonly<Record<string, string | number>> };
 	at: number;
 }
 
@@ -171,8 +173,7 @@ export class GuestClient {
 
 	/** @throws Error when the link does not parse. */
 	constructor(link: string, displayName: string) {
-		const parsed = parseCollabLink(link);
-		if ("error" in parsed) throw new Error(parsed.error);
+		const parsed = requireGuestLink(link);
 		this.#name = displayName;
 		this.#writeToken = parsed.writeToken ? encodeBase64Url(parsed.writeToken) : undefined;
 		this.#socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: importRoomKey(parsed.key) });
@@ -369,7 +370,9 @@ export class GuestClient {
 				else this.#end(reason);
 				return;
 			}
-			this.#pushNotice("error", `failed to apply ${frame.t} frame`);
+			this.#pushLocalizedNotice("error", "viewer.toasts.failed_frame", "failed to apply {type} frame", {
+				type: frame.t,
+			});
 			this.#commit();
 		}
 	}
@@ -626,24 +629,32 @@ export class GuestClient {
 				this.#pushNotice(event.level, event.message);
 				break;
 			case "auto_retry_start":
-				this.#pushNotice("info", `retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`);
+				this.#pushLocalizedNotice("info", "viewer.toasts.retry", "retry {attempt}/{max}: {error}", {
+					attempt: event.attempt,
+					max: event.maxAttempts,
+					error: event.errorMessage,
+				});
 				break;
 			case "auto_retry_end":
-				if (!event.success) this.#pushNotice("error", event.finalError ?? "retry failed");
+				if (!event.success) {
+					if (event.finalError !== undefined) this.#pushNotice("error", event.finalError);
+					else this.#pushLocalizedNotice("error", "viewer.toasts.retry_failed", "retry failed");
+				}
 				break;
 			case "auto_compaction_start":
-				this.#pushNotice("info", `compacting context (${event.reason})`);
+				this.#pushLocalizedNotice("info", "viewer.toasts.compacting", "compacting context ({reason})", {
+					reason: event.reason,
+				});
 				break;
 			case "auto_compaction_end":
 				if (!event.skipped) {
-					this.#pushNotice(
-						"info",
-						event.aborted
-							? "compaction aborted"
-							: event.errorMessage
-								? `compaction failed: ${event.errorMessage}`
-								: "context compacted",
-					);
+					if (event.aborted)
+						this.#pushLocalizedNotice("info", "viewer.toasts.compaction_aborted", "compaction aborted");
+					else if (event.errorMessage)
+						this.#pushLocalizedNotice("info", "viewer.toasts.compaction_failed", "compaction failed: {error}", {
+							error: event.errorMessage,
+						});
+					else this.#pushLocalizedNotice("info", "viewer.toasts.compaction_done", "context compacted");
 				}
 				break;
 			default:
@@ -652,8 +663,23 @@ export class GuestClient {
 		}
 	}
 
-	#pushNotice(level: Notice["level"], message: string): void {
-		const notice: Notice = { id: ++this.#noticeSeq, level, message, at: Date.now() };
+	#pushLocalizedNotice(
+		level: Notice["level"],
+		key: string,
+		english: string,
+		values?: Readonly<Record<string, string | number>>,
+	): void {
+		this.#pushNotice(level, interpolate(english, values), { key, english, values });
+	}
+
+	#pushNotice(level: Notice["level"], message: string, localization?: Notice["localization"]): void {
+		const notice: Notice = {
+			id: ++this.#noticeSeq,
+			level,
+			message,
+			at: Date.now(),
+			...(localization ? { localization } : {}),
+		};
 		const next = [...this.#notices, notice];
 		if (next.length > MAX_NOTICES) next.splice(0, next.length - MAX_NOTICES);
 		this.#notices = next;

@@ -6,6 +6,7 @@
  * scrollback/erase strategy, and the live geometry — the details that decide
  * which escape sequences the renderer emits.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	getCellDimensions,
 	ImageProtocol,
@@ -83,33 +84,63 @@ export function collectTerminalState(runtime: TerminalRuntimeState): TerminalSta
 	};
 }
 
-const yesNo = (value: boolean): string => (value ? "yes" : "no");
+const yesNo = (value: boolean): string =>
+	value ? t("cli.commands.debug.terminal.yes") : t("cli.commands.debug.terminal.no");
+
+/** Localize built-in descriptions without rewriting protocol or snapshot data. */
+function displayProtocol(name: string): string {
+	switch (name) {
+		case "Kitty graphics":
+			return t("cli.commands.debug.terminal.kitty_graphics");
+		case "iTerm2 inline images":
+			return t("cli.commands.debug.terminal.iterm2_images");
+		case "OSC 99 (kitty desktop notifications)":
+			return t("cli.commands.debug.terminal.osc99_notify");
+		default:
+			return name;
+	}
+}
 
 /** Format terminal state for display in the debug menu. */
 export function formatTerminalState(info: TerminalStateInfo): string {
 	const lines = [
-		"Terminal State",
+		t("cli.commands.debug.terminal.title"),
 		"━━━━━━━━━━━━━━",
-		`Detected:     ${info.detectedId}`,
-		`Geometry:     ${info.columns}x${info.rows} cells · cell ${info.cellWidthPx}x${info.cellHeightPx}px`,
-		info.multiplexer ? `Multiplexer:  ${info.multiplexer}` : "Multiplexer:  none",
+		t("cli.commands.debug.terminal.detected", { id: info.detectedId }),
+		t("cli.commands.debug.terminal.geometry", {
+			columns: info.columns,
+			rows: info.rows,
+			width: info.cellWidthPx,
+			height: info.cellHeightPx,
+		}),
+		t("cli.commands.debug.terminal.multiplexer", { name: info.multiplexer || t("cli.commands.debug.terminal.none") }),
 		"",
-		"Subprotocols",
-		`  Graphics:     ${info.imageProtocol}`,
-		`  Notify:       ${info.notifyProtocol}${info.osc99Confirmed ? " · confirmed via DA" : ""}`,
-		`  Hyperlinks:   ${yesNo(info.hyperlinks)} (OSC 8)`,
-		`  True color:   ${yesNo(info.trueColor)} (24-bit SGR)`,
-		`  DECCARA:      ${yesNo(info.deccara)} (rectangular-SGR background fills)`,
-		`  Sync output:  ${yesNo(info.synchronizedOutput)} (DEC 2026)`,
+		t("cli.commands.debug.terminal.subprotocols"),
+		t("cli.commands.debug.terminal.graphics", {
+			protocol:
+				info.imageProtocol === "none"
+					? t("cli.commands.debug.terminal.no_graphics")
+					: displayProtocol(info.imageProtocol),
+		}),
+		t("cli.commands.debug.terminal.notify", {
+			protocol: displayProtocol(info.notifyProtocol),
+			confirmation: info.osc99Confirmed ? t("cli.commands.debug.terminal.confirmed_da") : "",
+		}),
+		t("cli.commands.debug.terminal.hyperlinks", { enabled: yesNo(info.hyperlinks) }),
+		t("cli.commands.debug.terminal.true_color", { enabled: yesNo(info.trueColor) }),
+		t("cli.commands.debug.terminal.deccara", { enabled: yesNo(info.deccara) }),
+		t("cli.commands.debug.terminal.sync_output", { enabled: yesNo(info.synchronizedOutput) }),
 		"",
-		"Scrollback",
-		`  Screen->history clear: ${info.screenToScrollback ? "CSI 22 J" : "CSI 2 J (redraw)"}`,
+		t("cli.commands.debug.terminal.scrollback"),
+		t("cli.commands.debug.terminal.screen_to_history", {
+			strategy: info.screenToScrollback ? "CSI 22 J" : t("cli.commands.debug.terminal.redraw"),
+		}),
 		"",
-		"Detection signals",
-		`  TERM:                 ${info.env.TERM ?? "(unset)"}`,
-		`  TERM_PROGRAM:         ${info.env.TERM_PROGRAM ?? "(unset)"}`,
-		`  TERM_PROGRAM_VERSION: ${info.env.TERM_PROGRAM_VERSION ?? "(unset)"}`,
-		`  COLORTERM:            ${info.env.COLORTERM ?? "(unset)"}`,
+		t("cli.commands.debug.terminal.detection_signals"),
+		`  TERM:                 ${info.env.TERM ?? t("cli.commands.debug.terminal.unset")}`,
+		`  TERM_PROGRAM:         ${info.env.TERM_PROGRAM ?? t("cli.commands.debug.terminal.unset")}`,
+		`  TERM_PROGRAM_VERSION: ${info.env.TERM_PROGRAM_VERSION ?? t("cli.commands.debug.terminal.unset")}`,
+		`  COLORTERM:            ${info.env.COLORTERM ?? t("cli.commands.debug.terminal.unset")}`,
 	];
 	return lines.join("\n");
 }

@@ -1,3 +1,5 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { formatCount } from "./localized-count";
 import { type } from "@oh-my-pi/omptype";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import type { ThemeColor } from "../theme/theme";
@@ -24,11 +26,9 @@ import {
 	capPreviewLines,
 	FEED_MODEL_BADGE_WIDTH,
 	formatBadge,
-	formatCount,
 	formatDuration,
 	formatExpandHint,
 	formatFeedModelBadge,
-	formatMoreItems,
 	formatNumber,
 	formatStatusIcon,
 	isFeedModelBadgeEnabled,
@@ -44,6 +44,7 @@ import {
 	type ToolUIStatus,
 	TRUNCATE_LENGTHS,
 	truncateToWidth,
+	formatMoreItems,
 } from "../render/render-utils";
 import { renderStatusLine } from "../render/index";
 import { framedToolCard } from "../render/tool-card";
@@ -84,7 +85,7 @@ type TaskRenderOptions = RenderResultOptions & { renderContext?: TaskRenderConte
 const MAX_NESTED_TASK_RENDER_DEPTH = 8;
 
 function renderNestedCycleLine(theme: Theme): string {
-	return theme.fg("dim", "… nested task progress already shown");
+	return theme.fg("dim", t("tools.task.nested_shown"));
 }
 
 function formatFindingSummary(findings: FindingDetails[], theme: Theme): string {
@@ -218,7 +219,7 @@ function getRenderYieldLabels(type: RenderYieldItem["type"]): string[] {
 }
 
 function formatYieldPreview(item: RenderYieldItem): string {
-	if (item.data === undefined) return "finalize sections";
+	if (item.data === undefined) return t("tools.task.finalize");
 	if (typeof item.data === "string") return previewLine(sanitizeText(item.data), 70);
 	try {
 		return previewLine(sanitizeText(JSON.stringify(item.data) ?? "null"), 70);
@@ -349,7 +350,7 @@ function renderOutputSection(
 	if (!trimmedOutput && !warning) return lines;
 
 	if (warning) {
-		lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
+		lines.push(`${continuePrefix}${theme.fg("dim", t("tools.common.output"))}`);
 		lines.push(
 			`${continuePrefix}  ${formatStatusIcon("warning", theme)} ${theme.fg(
 				"dim",
@@ -420,7 +421,7 @@ function renderOutputSection(
 			}
 
 			// Expanded: tree format
-			lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
+			lines.push(`${continuePrefix}${theme.fg("dim", t("tools.common.output"))}`);
 			const tree = renderJsonTreeLines(parsed, theme, {
 				maxDepth: expanded ? 6 : 2,
 				maxLines: expanded ? 24 : 6,
@@ -445,7 +446,7 @@ function renderOutputSection(
 		}
 	}
 
-	lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
+	lines.push(`${continuePrefix}${theme.fg("dim", t("tools.common.output"))}`);
 
 	const outputLines = trimmedOutput.split("\n");
 	const previewCount = expanded ? maxExpanded : maxCollapsed;
@@ -752,9 +753,9 @@ function renderAgentProgress(
 	const fullDescription = progress.description ? replaceTabs(sanitizeText(progress.description)).trim() : undefined;
 	let statusBadge: string | undefined;
 	if (progress.retryState && progress.status === "running") {
-		statusBadge = ` ${formatBadge("retrying", "warning", theme)}`;
+		statusBadge = ` ${formatBadge(t("tools.task.retrying"), "warning", theme)}`;
 	} else if (progress.retryFailure && (progress.status === "failed" || progress.status === "aborted")) {
-		statusBadge = ` ${formatBadge("rate-limited", "error", theme)}`;
+		statusBadge = ` ${formatBadge(t("tools.task.rate_limited"), "error", theme)}`;
 	}
 	const row = renderAgentTreeRow(
 		{
@@ -834,15 +835,21 @@ function renderAgentProgress(
 	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
 	if (progress.retryState && progress.status === "running") {
 		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - nowMs);
-		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
-		const summary =
-			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
-			previewLine(sanitizeText(progress.retryState.errorMessage), 60);
+		const waitLabel =
+			remainingMs > 0 ? t("tools.task.retry_in", { time: formatDuration(remainingMs) }) : t("tools.task.retry_now");
+		const summary = t("tools.task.retry_summary", {
+			attempt: progress.retryState.attempt,
+			max: progress.retryState.maxAttempts,
+			wait: waitLabel,
+			error: previewLine(sanitizeText(progress.retryState.errorMessage), 60),
+		});
 		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("warning", summary)}`);
 	} else if (progress.retryFailure && progress.status !== "running") {
-		const summary = `auto-retry gave up after ${progress.retryFailure.attempt} attempt${
-			progress.retryFailure.attempt === 1 ? "" : "s"
-		}: ${previewLine(sanitizeText(progress.retryFailure.errorMessage), 80)}`;
+		const count = progress.retryFailure.attempt;
+		const summary = t(count === 1 ? "tools.task.retry_exhausted.one" : "tools.task.retry_exhausted.many", {
+			count,
+			error: previewLine(sanitizeText(progress.retryFailure.errorMessage), 80),
+		});
 		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("error", summary)}`);
 	}
 
@@ -990,7 +997,7 @@ function renderReviewResult(
 	// Explanation preview (first ~80 chars when collapsed, full when expanded)
 	if (summary.explanation) {
 		if (expanded) {
-			lines.push(`${continuePrefix}${theme.fg("dim", "Summary")}`);
+			lines.push(`${continuePrefix}${theme.fg("dim", t("tools.task.summary"))}`);
 			const explanationLines = sanitizeText(summary.explanation).split("\n");
 			for (const line of explanationLines) {
 				lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
@@ -1033,7 +1040,7 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
 		const { color } = getPriorityInfo(finding.priority);
-		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled");
+		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? t("tools.common.untitled"));
 		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
 		const loc = `${path.basename(sanitizeText(finding.file_path || "<unknown>"))}:${finding.line_start}`;
 
@@ -1089,14 +1096,14 @@ function renderAgentResult(
 	const icon = formatStatusIcon(iconStatus, theme);
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
-		? "aborted"
+		? t("tools.task.status_aborted")
 		: needsWarning
-			? "warning"
+			? t("tools.task.status_warning")
 			: success
-				? "done"
+				? t("tools.task.status_done")
 				: mergeFailed
-					? "merge failed"
-					: "failed";
+					? t("tools.task.merge_failed")
+					: t("tools.task.status_failed");
 
 	// Reserve the name and required badges before optional model metadata and details.
 	const fullDescription = result.description ? replaceTabs(sanitizeText(result.description)).trim() : undefined;
@@ -1145,7 +1152,7 @@ function renderAgentResult(
 	statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 
 	if (result.truncated) {
-		statusLine += ` ${theme.fg("warning", "[truncated]")}`;
+		statusLine += ` ${theme.fg("warning", t("tools.task.truncated"))}`;
 	}
 
 	lines.push(truncateTaskRow(statusLine, maxWidth, ""));
@@ -1339,11 +1346,11 @@ function formatHiddenProgressLine(hidden: readonly AgentProgress[], theme: Theme
 	};
 	for (const p of hidden) counts[p.status]++;
 	const parts: string[] = [];
-	if (counts.completed > 0) parts.push(theme.fg("dim", `${counts.completed} done`));
-	if (counts.running > 0) parts.push(theme.fg("dim", `${counts.running} running`));
-	if (counts.pending > 0) parts.push(theme.fg("dim", `${counts.pending} pending`));
-	if (counts.failed > 0) parts.push(theme.fg("error", `${counts.failed} failed`));
-	if (counts.aborted > 0) parts.push(theme.fg("error", `${counts.aborted} aborted`));
+	if (counts.completed > 0) parts.push(theme.fg("dim", t("tools.task.count_done", { count: counts.completed })));
+	if (counts.running > 0) parts.push(theme.fg("dim", t("tools.task.count_running", { count: counts.running })));
+	if (counts.pending > 0) parts.push(theme.fg("dim", t("tools.task.count_pending", { count: counts.pending })));
+	if (counts.failed > 0) parts.push(theme.fg("error", t("tools.task.count_failed", { count: counts.failed })));
+	if (counts.aborted > 0) parts.push(theme.fg("error", t("tools.task.count_aborted", { count: counts.aborted })));
 	const breakdown =
 		parts.length > 0
 			? `${theme.fg("dim", " (")}${parts.join(theme.fg("dim", theme.sep.dot))}${theme.fg("dim", ")")}`
@@ -1553,12 +1560,16 @@ export function renderResult(
 			}
 
 			const summaryParts: string[] = [];
-			if (abortedCount > 0) summaryParts.push(theme.fg("error", `${abortedCount} aborted`));
-			if (successCount > 0) summaryParts.push(theme.fg("success", `${successCount} succeeded`));
-			if (mergeFailedCount > 0) summaryParts.push(theme.fg("warning", `${mergeFailedCount} merge failed`));
-			if (failCount > 0) summaryParts.push(theme.fg("error", `${failCount} failed`));
+			if (abortedCount > 0)
+				summaryParts.push(theme.fg("error", t("tools.task.count_aborted", { count: abortedCount })));
+			if (successCount > 0)
+				summaryParts.push(theme.fg("success", t("tools.task.count_succeeded", { count: successCount })));
+			if (mergeFailedCount > 0)
+				summaryParts.push(theme.fg("warning", t("tools.task.count_merge_failed", { count: mergeFailedCount })));
+			if (failCount > 0) summaryParts.push(theme.fg("error", t("tools.task.count_failed", { count: failCount })));
 			const totalRequests = requestTotal;
-			if (totalRequests > 0) summaryParts.push(theme.fg("dim", `${formatNumber(totalRequests)} req`));
+			if (totalRequests > 0)
+				summaryParts.push(theme.fg("dim", t("tools.task.request_count", { count: formatNumber(totalRequests) })));
 			summaryParts.push(theme.fg("dim", formatDuration(details.totalDurationMs)));
 			// Wrap the run summary in the theme's bracket glyphs (dim chrome, colored
 			// counts) to match the bash tool's `[Wall: … | Exit: …]` footer.
@@ -1573,7 +1584,7 @@ export function renderResult(
 		const borderColor = isError ? "error" : "borderMuted";
 
 		if (lines.length === 0) {
-			const text = fallbackText.trim() ? fallbackText : "No results";
+			const text = fallbackText.trim() ? fallbackText : t("tools.common.no_results");
 			return {
 				header,
 				sections: [
@@ -1684,7 +1695,7 @@ export function renderNestedTaskResults(
 			continue;
 		}
 		if (depth >= MAX_NESTED_TASK_RENDER_DEPTH) {
-			lines.push(theme.fg("dim", "… nested task depth limit reached"));
+			lines.push(theme.fg("dim", t("tools.task.nested_limit")));
 			continue;
 		}
 		seen.add(details);
@@ -1731,7 +1742,7 @@ function renderNestedTaskTree(
 			continue;
 		}
 		if (depth >= MAX_NESTED_TASK_RENDER_DEPTH) {
-			lines.push(theme.fg("dim", "… nested task depth limit reached"));
+			lines.push(theme.fg("dim", t("tools.task.nested_limit")));
 			continue;
 		}
 		seen.add(details);
@@ -1865,11 +1876,11 @@ function describeNestedTasks(
 	const out: NativeNode[] = [];
 	for (const details of nested) {
 		if (state.seen.has(details)) {
-			out.push(noteText("↻ nested task cycle", "dim"));
+			out.push(noteText(t("tools.task.nested_cycle"), "dim"));
 			continue;
 		}
 		if (depth >= MAX_NESTED_TASK_RENDER_DEPTH) {
-			out.push(noteText("… nested task depth limit reached", "dim"));
+			out.push(noteText(t("tools.task.nested_limit"), "dim"));
 			continue;
 		}
 		state.seen.add(details);
@@ -1987,7 +1998,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 	const errorLine = (message: string, token = "error"): NativeNode =>
 		text([span(plainText(message), token)], { wrap: "word", role: "omp.tool.error" });
 	const badges: { text: string; tone?: TspTone }[] = [...(agentBadges(state.background, result.isolated) ?? [])];
-	if (mergeFailed) badges.push({ text: "merge failed", tone: "warning" });
+	if (mergeFailed) badges.push({ text: t("tools.task.merge_failed"), tone: "warning" });
 	else if (warning && success) badges.push({ text: "warning", tone: "warning" });
 	if (result.truncated) badges.push({ text: "truncated", tone: "warning" });
 	const cost = result.usage?.cost.total ?? 0;
@@ -2031,12 +2042,12 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			result.stderr.trim() && !success ? node("ansi", { text: result.stderr, preview: { lines: 6 } }) : undefined,
 			kv([
 				[
-					"Patch",
+					t("tools.task.patch"),
 					result.patchPath && result.hasRootChanges !== false && success
 						? shortenPath(result.patchPath)
 						: undefined,
 				],
-				["Branch", result.branchName && success ? plainText(result.branchName) : undefined],
+				[t("tools.task.branch"), result.branchName && success ? plainText(result.branchName) : undefined],
 			]),
 			...describeNestedTasks(result, state, depth),
 		],
@@ -2122,7 +2133,7 @@ function describeTaskResult(
 			return {
 				tool: { title: "Task", target: agentLabel, targetKind: "text" },
 				tone: "error",
-				body: compact([context, errorText(fallback || "Task failed")]),
+				body: compact([context, errorText(fallback || t("tools.task.failed"))]),
 			};
 		}
 		return {
@@ -2156,10 +2167,10 @@ function describeTaskResult(
 	}
 	const summary: string[] = [];
 	if ((details.results ?? []).length > 0) {
-		if (succeeded) summary.push(`${succeeded} succeeded`);
-		if (failed) summary.push(`${failed} failed`);
-		if (aborted) summary.push(`${aborted} aborted`);
-		if (requests) summary.push(`${formatNumber(requests)} req`);
+		if (succeeded) summary.push(t("tools.task.count_succeeded", { count: succeeded }));
+		if (failed) summary.push(t("tools.task.count_failed", { count: failed }));
+		if (aborted) summary.push(t("tools.task.count_aborted", { count: aborted }));
+		if (requests) summary.push(t("tools.task.request_count", { count: formatNumber(requests) }));
 		summary.push(formatDuration(details.totalDurationMs));
 	}
 	const fallback = resultText(result);
@@ -2191,7 +2202,7 @@ function describeTaskResult(
 		body: compact([
 			context,
 			...agents,
-			count === 0 ? noteText(fallback.trim() || "No results", "dim") : undefined,
+			count === 0 ? noteText(fallback.trim() || t("tools.common.no_results"), "dim") : undefined,
 			trailer ? text([span(plainText(trailer), "muted")], { wrap: "word", role: "omp.tool.stats" }) : undefined,
 		]),
 	};
@@ -2205,15 +2216,17 @@ export const taskToolRenderer = {
 	renderCall,
 	renderResult,
 	describeCall(args: TaskParams, options: RenderResultOptions): NativeToolView | undefined {
-		return taskCallMemo.get(args, [options.argsComplete], () => describeTaskCall(args));
+		return taskCallMemo.get(args, [getLocale(), options.argsComplete], () => describeTaskCall(args));
 	},
 	describeResult(
 		result: ToolRenderResult<TaskToolDetails>,
 		options: TaskRenderOptions,
 		args?: TaskParams,
 	): NativeToolView | undefined {
-		return taskResultMemo.get(result, [options.renderContext?.nowMs, options.expanded, options.json], () =>
-			describeTaskResult(result, options, args),
+		return taskResultMemo.get(
+			result,
+			[getLocale(), options.renderContext?.nowMs, options.expanded, options.json],
+			() => describeTaskResult(result, options, args),
 		);
 	},
 	mergeCallAndResult: true,

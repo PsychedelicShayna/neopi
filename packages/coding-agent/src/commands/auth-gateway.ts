@@ -4,6 +4,7 @@
 
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	AUTH_GATEWAY_ACTIONS,
 	type AuthGatewayAction,
@@ -52,22 +53,24 @@ export default class AuthGateway extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Boot the gateway against the configured broker\n  ${APP_NAME} auth-gateway serve`,
-		`# Serve the same routes as JSON lines on stdin/stdout with your own credentials\n  echo '{"id":1,"path":"/v1/chat/completions","body":{"model":"@smol","messages":[{"role":"user","content":"hi"}]}}' | ${APP_NAME} auth-gateway stdio`,
-		`# Boot on a non-default port\n  ${APP_NAME} auth-gateway serve --bind=127.0.0.1:4000`,
-		`# Trust client IP headers from a trusted reverse proxy\n  ${APP_NAME} auth-gateway serve --trust-proxy-headers`,
-		`# Print the gateway bearer token (creates one on first run)\n  ${APP_NAME} auth-gateway token`,
-		`# Rotate the gateway bearer token\n  ${APP_NAME} auth-gateway token --regenerate`,
-		`# Run on loopback without any bearer (anyone on this host can call)\n  ${APP_NAME} auth-gateway serve --no-auth`,
-		`# Also admit scoped client tokens listed in a file\n  ${APP_NAME} auth-gateway serve --clients=/etc/omp/gateway-clients.json`,
-		`# Print one connection link to paste into NeoProxy (contains the bearer token)\n  ${APP_NAME} auth-gateway link`,
-		`# Same, naming the address other machines use to reach this one\n  ${APP_NAME} auth-gateway link --host=192.168.1.31`,
-		`# Show local gateway + broker config status\n  ${APP_NAME} auth-gateway status`,
-		`# Probe each broker credential to see which one is producing 401s\n  ${APP_NAME} auth-gateway check`,
-		`# Same, machine-readable for scripts\n  ${APP_NAME} auth-gateway check --json`,
-		`# Strict check — also exercises each credential with a real chat-completion ping\n  ${APP_NAME} auth-gateway check --strict`,
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.auth-gateway.example.serve")}\n  ${APP_NAME} auth-gateway serve`,
+			`# ${t("cli.commands.auth-gateway.example.stdio")}\n  echo '{"id":1,"path":"/v1/chat/completions","body":{"model":"@smol","messages":[{"role":"user","content":"hi"}]}}' | ${APP_NAME} auth-gateway stdio`,
+			`# ${t("cli.commands.auth-gateway.example.port")}\n  ${APP_NAME} auth-gateway serve --bind=127.0.0.1:4000`,
+			`# ${t("cli.commands.auth-gateway.example.trust_proxy")}\n  ${APP_NAME} auth-gateway serve --trust-proxy-headers`,
+			`# ${t("cli.commands.auth-gateway.example.token")}\n  ${APP_NAME} auth-gateway token`,
+			`# ${t("cli.commands.auth-gateway.example.rotate_token")}\n  ${APP_NAME} auth-gateway token --regenerate`,
+			`# ${t("cli.commands.auth-gateway.example.no_auth")}\n  ${APP_NAME} auth-gateway serve --no-auth`,
+			`# ${t("cli.commands.auth-gateway.example.clients")}\n  ${APP_NAME} auth-gateway serve --clients=/etc/omp/gateway-clients.json`,
+			`# ${t("cli.commands.auth-gateway.example.link")}\n  ${APP_NAME} auth-gateway link`,
+			`# ${t("cli.commands.auth-gateway.example.link_host")}\n  ${APP_NAME} auth-gateway link --host=192.168.1.31`,
+			`# ${t("cli.commands.auth-gateway.example.status")}\n  ${APP_NAME} auth-gateway status`,
+			`# ${t("cli.commands.auth-gateway.example.check")}\n  ${APP_NAME} auth-gateway check`,
+			`# ${t("cli.commands.auth-gateway.example.check_json")}\n  ${APP_NAME} auth-gateway check --json`,
+			`# ${t("cli.commands.auth-gateway.example.check_strict")}\n  ${APP_NAME} auth-gateway check --strict`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(AuthGateway);

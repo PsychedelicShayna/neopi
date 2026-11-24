@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { applyBackgroundToLine, padding, stripTerminalSequences, visibleWidth } from "../utils";
 import type { AnimationFrame, TranscriptPresentationTarget } from "../chrome/transcript-container";
 import { type Component, Container } from "../tui";
@@ -233,8 +234,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 					{
 						name: "copy",
 						role: "omp.user.tool",
-						title: "Copy message",
-						aria: "Copy message",
+						title: t("overlays.user_message.copy_message"),
+						aria: t("overlays.user_message.copy_message"),
 						actions: { click: "copy-message" },
 					},
 					undefined,
@@ -245,7 +246,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 					{
 						name: "rewind",
 						role: "omp.user.tool",
-						title: "Rewind the conversation to an earlier message",
+						title: t("overlays.user_message.rewind_description"),
 						aria: "Rewind",
 						actions: { click: "rewind" },
 					},
@@ -286,7 +287,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 				node("badge", {
 					text: "steered",
 					tone: "accent",
-					title: "Delivered into the response that was streaming",
+					title: t("overlays.user_message.steered_description"),
 				}),
 			);
 		}
@@ -299,7 +300,11 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			!this.#synthetic && hasTranscriptActions() && this.#timestamp !== undefined
 				? {
 						actions: {
-							hold: turnHoldEntries("user", { id: "copy-message", label: "Copy message", icon: "copy" }),
+							hold: turnHoldEntries("user", {
+								id: "copy-message",
+								label: t("overlays.user_message.copy_message"),
+								icon: "copy",
+							}),
 						},
 					}
 				: {};
@@ -561,7 +566,14 @@ function summarizeSyntheticInput(text: string): string {
 	const size = formatBytes(Buffer.byteLength(text, "utf-8"));
 	const lineCount = text === "" ? 0 : text.split("\n").length;
 	const dot = theme.sep.dot.trim();
-	return `${syntheticInputLabel(text)} ${dot} ${size} ${dot} ${lineCount} line${lineCount === 1 ? "" : "s"}`;
+	return t("overlays.user_message.synthetic_summary", {
+		syntheticInputLabel: `${syntheticInputLabel(text)}`,
+		dot: `${dot}`,
+		size: `${size}`,
+		dot2: `${dot}`,
+		lineCount: `${lineCount}`,
+		plural: `${lineCount === 1 ? "" : "s"}`,
+	});
 }
 
 /** First Markdown heading text in `text`, else `Synthetic input`. */
@@ -570,7 +582,9 @@ function syntheticInputLabel(text: string): string {
 		const line = raw.trim();
 		if (!line) continue;
 		const heading = /^#{1,6}\s+(.*)$/.exec(line);
-		return heading ? heading[1]!.trim() || "Synthetic input" : "Synthetic input";
+		return heading
+			? heading[1]!.trim() || t("overlays.user_message.synthetic_input")
+			: t("overlays.user_message.synthetic_input");
 	}
-	return "Synthetic input";
+	return t("overlays.user_message.synthetic_input");
 }

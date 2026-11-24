@@ -61,11 +61,18 @@ export class MenuHints implements Component {
 /** Small, host-owned help float. Text fields must receive literal ? before this reader. */
 export class MenuHelp {
 	#open = false;
+	readonly #extra: string | (() => string);
 
 	constructor(
 		readonly vim = MENU_VIM_HINT,
-		readonly extra = "",
-	) {}
+		extra: string | (() => string) = "",
+	) {
+		this.#extra = extra;
+	}
+
+	get extra(): string {
+		return typeof this.#extra === "function" ? this.#extra() : this.#extra;
+	}
 
 	get open(): boolean {
 		return this.#open;
@@ -85,7 +92,9 @@ export class MenuHelp {
 		return node(
 			"card",
 			{
-				head: getMenuSearchVimMode() ? t("tui.components.vim_help.title") : "Menu navigation",
+				head: getMenuSearchVimMode()
+					? t("tui.components.vim_help.title")
+					: t("overlays.menu_hints.navigation_title"),
 				role: "omp.menu.vim-help",
 			},
 			[col(this.#explanations().map(line => node("text", { spans: [span(line)] })))],
@@ -93,17 +102,18 @@ export class MenuHelp {
 	}
 
 	#explanations(): string[] {
+		const extra = this.extra;
 		if (!getMenuSearchVimMode()) {
 			return [
-				"Menu navigation",
+				t("overlays.menu_hints.navigation_title"),
 				"",
-				"↑ / ↓: previous / next row",
-				"← / →: switch pane, collapse / expand, or adjust",
-				"Home / End: first / last item",
-				"PageUp / PageDown: full page up / down",
-				"Tab / Shift-Tab: next / previous context",
-				"/: search · Enter: select · Esc: return",
-				...(this.extra ? [this.extra] : []),
+				t("overlays.menu_hints.previous_next_row"),
+				t("overlays.menu_hints.pane_navigation"),
+				t("overlays.menu_hints.first_last_item"),
+				t("overlays.menu_hints.page_navigation"),
+				t("overlays.menu_hints.context_navigation"),
+				t("overlays.menu_hints.search_select_return"),
+				...(extra ? [extra] : []),
 				"",
 				t("tui.components.vim_help.return"),
 			];
@@ -115,7 +125,7 @@ export class MenuHelp {
 		if (this.vim.includes("u") || this.vim.includes("d")) explanations.push(t("tui.components.vim_help.half_page"));
 		if (this.vim.includes("e") || this.vim.includes("y")) explanations.push(t("tui.components.vim_help.scroll"));
 		if (this.vim.includes("Pg") || this.vim.includes("gg")) explanations.push(t("tui.components.vim_help.page"));
-		if (this.extra) explanations.push(this.extra);
+		if (extra) explanations.push(extra);
 		explanations.push("", t("tui.components.vim_help.return"));
 		return explanations;
 	}

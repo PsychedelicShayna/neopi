@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
@@ -449,7 +450,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			const shown = drawn[index]!;
 			if (shown.mode === "compact") {
 				const glyph = entry.status === "success" ? undefined : formatStatusIcon(entry.status, theme);
-				lines.push(...compactRows(compactHead("Read", shortenPath(entry.path)), shown, width, glyph));
+				lines.push(
+					...compactRows(
+						compactHead(t("overlays.read_tool_group.read"), shortenPath(entry.path)),
+						shown,
+						width,
+						glyph,
+					),
+				);
 			} else if (shown.mode === "full" && !fullDrawn) {
 				fullDrawn = true;
 				lines.push(...super.render(width));
@@ -777,7 +785,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				if (shown.mode === "compact") {
 					const own = presentNative(describeEntries([entry]), shown, {
 						role: "omp.tool.read",
-						title: "Read",
+						title: t("overlays.read_tool_group.read"),
 						target: shortenPath(entry.path) || "…",
 					});
 					children.push(keyed(own, `c${entry.toolCallId}`));
@@ -852,7 +860,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				...head,
 				role: "omp.tool.read",
 				name: "read",
-				title: "Read",
+				title: t("overlays.read_tool_group.read"),
 				status,
 				tone: status === "error" ? "error" : undefined,
 				frame: "inline",
@@ -874,9 +882,19 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : "…",
 			targetKind: "path",
 			href: fileHref(linkPathForTargets(row.targets)) ?? urlHref(split.path),
-			meta: correctedFrom ? [`corrected from ${shortenPath(correctedFrom)}`] : undefined,
+			meta: correctedFrom
+				? [t("overlays.read_tool_group.corrected_from", { correctedFrom: `${shortenPath(correctedFrom)}` })]
+				: undefined,
 			badges: conflicts
-				? [{ text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}`, tone: "warning" }]
+				? [
+						{
+							text: t("overlays.read_tool_group.conflict_count", {
+								conflicts: `${conflicts}`,
+								plural: `${conflicts === 1 ? "" : "s"}`,
+							}),
+							tone: "warning",
+						},
+					]
 				: undefined,
 		};
 	}
@@ -892,14 +910,21 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			error !== undefined
 				? [span(`— ${error.split("\n", 1)[0]}`, "error")]
 				: correctedFrom
-					? `corrected from ${shortenPath(correctedFrom)}`
+					? t("overlays.read_tool_group.corrected_from", { correctedFrom: `${shortenPath(correctedFrom)}` })
 					: undefined;
 		return fileRow(shortenPath(split.sel ? split.path : row.targetPath), {
 			range: split.sel ? `:${split.sel}` : undefined,
 			href: fileHref(linkPathForTargets(row.targets)) ?? urlHref(split.path),
 			icon: status === "error" ? "x-circle" : undefined,
 			tone: READ_STATUS_TONE[status],
-			chip: conflicts ? { text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}` } : undefined,
+			chip: conflicts
+				? {
+						text: t("overlays.read_tool_group.conflict_count", {
+							conflicts: `${conflicts}`,
+							plural: `${conflicts === 1 ? "" : "s"}`,
+						}),
+					}
+				: undefined,
 			detail,
 			title: error,
 			key: row.targetPath,
@@ -912,7 +937,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return (
 			plainText(failed?.contentText ?? "")
 				.replace(/^Error:\s*/, "")
-				.trim() || "Read failed"
+				.trim() || t("overlays.read_tool_group.read_failed")
 		);
 	}
 
@@ -957,7 +982,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const usageByRow = this.#usageRowsBySummaryRow(rows);
 		const previews = entries.filter(entry => this.#shouldRenderPreview(entry));
 		const status = this.#groupStatus(entries);
-		const title = span("Read", "toolTitle");
+		const title = span(t("overlays.read_tool_group.read"), "toolTitle");
 		const children: NativeChild[] = [];
 		let head: TspSpan[] = [title];
 		if (rows.length === 1) {
@@ -1062,9 +1087,24 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		if (split.sel) spans.push(span(`:${split.sel}`, "accent"));
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
-		if (correctedFrom) spans.push(span(` (corrected from ${shortenPath(correctedFrom)})`, "dim"));
+		if (correctedFrom)
+			spans.push(
+				span(
+					t("overlays.read_tool_group.corrected_from_paren", { correctedFrom: `${shortenPath(correctedFrom)}` }),
+					"dim",
+				),
+			);
 		const conflicts = this.#conflictCountForTargets(row.targets);
-		if (conflicts) spans.push(span(` (⚠ ${conflicts} conflict${conflicts === 1 ? "" : "s"})`, "warning"));
+		if (conflicts)
+			spans.push(
+				span(
+					t("overlays.read_tool_group.conflicts_paren", {
+						conflicts: `${conflicts}`,
+						plural: `${conflicts === 1 ? "" : "s"}`,
+					}),
+					"warning",
+				),
+			);
 		return spans;
 	}
 
@@ -1086,7 +1126,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 
 		if (displayRows.length === 0) {
-			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold("Read"))}`);
+			this.#text.setText(
+				` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold(t("overlays.read_tool_group.read")))}`,
+			);
 			this.addChild(this.#text);
 			return;
 		}
@@ -1096,7 +1138,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			if (!this.#shouldRenderPreviewRow(row)) {
 				const statusSymbol = formatStatusIcon(this.#statusForTargets(row.targets), theme);
 				const pathDisplay = this.#formatRowPath(row, HEADER_PATH_PAINT);
-				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd()];
+				const lines = [
+					` ${statusSymbol} ${theme.fg("toolTitle", theme.bold(t("overlays.read_tool_group.read")))} ${pathDisplay}`.trimEnd(),
+				];
 				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
 				this.#appendUsageRows(lines, usageRows, "   ");
 				this.#text.setText(lines.join("\n"));
@@ -1109,7 +1153,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			return;
 		}
 
-		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${displayRows.length})`)}`;
+		const header = `${theme.fg("toolTitle", theme.bold(t("overlays.read_tool_group.read")))}${theme.fg("dim", ` (${displayRows.length})`)}`;
 		const lines = [` ${theme.format.bullet} ${header}`];
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
 		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
@@ -1348,7 +1392,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		if (selectors) pathDisplay += theme.fg(paint.selectors, selectors);
 		if (options.correctedFrom) {
-			pathDisplay += theme.fg("dim", ` (corrected from ${shortenPath(options.correctedFrom)})`);
+			pathDisplay += theme.fg(
+				"dim",
+				t("overlays.read_tool_group.corrected_from_paren", {
+					correctedFrom: `${shortenPath(options.correctedFrom)}`,
+				}),
+			);
 		}
 		return pathDisplay + this.#formatConflictBadge(options.conflictCount);
 	}
@@ -1356,7 +1405,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#formatConflictBadge(conflictCount: number | undefined): string {
 		if (!conflictCount || conflictCount <= 0) return "";
 		const n = conflictCount;
-		return ` ${theme.fg("warning", `(⚠ ${n} conflict${n === 1 ? "" : "s"})`)}`;
+		return ` ${theme.fg("warning", t("overlays.read_tool_group.conflicts_badge", { n: `${n}`, plural: `${n === 1 ? "" : "s"}` }))}`;
 	}
 
 	/**
@@ -1376,7 +1425,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 					linkPath: readTargetLinkPath(split.path, entry.linkPath),
 				})
 			: "";
-		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
+		const title = pathDisplay
+			? t("overlays.read_tool_group.read_path", { pathDisplay: `${pathDisplay}` })
+			: t("overlays.read_tool_group.read");
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const dropCache = () => {

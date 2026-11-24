@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ifBenchHelp as commandHelp } from "../cli/command-help";
 import { runIfBenchCommand } from "../if-bench";
 
@@ -22,12 +23,14 @@ export default class IfBench extends Command {
 		json: Flags.boolean({ description: "Output JSON" }),
 	};
 
-	static examples = [
-		`# Compare three models on the incremental array machine\n  ${APP_NAME} if-bench opus sonnet gpt-5.2`,
-		`# Go deeper, one model at a time\n  ${APP_NAME} if-bench opus --turns 40 --par 1`,
-		`# Shorter array, tighter cat sound\n  ${APP_NAME} if-bench sonnet --length 12 --nya-max 2`,
-		`# Machine-readable per-turn transcript\n  ${APP_NAME} if-bench opus --json`,
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.if-bench.example.compare")}\n  ${APP_NAME} if-bench opus sonnet gpt-5.2`,
+			`# ${t("cli.commands.if-bench.example.turns")}\n  ${APP_NAME} if-bench opus --turns 40 --par 1`,
+			`# ${t("cli.commands.if-bench.example.length")}\n  ${APP_NAME} if-bench sonnet --length 12 --nya-max 2`,
+			`# ${t("cli.commands.if-bench.example.json")}\n  ${APP_NAME} if-bench opus --json`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(IfBench);

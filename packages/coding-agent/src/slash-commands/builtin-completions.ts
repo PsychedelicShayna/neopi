@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -159,7 +160,7 @@ export function buildEffortArgumentCompletions(
 				return {
 					value: `${level} `,
 					label: level,
-					description: level === current ? `${description} (current)` : description,
+					description: level === current ? t("commands.completion.current", { description }) : description,
 				};
 			});
 		return matches.length > 0 ? matches : null;
@@ -257,7 +258,11 @@ async function buildMcpRemoveCompletions(namePrefix: string): Promise<Autocomple
 		.map(name =>
 			projectNameSet.has(name)
 				? { value: `${name} `, label: name, submitsCommand: true }
-				: { value: `${name} --scope user `, label: `${name} (user)`, submitsCommand: true },
+				: {
+						value: `${name} --scope user `,
+						label: t("commands.completion.user", { server: name }),
+						submitsCommand: true,
+					},
 		)
 		.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
 	return matches.length > 0 ? matches : null;

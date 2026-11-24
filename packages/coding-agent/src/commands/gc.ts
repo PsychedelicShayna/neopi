@@ -3,6 +3,7 @@
  */
 
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { gcHelp as commandHelp } from "../cli/command-help";
 import { collectGcErrors, type GcCommandArgs, runGcCommand } from "../cli/gc-cli";
 
@@ -60,14 +61,16 @@ export default class Gc extends Command {
 			progress: process.stderr,
 		};
 		if (!flags.apply && process.stderr.isTTY) {
-			process.stderr.write("Dry run: nothing will be changed. Pass --apply to apply.\n");
+			process.stderr.write(t("cli.commands.gc.dryRun"));
 		}
 		const result = await runGcCommand(cmd);
 		const errors = collectGcErrors(result);
 		if (errors.length > 0) {
-			process.stderr.write(
-				`GC completed with ${errors.length} error${errors.length === 1 ? "" : "s"}:\n${errors.map(error => `- ${error}`).join("\n")}\n`,
+			const heading = t(
+				errors.length === 1 ? "cli.commands.gc.errorSummary.one" : "cli.commands.gc.errorSummary.many",
+				{ count: errors.length },
 			);
+			process.stderr.write(`${heading}\n${errors.map(error => `- ${error}`).join("\n")}\n`);
 			process.exitCode = 1;
 		}
 	}

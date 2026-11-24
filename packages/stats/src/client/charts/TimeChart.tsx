@@ -1,4 +1,5 @@
 import { formatBucket, formatTick } from "../data/range";
+import { useLocale } from "../i18n";
 import { Chart, type ChartProps } from "./Chart";
 
 export interface TimeChartProps extends Omit<ChartProps, "slots" | "tickLabel" | "tooltipTitle" | "onSelect"> {
@@ -10,12 +11,13 @@ export interface TimeChartProps extends Omit<ChartProps, "slots" | "tickLabel" |
 
 /** {@link Chart} over a bucketed time axis. */
 export function TimeChart({ buckets, bucketMs, onSelectBucket, ...rest }: TimeChartProps) {
+	const locale = useLocale();
 	return (
 		<Chart
 			{...rest}
 			slots={buckets.length}
-			tickLabel={i => formatTick(buckets[i], bucketMs)}
-			tooltipTitle={i => formatBucket(buckets[i], bucketMs)}
+			tickLabel={i => formatTick(buckets[i], bucketMs, locale)}
+			tooltipTitle={i => formatBucket(buckets[i], bucketMs, locale)}
 			onSelect={onSelectBucket ? i => onSelectBucket(buckets[i]) : undefined}
 		/>
 	);

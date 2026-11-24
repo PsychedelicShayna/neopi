@@ -15,6 +15,7 @@ import { getMenuSearchVimMode, MenuKeyReader } from "@oh-my-pi/pi-tui/components
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { logger } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
 import {
 	cfgSidebarEnabled,
@@ -267,12 +268,12 @@ export class SidePanelController {
 	#hints(): readonly string[] {
 		if (!this.active) return [];
 		const [key] = this.#host.keybindings.getKeys("app.sidebar.toggle");
-		const prefix = key === undefined ? "Views:" : `${formatKeyHint(key)} →`;
+		const prefix = key === undefined ? t("overlays.side_panel.views_prefix") : `${formatKeyHint(key)} →`;
 		return [
-			theme.bold(theme.fg("accent", `${prefix} t Todo, a Agents, i IRC`)),
-			theme.fg("text", "↑↓ scroll · 00–99 jump · Esc"),
+			theme.bold(theme.fg("accent", t("overlays.side_panel.views_hint", { prefix }))),
+			theme.fg("text", t("overlays.side_panel.navigation_hint")),
 			...(getMenuSearchVimMode() ? [theme.fg("text", "j/k · C-u/d · C-e/y · gg/G")] : []),
-			...(this.#mounted?.moveControl ? [theme.fg("text", "Tab / Space to toggle filters")] : []),
+			...(this.#mounted?.moveControl ? [theme.fg("text", t("overlays.side_panel.filters_hint"))] : []),
 		];
 	}
 

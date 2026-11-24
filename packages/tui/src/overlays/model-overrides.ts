@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Input } from "../components/input";
 import { SelectList, type SelectItem } from "../components/select-list";
 import { matchesKey } from "../keys";
@@ -37,6 +38,7 @@ function shown(value: unknown): string {
 /** A schema-driven config editor embedded in /models, not a second serializer. */
 export class ModelOverridesPanel {
 	#list = new SelectList([], 12, getSelectListTheme(), { search: "always", wrapDescription: true });
+	#labelsLocale = getLocale();
 	#entries: HubModelConfigEntry[] = [];
 	#draft?: HubModelConfigEntry;
 	#original?: HubModelConfigEntry;
@@ -68,11 +70,9 @@ export class ModelOverridesPanel {
 		return !!this.#identity || !!this.#fields?.input || this.#list.filterFocused;
 	}
 	get hint(): string {
-		if (this.#pending) return "Saving…";
-		if (this.#identity || this.#fields?.input) return "Enter accept · Esc leave field";
-		return this.#draft
-			? "Enter edit · x unset/remove · t type · s save · / search · Esc back/discard · Tab pane"
-			: "Enter fields · x delete · / search · Esc sidebar · Tab pane";
+		if (this.#pending) return t("overlaysModel.overrides.saving");
+		if (this.#identity || this.#fields?.input) return t("overlaysModel.overrides.hintInput");
+		return this.#draft ? t("overlaysModel.overrides.hintEdit") : t("overlaysModel.overrides.hintList");
 	}
 
 	reload(): void {
@@ -88,26 +88,33 @@ export class ModelOverridesPanel {
 	}
 
 	#rebuild(): void {
+		this.#labelsLocale = getLocale();
 		const draft = this.#draft;
 		let items: SelectItem[];
 		if (this.#deleting)
 			items = [
-				{ value: "keep", label: "Keep entry" },
+				{ value: "keep", label: t("overlaysModel.overrides.keep") },
 				{
 					value: "delete",
-					label: `Delete ${this.#deleting.provider}/${this.#deleting.id}`,
-					confirmation: "Enter again to delete this entry",
+					label: t("overlaysModel.overrides.delete", {
+						provider: this.#deleting.provider,
+						model: this.#deleting.id,
+					}),
+					confirmation: t("overlaysModel.overrides.confirmDelete"),
 				},
 			];
 		else if (!draft) {
 			items = this.#entries.map((entry, index) => ({
 				value: String(index),
 				label: `${entry.provider}/${entry.id}`,
-				description: entry.kind,
+				description:
+					entry.kind === "custom"
+						? t("overlaysModel.overrides.customKind")
+						: t("overlaysModel.overrides.overrideKind"),
 			}));
 			items.push(
-				{ value: "new:override", label: "+ New override" },
-				{ value: "new:custom", label: "+ New custom model" },
+				{ value: "new:override", label: t("overlaysModel.overrides.newOverride") },
+				{ value: "new:custom", label: t("overlaysModel.overrides.newCustom") },
 			);
 		} else {
 			items = this.#fields?.items() ?? [];
@@ -115,17 +122,30 @@ export class ModelOverridesPanel {
 				items.unshift(
 					{
 						value: "meta:provider",
-						label: "Provider",
-						description: `${draft.provider || "required"}${this.#original ? " · read-only" : ""}`,
+						label: t("overlaysModel.overrides.provider"),
+						description: this.#original
+							? t("overlaysModel.overrides.readOnly", {
+									value: draft.provider || t("overlaysModel.overrides.required"),
+								})
+							: draft.provider || t("overlaysModel.overrides.required"),
 					},
 					{
 						value: "meta:id",
-						label: "Model ID",
-						description: draft.id || "required",
+						label: t("overlaysModel.overrides.modelId"),
+						description: draft.id || t("overlaysModel.overrides.required"),
 					},
-					{ value: "meta:kind", label: "Entry type", description: `${draft.kind} · read-only` },
+					{
+						value: "meta:kind",
+						label: t("overlaysModel.overrides.entryType"),
+						description: t("overlaysModel.overrides.readOnly", {
+							value:
+								draft.kind === "custom"
+									? t("overlaysModel.overrides.customKind")
+									: t("overlaysModel.overrides.overrideKind"),
+						}),
+					},
 				);
-				items.push({ value: "save", label: "Save entry" });
+				items.push({ value: "save", label: t("overlaysModel.overrides.save") });
 			}
 		}
 		this.#list.setItems(items);
@@ -235,32 +255,61 @@ export class ModelOverridesPanel {
 	}
 
 	render(width: number, rows: number): string[] {
-		const description = Bun.wrapAnsi(MODEL_OVERRIDES_DESCRIPTION, width).split("\n");
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
+		const description = Bun.wrapAnsi(t("overlaysModel.overrides.description"), width).split("\n");
 		this.#descriptionRows = description.length + (this.#error ? 1 : 0) + 1;
 		const input = this.#identity?.input ?? this.#fields?.input?.input;
 		this.#list.setMaxVisible(Math.max(1, rows - this.#descriptionRows - (input ? 2 : 0)));
 		return [
 			...description,
 			...(this.#error ? [truncateToWidth(this.#error, width)] : []),
-			truncateToWidth(this.#fields?.heading ?? "Model overrides and custom models", width),
+			truncateToWidth(this.#fields?.heading ?? t("overlaysModel.overrides.heading"), width),
 			...this.#list.render(width),
 			...(input
-				? [truncateToWidth(this.#identity?.key ?? this.#fields?.input?.label ?? "", width), ...input.render(width)]
+				? [
+						truncateToWidth(
+							(this.#identity
+								? this.#identity.key === "provider"
+									? t("overlaysModel.overrides.providerField")
+									: t("overlaysModel.overrides.idField")
+								: undefined) ??
+								this.#fields?.input?.label ??
+								"",
+							width,
+						),
+						...input.render(width),
+					]
 				: []),
 		].slice(0, rows);
 	}
 
 	describe(): NativeNode {
+		if (this.#labelsLocale !== getLocale()) this.#rebuild();
 		const input = this.#identity?.input ?? this.#fields?.input?.input;
 		return node(
 			"col",
 			{ gap: "sm", grow: 1 },
 			[
-				text([span(MODEL_OVERRIDES_DESCRIPTION)], { wrap: "word" }),
+				text([span(t("overlaysModel.overrides.description"))], { wrap: "word" }),
 				...(this.#error ? [text([span(this.#error, "error")])] : []),
-				text([span(this.#fields?.heading ?? "Model overrides and custom models")]),
+				text([span(this.#fields?.heading ?? t("overlaysModel.overrides.heading"))]),
 				this.#list,
-				...(input ? [text([span(this.#identity?.key ?? this.#fields?.input?.label ?? "")]), input] : []),
+				...(input
+					? [
+							text([
+								span(
+									(this.#identity
+										? this.#identity.key === "provider"
+											? t("overlaysModel.overrides.providerField")
+											: t("overlaysModel.overrides.idField")
+										: undefined) ??
+										this.#fields?.input?.label ??
+										"",
+								),
+							]),
+							input,
+						]
+					: []),
 			],
 			"modelOverrides",
 		);

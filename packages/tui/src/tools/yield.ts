@@ -4,7 +4,9 @@
  * submitted: the section labels or workpool item in the head, the data as a
  * JSON tree (Markdown when it is a string), and the reported or rejected error.
  */
-import { formatCount, isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { formatCount } from "./localized-count";
+import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import { compact, md } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
 import type { NativeChild } from "../native/node";
@@ -74,7 +76,8 @@ function readSubmission(
 	const data = details?.data !== undefined ? details.data : (args?.data ?? undefined);
 	let error = args?.error || undefined;
 	if (result?.isError) error = resultText(result) || `${TITLE} failed`;
-	else if (result && details?.status === "aborted") error = details.error || resultText(result) || "Aborted";
+	else if (result && details?.status === "aborted")
+		error = details.error || resultText(result) || t("tools.yield.aborted");
 	const settled = result !== undefined;
 	return {
 		target: typeof args?.key === "number" ? `item ${args.key}` : incremental ? type.join(", ") : undefined,
@@ -85,8 +88,8 @@ function readSubmission(
 		note:
 			settled && error === undefined && data === undefined
 				? incremental
-					? "Takes the last message as this section"
-					: "Ends with the sections submitted earlier, or the last message"
+					? t("tools.yield.last_as_section")
+					: t("tools.yield.end_with_sections")
 				: undefined,
 	};
 }
@@ -100,7 +103,8 @@ function sizeMeta(data: unknown): string | undefined {
 
 function describeData(data: unknown, streaming: boolean, json: boolean): NativeChild | undefined {
 	if (data === undefined) return undefined;
-	if (typeof data === "string") return data.trim() ? md(data, { stream: streaming }) : noteText("(empty)");
+	if (typeof data === "string")
+		return data.trim() ? md(data, { stream: streaming }) : noteText(t("tools.yield.empty"));
 	// Open to the depth cap: the data is the card's whole point, and the
 	// collapsed card's preview clamp already bounds what shows.
 	return describeJsonValue(data, {
@@ -119,7 +123,7 @@ function describeSubmission(s: Submission, streaming: boolean, json: boolean): N
 			target: s.target,
 			targetKind: s.target ? "text" : undefined,
 			meta: size ? [size] : undefined,
-			badges: s.overridden ? [{ text: "schema overridden", tone: "warning" }] : undefined,
+			badges: s.overridden ? [{ text: t("tools.yield.schema_overridden"), tone: "warning" }] : undefined,
 		},
 		tone: s.settled && s.error !== undefined ? "error" : undefined,
 		body: compact([
@@ -170,7 +174,7 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				spinnerFrame: options.spinnerFrame,
 				title: TITLE,
 				description: s.target,
-				badge: s.overridden ? { label: "schema overridden", color: "warning" } : undefined,
+				badge: s.overridden ? { label: t("tools.yield.schema_overridden"), color: "warning" } : undefined,
 				meta: size ? [size] : undefined,
 			};
 			const phase: ToolCardPhase = !s.settled ? (running ? "running" : "partial") : failed ? "error" : "success";
@@ -213,7 +217,7 @@ export const yieldToolRenderer = {
 	describeCall(args: YieldRenderArgs, options: RenderResultOptions): NativeToolView {
 		const streaming = options.argsComplete === false;
 		const json = options.json === true;
-		return callMemo.get(args, [streaming, json], () =>
+		return callMemo.get(args, [getLocale(), streaming, json], () =>
 			describeSubmission(readSubmission(args, undefined), streaming, json),
 		);
 	},
@@ -224,7 +228,7 @@ export const yieldToolRenderer = {
 		args?: YieldRenderArgs,
 	): NativeToolView {
 		const json = options.json === true;
-		return resultMemo.get(result.content, [args, result.details, result.isError, json], () =>
+		return resultMemo.get(result.content, [getLocale(), args, result.details, result.isError, json], () =>
 			describeSubmission(readSubmission(args, result), false, json),
 		);
 	},

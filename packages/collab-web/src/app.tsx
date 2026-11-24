@@ -1,3 +1,5 @@
+import { GuestLinkError } from "./lib/link";
+import { useTranslation } from "./lib/i18n";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDrawer } from "./components/agents/AgentDrawer";
@@ -37,8 +39,9 @@ function hashLink(): string | null {
 }
 
 export function App(): ReactNode {
+	const tr = useTranslation();
 	const [client, setClient] = useState<GuestClient | null>(null);
-	const [connectError, setConnectError] = useState<string | null>(null);
+	const [connectError, setConnectError] = useState<Error | null>(null);
 	const credsRef = useRef<Creds | null>(null);
 
 	const connect = useCallback((link: string, name: string): void => {
@@ -46,7 +49,7 @@ export function App(): ReactNode {
 		try {
 			next = new GuestClient(link, name);
 		} catch (err) {
-			setConnectError(err instanceof Error ? err.message : String(err));
+			setConnectError(err instanceof Error ? err : new Error(String(err)));
 			return;
 		}
 		next.connect();
@@ -108,7 +111,9 @@ export function App(): ReactNode {
 	}, [client]);
 
 	if (!client) {
-		return <ConnectScreen defaultName={storedName()} error={connectError} onConnect={connect} />;
+		const error =
+			connectError instanceof GuestLinkError ? connectError.localized(tr) : (connectError?.message ?? null);
+		return <ConnectScreen defaultName={storedName()} error={error} onConnect={connect} />;
 	}
 	return <Session client={client} onLeave={leave} onRejoin={rejoin} />;
 }
@@ -120,6 +125,7 @@ interface SessionProps {
 }
 
 function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
+	const tr = useTranslation();
 	const snap = useGuestSnapshot(client);
 	const [railOpen, setRailOpen] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -147,7 +153,7 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 		}
 	}, [subCount]);
 
-	const title = snap.header?.title ?? snap.state?.sessionName ?? "session";
+	const title = snap.header?.title ?? snap.state?.sessionName ?? tr("header.session", "session");
 	useEffect(() => {
 		document.title = `${title} · NeoPi collab`;
 	}, [title]);

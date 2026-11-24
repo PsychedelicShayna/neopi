@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
@@ -118,19 +119,61 @@ export interface HubModelFolder {
 }
 
 const NEW_MODELS_ID = "newModels";
-const NEW_MODELS_LABEL = "New models";
+const RESERVED_NEW_MODELS_NAME = "New models";
 const DAY_MS = 86_400_000;
 const DISCOVERY_TIERS = ["provenanceGold", "provenanceSilver", "provenanceBronze"] as const;
 const DISCOVERY_DATE = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "short" });
 
 const FOLDER_ACTIONS = [
-	{ id: "folderNew", key: "ctrl+alt+n", label: "New folder" },
-	{ id: "folderMembership", key: "ctrl+alt+a", label: "Folder membership" },
-	{ id: "folderRemove", key: "backspace", label: "Remove model" },
-	{ id: "folderRename", key: "ctrl+alt+r", label: "Rename folder" },
-	{ id: "folderClear", key: "ctrl+alt+x", label: "Clear folder" },
-	{ id: "folderDelete", key: "delete", label: "Delete folder" },
-	{ id: "folderRules", key: "ctrl+alt+i", label: "Folder rules" },
+	{
+		id: "folderNew",
+		key: "ctrl+alt+n",
+		get label() {
+			return t("overlaysModel.hub.folder.new");
+		},
+	},
+	{
+		id: "folderMembership",
+		key: "ctrl+alt+a",
+		get label() {
+			return t("overlaysModel.hub.folder.membership");
+		},
+	},
+	{
+		id: "folderRemove",
+		key: "backspace",
+		get label() {
+			return t("overlaysModel.hub.folder.removeModel");
+		},
+	},
+	{
+		id: "folderRename",
+		key: "ctrl+alt+r",
+		get label() {
+			return t("overlaysModel.hub.folder.rename");
+		},
+	},
+	{
+		id: "folderClear",
+		key: "ctrl+alt+x",
+		get label() {
+			return t("overlaysModel.hub.folder.clear");
+		},
+	},
+	{
+		id: "folderDelete",
+		key: "delete",
+		get label() {
+			return t("overlaysModel.hub.folder.delete");
+		},
+	},
+	{
+		id: "folderRules",
+		key: "ctrl+alt+i",
+		get label() {
+			return t("overlaysModel.hub.folder.rules");
+		},
+	},
 ] as const;
 type FolderAction = (typeof FOLDER_ACTIONS)[number]["id"];
 
@@ -139,20 +182,19 @@ type FolderNameStrip = Extract<StripState, { purpose: "folder" }>;
 function folderPrompt(strip: FolderNameStrip): string {
 	switch (strip.action) {
 		case "folderNew":
-			return "New folder name:";
+			return t("overlaysModel.hub.folder.newName");
 		case "folderRename":
-			return "Rename folder:";
+			return t("overlaysModel.hub.folder.renamePrompt");
 		case "folderClear":
-			return `Type "${strip.name}" to clear:`;
+			return t("overlaysModel.hub.folder.clearPrompt", { name: String(strip.name) });
 		case "folderDelete":
-			return `Type "${strip.name}" to delete:`;
+			return t("overlaysModel.hub.folder.deletePrompt", { name: String(strip.name) });
 	}
 }
 
-const EFFORT_RULE_DESCRIPTION =
-	"Not Auto-only: implicit efforts in sessions and subagents, including saved fixed defaults. Caller/manual efforts bypass rules; legacy mode ignores them.";
-const CONTEXT_RULE_DESCRIPTION =
-	"All session model uses, including subagents and explicit efforts. Session/role/agent overrides > N model limits > context rules > global policy. * marks the effective maintenance budget; catalog context stays in the preview.";
+function scopeLabel(scope: ModelRoleSelectionScope): string {
+	return t(`overlaysModel.hub.scope.${scope}`);
+}
 
 /**
  * Selector kinds the hub can author. `re:` opts a selector into a native
@@ -200,16 +242,29 @@ function compilePatternSelectorMatcher(selector: string): (candidate: string) =>
  * still being typed, so Enter is never the first sign of a broken regex.
  */
 function patternStripHint(value: string): string {
-	if (!value) return theme.fg("dim", "glob, or re: for regex");
+	if (!value) return theme.fg("dim", t("overlaysModel.hub.pattern.help"));
 	const kind = selectorKind(value);
-	if (kind !== "regex") return theme.fg("dim", kind === "glob" ? "glob" : "literal");
-	if (value.length === REGEX_SELECTOR_PREFIX.length) return theme.fg("dim", "regex");
+	if (kind !== "regex")
+		return theme.fg(
+			"dim",
+			kind === "glob" ? t("overlaysModel.hub.pattern.glob") : t("overlaysModel.hub.pattern.literal"),
+		);
+	if (value.length === REGEX_SELECTOR_PREFIX.length) return theme.fg("dim", t("overlaysModel.hub.pattern.regex"));
 	const compiled = compileSelectorRegex(value);
-	return "error" in compiled ? theme.fg("error", `regex · ${compiled.error}`) : theme.fg("dim", "regex");
+	return "error" in compiled
+		? theme.fg("error", t("overlaysModel.hub.pattern.regexError", { error: compiled.error }))
+		: theme.fg("dim", t("overlaysModel.hub.pattern.regex"));
+}
+
+function selectorKindLabel(kind: "exact" | "glob" | "regex"): string {
+	return kind === "exact"
+		? t("overlaysModel.hub.rule.exact")
+		: kind === "glob"
+			? t("overlaysModel.hub.pattern.glob")
+			: t("overlaysModel.hub.pattern.regex");
 }
 
 const MODEL_HUB_BODY_MIN_WIDTH = 28;
-const MODEL_SCOPE_HINT = "⏎ models · / search · Alt+←/→ kind · ⎋ close";
 
 /**
  * A row of the Roles view: a role, a model/wildcard chain-key header, one of a
@@ -641,29 +696,80 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 
 /** Picker fact columns of the Roles view. */
 const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
-	{ id: "model", head: "Model", format: "text", priority: 2 },
-	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
-	{ id: "budget", head: "Role budget", format: "dim", priority: 1 },
+	{
+		id: "model",
+		get head() {
+			return t("overlaysModel.hub.column.model");
+		},
+		format: "text",
+		priority: 2,
+	},
+	{
+		id: "thinking",
+		get head() {
+			return t("overlaysModel.hub.role.thinking");
+		},
+		format: "dim",
+		priority: 1,
+	},
+	{
+		id: "budget",
+		get head() {
+			return t("overlaysModel.hub.role.budget");
+		},
+		format: "dim",
+		priority: 1,
+	},
 ];
+
+function localizedPickerColumns() {
+	return {
+		roles: ROLE_PICKER_COLUMNS.map(column => ({ ...column })),
+		models: MODEL_PICKER_COLUMNS.map(column => ({ ...column })),
+		newModels: NEW_MODEL_PICKER_COLUMNS.map(column => ({ ...column })),
+	};
+}
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
 const MODEL_KIND_LABELS: Record<"all" | ModelKind, string> = {
-	all: "All",
-	chat: "Chat",
-	tiny: "Tiny",
-	image: "Image",
+	get all() {
+		return t("overlaysModel.hub.kind.all");
+	},
+	get chat() {
+		return t("overlaysModel.hub.kind.chat");
+	},
+	get tiny() {
+		return t("overlaysModel.hub.kind.tiny");
+	},
+	get image() {
+		return t("overlaysModel.hub.kind.image");
+	},
 	tts: "TTS",
 	stt: "STT",
-	search: "Search",
-	judge: "Judge",
-	embedding: "Embedding",
-	rerank: "Rerank",
-	video: "Video",
+	get search() {
+		return t("overlaysModel.hub.kind.search");
+	},
+	get judge() {
+		return t("overlaysModel.hub.kind.judge");
+	},
+	get embedding() {
+		return t("overlaysModel.hub.kind.embedding");
+	},
+	get rerank() {
+		return t("overlaysModel.hub.kind.rerank");
+	},
+	get video() {
+		return t("overlaysModel.hub.kind.video");
+	},
 };
+
+function lowerKindLabel(kind: "all" | ModelKind): string {
+	if (kind === "chat" || kind === "tts" || kind === "stt" || kind === "video") return kind;
+	return t(`overlaysModel.hub.kind.lower.${kind}`);
+}
 
 const RECENT_LIMIT = 15;
 /** Accepted compaction limit input, shown beside the field: a scaled base, a fixed trigger, or a percentage. */
-const COMPACTION_INPUT_HINT = "400k base · f400k fixed · 80% · empty resets";
 
 type CompactionStrip = Extract<StripState, { purpose: "compaction" }>;
 
@@ -694,7 +800,7 @@ function compactionNotice(
 		if (strip.preview?.value !== value) strip.preview = { value, text: preview(strip.model, value) };
 		if (strip.preview.text) return { text: sanitizeDisplayWarning(strip.preview.text), style: "dim" };
 	}
-	return { text: COMPACTION_INPUT_HINT, style: "dim" };
+	return { text: t("overlaysModel.hub.compaction.syntax"), style: "dim" };
 }
 
 const MODEL_KIND_TABS: ReadonlyArray<"all" | ModelKind> = ["all", ...MODEL_KINDS];
@@ -845,11 +951,11 @@ export class ModelHubComponent implements Component {
 			fields: () => this.#settings.modelVariantFields ?? [],
 			models: () => this.#registry.getAll("all"),
 			save: variant => {
-				if (!this.#settings.onSaveModelVariant) throw new Error("Model variants are read-only.");
+				if (!this.#settings.onSaveModelVariant) throw new Error(t("overlaysModel.hub.error.variantsReadOnly"));
 				return this.#settings.onSaveModelVariant(variant);
 			},
 			remove: id => {
-				if (!this.#settings.onDeleteModelVariant) throw new Error("Model variants are read-only.");
+				if (!this.#settings.onDeleteModelVariant) throw new Error(t("overlaysModel.hub.error.variantsReadOnly"));
 				return this.#settings.onDeleteModelVariant(id);
 			},
 			changed: () => {
@@ -864,17 +970,17 @@ export class ModelHubComponent implements Component {
 	#overrides(): ModelOverridesPanel {
 		return (this.#overridesPanel ??= new ModelOverridesPanel({
 			list: () => {
-				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				if (!this.#registry.modelConfig) throw new Error(t("overlaysModel.hub.error.configUnavailable"));
 				return this.#registry.modelConfig.list();
 			},
 			schema: kind => this.#registry.modelConfig?.schema(kind) ?? {},
 			save: async (entry, original) => {
-				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				if (!this.#registry.modelConfig) throw new Error(t("overlaysModel.hub.error.configUnavailable"));
 				await this.#registry.modelConfig.save(entry, original);
 				await this.#registry.refresh("offline");
 			},
 			remove: async entry => {
-				if (!this.#registry.modelConfig) throw new Error("Model config editing is unavailable.");
+				if (!this.#registry.modelConfig) throw new Error(t("overlaysModel.hub.error.configUnavailable"));
 				await this.#registry.modelConfig.remove(entry);
 				await this.#registry.refresh("offline");
 			},
@@ -962,7 +1068,7 @@ export class ModelHubComponent implements Component {
 		return lines.slice(0, rows);
 	};
 	readonly #frame: HubFrame = new HubFrame(
-		"Models",
+		t("overlaysModel.hub.title.models"),
 		{ min: 18, max: 26 },
 		(width, rows) => this.#renderSidebar(width, rows),
 		this.#renderBodyPane,
@@ -976,6 +1082,19 @@ export class ModelHubComponent implements Component {
 	/** Bumped on every visible-state change; the described node is rebuilt when it moves. */
 	#nativeVersion = 0;
 	#nativeCache: { version: number; picker: boolean; node: NativeNode } | undefined;
+	#localizedPickerColumns = localizedPickerColumns();
+	#labelsLocale = getLocale();
+	#syncLabelsLocale(): void {
+		const locale = getLocale();
+		if (locale === this.#labelsLocale) return;
+		this.#labelsLocale = locale;
+		this.#localizedPickerColumns = localizedPickerColumns();
+		this.#nativeCache = undefined;
+		this.#kindTabsMemo = undefined;
+		this.#pickerRoleItems = undefined;
+		this.#pickerRolePreview = undefined;
+	}
+
 	#currentSelector: string | undefined;
 	#kindTabsMemo: { candidates: readonly ModelBrowserItem[]; tabs: TspPickerProps["tabs"] } | undefined;
 	#pickerRoleItems:
@@ -1069,7 +1188,12 @@ export class ModelHubComponent implements Component {
 				fallbackTarget: strip.fallbackTarget ? { ...strip.fallbackTarget } : undefined,
 				toggle: new EffortToggle([...strip.toggle.options], [...strip.toggle.selected]),
 			};
-		const snapshot = { ...strip, chips: strip.chips.map(chip => ({ ...chip })) };
+		const snapshot = {
+			...strip,
+			chips: strip.chips.map(chip =>
+				Object.defineProperties({} as StripChip, Object.getOwnPropertyDescriptors(chip)),
+			),
+		};
 		if ("initialSelection" in snapshot) snapshot.initialSelection = structuredClone(snapshot.initialSelection);
 		if ("fallbackTarget" in snapshot && snapshot.fallbackTarget)
 			snapshot.fallbackTarget = { ...snapshot.fallbackTarget };
@@ -1441,16 +1565,22 @@ export class ModelHubComponent implements Component {
 			locked.delete(pinned.id);
 		}
 		const oauthIds = new Set(getOAuthProviders().map(provider => provider.id));
-		const providerEntry = (providerId: string, isLocked: boolean): SidebarEntry => ({
-			id: `provider:${providerId}`,
-			kind: "provider",
-			label: this.#pinnedProviders.find(pinned => pinned.id === providerId)?.label ?? providerId,
-			providerId,
-			locked: isLocked,
-			annotation: isLocked ? undefined : String(availableCounts.get(providerId) ?? 0),
-			oauth: oauthIds.has(providerId),
-			catalogCount: catalogCounts.get(providerId) ?? 0,
-		});
+		const pinnedProviders = this.#pinnedProviders;
+		const providerEntry = (providerId: string, isLocked: boolean): SidebarEntry => {
+			const pinnedProvider = pinnedProviders.find(pinned => pinned.id === providerId);
+			return {
+				id: `provider:${providerId}`,
+				kind: "provider",
+				get label() {
+					return pinnedProvider?.label ?? providerId;
+				},
+				providerId,
+				locked: isLocked,
+				annotation: isLocked ? undefined : String(availableCounts.get(providerId) ?? 0),
+				oauth: oauthIds.has(providerId),
+				catalogCount: catalogCounts.get(providerId) ?? 0,
+			};
+		};
 
 		const visibleRoles = this.#visibleRoleIds();
 		let assignedCount = 0;
@@ -1463,17 +1593,40 @@ export class ModelHubComponent implements Component {
 		// model scopes instead of being captured by the roles view.
 		const fixed: SidebarEntry[] = this.#sessionOnly
 			? [
-					{ id: "recent", kind: "recent", label: "Recently used", annotation: String(this.#recentItems.length) },
-					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+					{
+						id: "recent",
+						kind: "recent",
+						get label() {
+							return t("overlaysModel.hub.sidebar.recentlyUsed");
+						},
+						annotation: String(this.#recentItems.length),
+					},
+					{
+						id: "all",
+						kind: "all",
+						get label() {
+							return t("overlaysModel.hub.sidebar.allModels");
+						},
+						annotation: String(availableModels.length),
+					},
 				]
 			: [
 					{
 						id: "roles",
 						kind: "roles",
-						label: "Roles",
+						get label() {
+							return t("overlaysModel.hub.sidebar.roles");
+						},
 						annotation: `${assignedCount}/${visibleRoles.length}`,
 					},
-					{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
+					{
+						id: "all",
+						kind: "all",
+						get label() {
+							return t("overlaysModel.hub.sidebar.allModels");
+						},
+						annotation: String(availableModels.length),
+					},
 				];
 
 		this.#fixedEntries = fixed;
@@ -1519,7 +1672,9 @@ export class ModelHubComponent implements Component {
 				{
 					id: "effort",
 					kind: "effort",
-					label: "Effort rules",
+					get label() {
+						return t("overlaysModel.hub.sidebar.effortRules");
+					},
 					annotation: String(this.#settings.effortRules.length),
 				},
 			);
@@ -1527,25 +1682,48 @@ export class ModelHubComponent implements Component {
 			if (variants !== undefined) {
 				entries.push(
 					{ id: "sep:variants", kind: "separator", label: "" },
-					{ id: "variants", kind: "variants", label: "Model Variants", annotation: String(variants.length) },
+					{
+						id: "variants",
+						kind: "variants",
+						get label() {
+							return t("overlaysModel.hub.sidebar.variants");
+						},
+						annotation: String(variants.length),
+					},
 				);
 			}
 			entries.push(
 				{
 					id: "context",
 					kind: "effort",
-					label: "Context rules",
+					get label() {
+						return t("overlaysModel.hub.sidebar.contextRules");
+					},
 					annotation: String(this.#settings.contextRules?.length ?? 0),
 				},
-				{ id: "overrides", kind: "overrides", label: "Model overrides" },
+				{
+					id: "overrides",
+					kind: "overrides",
+					get label() {
+						return t("overlaysModel.hub.sidebar.overrides");
+					},
+				},
 			);
 		}
 		entries.push(
-			{ id: "sep:folders", kind: "separator", label: "Folders" },
+			{
+				id: "sep:folders",
+				kind: "separator",
+				get label() {
+					return t("overlaysModel.hub.sidebar.folders");
+				},
+			},
 			{
 				id: NEW_MODELS_ID,
 				kind: "newModels",
-				label: NEW_MODELS_LABEL,
+				get label() {
+					return t("overlaysModel.hub.sidebar.newModels");
+				},
 				annotation: String(this.#newModelItems.length),
 			},
 			...this.#folderEntries,
@@ -2054,25 +2232,25 @@ export class ModelHubComponent implements Component {
 	#formatDiscoveryAge(fetchedAt: number | undefined): string | undefined {
 		if (!fetchedAt) return undefined;
 		const ageMs = Math.max(0, Date.now() - fetchedAt);
-		if (ageMs < 60_000) return "less than a minute ago";
-		return `${Math.round(ageMs / 60_000)}m ago`;
+		if (ageMs < 60_000) return t("overlaysModel.hub.empty.ageRecent");
+		return t("overlaysModel.hub.empty.ageMinutes", { minutes: Math.round(ageMs / 60_000) });
 	}
 
 	#emptyStateMessage(): string | undefined {
 		if (this.#configError) return `  ${this.#configError}`;
 		const entry = this.#activeEntry();
-		if (entry.kind === "recent") return "  No recently used models yet";
+		if (entry.kind === "recent") return t("overlaysModel.hub.empty.recent");
 		if (entry.kind === "newModels" && !this.#browser.query.trim()) {
-			return "  No newly discovered models in this view.";
+			return t("overlaysModel.hub.empty.new");
 		}
 		if (entry.kind === "folder" && !this.#browser.query.trim()) {
 			return entry.folder?.models.length
-				? "  No models in this folder are available in this view."
-				: `  This folder is empty. Highlight a model in any provider and press ${formatKeyHint(FOLDER_ACTIONS[1].key)}.`;
+				? t("overlaysModel.hub.empty.folderUnavailable")
+				: t("overlaysModel.hub.empty.folder", { key: formatKeyHint(FOLDER_ACTIONS[1].key) });
 		}
 		if (entry.kind !== "provider" || entry.locked) return undefined;
 		if (this.#browser.query.trim()) {
-			return `  No matching models in ${entry.label}. Switch to All models to search every provider.`;
+			return t("overlaysModel.hub.empty.providerMatches", { provider: entry.label });
 		}
 		const providerId = entry.providerId ?? "";
 		const state = this.#registry.getProviderDiscoveryState(providerId);
@@ -2080,23 +2258,23 @@ export class ModelHubComponent implements Component {
 		const age = this.#formatDiscoveryAge(state.fetchedAt);
 		switch (state.status) {
 			case "cached":
-				return age
-					? `  Using cached model list from ${age}. Live refresh is still pending.`
-					: "  Using cached model list. Live refresh is still pending.";
+				return age ? t("overlaysModel.hub.empty.cachedAge", { age }) : t("overlaysModel.hub.empty.cached");
 			case "unavailable": {
 				const httpMatch = state.error?.match(/^HTTP (\d+) from (.+)$/);
 				if (httpMatch?.[1] === "404") {
-					return `  Discovery endpoint ${httpMatch[2]} returned 404. Point baseUrl at the host that serves /models (usually .../v1).`;
+					return t("overlaysModel.hub.empty.discovery404", { endpoint: httpMatch[2] });
 				}
-				if (state.error) return `  Discovery failed: ${state.error}`;
-				return age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.";
+				if (state.error) return t("overlaysModel.hub.empty.discoveryFailure", { error: state.error });
+				return age
+					? t("overlaysModel.hub.empty.unavailableCached", { age })
+					: t("overlaysModel.hub.empty.unavailable");
 			}
 			case "unauthenticated":
-				return "  Provider requires authentication before models can be discovered.";
+				return t("overlaysModel.hub.empty.auth");
 			case "idle":
-				return "  Provider has not been refreshed yet.";
+				return t("overlaysModel.hub.empty.notRefreshed");
 			case "empty":
-				return "  Discovery succeeded but returned 0 models. Check that /models returns { data: [{ id }] }.";
+				return t("overlaysModel.hub.empty.zero");
 			case "ok":
 				return undefined;
 		}
@@ -2112,7 +2290,7 @@ export class ModelHubComponent implements Component {
 		if (item.discovery?.unavailable) {
 			const provider = this.#lockedProviderEntries.find(entry => entry.providerId === item.provider);
 			if (provider?.oauth && this.#callbacks.onLoginRequest) this.#requestLogin(provider);
-			else this.#configError = `${item.provider} is not configured for this model.`;
+			else this.#configError = t("overlaysModel.hub.error.providerConfig", { provider: item.provider });
 			this.#requestRender();
 			return;
 		}
@@ -2299,16 +2477,19 @@ export class ModelHubComponent implements Component {
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
 				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
-				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
-					label,
-					styled: assignedHere
-						? // Separator required: under the `nerd` preset this glyph is a
-							// two-cell-wide PUA icon that `visibleWidth` counts as one, so
-							// without it the icon overhangs and eats `label`'s first char.
-							theme.fg(info.color ?? "muted", `${theme.status.enabled} ${label}`) +
-							theme.fg("dim", ` ${theme.status.success}`)
-						: theme.fg(info.color ?? "muted", label),
+					get label() {
+						return scopedStorage ? `${scopeLabel(scope)} ${roleLabel}` : roleLabel;
+					},
+					get styled() {
+						return assignedHere
+							? // Separator required: under the `nerd` preset this glyph is a
+								// two-cell-wide PUA icon that `visibleWidth` counts as one, so
+								// without it the icon overhangs and eats `label`'s first char.
+								theme.fg(info.color ?? "muted", `${theme.status.enabled} ${this.label}`) +
+									theme.fg("dim", ` ${theme.status.success}`)
+							: theme.fg(info.color ?? "muted", this.label);
+					},
 					role,
 					scope,
 					action: assignedHere ? "unassign" : "assign",
@@ -2316,26 +2497,60 @@ export class ModelHubComponent implements Component {
 			}
 		}
 		chips.push({
-			label: `fallbacks:${item.model.id}`,
-			styled: theme.fg("muted", `fallbacks:${item.model.id}`),
+			get label() {
+				return t("overlaysModel.hub.strip.modelFallbacks", { model: item.model.id });
+			},
+			get styled() {
+				return theme.fg("muted", t("overlaysModel.hub.strip.modelFallbacks", { model: item.model.id }));
+			},
 			action: "fallbackModel",
 		});
 		chips.push({
-			label: `fallbacks:${item.model.provider}/*`,
-			styled: theme.fg("muted", `fallbacks:${item.model.provider}/*`),
+			get label() {
+				return t("overlaysModel.hub.strip.providerFallbacks", { model: item.model.provider });
+			},
+			get styled() {
+				return theme.fg("muted", t("overlaysModel.hub.strip.providerFallbacks", { model: item.model.provider }));
+			},
 			action: "fallbackProvider",
 		});
 		// `retry-fallback` appends to the default chain, so only chat-capable models qualify.
 		if (this.#settings.getRoleInfo("default").accepts(item.model)) {
-			chips.push({ label: "fallback", styled: theme.fg("muted", "retry-fallback"), action: "fallback" });
+			chips.push({
+				get label() {
+					return t("overlaysModel.hub.strip.fallback");
+				},
+				get styled() {
+					return theme.fg("muted", t("overlaysModel.hub.strip.retryFallback"));
+				},
+				action: "fallback",
+			});
 		}
 		this.#strip = { kind: "role", item, chips, index: 0, returnToRoles: false };
 	}
 
 	#openScopeStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
 		const chips: StripChip[] = [
-			{ label: "global", styled: theme.fg("accent", "global"), action: "scope", scope: "global" },
-			{ label: "project", styled: theme.fg("muted", "project"), action: "scope", scope: "project" },
+			{
+				get label() {
+					return scopeLabel("global");
+				},
+				get styled() {
+					return theme.fg("accent", this.label);
+				},
+				action: "scope",
+				scope: "global",
+			},
+			{
+				get label() {
+					return scopeLabel("project");
+				},
+				get styled() {
+					return theme.fg("muted", this.label);
+				},
+				action: "scope",
+				scope: "project",
+			},
 		];
 		this.#strip = { kind: "scope", item, role, chips, index: 0, returnToRoles };
 	}
@@ -2420,7 +2635,7 @@ export class ModelHubComponent implements Component {
 			// A regex selector is matched against the whole `provider/model-id`
 			// string, so neither a slash nor a provider prefix is required.
 			if (selector.length === REGEX_SELECTOR_PREFIX.length) {
-				this.#configError = "Enter a regular expression after re:";
+				this.#configError = t("overlaysModel.hub.error.regex");
 				return;
 			}
 			const compiled = compileSelectorRegex(selector);
@@ -2431,7 +2646,7 @@ export class ModelHubComponent implements Component {
 			}
 		} else {
 			if (!selector || !selector.includes("/") || selector.startsWith("/") || selector.endsWith("/")) {
-				this.#configError = "Enter a provider/model selector, provider/* glob, or re: regex";
+				this.#configError = t("overlaysModel.hub.error.selector");
 				return;
 			}
 			if (
@@ -2439,13 +2654,13 @@ export class ModelHubComponent implements Component {
 				selectorKind(selector) === "glob" &&
 				!/^([^/*?[\]{}]+\/)+\*$/.test(selector)
 			) {
-				this.#configError = "Chain keys support provider/* or provider/prefix/* only; use re: for other patterns";
+				this.#configError = t("overlaysModel.hub.error.chainPattern");
 				return;
 			}
 			try {
 				if (isPatternSelector(selector)) new Bun.Glob(selector);
 			} catch {
-				this.#configError = "Invalid model glob";
+				this.#configError = t("overlaysModel.hub.error.glob");
 				return;
 			}
 		}
@@ -2453,13 +2668,13 @@ export class ModelHubComponent implements Component {
 		if (strip.target === "fallbackKey") {
 			const chains = this.#fallbackChains();
 			if (selector !== strip.role && Object.hasOwn(chains, selector)) {
-				this.#configError = `Fallback chain already exists: ${selector}`;
+				this.#configError = t("overlaysModel.hub.error.chainExists", { selector });
 				return;
 			}
 			if (strip.role) {
 				if (selector !== strip.role) {
 					if (!this.#callbacks.onFallbackChainKeyChange) {
-						this.#configError = "Renaming fallback chains is unavailable";
+						this.#configError = t("overlaysModel.hub.error.renameChain");
 						return;
 					}
 					if (this.#callbacks.onFallbackChainKeyChange(strip.role, selector) === false) return;
@@ -2484,7 +2699,7 @@ export class ModelHubComponent implements Component {
 				this.#scopedModels.length > 0 ? this.#scopedModels.map(entry => entry.model) : this.#registry.getAll("all");
 			const resolved = this.#settings.resolveRoleValue(selector, models);
 			if (!resolved.model || !this.#settings.getRoleInfo(strip.role).accepts(resolved.model)) {
-				this.#configError = "Pattern does not resolve to a compatible model";
+				this.#configError = t("overlaysModel.hub.error.patternModel");
 				return;
 			}
 			const model = resolved.model;
@@ -2494,21 +2709,33 @@ export class ModelHubComponent implements Component {
 		}
 	}
 
+	#selectorChoiceChip(key: string, color: "accent" | "muted"): StripChip {
+		return {
+			get label() {
+				return t(key);
+			},
+			get styled() {
+				return theme.fg(color, this.label);
+			},
+			action: "thinking",
+		};
+	}
+
 	#openFallbackSelectorChoice(role: string, index: number | null): void {
 		this.#strip = {
 			kind: "selectorChoice",
 			target: { kind: "fallback", role, index },
 			index: 0,
 			chips: [
-				{ action: "thinking", label: "pick model…", styled: theme.fg("accent", "pick model…") },
-				{ action: "thinking", label: "pattern…", styled: theme.fg("muted", "pattern…") },
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pickModel", "accent"),
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pattern", "muted"),
 			],
 		};
 	}
 
 	#selectorStripLabel(strip: Extract<StripState, { kind: "selectorChoice" | "patternEffort" }>): string {
 		if (strip.kind === "patternEffort") return strip.selector;
-		return strip.target.kind === "fallbackKey" ? "New fallback chain" : strip.target.role;
+		return strip.target.kind === "fallbackKey" ? t("overlaysModel.hub.role.newChain") : strip.target.role;
 	}
 
 	#openFallbackKeySelectorChoice(): void {
@@ -2517,8 +2744,8 @@ export class ModelHubComponent implements Component {
 			target: { kind: "fallbackKey" },
 			index: 0,
 			chips: [
-				{ action: "thinking", label: "pick model…", styled: theme.fg("accent", "pick model…") },
-				{ action: "thinking", label: "pattern…", styled: theme.fg("muted", "pattern…") },
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pickModel", "accent"),
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pattern", "muted"),
 			],
 		};
 	}
@@ -2529,8 +2756,8 @@ export class ModelHubComponent implements Component {
 			target: { kind: "role", role },
 			index: 0,
 			chips: [
-				{ action: "thinking", label: "pick model…", styled: theme.fg("accent", "pick model…") },
-				{ action: "thinking", label: "pattern…", styled: theme.fg("muted", "pattern…") },
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pickModel", "accent"),
+				this.#selectorChoiceChip("overlaysModel.hub.strip.pattern", "muted"),
 			],
 		};
 	}
@@ -2633,9 +2860,12 @@ export class ModelHubComponent implements Component {
 	#effortRowText(index: number): string {
 		const rules = this.#rules();
 		const rule = rules[index];
-		if (!rule) return index === rules.length ? "+ Pick exact model…" : "+ Enter glob or re: regex…";
+		if (!rule)
+			return index === rules.length
+				? t("overlaysModel.hub.rule.addExactTerminal")
+				: t("overlaysModel.hub.rule.addPatternTerminal");
 		const kind = selectorKind(rule.selector);
-		const prefix = kind === "exact" ? "exact" : `${index + 1}. ${kind}`;
+		const prefix = kind === "exact" ? t("overlaysModel.hub.rule.exact") : `${index + 1}. ${selectorKindLabel(kind)}`;
 		return `${prefix}  ${rule.selector}  [${this.#ruleValue(rule)}]`;
 	}
 
@@ -2653,7 +2883,9 @@ export class ModelHubComponent implements Component {
 	#renderEffortRules(width: number, rows: number): string[] {
 		const indices = this.#syncEffortSelection();
 		const description = Bun.wrapAnsi(
-			this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION,
+			this.#contextRulesView()
+				? t("overlaysModel.hub.rule.contextDescription")
+				: t("overlaysModel.hub.rule.effortDescription"),
 			Math.max(1, width - 2),
 		).split("\n");
 		this.#ruleHeaderRows = description.length + 2;
@@ -2668,11 +2900,11 @@ export class ModelHubComponent implements Component {
 		);
 		this.#effortScrollStart = view.startIndex;
 		const lines = [
-			theme.fg("muted", " Exact rules win, then regex, then glob — each in listed order"),
+			theme.fg("muted", t("overlaysModel.hub.rule.priority")),
 			...description.map(line => theme.fg("muted", ` ${line}`)),
 			this.#effortSearch.render(width, { muted: value => theme.fg("muted", value) }),
 		];
-		if (indices.length === 0) lines.push(theme.fg("muted", " No matching rules"));
+		if (indices.length === 0) lines.push(theme.fg("muted", t("overlaysModel.hub.rule.noMatch")));
 		const body: string[] = [];
 		for (let row = view.startIndex; row < view.endIndex; row++) {
 			const index = indices[row];
@@ -2754,7 +2986,7 @@ export class ModelHubComponent implements Component {
 	#confirmEffortLevels(strip: Extract<StripState, { kind: "effortLevels" }>): void {
 		const allowed = strip.toggle.confirm();
 		if (!allowed) {
-			this.#configError = "Select at least one effort level before saving";
+			this.#configError = t("overlaysModel.hub.error.chooseEffort");
 			this.#tui.requestRender();
 			return;
 		}
@@ -3121,13 +3353,24 @@ export class ModelHubComponent implements Component {
 	#openFallbackKeyStrip(item: ModelBrowserItem): void {
 		const chips: StripChip[] = [
 			{
-				label: `for ${item.selector}`,
-				styled: theme.fg("muted", `for ${item.selector}`),
+				get label() {
+					return t("overlaysModel.hub.strip.chainFor", { model: item.selector });
+				},
+				get styled() {
+					return theme.fg("muted", t("overlaysModel.hub.strip.chainFor", { model: item.selector }));
+				},
 				action: "fallbackModel",
 			},
 			{
-				label: `for ${item.model.provider}/*`,
-				styled: theme.fg("muted", `for ${item.model.provider}/*`),
+				get label() {
+					return t("overlaysModel.hub.strip.chainForProvider", { provider: item.model.provider });
+				},
+				get styled() {
+					return theme.fg(
+						"muted",
+						t("overlaysModel.hub.strip.chainForProvider", { provider: item.model.provider }),
+					);
+				},
 				action: "fallbackProvider",
 			},
 		];
@@ -3360,7 +3603,7 @@ export class ModelHubComponent implements Component {
 		const source = this.#settings.modelFolders;
 		const folders = source?.entries;
 		const folder = folders?.find(folder => folder.name === name);
-		if (!source || !folders || !folder) throw new Error("This folder no longer exists.");
+		if (!source || !folders || !folder) throw new Error(t("overlaysModel.hub.error.folderMissing"));
 		const models =
 			action === "save"
 				? folder.models
@@ -3372,9 +3615,9 @@ export class ModelHubComponent implements Component {
 					);
 		source.save(folders.map(candidate => (candidate === folder ? { ...folder, models, rules } : candidate)));
 		this.#refreshAfterMutation();
-		if (action === "save") return "Rules saved.";
-		if (action === "force") return `Folder synced: ${models.length} matching model(s).`;
-		return `Added ${models.length - folder.models.length} matching model(s).`;
+		if (action === "save") return t("overlaysModel.hub.folder.saved");
+		if (action === "force") return t("overlaysModel.hub.folder.synced", { count: models.length });
+		return t("overlaysModel.hub.folder.added", { count: models.length - folder.models.length });
 	}
 
 	#setFolderMembership(name: string, selector: string, add: boolean): void {
@@ -3396,7 +3639,7 @@ export class ModelHubComponent implements Component {
 		const name = value.trim();
 		if (strip.action === "folderDelete" || strip.action === "folderClear") {
 			if (value !== strip.name) {
-				strip.error = "Type the exact folder name to confirm.";
+				strip.error = t("overlaysModel.hub.folder.confirmExact");
 				return;
 			}
 			this.#saveFolders(
@@ -3407,15 +3650,15 @@ export class ModelHubComponent implements Component {
 			return;
 		}
 		if (!name || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(name)) {
-			strip.error = "Enter a non-empty, single-line folder name.";
+			strip.error = t("overlaysModel.hub.folder.nonempty");
 			return;
 		}
 		const previous = strip.action === "folderRename" ? strip.name : undefined;
 		if (
-			(name === NEW_MODELS_LABEL && name !== previous) ||
+			(name === RESERVED_NEW_MODELS_NAME && name !== previous) ||
 			folders.some(folder => folder.name === name && folder.name !== previous)
 		) {
-			strip.error = "A folder with that name already exists.";
+			strip.error = t("overlaysModel.hub.folder.duplicate");
 			return;
 		}
 		this.#saveFolders(
@@ -3473,7 +3716,7 @@ export class ModelHubComponent implements Component {
 			const draft = strip.input.getValue().trim();
 			const value = draft === "" ? undefined : Number(draft);
 			if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) {
-				this.#configError = "Role token budget must be a positive integer; empty inherits.";
+				this.#configError = t("overlaysModel.hub.error.tokenBudget");
 				return;
 			}
 			if (this.#callbacks.onRoleTokenBudgetChange?.(strip.role, value) === false) return;
@@ -4582,11 +4825,11 @@ export class ModelHubComponent implements Component {
 	#renderModelKindTabs(width: number): string {
 		const active = MODEL_KIND_TABS.indexOf(this.#modelKindTab);
 		const track = renderSegmentTrack(
-			MODEL_KIND_TABS.map(kind => ({ label: kind })),
+			MODEL_KIND_TABS.map(kind => ({ label: lowerKindLabel(kind) })),
 			Math.max(0, active),
 		);
 		return truncateToWidth(
-			` ${theme.fg("dim", "Kind:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
+			` ${theme.fg("dim", t("overlaysModel.hub.kind.title"))} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
 			width,
 		);
 	}
@@ -4594,24 +4837,31 @@ export class ModelHubComponent implements Component {
 	#renderRoleTabs(width: number): string {
 		const active = ROLE_TABS.indexOf(this.#roleTab);
 		const track = renderSegmentTrack(
-			ROLE_TABS.map(tab => ({ label: tab === "kind" ? "kinds" : tab })),
+			ROLE_TABS.map(tab => ({
+				label:
+					tab === "kind"
+						? t("overlaysModel.hub.role.tabKinds")
+						: tab === "all"
+							? t("overlaysModel.hub.role.tabAll")
+							: tab,
+			})),
 			Math.max(0, active),
 		);
 		const { names, active: activePreset } = this.#presets();
 		const presetKeys = formatKeyHints(["ctrl+left", "ctrl+right"]);
 		const preset =
 			names.length > 0
-				? `   ${theme.fg("dim", "Preset:")} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", "custom")}  ${theme.fg("dim", presetKeys)}`
+				? `   ${theme.fg("dim", t("overlaysModel.hub.role.presetTitle"))} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", t("overlaysModel.hub.role.customPreset"))}  ${theme.fg("dim", presetKeys)}`
 				: "";
 		return truncateToWidth(
-			` ${theme.fg("dim", "Roles:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
+			` ${theme.fg("dim", t("overlaysModel.hub.role.trackTitle"))} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
 			width,
 		);
 	}
 
 	#statusRow(width: number): string {
 		if (this.#assignmentPending) {
-			return truncateToWidth(theme.fg("accent", " Applying model…"), width);
+			return truncateToWidth(theme.fg("accent", t("overlaysModel.hub.status.applyingTerminal")), width);
 		}
 		if (this.#assigning !== null) {
 			const enter = formatKeyHint("enter");
@@ -4620,40 +4870,57 @@ export class ModelHubComponent implements Component {
 				return truncateToWidth(
 					theme.fg(
 						"accent",
-						` New exact ${this.#contextRulesView() ? "context" : "effort"} rule · ${enter} picks model, ${cancel} cancels`,
+						this.#contextRulesView()
+							? t("overlaysModel.hub.status.exactContextTerminal", { enter, cancel })
+							: t("overlaysModel.hub.status.exactEffortTerminal", { enter, cancel }),
 					),
 					width,
 				);
 			}
 			if (this.#assigning.kind === "fallbackKey") {
 				return truncateToWidth(
-					theme.fg("accent", ` New fallback chain — ${enter} picks the model it protects, ${cancel} cancels`),
+					theme.fg("accent", t("overlaysModel.hub.status.protectedModelTerminal", { enter, cancel })),
 					width,
 				);
 			}
 			const info = this.#settings.getRoleInfo(this.#assigning.role);
 			const label = info.tag ?? info.name ?? this.#assigning.role;
 			if (this.#assigning.kind === "fallback") {
-				const verb = this.#assigning.index === null ? "Adding fallback for" : "Replacing fallback of";
+				const verb =
+					this.#assigning.index === null
+						? t("overlaysModel.hub.status.addFallback")
+						: t("overlaysModel.hub.status.replaceFallback");
 				return truncateToWidth(
 					theme.fg(
 						"accent",
-						` ${verb} ${theme.bold(label)} — ${enter} picks the fallback model, ${cancel} cancels`,
+						t("overlaysModel.hub.status.fallbackPicking", {
+							verb,
+							role: theme.bold(label),
+							enter,
+							cancel,
+						}),
 					),
 					width,
 				);
 			}
 			return truncateToWidth(
-				theme.fg("accent", ` Assigning ${theme.bold(label)} — ${enter} assigns, ${cancel} cancels`),
+				theme.fg(
+					"accent",
+					t("overlaysModel.hub.status.assignTerminal", {
+						role: theme.bold(label),
+						enter,
+						cancel,
+					}),
+				),
 				width,
 			);
 		}
 		const entry = this.#activeEntry();
-		const scopedSuffix = this.#scopedModels.length > 0 ? " · --models scope" : "";
+		const scopedSuffix = this.#scopedModels.length > 0 ? t("overlaysModel.hub.status.scopedSuffix") : "";
 		let text: string;
 		switch (entry.kind) {
 			case "recent":
-				text = `Recently used models${scopedSuffix}`;
+				text = t("overlaysModel.hub.status.recent", { scopedSuffix });
 				break;
 			case "roles": {
 				const row = this.#rolesRows[this.#roleIndex];
@@ -4662,26 +4929,39 @@ export class ModelHubComponent implements Component {
 				break;
 			}
 			case "effort":
-				text = this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
+				text = this.#contextRulesView()
+					? t("overlaysModel.hub.rule.contextDescription")
+					: t("overlaysModel.hub.rule.effortDescription");
 				break;
 			case "variants":
-				text = `${entry.annotation ?? "0"} saved${entry.annotation === "1" ? " variant" : " variants"}`;
+				text =
+					entry.annotation === "1"
+						? t("overlaysModel.hub.status.variant", { count: entry.annotation ?? "0" })
+						: t("overlaysModel.hub.status.variants", { count: entry.annotation ?? "0" });
 				break;
 			case "provider":
 				if (entry.locked) {
-					text = `${entry.label} · not configured`;
+					text = t("overlaysModel.hub.status.notConfigured", { provider: entry.label });
 				} else if (entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
-					text = `${entry.label} · refreshing model list…`;
+					text = t("overlaysModel.hub.status.refreshing", { provider: entry.label });
 				} else {
-					text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
+					text = t("overlaysModel.hub.status.modelCount", {
+						label: entry.label,
+						count: entry.annotation ?? "0",
+						scopedSuffix,
+					});
 				}
 				break;
 			case "newModels":
 			case "folder":
-				text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
+				text = t("overlaysModel.hub.status.modelCount", {
+					label: entry.label,
+					count: entry.annotation ?? "0",
+					scopedSuffix,
+				});
 				break;
 			default:
-				text = `All available models${scopedSuffix}`;
+				text = t("overlaysModel.hub.status.all", { scopedSuffix });
 				break;
 		}
 		if (this.#configError && entry.kind !== "provider") {
@@ -4753,7 +5033,10 @@ export class ModelHubComponent implements Component {
 			}
 
 			if (rowDef.kind === "newRole" || rowDef.kind === "newFallback") {
-				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
+				const label =
+					rowDef.kind === "newRole"
+						? t("overlaysModel.hub.role.newRolePlus")
+						: t("overlaysModel.hub.role.newFallbackPlus");
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
 				line = this.#finishRolesRow(line, width, hovered);
 				body.push(line);
@@ -4818,7 +5101,7 @@ export class ModelHubComponent implements Component {
 				const glyph = thinkingLevelGlyph(effective, theme);
 				const label =
 					policy?.mode === "auto" && policy.allowed
-						? `Auto [${policy.allowed.join(", ")}]`
+						? t("overlaysModel.hub.role.autoEfforts", { efforts: policy.allowed.join(", ") })
 						: getConfiguredThinkingLevelMetadata(effective).label;
 				if (effective !== ThinkingLevel.Inherit) {
 					levelStyled = theme.fg(selected ? "accent" : "dim", glyph ? `${glyph} ${label}` : label);
@@ -4826,7 +5109,10 @@ export class ModelHubComponent implements Component {
 			} else if (assignment) {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
-				value = theme.fg("dim", `auto → ${assignment.model.provider}/${assignment.model.id}`);
+				value = theme.fg(
+					"dim",
+					t("overlaysModel.hub.role.autoModel", { model: `${assignment.model.provider}/${assignment.model.id}` }),
+				);
 			} else {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
@@ -4841,7 +5127,10 @@ export class ModelHubComponent implements Component {
 			const scopeNote = this.#settings.getRoleScopeNote?.(role);
 			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
-			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
+			const budgetStyled =
+				budget === undefined
+					? ""
+					: theme.fg("dim", t("overlaysModel.hub.role.budgetCount", { count: budget.toLocaleString("en-US") }));
 			const right = [budgetStyled, levelStyled, cycleStyled].filter(part => part.length > 0).join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
@@ -4861,8 +5150,8 @@ export class ModelHubComponent implements Component {
 			const hiddenAbove = this.#roleScrollStart;
 			const hiddenBelow = total - endIndex;
 			const parts: string[] = [];
-			if (hiddenAbove > 0) parts.push(`↑ ${hiddenAbove} more`);
-			if (hiddenBelow > 0) parts.push(`↓ ${hiddenBelow} more`);
+			if (hiddenAbove > 0) parts.push(t("overlaysModel.hub.role.hiddenAbove", { count: hiddenAbove }));
+			if (hiddenBelow > 0) parts.push(t("overlaysModel.hub.role.hiddenBelow", { count: hiddenBelow }));
 			lines.push(truncateToWidth(theme.fg("dim", `   ${parts.join("   ")}`), width));
 		}
 
@@ -4880,10 +5169,13 @@ export class ModelHubComponent implements Component {
 					cycleOrder.map(role => ({ label: role })),
 					activeIndex,
 				);
-				lines[rows - 1] = truncateToWidth(`  ${theme.fg("dim", `${cycleKey} cycle:`)} ${track}`, width);
+				lines[rows - 1] = truncateToWidth(
+					`  ${theme.fg("dim", t("overlaysModel.hub.role.cycleKey", { key: cycleKey }))} ${track}`,
+					width,
+				);
 			} else {
 				lines[rows - 1] = truncateToWidth(
-					theme.fg("dim", `  ${cycleKey} cycle is empty — press ${formatKeyHint("c")} on a role to add it`),
+					theme.fg("dim", t("overlaysModel.hub.role.cycleEmpty", { cycleKey, add: formatKeyHint("c") })),
 					width,
 				);
 			}
@@ -4895,24 +5187,40 @@ export class ModelHubComponent implements Component {
 		const lines: string[] = [];
 		this.#lockedLoginLine = null;
 		lines.push("");
-		lines.push(truncateToWidth(theme.fg("warning", `  ${entry.label} has no credentials configured`), width));
+		lines.push(
+			truncateToWidth(
+				theme.fg("warning", t("overlaysModel.hub.provider.noCredentialsTerminal", { provider: entry.label })),
+				width,
+			),
+		);
 		lines.push("");
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		if (envVars.length > 0) {
 			lines.push(
 				truncateToWidth(
-					theme.fg("muted", `  Set ${envVars.join(" or ")} in your environment, or add a key in config.`),
+					theme.fg(
+						"muted",
+						t("overlaysModel.hub.provider.envTerminal", {
+							vars: envVars.join(t("overlaysModel.hub.provider.or")),
+						}),
+					),
 					width,
 				),
 			);
 		} else {
-			lines.push(truncateToWidth(theme.fg("muted", "  Add an API key for this provider in config."), width));
+			lines.push(truncateToWidth(theme.fg("muted", t("overlaysModel.hub.provider.apiKeyTerminal")), width));
 		}
 		if (entry.oauth) {
 			this.#lockedLoginLine = lines.length + 1; // +1 for the status row offset handled by caller
 			lines.push(
 				truncateToWidth(
-					theme.fg("accent", `  ${theme.nav.cursor} Log in with OAuth (${formatKeyHint("enter")})`),
+					theme.fg(
+						"accent",
+						t("overlaysModel.hub.provider.oauthTerminal", {
+							cursor: theme.nav.cursor,
+							key: formatKeyHint("enter"),
+						}),
+					),
 					width,
 				),
 			);
@@ -4920,7 +5228,12 @@ export class ModelHubComponent implements Component {
 		lines.push("");
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
-			lines.push(truncateToWidth(theme.fg("dim", `  ${catalogCount} models in catalog:`), width));
+			lines.push(
+				truncateToWidth(
+					theme.fg("dim", t("overlaysModel.hub.provider.catalogCountTerminal", { count: catalogCount })),
+					width,
+				),
+			);
 			const preview = this.#scopedModels.length > 0 ? [] : this.#catalogModels;
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
@@ -4933,9 +5246,12 @@ export class ModelHubComponent implements Component {
 	}
 
 	get #title(): string {
-		if (this.#sessionOnly) return this.#taskMode ? "Task model" : "Session model";
+		if (this.#sessionOnly)
+			return this.#taskMode ? t("overlaysModel.hub.title.taskModel") : t("overlaysModel.hub.title.sessionModel");
 		const scope = this.#settings.editingScope;
-		return scope ? `Models · ${scope}` : "Models";
+		return scope
+			? t("overlaysModel.hub.title.scoped", { scope: scopeLabel(scope) })
+			: t("overlaysModel.hub.title.models");
 	}
 
 	#footerHint(): string {
@@ -4943,25 +5259,27 @@ export class ModelHubComponent implements Component {
 		const entry = this.#activeEntry();
 		const configFile =
 			!this.#sessionOnly && this.#settings.editingScope !== "session" && this.#callbacks.onOpenConfigFile
-				? " · Ctrl+G config file"
+				? t("overlaysModel.hub.footer.config")
 				: "";
-		const scopeHint = this.#canCycleScope ? " · Ctrl+S cycle scope" : "";
+		const scopeHint = this.#canCycleScope ? t("overlaysModel.hub.footer.cycleScope") : "";
 		if (entry.kind === "overrides" && this.#assigning === null)
 			return `${this.#overrides().hint}${scopeHint}${configFile}`;
 		if (entry.kind === "variants" && this.#assigning === null) {
 			return this.#focus === "scope"
-				? `↑/↓ scopes · Enter/→ Model Variants · Esc close${scopeHint}`
+				? t("overlaysModel.hub.footer.variantScopes", { scopeHint })
 				: `${this.#variants().hint}${scopeHint}`;
 		}
 		const refreshHint =
 			!this.#strip && !this.#filterEditing
-				? `${this.#canRefreshProvider(entry) ? ` · ${formatKeyHint("alt+r")} refresh` : ""}${
-						this.#scopedModels.length === 0 ? ` · ${formatKeyHint("ctrl+r")} refresh all` : ""
+				? `${this.#canRefreshProvider(entry) ? t("overlaysModel.hub.footer.refresh", { key: formatKeyHint("alt+r") }) : ""}${
+						this.#scopedModels.length === 0
+							? t("overlaysModel.hub.footer.refreshAll", { key: formatKeyHint("ctrl+r") })
+							: ""
 					}`
 				: "";
 		const facts =
 			!this.#sessionOnly && this.#callbacks.onEditFacts && this.#assigning === null
-				? ` · ${formatKeyHint("alt+d")} model facts`
+				? t("overlaysModel.hub.footer.facts", { key: formatKeyHint("alt+d") })
 				: "";
 		const folders =
 			this.#strip || this.#filterEditing
@@ -4978,10 +5296,17 @@ export class ModelHubComponent implements Component {
 			this.#isBrowserView(entry) &&
 			!(entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId))
 		)
-			return `${prefix}${MODEL_SCOPE_HINT}${scopeHint}${refreshHint}${facts}${configFile}`;
+			return `${prefix}${t("overlaysModel.hub.footer.modelScopeStandalone")}${scopeHint}${refreshHint}${facts}${configFile}`;
 		const detail = this.#surfaceFooterHint();
 		if (this.#strip || this.#filterEditing) return detail;
-		return `${prefix}/ search · ${detail}${scopeHint}${refreshHint}${facts}${configFile}`;
+		return t("overlaysModel.hub.footer.search", {
+			prefix,
+			detail,
+			scopeHint,
+			refreshHint,
+			facts,
+			configFile,
+		});
 	}
 
 	#surfaceFooterHint(): string {
@@ -4995,72 +5320,108 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		if (strip) {
 			if (strip.kind === "name") {
-				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
+				if (!strip.input.focused) return t("overlaysModel.hub.footer.nameInactive", { enter, cancel });
 				if (strip.purpose === "folder") {
 					const error = strip.error ? `${strip.error} · ` : "";
-					return `${error}${enter} confirm · ${cancel} leave field`;
+					return t("overlaysModel.hub.footer.confirmFolder", { error, enter, cancel });
 				}
-				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
-				if (strip.purpose === "roleBudget")
-					return `${enter} save token budget · empty inherits · ${cancel} leave field`;
+				if (strip.purpose === "description") return t("overlaysModel.hub.footer.description", { enter, cancel });
+				if (strip.purpose === "roleBudget") return t("overlaysModel.hub.footer.tokenBudget", { enter, cancel });
 				if (strip.purpose === "compaction") {
-					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
+					return compactionConfirmPending(strip)
+						? t("overlaysModel.hub.footer.acceptCompaction", { enter, cancel })
+						: t("overlaysModel.hub.footer.setCompaction", { enter, cancel });
 				}
-				if (strip.purpose === "contextRule") return `${enter} save context limit · ${cancel} leave field`;
+				if (strip.purpose === "contextRule") return t("overlaysModel.hub.footer.contextLimit", { enter, cancel });
 				if (strip.purpose === "preset") {
-					return `${enter} save preset · ${cancel} leave field`;
+					return t("overlaysModel.hub.footer.savePreset", { enter, cancel });
 				}
-				return `${enter} create + pick model · ${cancel} leave field`;
+				return t("overlaysModel.hub.footer.createRole", { enter, cancel });
 			}
 			if (strip.kind === "pattern")
 				return strip.input.focused
-					? `${enter} continue to ${strip.target === "rule" && this.#contextRulesView() ? "limit" : "effort"} · ${cancel} leave field`
-					: `/ edit · ${enter} continue · ${cancel} parent`;
+					? strip.target === "rule" && this.#contextRulesView()
+						? t("overlaysModel.hub.footer.continueLimit", { enter, cancel })
+						: t("overlaysModel.hub.footer.continueEffort", { enter, cancel })
+					: t("overlaysModel.hub.footer.patternInactive", { enter, cancel });
 			if (strip.kind === "folderChoice") {
 				const error = strip.error ? `${strip.error} · ` : "";
-				return `${error}${leftRight} choose folder · ${enter} add/remove · ${cancel} cancel`;
+				return t("overlaysModel.hub.footer.folder", {
+					error,
+					leftRight,
+					enter,
+					cancel,
+				});
 			}
 			if (strip.kind === "effortLevels")
-				return `${leftRight} effort · ${formatKeyHint("space")} toggle · ${enter} save · ${cancel} discard`;
-			if (strip.kind === "selectorChoice")
-				return `${upDown} exact/pattern · ${enter}/Space set · Tab context · ${cancel} cancel`;
-			if (strip.kind === "role") return `${upDown} role · ${enter} assign/clear · Tab context · ${cancel} cancel`;
-			if (strip.kind === "scope")
-				return `${upDown} save scope · ${enter}/Space set · Tab context · ${cancel} cancel`;
-			return `${leftRight} effort · ${enter}/Space apply · ${cancel} keep`;
+				return t("overlaysModel.hub.footer.effortLevels", {
+					leftRight,
+					space: formatKeyHint("space"),
+					enter,
+					cancel,
+				});
+			if (strip.kind === "selectorChoice") return t("overlaysModel.hub.footer.selector", { upDown, enter, cancel });
+			if (strip.kind === "role") return t("overlaysModel.hub.footer.role", { upDown, enter, cancel });
+			if (strip.kind === "scope") return t("overlaysModel.hub.footer.scope", { upDown, enter, cancel });
+			return t("overlaysModel.hub.footer.applyEffort", { leftRight, enter, cancel });
 		}
-		if (this.#filterEditing) return "Search · Enter confirm · Esc clear";
+		if (this.#filterEditing) return t("overlaysModel.hub.footer.searchEditing");
 		if (this.#sessionOnly && this.#isBrowserView(this.#activeEntry())) {
 			const toggle = this.#taskModeKey
-				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "Task model"}`
+				? ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? t("overlaysModel.hub.footer.taskSession") : t("overlaysModel.hub.title.taskModel")}`
 				: "";
-			return `${enter} ${this.#taskMode ? "use for Task subagents (session-only)" : "use for session"} · ${upDown} models · ${left} providers · ${cancel} close${toggle}`;
+			return t("overlaysModel.hub.footer.session", {
+				enter,
+				action: this.#taskMode
+					? t("overlaysModel.hub.footer.useTaskOnce")
+					: t("overlaysModel.hub.footer.useSession"),
+				upDown,
+				left,
+				cancel,
+				toggle,
+			});
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
+				return t("overlaysModel.hub.footer.assignScopes", {
+					enterRight,
+					upDown,
+					altLeftRight,
+					cancel,
+				});
 			}
-			const browse = `${upDown} models · ${left} providers · / search · ${altLeftRight} kind · ${cancel} cancel`;
+			const browse = t("overlaysModel.hub.footer.assignModels", {
+				upDown,
+				left,
+				altLeftRight,
+				cancel,
+			});
 			switch (this.#assigning.kind) {
 				case "fallback":
-					return `${enter} pick fallback · ${browse}`;
+					return t("overlaysModel.hub.footer.pickFallback", { enter, browse });
 				case "fallbackKey":
-					return `${enter} pick the protected model · ${browse}`;
+					return t("overlaysModel.hub.footer.pickProtected", { enter, browse });
 				default:
-					return `${enter} assign · ${browse}`;
+					return t("overlaysModel.hub.footer.assign", { enter, browse });
 			}
 		}
 		const entry = this.#activeEntry();
 		if (entry.kind === "effort") {
-			return this.#focus === "list"
-				? "↑/↓ rules · Enter edit/add · x remove · [/] reorder patterns · ← scopes"
-				: "↑/↓ scopes · Enter/→ effort rules · Esc close";
+			return this.#focus === "list" ? t("overlaysModel.hub.footer.rules") : t("overlaysModel.hub.footer.ruleScopes");
 		}
 		if (entry.kind === "roles") {
 			if (this.#focus !== "list") {
 				const presets =
-					this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
-				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
+					this.#presets().names.length > 0
+						? t("overlaysModel.hub.footer.presetCycle", { key: formatKeyHints(["ctrl+left", "ctrl+right"]) })
+						: "";
+				return t("overlaysModel.hub.footer.roleScopes", {
+					upDown,
+					enterRight,
+					altLeftRight,
+					presets,
+					cancel,
+				});
 			}
 			const row = this.#rolesRows[this.#roleIndex];
 			const copyKeys = getMenuSearchVimMode() ? (["y", "shift+y"] as const) : (["alt+y", "alt+shift+y"] as const);
@@ -5068,45 +5429,99 @@ export class ModelHubComponent implements Component {
 			if (row?.kind === "fallback") {
 				// Advertise thinking only when the entry resolves to an editable model.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
-				const thinking = editable ? ` · ${formatKeyHint("t")} effort` : "";
-				return `${upDown} rows · ${enter} exact/pattern · ${formatKeyHint("f")} add · ${formatKeyHints(copyKeys)} copy · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} remove${thinking} · [/] reorder · ${left} scopes`;
+				const thinking = editable ? t("overlaysModel.hub.footer.fallbackEffort", { key: formatKeyHint("t") }) : "";
+				return t("overlaysModel.hub.footer.fallbackActions", {
+					upDown,
+					enter,
+					add: formatKeyHint("f"),
+					remove: formatKeyHint("x"),
+					copy: formatKeyHints(copyKeys),
+					paste: formatKeyHint(pasteKey),
+					thinking,
+					left,
+				});
 			}
 			if (row?.kind === "chainKey") {
-				return `${upDown} rows · ${enter} edit key · ${formatKeyHint("f")} add fallback · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear chain · ${left} providers`;
+				return t("overlaysModel.hub.footer.chainActions", {
+					upDown,
+					enter,
+					add: formatKeyHint("f"),
+					clear: formatKeyHint("x"),
+					paste: formatKeyHint(pasteKey),
+					left,
+				});
 			}
 			if (row?.kind === "newFallback") {
-				return `${upDown} rows · ${enter} new exact/pattern fallback chain · ${left} providers`;
+				return t("overlaysModel.hub.footer.newChainActions", { upDown, enter, left });
 			}
 			// Thinking is editable only when the assigned model has reasoning levels.
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
-			const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
+			const thinking = editable ? t("overlaysModel.hub.footer.roleThinking", { key: formatKeyHint("t") }) : "";
 			const budget =
 				row?.kind === "role" && this.#callbacks.onRoleTokenBudgetChange
-					? ` · ${formatKeyHint("m")} token budget`
+					? t("overlaysModel.hub.footer.roleBudget", { key: formatKeyHint("m") })
 					: "";
-			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
+			const savePreset = this.#callbacks.onSavePreset
+				? t("overlaysModel.hub.footer.roleSavePreset", { key: formatKeyHint("s") })
+				: "";
 			const switchPreset =
-				this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
+				this.#presets().names.length > 0
+					? t("overlaysModel.hub.footer.presetCycle", { key: formatKeyHints(["ctrl+left", "ctrl+right"]) })
+					: "";
 			const yank =
-				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0 ? "yank chain" : "yank model";
-			return `${upDown} rows · ${enter} pick · D description · ${formatKeyHint("f")} fallback · ${formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y")} ${yank} · ${formatKeyHint(pasteKey)} append · ${formatKeyHint("x")} clear${thinking}${budget} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
+				row?.kind === "role" && (this.#fallbackChains()[row.role]?.length ?? 0) > 0
+					? t("overlaysModel.hub.footer.yankChain")
+					: t("overlaysModel.hub.footer.yankModel");
+			return t("overlaysModel.hub.footer.roleActions", {
+				upDown,
+				enter,
+				fallback: formatKeyHint("f"),
+				clear: formatKeyHint("x"),
+				cycle: formatKeyHint("c"),
+				newRole: formatKeyHint("n"),
+				copy: formatKeyHint(getMenuSearchVimMode() ? "y" : "alt+y"),
+				yank,
+				paste: formatKeyHint(pasteKey),
+				thinking,
+				budget,
+				savePreset,
+				switchPreset,
+			});
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
-				? `${enter} log in · ${upDown} providers · ${cancel} close`
-				: `${upDown} providers · ${cancel} close`;
+				? t("overlaysModel.hub.footer.providerLogin", { enter, upDown, cancel })
+				: t("overlaysModel.hub.footer.providerLocked", { upDown, cancel });
 		}
 		if (entry.kind === "provider" && this.#pinnedProviders.some(provider => provider.id === entry.providerId)) {
 			return this.#focus === "scope"
-				? "Enter/→ mixtures · ↑/↓ providers · Esc close"
-				: "Enter pick · e edit graph · ↓ define mixture · ← providers · Esc close";
+				? t("overlaysModel.hub.footer.mixtureScopes")
+				: t("overlaysModel.hub.footer.mixtureList");
 		}
-		const refresh = this.#canRefreshProvider(entry) ? ` · ${formatKeyHint("alt+r")} refresh` : "";
+		const refresh = this.#canRefreshProvider(entry)
+			? t("overlaysModel.hub.footer.refresh", { key: formatKeyHint("alt+r") })
+			: "";
 		if (this.#focus === "scope") {
-			return `${enterRight} models · ${upDown} providers · / search · ${altLeftRight} kind${refresh} · ${cancel} close`;
+			return t("overlaysModel.hub.footer.modelScopes", {
+				enterRight,
+				upDown,
+				altLeftRight,
+				refresh,
+				cancel,
+			});
 		}
-		const compaction = this.#modelCompactionTarget() ? ` · ${formatKeyHint("m")} compaction limit` : "";
-		return `${enter} assign roles · ${upDown} models · ${left} providers · / search · ${altLeftRight} kind${compaction}${refresh} · ${cancel} close`;
+		const compaction = this.#modelCompactionTarget()
+			? t("overlaysModel.hub.footer.roleCompaction", { key: formatKeyHint("m") })
+			: "";
+		return t("overlaysModel.hub.footer.modelActions", {
+			enter,
+			upDown,
+			left,
+			altLeftRight,
+			compaction,
+			refresh,
+			cancel,
+		});
 	}
 
 	#renderFooter(width: number): string {
@@ -5119,15 +5534,15 @@ export class ModelHubComponent implements Component {
 						const label =
 							strip.kind === "name" || strip.kind === "pattern"
 								? strip.input.focused
-									? "Enter set · Esc leave field"
-									: "/ edit · Esc parent"
+									? t("overlaysModel.hub.footer.stripSet")
+									: t("overlaysModel.hub.footer.stripEdit")
 								: strip.kind === "effortLevels"
-									? "←/→ effort · Space toggle"
+									? t("overlaysModel.hub.footer.stripToggle")
 									: strip.kind === "folderChoice"
-										? "←/→ folder · Enter add/remove"
+										? t("overlaysModel.hub.footer.stripFolder")
 										: strip.kind === "thinking" || strip.kind === "patternEffort"
-											? "←/→ effort · Enter set"
-											: "↑/↓ choose · Enter set";
+											? t("overlaysModel.hub.footer.stripEffort")
+											: t("overlaysModel.hub.footer.stripChoose");
 						const hint = truncateToWidth(label, Math.max(0, width - 36));
 						const columns = Math.max(1, width - visibleWidth(hint) - (hint ? 3 : 0));
 						const line = this.#renderStrip(columns, strip);
@@ -5148,16 +5563,16 @@ export class ModelHubComponent implements Component {
 			}
 			const labelText =
 				strip.purpose === "roleBudget"
-					? `${strip.role} token budget:`
+					? t("overlaysModel.hub.strip.roleBudget", { role: strip.role })
 					: strip.purpose === "compaction"
-						? `${strip.model.id} limit:`
+						? t("overlaysModel.hub.strip.limit", { model: strip.model.id })
 						: strip.purpose === "contextRule"
-							? `${strip.selector} limit:`
+							? t("overlaysModel.hub.strip.limit", { model: strip.selector })
 							: strip.purpose === "description"
-								? `${strip.role} description:`
+								? t("overlaysModel.hub.strip.roleDescription", { role: strip.role })
 								: strip.purpose === "preset"
-									? "Preset name:"
-									: "New role name:";
+									? t("overlaysModel.hub.strip.presetName")
+									: t("overlaysModel.hub.strip.roleName");
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
@@ -5169,32 +5584,34 @@ export class ModelHubComponent implements Component {
 				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
 				hint = theme.fg(notice.style, notice.text);
 			} else if (strip.purpose === "contextRule") {
-				hint = theme.fg("dim", "400k base · f400k fixed · 80% · empty resets");
+				hint = theme.fg("dim", t("overlaysModel.hub.compaction.syntax"));
 			} else if (strip.purpose === "description") {
 				hint = "";
 			} else if (strip.purpose === "roleBudget") {
-				hint = theme.fg("dim", "positive tokens · empty inherits");
+				hint = theme.fg("dim", t("overlaysModel.hub.strip.positive"));
 			} else {
-				hint = theme.fg("dim", "(letters, digits, - and _)");
+				hint = theme.fg("dim", t("overlaysModel.hub.strip.nameHelp"));
 			}
 			return truncateToWidth(`${label} ${inputLine} ${hint}`, width);
 		}
 		if (strip.kind === "folderChoice")
-			return this.#renderChipWindow(width, theme.fg("accent", "Folder membership → "), strip);
+			return this.#renderChipWindow(width, theme.fg("accent", t("overlaysModel.hub.folder.membershipArrow")), strip);
 		if (strip.kind === "pattern") {
 			const label = theme.fg(
 				"accent",
 				strip.target === "rule"
-					? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern:`
+					? this.#contextRulesView()
+						? t("overlaysModel.hub.strip.contextPattern")
+						: t("overlaysModel.hub.strip.effortPattern")
 					: strip.target === "role"
-						? "Role model pattern:"
+						? t("overlaysModel.hub.strip.rolePattern")
 						: strip.target === "fallbackKey"
-							? "Fallback chain key:"
-							: "Fallback model pattern:",
+							? t("overlaysModel.hub.strip.fallbackKey")
+							: t("overlaysModel.hub.strip.fallbackPattern"),
 			);
 			const hint =
 				strip.target === "fallbackKey"
-					? theme.fg("dim", "provider/*, provider/prefix/*, or re: regex")
+					? theme.fg("dim", t("overlaysModel.hub.strip.keyHelp"))
 					: patternStripHint(strip.input.getValue().trim());
 			const inputWidth = Math.max(8, width - visibleWidth(label) - visibleWidth(hint) - 4);
 			return truncateToWidth(`${label} ${strip.input.render(inputWidth)[0] ?? ""} ${hint}`, width);
@@ -5208,7 +5625,8 @@ export class ModelHubComponent implements Component {
 				)} ${level}`,
 				action: "thinking" as const,
 			}));
-			const label = strip.pendingRuleSelector ?? strip.selector ?? strip.item?.id ?? "Effort";
+			const label =
+				strip.pendingRuleSelector ?? strip.selector ?? strip.item?.id ?? t("overlaysModel.hub.strip.effort");
 			return this.#renderChipWindow(
 				width,
 				theme.fg("accent", `${truncateToWidth(label, Math.max(12, Math.floor(width / 3)))} → `),
@@ -5255,6 +5673,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	render(width: number): readonly string[] {
+		this.#syncLabelsLocale();
 		const height = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
 		const innerWidth = Math.max(1, width - 4);
 		const strip = this.#strip;
@@ -5263,7 +5682,7 @@ export class ModelHubComponent implements Component {
 			((strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused) ||
 			this.#activeConfigPanel()?.editing;
 		const footer = menuHintLines(
-			`${this.#footerHint()}${textFocused ? "" : " · ? help"}`,
+			`${this.#footerHint()}${textFocused ? "" : t("overlaysModel.hub.footer.helpSuffix")}`,
 			innerWidth,
 			textFocused ? "" : undefined,
 		).map(line => theme.fg("dim", line));
@@ -5288,6 +5707,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		this.#syncLabelsLocale();
 		if (this.#help.open) return this.#help.describe();
 		const usePicker = this.nativeSheet(cx);
 		const cached = this.#nativeCache;
@@ -5303,7 +5723,7 @@ export class ModelHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.overlay.model-hub",
-			this.#taskMode ? "Task model · session-only override" : this.#title,
+			this.#taskMode ? t("overlaysModel.hub.status.taskTitle") : this.#title,
 			describeHubSidebar(this.#entries, this.#activeEntryId, this.#nativeSidebarStyle, "scopes"),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
@@ -5462,7 +5882,9 @@ export class ModelHubComponent implements Component {
 						selected: this.#effortIndex < 0 ? null : String(this.#effortIndex),
 						virtual: true,
 						grow: 1,
-						aria: this.#contextRulesView() ? "Context rules" : "Effort rules",
+						aria: this.#contextRulesView()
+							? t("overlaysModel.hub.sidebar.contextRules")
+							: t("overlaysModel.hub.sidebar.effortRules"),
 					},
 					items,
 					"effortRules",
@@ -5476,10 +5898,13 @@ export class ModelHubComponent implements Component {
 					"row",
 					{ gap: "sm", align: "center" },
 					[
-						text([span("Kind:", "dim")]),
+						text([span(t("overlaysModel.hub.kind.title"), "dim")]),
 						node(
 							"tabs",
-							{ items: MODEL_KIND_TABS.map(kind => ({ id: kind, label: kind })), active: this.#modelKindTab },
+							{
+								items: MODEL_KIND_TABS.map(kind => ({ id: kind, label: lowerKindLabel(kind) })),
+								active: this.#modelKindTab,
+							},
 							undefined,
 							"kinds",
 						),
@@ -5495,26 +5920,36 @@ export class ModelHubComponent implements Component {
 
 	#describeStatus(): NativeNode {
 		if (this.#assignmentPending) {
-			return node("spinner", { label: [span("Applying model…", "accent")] }, undefined, "status");
+			return node(
+				"spinner",
+				{ label: [span(t("overlaysModel.hub.status.applying"), "accent")] },
+				undefined,
+				"status",
+			);
 		}
 		let spans: TspSpan[];
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") {
-				spans = [span("New fallback chain — pick the model it protects", "accent")];
+				spans = [span(t("overlaysModel.hub.status.protectedModel"), "accent")];
 			} else if (assigning.kind === "effortRule") {
 				spans = [
-					span(`New exact ${this.#contextRulesView() ? "context" : "effort"} rule · pick a model`, "accent"),
+					span(
+						this.#contextRulesView()
+							? t("overlaysModel.hub.status.exactContext")
+							: t("overlaysModel.hub.status.exactEffort"),
+						"accent",
+					),
 				];
 			} else {
 				const info = this.#settings.getRoleInfo(assigning.role);
 				const label = info.tag ?? info.name ?? assigning.role;
 				const verb =
 					assigning.kind === "role"
-						? "Assigning"
+						? t("overlaysModel.hub.status.assigning")
 						: assigning.index === null
-							? "Adding fallback for"
-							: "Replacing fallback of";
+							? t("overlaysModel.hub.status.addFallback")
+							: t("overlaysModel.hub.status.replaceFallback");
 				spans = [span(`${verb} `, "accent"), span(label, "accent strong")];
 			}
 			return node("text", { spans, truncate: "end" }, undefined, "status");
@@ -5523,38 +5958,56 @@ export class ModelHubComponent implements Component {
 		if (this.#configError && entry.kind !== "provider") {
 			return node("text", { spans: [span(this.#configError, "error")], wrap: "word" }, undefined, "status");
 		}
-		const scopedSuffix = this.#scopedModels.length > 0 ? " · --models scope" : "";
+		const scopedSuffix = this.#scopedModels.length > 0 ? t("overlaysModel.hub.status.scopedSuffix") : "";
 		switch (entry.kind) {
 			case "recent":
-				spans = [span(`Recently used models${scopedSuffix}`, "muted")];
+				spans = [span(t("overlaysModel.hub.status.recent", { scopedSuffix }), "muted")];
 				break;
 			case "roles":
 				spans = [
-					span("Model roles — ", "muted"),
+					span(t("overlaysModel.hub.status.modelRoles"), "muted"),
 					span("f", "key"),
-					span(" adds a retry fallback, cleared roles fall back to auto-selection", "muted"),
+					span(t("overlaysModel.hub.status.fallbackHelp"), "muted"),
 				];
 				break;
 			case "provider":
 				if (entry.locked) {
-					spans = [span(`${entry.label} · not configured`, "muted")];
+					spans = [span(t("overlaysModel.hub.status.notConfigured", { provider: entry.label }), "muted")];
 				} else if (entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
 					return node(
 						"spinner",
-						{ label: [span(`${entry.label} · refreshing model list…`, "muted")] },
+						{ label: [span(t("overlaysModel.hub.status.refreshing", { provider: entry.label }), "muted")] },
 						undefined,
 						"status",
 					);
 				} else {
-					spans = [span(`${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`, "muted")];
+					spans = [
+						span(
+							t("overlaysModel.hub.status.modelCount", {
+								label: entry.label,
+								count: entry.annotation ?? "0",
+								scopedSuffix,
+							}),
+							"muted",
+						),
+					];
 				}
 				break;
 			case "newModels":
 			case "folder":
-				spans = [span(`${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`, "muted")];
+				spans = [
+					span(
+						t("overlaysModel.hub.status.modelCount", {
+							label: entry.label,
+							count: entry.annotation ?? "0",
+							scopedSuffix,
+						}),
+						"muted",
+					),
+				];
 				break;
 			default:
-				spans = [span(`All available models${scopedSuffix}`, "muted")];
+				spans = [span(t("overlaysModel.hub.status.all", { scopedSuffix }), "muted")];
 				break;
 		}
 		return node("text", { spans, truncate: "end" }, undefined, "status");
@@ -5565,11 +6018,19 @@ export class ModelHubComponent implements Component {
 			"row",
 			{ gap: "sm", align: "center" },
 			[
-				text([span("Roles:", "dim")]),
+				text([span(t("overlaysModel.hub.role.trackTitle"), "dim")]),
 				node(
 					"tabs",
 					{
-						items: ROLE_TABS.map(tab => ({ id: tab, label: tab === "kind" ? "kinds" : tab })),
+						items: ROLE_TABS.map(tab => ({
+							id: tab,
+							label:
+								tab === "kind"
+									? t("overlaysModel.hub.role.tabKinds")
+									: tab === "all"
+										? t("overlaysModel.hub.role.tabAll")
+										: tab,
+						})),
 						active: this.#roleTab,
 					},
 					undefined,
@@ -5588,7 +6049,7 @@ export class ModelHubComponent implements Component {
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
-				aria: "Roles",
+				aria: t("overlaysModel.hub.sidebar.roles"),
 			},
 			items,
 			"roles",
@@ -5609,9 +6070,9 @@ export class ModelHubComponent implements Component {
 			case "separator":
 				return node("rule", undefined, undefined, key);
 			case "newRole":
-				return node("item", { label: [span("+ New role…", "dim")] }, undefined, key);
+				return node("item", { label: [span(t("overlaysModel.hub.role.newRolePlus"), "dim")] }, undefined, key);
 			case "newFallback":
-				return node("item", { label: [span("+ New fallback…", "dim")] }, undefined, key);
+				return node("item", { label: [span(t("overlaysModel.hub.role.newFallbackPlus"), "dim")] }, undefined, key);
 			case "chainKey": {
 				const slash = rowDef.role.lastIndexOf("/");
 				return node(
@@ -5661,7 +6122,14 @@ export class ModelHubComponent implements Component {
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
 			detail = assignment
-				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
+				? [
+						span(
+							t("overlaysModel.hub.role.autoModel", {
+								model: `${assignment.model.provider}/${assignment.model.id}`,
+							}),
+							"dim",
+						),
+					]
 				: [span("—", "dim")];
 		}
 		if (uiProvenance("roles", role)) {
@@ -5670,7 +6138,7 @@ export class ModelHubComponent implements Component {
 		const budget = this.#settings.getRoleTokenBudget?.(role);
 		if (budget !== undefined) {
 			if (value.length > 0) value.push(span("  "));
-			value.push(span(`budget ${budget.toLocaleString("en-US")}`, "dim"));
+			value.push(span(t("overlaysModel.hub.role.budgetCount", { count: budget.toLocaleString("en-US") }), "dim"));
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
 		const cycleIndex = cycleOrder.indexOf(role);
@@ -5691,7 +6159,11 @@ export class ModelHubComponent implements Component {
 				{ gap: "xs", align: "center", wrap: true },
 				[
 					...keycap,
-					text([span("cycle is empty — press ", "dim"), span("c", "key"), span(" on a role to add it", "dim")]),
+					text([
+						span(t("overlaysModel.hub.role.cycleEmptyLead"), "dim"),
+						span("c", "key"),
+						span(t("overlaysModel.hub.role.cycleEmptyEnd"), "dim"),
+					]),
 				],
 				"cycle",
 			);
@@ -5707,14 +6179,16 @@ export class ModelHubComponent implements Component {
 		return node(
 			"row",
 			{ gap: "xs", align: "center", wrap: true },
-			[...keycap, text([span("cycle:", "dim")]), text(track, { wrap: "word" })],
+			[...keycap, text([span(t("overlaysModel.hub.role.cycle"), "dim")]), text(track, { wrap: "word" })],
 			"cycle",
 		);
 	}
 
 	#describeLockedView(entry: SidebarEntry): NativeNode {
 		const children: NativeChild[] = [
-			text([span(`${entry.label} has no credentials configured`, "warning")], { wrap: "word" }),
+			text([span(t("overlaysModel.hub.provider.noCredentials", { provider: entry.label }), "warning")], {
+				wrap: "word",
+			}),
 		];
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		children.push(
@@ -5722,8 +6196,8 @@ export class ModelHubComponent implements Component {
 				[
 					span(
 						envVars.length > 0
-							? `Set ${envVars.join(" or ")} in your environment, or add a key in config.`
-							: "Add an API key for this provider in config.",
+							? t("overlaysModel.hub.provider.env", { vars: envVars.join(t("overlaysModel.hub.provider.or")) })
+							: t("overlaysModel.hub.provider.apiKey"),
 						"muted",
 					),
 				],
@@ -5735,7 +6209,7 @@ export class ModelHubComponent implements Component {
 				node(
 					"row",
 					{ gap: "sm", align: "center", actions: { click: "login" } },
-					[text([span("Log in with OAuth", "accent")]), node("kbd", { keys: ["enter"] })],
+					[text([span(t("overlaysModel.hub.provider.oauth"), "accent")]), node("kbd", { keys: ["enter"] })],
 					"login",
 				),
 			);
@@ -5751,7 +6225,7 @@ export class ModelHubComponent implements Component {
 			children.push(
 				node(
 					"section",
-					{ head: [span(`${catalogCount} models in catalog`, "dim")] },
+					{ head: [span(t("overlaysModel.hub.provider.catalogCount", { count: catalogCount }), "dim")] },
 					[node("list", { selected: null, virtual: true }, items, "catalog")],
 					"catalog",
 				),
@@ -5773,8 +6247,10 @@ export class ModelHubComponent implements Component {
 				? this.#surfaceFooterHint()
 				: this.#focus === "scope"
 					? this.#footerHint()
-					: "/ search · ? help";
-		const cycleScope = this.#canCycleScope ? pickerAction("cycleScope", "Cycle scope", "ctrl+s") : undefined;
+					: t("overlaysModel.hub.footer.searchHelp");
+		const cycleScope = this.#canCycleScope
+			? pickerAction("cycleScope", t("overlaysModel.hub.action.cycleScope"), "ctrl+s")
+			: undefined;
 		const actions = this.#pickerActions(entry, rolesView, lockedView);
 		if (cycleScope) actions.splice(actions.length - 1, 0, cycleScope);
 		const queryError = compileMenuRegex(
@@ -5793,7 +6269,7 @@ export class ModelHubComponent implements Component {
 				span(` · ${plainText(navigation)}`, "dim"),
 			],
 			icon: "cpu",
-			noun: rolesView ? "roles" : "models",
+			noun: rolesView ? t("overlaysModel.hub.noun.roles") : t("overlaysModel.hub.noun.models"),
 			size: "lg",
 			layout: "rows",
 			preview: "side",
@@ -5803,7 +6279,7 @@ export class ModelHubComponent implements Component {
 					: null
 				: this.#browser.value,
 			cursor: rolesView ? this.#rolesSearch.cursor : this.#browser.cursor,
-			placeholder: rolesView ? "Search roles and fallback chains…" : "/ search models…",
+			placeholder: rolesView ? t("overlaysModel.hub.search.roles") : t("overlaysModel.hub.search.models"),
 			scopes: this.#pickerScopes(),
 			scope: entry.id,
 			actions,
@@ -5816,20 +6292,22 @@ export class ModelHubComponent implements Component {
 			const items: TspPickerItem[] = rules.map((rule, index) => ({
 				id: `effort:${index}`,
 				label: rule.selector,
-				detail: `${selectorKind(rule.selector)} · ${this.#ruleValue(rule)}`,
+				detail: `${selectorKindLabel(selectorKind(rule.selector))} · ${this.#ruleValue(rule)}`,
 				mono: true,
 			}));
 			items.push(
-				{ id: `effort:${rules.length}`, label: "Pick exact model…", icon: "plus" },
-				{ id: `effort:${rules.length + 1}`, label: "Enter glob or re: regex…", icon: "plus" },
+				{ id: `effort:${rules.length}`, label: t("overlaysModel.hub.rule.addExact"), icon: "plus" },
+				{ id: `effort:${rules.length + 1}`, label: t("overlaysModel.hub.rule.addPattern"), icon: "plus" },
 			);
 			return picker(
 				{
 					...props,
-					noun: "rules",
+					noun: t("overlaysModel.hub.noun.rules"),
 					query: this.#effortSearch.value,
 					cursor: this.#effortSearch.cursor,
-					placeholder: this.#contextRulesView() ? "Search context rules…" : "Search effort rules…",
+					placeholder: this.#contextRulesView()
+						? t("overlaysModel.hub.search.contextRules")
+						: t("overlaysModel.hub.search.effortRules"),
 					items,
 					order: indices.map(index => `effort:${index}`),
 					selected: this.#effortIndex < 0 ? null : `effort:${this.#effortIndex}`,
@@ -5839,12 +6317,16 @@ export class ModelHubComponent implements Component {
 							? props.actions
 							: compact([
 									this.#effortIndex >= 0
-										? pickerAction("effort:edit", "Edit / add", "enter", { primary: true })
+										? pickerAction("effort:edit", t("overlaysModel.hub.action.editAdd"), "enter", {
+												primary: true,
+											})
 										: undefined,
 									this.#effortIndex >= 0 && this.#effortIndex < rules.length
-										? pickerAction("effort:remove", "Remove", "x")
+										? pickerAction("effort:remove", t("overlaysModel.hub.action.remove"), "x")
 										: undefined,
-									this.#effortSearch.value ? pickerAction("clear", "Clear search") : undefined,
+									this.#effortSearch.value
+										? pickerAction("clear", t("overlaysModel.hub.action.clearSearch"))
+										: undefined,
 									cycleScope,
 									this.#pickerCancelAction(),
 								]),
@@ -5859,13 +6341,18 @@ export class ModelHubComponent implements Component {
 					...props,
 					tabs: ROLE_TABS.map(tab => ({
 						id: tab,
-						label: tab === "all" ? "All" : tab === "chat" ? "Chat" : "Kinds",
+						label:
+							tab === "all"
+								? t("overlaysModel.hub.kind.all")
+								: tab === "chat"
+									? t("overlaysModel.hub.kind.chat")
+									: t("overlaysModel.hub.kind.kinds"),
 						count: this.#visibleRoleIds().filter(
 							role => tab === "all" || this.#settings.getRoleInfo(role).section === tab,
 						).length,
 					})),
 					tab: this.#roleTab,
-					columns: ROLE_PICKER_COLUMNS,
+					columns: this.#localizedPickerColumns.roles,
 					items: this.#rolePickerItems(),
 					order: this.#rolePickerOrder(),
 					selected: row && row.kind !== "separator" ? rolesRowKey(row, this.#roleIndex) : null,
@@ -5883,7 +6370,7 @@ export class ModelHubComponent implements Component {
 			return picker(
 				{
 					...props,
-					columns: MODEL_PICKER_COLUMNS,
+					columns: this.#localizedPickerColumns.models,
 					...catalogue,
 					order: [],
 					selected: null,
@@ -5903,8 +6390,8 @@ export class ModelHubComponent implements Component {
 					: entry.kind === "provider" || entry.kind === "folder"
 						? entry.label
 						: query
-							? "Matches"
-							: "All models",
+							? t("overlaysModel.hub.search.matches")
+							: t("overlaysModel.hub.sidebar.allModels"),
 		});
 		const refreshing = entry.kind === "provider" && this.#refreshingProviders.has(entry.providerId ?? "");
 		const state =
@@ -5921,12 +6408,14 @@ export class ModelHubComponent implements Component {
 				tabs: this.#pickerKindTabs(),
 				tab: this.#modelKindTab,
 				...this.#browser.pickerRows(catalogue, view, currentSelector),
-				...(entry.kind === "newModels" ? { columns: NEW_MODEL_PICKER_COLUMNS } : {}),
+				...(entry.kind === "newModels" ? { columns: this.#localizedPickerColumns.newModels } : {}),
 				state,
 				...(state === "error" && this.#configError ? { message: this.#configError } : {}),
 				empty:
 					this.#emptyStateMessage()?.trim() ??
-					(entry.kind === "provider" ? `No models from ${entry.label} yet` : "No models available in this scope"),
+					(entry.kind === "provider"
+						? t("overlaysModel.hub.provider.noModels", { provider: entry.label })
+						: t("overlaysModel.hub.empty.noScope")),
 			},
 			this.#browser.pickerPreview("full", currentSelector),
 		);
@@ -5934,46 +6423,53 @@ export class ModelHubComponent implements Component {
 
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
-		if (this.#assignmentPending) return "Applying model…";
+		if (this.#assignmentPending) return t("overlaysModel.hub.status.applying");
 		if (this.#sessionOnly)
 			return this.#taskMode
-				? [span("Task subagent model · temporary session-only override", "error")]
-				: "Current session only";
+				? [span(t("overlaysModel.hub.status.taskOverride"), "error")]
+				: t("overlaysModel.hub.status.sessionOnly");
 		if (rolesView && this.#settings.editingScope)
-			return `Editing ${this.#settings.editingScope} · session > project > global`;
+			return t("overlaysModel.hub.status.editingScope", { scope: scopeLabel(this.#settings.editingScope) });
 		const assigning = this.#assigning;
 		if (assigning !== null) {
-			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
+			if (assigning.kind === "fallbackKey") return t("overlaysModel.hub.status.protectedModel");
 			if (assigning.kind === "effortRule")
-				return `New exact ${this.#contextRulesView() ? "context" : "effort"} rule · pick a model`;
+				return this.#contextRulesView()
+					? t("overlaysModel.hub.status.exactContext")
+					: t("overlaysModel.hub.status.exactEffort");
 			const info = this.#settings.getRoleInfo(assigning.role);
 			const label = info.tag ?? info.name ?? assigning.role;
 			const verb =
 				assigning.kind === "role"
-					? "Assigning"
+					? t("overlaysModel.hub.status.assigning")
 					: assigning.index === null
-						? "Adding fallback for"
-						: "Replacing fallback of";
+						? t("overlaysModel.hub.status.addFallback")
+						: t("overlaysModel.hub.status.replaceFallback");
 			return [span(`${verb} `), span(label, "strong")];
 		}
 		if (this.#configError && entry.kind !== "provider") return [span(this.#configError, "error")];
 		if (entry.kind === "provider" && entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
-			return `${entry.label} · refreshing model list…`;
+			return t("overlaysModel.hub.status.refreshing", { provider: entry.label });
 		}
-		if (entry.kind === "effort") return this.#contextRulesView() ? CONTEXT_RULE_DESCRIPTION : EFFORT_RULE_DESCRIPTION;
+		if (entry.kind === "effort")
+			return this.#contextRulesView()
+				? t("overlaysModel.hub.rule.contextDescription")
+				: t("overlaysModel.hub.rule.effortDescription");
 		const presets = rolesView ? this.#presets() : undefined;
 		if (presets && presets.names.length > 0) {
 			return [
-				span("Preset ", "muted"),
-				presets.active ? span(presets.active, "strong") : span("custom", "muted"),
+				span(t("overlaysModel.hub.role.presetLead"), "muted"),
+				presets.active ? span(presets.active, "strong") : span(t("overlaysModel.hub.role.customPreset"), "muted"),
 				span(
-					this.#scopedModels.length > 0 ? " · --models scope" : " · Cleared roles fall back to auto-selection",
+					this.#scopedModels.length > 0
+						? t("overlaysModel.hub.status.scopedSuffix")
+						: t("overlaysModel.hub.role.autoSelectionSuffix"),
 					"muted",
 				),
 			];
 		}
-		if (this.#scopedModels.length > 0) return "--models scope";
-		if (rolesView) return "Cleared roles fall back to auto-selection";
+		if (this.#scopedModels.length > 0) return t("overlaysModel.hub.sidebar.scope");
+		if (rolesView) return t("overlaysModel.hub.role.autoSelection");
 		return undefined;
 	}
 
@@ -5987,7 +6483,12 @@ export class ModelHubComponent implements Component {
 				case "separator":
 					break;
 				case "roles":
-					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
+					scopes.push({
+						id: entry.id,
+						label: t("overlaysModel.hub.sidebar.roles"),
+						icon: "sparkles",
+						count: this.#visibleRoleIds().length,
+					});
 					break;
 				case "variants":
 					scopes.push({
@@ -6000,7 +6501,7 @@ export class ModelHubComponent implements Component {
 							),
 						],
 						icon: "sliders",
-						group: "Variants",
+						group: t("overlaysModel.hub.sidebar.variantsGroup"),
 						count: Number(entry.annotation ?? 0),
 					});
 					break;
@@ -6008,7 +6509,7 @@ export class ModelHubComponent implements Component {
 					if (entry.id === "context") {
 						scopes.push({
 							id: entry.id,
-							label: "Context rules",
+							label: t("overlaysModel.hub.sidebar.contextRules"),
 							icon: "sliders",
 							count: this.#settings.contextRules?.length ?? 0,
 						});
@@ -6016,7 +6517,7 @@ export class ModelHubComponent implements Component {
 					}
 					scopes.push({
 						id: entry.id,
-						label: "Effort rules",
+						label: t("overlaysModel.hub.sidebar.effortRules"),
 						icon: "sliders",
 						count: this.#settings.effortRules.length,
 					});
@@ -6024,7 +6525,7 @@ export class ModelHubComponent implements Component {
 				case "all":
 					scopes.push({
 						id: entry.id,
-						label: "All models",
+						label: t("overlaysModel.hub.sidebar.allModels"),
 						icon: "list",
 						count: counts ? this.#searchTotal : this.#availableItems.length,
 					});
@@ -6032,7 +6533,7 @@ export class ModelHubComponent implements Component {
 				case "recent":
 					scopes.push({
 						id: entry.id,
-						label: "Recent",
+						label: t("overlaysModel.hub.sidebar.recent"),
 						icon: "clock",
 						count: counts ? this.#recentSearchCount : this.#recentItems.length,
 					});
@@ -6051,7 +6552,7 @@ export class ModelHubComponent implements Component {
 									]
 								: entry.label,
 						icon: "folder",
-						group: "Folders",
+						group: t("overlaysModel.hub.sidebar.folders"),
 						count: Number(entry.annotation),
 					});
 					break;
@@ -6064,12 +6565,14 @@ export class ModelHubComponent implements Component {
 							id: entry.id,
 							label: entry.label,
 							mark,
-							group: "Not signed in",
+							group: t("overlaysModel.hub.sidebar.notSignedIn"),
 							disabled: oauthIds.has(providerId)
-								? "Sign in with /login"
+								? t("overlaysModel.hub.provider.loginCommand")
 								: envVars.length > 0
-									? `Set ${envVars.join(" or ")} to sign in`
-									: "Add an API key in config to sign in",
+									? t("overlaysModel.hub.provider.setEnv", {
+											vars: envVars.join(t("overlaysModel.hub.provider.or")),
+										})
+									: t("overlaysModel.hub.provider.apiKeyPrompt"),
 							dot: "muted",
 						});
 						break;
@@ -6079,7 +6582,7 @@ export class ModelHubComponent implements Component {
 						id: entry.id,
 						label: entry.label,
 						mark,
-						group: "Providers",
+						group: t("overlaysModel.hub.sidebar.providers"),
 						count: counts ? (counts.get(providerId) ?? 0) : Number(entry.annotation ?? 0),
 						...(dot ? { dot } : {}),
 					});
@@ -6127,18 +6630,18 @@ export class ModelHubComponent implements Component {
 	}
 
 	#pickerCancelAction(): TspPickerAction {
-		if (this.#assignmentPending) return CLOSE_ACTION;
+		if (this.#assignmentPending) return { ...CLOSE_ACTION, label: t("overlaysModel.hub.action.close") };
 		const strip = this.#strip;
 		const textFocused = (strip?.kind === "name" || strip?.kind === "pattern") && strip.input.focused;
 		return {
 			...CLOSE_ACTION,
 			label: this.#filterEditing
-				? "Clear search"
+				? t("overlaysModel.hub.action.clearSearch")
 				: textFocused
-					? "Leave field"
+					? t("overlaysModel.hub.action.leaveField")
 					: strip || this.#assigning
-						? "Back"
-						: "Close",
+						? t("overlaysModel.hub.action.back")
+						: t("overlaysModel.hub.action.close"),
 		};
 	}
 
@@ -6147,13 +6650,19 @@ export class ModelHubComponent implements Component {
 		const strip = this.#strip;
 		const cancel = this.#pickerCancelAction();
 		if (this.#assignmentPending) return [cancel];
-		if (this.#filterEditing) return [pickerAction("searchConfirm", "Search", "enter", { primary: true }), cancel];
+		if (this.#filterEditing)
+			return [
+				pickerAction("searchConfirm", t("overlaysModel.hub.action.search"), "enter", { primary: true }),
+				cancel,
+			];
 		if (strip) {
 			if (strip.kind === "folderChoice" || (strip.kind === "name" && strip.purpose === "folder")) {
 				return [
 					pickerAction(
 						strip.kind === "folderChoice" ? "stripApply" : "folderName",
-						strip.kind === "folderChoice" ? "Add / remove model" : "Confirm",
+						strip.kind === "folderChoice"
+							? t("overlaysModel.hub.action.addRemoveModel")
+							: t("overlaysModel.hub.action.confirm"),
 						"enter",
 						{ primary: true },
 					),
@@ -6165,7 +6674,9 @@ export class ModelHubComponent implements Component {
 					? strip.purpose === "compaction"
 						? pickerAction(
 								"compactionPoint",
-								compactionConfirmPending(strip) ? "Accept compaction point" : "Set compaction point",
+								compactionConfirmPending(strip)
+									? t("overlaysModel.hub.action.acceptCompaction")
+									: t("overlaysModel.hub.action.setCompaction"),
 								"enter",
 								{ primary: true },
 							)
@@ -6176,30 +6687,30 @@ export class ModelHubComponent implements Component {
 										? "presetName"
 										: "roleName",
 								strip.purpose === "description"
-									? "Save description"
+									? t("overlaysModel.hub.action.saveDescription")
 									: strip.purpose === "roleBudget"
-										? "Save token budget"
+										? t("overlaysModel.hub.action.saveBudget")
 										: strip.purpose === "preset"
-											? "Save preset"
-											: "Create role",
+											? t("overlaysModel.hub.action.savePreset")
+											: t("overlaysModel.hub.action.createRole"),
 								"enter",
 								{ primary: true },
 							)
 					: pickerAction(
 							"stripApply",
 							strip.kind === "thinking" || strip.kind === "patternEffort"
-								? "Apply"
+								? t("overlaysModel.hub.action.apply")
 								: strip.kind === "scope"
-									? "Save to scope"
+									? t("overlaysModel.hub.action.saveScope")
 									: strip.kind === "effortLevels"
-										? "Save efforts"
+										? t("overlaysModel.hub.action.saveEfforts")
 										: strip.kind === "pattern"
 											? this.#contextRulesView()
-												? "Continue to limit"
-												: "Continue to effort"
+												? t("overlaysModel.hub.action.continueLimit")
+												: t("overlaysModel.hub.action.continueEffort")
 											: strip.kind === "selectorChoice"
-												? "Select"
-												: "Assign / clear",
+												? t("overlaysModel.hub.action.select")
+												: t("overlaysModel.hub.action.assignClear"),
 							"enter",
 							{ primary: true },
 						);
@@ -6207,23 +6718,25 @@ export class ModelHubComponent implements Component {
 		}
 		const facts =
 			!this.#sessionOnly && !this.#filterEditing && this.#callbacks.onEditFacts
-				? pickerAction("modelFacts", "Model facts", "alt+d")
+				? pickerAction("modelFacts", t("overlaysModel.hub.action.modelFacts"), "alt+d")
 				: undefined;
 		const refresh = this.#canRefreshProvider(entry)
-			? pickerAction("refresh", "Refresh provider", "alt+r")
+			? pickerAction("refresh", t("overlaysModel.hub.action.refresh"), "alt+r")
 			: undefined;
 		const refreshAll =
-			this.#scopedModels.length > 0 ? undefined : pickerAction("refreshAll", "Refresh all", "ctrl+r");
+			this.#scopedModels.length > 0
+				? undefined
+				: pickerAction("refreshAll", t("overlaysModel.hub.action.refreshAll"), "ctrl+r");
 		const folderActions = this.#availableFolderActions().map(({ id, label, key }) => pickerAction(id, label, key));
 		if (this.#assigning !== null) {
 			const label =
 				this.#assigning.kind === "fallback"
-					? "Pick fallback"
+					? t("overlaysModel.hub.action.pickFallback")
 					: this.#assigning.kind === "fallbackKey"
-						? "Pick protected model"
+						? t("overlaysModel.hub.action.pickProtected")
 						: this.#assigning.kind === "effortRule"
-							? "Pick rule model"
-							: "Assign";
+							? t("overlaysModel.hub.action.pickRule")
+							: t("overlaysModel.hub.action.assign");
 			return compact([
 				pickerAction("assign", label, "enter", { primary: true }),
 				...folderActions,
@@ -6248,54 +6761,75 @@ export class ModelHubComponent implements Component {
 				case "role": {
 					const assigned = this.#roles[row.role];
 					actions.push(
-						roleAction("pick", "Pick model", "enter", true),
+						roleAction("pick", t("overlaysModel.hub.action.pickModel"), "enter", true),
 						this.#callbacks.onRoleDescriptionChange
-							? roleAction("description", "Description", "shift+d")
+							? roleAction("description", t("overlaysModel.hub.action.description"), "shift+d")
 							: undefined,
-						this.#callbacks.onRoleTokenBudgetChange ? roleAction("budget", "Token budget", "m") : undefined,
-						roleAction("fallback", "Add fallback", "f"),
-						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
-						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
-						roleAction("cycle", this.#cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
-						roleAction("new", "New role", "n"),
-						this.#callbacks.onSavePreset ? roleAction("save", "Save preset", "s") : undefined,
-						this.#presets().names.length > 0 ? roleAction("nextPreset", "Next preset", "ctrl+right") : undefined,
+						this.#callbacks.onRoleTokenBudgetChange
+							? roleAction("budget", t("overlaysModel.hub.action.tokenBudget"), "m")
+							: undefined,
+						roleAction("fallback", t("overlaysModel.hub.action.addFallback"), "f"),
+						assigned && !assigned.autoSelected
+							? roleAction("clear", t("overlaysModel.hub.action.clear"), "x")
+							: undefined,
+						this.#roleThinkingTarget(row.role)
+							? roleAction("thinking", t("overlaysModel.hub.role.thinking"), "t")
+							: undefined,
+						roleAction(
+							"cycle",
+							this.#cycleOrder().includes(row.role)
+								? t("overlaysModel.hub.action.leaveCycle")
+								: t("overlaysModel.hub.action.addCycle"),
+							"c",
+						),
+						roleAction("new", t("overlaysModel.hub.role.newRole"), "n"),
+						this.#callbacks.onSavePreset
+							? roleAction("save", t("overlaysModel.hub.action.savePreset"), "s")
+							: undefined,
+						this.#presets().names.length > 0
+							? roleAction("nextPreset", t("overlaysModel.hub.action.nextPreset"), "ctrl+right")
+							: undefined,
 					);
 					break;
 				}
 				case "fallback":
 					actions.push(
-						roleAction("pick", "Replace", "enter", true),
-						roleAction("fallback", "Add another", "f"),
-						roleAction("clear", "Remove", "x"),
+						roleAction("pick", t("overlaysModel.hub.action.replace"), "enter", true),
+						roleAction("fallback", t("overlaysModel.hub.action.addAnother"), "f"),
+						roleAction("clear", t("overlaysModel.hub.action.remove"), "x"),
 						this.#resolveFallbackEntry(row.role, row.chainIndex)
-							? roleAction("thinking", "Thinking", "t")
+							? roleAction("thinking", t("overlaysModel.hub.role.thinking"), "t")
 							: undefined,
-						roleAction("earlier", "Earlier", "["),
-						roleAction("later", "Later", "]"),
+						roleAction("earlier", t("overlaysModel.hub.action.earlier"), "["),
+						roleAction("later", t("overlaysModel.hub.action.later"), "]"),
 					);
 					break;
 				case "chainKey":
-					actions.push(roleAction("pick", "Add fallback", "enter", true), roleAction("clear", "Clear chain", "x"));
+					actions.push(
+						roleAction("pick", t("overlaysModel.hub.action.addFallback"), "enter", true),
+						roleAction("clear", t("overlaysModel.hub.action.clearChain"), "x"),
+					);
 					break;
 				case "newFallback":
-					actions.push(roleAction("pick", "New fallback chain", "enter", true));
+					actions.push(roleAction("pick", t("overlaysModel.hub.role.newChain"), "enter", true));
 					break;
 				case "newRole":
-					actions.push(roleAction("pick", "New role", "enter", true));
+					actions.push(roleAction("pick", t("overlaysModel.hub.role.newRole"), "enter", true));
 					break;
 			}
 			return compact([
 				...actions,
 				...folderActions,
-				this.#rolesSearch.value ? pickerAction("clear", "Clear search") : undefined,
+				this.#rolesSearch.value ? pickerAction("clear", t("overlaysModel.hub.action.clearSearch")) : undefined,
 				facts,
 				cancel,
 			]);
 		}
 		if (lockedView) {
 			return compact([
-				entry.oauth ? pickerAction("login", "Log in", "enter", { primary: true }) : undefined,
+				entry.oauth
+					? pickerAction("login", t("overlaysModel.hub.provider.login"), "enter", { primary: true })
+					: undefined,
 				...folderActions,
 				facts,
 				cancel,
@@ -6304,21 +6838,34 @@ export class ModelHubComponent implements Component {
 		return compact([
 			pickerAction(
 				"assign",
-				this.#sessionOnly ? (this.#taskMode ? "Use for Task subagents" : "Use for session") : "Assign role",
+				this.#sessionOnly
+					? this.#taskMode
+						? t("overlaysModel.hub.action.useTask")
+						: t("overlaysModel.hub.action.useSession")
+					: t("overlaysModel.hub.action.assignRole"),
 				"enter",
-				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
+				this.#browser.pickerSelected
+					? { primary: true }
+					: { primary: true, disabled: t("overlaysModel.hub.action.noModel") },
 			),
 			...folderActions,
 			this.#taskModeKey
-				? pickerAction("task", this.#taskMode ? "Session model" : "Task model", this.#taskModeKey, {
-						on: this.#taskMode,
-					})
+				? pickerAction(
+						"task",
+						this.#taskMode ? t("overlaysModel.hub.title.sessionModel") : t("overlaysModel.hub.title.taskModel"),
+						this.#taskModeKey,
+						{
+							on: this.#taskMode,
+						},
+					)
 				: undefined,
 			refresh,
 			refreshAll,
 			facts,
-			this.#modelCompactionTarget() ? pickerAction("editCompaction", "Compaction limit", "m") : undefined,
-			this.#browser.query.length > 0 ? pickerAction("clear", "Clear search") : undefined,
+			this.#modelCompactionTarget()
+				? pickerAction("editCompaction", t("overlaysModel.hub.action.compactionLimit"), "m")
+				: undefined,
+			this.#browser.query.length > 0 ? pickerAction("clear", t("overlaysModel.hub.action.clearSearch")) : undefined,
 			cancel,
 		]);
 	}
@@ -6327,7 +6874,7 @@ export class ModelHubComponent implements Component {
 	#pickerStrip(strip: StripState): NonNullable<TspPickerProps["strip"]> {
 		if (strip.kind === "folderChoice") {
 			return {
-				label: [span(strip.error ?? "Folder membership", strip.error ? "error" : "accent")],
+				label: [span(strip.error ?? t("overlaysModel.hub.folder.membership"), strip.error ? "error" : "accent")],
 				items: strip.chips.map((chip, index) => ({ id: String(index), label: chip.label })),
 				selected: String(strip.index),
 			};
@@ -6349,7 +6896,7 @@ export class ModelHubComponent implements Component {
 				return {
 					label: [
 						span(strip.model.id, "mono"),
-						span(" limit ", "muted"),
+						span(t("overlaysModel.hub.strip.limitWord"), "muted"),
 						span(strip.input.getValue(), "mono"),
 						span("▏", "accent"),
 						span(`  ${notice.text}`, notice.style),
@@ -6362,19 +6909,21 @@ export class ModelHubComponent implements Component {
 					span(
 						strip.kind === "name"
 							? strip.purpose === "contextRule"
-								? `${strip.selector} limit `
+								? t("overlaysModel.hub.strip.limitSoft", { model: strip.selector })
 								: strip.purpose === "roleBudget"
-									? `${strip.role} token budget `
+									? t("overlaysModel.hub.strip.budgetSoft", { role: strip.role })
 									: strip.purpose === "description"
-										? `${strip.role} description `
+										? t("overlaysModel.hub.strip.descriptionSoft", { role: strip.role })
 										: strip.purpose === "preset"
-											? "Preset name "
-											: "New role name "
+											? t("overlaysModel.hub.strip.presetNameSoft")
+											: t("overlaysModel.hub.strip.roleNameSoft")
 							: strip.target === "rule"
-								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
+								? this.#contextRulesView()
+									? t("overlaysModel.hub.strip.contextPatternSoft")
+									: t("overlaysModel.hub.strip.effortPatternSoft")
 								: strip.target === "role"
-									? "Role model pattern "
-									: "Fallback model pattern ",
+									? t("overlaysModel.hub.strip.rolePatternSoft")
+									: t("overlaysModel.hub.strip.fallbackPatternSoft"),
 						"muted",
 					),
 					span(strip.input.getValue(), "mono"),
@@ -6385,7 +6934,12 @@ export class ModelHubComponent implements Component {
 		}
 		if (strip.kind === "effortLevels") {
 			return {
-				label: [span(strip.pendingRuleSelector ?? strip.selector ?? strip.item?.id ?? "Effort", "accent")],
+				label: [
+					span(
+						strip.pendingRuleSelector ?? strip.selector ?? strip.item?.id ?? t("overlaysModel.hub.strip.effort"),
+						"accent",
+					),
+				],
 				items: strip.toggle.options.map((level, index) => ({
 					id: String(index),
 					label: level,
@@ -6406,17 +6960,26 @@ export class ModelHubComponent implements Component {
 			// The second step of "New fallback chain…" reuses the role strip with key chips only.
 			const keyStrip = strip.chips.every(chip => chip.label.startsWith("for "));
 			label = keyStrip
-				? [span("New fallback chain", "muted")]
-				: [span("Assign ", "muted"), span(strip.item.id, "mono"), span(" to", "muted")];
+				? [span(t("overlaysModel.hub.role.newChain"), "muted")]
+				: [
+						span(t("overlaysModel.hub.strip.assignPrefix"), "muted"),
+						span(strip.item.id, "mono"),
+						span(t("overlaysModel.hub.strip.assignTo"), "muted"),
+					];
 		} else {
 			const info = this.#settings.getRoleInfo(strip.role ?? "");
 			const roleLabel = (info.tag ?? strip.role ?? "").toLowerCase();
 			label = [
-				span(strip.kind === "thinking" ? "Thinking for " : "Save ", "muted"),
+				span(
+					strip.kind === "thinking"
+						? t("overlaysModel.hub.strip.thinkingPrefix")
+						: t("overlaysModel.hub.strip.savePrefix"),
+					"muted",
+				),
 				span(roleLabel, "strong"),
 				span(" · ", "muted"),
 				span(strip.item.id, "mono"),
-				...(strip.kind === "scope" ? [span(" to", "muted")] : []),
+				...(strip.kind === "scope" ? [span(t("overlaysModel.hub.strip.assignTo"), "muted")] : []),
 			];
 		}
 		return {
@@ -6461,13 +7024,19 @@ export class ModelHubComponent implements Component {
 				case "separator":
 					return;
 				case "newRole":
-					items.push({ id, label: "New role…", icon: "plus", tone: "muted" });
+					items.push({ id, label: t("overlaysModel.hub.role.newRoleItem"), icon: "plus", tone: "muted" });
 					return;
 				case "newFallback":
-					items.push({ id, label: "New fallback chain…", icon: "plus", tone: "muted" });
+					items.push({ id, label: t("overlaysModel.hub.role.newChainItem"), icon: "plus", tone: "muted" });
 					return;
 				case "chainKey":
-					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: "fallback chain" });
+					items.push({
+						id,
+						label: row.role,
+						mono: true,
+						icon: "git-branch",
+						detail: t("overlaysModel.hub.role.chainDetail"),
+					});
 					return;
 				case "fallback": {
 					items.push({
@@ -6475,7 +7044,7 @@ export class ModelHubComponent implements Component {
 						label: row.selector,
 						mono: true,
 						depth: 1,
-						detail: `fallback ${row.chainIndex + 1}`,
+						detail: t("overlaysModel.hub.role.fallbackIndex", { index: row.chainIndex + 1 }),
 					});
 					return;
 				}
@@ -6490,7 +7059,9 @@ export class ModelHubComponent implements Component {
 			if (budget !== undefined) facts.budget = String(budget);
 			if (assignment) {
 				const selector = `${assignment.model.provider}/${assignment.model.id}`;
-				facts.model = assignment.autoSelected ? `auto → ${selector}` : selector;
+				facts.model = assignment.autoSelected
+					? t("overlaysModel.hub.role.autoModel", { model: selector })
+					: selector;
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
@@ -6513,9 +7084,9 @@ export class ModelHubComponent implements Component {
 					? {
 							badges: [
 								{
-									text: `cycle ${cycleIndex + 1}`,
+									text: t("overlaysModel.hub.role.cycleIndex", { index: cycleIndex + 1 }),
 									tone: "accent" as const,
-									title: `Stop ${cycleIndex + 1} of the quick-switch cycle`,
+									title: t("overlaysModel.hub.role.cycleStop", { stop: cycleIndex + 1 }),
 								},
 							],
 						}
@@ -6534,12 +7105,15 @@ export class ModelHubComponent implements Component {
 			head = { group, label, count: 0 };
 			order.push(head);
 		};
-		open(this.#roleTab === "kind" ? "kind" : "chat", this.#roleTab === "kind" ? "Kind roles" : "Chat roles");
+		open(
+			this.#roleTab === "kind" ? "kind" : "chat",
+			this.#roleTab === "kind" ? t("overlaysModel.hub.role.kindRoles") : t("overlaysModel.hub.role.chatRoles"),
+		);
 		this.#rolesRows.forEach((row, index) => {
 			if (row.kind === "separator") {
 				const previous = this.#rolesRows[index - 1];
-				if (previous?.kind === "newRole") open("chains", "Model fallback chains");
-				else open("kind", "Kind roles");
+				if (previous?.kind === "newRole") open("chains", t("overlaysModel.hub.role.modelChains"));
+				else open("kind", t("overlaysModel.hub.role.kindRoles"));
 				return;
 			}
 			order.push(rolesRowKey(row, index));
@@ -6566,7 +7140,7 @@ export class ModelHubComponent implements Component {
 		const chainList = (key: string): NativeChild | undefined => {
 			const chain = this.#fallbackChains()[key] ?? [];
 			if (chain.length === 0) return undefined;
-			return node("section", { head: "Fallback chain" }, [
+			return node("section", { head: t("overlaysModel.hub.role.chain") }, [
 				md(chain.map((selector, index) => `${index + 1}. \`${selector}\``).join("\n")),
 			]);
 		};
@@ -6588,23 +7162,31 @@ export class ModelHubComponent implements Component {
 					children.push(
 						node("kv", {
 							items: [
-								{ k: [span("Role", "muted")], v: info.name },
+								{ k: [span(t("overlaysModel.hub.role.role"), "muted")], v: info.name },
 								{
-									k: [span("Role budget", "muted")],
-									v: budget === undefined ? "inherits" : budget.toLocaleString("en-US"),
+									k: [span(t("overlaysModel.hub.role.budget"), "muted")],
+									v:
+										budget === undefined
+											? t("overlaysModel.hub.role.inherits")
+											: budget.toLocaleString("en-US"),
 								},
 								{
-									k: [span("Thinking", "muted")],
+									k: [span(t("overlaysModel.hub.role.thinking"), "muted")],
 									v: getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label,
 								},
-								{ k: [span("Source", "muted")], v: assignment.autoSelected ? "auto-selected" : "configured" },
+								{
+									k: [span(t("overlaysModel.hub.role.source"), "muted")],
+									v: assignment.autoSelected
+										? t("overlaysModel.hub.role.autoSelected")
+										: t("overlaysModel.hub.role.configured"),
+								},
 							],
 						}),
 					);
 				} else {
 					children.push(
 						text(info.name, { role: "omp.picker.title" }),
-						text([span("Not assigned; no available model fits this role.", "muted")], { wrap: "word" }),
+						text([span(t("overlaysModel.hub.role.unassignedNoFit"), "muted")], { wrap: "word" }),
 					);
 				}
 				const chain = chainList(row.role);
@@ -6628,14 +7210,14 @@ export class ModelHubComponent implements Component {
 			}
 			case "newRole":
 				children.push(
-					text("New role", { role: "omp.picker.title" }),
-					text([span("Name a custom role, then pick the model it runs on.", "muted")], { wrap: "word" }),
+					text(t("overlaysModel.hub.role.newRole"), { role: "omp.picker.title" }),
+					text([span(t("overlaysModel.hub.role.newDescription"), "muted")], { wrap: "word" }),
 				);
 				break;
 			case "newFallback":
 				children.push(
-					text("New fallback chain", { role: "omp.picker.title" }),
-					text([span("Pick the model (or provider) a new retry fallback chain protects.", "muted")], {
+					text(t("overlaysModel.hub.role.newChain"), { role: "omp.picker.title" }),
+					text([span(t("overlaysModel.hub.role.chainDescription"), "muted")], {
 						wrap: "word",
 					}),
 				);
@@ -6649,9 +7231,9 @@ export class ModelHubComponent implements Component {
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		const how =
 			envVars.length > 0
-				? `Set ${envVars.join(" or ")} in your environment, or add a key in config.`
-				: "Add an API key for this provider in config.";
-		return `${entry.label} has no credentials configured. ${how}`;
+				? t("overlaysModel.hub.provider.env", { vars: envVars.join(t("overlaysModel.hub.provider.or")) })
+				: t("overlaysModel.hub.provider.apiKey");
+		return t("overlaysModel.hub.provider.lockedDetails", { provider: entry.label, how });
 	}
 
 	/** A signed-out provider's preview: how to sign in and what its catalog holds. */
@@ -6666,7 +7248,11 @@ export class ModelHubComponent implements Component {
 			for (const model of this.#catalogModels) {
 				if (model.provider === entry.providerId) ids.push(`- \`${model.id}\``);
 			}
-			children.push(node("section", { head: `${catalogCount} models in catalog` }, [md(ids.join("\n"))]));
+			children.push(
+				node("section", { head: t("overlaysModel.hub.provider.catalogCount", { count: catalogCount }) }, [
+					md(ids.join("\n")),
+				]),
+			);
 		}
 		return children;
 	}
@@ -6889,7 +7475,7 @@ export class ModelHubComponent implements Component {
 					"row",
 					{ gap: "sm", align: "center" },
 					[
-						text([span(`${strip.model.id} limit:`, "accent")]),
+						text([span(t("overlaysModel.hub.strip.limit", { model: strip.model.id }), "accent")]),
 						col([strip.input], { grow: 1 }),
 						text([span(notice.text, notice.style)], { wrap: "word" }),
 					],
@@ -6898,13 +7484,16 @@ export class ModelHubComponent implements Component {
 			}
 			if (strip.purpose === "roleBudget") {
 				return row([
-					text([span(`${strip.role} token budget:`, "accent")]),
+					text([span(t("overlaysModel.hub.strip.roleBudget", { role: strip.role }), "accent")]),
 					col([strip.input], { grow: 1 }),
-					text([span("Positive tokens; empty inherits", "dim")]),
+					text([span(t("overlaysModel.hub.strip.positiveNative"), "dim")]),
 				]);
 			}
 			if (strip.purpose === "description") {
-				return row([text([span(`${strip.role} description:`, "accent")]), col([strip.input], { grow: 1 })]);
+				return row([
+					text([span(t("overlaysModel.hub.strip.roleDescription", { role: strip.role }), "accent")]),
+					col([strip.input], { grow: 1 }),
+				]);
 			}
 			const preset = strip.purpose === "preset";
 			return node(
@@ -6914,10 +7503,10 @@ export class ModelHubComponent implements Component {
 					text([
 						span(
 							preset
-								? "Preset name:"
+								? t("overlaysModel.hub.strip.presetName")
 								: strip.purpose === "contextRule"
-									? `${strip.selector} limit:`
-									: "New role name:",
+									? t("overlaysModel.hub.strip.limit", { model: strip.selector })
+									: t("overlaysModel.hub.strip.roleName"),
 							"accent",
 						),
 					]),
@@ -6925,8 +7514,8 @@ export class ModelHubComponent implements Component {
 					text([
 						span(
 							strip.purpose === "contextRule"
-								? "400k base · f400k fixed · 80% · empty resets"
-								: "(letters, digits, - and _)",
+								? t("overlaysModel.hub.compaction.syntax")
+								: t("overlaysModel.hub.strip.nameHelp"),
 							"dim",
 						),
 					]),
@@ -6936,7 +7525,7 @@ export class ModelHubComponent implements Component {
 		}
 		if (strip.kind === "folderChoice") {
 			return row([
-				text([span(strip.error ?? "Folder membership", strip.error ? "error" : "accent")]),
+				text([span(strip.error ?? t("overlaysModel.hub.folder.membership"), strip.error ? "error" : "accent")]),
 				node(
 					"tabs",
 					{
@@ -6954,10 +7543,12 @@ export class ModelHubComponent implements Component {
 				text([
 					span(
 						strip.target === "rule"
-							? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern:`
+							? this.#contextRulesView()
+								? t("overlaysModel.hub.strip.contextPattern")
+								: t("overlaysModel.hub.strip.effortPattern")
 							: strip.target === "role"
-								? "Role model pattern:"
-								: "Fallback model pattern:",
+								? t("overlaysModel.hub.strip.rolePattern")
+								: t("overlaysModel.hub.strip.fallbackPattern"),
 						"accent",
 					),
 				]),

@@ -1,4 +1,5 @@
 import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { connectToServer, disconnectServer, listPrompts, listResources, listTools } from "../../mcp/client";
 import {
 	addMCPServer,
@@ -38,14 +39,15 @@ interface ParsedMcpAddArgs {
 
 type McpAddOptionParser = (parsed: ParsedMcpAddArgs, value: string | undefined) => string | undefined;
 
-const MCP_ADD_USAGE =
-	"Usage: /mcp add <name> [--scope project|user] [--url <url> --transport http|sse] [--token <token>] [-- <command...>]";
+function mcpAddUsage() {
+	return t("commands.mcp.addUsage");
+}
 
 const MCP_ADD_OPTION_PARSERS = new Map<string, McpAddOptionParser>([
 	[
 		"--scope",
 		(parsed, value) => {
-			if (!value || (value !== "project" && value !== "user")) return "Invalid --scope value. Use project or user.";
+			if (!value || (value !== "project" && value !== "user")) return t("commands.mcp.invalidScope");
 			parsed.scope = value;
 			return undefined;
 		},
@@ -53,7 +55,7 @@ const MCP_ADD_OPTION_PARSERS = new Map<string, McpAddOptionParser>([
 	[
 		"--url",
 		(parsed, value) => {
-			if (!value) return "Missing value for --url.";
+			if (!value) return t("commands.mcp.missingUrl");
 			parsed.url = value;
 			return undefined;
 		},
@@ -61,7 +63,7 @@ const MCP_ADD_OPTION_PARSERS = new Map<string, McpAddOptionParser>([
 	[
 		"--transport",
 		(parsed, value) => {
-			if (!value || (value !== "http" && value !== "sse")) return "Invalid --transport value. Use http or sse.";
+			if (!value || (value !== "http" && value !== "sse")) return t("commands.mcp.invalidTransport");
 			parsed.transport = value;
 			return undefined;
 		},
@@ -69,7 +71,7 @@ const MCP_ADD_OPTION_PARSERS = new Map<string, McpAddOptionParser>([
 	[
 		"--token",
 		(parsed, value) => {
-			if (!value) return "Missing value for --token.";
+			if (!value) return t("commands.mcp.missingToken");
 			parsed.authToken = value;
 			return undefined;
 		},
@@ -102,12 +104,12 @@ function validateParsedMcpAddArgs(parsed: ParsedMcpAddArgs): ParsedMcpAddArgs {
 	if (!hasCommand && !hasUrl) {
 		return {
 			...parsed,
-			error: "Provide --url or -- <command...> for non-interactive add. Usage: /mcp add <name> [--scope project|user] [--url <url> --transport http|sse] [--token <token>] [-- <command...>]",
+			error: t("commands.mcp.noninteractiveAdd"),
 		};
 	}
-	if (!parsed.name) return { ...parsed, error: "Server name required. Usage: /mcp add <name> ..." };
-	if (hasCommand && hasUrl) return { ...parsed, error: "Use either --url or -- <command...>, not both." };
-	if (parsed.authToken && !hasUrl) return { ...parsed, error: "--token requires --url (HTTP/SSE transport)." };
+	if (!parsed.name) return { ...parsed, error: t("commands.mcp.nameRequired") };
+	if (hasCommand && hasUrl) return { ...parsed, error: t("commands.mcp.conflictingTransport") };
+	if (parsed.authToken && !hasUrl) return { ...parsed, error: t("commands.mcp.tokenNeedsUrl") };
 	return parsed;
 }
 
@@ -129,7 +131,7 @@ function parseMcpAddArgs(rest: string): ParsedMcpAddArgs {
 			break;
 		}
 		const parser = MCP_ADD_OPTION_PARSERS.get(arg);
-		if (!parser) return { ...parsed, error: `Unknown option: ${arg}` };
+		if (!parser) return { ...parsed, error: t("commands.mcp.unknownOption", { option: arg }) };
 		const error = parser(parsed, tokens[index + 1]);
 		if (error) return { ...parsed, error };
 		index += 2;
@@ -145,7 +147,7 @@ async function withPreparedMcpConnection<T>(
 	fn: (connection: MCPServerConnection) => Promise<T>,
 ): Promise<T> {
 	if (!compileMCPAllowlist(cfgMcpIncludeServers.get(runtime.settings)).admits(name)) {
-		throw new Error(`Server "${name}" is excluded by this session's MCP allowlist (--mcp).`);
+		throw new Error(t("commands.mcp.serverExcluded", { name }));
 	}
 	let connection: MCPServerConnection | undefined;
 	try {
@@ -200,10 +202,10 @@ async function handleResourcesCommand(runtime: SlashCommandRuntime): Promise<Sla
 		return resources.map(resource => `${name}/${resource.uri}`);
 	});
 	if (!lines) {
-		await runtime.output("No MCP servers configured.");
+		await runtime.output(t("commands.mcp.noServers"));
 		return commandConsumed();
 	}
-	await runtime.output(lines.length > 0 ? lines.join("\n") : "No resources available on connected servers.");
+	await runtime.output(lines.length > 0 ? lines.join("\n") : t("commands.mcp.noResources"));
 	return commandConsumed();
 }
 
@@ -213,30 +215,30 @@ async function handlePromptsCommand(runtime: SlashCommandRuntime): Promise<Slash
 		return prompts.map(prompt => `${name}/${prompt.name}${prompt.description ? ` — ${prompt.description}` : ""}`);
 	});
 	if (!lines) {
-		await runtime.output("No MCP servers configured.");
+		await runtime.output(t("commands.mcp.noServers"));
 		return commandConsumed();
 	}
-	await runtime.output(lines.length > 0 ? lines.join("\n") : "No prompts available on connected servers.");
+	await runtime.output(lines.length > 0 ? lines.join("\n") : t("commands.mcp.noPrompts"));
 	return commandConsumed();
 }
 
 async function handleTestCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
 	const name = rest.split(/\s+/)[0]?.trim() ?? "";
-	if (!name) return usage("Usage: /mcp test <name>", runtime);
+	if (!name) return usage(t("commands.mcp.testUsage"), runtime);
 	const servers = await getMcpConfiguredServers(runtime.cwd);
 	const server = servers.find(item => item.name === name);
-	if (!server) return usage(`Server "${name}" not found. Run /mcp list to see configured servers.`, runtime);
+	if (!server) return usage(t("commands.mcp.serverNotFound", { name }), runtime);
 
 	try {
 		return await withPreparedMcpConnection(runtime, name, server.config, async connection => {
 			const tools = await listTools(connection);
-			const lines = [`Server "${name}" connected (${tools.length} tools).`];
+			const lines = [t("commands.mcp.connected", { name, count: tools.length })];
 			for (const tool of tools) lines.push(`  - ${tool.name}`);
 			await runtime.output(lines.join("\n"));
 			return commandConsumed();
 		});
 	} catch (err) {
-		return usage(`Connection to "${name}" failed: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.mcp.connectFailed", { name, error: errorMessage(err) }), runtime);
 	}
 }
 
@@ -255,19 +257,19 @@ function buildMcpServerConfig(parsed: ParsedMcpAddArgs): MCPServerConfig | undef
 }
 
 async function handleAddCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
-	if (!rest) return usage(MCP_ADD_USAGE, runtime);
+	if (!rest) return usage(mcpAddUsage(), runtime);
 	const parsed = parseMcpAddArgs(rest);
 	if (parsed.error) return usage(parsed.error, runtime);
-	if (!parsed.name) return usage(MCP_ADD_USAGE, runtime);
+	if (!parsed.name) return usage(mcpAddUsage(), runtime);
 	const config = buildMcpServerConfig(parsed);
-	if (!config) return usage(MCP_ADD_USAGE, runtime);
+	if (!config) return usage(mcpAddUsage(), runtime);
 	try {
 		const filePath = getMCPConfigPath(parsed.scope, runtime.cwd);
 		await addMCPServer(filePath, parsed.name, config);
-		await runtime.output(`Added MCP server "${parsed.name}" (${parsed.scope}).`);
+		await runtime.output(t("commands.mcp.added", { name: parsed.name, scope: parsed.scope }));
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to add server: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.mcp.addFailed", { error: errorMessage(err) }), runtime);
 	}
 }
 
@@ -288,14 +290,17 @@ async function handleListCommand(runtime: SlashCommandRuntime): Promise<SlashCom
 			if (!entries.some(entry => entry.name === name)) entries.push({ name, config, scope: "project" });
 		}
 		if (entries.length === 0) {
-			await runtime.output("No MCP servers configured.");
+			await runtime.output(t("commands.mcp.noServers"));
 			return commandConsumed();
 		}
 		await runtime.output(
 			entries
 				.map(({ name, config, scope }) => {
 					const type = config.type ?? "stdio";
-					const enabled = config.enabled !== false && !disabledSet.has(name) ? "enabled" : "disabled";
+					const enabled =
+						config.enabled !== false && !disabledSet.has(name)
+							? t("commands.mcp.enabled")
+							: t("commands.mcp.disabled");
 					let location: string | undefined;
 					if (config.type === "http" || config.type === "sse") {
 						// Strip query string and userinfo from URLs to avoid leaking
@@ -310,19 +315,19 @@ async function handleListCommand(runtime: SlashCommandRuntime): Promise<SlashCom
 								const pathOnly = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
 								location = `${parsed.origin}${pathOnly}`;
 							} catch {
-								location = "(hidden)";
+								location = t("commands.mcp.hidden");
 							}
 						}
 					} else {
 						location = (config as { command: string }).command;
 					}
-					return `${name} | ${type} | ${enabled} | ${location ?? "(unknown)"} [${scope}]`;
+					return `${name} | ${type} | ${enabled} | ${location ?? t("commands.mcp.unknown")} [${scope}]`;
 				})
 				.join("\n"),
 		);
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to list MCP servers: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.mcp.listFailed", { error: errorMessage(err) }), runtime);
 	}
 }
 
@@ -332,7 +337,7 @@ async function handleEnableDisableCommand(
 	runtime: SlashCommandRuntime,
 ): Promise<SlashCommandResult> {
 	const name = rest.split(/\s+/)[0] ?? "";
-	if (!name) return usage(`Usage: /mcp ${verb} <name>`, runtime);
+	if (!name) return usage(t("commands.mcp.enableDisableUsage", { subcommand: verb }), runtime);
 	const enabled = verb === "enable";
 	try {
 		const userPath = getMCPConfigPath("user", runtime.cwd);
@@ -343,37 +348,52 @@ async function handleEnableDisableCommand(
 		]);
 		if (projectConfig.mcpServers?.[name] !== undefined) {
 			await updateMCPServer(projectPath, name, { ...projectConfig.mcpServers[name], enabled } as MCPServerConfig);
-			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"} (project config).`);
+			await runtime.output(
+				t("commands.mcp.projectEnabled", {
+					name,
+					state: enabled ? t("commands.mcp.enabled") : t("commands.mcp.disabled"),
+				}),
+			);
 			return commandConsumed();
 		}
 		if (userConfig.mcpServers?.[name] !== undefined) {
 			await updateMCPServer(userPath, name, { ...userConfig.mcpServers[name], enabled } as MCPServerConfig);
-			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"} (user config).`);
+			await runtime.output(
+				t("commands.mcp.userEnabled", {
+					name,
+					state: enabled ? t("commands.mcp.enabled") : t("commands.mcp.disabled"),
+				}),
+			);
 			return commandConsumed();
 		}
 		const disabledList = await readDisabledServers(userPath);
 		if (!enabled || disabledList.includes(name)) {
 			await setServerDisabled(userPath, name, !enabled);
-			await runtime.output(`Server "${name}" ${enabled ? "enabled" : "disabled"}.`);
+			await runtime.output(
+				t("commands.mcp.serverEnabled", {
+					name,
+					state: enabled ? t("commands.mcp.enabled") : t("commands.mcp.disabled"),
+				}),
+			);
 			return commandConsumed();
 		}
-		return usage(`Server "${name}" not found in user or project config.`, runtime);
+		return usage(t("commands.mcp.noServerInConfig", { name }), runtime);
 	} catch (err) {
-		return usage(`Failed to ${verb} MCP server: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.mcp.updateFailed", { subcommand: verb, error: errorMessage(err) }), runtime);
 	}
 }
 
 async function handleRemoveCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
-	const parsed = parseNamedScopeArgs(rest, "Invalid --scope value. Use project or user.");
+	const parsed = parseNamedScopeArgs(rest, t("commands.mcp.invalidScope"));
 	if (parsed.error) return usage(parsed.error, runtime);
-	if (!parsed.name) return usage("Usage: /mcp remove <name> [--scope project|user]", runtime);
+	if (!parsed.name) return usage(t("commands.mcp.removeUsage"), runtime);
 	try {
 		const filePath = getMCPConfigPath(parsed.scope, runtime.cwd);
 		await removeMCPServer(filePath, parsed.name);
-		await runtime.output(`Removed server "${parsed.name}" from ${parsed.scope} config.`);
+		await runtime.output(t("commands.mcp.removed", { name: parsed.name, scope: parsed.scope }));
 		return commandConsumed();
 	} catch (err) {
-		return usage(`Failed to remove MCP server: ${errorMessage(err)}`, runtime);
+		return usage(t("commands.mcp.removeFailed", { error: errorMessage(err) }), runtime);
 	}
 }
 
@@ -395,7 +415,7 @@ async function handleReauthCommand(rest: string, runtime: SlashCommandRuntime): 
 	// `validateServerName` permits spaces, and splitting on whitespace (or
 	// un-quoting) would truncate "MaaS Slack" to "MaaS".
 	const name = rest.trim();
-	if (!name) return usage("Usage: /mcp reauth <name>", runtime);
+	if (!name) return usage(t("commands.mcp.reauthUsage"), runtime);
 	const found = await findMcpServerForAuth(name, runtime.cwd, runtime.mcpManager, {
 		preferManager: true,
 		// `mcp.enableProjectConfig: false` opts the project out of project-scoped
@@ -403,7 +423,7 @@ async function handleReauthCommand(rest: string, runtime: SlashCommandRuntime): 
 		// opted-out entry.
 		enableProjectConfig: cfgMcpEnableProjectConfig.get(runtime.settings),
 	});
-	if (!found) return usage(`Server "${name}" not found. Run /mcp list to see configured servers.`, runtime);
+	if (!found) return usage(t("commands.mcp.serverNotFound", { name }), runtime);
 
 	const emit = (text: string): void => {
 		void Promise.resolve(runtime.output(text)).catch(() => {});
@@ -414,13 +434,13 @@ async function handleReauthCommand(rest: string, runtime: SlashCommandRuntime): 
 				authStorage: runtime.session.modelRegistry.authStorage,
 				signal: runtime.signal,
 				cwd: runtime.cwd,
-				onReauthorizing: () => emit(`Reauthorizing "${name}"… opening your browser (5 minute timeout).`),
+				onReauthorizing: () => emit(t("commands.mcp.reauthStarting", { name })),
 				onAuth: info => {
 					openPath(info.url);
 					emit(
 						[
-							"━━━ OAuth Authorization Required ━━━",
-							"Opening your browser to authorize. If it did not open:",
+							t("commands.mcp.oauthRequired"),
+							t("commands.mcp.openBrowser"),
 							info.url,
 							...(info.instructions ? ["", info.instructions] : []),
 						].join("\n"),
@@ -434,23 +454,23 @@ async function handleReauthCommand(rest: string, runtime: SlashCommandRuntime): 
 			const state = await runtime.reconnectMcpServer?.(name, found.config);
 			const suffix =
 				state === "connected"
-					? " Server reconnected."
+					? t("commands.mcp.reconnected")
 					: state === "connecting"
-						? " Server reconnecting…"
+						? t("commands.mcp.reconnecting")
 						: state === "disconnected"
-							? " Server still disconnected; no background retry is armed for a server that never connected — restart the session (or reconnect it interactively) to use the fresh credential."
-							: " Credentials apply on the next connection; restart the session if the server stays disconnected.";
-			emit(`✓ Reauthorized "${name}" (${found.scope} config).${suffix}`);
+							? t("commands.mcp.stillDisconnected")
+							: t("commands.mcp.credentialsNextConnection");
+			emit(t("commands.mcp.reauthorized", { name, scope: found.scope, detail: suffix }));
 			return commandConsumed();
 		} catch (error) {
 			if (error instanceof McpReauthRefusalError) {
 				return usage(error.message, runtime);
 			}
 			if (error instanceof MCPOAuthCancelledError) {
-				emit(`Reauthorization cancelled for "${name}".`);
+				emit(t("commands.mcp.reauthCancelled", { name }));
 				return commandConsumed();
 			}
-			return usage(`Failed to reauthorize server "${name}": ${errorMessage(error)}`, runtime);
+			return usage(t("commands.mcp.reauthFailed", { name, error: errorMessage(error) }), runtime);
 		}
 	};
 
@@ -469,21 +489,23 @@ async function handleReauthCommand(rest: string, runtime: SlashCommandRuntime): 
 	return await run();
 }
 
-const MCP_HELP_TEXT = [
-	"MCP server management (ACP mode)",
-	"  /mcp list                                               List configured servers",
-	"  /mcp enable <name>                                      Enable a server",
-	"  /mcp disable <name>                                     Disable a server",
-	"  /mcp remove <name> [--scope project|user]               Remove a server",
-	"  /mcp reload                                             Reload MCP runtime",
-	"  /mcp resources                                          List resources from all servers",
-	"  /mcp prompts                                            List prompts from all servers",
-	"  /mcp test <name>                                        Test connection to a server",
-	"  /mcp reauth <name>                                      Reauthorize OAuth for a server (opens browser)",
-	"  /mcp add <name> [--scope project|user] [--url <url>]    Add a server (non-interactive)",
-	"  /mcp add <name> [-- <command...>]                       Add a stdio server",
-	"  /mcp help                                               Show this help",
-].join("\n");
+function mcpHelpText() {
+	return [
+		t("commands.mcp.help"),
+		t("commands.mcp.helpList"),
+		t("commands.mcp.helpEnable"),
+		t("commands.mcp.helpDisable"),
+		t("commands.mcp.helpRemove"),
+		t("commands.mcp.helpReload"),
+		t("commands.mcp.helpResources"),
+		t("commands.mcp.helpPrompts"),
+		t("commands.mcp.helpTest"),
+		t("commands.mcp.helpReauth"),
+		t("commands.mcp.helpAddUrl"),
+		t("commands.mcp.helpAddStdio"),
+		t("commands.mcp.helpHelp"),
+	].join("\n");
+}
 
 const TUI_ONLY_MCP_VERBS = new Set(["unauth", "reconnect"]);
 
@@ -494,17 +516,14 @@ export async function handleMcpAcp(
 ): Promise<SlashCommandResult> {
 	const { verb, rest } = parseSubcommand(command.args);
 	if (!verb || verb === "help") {
-		await runtime.output(MCP_HELP_TEXT);
+		await runtime.output(mcpHelpText());
 		return commandConsumed();
 	}
 	if (verb === "notifications") {
-		return usage(
-			"MCP notifications require the TUI client (live MCPManager). Use /mcp list to see server status.",
-			runtime,
-		);
+		return usage(t("commands.mcp.notificationsTuiOnly"), runtime);
 	}
 	if (TUI_ONLY_MCP_VERBS.has(verb)) {
-		return usage(`/mcp ${verb} requires OAuth or browser flows only available in the TUI client.`, runtime);
+		return usage(t("commands.mcp.authTuiOnly", { subcommand: verb }), runtime);
 	}
 	switch (verb) {
 		case "resources":
@@ -519,7 +538,7 @@ export async function handleMcpAcp(
 			return await handleAddCommand(rest, runtime);
 		case "reload":
 			await runtime.refreshCommands();
-			await runtime.output("MCP runtime reload requested.");
+			await runtime.output(t("commands.mcp.reloadRequested"));
 			return commandConsumed();
 		case "list":
 			return await handleListCommand(runtime);
@@ -530,6 +549,6 @@ export async function handleMcpAcp(
 		case "rm":
 			return await handleRemoveCommand(rest, runtime);
 		default:
-			return usage(`Unknown /mcp subcommand: ${verb}. Use /mcp help for available subcommands.`, runtime);
+			return usage(t("commands.mcp.unknownSubcommand", { subcommand: verb }), runtime);
 	}
 }

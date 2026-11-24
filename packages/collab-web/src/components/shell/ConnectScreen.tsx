@@ -30,6 +30,9 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 	};
 
 	const shown = missingLink ? tr("connect.missing_link", "Paste a join link first.") : error;
+	const [hintBefore, hintAfter] = tr("connect.hint", "Run {command} in any NeoPi session to get one.").split(
+		"{command}",
+	);
 
 	return (
 		<div className="sh-connect">
@@ -48,10 +51,12 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 			</div>
 			<form className="sh-connect-card" onSubmit={submit}>
 				<div className="sh-connect-head">
-					<h1 className="sh-connect-title">Join a live session</h1>
+					<h1 className="sh-connect-title">{tr("connect.title", "Join a live session")}</h1>
 					<p className="sh-connect-sub">
-						Watch a NeoPi agent work in real time — transcript, tool calls and subagents — and prompt it from
-						here.
+						{tr(
+							"connect.description",
+							"Watch a NeoPi agent work in real time — transcript, tool calls and subagents — and prompt it from here.",
+						)}
 					</p>
 				</div>
 				<label className="sh-field">
@@ -67,7 +72,9 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 						autoFocus
 					/>
 					<span className="sh-field-hint">
-						Run <code>/collab</code> in any NeoPi session to get one.
+						{hintBefore}
+						<code>/collab</code>
+						{hintAfter}
 					</span>
 				</label>
 				<label className="sh-field">
@@ -77,7 +84,7 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 						type="text"
 						value={name}
 						onChange={e => setName(e.target.value)}
-						placeholder="guest"
+						placeholder={tr("connect.guest", "guest")}
 						spellCheck={false}
 						autoComplete="off"
 						maxLength={32}
@@ -89,7 +96,10 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 				</button>
 				<div className="sh-connect-foot">
 					<Lock size={12} />
-					End-to-end encrypted. The room key stays in the link and never reaches the relay.
+					{tr(
+						"connect.encryption",
+						"End-to-end encrypted. The room key stays in the link and never reaches the relay.",
+					)}
 				</div>
 			</form>
 		</div>

@@ -1,5 +1,6 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../thinking";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -7,12 +8,22 @@ import { routeSelectListMouseWithTopBorder } from "../chrome/select-list-mouse-r
 import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import { SelectListSheet } from "../native/picker";
 
+function thinkingItems(levels: readonly ConfiguredThinkingLevel[]): SelectItem[] {
+	return levels.map(value => ({
+		value,
+		label: t(`overlaysModel.thinkingSelector.level.${value}.label`),
+		description: t(`overlaysModel.thinkingSelector.level.${value}.description`),
+	}));
+}
+
 /**
  * Component that renders a thinking level selector with borders
  */
 export class ThinkingSelectorComponent extends OverlayPanel {
 	#selectList: SelectList;
 	#sheet: SelectListSheet;
+	readonly #levels: readonly ConfiguredThinkingLevel[];
+	#locale = getLocale();
 
 	constructor(
 		currentLevel: ConfiguredThinkingLevel | undefined,
@@ -20,9 +31,10 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		onSelect: (level: ConfiguredThinkingLevel) => void,
 		onCancel: () => void,
 	) {
-		super("Thinking Level", "omp.overlay.thinking");
+		super(t("overlaysModel.thinkingSelector.title.terminal"), "omp.overlay.thinking");
+		this.#levels = availableLevels.slice();
 
-		const thinkingLevels: SelectItem[] = availableLevels.map(getConfiguredThinkingLevelMetadata);
+		const thinkingLevels = thinkingItems(this.#levels);
 
 		// Create selector
 		this.#selectList = new SelectList(thinkingLevels, thinkingLevels.length, getSelectListTheme(), {
@@ -44,10 +56,10 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 		};
 
 		this.addChild(this.#selectList);
-		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Thinking level",
+		this.#sheet = new SelectListSheet(this.#selectList, () => ({
+			title: t("overlaysModel.thinkingSelector.title.picker"),
 			icon: "brain",
-			noun: "levels",
+			noun: t("overlaysModel.thinkingSelector.noun"),
 			current: currentLevel ? [currentLevel] : [],
 			// How hard each level thinks, as a meter from off (empty) to the deepest effort (full); auto has none.
 			columns: [{ id: "depth", format: "bar" }],
@@ -56,10 +68,24 @@ export class ThinkingSelectorComponent extends OverlayPanel {
 				const effort = THINKING_EFFORTS.indexOf(item.value as (typeof THINKING_EFFORTS)[number]);
 				return { facts: { depth: (effort + 1) / THINKING_EFFORTS.length } };
 			},
-		});
+		}));
+	}
+
+	#syncLocale(): void {
+		const locale = getLocale();
+		if (this.#locale === locale) return;
+		this.#locale = locale;
+		this.title = t("overlaysModel.thinkingSelector.title.terminal");
+		this.#selectList.setItems(thinkingItems(this.#levels));
+	}
+
+	override render(width: number): readonly string[] {
+		this.#syncLocale();
+		return super.render(width);
 	}
 
 	override describe(cx: DescribeContext): NativeNode | null {
+		this.#syncLocale();
 		return cx.supports("picker") ? this.#sheet.describe() : super.describe(cx);
 	}
 

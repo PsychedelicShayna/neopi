@@ -29,6 +29,7 @@ import {
 	type WordPredictionBackend,
 } from "@oh-my-pi/pi-tui/prompt/word-completion";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { closeDaemonClient } from "../daemon/client";
 import type { TextPredictMethod } from "../predict/protocol";
@@ -107,7 +108,7 @@ class Lane {
 
 	/** Loading, the error, or confidence and latency of the latest answer. */
 	#summary(): { text: string; error: boolean } | undefined {
-		if (this.pending > 0 && !this.answer) return { text: "loading…", error: false };
+		if (this.pending > 0 && !this.answer) return { text: t("cli.commands.predict.loading"), error: false };
 		const answer = this.answer;
 		if (!answer) return undefined;
 		if (answer.error) return { text: answer.error, error: true };
@@ -227,17 +228,20 @@ class PredictCompareComponent implements Component, Focusable {
 								text: value,
 								cursor,
 								prompt: this.#input.prompt,
-								placeholder: "Type to compare engines",
+								placeholder: t("cli.commands.predict.placeholder"),
 								ghost: ghosts[0] || undefined,
 							}),
 							"input",
 						),
 						this.#describeLanes(value, ghosts),
 						actionBar([
-							actionButton(`Accept ${ENGINES[0]}`, "accept", { keys: "tab", tone: "accent" }),
-							actionButton("Clear", "clear", { keys: "enter" }),
+							actionButton(t("cli.commands.predict.accept", { engine: ENGINES[0] }), "accept", {
+								keys: "tab",
+								tone: "accent",
+							}),
+							actionButton(t("cli.commands.predict.clear"), "clear", { keys: "enter" }),
 							null,
-							actionButton("Quit", "quit", { keys: "escape" }),
+							actionButton(t("cli.commands.ps.quit"), "quit", { keys: "escape" }),
 						]),
 					],
 					{ role: "omp.app.predict", gap: "md", grow: 1 },
@@ -253,7 +257,7 @@ class PredictCompareComponent implements Component, Focusable {
 					row(
 						[
 							text("omp predict", { role: "omp.app.title" }),
-							text([span(`${this.#lanes.length} engines · comparison typing never teaches them`, "muted")], {
+							text([span(t("cli.commands.predict.comparison", { count: this.#lanes.length }), "muted")], {
 								truncate: "end",
 							}),
 						],
@@ -262,12 +266,16 @@ class PredictCompareComponent implements Component, Focusable {
 					row(
 						compact([
 							pending &&
-								row([node("spinner", { style: "dots" }), text([span("predicting", "dim")])], {
-									gap: "xs",
-									align: "center",
-									role: "omp.app.fresh",
-								}),
-							iconButton("x", "quit", "Quit  esc", { aria: "Quit" }),
+								row(
+									[
+										node("spinner", { style: "dots" }),
+										text([span(t("cli.commands.predict.predicting"), "dim")]),
+									],
+									{ gap: "xs", align: "center", role: "omp.app.fresh" },
+								),
+							iconButton("x", "quit", `${t("cli.commands.ps.quit")}  esc`, {
+								aria: t("cli.commands.ps.quit"),
+							}),
 						]),
 						{ gap: "md", align: "center", role: "omp.app.tools" },
 					),
@@ -284,9 +292,9 @@ class PredictCompareComponent implements Component, Focusable {
 		return keyed(
 			node("table", {
 				cols: [
-					{ id: "engine", head: "Engine", truncate: "end" },
-					{ id: "completion", head: "Completion", truncate: "start", grow: 1 },
-					{ id: "stats", head: "Confidence · latency", align: "end", priority: 1 },
+					{ id: "engine", head: t("cli.commands.predict.engine"), truncate: "end" },
+					{ id: "completion", head: t("cli.commands.predict.completion"), truncate: "start", grow: 1 },
+					{ id: "stats", head: t("cli.commands.predict.stats"), align: "end", priority: 1 },
 				],
 				rows: this.#lanes.map((lane, index) => {
 					const ghost = ghosts[index] ?? "";
@@ -307,7 +315,12 @@ class PredictCompareComponent implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const value = this.#input.getValue();
 		const header = `${chalk.bold("omp predict")} ${chalk.dim(
-			`· type to compare engines · ${formatKeyHint("tab")} accepts ${ENGINES[0]} · ${formatKeyHint("enter")} clears · ${formatKeyHint("escape")} quits`,
+			t("cli.commands.predict.hints", {
+				accept: formatKeyHint("tab"),
+				engine: ENGINES[0],
+				clear: formatKeyHint("enter"),
+				quit: formatKeyHint("escape"),
+			}),
 		)}`;
 		const textWidth = Math.max(8, width - LABEL_WIDTH - STATS_WIDTH - 2);
 		const rows = this.#lanes.map(lane => {

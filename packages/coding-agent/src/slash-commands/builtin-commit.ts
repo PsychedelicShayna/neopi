@@ -1,5 +1,6 @@
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { draftFor } from "../commit/selective/prelude-definition";
 import commitRequestTemplate from "../prompts/commit-request.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -14,12 +15,14 @@ export const BUILTIN_COMMIT_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "commit",
 		icon: "branch",
-		description: "Commit only the changes this agent and its subagents made",
+		get description() {
+			return t("commands.commit.description");
+		},
 		inlineHint: "[instructions]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			if (!runtime.session.getAdvertisedEvalPreludes().some(prelude => prelude.name === "commit")) {
-				return usage("/commit needs the eval tool and the `commit.enabled` setting.", runtime);
+				return usage(t("commands.commit.unavailable"), runtime);
 			}
 			try {
 				const draft = await draftFor({

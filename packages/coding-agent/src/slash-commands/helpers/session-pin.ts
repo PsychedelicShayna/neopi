@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { OAuthAccountSummary } from "../../session/auth-storage";
 import { formatActiveAccountLabel } from "./active-oauth-account";
 
@@ -9,7 +10,9 @@ export function toSessionPinAccounts(accounts: readonly OAuthAccountSummary[]): 
 		const enterpriseUrl = account.enterpriseUrl?.trim();
 		return {
 			...account,
-			label: (formatActiveAccountLabel(account) ?? enterpriseUrl) || `OAuth credential #${account.credentialId}`,
+			label:
+				(formatActiveAccountLabel(account) ?? enterpriseUrl) ||
+				t("commands.auth.credential", { id: account.credentialId }),
 		};
 	});
 }
@@ -35,7 +38,7 @@ export function matchSessionPinAccounts(accounts: readonly SessionPinAccount[], 
 			account.enterpriseUrl,
 			account.orgId,
 			account.orgName,
-			`OAuth credential #${account.credentialId}`,
+			t("commands.auth.credential", { id: account.credentialId }),
 		].some(value => value?.trim().toLowerCase() === wanted),
 	);
 }

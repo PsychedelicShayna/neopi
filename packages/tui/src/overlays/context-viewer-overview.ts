@@ -2,6 +2,7 @@
  * Overview model: usage attribution, legend rows, and the occupancy map. Legend and
  * map rows have an ANSI form (`render`) and a native form (`describe`); keep the twins visually identical.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { ContextBreakdown } from "../status-line/context-usage";
@@ -130,8 +131,18 @@ export function buildOverviewRows(
 			});
 	}
 	rows.push(
-		{ key: "buffer", id: "buffer", label: "Auto-Compact Buffer", tokens: data.breakdown.autoCompactBufferTokens },
-		{ key: "free", id: "free", label: "Free Space", tokens: data.breakdown.freeTokens },
+		{
+			key: "buffer",
+			id: "buffer",
+			label: t("overlays.context_viewer_overview.auto_compact_buffer"),
+			tokens: data.breakdown.autoCompactBufferTokens,
+		},
+		{
+			key: "free",
+			id: "free",
+			label: t("overlays.context_viewer_overview.free_space"),
+			tokens: data.breakdown.freeTokens,
+		},
 	);
 	const tokenWidth = Math.max(...rows.map(row => (row.tokens === undefined ? 1 : formatNumber(row.tokens).length)));
 	const shareWidth = Math.max(
@@ -253,37 +264,57 @@ function percentString(part: number, whole: number, fractionDigits = 1): string 
 export function contextSnapcompactLines(breakdown: ContextBreakdown): string[] {
 	const snap = breakdown.snapcompact;
 	if (!snap) return [];
-	if (!snap.visionCapable) return ["Snapcompact: inactive (model has no image input)"];
-	const lines = ["Snapcompact (estimated wire savings)"];
+	if (!snap.visionCapable) return [t("overlays.context_viewer_overview.snapcompact_inactive")];
+	const lines = [t("overlays.context_viewer_overview.snapcompact_savings")];
 	if (snap.systemPrompt) {
 		const sp = snap.systemPrompt;
-		const scope = sp.scope === "agents-md" ? "AGENTS.md" : "all";
+		const scope = sp.scope === "agents-md" ? "AGENTS.md" : t("overlays.context_viewer_overview.scope_all");
 		if (sp.applied) {
-			const frames = `${sp.frames} frame${sp.frames === 1 ? "" : "s"}`;
+			const frames = t("overlays.context_viewer_overview.frame_count", {
+				frames: `${sp.frames}`,
+				plural: `${sp.frames === 1 ? "" : "s"}`,
+			});
 			lines.push(
-				`  System prompt (${scope}): saves ~${formatNumber(sp.savedTokens)} (${formatNumber(sp.textTokens)} text → ${frames} ≈ ${formatNumber(sp.imageTokens)})`,
+				t("overlays.context_viewer_overview.system_prompt_savings", {
+					scope: `${scope}`,
+					savedTokens: `${formatNumber(sp.savedTokens)}`,
+					textTokens: `${formatNumber(sp.textTokens)}`,
+					frames: `${frames}`,
+					imageTokens: `${formatNumber(sp.imageTokens)}`,
+				}),
 			);
 		} else {
 			const reason =
 				sp.reason === "budget"
-					? "image budget exhausted"
+					? t("overlays.context_viewer_overview.image_budget_exhausted")
 					: sp.reason === "empty"
-						? "nothing to image"
-						: "frames would not save tokens";
-			lines.push(`  System prompt (${scope}): stays text (${reason})`);
+						? t("overlays.context_viewer_overview.nothing_to_image")
+						: t("overlays.context_viewer_overview.frames_no_savings");
+			lines.push(
+				t("overlays.context_viewer_overview.system_prompt_text", { scope: `${scope}`, reason: `${reason}` }),
+			);
 		}
 	}
 	if (snap.toolResults) {
 		const tr = snap.toolResults;
 		lines.push(
 			tr.swapped > 0
-				? `  Tool results: saves ~${formatNumber(tr.savedTokens)} (${tr.swapped}/${tr.total} imaged, ${formatNumber(tr.textTokens)} text → ${tr.frames} frames ≈ ${formatNumber(tr.imageTokens)})`
-				: `  Tool results: none imaged (${tr.total} in history)`,
+				? t("overlays.context_viewer_overview.tool_results_savings", {
+						savedTokens: `${formatNumber(tr.savedTokens)}`,
+						swapped: `${tr.swapped}`,
+						total: `${tr.total}`,
+						textTokens: `${formatNumber(tr.textTokens)}`,
+						frames: `${tr.frames}`,
+						imageTokens: `${formatNumber(tr.imageTokens)}`,
+					})
+				: t("overlays.context_viewer_overview.tool_results_no_images", { total: `${tr.total}` }),
 		);
 	}
 	if (snap.savedTokens > 0) {
 		lines.push(
-			`  Next request: ~${formatNumber(Math.max(0, breakdown.usedTokens - snap.savedTokens))} tokens on the wire`,
+			t("overlays.context_viewer_overview.next_request_tokens", {
+				max: `${formatNumber(Math.max(0, breakdown.usedTokens - snap.savedTokens))}`,
+			}),
 		);
 	}
 	return lines;
@@ -306,19 +337,29 @@ function contextMeterParts(
 		.map(category => ({
 			value: category.tokens / window,
 			token: category.color,
-			label: `${category.label} · ${formatNumber(category.tokens)} tokens (${percentString(category.tokens, window)})`,
+			label: t("overlays.context_viewer_overview.category_tokens", {
+				label: `${category.label}`,
+				tokens: `${formatNumber(category.tokens)}`,
+				percentString: `${percentString(category.tokens, window)}`,
+			}),
 		}));
 	parts.push({
 		value: breakdown.freeTokens / window,
 		token: "track",
-		label: `Free space · ${formatNumber(breakdown.freeTokens)} tokens (${percentString(breakdown.freeTokens, window)})`,
+		label: t("overlays.context_viewer_overview.free_space_tokens", {
+			freeTokens: `${formatNumber(breakdown.freeTokens)}`,
+			percentString: `${percentString(breakdown.freeTokens, window)}`,
+		}),
 	});
 	if (breakdown.autoCompactBufferTokens > 0) {
 		parts.push({
 			value: breakdown.autoCompactBufferTokens / window,
 			token: "warning",
 			hatch: true,
-			label: `Autocompact buffer · ${formatNumber(breakdown.autoCompactBufferTokens)} tokens (${percentString(breakdown.autoCompactBufferTokens, window)})`,
+			label: t("overlays.context_viewer_overview.buffer_tokens", {
+				autoCompactBufferTokens: `${formatNumber(breakdown.autoCompactBufferTokens)}`,
+				percentString: `${percentString(breakdown.autoCompactBufferTokens, window)}`,
+			}),
 		});
 	}
 	return parts;
@@ -331,13 +372,21 @@ export function contextUsageSummary(
 	const { contextWindow: window, usedTokens, freeTokens, thresholdTokens } = breakdown;
 	const room =
 		thresholdTokens === undefined
-			? `${formatNumber(freeTokens)} free`
+			? t("overlays.context_viewer_overview.tokens_free", { freeTokens: `${formatNumber(freeTokens)}` })
 			: usedTokens >= thresholdTokens
-				? `Past auto-compaction at ${percentString(thresholdTokens, window, 0)}`
-				: `${formatNumber(thresholdTokens - usedTokens)} left before auto-compaction at ${percentString(thresholdTokens, window, 0)}`;
+				? t("overlays.context_viewer_overview.past_compaction", {
+						percentString: `${percentString(thresholdTokens, window, 0)}`,
+					})
+				: t("overlays.context_viewer_overview.before_compaction", {
+						value: `${formatNumber(thresholdTokens - usedTokens)}`,
+						percentString: `${percentString(thresholdTokens, window, 0)}`,
+					});
 	return {
 		used: formatNumber(usedTokens),
-		detail: ` of ${formatNumber(window)} tokens · ${percentString(usedTokens, window, 0)}`,
+		detail: t("overlays.context_viewer_overview.usage_detail", {
+			window: `${formatNumber(window)}`,
+			percentString: `${percentString(usedTokens, window, 0)}`,
+		}),
 		room,
 	};
 }
@@ -367,13 +416,23 @@ export function describeContextMeter(breakdown: ContextMeterData): [NativeNode, 
 					{
 						at: thresholdTokens / window,
 						tone: "warning" as const,
-						title: `Auto-compaction at ${percentString(thresholdTokens, window, 0)} · ${formatNumber(thresholdTokens)} tokens`,
+						title: t("overlays.context_viewer_overview.compaction_threshold", {
+							percentString: `${percentString(thresholdTokens, window, 0)}`,
+							thresholdTokens: `${formatNumber(thresholdTokens)}`,
+						}),
 					},
 				]
 			: undefined;
 	const bar = node(
 		"meter",
-		{ value: used, style: "bar", size: "lg", parts, ...(marks ? { marks } : {}), aria: "Context usage by category" },
+		{
+			value: used,
+			style: "bar",
+			size: "lg",
+			parts,
+			...(marks ? { marks } : {}),
+			aria: t("overlays.context_viewer_overview.usage_by_category"),
+		},
 		undefined,
 		"bar",
 	);

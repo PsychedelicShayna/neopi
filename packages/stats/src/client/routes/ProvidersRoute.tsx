@@ -1,3 +1,5 @@
+import { LocalizedText, useTranslation, useLocale } from "../i18n";
+import type { Locale } from "../types";
 import { format } from "@oh-my-pi/pi-utils/dates";
 import { type ReactNode, useMemo, useState } from "react";
 import { getProviderDashboardStats, getProviderWindowStats } from "../api";
@@ -15,7 +17,7 @@ import {
 } from "../data/formatters";
 import { type QueryResult, useQuery } from "../data/query";
 import { bucketAxis, formatBucket, formatTick, rangeMeta } from "../data/range";
-import { bucketAt, densify, pivotSeries } from "../data/series";
+import { bucketAt, densify, localizeGroupedSeries, pivotSeries } from "../data/series";
 import type {
 	ProviderAggregate,
 	ProviderHourlyPoint,
@@ -53,8 +55,13 @@ type BurnMetric = "tokens" | "cost" | "requests";
 
 const BURN_OPTIONS = [
 	{ value: "tokens" as const, label: "Tokens" },
-	{ value: "cost" as const, label: "Cost", title: "API-equivalent estimate" },
-	{ value: "requests" as const, label: "Requests" },
+	{
+		value: "cost" as const,
+		label: <LocalizedText messageKey="pages.providers.cost" english={"Cost"} />,
+		title: "API-equivalent estimate",
+		titleKey: "pages.providers.api_equivalent_estimate",
+	},
+	{ value: "requests" as const, label: <LocalizedText messageKey="pages.providers.requests" english={"Requests"} /> },
 ];
 
 /** Providers stacked individually in the burn chart; the rest fold into "Other". */
@@ -75,6 +82,7 @@ interface WindowRef {
 }
 
 export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
+	const tr = useTranslation();
 	const stats = useQuery(["providers", range], ({ signal }) => getProviderDashboardStats(range, signal), {
 		enabled: active,
 	});
@@ -139,15 +147,19 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 		};
 	}, [stats.data, range]);
 
-	const burnSeries = view.burn[metric];
+	const burnSeries = localizeGroupedSeries(view.burn[metric], tr);
 	const burnFormat = metric === "cost" ? (v: number) => formatCost(v) : formatCompact;
 	const t = view.totals;
 
 	return (
 		<div className="page">
 			<PageHeader
-				title="Providers"
-				description={`Burn, reliability and subscription headroom per provider over ${meta.windowLabel}.`}
+				title={tr("pages.providers.providers", "Providers")}
+				description={tr(
+					"pages.providers.burn_reliability_and_subscription_headroom_per_provider",
+					"Burn, reliability and subscription headroom per provider over {window}.",
+					{ window: tr(`costs.window.${range}`, meta.windowLabel) },
+				)}
 			/>
 
 			<QueryView query={stats} skeleton={<ChartSkeleton height={112} />}>
@@ -155,34 +167,54 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 					<div data-stale={stats.stale}>
 						<StatGrid min={190}>
 							<Stat
-								label="Providers"
+								label={tr("pages.providers.providers", "Providers")}
 								value={formatInteger(providers.length)}
-								hint={view.topProvider ? `Most tokens: ${view.topProvider.provider}` : undefined}
+								hint={
+									view.topProvider
+										? tr("pages.providers.most_tokens_provider", "Most tokens: {provider}", {
+												provider: view.topProvider.provider,
+											})
+										: undefined
+								}
 							/>
 							<Stat
-								label="Requests"
+								label={tr("pages.providers.requests", "Requests")}
 								value={formatInteger(t.requests)}
-								hint={`${formatInteger(t.failed)} failed`}
+								hint={tr("pages.providers.count_failed", "{count} failed", { count: formatInteger(t.failed) })}
 								spark={view.spark.requests}
 							/>
 							<Stat
 								label="Tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								title={tr(
+									"pages.providers.uncached_input_cache_reads_cache_writes_output",
+									"Uncached input + cache reads + cache writes + output",
+								)}
 								value={formatCompact(t.tokens)}
 								spark={view.spark.tokens}
 							/>
 							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
+								label={tr("pages.providers.api_equivalent_cost", "API-equivalent cost")}
+								title={tr(
+									"pages.providers.what_this_usage_would_cost_at_public",
+									"What this usage would cost at public API rates",
+								)}
 								value={formatEstimatedCost(t.cost, t.unpriced)}
-								hint={t.unpriced > 0 ? `${formatInteger(t.unpriced)} unpriced` : undefined}
+								hint={
+									t.unpriced > 0
+										? tr("pages.providers.count_unpriced", "{count} unpriced", {
+												count: formatInteger(t.unpriced),
+											})
+										: undefined
+								}
 								spark={view.spark.cost}
 								sparkColor="var(--chart-secondary)"
 							/>
 							<Stat
-								label="Error rate"
+								label={tr("pages.providers.error_rate", "Error rate")}
 								value={formatErrorRate(t.requests > 0 ? t.failed / t.requests : 0)}
-								hint={`${formatInteger(t.requests - t.failed)} succeeded`}
+								hint={tr("pages.providers.count_succeeded", "{count} succeeded", {
+									count: formatInteger(t.requests - t.failed),
+								})}
 							/>
 						</StatGrid>
 					</div>
@@ -191,11 +223,18 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 
 			<Card
 				index={1}
-				title="Provider totals"
+				title={tr("pages.providers.provider_totals", "Provider totals")}
 				description={
 					t.unpriced > 0
-						? `Cost is an API-equivalent estimate and excludes ${formatInteger(t.unpriced)} unpriced subscription request${t.unpriced === 1 ? "" : "s"}. Select a row for its token mix.`
-						: "Cost is an API-equivalent estimate. Select a row for its token mix."
+						? tr(
+								"pages.providers.cost_is_an_api_equivalent_estimate_and",
+								"Cost is an API-equivalent estimate and excludes {count} unpriced subscription request{plural}. Select a row for its token mix.",
+								{ count: formatInteger(t.unpriced), plural: t.unpriced === 1 ? "" : "s" },
+							)
+						: tr(
+								"pages.providers.cost_is_an_api_equivalent_estimate_select",
+								"Cost is an API-equivalent estimate. Select a row for its token mix.",
+							)
 				}
 				flush
 				stale={stats.stale}
@@ -208,11 +247,32 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 			<div className="grid grid-main-side">
 				<Card
 					index={2}
-					title="Burn by provider"
+					title={tr("pages.providers.burn_by_provider", "Burn by provider")}
 					description={
 						metric === "cost" && t.unpriced > 0
-							? `API-equivalent estimate per ${meta.bucketMs < 86_400_000 ? "hour" : "day"}; excludes unpriced subscription requests`
-							: `Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}, top ${TOP_PROVIDERS} providers stacked`
+							? tr(
+									"pages.providers.api_equivalent_estimate_per_bucket_excludes_unpriced",
+									"API-equivalent estimate per {bucket}; excludes unpriced subscription requests",
+									{
+										bucket:
+											meta.bucketMs < 86_400_000
+												? tr("pages.period.hour", "hour")
+												: tr("pages.period.day", "day"),
+									},
+								)
+							: tr(
+									"pages.providers.per_bucket_top_count_providers_stacked",
+									"Per {bucket}, top {count} providers stacked",
+									{
+										bucket:
+											meta.bucketMs < 3_600_000
+												? tr("pages.period.five_minutes", "5 minutes")
+												: meta.bucketMs < 86_400_000
+													? tr("pages.period.hour", "hour")
+													: tr("pages.period.day", "day"),
+										count: TOP_PROVIDERS,
+									},
+								)
 					}
 					actions={<Segmented size="sm" options={BURN_OPTIONS} value={metric} onChange={setMetric} />}
 					stale={stats.stale}
@@ -228,7 +288,10 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 									height={260}
 									format={burnFormat}
 									formatTooltip={metric === "cost" ? v => formatCost(v) : formatInteger}
-									emptyLabel="No provider activity in this range"
+									emptyLabel={tr(
+										"pages.providers.no_provider_activity_in_this_range",
+										"No provider activity in this range",
+									)}
 								/>
 								<Legend
 									items={burnSeries.map(s => ({
@@ -252,8 +315,11 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 
 			<Card
 				index={4}
-				title="Subscription windows"
-				description="What one usage window buys you and how many accounts peak demand needs. Select a row to chart it."
+				title={tr("pages.providers.subscription_windows", "Subscription windows")}
+				description={tr(
+					"pages.providers.what_one_usage_window_buys_you_and",
+					"What one usage window buys you and how many accounts peak demand needs. Select a row to chart it.",
+				)}
 				flush
 				stale={windows.stale}
 			>
@@ -299,6 +365,7 @@ function ProviderTotalsTable({
 	providers: ProviderAggregate[];
 	colors: ReadonlyMap<string, string>;
 }) {
+	const tr = useTranslation();
 	const [open, setOpen] = useState<string | null>(null);
 	const columns = useMemo<Column<ProviderAggregate>[]>(() => {
 		let maxRequests = 0;
@@ -312,7 +379,7 @@ function ProviderTotalsTable({
 		return [
 			{
 				key: "provider",
-				header: "Provider",
+				header: tr("pages.providers.provider", "Provider"),
 				sort: p => p.provider,
 				render: p => (
 					<span className="row" style={{ gap: 8 }}>
@@ -323,7 +390,7 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "requests",
-				header: "Requests",
+				header: tr("pages.providers.requests", "Requests"),
 				align: "right",
 				sort: p => p.totalRequests,
 				render: p => (
@@ -332,7 +399,7 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "errors",
-				header: "Error rate",
+				header: tr("pages.providers.error_rate", "Error rate"),
 				align: "right",
 				sort: p => (p.totalRequests > 0 ? p.failedRequests / p.totalRequests : 0),
 				render: p => {
@@ -349,8 +416,11 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "models",
-				header: "Models",
-				title: "Distinct models used through this provider",
+				header: tr("pages.providers.models", "Models"),
+				title: tr(
+					"pages.providers.distinct_models_used_through_this_provider",
+					"Distinct models used through this provider",
+				),
 				align: "right",
 				sort: p => p.models,
 				render: p => <span className="num">{formatInteger(p.models)}</span>,
@@ -358,7 +428,10 @@ function ProviderTotalsTable({
 			{
 				key: "tokens",
 				header: "Tokens",
-				title: "Uncached input + cache reads + cache writes + output",
+				title: tr(
+					"pages.providers.uncached_input_cache_reads_cache_writes_output",
+					"Uncached input + cache reads + cache writes + output",
+				),
 				align: "right",
 				sort: p => p.totalTokens,
 				render: p => (
@@ -372,8 +445,8 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "share",
-				header: "Share",
-				title: "Fraction of all tokens in range",
+				header: tr("pages.providers.share", "Share"),
+				title: tr("pages.providers.fraction_of_all_tokens_in_range", "Fraction of all tokens in range"),
 				align: "right",
 				sort: p => p.totalTokens,
 				render: p => (
@@ -382,14 +455,20 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "cost",
-				header: "Cost",
-				title: "API-equivalent estimate",
+				header: tr("pages.providers.cost", "Cost"),
+				title: tr("pages.providers.api_equivalent_estimate", "API-equivalent estimate"),
 				align: "right",
 				sort: p => p.totalCost,
 				render: p => (
 					<span
 						className="num"
-						title={p.unpricedRequests > 0 ? `${formatInteger(p.unpricedRequests)} unpriced` : undefined}
+						title={
+							p.unpricedRequests > 0
+								? tr("pages.providers.count_unpriced", "{count} unpriced", {
+										count: formatInteger(p.unpricedRequests),
+									})
+								: undefined
+						}
 					>
 						{formatEstimatedCost(p.totalCost, p.unpricedRequests)}
 					</span>
@@ -398,15 +477,18 @@ function ProviderTotalsTable({
 			{
 				key: "tps",
 				header: "Tokens/s",
-				title: "Average output throughput",
+				title: tr("pages.providers.average_output_throughput", "Average output throughput"),
 				align: "right",
 				sort: p => p.avgTokensPerSecond ?? -1,
 				render: p => <span className="num">{formatTokensPerSecond(p.avgTokensPerSecond)}</span>,
 			},
 			{
 				key: "premium",
-				header: "Premium",
-				title: "Premium requests (subscription multiplier units)",
+				header: tr("pages.providers.premium", "Premium"),
+				title: tr(
+					"pages.providers.premium_requests_subscription_multiplier_units",
+					"Premium requests (subscription multiplier units)",
+				),
 				align: "right",
 				sort: p => p.totalPremiumRequests,
 				render: p => (
@@ -416,7 +498,7 @@ function ProviderTotalsTable({
 				),
 			},
 		];
-	}, [providers, colors]);
+	}, [providers, colors, tr, tr]);
 
 	return (
 		<Table
@@ -428,12 +510,13 @@ function ProviderTotalsTable({
 			selectedKey={open}
 			onRowClick={p => setOpen(prev => (prev === p.provider ? null : p.provider))}
 			expanded={p => (p.provider === open ? <TokenMix provider={p} /> : null)}
-			empty={<EmptyState title="No requests in this range" />}
+			empty={<EmptyState title={tr("pages.providers.no_requests_in_this_range", "No requests in this range")} />}
 		/>
 	);
 }
 
 function TokenMix({ provider }: { provider: ProviderAggregate }) {
+	const tr = useTranslation();
 	const mix = {
 		input: provider.totalInputTokens,
 		cacheRead: provider.totalCacheReadTokens,
@@ -442,11 +525,18 @@ function TokenMix({ provider }: { provider: ProviderAggregate }) {
 	};
 	return (
 		<div className="providers-mix">
-			<ShareBar segments={TOKEN_MIX.map(m => ({ key: m.key, label: m.label, value: mix[m.key], color: m.color }))} />
+			<ShareBar
+				segments={TOKEN_MIX.map(m => ({
+					key: m.key,
+					label: tr(`pages.providers.token_mix.${m.key}`, m.label),
+					value: mix[m.key],
+					color: m.color,
+				}))}
+			/>
 			<Legend
 				items={TOKEN_MIX.map(m => ({
 					key: m.key,
-					label: m.label,
+					label: tr(`pages.providers.token_mix.${m.key}`, m.label),
 					color: m.color,
 					value: `${formatCompact(mix[m.key])} · ${provider.totalTokens > 0 ? formatPercent(mix[m.key] / provider.totalTokens, 0) : "–"}`,
 				}))}
@@ -470,6 +560,7 @@ function PeakHoursCard({
 	providers: ProviderAggregate[];
 	stale: boolean;
 }) {
+	const tr = useTranslation();
 	const [provider, setProvider] = useState(ALL_PROVIDERS);
 	const current =
 		provider === ALL_PROVIDERS || providers.some(p => p.provider === provider) ? provider : ALL_PROVIDERS;
@@ -496,33 +587,35 @@ function PeakHoursCard({
 			},
 			{
 				key: "peak",
-				label: "Tokens (peak hour)",
+				label: tr("pages.providers.tokens_peak_hour", "Tokens (peak hour)"),
 				color: "var(--chart-secondary)",
 				values: tokens.map((v, hour) => (hasData && hour === peak ? v : null)),
 			},
 		];
 		return { series, output, requests, peak, hasData };
-	}, [hourly, current]);
+	}, [hourly, current, tr, tr]);
 
 	const hourLabel = (hour: number) => `${String(hour).padStart(2, "0")}:00`;
 
 	return (
 		<Card
 			index={3}
-			title="Peak burn hours"
+			title={tr("pages.providers.peak_burn_hours", "Peak burn hours")}
 			description={
 				hours.hasData
-					? `Tokens by local hour of day; peak at ${hourLabel(hours.peak)}`
-					: "Tokens by local hour of day"
+					? tr("pages.providers.tokens_by_local_hour_of_day_peak", "Tokens by local hour of day; peak at {hour}", {
+							hour: hourLabel(hours.peak),
+						})
+					: tr("pages.providers.tokens_by_local_hour_of_day", "Tokens by local hour of day")
 			}
 			actions={
 				<select
 					className="input providers-select"
 					value={current}
 					onChange={e => setProvider(e.target.value)}
-					aria-label="Provider"
+					aria-label={tr("pages.providers.provider", "Provider")}
 				>
-					<option value={ALL_PROVIDERS}>All providers</option>
+					<option value={ALL_PROVIDERS}>{tr("pages.providers.all_providers", "All providers")}</option>
 					{providers.map(p => (
 						<option key={p.provider} value={p.provider}>
 							{p.provider}
@@ -540,15 +633,15 @@ function PeakHoursCard({
 				height={260}
 				showTotal={false}
 				formatTooltip={formatInteger}
-				emptyLabel="No activity in this range"
+				emptyLabel={tr("pages.providers.no_activity_in_this_range", "No activity in this range")}
 				tooltipExtra={hour => (
 					<>
 						<div className="chart-tooltip-row">
-							<span className="chart-tooltip-label">Output</span>
+							<span className="chart-tooltip-label">{tr("pages.providers.output", "Output")}</span>
 							<span className="chart-tooltip-value">{formatInteger(hours.output[hour])}</span>
 						</div>
 						<div className="chart-tooltip-row">
-							<span className="chart-tooltip-label">Requests</span>
+							<span className="chart-tooltip-label">{tr("pages.providers.requests", "Requests")}</span>
 							<span className="chart-tooltip-value">{formatInteger(hours.requests[hour])}</span>
 						</div>
 					</>
@@ -571,6 +664,7 @@ function WindowInsightsTable({
 	selected: WindowRef | null;
 	onSelect: (ref: WindowRef) => void;
 }) {
+	const tr = useTranslation();
 	return (
 		<Table
 			rows={insights}
@@ -580,61 +674,81 @@ function WindowInsightsTable({
 			limit={12}
 			selectedKey={selected ? `${selected.provider}::${selected.windowKey}` : null}
 			onRowClick={i => onSelect({ provider: i.provider, windowKey: i.windowKey })}
-			empty={<EmptyState title="No usage snapshots in this range" hint={SNAPSHOT_HINT} />}
+			empty={
+				<EmptyState
+					title={tr("pages.providers.no_usage_snapshots_in_this_range", "No usage snapshots in this range")}
+					hint={tr("pages.providers.SNAPSHOT_HINT", SNAPSHOT_HINT)}
+				/>
+			}
 		/>
+	);
+}
+
+function WindowEstimateMissing() {
+	const tr = useTranslation();
+	return (
+		<span
+			className="dim"
+			title={tr("pages.providers.not_enough_usage", "Too little of the window was consumed to extrapolate")}
+		>
+			–
+		</span>
 	);
 }
 
 const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	{
 		key: "window",
-		header: "Window",
+		header: <LocalizedText messageKey="pages.providers.window" english={"Window"} />,
 		sort: i => `${i.provider} ${i.windowLabel}`,
 		render: i => <LabelCell primary={i.windowLabel} secondary={<span className="mono">{i.provider}</span>} />,
 	},
 	{
 		key: "accounts",
-		header: "Accounts",
+		header: <LocalizedText messageKey="pages.providers.accounts" english={"Accounts"} />,
 		title: "Accounts with at least one snapshot for this window in range",
+		titleKey: "pages.providers.accounts_with_at_least_one_snapshot_for",
 		align: "right",
 		sort: i => i.accounts,
 		render: i => <span className="num">{formatInteger(i.accounts)}</span>,
 	},
 	{
 		key: "cycles",
-		header: "Resets",
+		header: <LocalizedText messageKey="pages.providers.resets" english={"Resets"} />,
 		title: "Window resets observed (drops in used fraction)",
+		titleKey: "pages.providers.window_resets_observed_drops_in_used_fraction",
 		align: "right",
 		sort: i => i.cycles,
 		render: i => <span className="num muted">{formatInteger(i.cycles)}</span>,
 	},
 	{
 		key: "consumed",
-		header: "Windows burned",
+		header: <LocalizedText messageKey="pages.providers.windows_burned" english={"Windows burned"} />,
 		title: "Subscription-window equivalents consumed in range (sum of used-fraction increases across accounts)",
+		titleKey: "pages.providers.subscription_window_equivalents_consumed_in_range_sum",
 		align: "right",
 		sort: i => i.fractionConsumed,
 		render: i => <span className="num">{i.fractionConsumed.toFixed(2)}</span>,
 	},
 	{
 		key: "capacity",
-		header: "Tokens / window",
+		header: <LocalizedText messageKey="pages.providers.tokens_window" english={"Tokens / window"} />,
 		title: "Provider tokens burned in range ÷ windows burned — what one full window is worth",
+		titleKey: "pages.providers.provider_tokens_burned_in_range_windows_burned",
 		align: "right",
 		sort: i => i.estTokensPerWindow ?? -1,
 		render: i =>
 			i.estTokensPerWindow !== null ? (
 				<span className="num">{formatCompact(i.estTokensPerWindow)}</span>
 			) : (
-				<span className="dim" title="Too little of the window was consumed to extrapolate">
-					–
-				</span>
+				<WindowEstimateMissing />
 			),
 	},
 	{
 		key: "peak",
-		header: "Peak utilization",
+		header: <LocalizedText messageKey="pages.providers.peak_utilization" english={"Peak utilization"} />,
 		title: "Peak of summed used fraction across accounts at any sampled instant; the bar is relative to fleet capacity",
+		titleKey: "pages.providers.peak_of_summed_used_fraction_across_accounts",
 		align: "right",
 		sort: i => i.peakConcurrentFraction,
 		render: i => {
@@ -651,14 +765,17 @@ const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	},
 	{
 		key: "ideal",
-		header: "Accounts needed",
+		header: <LocalizedText messageKey="pages.providers.accounts_needed" english={"Accounts needed"} />,
 		title: "Accounts needed to keep peak demand under 90% of fleet capacity",
+		titleKey: "pages.providers.accounts_needed_to_keep_peak_demand_under",
 		align: "right",
 		sort: i => i.idealAccounts - i.accounts,
 		render: i =>
 			i.idealAccounts > i.accounts ? (
 				<Badge tone="warn" mono>
-					{formatInteger(i.idealAccounts)} · have {formatInteger(i.accounts)}
+					{formatInteger(i.idealAccounts)}
+					<LocalizedText messageKey="pages.providers.have" english={" · have "} />
+					{formatInteger(i.accounts)}
 				</Badge>
 			) : (
 				<span className="num">{formatInteger(i.idealAccounts)}</span>
@@ -666,14 +783,16 @@ const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	},
 	{
 		key: "exhausted",
-		header: "Exhaustions",
+		header: <LocalizedText messageKey="pages.providers.exhaustions" english={"Exhaustions"} />,
 		title: "Transitions into an exhausted state observed in range",
+		titleKey: "pages.providers.transitions_into_an_exhausted_state_observed_in",
 		align: "right",
 		sort: i => i.exhaustedEvents,
 		render: i =>
 			i.exhaustedEvents > 0 ? (
 				<Badge tone="warn" mono>
-					{formatInteger(i.exhaustedEvents)} exhausted
+					{formatInteger(i.exhaustedEvents)}
+					<LocalizedText messageKey="pages.providers.exhausted" english={" exhausted"} />
 				</Badge>
 			) : (
 				<span className="num dim">0</span>
@@ -731,6 +850,9 @@ function WindowUtilizationCard({
 	selected: WindowRef | null;
 	onSelect: (ref: WindowRef) => void;
 }) {
+	const locale = useLocale();
+	const tr = useTranslation();
+	const localizedAccountColumns = useMemo(() => accountColumns(locale), [locale]);
 	const [hidden, toggleHidden] = useHiddenSeries();
 
 	const providers = useMemo(() => [...new Set((insights ?? []).map(i => i.provider))], [insights]);
@@ -802,11 +924,19 @@ function WindowUtilizationCard({
 	return (
 		<Card
 			index={5}
-			title="Window utilization"
+			title={tr("pages.providers.window_utilization", "Window utilization")}
 			description={
 				chart.buckets.length > 0
-					? `${windowLabel ?? "Window"} used fraction per account, ${format(new Date(chart.first), "MMM d HH:mm")} – ${format(new Date(chart.last), "MMM d HH:mm")}`
-					: "Recorded limit utilization per account"
+					? tr(
+							"pages.providers.window_used_fraction_per_account_start_end",
+							"{window} used fraction per account, {start} – {end}",
+							{
+								window: windowLabel ?? "Window",
+								start: format(new Date(chart.first), "MMM d HH:mm"),
+								end: format(new Date(chart.last), "MMM d HH:mm"),
+							},
+						)
+					: tr("pages.providers.recorded_limit_utilization_per_account", "Recorded limit utilization per account")
 			}
 			actions={
 				selected && (
@@ -819,7 +949,7 @@ function WindowUtilizationCard({
 								const first = insights?.find(i => i.provider === next);
 								if (first) onSelect({ provider: next, windowKey: first.windowKey });
 							}}
-							aria-label="Provider"
+							aria-label={tr("pages.providers.provider", "Provider")}
 						>
 							{providers.map(p => (
 								<option key={p} value={p}>
@@ -831,7 +961,7 @@ function WindowUtilizationCard({
 							className="input providers-select"
 							value={selected.windowKey}
 							onChange={e => onSelect({ provider: selected.provider, windowKey: e.target.value })}
-							aria-label="Window"
+							aria-label={tr("pages.providers.window", "Window")}
 						>
 							{windows.map(w => (
 								<option key={w.key} value={w.key}>
@@ -847,7 +977,10 @@ function WindowUtilizationCard({
 			{insights === null ? (
 				<ChartSkeleton height={260} />
 			) : selected === null ? (
-				<EmptyState title="No usage snapshots in this range" hint={SNAPSHOT_HINT} />
+				<EmptyState
+					title={tr("pages.providers.no_usage_snapshots_in_this_range", "No usage snapshots in this range")}
+					hint={tr("pages.providers.SNAPSHOT_HINT", SNAPSHOT_HINT)}
+				/>
 			) : (
 				<QueryView query={accounts} skeleton={<ChartSkeleton height={260} />}>
 					{() =>
@@ -862,9 +995,10 @@ function WindowUtilizationCard({
 											formatTick(
 												chart.buckets[i],
 												chart.last - chart.first > DAY_MS ? DAY_MS : chart.bucketMs,
+												locale,
 											)
 										}
-										tooltipTitle={i => formatBucket(chart.buckets[i], HOUR_MS)}
+										tooltipTitle={i => formatBucket(chart.buckets[i], HOUR_MS, locale)}
 										series={chart.series}
 										hidden={hidden}
 										kind="line"
@@ -874,12 +1008,17 @@ function WindowUtilizationCard({
 										format={v => formatPercent(v, 0)}
 										formatTooltip={v => formatPercent(v, 1)}
 										references={[{ value: 1, label: "100%" }]}
-										emptyLabel="No utilization readings for this window"
+										emptyLabel={tr(
+											"pages.providers.no_utilization_readings_for_this_window",
+											"No utilization readings for this window",
+										)}
 										tooltipExtra={i => {
 											const exhausted = chart.exhausted[i];
 											return exhausted.length > 0 ? (
 												<div className="chart-tooltip-row">
-													<span className="chart-tooltip-label tone-bad">Exhausted</span>
+													<span className="chart-tooltip-label tone-bad">
+														{tr("pages.providers.exhausted_2", "Exhausted")}
+													</span>
 													<span className="chart-tooltip-value">{exhausted.join(", ")}</span>
 												</div>
 											) : null;
@@ -897,7 +1036,7 @@ function WindowUtilizationCard({
 									<Table
 										rows={rows}
 										rowKey={r => `${r.series.windowKey}::${r.series.accountKey}`}
-										columns={ACCOUNT_COLUMNS}
+										columns={localizedAccountColumns}
 										limit={16}
 										onRowClick={r => onSelect({ provider: r.series.provider, windowKey: r.series.windowKey })}
 										dense
@@ -980,74 +1119,91 @@ function buildUtilization(accounts: UsageWindowSeries[], names: ReadonlyMap<stri
 }
 
 function statusBadge(latest: AccountRow["latest"]): ReactNode {
-	if (!latest) return <span className="dim">No reading</span>;
-	if (latest.exhausted) return <Badge tone="bad">Exhausted</Badge>;
-	if (latest.fraction >= 0.8) return <Badge tone="warn">High</Badge>;
+	if (!latest)
+		return (
+			<span className="dim">
+				<LocalizedText messageKey="pages.providers.no_reading" english={"No reading"} />
+			</span>
+		);
+	if (latest.exhausted)
+		return (
+			<Badge tone="bad">
+				<LocalizedText messageKey="pages.providers.exhausted_2" english={"Exhausted"} />
+			</Badge>
+		);
+	if (latest.fraction >= 0.8)
+		return (
+			<Badge tone="warn">
+				<LocalizedText messageKey="pages.providers.high" english={"High"} />
+			</Badge>
+		);
 	return <Badge tone="ok">OK</Badge>;
 }
 
-const ACCOUNT_COLUMNS: Column<AccountRow>[] = [
-	{
-		key: "account",
-		header: "Account",
-		sort: r => r.name,
-		render: r => (
-			<span className="row" style={{ gap: 8 }}>
-				<span className="providers-swatch-slot">{r.color && <Swatch color={r.color} />}</span>
-				<span className="truncate providers-account" title={r.series.accountKey}>
-					{r.name}
+function accountColumns(locale: Locale): Column<AccountRow>[] {
+	return [
+		{
+			key: "account",
+			header: <LocalizedText messageKey="pages.providers.account" english={"Account"} />,
+			sort: r => r.name,
+			render: r => (
+				<span className="row" style={{ gap: 8 }}>
+					<span className="providers-swatch-slot">{r.color && <Swatch color={r.color} />}</span>
+					<span className="truncate providers-account" title={r.series.accountKey}>
+						{r.name}
+					</span>
 				</span>
-			</span>
-		),
-	},
-	{
-		key: "window",
-		header: "Window",
-		sort: r => r.series.windowLabel,
-		render: r => <span className={r.color ? undefined : "muted"}>{r.series.windowLabel}</span>,
-	},
-	{
-		key: "latest",
-		header: "Latest used",
-		align: "right",
-		sort: r => r.latest?.fraction ?? -1,
-		render: r =>
-			r.latest ? (
-				<MeterCell
-					value={r.latest.fraction}
-					max={1}
-					display={formatPercent(r.latest.fraction, 0)}
-					color={r.latest.exhausted ? "var(--bad)" : r.latest.fraction >= 0.8 ? "var(--warn)" : "var(--ok)"}
-				/>
-			) : (
-				<span className="dim">–</span>
 			),
-	},
-	{
-		key: "status",
-		header: "Status",
-		sort: r => (r.latest?.exhausted ? 2 : (r.latest?.fraction ?? 0) >= 0.8 ? 1 : 0),
-		render: r => statusBadge(r.latest),
-	},
-	{
-		key: "peak",
-		header: "Peak in range",
-		align: "right",
-		sort: r => r.peak ?? -1,
-		render: r => <span className="num">{r.peak === null ? "–" : formatPercent(r.peak, 0)}</span>,
-	},
-	{
-		key: "samples",
-		header: "Snapshots",
-		align: "right",
-		sort: r => r.samples,
-		render: r => <span className="num muted">{formatInteger(r.samples)}</span>,
-	},
-	{
-		key: "recorded",
-		header: "Recorded",
-		align: "right",
-		sort: r => r.latest?.timestamp ?? 0,
-		render: r => <span className="muted">{r.latest ? formatRelativeTime(r.latest.timestamp) : "–"}</span>,
-	},
-];
+		},
+		{
+			key: "window",
+			header: <LocalizedText messageKey="pages.providers.window" english={"Window"} />,
+			sort: r => r.series.windowLabel,
+			render: r => <span className={r.color ? undefined : "muted"}>{r.series.windowLabel}</span>,
+		},
+		{
+			key: "latest",
+			header: <LocalizedText messageKey="pages.providers.latest_used" english={"Latest used"} />,
+			align: "right",
+			sort: r => r.latest?.fraction ?? -1,
+			render: r =>
+				r.latest ? (
+					<MeterCell
+						value={r.latest.fraction}
+						max={1}
+						display={formatPercent(r.latest.fraction, 0)}
+						color={r.latest.exhausted ? "var(--bad)" : r.latest.fraction >= 0.8 ? "var(--warn)" : "var(--ok)"}
+					/>
+				) : (
+					<span className="dim">–</span>
+				),
+		},
+		{
+			key: "status",
+			header: <LocalizedText messageKey="pages.providers.status" english={"Status"} />,
+			sort: r => (r.latest?.exhausted ? 2 : (r.latest?.fraction ?? 0) >= 0.8 ? 1 : 0),
+			render: r => statusBadge(r.latest),
+		},
+		{
+			key: "peak",
+			header: <LocalizedText messageKey="pages.providers.peak_in_range" english={"Peak in range"} />,
+			align: "right",
+			sort: r => r.peak ?? -1,
+			render: r => <span className="num">{r.peak === null ? "–" : formatPercent(r.peak, 0)}</span>,
+		},
+		{
+			key: "samples",
+			header: <LocalizedText messageKey="pages.providers.snapshots" english={"Snapshots"} />,
+			align: "right",
+			sort: r => r.samples,
+			render: r => <span className="num muted">{formatInteger(r.samples)}</span>,
+		},
+		{
+			key: "recorded",
+			header: <LocalizedText messageKey="pages.providers.recorded" english={"Recorded"} />,
+			align: "right",
+			sort: r => r.latest?.timestamp ?? 0,
+			render: r => <span className="muted">{r.latest ? formatRelativeTime(r.latest.timestamp, locale) : "–"}</span>,
+		},
+	];
+}

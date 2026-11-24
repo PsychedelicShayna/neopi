@@ -3,7 +3,7 @@ import { APP_NAME } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils/dirs";
 import { logger } from "@oh-my-pi/pi-utils";
-import { setLocale, t } from "@oh-my-pi/pi-utils/i18n";
+import { setLocale, t, type TranslationValues } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import { BUILTIN_TOOL_HELP, type BuiltinToolHelp } from "../tools/builtin-names";
 import { cfgLanguage } from "../modes/settings";
@@ -19,120 +19,123 @@ export async function initializeCliLanguage(): Promise<void> {
 	}
 }
 
-export function translateHelpHeading(key: string, fallback: string): string {
-	const translated = t(key);
+export function translateHelpHeading(key: string, fallback: string, values?: TranslationValues): string {
+	const translated = t(key, values);
 	return translated === key ? fallback : translated;
 }
 
-function renderBuiltinToolSummary(help: BuiltinToolHelp): string {
-	return help.defaultState === "detected" ? `${help.summary} (when ${help.detectedWhen})` : help.summary;
+function renderBuiltinToolSummary(name: string, help: BuiltinToolHelp): string {
+	const key = `cli.extraHelp.tool.${name}`;
+	const summary = translateHelpHeading(key, help.summary);
+	if (help.defaultState !== "detected") return summary;
+	const condition = translateHelpHeading(`${key}.detectedWhen`, help.detectedWhen);
+	return t("cli.extraHelp.toolDetected", { summary, condition });
 }
 
 /** Lists tools in `BUILTIN_TOOL_HELP` entry order, which ranks them by how often they are used. */
 function renderBuiltinTools(group: "default" | "optional"): string {
 	return Object.entries(BUILTIN_TOOL_HELP)
 		.filter(([, help]) => (help.defaultState === "off") === (group === "optional"))
-		.map(([name, help]) => `  ${name.padEnd(14)}- ${renderBuiltinToolSummary(help)}`)
+		.map(([name, help]) => `  ${name.padEnd(14)}- ${renderBuiltinToolSummary(name, help)}`)
 		.join("\n");
 }
 
 export function getExtraHelpText(): string {
-	return `${chalk.bold("NeoProxy connection:")}
+	return `${chalk.bold(t("cli.extraHelp.proxyHeading"))}
   ${APP_NAME} login neoproxy --url https://proxy.example.com
-  Prompts for your existing administrator-assigned API key in a hidden field.
-  Discovers granted models automatically. Use /login in-session, then /model or /roles.
-  Remote servers require validated HTTPS; loopback HTTP is supported for local use.
+  ${t("cli.extraHelp.proxyPrompt")}
+  ${t("cli.extraHelp.proxyModels")}
+  ${t("cli.extraHelp.proxyTransport")}
 
-${chalk.bold("Environment Variables:")}
-  ${chalk.dim("# Core Providers")}
-  ANTHROPIC_API_KEY          - Anthropic Claude models
-  ANTHROPIC_OAUTH_TOKEN      - Anthropic OAuth (takes precedence over API key)
-  CLAUDE_CODE_USE_FOUNDRY    - Enable Anthropic Foundry mode (uses Foundry endpoint + mTLS)
-  FOUNDRY_BASE_URL           - Anthropic Foundry base URL (e.g., https://<foundry-host>)
-  ANTHROPIC_FOUNDRY_API_KEY  - Anthropic token used as Authorization: Bearer <token> in Foundry mode
-  ANTHROPIC_CUSTOM_HEADERS   - Extra headers for Foundry or any custom ANTHROPIC_BASE_URL gateway (e.g., "user-id: USERNAME")
-  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS - Omit pre-release Anthropic fields (context_management, beta tool fields, task budgets, thinking.block_binding) for gateways that reject them
-  CLAUDE_CODE_CLIENT_CERT    - Client certificate (PEM path or inline PEM) for mTLS
-  CLAUDE_CODE_CLIENT_KEY     - Client private key (PEM path or inline PEM) for mTLS
-  NODE_EXTRA_CA_CERTS        - CA bundle path (or inline PEM) for server certificate validation
-  OPENAI_API_KEY             - OpenAI GPT models
-  GEMINI_API_KEY             - Google Gemini models
+${chalk.bold(t("cli.extraHelp.envHeading"))}
+  ${chalk.dim(t("cli.extraHelp.coreProviders"))}
+  ANTHROPIC_API_KEY          - ${t("cli.extraHelp.env.ANTHROPIC_API_KEY")}
+  ANTHROPIC_OAUTH_TOKEN      - ${t("cli.extraHelp.env.ANTHROPIC_OAUTH_TOKEN")}
+  CLAUDE_CODE_USE_FOUNDRY    - ${t("cli.extraHelp.env.CLAUDE_CODE_USE_FOUNDRY")}
+  FOUNDRY_BASE_URL           - ${t("cli.extraHelp.env.FOUNDRY_BASE_URL")}
+  ANTHROPIC_FOUNDRY_API_KEY  - ${t("cli.extraHelp.env.ANTHROPIC_FOUNDRY_API_KEY")}
+  ANTHROPIC_CUSTOM_HEADERS   - ${t("cli.extraHelp.env.ANTHROPIC_CUSTOM_HEADERS")}
+  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS - ${t("cli.extraHelp.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS")}
+  CLAUDE_CODE_CLIENT_CERT    - ${t("cli.extraHelp.env.CLAUDE_CODE_CLIENT_CERT")}
+  CLAUDE_CODE_CLIENT_KEY     - ${t("cli.extraHelp.env.CLAUDE_CODE_CLIENT_KEY")}
+  NODE_EXTRA_CA_CERTS        - ${t("cli.extraHelp.env.NODE_EXTRA_CA_CERTS")}
+  OPENAI_API_KEY             - ${t("cli.extraHelp.env.OPENAI_API_KEY")}
+  GEMINI_API_KEY             - ${t("cli.extraHelp.env.GEMINI_API_KEY")}
   COPILOT_GITHUB_TOKEN      - GitHub Copilot
 
-  ${chalk.dim("# Additional LLM Providers")}
-  AZURE_OPENAI_API_KEY       - Azure OpenAI models
-  GROQ_API_KEY               - Groq models
-  CEREBRAS_API_KEY           - Cerebras models
-  XAI_API_KEY                - xAI Grok models
-  OPENROUTER_API_KEY         - OpenRouter aggregated models
-  KILO_API_KEY               - Kilo Gateway models
-  MISTRAL_API_KEY            - Mistral models
-  ZAI_API_KEY                - z.ai models (ZhipuAI/GLM)
-  UMANS_AI_CODING_PLAN_API_KEY - Umans AI Coding Plan models
-  ABLITERATION_API_KEY       - Abliteration uncensored GLM models
-  KIRO_API_KEY               - Kiro agentic IDE models
-  UMANS_WEBSEARCH_PROVIDER    - Umans gateway web search backend (native or exa)
-  MINIMAX_API_KEY            - MiniMax models
-  OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
-  CURSOR_ACCESS_TOKEN        - Cursor AI models
-  CLINE_API_KEY              - ClinePass subscription models
-  COMMAND_CODE_API_KEY       - Command Code Provider API models
-  CHARM_HYPER_API_KEY        - Charm Hyper inference gateway models
+  ${chalk.dim(t("cli.extraHelp.otherProviders"))}
+  AZURE_OPENAI_API_KEY       - ${t("cli.extraHelp.env.AZURE_OPENAI_API_KEY")}
+  GROQ_API_KEY               - ${t("cli.extraHelp.env.GROQ_API_KEY")}
+  CEREBRAS_API_KEY           - ${t("cli.extraHelp.env.CEREBRAS_API_KEY")}
+  XAI_API_KEY                - ${t("cli.extraHelp.env.XAI_API_KEY")}
+  OPENROUTER_API_KEY         - ${t("cli.extraHelp.env.OPENROUTER_API_KEY")}
+  KILO_API_KEY               - ${t("cli.extraHelp.env.KILO_API_KEY")}
+  MISTRAL_API_KEY            - ${t("cli.extraHelp.env.MISTRAL_API_KEY")}
+  ZAI_API_KEY                - ${t("cli.extraHelp.env.ZAI_API_KEY")}
+  UMANS_AI_CODING_PLAN_API_KEY - ${t("cli.extraHelp.env.UMANS_AI_CODING_PLAN_API_KEY")}
+  ABLITERATION_API_KEY       - ${t("cli.extraHelp.env.ABLITERATION_API_KEY")}
+  KIRO_API_KEY               - ${t("cli.extraHelp.env.KIRO_API_KEY")}
+  UMANS_WEBSEARCH_PROVIDER    - ${t("cli.extraHelp.env.UMANS_WEBSEARCH_PROVIDER")}
+  MINIMAX_API_KEY            - ${t("cli.extraHelp.env.MINIMAX_API_KEY")}
+  OPENCODE_API_KEY           - ${t("cli.extraHelp.env.OPENCODE_API_KEY")}
+  CURSOR_ACCESS_TOKEN        - ${t("cli.extraHelp.env.CURSOR_ACCESS_TOKEN")}
+  CLINE_API_KEY              - ${t("cli.extraHelp.env.CLINE_API_KEY")}
+  COMMAND_CODE_API_KEY       - ${t("cli.extraHelp.env.COMMAND_CODE_API_KEY")}
+  CHARM_HYPER_API_KEY        - ${t("cli.extraHelp.env.CHARM_HYPER_API_KEY")}
   AI_GATEWAY_API_KEY         - Vercel AI Gateway
-  STEPFUN_API_KEY            - StepFun Step models
-  HELMCODE_API_KEY           - Helmcode private EU inference
-  WAFER_SERVERLESS_API_KEY   - Wafer Serverless (pay-as-you-go)
-  YOLO_AUTO_API_KEY          - Yolo-Auto flat-rate Qwen models
-  SINGULARITYAPI_DEV_API_KEY - SingularityAPI universal gateway (300+ models)
-  SINGULARITYAPI_TECH_API_KEY - SingularityAPI reserved DeepSeek lanes
-  SCW_SECRET_KEY             - Scaleway Generative APIs models
-  OTARI_API_KEY              - Otari AI gateway (workspace models)
-  OTARI_BASE_URL             - Otari self-hosted API root (e.g. https://host/api/v1)
+  STEPFUN_API_KEY            - ${t("cli.extraHelp.env.STEPFUN_API_KEY")}
+  HELMCODE_API_KEY           - ${t("cli.extraHelp.env.HELMCODE_API_KEY")}
+  WAFER_SERVERLESS_API_KEY   - ${t("cli.extraHelp.env.WAFER_SERVERLESS_API_KEY")}
+  YOLO_AUTO_API_KEY          - ${t("cli.extraHelp.env.YOLO_AUTO_API_KEY")}
+  SINGULARITYAPI_DEV_API_KEY - ${t("cli.extraHelp.env.SINGULARITYAPI_DEV_API_KEY")}
+  SINGULARITYAPI_TECH_API_KEY - ${t("cli.extraHelp.env.SINGULARITYAPI_TECH_API_KEY")}
+  SCW_SECRET_KEY             - ${t("cli.extraHelp.env.SCW_SECRET_KEY")}
+  OTARI_API_KEY              - ${t("cli.extraHelp.env.OTARI_API_KEY")}
+  OTARI_BASE_URL             - ${t("cli.extraHelp.env.OTARI_BASE_URL")}
 
-  ${chalk.dim("# Cloud Providers")}
-  AWS_PROFILE                - AWS Bedrock (or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY)
-  GOOGLE_CLOUD_PROJECT       - Google Vertex AI (requires GOOGLE_CLOUD_LOCATION)
-  GOOGLE_APPLICATION_CREDENTIALS - Service account for Vertex AI
+  ${chalk.dim(t("cli.extraHelp.cloudProviders"))}
+  AWS_PROFILE                - ${t("cli.extraHelp.env.AWS_PROFILE")}
+  GOOGLE_CLOUD_PROJECT       - ${t("cli.extraHelp.env.GOOGLE_CLOUD_PROJECT")}
+  GOOGLE_APPLICATION_CREDENTIALS - ${t("cli.extraHelp.env.GOOGLE_APPLICATION_CREDENTIALS")}
 
-  ${chalk.dim("# Search & Tools")}
-  EXA_API_KEY                - Exa web search
-  BRAVE_API_KEY              - Brave web search
-  PERPLEXITY_API_KEY         - Perplexity web search API key (optional; anonymous fallback)
-  PERPLEXITY_COOKIES         - Perplexity web search (session cookie)
-  TAVILY_API_KEY             - Tavily web search
-  TINYFISH_API_KEY           - TinyFish web search
-  KEENABLE_API_KEY           - Keenable web search (optional; keyless public fallback)
-  SOFYA_API_KEY              - Sofya web search
-  FIRECRAWL_API_KEY          - Firecrawl web search + fetch reader backend
-  ANTHROPIC_SEARCH_API_KEY   - Anthropic web search (override; isolates search from main ANTHROPIC_API_KEY)
-  ANTHROPIC_SEARCH_BASE_URL  - Anthropic web search base URL (override; pairs with ANTHROPIC_SEARCH_API_KEY)
-  TYPESAFE_API_KEY           - TypeSafe System One judgments (auto thinking, unexpected-stop, AI staging, eval judge())
+  ${chalk.dim(t("cli.extraHelp.searchTools"))}
+  EXA_API_KEY                - ${t("cli.extraHelp.env.EXA_API_KEY")}
+  BRAVE_API_KEY              - ${t("cli.extraHelp.env.BRAVE_API_KEY")}
+  PERPLEXITY_API_KEY         - ${t("cli.extraHelp.env.PERPLEXITY_API_KEY")}
+  PERPLEXITY_COOKIES         - ${t("cli.extraHelp.env.PERPLEXITY_COOKIES")}
+  TAVILY_API_KEY             - ${t("cli.extraHelp.env.TAVILY_API_KEY")}
+  TINYFISH_API_KEY           - ${t("cli.extraHelp.env.TINYFISH_API_KEY")}
+  KEENABLE_API_KEY           - ${t("cli.extraHelp.env.KEENABLE_API_KEY")}
+  SOFYA_API_KEY              - ${t("cli.extraHelp.env.SOFYA_API_KEY")}
+  FIRECRAWL_API_KEY          - ${t("cli.extraHelp.env.FIRECRAWL_API_KEY")}
+  ANTHROPIC_SEARCH_API_KEY   - ${t("cli.extraHelp.env.ANTHROPIC_SEARCH_API_KEY")}
+  ANTHROPIC_SEARCH_BASE_URL  - ${t("cli.extraHelp.env.ANTHROPIC_SEARCH_BASE_URL")}
+  TYPESAFE_API_KEY           - ${t("cli.extraHelp.env.TYPESAFE_API_KEY")}
 
-  ${chalk.dim("# Configuration")}
-  OMP_PROFILE                 - Named profile for isolated agent state (same as --profile)
-  Use \`${APP_NAME} --profile <name> --alias <command>\` to create a shell shortcut for a profile
-  PI_CODING_AGENT_DIR        - Session storage directory (default: ~/${CONFIG_DIR_NAME}/agent)
-  PI_PACKAGE_DIR             - Override package directory (for Nix/Guix store paths)
-  PI_SMOL_MODEL              - Override smol/fast model (see --smol)
-  PI_SLOW_MODEL              - Override slow/reasoning model (see --slow)
-  PI_PLAN_MODEL              - Override planning model (see --plan)
-  PI_NO_PTY                  - Disable PTY-based interactive bash execution
-  For complete environment variable reference, see:
+  ${chalk.dim(t("cli.extraHelp.configuration"))}
+  OMP_PROFILE                 - ${t("cli.extraHelp.env.OMP_PROFILE")}
+  ${t("cli.extraHelp.alias", { bin: APP_NAME })}
+  PI_CODING_AGENT_DIR        - ${t("cli.extraHelp.env.PI_CODING_AGENT_DIR", { configDir: CONFIG_DIR_NAME })}
+  PI_PACKAGE_DIR             - ${t("cli.extraHelp.env.PI_PACKAGE_DIR")}
+  PI_SMOL_MODEL              - ${t("cli.extraHelp.env.PI_SMOL_MODEL")}
+  PI_SLOW_MODEL              - ${t("cli.extraHelp.env.PI_SLOW_MODEL")}
+  PI_PLAN_MODEL              - ${t("cli.extraHelp.env.PI_PLAN_MODEL")}
+  PI_NO_PTY                  - ${t("cli.extraHelp.env.PI_NO_PTY")}
+  ${t("cli.extraHelp.envReference")}
   ${chalk.dim("docs/environment-variables.md")}
-${chalk.bold("Built-in Tools (names accepted by --tools):")}
-  ${chalk.dim("# Enabled by default")}
+${chalk.bold(t("cli.extraHelp.builtinTools"))}
+  ${chalk.dim(t("cli.extraHelp.enabledByDefault"))}
 ${renderBuiltinTools("default")}
 
-  ${chalk.dim("# Optional (off by default; enable in settings)")}
+  ${chalk.dim(t("cli.extraHelp.optionalTools"))}
 ${renderBuiltinTools("optional")}
 
-  Browser and computer use run inside eval: toggle with the browser.enabled
-  (default on) and computer.enabled (default off) settings.
+  ${t("cli.extraHelp.browserAndComputer")}
 
-${chalk.bold("Plugin Options:")}
-  --plugin-dir <path>        Load plugin from directory (repeatable)
+${chalk.bold(t("cli.extraHelp.pluginsHeading"))}
+  --plugin-dir <path>        ${t("cli.extraHelp.pluginDir")}
 
-${chalk.bold("Useful Commands:")}
-  ${APP_NAME} agents unpack           - Export bundled subagents to ~/.omp/agent/agents (default)
-  ${APP_NAME} agents unpack --project - Export bundled subagents to ./.omp/agents`;
+${chalk.bold(t("cli.extraHelp.usefulCommands"))}
+  ${APP_NAME} agents unpack           - ${t("cli.extraHelp.unpackSubagents")}
+  ${APP_NAME} agents unpack --project - ${t("cli.extraHelp.unpackProjectSubagents")}`;
 }

@@ -1,5 +1,6 @@
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { dryBalanceHelp as commandHelp } from "../cli/command-help";
 import { runDryBalanceCommand } from "../cli/dry-balance-cli";
 
@@ -24,13 +25,15 @@ export default class DryBalance extends Command {
 		}),
 	};
 
-	static examples = [
-		`# Dry-run the configured default model with 100 random session ids\n  ${APP_NAME} dry-balance`,
-		`# Dry-run a specific model\n  ${APP_NAME} dry-balance anthropic/claude-sonnet-4-5`,
-		`# Larger run with bounded concurrency\n  ${APP_NAME} dry-balance --model openai-codex/gpt-5-codex --count 1000 --concurrency 64`,
-		`# Benchmark every OAuth account in parallel\n  ${APP_NAME} dry-balance --bench`,
-		`# Machine-readable output\n  ${APP_NAME} dry-balance --json`,
-	];
+	static get examples(): string[] {
+		return [
+			`# ${t("cli.commands.dry-balance.example.default")}\n  ${APP_NAME} dry-balance`,
+			`# ${t("cli.commands.dry-balance.example.model")}\n  ${APP_NAME} dry-balance anthropic/claude-sonnet-4-5`,
+			`# ${t("cli.commands.dry-balance.example.concurrency")}\n  ${APP_NAME} dry-balance --model openai-codex/gpt-5-codex --count 1000 --concurrency 64`,
+			`# ${t("cli.commands.dry-balance.example.bench")}\n  ${APP_NAME} dry-balance --bench`,
+			`# ${t("cli.commands.dry-balance.example.json")}\n  ${APP_NAME} dry-balance --json`,
+		];
+	}
 
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(DryBalance);

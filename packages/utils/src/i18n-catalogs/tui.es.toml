@@ -71,6 +71,7 @@
 "tui.ask.review_answers" = "Revisar respuestas"
 "tui.ask.custom_answer" = "Respuesta personalizada"
 "tui.ask.note_for" = "Nota para {option}"
+"tui.ask.recommended" = "Recomendado"
 "tui.ask.timer_recommended" = "Responde con la opción recomendada cuando se agote el tiempo"
 "tui.ask.more" = "+{count} más"
 "tui.ask.unanswered_count" = "{count} sin responder"

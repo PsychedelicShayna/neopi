@@ -1,5 +1,6 @@
 /** `ast_edit` — structural AST rewrites: per-op pattern/replacement pairs, replacement counts, diffs. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, CodeBlock, DiffBlock, InvalidArg, Note, Output, PathText, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, isRecord, languageFromPath, num, shortenPath, str } from "../util";
@@ -73,6 +74,7 @@ function detailsOf(result: ToolRenderProps["result"]): AstEditDetails | null {
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const paths = pathsOf(args);
 	const first = paths[0];
 	const opCount = Array.isArray(args.ops) ? args.ops.length : 0;
@@ -81,38 +83,53 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{first ? <PathText path={first} /> : <InvalidArg what="paths" />}
-			{paths.length > 1 && <span className="tv-faint">+{paths.length - 1} more</span>}
+			{paths.length > 1 && (
+				<span className="tv-faint">
+					{t("guesttools.edit.more_paths", "+{count} more", { count: paths.length - 1 })}
+				</span>
+			)}
 			<Badge tone="accent">
-				{opCount} op{opCount === 1 ? "" : "s"}
+				{opCount === 1
+					? t("guesttools.count.operation.one", "{count} op", { count: opCount })
+					: t("guesttools.count.operation.many", "{count} ops", { count: opCount })}
 			</Badge>
 			{total != null && (
 				<Badge tone={total > 0 ? "ok" : "warn"}>
-					{total} replacement{total === 1 ? "" : "s"}
+					{total === 1
+						? t("guesttools.count.replacement.one", "{count} replacement", { count: total })
+						: t("guesttools.count.replacement.many", "{count} replacements", { count: total })}
 				</Badge>
 			)}
-			{details?.limitReached && <Badge tone="warn">limit</Badge>}
+			{details?.limitReached && <Badge tone="warn">{t("guesttools.limit", "limit")}</Badge>}
 		</>
 	);
 }
 
 function OpCell({ op, lang }: { op: AstEditOp; lang: string | null }): ReactNode {
+	const t = useTranslation();
 	return (
 		<div className="tv-cell">
 			{op.pat ? (
-				<CodeBlock code={op.pat} lang={lang} title="pattern" maxLines={10} />
+				<CodeBlock code={op.pat} lang={lang} title={t("guesttools.label.pattern", "pattern")} maxLines={10} />
 			) : (
 				<InvalidArg what="pattern" />
 			)}
 			{op.out ? (
-				<CodeBlock code={op.out} lang={lang} title="replacement" maxLines={10} />
+				<CodeBlock
+					code={op.out}
+					lang={lang}
+					title={t("guesttools.label.replacement", "replacement")}
+					maxLines={10}
+				/>
 			) : (
-				<div className="tv-muted">deletion — matched code is removed</div>
+				<div className="tv-muted">{t("guesttools.ast_edit.deletion", "deletion — matched code is removed")}</div>
 			)}
 		</div>
 	);
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const paths = pathsOf(args);
 	const first = paths[0];
 	const ops = opsOf(args);
@@ -141,17 +158,29 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				<span className="tv-badges">
 					{details.totalReplacements != null && (
 						<Badge tone={details.totalReplacements > 0 ? "ok" : "warn"}>
-							{details.totalReplacements} replacement{details.totalReplacements === 1 ? "" : "s"}
+							{details.totalReplacements === 1
+								? t("guesttools.count.replacement.one", "{count} replacement", {
+										count: details.totalReplacements,
+									})
+								: t("guesttools.count.replacement.many", "{count} replacements", {
+										count: details.totalReplacements,
+									})}
 						</Badge>
 					)}
 					{details.filesTouched != null && (
 						<Badge>
-							{details.filesTouched} file{details.filesTouched === 1 ? "" : "s"}
+							{details.filesTouched === 1
+								? t("guesttools.count.file.one", "{count} file", { count: details.filesTouched })
+								: t("guesttools.count.file.many", "{count} files", { count: details.filesTouched })}
 						</Badge>
 					)}
-					{details.filesSearched != null && <Badge>searched {details.filesSearched}</Badge>}
-					{details.scopePath && <Badge>in {shortenPath(details.scopePath)}</Badge>}
-					{details.limitReached && <Badge tone="warn">limit reached</Badge>}
+					{details.filesSearched != null && (
+						<Badge>{t("guesttools.search.searched", "searched {count}", { count: details.filesSearched })}</Badge>
+					)}
+					{details.scopePath && (
+						<Badge>{t("guesttools.search.in_path", "in {path}", { path: shortenPath(details.scopePath) })}</Badge>
+					)}
+					{details.limitReached && <Badge tone="warn">{t("guesttools.limit_reached", "limit reached")}</Badge>}
 				</span>
 			)}
 			{details && details.fileReplacements.length > 0 && (
@@ -163,12 +192,14 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					))}
 				</div>
 			)}
-			{details?.limitReached && <Note tone="warn">limit reached; narrow path</Note>}
+			{details?.limitReached && (
+				<Note tone="warn">{t("guesttools.ast_edit.narrow_path", "limit reached; narrow path")}</Note>
+			)}
 			{details && details.parseErrors.length > 0 && (
 				<Output
 					text={details.parseErrors.join("\n")}
 					maxLines={6}
-					title={`parse issues (${parseErrorsTotal})`}
+					title={t("guesttools.parse.numbered_issues", "parse issues ({count})", { count: parseErrorsTotal })}
 					variant="plain"
 				/>
 			)}

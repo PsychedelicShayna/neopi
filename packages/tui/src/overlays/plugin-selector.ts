@@ -4,6 +4,7 @@
  * Shows available plugins from all configured marketplaces in a SelectList.
  * Enter installs or uninstalls the selected plugin. Space never uninstalls. Esc cancels.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -35,7 +36,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 		installedIds: Set<string>,
 		callbacks: PluginSelectorCallbacks,
 	) {
-		super("Plugins", "omp.overlay.plugins");
+		super(t("settings.selector.plugins"), "omp.overlay.plugins");
 
 		// The sheet draws version, install state and scope as badges instead of bracketed label text.
 		const badgesByValue = new Map<string, NonNullable<TspPickerItem["badges"]>>();
@@ -45,7 +46,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 			const id = scope ? `${plugin.name}@${marketplace}#${scope}` : `${plugin.name}@${marketplace}`;
 			const installed = installedIds.has(`${plugin.name}@${marketplace}`);
 			const version = plugin.version ? `@${plugin.version}` : "";
-			const status = installed ? " [installed]" : "";
+			const status = installed ? t("overlays.plugin_selector.installed_tag") : "";
 			const scopeTag = scope ? ` [${scope}]` : "";
 			badgesByValue.set(id, [
 				...(plugin.version ? [{ text: plugin.version }] : []),
@@ -64,11 +65,11 @@ export class PluginSelectorComponent extends OverlayPanel {
 		if (items.length === 0) {
 			items.push({
 				value: "__empty__",
-				label: "No plugins available",
+				label: t("overlays.plugin_selector.no_plugins"),
 				description:
 					marketplaceCount === 0
-						? "Add a marketplace first: /marketplace add <source>"
-						: "Configured marketplaces have no plugins",
+						? t("overlays.plugin_selector.add_marketplace")
+						: t("overlays.plugin_selector.marketplaces_empty"),
 				disabled: true,
 			});
 		}
@@ -91,10 +92,11 @@ export class PluginSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Plugins",
+			title: t("settings.selector.plugins"),
 			icon: "plus",
 			noun: "plugins",
-			confirm: mode === "uninstall" ? "Uninstall" : "Install",
+			confirm:
+				mode === "uninstall" ? t("overlays.plugin_selector.uninstall") : t("overlays.plugin_selector.install"),
 			decorate: item => {
 				const [name] = splitPluginId(item.value);
 				if (!name) return undefined;

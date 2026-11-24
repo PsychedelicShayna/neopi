@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { uiProvenanceSuffix } from "../theme/provenance";
 import { type ComposerStyle, registerComposerStyle } from "../index";
 import type { SubmenuOption } from "./settings-defs";
@@ -9,43 +10,71 @@ export type ComposerShape = string;
 export const BUILTIN_COMPOSER_SHAPES = [
 	{
 		value: "band",
-		label: "Status Band (Default)",
-		description: "Flush soft-capped status band above a curved prompt, no frame",
+		get label() {
+			return t("overlays.composer_shape_registry.band_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.band_description");
+		},
 	},
 	{
 		value: "box",
-		label: "Rounded Box",
-		description: "Status line embedded in top border, compact 2-line prompt",
+		get label() {
+			return t("overlays.composer_shape_registry.box_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.box_description");
+		},
 	},
 	{
 		value: "claude",
 		label: "Claude Code",
-		description: "Full-width horizontal rules above and below, status line at bottom",
+		get description() {
+			return t("overlays.composer_shape_registry.claude_description");
+		},
 	},
 	{
 		value: "pi",
 		label: "Pi",
-		description: "Framed horizontal rules with status line at bottom",
+		get description() {
+			return t("overlays.composer_shape_registry.pi_description");
+		},
 	},
 	{
 		value: "borderless",
-		label: "Borderless",
-		description: "Clean prompt glyph with status line at bottom, no box borders",
+		get label() {
+			return t("overlays.composer_shape_registry.borderless_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.borderless_description");
+		},
 	},
 	{
 		value: "rule",
-		label: "Top Rule Dock",
-		description: "Single top rule with status docked onto it and below",
+		get label() {
+			return t("overlays.composer_shape_registry.rule_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.rule_description");
+		},
 	},
 	{
 		value: "field",
-		label: "Compact Field",
-		description: "Filled one-row field with accent end caps",
+		get label() {
+			return t("overlays.composer_shape_registry.field_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.field_description");
+		},
 	},
 	{
 		value: "rail",
-		label: "Accent Rail",
-		description: "Filled one-row field anchored by a single accent rail",
+		get label() {
+			return t("overlays.composer_shape_registry.rail_label");
+		},
+		get description() {
+			return t("overlays.composer_shape_registry.rail_description");
+		},
 	},
 ] as const;
 

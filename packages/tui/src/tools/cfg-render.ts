@@ -5,14 +5,15 @@
  * YAML. Writes show the `previous → value` change, its scope (session or
  * saved), and whether the user approved it.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { renderStatusLine } from "../render";
 import {
 	cappedHeadLines,
 	formatBadge,
 	formatErrorDetail,
-	formatMoreItems,
 	PREVIEW_LIMITS,
+	formatMoreItems,
 } from "../render/render-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { parseCfgUrl } from "./cfg-url";
@@ -65,13 +66,14 @@ export function renderCfgRead(
 			{
 				icon: result === undefined ? "pending" : result.isError ? "error" : "info",
 				title: "Config",
-				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings",
+				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || t("tools.cfg_render.all_settings"),
 				meta,
 			},
 			theme,
 		);
 		if (!result) return [header];
-		if (result.isError) return [header, formatErrorDetail(firstText(result) || "Settings read failed.", theme)];
+		if (result.isError)
+			return [header, formatErrorDetail(firstText(result) || t("tools.cfg_render.read_failed"), theme)];
 		const body = firstText(result).trimEnd().split("\n");
 		const shown = cappedHeadLines(body, expanded ? body.length : PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		const lines = [header, ...highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`)];
@@ -86,13 +88,14 @@ export function describeCfgRead(
 	result: CardToolResult | undefined,
 	details: CfgReadDetails | undefined,
 ): NativeToolView {
-	const description = (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings";
+	const description = (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || t("tools.cfg_render.all_settings");
 	const meta: string[] = [];
 	if (details) {
 		meta.push(details.count === 1 ? "1 setting" : `${details.count} settings`);
 		if (details.modified) meta.push(`${details.modified} modified`);
 	}
-	if (result?.isError) return errorView("Config", firstText(result) || "Settings read failed.", description, ...meta);
+	if (result?.isError)
+		return errorView("Config", firstText(result) || t("tools.cfg_render.read_failed"), description, ...meta);
 	const head = toolHead("Config", description, ...meta);
 	if (!result) return { head };
 	const listing = plainText(safe(firstText(result).trimEnd()));
@@ -113,7 +116,7 @@ export function describeCfgWrite(
 	const target = parseCfgUrl(url);
 	const path = details?.path ?? target?.segments.join(".");
 	const save = details?.save ?? target?.save ?? false;
-	if (result?.isError) return errorView("Config", firstText(result) || "Settings write failed.", path);
+	if (result?.isError) return errorView("Config", firstText(result) || t("tools.cfg_render.write_failed"), path);
 	const head = toolHead("Config", path);
 	head.push(span(" "), span(save ? "persist" : "session", save ? "accent strong" : "muted"));
 	if (details?.outcome === "declined") head.push(span(" "), span("declined", "warning strong"));
@@ -166,7 +169,8 @@ export function renderCfgWrite(
 		if (details?.outcome === "declined") badges.push(formatBadge("declined", "warning", theme));
 		if (details?.outcome === "unchanged") badges.push(formatBadge("unchanged", "muted", theme));
 		const header = `${renderStatusLine({ icon, title: "Config", description: details?.path ?? target?.segments.join(".") }, theme)} ${badges.join(" ")}`;
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Settings write failed.", theme)];
+		if (result?.isError)
+			return [header, formatErrorDetail(firstText(result) || t("tools.cfg_render.write_failed"), theme)];
 		const arrow = theme.fg("dim", "→");
 		// Pending content may be a credential; only the redacted result value is shown.
 		const next = theme.fg("toolOutput", details?.value ?? "…");

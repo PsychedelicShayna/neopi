@@ -5,6 +5,7 @@
  * prompts, resolved on select/submit/cancel so the command can keep writing
  * plain stdout afterwards.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem } from "../components/select-list";
 import { promptStandaloneText, selectStandaloneItem } from "./standalone-picker";
 
@@ -28,7 +29,9 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 	const items: SelectItem[] = [
 		{
 			value: "all",
-			label: `Run all ${checkers.length} discovered checker${checkers.length === 1 ? "" : "s"}`,
+			label: t(checkers.length === 1 ? "cli.commands.cleanse.run_all.one" : "cli.commands.cleanse.run_all.many", {
+				count: checkers.length,
+			}),
 		},
 		...checkers.map(checker => ({
 			value: `checker:${checker.id}`,
@@ -37,17 +40,17 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 		})),
 		{
 			value: "request",
-			label: "Describe what to fix…",
-			description: "A discovery agent figures out the command to run",
+			label: t("cli.commands.cleanse.describe_fix"),
+			description: t("cli.commands.cleanse.discovery"),
 		},
 	];
-	const selection = await selectStandaloneItem("Select what to cleanse:", items, {
+	const selection = await selectStandaloneItem(t("cli.commands.cleanse.select"), items, {
 		maxVisible: 12,
 		picker: {
 			icon: "wand",
-			noun: "checkers",
-			subtitle: "Run the checkers, then repair what they find",
-			confirm: "Cleanse",
+			noun: t("cli.commands.cleanse.checkers"),
+			subtitle: t("cli.commands.cleanse.subtitle"),
+			confirm: t("cli.commands.cleanse.confirm"),
 		},
 	});
 	if (selection === null) return { kind: "cancel" };
@@ -61,5 +64,5 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 
 /** One-shot text prompt for a free-form cleanse request; `null` when cancelled or left empty. */
 export async function promptCleanseRequest(): Promise<string | null> {
-	return promptStandaloneText('Describe what to detect and fix (e.g. "ts errors"):');
+	return promptStandaloneText(t("cli.commands.cleanse.describe_request"));
 }

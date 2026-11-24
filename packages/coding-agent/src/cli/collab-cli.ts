@@ -5,6 +5,7 @@
  */
 import { APP_NAME, formatAge } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	COLLAB_REGISTRY_VERSION,
 	type CollabHostSnapshot,
@@ -55,11 +56,17 @@ export async function runCollabListCommand(
 	}
 
 	if (hosts.length === 0) {
-		print(chalk.dim("No active Collab hosts."));
+		print(chalk.dim(t("cli.commands.collab.noHosts")));
 		return;
 	}
 
-	print(chalk.green(`${hosts.length} active Collab ${hosts.length === 1 ? "host" : "hosts"}`));
+	print(
+		chalk.green(
+			t(hosts.length === 1 ? "cli.commands.collab.hosts.one" : "cli.commands.collab.hosts.many", {
+				count: hosts.length,
+			}),
+		),
+	);
 	for (const host of hosts) {
 		// Session names and POSIX paths come from other processes and may carry
 		// tabs, newlines, or escape bytes; keep each on one clean line.
@@ -68,22 +75,30 @@ export async function runCollabListCommand(
 		const session = name ? `${name} (${sessionId})` : sessionId;
 		const cwd = sanitizeDisplayLine(shortenPath(host.cwd));
 		const guests = host.participants - 1;
+		const age = formatAge(Math.round((Date.now() - host.startedAt) / 1000));
 		const details = [
 			`pid ${host.pid}`,
 			`gen ${host.generation}`,
-			host.model ? sanitizeDisplayLine(`${host.model.provider}/${host.model.id}`) : "no model",
-			`started ${formatAge(Math.round((Date.now() - host.startedAt) / 1000)) || "just now"}`,
-			`${guests} ${guests === 1 ? "guest" : "guests"}`,
+			host.model
+				? sanitizeDisplayLine(`${host.model.provider}/${host.model.id}`)
+				: t("commands.collaboration.noModel"),
+			t("cli.commands.collab.started", {
+				age: !age || age === t("en", "commands.collaboration.justNow") ? t("commands.collaboration.justNow") : age,
+			}),
+			t("commands.collaboration.guests", { count: guests, plural: guests === 1 ? "" : "s" }),
 			host.access,
-			`relay ${host.relayConnected ? "connected" : "reconnecting"}`,
+			host.relayConnected
+				? t("commands.collaboration.relayConnected")
+				: t("commands.collaboration.relayReconnecting"),
 		];
-		if (host.inputRequired) details.push("input required");
-		if (host.busy !== null) details.push(host.busy ? "working" : "idle");
+		if (host.inputRequired) details.push(t("commands.collaboration.inputRequired"));
+		if (host.busy !== null)
+			details.push(host.busy ? t("cli.commands.collab.working") : t("cli.commands.collab.idle"));
 		print("");
 		print(`${host.instanceId}  ${session}  ${chalk.dim(cwd)}`);
 		print(`  ${chalk.dim(details.join(" · "))}`);
 	}
-	print(chalk.dim(`Get a link: ${APP_NAME} collab link <instanceId|pid> [--view]`));
+	print(chalk.dim(t("cli.commands.collab.getLink", { app: APP_NAME })));
 }
 
 export async function runCollabLinkCommand(

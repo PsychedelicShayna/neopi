@@ -53,6 +53,7 @@ import { type GeneratedProvider, getBundledModels, getEffectiveTokenCost } from 
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { APP_NAME, getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { ModelRegistry } from "../config/model-registry";
 import { cfgDisabledProviders, cfgModelProviderOrder } from "../config/model-settings";
 import { resolveProviderModelReference } from "../config/model-resolver";
@@ -195,9 +196,9 @@ function createBrokerClient(brokerConfig: AuthBrokerClientConfig): AuthBrokerCli
 	return new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 }
 
-async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotResponse> {
+async function fetchBrokerSnapshot(client: AuthBrokerClient, outputLocale = getLocale()): Promise<SnapshotResponse> {
 	const result = await client.fetchSnapshot();
-	if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
+	if (result.status !== 200) throw new Error(t(outputLocale, "cli.commands.auth-gateway.noInitialSnapshot"));
 	return result.snapshot;
 }
 
@@ -411,12 +412,10 @@ export function createSerializedRebuilder(run: (force: boolean) => Promise<void>
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
-		throw new Error(
-			`\`${APP_NAME} auth-gateway serve\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.yml). The gateway is itself a broker client.`,
-		);
+		throw new Error(t("cli.commands.auth-gateway.serveRequiresBroker", { app: APP_NAME }));
 	}
 	if (flags.clients !== undefined && flags.noAuth) {
-		throw new Error("`--clients` needs bearer auth; drop `--no-auth`.");
+		throw new Error(t("cli.commands.auth-gateway.clientRequiresAuth"));
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
@@ -430,7 +429,10 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 			clients = parseAuthGatewayClients(clientsText);
 		} catch (error) {
 			throw new Error(
-				`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
+				t("cli.commands.auth-gateway.clientLoadFailed", {
+					path: clientsPath,
+					error: error instanceof Error ? error.message : String(error),
+				}),
 			);
 		}
 	}
@@ -501,7 +503,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
 		clients,
 	});
-	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
+	process.stdout.write(`${t("cli.commands.auth-gateway.listening", { url: handle.url })}\n`);
 	try {
 		await writeRuntimeFile({
 			pid: process.pid,
@@ -517,17 +519,17 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		});
 	}
 	if (gatewayToken) {
-		process.stdout.write(`bearer token: ${getTokenFilePath()} (chmod 0600)\n`);
-		process.stdout.write(`connection link: run \`${APP_NAME} auth-gateway link\`\n`);
+		process.stdout.write(`${t("cli.commands.auth-gateway.bearerPath", { path: getTokenFilePath() })}\n`);
+		process.stdout.write(`${t("cli.commands.auth-gateway.connectionLink", { app: APP_NAME })}\n`);
 	} else {
-		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
+		process.stdout.write(`${t("cli.commands.auth-gateway.authDisabled")}\n`);
 	}
 	if (clientsPath !== undefined && clients !== undefined) {
 		process.stdout.write(
-			`client tokens: ${clients.length} from ${clientsPath} (re-read every ${CLIENTS_RELOAD_INTERVAL_MS / 1000}s)\n`,
+			`${t("cli.commands.auth-gateway.clientTokens", { count: clients.length, path: clientsPath, seconds: CLIENTS_RELOAD_INTERVAL_MS / 1000 })}\n`,
 		);
 	}
-	process.stdout.write(`upstream broker: ${brokerConfig.url}\n`);
+	process.stdout.write(`${t("cli.commands.auth-gateway.upstreamBroker", { url: brokerConfig.url })}\n`);
 
 	// `serve` is long-lived: rebuild the catalog periodically so models
 	// discovered after boot (for providers we already hold credentials for)
@@ -576,7 +578,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const stop = async (signal: NodeJS.Signals): Promise<void> => {
 		if (shutdownStarted) return;
 		shutdownStarted = true;
-		process.stdout.write(`\nReceived ${signal}, shutting down...\n`);
+		process.stdout.write(`\n${t("cli.commands.auth-gateway.shuttingDown", { signal })}\n`);
 		clearInterval(catalogRefresh);
 		clearInterval(credentialSync);
 		clearInterval(clientsReload);
@@ -631,6 +633,13 @@ async function runToken(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	}
 }
 
+function formatTokenStatus(present: boolean, path: string): string {
+	const state = present
+		? chalk.green(t("cli.commands.auth-gateway.tokenPresent"))
+		: chalk.red(t("cli.commands.auth-gateway.tokenMissing"));
+	return t("cli.commands.auth-gateway.tokenStatus", { state, path });
+}
+
 async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const token = await readTokenFile(getTokenFilePath());
 	const brokerConfig = await resolveAuthBrokerConfig();
@@ -648,17 +657,17 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			process.stdout.write(`${chalk.yellow("No broker configured.")} Set OMP_AUTH_BROKER_URL.\n`);
 			process.stdout.write(
-				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+				`${t("cli.commands.auth-gateway.noBroker", { warning: chalk.yellow(t("cli.commands.auth-gateway.noBrokerWarning")) })}\n`,
 			);
+			process.stdout.write(`${formatTokenStatus(status.tokenPresent, status.tokenFile)}\n`);
 		}
 		process.exitCode = 1;
 		return;
 	}
 
 	try {
-		const snapshot = await fetchBrokerSnapshot(createBrokerClient(brokerConfig));
+		const snapshot = await fetchBrokerSnapshot(createBrokerClient(brokerConfig), flags.json ? "en" : getLocale());
 		const tokenPresent = token !== null;
 		const status = {
 			ready: tokenPresent,
@@ -673,17 +682,18 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			const brokerLine = `upstream broker: ${brokerConfig.url} (${snapshot.credentials.length} credential${
-				snapshot.credentials.length === 1 ? "" : "s"
-			})`;
-			process.stdout.write(`${tokenPresent ? chalk.green("ready") : chalk.yellow("not ready")} ${brokerLine}\n`);
-			process.stdout.write(
-				`token: ${tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+			const count = snapshot.credentials.length;
+			const brokerLine = t(
+				count === 1 ? "cli.commands.auth-gateway.brokerStatus.one" : "cli.commands.auth-gateway.brokerStatus.many",
+				{ url: brokerConfig.url, count },
 			);
+			const readiness = tokenPresent
+				? chalk.green(t("cli.commands.auth-gateway.ready"))
+				: chalk.yellow(t("cli.commands.auth-gateway.notReady"));
+			process.stdout.write(`${readiness} ${brokerLine}\n`);
+			process.stdout.write(`${formatTokenStatus(tokenPresent, status.tokenFile)}\n`);
 			if (!tokenPresent) {
-				process.stdout.write(
-					`Run \`${APP_NAME} auth-gateway token\` or \`${APP_NAME} auth-gateway serve\` to create a bearer token.\n`,
-				);
+				process.stdout.write(`${t("cli.commands.auth-gateway.createToken", { app: APP_NAME })}\n`);
 			}
 		}
 		if (!tokenPresent) process.exitCode = 1;
@@ -702,10 +712,10 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			process.stdout.write(`${chalk.red("FAILED")} upstream broker: ${brokerConfig.url}: ${message}\n`);
 			process.stdout.write(
-				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
+				`${t("cli.commands.auth-gateway.brokerFailed", { status: chalk.red(t("cli.commands.auth-gateway.failed")), url: brokerConfig.url, error: message })}\n`,
 			);
+			process.stdout.write(`${formatTokenStatus(status.tokenPresent, status.tokenFile)}\n`);
 		}
 		process.exitCode = 1;
 	}
@@ -753,17 +763,17 @@ async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 				`${JSON.stringify({ running: false, url: localUrl, serveCommand, sharedServeCommand: flags.bind ? undefined : sharedCommand, brokerConfigured })}\n`,
 			);
 		} else {
-			process.stderr.write(`${chalk.yellow("No auth-gateway is running")} at ${localUrl}.\n`);
-			process.stderr.write(`Start it, then run \`${APP_NAME} auth-gateway link\` again:\n  ${serveCommand}\n`);
+			process.stderr.write(
+				`${t("cli.commands.auth-gateway.notRunning", { warning: chalk.yellow(t("cli.commands.auth-gateway.notRunningWarning")), url: localUrl })}\n`,
+			);
+			process.stderr.write(
+				`${t("cli.commands.auth-gateway.restartFirst", { app: APP_NAME, command: serveCommand })}\n`,
+			);
 			if (!flags.bind) {
-				process.stderr.write(
-					`To let other machines connect, listen on every interface instead:\n  ${sharedCommand}\n`,
-				);
+				process.stderr.write(`${t("cli.commands.auth-gateway.serveShared", { command: sharedCommand })}\n`);
 			}
 			if (!brokerConfigured) {
-				process.stderr.write(
-					`\`serve\` needs a broker: set OMP_AUTH_BROKER_URL (or \`auth.broker.url\` in config.yml) first.\n`,
-				);
+				process.stderr.write(`${t("cli.commands.auth-gateway.linkBrokerRequired")}\n`);
 			}
 		}
 		process.exitCode = 1;
@@ -772,17 +782,18 @@ async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 
 	const sameListener = runtime !== null && runtime.hostname === bind.hostname && runtime.port === bind.port;
 	const token = await readTokenFile(getTokenFilePath());
+	const outputLocale = flags.json ? "en" : getLocale();
 	const failure =
 		sameListener && runtime.auth === "none"
-			? `The gateway at ${localUrl} runs with --no-auth. Clients pair with its bearer token: restart it without --no-auth.`
+			? t(outputLocale, "cli.commands.auth-gateway.linkNoAuth", { url: localUrl })
 			: token === null
-				? `No gateway token at ${getTokenFilePath()}. Restart \`${APP_NAME} auth-gateway serve\` to create one.`
+				? t(outputLocale, "cli.commands.auth-gateway.linkNoToken", { path: getTokenFilePath(), app: APP_NAME })
 				: undefined;
 	if (failure !== undefined || token === null) {
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify({ running: true, url: localUrl, error: failure })}\n`);
 		} else {
-			process.stderr.write(`${chalk.red("Cannot make a link:")} ${failure}\n`);
+			process.stderr.write(`${chalk.red(t("cli.commands.auth-gateway.linkFailed"))} ${failure}\n`);
 		}
 		process.exitCode = 1;
 		return;
@@ -793,7 +804,11 @@ async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const parsedLink = { host, port: bind.port, token, name };
 	const link = formatAuthGatewayLink(parsedLink);
 	const warning = isLoopbackHost(bind.hostname)
-		? `The gateway listens on ${bind.hostname}:${bind.port}, so only programs on this machine can use this link. For other machines restart it with \`${APP_NAME} auth-gateway serve --bind=0.0.0.0:${bind.port}\`.`
+		? t(outputLocale, "cli.commands.auth-gateway.loopbackWarning", {
+				host: bind.hostname,
+				port: bind.port,
+				app: APP_NAME,
+			})
 		: undefined;
 	if (flags.json) {
 		process.stdout.write(
@@ -802,7 +817,7 @@ async function runLink(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		return;
 	}
 	process.stdout.write(`${link}\n`);
-	process.stderr.write(`${chalk.dim("This link contains the gateway token; share it like a password.")}\n`);
+	process.stderr.write(`${chalk.dim(t("cli.commands.auth-gateway.linkSensitive"))}\n`);
 	if (warning) process.stderr.write(`${chalk.yellow(warning)}\n`);
 }
 
@@ -828,7 +843,7 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 			return;
 		default: {
 			const _exhaustive: never = cmd.action;
-			throw new Error(`Unknown auth-gateway action: ${String(_exhaustive)}`);
+			throw new Error(t("cli.commands.auth-gateway.unknownAction", { action: String(_exhaustive) }));
 		}
 	}
 }
@@ -1005,9 +1020,9 @@ export function createStrictCompletionProbe(): CompletionProbe {
 
 function formatCompletionStatus(completion: CredentialCompletionResult | undefined): string {
 	if (!completion) return "";
-	if (completion.ok === true) return chalk.green(" [chat: ok]");
-	if (completion.ok === false) return chalk.red(" [chat: FAIL]");
-	return chalk.yellow(" [chat: skip]");
+	if (completion.ok === true) return chalk.green(t("cli.commands.auth-gateway.chatOk"));
+	if (completion.ok === false) return chalk.red(t("cli.commands.auth-gateway.chatFailed"));
+	return chalk.yellow(t("cli.commands.auth-gateway.chatSkipped"));
 }
 
 /**
@@ -1025,9 +1040,7 @@ function formatCompletionStatus(completion: CredentialCompletionResult | undefin
 async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
-		throw new Error(
-			`\`${APP_NAME} auth-gateway check\` requires OMP_AUTH_BROKER_URL (or \`auth.broker.url\`/\`auth.broker.token\` in config.yml). It probes the same credentials the gateway would serve.`,
-		);
+		throw new Error(t("cli.commands.auth-gateway.checkBrokerRequired", { app: APP_NAME }));
 	}
 
 	const accountPool = await loadAuthBrokerAccountPool();
@@ -1067,27 +1080,34 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 				grouped.set(row.provider, list);
 			}
 			const providers = [...grouped.keys()].sort();
-			process.stdout.write(`broker: ${brokerConfig.url}${flags.strict ? chalk.dim(" [strict]") : ""}\n`);
+			process.stdout.write(
+				`${t("cli.commands.auth-gateway.checkBroker", { url: brokerConfig.url, strict: flags.strict ? chalk.dim(t("cli.commands.auth-gateway.strict")) : "" })}\n`,
+			);
 			for (const provider of providers) {
 				const rows = grouped.get(provider) ?? [];
 				process.stdout.write(`\n${chalk.bold(provider)} (${rows.length})\n`);
 				for (const row of rows) {
 					const status =
 						row.ok === true
-							? chalk.green("ok      ")
+							? chalk.green(t("cli.commands.auth-gateway.checkOk").padEnd(8))
 							: row.ok === false
-								? chalk.red("FAIL    ")
-								: chalk.yellow("unknown ");
+								? chalk.red(t("cli.commands.auth-gateway.checkFailed").padEnd(8))
+								: chalk.yellow(t("cli.commands.auth-gateway.checkUnknown").padEnd(8));
 					const base =
-						row.email ?? row.accountId ?? (row.type === "api_key" ? "(api key)" : "(no identity on credential)");
+						row.email ??
+						row.accountId ??
+						(row.type === "api_key"
+							? t("cli.commands.auth-gateway.apiKey")
+							: t("cli.commands.auth-gateway.noIdentity"));
 					// Two subscriptions (orgs) can share one email — without the org a
 					// failed row can't say which subscription needs re-login.
 					const org = row.orgName ?? row.orgId;
 					const identity = org && org !== base ? `${base} (${org})` : base;
-					const remote = row.remoteRefresh ? chalk.dim(" [remote-refresh]") : "";
+					const remote = row.remoteRefresh ? chalk.dim(t("cli.commands.auth-gateway.remoteRefresh")) : "";
 					const reasonParts: string[] = [];
 					if (row.reason) reasonParts.push(row.reason);
-					if (row.completion?.reason) reasonParts.push(`chat: ${row.completion.reason}`);
+					if (row.completion?.reason)
+						reasonParts.push(t("cli.commands.auth-gateway.chatReason", { reason: row.completion.reason }));
 					const reason = reasonParts.length > 0 ? chalk.dim(` — ${reasonParts.join("; ")}`) : "";
 					const chat = formatCompletionStatus(row.completion);
 					process.stdout.write(
@@ -1100,12 +1120,13 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 			const passing = results.filter(row => row.ok === true).length;
 			const chatFailed = flags.strict ? results.filter(row => row.completion?.ok === false).length : 0;
 			const summaryParts = [
-				chalk.green(`${passing} ok`),
-				chalk.red(`${failed} failed`),
-				chalk.yellow(`${unverifiable} unverifiable`),
+				chalk.green(t("cli.commands.auth-gateway.passingCount", { count: passing })),
+				chalk.red(t("cli.commands.auth-gateway.failedCount", { count: failed })),
+				chalk.yellow(t("cli.commands.auth-gateway.unverifiableCount", { count: unverifiable })),
 			];
-			if (flags.strict) summaryParts.push(chalk.red(`${chatFailed} chat-failed`));
-			summaryParts.push(`${results.length} total`);
+			if (flags.strict)
+				summaryParts.push(chalk.red(t("cli.commands.auth-gateway.chatFailedCount", { count: chatFailed })));
+			summaryParts.push(t("cli.commands.auth-gateway.totalCount", { count: results.length }));
 			process.stdout.write(`\n${summaryParts.join(", ")}\n`);
 			if (failed > 0 || chatFailed > 0) process.exitCode = 1;
 		}

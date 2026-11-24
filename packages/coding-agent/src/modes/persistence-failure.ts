@@ -1,4 +1,5 @@
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { SessionContinuation } from "../session/session-listing";
 import type { SessionPersistenceNotice } from "../session/session-manager";
@@ -12,7 +13,7 @@ import type { SessionPersistenceNotice } from "../session/session-manager";
  */
 export function formatPersistenceFailure(message: string): string {
 	const detail = truncateToWidth(replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " "), TRUNCATE_LENGTHS.LINE);
-	return `Session persistence failed: ${detail}. Writes are retried; unsaved entries stay in memory until the store accepts them again.`;
+	return t("overlaysModel.persistence.failed", { detail });
 }
 
 /**
@@ -22,7 +23,7 @@ export function formatPersistenceFailure(message: string): string {
  */
 export function formatPersistenceDurabilityFailure(message: string): string {
 	const detail = truncateToWidth(replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " "), TRUNCATE_LENGTHS.LINE);
-	return `Session persistence is still failing at shutdown: ${detail}. The session transcript is not durable; unsaved entries are lost.`;
+	return t("overlaysModel.persistence.shutdownFailure", { detail });
 }
 
 /**
@@ -36,13 +37,13 @@ export function formatPersistenceNotice(notice: SessionPersistenceNotice): strin
 	let message: string;
 	switch (notice.reason) {
 		case "open-elsewhere":
-			message = `Session ${from} is open for writing in another omp process, so this session now saves to ${to} instead of mixing its entries into that file.`;
+			message = t("overlaysModel.persistence.openElsewhere", { from, to });
 			break;
 		case "replaced":
-			message = `Session ${from} changed on disk and no longer reads as this session; it is left untouched and this session now saves to ${to}.`;
+			message = t("overlaysModel.persistence.replaced", { from, to });
 			break;
 		case "contested":
-			message = `Another program kept writing to session ${from}; it is left to that writer and this session now saves to ${to}.`;
+			message = t("overlaysModel.persistence.contested", { from, to });
 			break;
 	}
 	return replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " ");
@@ -59,13 +60,13 @@ export function formatSessionContinuationNotice(continuation: SessionContinuatio
 	// A session moves off its file for every SessionPersistenceNotice reason, not only another process's hold.
 	let message: string;
 	if (continuation.relation === "earlier") {
-		message = `Session ${to}, which ${from} continues, has the newest turn of their conversation; resuming ${to}.`;
+		message = t("overlaysModel.persistence.continuationEarlier", { from, to });
 	} else if (continuation.relation === "other") {
-		message = `Session ${to}, another copy of the conversation in ${from}, has its newest turn; resuming ${to}.`;
+		message = t("overlaysModel.persistence.continuationOther", { from, to });
 	} else if (continuation.copies > 2) {
-		message = `Session ${from} went on in ${continuation.copies - 1} other files; resuming the one with the newest turn, ${to}.`;
+		message = t("overlaysModel.persistence.continuationSeveral", { from, to, count: continuation.copies - 1 });
 	} else {
-		message = `Session ${from} went on in ${to}; resuming ${to}.`;
+		message = t("overlaysModel.persistence.continuation", { from, to });
 	}
 	return replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " ");
 }

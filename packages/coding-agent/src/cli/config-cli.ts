@@ -7,6 +7,7 @@
 
 import { APP_NAME, getAgentDir, isRecord, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { orderedSettings } from "../config/all-settings";
 import { type AnySetting, lookup } from "../config/registry";
 import { Settings, settings } from "../config/settings";
@@ -91,8 +92,8 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 
 	const action = args[1];
 	if (!VALID_ACTIONS.includes(action as ConfigAction)) {
-		console.error(chalk.red(`Unknown config command: ${action}`));
-		console.error(`Valid commands: ${VALID_ACTIONS.join(", ")}`);
+		console.error(chalk.red(t("cli.commands.config.unknownCommand", { command: action })));
+		console.error(t("cli.commands.config.validCommands", { commands: VALID_ACTIONS.join(", ") }));
 		process.exit(1);
 	}
 
@@ -116,7 +117,7 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 	}
 
 	if (action === "to-toml" && positionalArgs.length > 1) {
-		throw new Error("Usage: npi config to-toml [config.yml|config.yaml] [--force]");
+		throw new Error(t("cli.commands.config.usageToToml"));
 	}
 	if (positionalArgs.length > 0) {
 		result.key = positionalArgs[0];
@@ -134,7 +135,7 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 
 function formatValue(value: unknown): string {
 	if (value === undefined || value === null) {
-		return chalk.dim("(not set)");
+		return chalk.dim(t("cli.commands.config.notSet"));
 	}
 	if (typeof value === "boolean") {
 		return value ? chalk.green("true") : chalk.red("false");
@@ -191,19 +192,19 @@ export async function runConfigCommand(cmd: ConfigCommandArgs): Promise<void> {
 		try {
 			const results = await convertMainSettingsToToml({ file: cmd.key, force: cmd.flags.force });
 			for (const result of results) {
-				console.log(`Converted ${result.sourcePath} -> ${result.targetPath}`);
+				console.log(t("cli.commands.config.converted", { source: result.sourcePath, target: result.targetPath }));
 				for (const diagnostic of result.diagnostics) {
 					console.error(`${result.sourcePath} ${diagnostic.path}: ${diagnostic.message}`);
 				}
 			}
 		} catch (error) {
-			console.error(error instanceof Error ? error.message : "TOML conversion failed");
+			console.error(error instanceof Error ? error.message : t("cli.commands.config.conversionFailed"));
 			process.exitCode = 1;
 		}
 		return;
 	}
 	if (cmd.flags.scope !== undefined && cmd.action !== "list") {
-		console.error(chalk.red("--scope applies to `config list` only"));
+		console.error(chalk.red(t("cli.commands.config.scopeOnlyList")));
 		process.exit(1);
 	}
 	await Settings.init();
@@ -268,7 +269,7 @@ async function handleList(flags: { json?: boolean }): Promise<void> {
 		return;
 	}
 
-	console.log(chalk.bold("Settings:\n"));
+	console.log(chalk.bold(t("cli.commands.config.settings")));
 
 	const groups: Record<string, CliSettingDef[]> = {};
 	for (const def of defs) {
@@ -328,7 +329,7 @@ async function handleListLayer(scope: ConfigScope, flags: { json?: boolean }): P
 		return;
 	}
 
-	console.log(chalk.bold(`Settings in the ${scope} layer:\n`));
+	console.log(chalk.bold(t("cli.commands.config.layerSettings", { scope })));
 	for (const [def, value] of entries) {
 		const valueStr = def.setting.isCredential && value ? REDACTED : formatValue(value);
 		console.log(`  ${chalk.white(def.path)} = ${valueStr} ${chalk.dim(getTypeDisplay(def))}`);
@@ -337,15 +338,15 @@ async function handleListLayer(scope: ConfigScope, flags: { json?: boolean }): P
 
 function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 	if (!key) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config get <key>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("cli.commands.config.usageGet", { bin: APP_NAME })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(`Unknown setting: ${key}`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("settings.host.unknown_setting", { path: key })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -361,15 +362,15 @@ function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 
 async function handleSet(key: string | undefined, value: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key || value === undefined) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config set <key> <value>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("cli.commands.config.usageSet", { bin: APP_NAME })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(`Unknown setting: ${key}`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("settings.host.unknown_setting", { path: key })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -393,7 +394,11 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 		console.log(JSON.stringify({ key: def.path, value: saved, ...shadow?.json }));
 		return;
 	}
-	console.log(chalk.green(`${theme.status.success} Set ${def.path} = ${formatValue(saved)}`));
+	console.log(
+		chalk.green(
+			`${theme.status.success} ${t("cli.commands.config.set", { path: def.path, value: formatValue(saved) })}`,
+		),
+	);
 	if (shadow) console.log(chalk.yellow(`${theme.status.warning} ${shadow.message}`));
 }
 
@@ -429,42 +434,42 @@ function shadowingSource(setting: AnySetting): { json: Record<string, string>; m
 			return setting.envFallback
 				? {
 						json: { fallbackEnv: name },
-						message: `$${name} is used as a fallback while the saved value is blank.`,
+						message: t("cli.commands.config.fallbackEnv", { name }),
 					}
 				: {
 						json: { overriddenBy: name },
-						message: `$${name} overrides this value; unset it for the saved value to apply.`,
+						message: t("cli.commands.config.overrideEnv", { name }),
 					};
 		}
 		case "project":
 			return {
 				json: { overriddenBy: provenance },
-				message: "Project settings override this value here; edit or remove it there for the saved value to apply.",
+				message: t("cli.commands.config.overrideProject"),
 			};
 		case "overlay":
 			return {
 				json: { overriddenBy: provenance },
-				message: "A --config / PI_CONFIG_FILES overlay overrides this value for this process.",
+				message: t("cli.commands.config.overrideOverlay"),
 			};
 		case "runtime":
 			return {
 				json: { overriddenBy: provenance },
-				message: "A runtime override supplies the effective value for this process.",
+				message: t("cli.commands.config.overrideRuntime"),
 			};
 	}
 }
 
 async function handleReset(key: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key) {
-		console.error(chalk.red(`Usage: ${APP_NAME} config reset <key>`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("cli.commands.config.usageReset", { bin: APP_NAME })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(`Unknown setting: ${key}`));
-		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
+		console.error(chalk.red(t("settings.host.unknown_setting", { path: key })));
+		console.error(chalk.dim(t("cli.commands.config.listHint", { bin: APP_NAME })));
 		process.exit(1);
 	}
 
@@ -487,7 +492,9 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 		console.log(JSON.stringify(redacted ? { key: def.path, redacted: true } : { key: def.path, value }));
 	} else {
 		console.log(
-			chalk.green(`${theme.status.success} Reset ${def.path} to ${redacted ? REDACTED : formatValue(value)}`),
+			chalk.green(
+				`${theme.status.success} ${t("cli.commands.config.reset", { path: def.path, value: redacted ? REDACTED : formatValue(value) })}`,
+			),
 		);
 	}
 }
@@ -501,24 +508,24 @@ function handlePath(): void {
 // =============================================================================
 
 export function printConfigHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} config`)} - Manage settings
+	console.log(`${chalk.bold(`${APP_NAME} config`)} - ${t("cli.config.help.title")}
 
-${chalk.bold("Commands:")}
-  list               List all settings with current values
-  get <key>          Get a specific setting value
-  set <key> <value>  Set a setting value
-  reset <key>        Clear a setting in the active config so its default applies
-  path               Print the config directory path
-  init-xdg           Initialize XDG Base Directory structure
-  dump-toml          Print documented defaults as TOML
-  to-toml [file]      Convert user/project main YAML settings to config.toml
+${chalk.bold(t("cli.config.help.commands"))}
+  list               ${t("cli.config.help.list")}
+  get <key>          ${t("cli.config.help.get")}
+  set <key> <value>  ${t("cli.config.help.set")}
+  reset <key>        ${t("cli.config.help.reset")}
+  path               ${t("cli.config.help.path")}
+  init-xdg           ${t("cli.config.help.init_xdg")}
+  dump-toml          ${t("cli.config.help.dump_toml")}
+  to-toml [file]      ${t("cli.config.help.to_toml")}
 
-${chalk.bold("Options:")}
-  --json             Output as JSON
-  --force            Replace existing config.toml during explicit conversion
-  --scope <scope>    With list: only the keys the global or project layer sets, as written
+${chalk.bold(t("cli.config.help.options"))}
+  --json             ${t("cli.config.help.json")}
+  --force            ${t("cli.config.help.force")}
+  --scope <scope>    ${t("cli.config.help.scope")}
 
-${chalk.bold("Examples:")}
+${chalk.bold(t("cli.config.help.examples"))}
   ${APP_NAME} config list
   ${APP_NAME} config get theme
   ${APP_NAME} config set theme catppuccin-mocha
@@ -529,7 +536,7 @@ ${chalk.bold("Examples:")}
   ${APP_NAME} config list --scope global --json
   ${APP_NAME} config init-xdg
 
-${chalk.bold("Boolean Values:")}
+${chalk.bold(t("cli.config.help.booleans"))}
   true, false, yes, no, on, off, 1, 0
 `);
 }

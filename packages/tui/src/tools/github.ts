@@ -1,3 +1,4 @@
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import type { NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer";
 import { type Component, padding, Text, visibleWidth } from "../index";
 import type { TspTone } from "@oh-my-pi/pi-wire";
@@ -15,7 +16,6 @@ import { sanitizeDisplayLine } from "../overlays/extensions/display-text";
 import { formatShortSha, pushLine } from "./gh-format";
 import {
 	formatExpandHint,
-	formatMoreItems,
 	formatStatusIcon,
 	PREVIEW_LIMITS,
 	replaceTabs,
@@ -23,6 +23,7 @@ import {
 	TRUNCATE_LENGTHS,
 	sanitizeDisplayWarning,
 	truncateToWidth as truncateVisualWidth,
+	formatMoreItems,
 } from "../render/render-utils";
 
 type GithubToolRenderArgs = {
@@ -78,7 +79,7 @@ function formatPrIdentifier(pr: string | string[] | undefined, fit: FitText = tr
 		const parts = pr.map(p => extractIssueId(p, fit)).filter((p): p is string => p !== undefined);
 		if (parts.length === 0) return undefined;
 		if (parts.length > 3) {
-			return `${parts.slice(0, 3).join(", ")}, +${parts.length - 3} more`;
+			return t("tools.github.more", { shown: parts.slice(0, 3).join(", "), count: parts.length - 3 });
 		}
 		return parts.join(", ");
 	}
@@ -127,18 +128,18 @@ function buildOpMeta(args: GithubToolRenderArgs, fit: FitText = truncateVisualWi
 function getWatchHeader(watch: GhRunWatchViewDetails): string {
 	if (watch.mode === "run" && watch.run) {
 		if (watch.state === "watching") {
-			return `watching run #${watch.run.id} on ${watch.repo}`;
+			return t("tools.github.watching_run", { id: watch.run.id, repo: watch.repo });
 		}
 
-		return `run #${watch.run.id} on ${watch.repo}`;
+		return t("tools.github.repo_run", { id: watch.run.id, repo: watch.repo });
 	}
 
-	const shortSha = formatShortSha(watch.headSha) ?? "this commit";
+	const shortSha = formatShortSha(watch.headSha) ?? t("tools.github.this_commit");
 	if (watch.state === "watching") {
-		return `watching ${shortSha} on ${watch.repo}`;
+		return t("tools.github.watching_commit", { commit: shortSha, repo: watch.repo });
 	}
 
-	return `workflow runs for ${shortSha} on ${watch.repo}`;
+	return t("tools.github.commit_runs", { commit: shortSha, repo: watch.repo });
 }
 
 function getRunLabel(run: GhRunWatchRunDetails): string {
@@ -251,7 +252,7 @@ function getStepProgressLabel(progress: GhRunStepProgress): string {
 	if (progress.failedStep) {
 		return `#${progress.failedStep.number} ${sanitizeDisplayLine(progress.failedStep.name)} · ${getStepStateLabel(progress.failedStep)} · ${progress.completed}/${progress.total}`;
 	}
-	return `${progress.completed}/${progress.total} steps complete`;
+	return t("tools.github.steps_complete", { completed: progress.completed, total: progress.total });
 }
 
 function renderJobLine(job: GhRunWatchJobDetails, width: number, theme: Theme): string {
@@ -308,7 +309,7 @@ function renderStepLine(step: GhRunWatchStepDetails, width: number, theme: Theme
 function renderRunBlock(run: GhRunWatchRunDetails, width: number, theme: Theme, expanded: boolean): string[] {
 	const lines = [formatRunLine(run, theme)];
 	if (run.jobs.length === 0) {
-		lines.push(theme.fg("dim", "waiting for workflow jobs..."));
+		lines.push(theme.fg("dim", t("tools.github.waiting_jobs")));
 		return lines;
 	}
 
@@ -343,7 +344,9 @@ function renderFailedLogs(
 
 	const lines: string[] = [];
 	for (const entry of failedLogs) {
-		const context = entry.workflowName ? `${entry.workflowName}  #${entry.runId}` : `run #${entry.runId}`;
+		const context = entry.workflowName
+			? `${entry.workflowName}  #${entry.runId}`
+			: t("tools.github.run", { id: entry.runId });
 		const jobName = theme.fg("error", replaceTabs(entry.jobName));
 		lines.push(`${formatStatusIcon("error", theme)} ${jobName}  ${theme.fg("muted", context)}`);
 
@@ -362,7 +365,12 @@ function renderFailedLogs(
 
 		if (!expanded && tailLines.length > previewLimit) {
 			const remaining = tailLines.length - previewLimit;
-			lines.push(theme.fg("dim", `  … ${remaining} more log lines ${formatExpandHint(theme, false, true)}`));
+			lines.push(
+				theme.fg(
+					"dim",
+					t("tools.github.extra_log", { count: remaining, hint: formatExpandHint(theme, false, true) }),
+				),
+			);
 		}
 	}
 
@@ -386,7 +394,7 @@ function buildWatchSections(
 	} else if (watch.mode === "commit") {
 		const runs = watch.runs ?? [];
 		if (runs.length === 0) {
-			main.push(theme.fg("dim", "waiting for workflow runs..."));
+			main.push(theme.fg("dim", t("tools.github.waiting_runs")));
 		} else {
 			runs.forEach((run, index) => {
 				if (index > 0) {
@@ -404,7 +412,7 @@ function buildWatchSections(
 
 	const failed = renderFailedLogs(watch.failedLogs ?? [], width, theme, options.expanded);
 	if (failed.length > 0) {
-		sections.push({ label: "failed logs", content: failed });
+		sections.push({ label: t("tools.github.failed_logs"), content: failed });
 	}
 
 	return sections;
@@ -447,7 +455,7 @@ function renderFallbackComponent(
 	);
 
 	if (!text) {
-		const empty = isError ? "request failed" : "no output";
+		const empty = isError ? t("tools.github.request_failed") : t("tools.common.no_output_lower");
 		return new Text(`${header}\n${theme.fg("dim", empty)}`, 0, 0);
 	}
 
@@ -507,11 +515,11 @@ function renderWatchCall(args: GithubToolRenderArgs, options: RenderResultOption
 	} else if (branch) {
 		metaText = theme.fg("text", branch);
 	} else {
-		metaText = theme.fg("muted", "current HEAD");
+		metaText = theme.fg("muted", t("tools.github.current_head"));
 	}
 
 	const header = `${icon} ${titleText}  ${metaText}`;
-	const wait = theme.fg("dim", "waiting for workflow data...");
+	const wait = theme.fg("dim", t("tools.github.waiting_data"));
 	return new Text(`${header}\n${wait}`, 0, 0);
 }
 
@@ -563,7 +571,7 @@ function describeRun(run: GhRunWatchRunDetails, expanded: boolean): NativeNode {
 	const hasSteps = run.jobs.some(job => (job.steps?.length ?? 0) > 0);
 	const jobs =
 		run.jobs.length === 0
-			? noteText("waiting for workflow jobs...")
+			? noteText(t("tools.github.waiting_jobs"))
 			: hasSteps
 				? node(
 						"col",
@@ -590,11 +598,13 @@ function describeWatch(watch: GhRunWatchViewDetails, isError: boolean, expanded:
 	if (watch.mode === "run" && watch.run) runs.push(describeRun(watch.run, expanded));
 	else if (watch.mode === "commit") {
 		const commitRuns = watch.runs ?? [];
-		if (commitRuns.length === 0) runs.push(noteText("waiting for workflow runs..."));
+		if (commitRuns.length === 0) runs.push(noteText(t("tools.github.waiting_runs")));
 		for (const run of commitRuns) runs.push(describeRun(run, expanded));
 	}
 	const failed = (watch.failedLogs ?? []).flatMap((entry): NativeChild[] => {
-		const context = entry.workflowName ? `${entry.workflowName}  #${entry.runId}` : `run #${entry.runId}`;
+		const context = entry.workflowName
+			? `${entry.workflowName}  #${entry.runId}`
+			: t("tools.github.run", { id: entry.runId });
 		const title = text([span(plainText(entry.jobName), "error"), span(`  ${plainText(context)}`, "muted")]);
 		if (!entry.available || !entry.tail) {
 			return [title, noteText(formatUnavailableLog(entry))];
@@ -608,7 +618,7 @@ function describeWatch(watch: GhRunWatchViewDetails, isError: boolean, expanded:
 			watch.note ? noteText(watch.note) : undefined,
 			...runs,
 			failed.length > 0
-				? node("section", { head: [span("failed logs", "error")], tone: "error" }, failed, "failed")
+				? node("section", { head: [span(t("tools.github.failed_logs"), "error")], tone: "error" }, failed, "failed")
 				: undefined,
 		]),
 	};
@@ -618,8 +628,9 @@ function describeFallback(result: ToolRenderResult<GhToolDetails>, args: GithubT
 	const output = extractText(result.content).trim();
 	const title = formatOpTitle(args.op);
 	const meta = buildOpMeta(args, KEEP_TEXT);
-	if (result.isError === true) return errorView(title, output || "request failed", ...meta);
-	if (!output) return { head: toolHead(title, ...meta), tone: "warning", body: [noteText("no output")] };
+	if (result.isError === true) return errorView(title, output || t("tools.github.request_failed"), ...meta);
+	if (!output)
+		return { head: toolHead(title, ...meta), tone: "warning", body: [noteText(t("tools.common.no_output_lower"))] };
 	return {
 		head: toolHead(title, ...meta),
 		body: [md(plainText(output))],
@@ -710,8 +721,8 @@ export const githubToolRenderer = {
 		const runId = typeof args.run === "string" && args.run.trim().length > 0 ? args.run.trim() : undefined;
 		const branch = typeof args.branch === "string" && args.branch.trim().length > 0 ? args.branch.trim() : undefined;
 		return {
-			head: toolHead("GitHub Run Watch", runId ? `#${runId}` : (branch ?? "current HEAD")),
-			body: [noteText("waiting for workflow data...")],
+			head: toolHead("GitHub Run Watch", runId ? `#${runId}` : (branch ?? t("tools.github.current_head"))),
+			body: [noteText(t("tools.github.waiting_data"))],
 		};
 	},
 
@@ -721,7 +732,7 @@ export const githubToolRenderer = {
 		args?: GithubToolRenderArgs,
 	): NativeToolView | undefined {
 		const watch = result.details?.watch;
-		const deps = [args?.op, options.isPartial, options.expanded, watch?.state, watch?.pollCount];
+		const deps = [getLocale(), args?.op, options.isPartial, options.expanded, watch?.state, watch?.pollCount];
 		return githubResultMemo.get(result, deps, () =>
 			watch ? describeWatch(watch, result.isError === true, options.expanded) : describeFallback(result, args ?? {}),
 		);

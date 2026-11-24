@@ -1,6 +1,22 @@
     (function() {
       'use strict';
 
+      const messages = JSON.parse(document.getElementById('viewer-i18n')?.textContent || '{}');
+      function viewerText(key, english, values) {
+        const message = messages[key] ?? english;
+        return values ? message.replace(/{([a-zA-Z0-9_]+)}/g, (placeholder, name) =>
+          Object.hasOwn(values, name) ? String(values[name]) : placeholder) : message;
+      }
+
+      for (const node of document.querySelectorAll('[data-export-text]')) {
+        node.textContent = viewerText(node.dataset.exportText, node.textContent);
+      }
+      for (const attr of ['title', 'aria-label', 'placeholder', 'alt']) {
+        for (const node of document.querySelectorAll('[data-export-' + attr + ']')) {
+          node.setAttribute(attr, viewerText(node.getAttribute('data-export-' + attr), node.getAttribute(attr)));
+        }
+      }
+
       const marked = new globalThis.ompMarkdown.Marked();
       const THEME_STORAGE_KEY = 'omp-export-theme';
       const themeSelect = document.getElementById('theme-select');
@@ -473,6 +489,10 @@
         return div.innerHTML;
       }
 
+      function viewerHtml(key, english, values) {
+        return escapeHtml(viewerText(key, english, values)).replaceAll('"', '&quot;');
+      }
+
       function canonicalizeMessage(text) {
         if (!text) return '';
         const trimmed = text.trim();
@@ -508,24 +528,24 @@
             const msg = entry.message;
             if (msg.role === 'user') {
               const content = truncate(normalizeTreeText(extractContent(msg.content)));
-              return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
+              return labelHtml + `<span class="tree-role-user">${viewerHtml('tools.export.role_user', "user:")}</span> ${escapeHtml(content)}`;
             }
             if (msg.role === 'developer') {
               const content = truncate(normalizeTreeText(extractContent(msg.content)));
-              return labelHtml + `<span class="tree-role-developer">developer:</span> ${escapeHtml(content)}`;
+              return labelHtml + `<span class="tree-role-developer">${viewerHtml('tools.export.role_developer', "developer:")}</span> ${escapeHtml(content)}`;
             }
             if (msg.role === 'assistant') {
               const textContent = truncate(normalizeTreeText(extractContent(msg.content)));
               if (textContent) {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(textContent)}`;
+                return labelHtml + `<span class="tree-role-assistant">${viewerHtml('tools.export.role_assistant', "assistant:")}</span> ${escapeHtml(textContent)}`;
               }
               if (msg.stopReason === 'aborted') {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(aborted)</span>`;
+                return labelHtml + `<span class="tree-role-assistant">${viewerHtml('tools.export.role_assistant', "assistant:")}</span> <span class="tree-muted">${viewerHtml('tools.export.aborted_inline', "(aborted)")}</span>`;
               }
               if (msg.errorMessage) {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
+                return labelHtml + `<span class="tree-role-assistant">${viewerHtml('tools.export.role_assistant', "assistant:")}</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
               }
-              return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(no text)</span>`;
+              return labelHtml + `<span class="tree-role-assistant">${viewerHtml('tools.export.role_assistant', "assistant:")}</span> <span class="tree-muted">${viewerHtml('tools.export.no_text', "(no text)")}</span>`;
             }
             if (msg.role === 'toolResult') {
               const toolCall = msg.toolCallId ? toolCallMap.get(msg.toolCallId) : null;
@@ -545,21 +565,21 @@
             return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
           }
           case 'compaction':
-            return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
+            return labelHtml + `<span class="tree-compaction">[${viewerHtml('tools.export.tree_compaction', "compaction: {tokens}k tokens", { tokens: Math.round(entry.tokensBefore / 1000) })}]</span>`;
           case 'branch_summary': {
             const summary = truncate(normalizeTreeText(entry.summary || ''));
-            return labelHtml + `<span class="tree-branch-summary">[branch summary]:</span> ${escapeHtml(summary)}`;
+            return labelHtml + `<span class="tree-branch-summary">[${viewerHtml('tools.export.branch_summary', "branch summary")}]:</span> ${escapeHtml(summary)}`;
           }
           case 'custom_message': {
             const content = typeof entry.content === 'string' ? entry.content : extractContent(entry.content);
             return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalizeTreeText(content)))}`;
           }
           case 'model_change':
-            return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.model)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[${viewerHtml('tools.export.tree_model', "model: ")}${escapeHtml(entry.model)}]</span>`;
           case 'thinking_level_change':
-            return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
+            return labelHtml + `<span class="tree-muted">[${viewerHtml('tools.export.tree_thinking', "thinking: ")}${entry.thinkingLevel}]</span>`;
           case 'mode_change':
-            return labelHtml + `<span class="tree-muted">[mode: ${escapeHtml(entry.mode)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[${viewerHtml('tools.export.tree_mode', "mode: ")}${escapeHtml(entry.mode)}]</span>`;
           default:
             return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
         }
@@ -760,7 +780,7 @@
             if (row.assistantText !== undefined) {
               const label = row.showLabel ? flatNode.node.label : undefined;
               const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : '';
-              content.innerHTML = labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(truncate(normalizeTreeText(row.assistantText)))}`;
+              content.innerHTML = labelHtml + `<span class="tree-role-assistant">${viewerHtml('tools.export.role_assistant', "assistant:")}</span> ${escapeHtml(truncate(normalizeTreeText(row.assistantText)))}`;
             } else if (row.assistantToolCall) {
               const call = row.assistantToolCall;
               content.innerHTML = `<span class="tree-role-tool">${escapeHtml(formatToolCall(call.name, call.arguments || {}))}</span>`;
@@ -800,7 +820,7 @@
           }
         }
 
-        document.getElementById('tree-status').textContent = `${sidebarRows.length} / ${allSidebarRows.length} rows`;
+        document.getElementById('tree-status').textContent = viewerText('tools.export.row_count', "{shown} / {total} rows", { shown: sidebarRows.length, total: allSidebarRows.length });
 
         // Scroll active node into view after layout
         setTimeout(() => {
@@ -877,7 +897,7 @@
 
             return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
               <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
-              <div class="expand-hint">... (${remaining} more lines)</div></div>
+              <div class="expand-hint">${viewerHtml('tools.export.more_lines', "... ({count} more lines)", { count: remaining })}</div></div>
               <div class="output-full"><pre><code class="hljs">${highlighted}</code></pre></div></div>`;
           }
 
@@ -891,7 +911,7 @@
           for (const line of displayLines) {
             out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
           }
-          out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
+          out += `<div class="expand-hint">${viewerHtml('tools.export.more_lines', "... ({count} more lines)", { count: remaining })}</div></div>`;
           out += '<div class="output-full">';
           for (const line of lines) {
             out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
@@ -972,7 +992,7 @@
       function renderSessionList() {
         const list = document.getElementById('session-list');
         list.replaceChildren();
-        const sessions = [['', { agentId: 'Main session', entries: data.entries }], ...Object.entries(subSessions || {})];
+        const sessions = [['', { agentId: viewerText('tools.export.main_session', "Main session"), entries: data.entries }], ...Object.entries(subSessions || {})];
         document.getElementById('session-count').textContent = sessions.length;
         for (const [key, session] of sessions) {
           const link = document.createElement('a');
@@ -980,13 +1000,13 @@
           link.href = sessionUrl(key).href;
           link.dataset.session = key;
           link.style.setProperty('--depth', Math.min(key ? key.split('/').length : 0, 6));
-          link.title = key || 'Main session';
+          link.title = key || viewerText('tools.export.main_session', "Main session");
           const name = document.createElement('span');
           name.className = 'session-name';
           name.textContent = session.agentId;
           const meta = document.createElement('span');
           meta.className = 'session-meta';
-          meta.textContent = session.aborted ? 'Stopped' : String(session.entries.filter(e => e.type === 'message').length);
+          meta.textContent = session.aborted ? viewerText('tools.export.stopped', "Stopped") : String(session.entries.filter(e => e.type === 'message').length);
           link.append(name, meta);
           link.addEventListener('click', event => {
             if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -1116,7 +1136,7 @@
        * Render the copy-link button HTML for a message.
        */
       function renderCopyLinkButton(entryId) {
-        return `<button class="copy-link-btn" data-entry-id="${entryId}" title="Copy link to this message">
+        return `<button class="copy-link-btn" data-entry-id="${entryId}" title="${viewerHtml('tools.export.copy_link', "Copy link to this message")}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1189,7 +1209,7 @@
                 if (!thinking) continue;
                 html += `<div class="thinking-block" id="${blockId}">
                   <div class="thinking-text">${escapeHtml(thinking)}</div>
-                  <div class="thinking-collapsed">Thinking ...</div>
+                  <div class="thinking-collapsed">${viewerHtml('tools.export.thinking', "Thinking ...")}</div>
                 </div>`;
               } else if (block.type === 'image') {
                 html += `<div class="message-images" id="${blockId}"><img src="data:${block.mimeType};base64,${block.data}" class="message-image" /></div>`;
@@ -1199,9 +1219,9 @@
             }
 
             if (msg.stopReason === 'aborted') {
-              html += '<div class="error-text">Aborted</div>';
+              html += '<div class="error-text">' + viewerHtml('tools.export.aborted', "Aborted") + '</div>';
             } else if (msg.stopReason === 'error') {
-              html += `<div class="error-text">Error: ${escapeHtml(msg.errorMessage || 'Unknown error')}</div>`;
+              html += `<div class="error-text">${viewerHtml('tools.export.error', "Error: {error}", { error: msg.errorMessage || viewerText('tools.export.unknown_error', 'Unknown error') })}</div>`;
             }
 
             html += '</div>';
@@ -1214,9 +1234,9 @@
             html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
             if (msg.cancelled) {
-              html += '<div style="color: var(--warning)">(cancelled)</div>';
+              html += '<div style="color: var(--warning)">' + viewerHtml('tools.export.cancelled', "(cancelled)") + '</div>';
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
+              html += `<div style="color: var(--error)">${viewerHtml('tools.export.exit_code', "(exit {code})", { code: msg.exitCode })}</div>`;
             }
             html += '</div>';
             return html;
@@ -1228,9 +1248,9 @@
             html += `<div class="tool-command">$ ${escapeHtml(msg.code)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
             if (msg.cancelled) {
-              html += '<div style="color: var(--warning)">(cancelled)</div>';
+              html += '<div style="color: var(--warning)">' + viewerHtml('tools.export.cancelled', "(cancelled)") + '</div>';
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
+              html += `<div style="color: var(--error)">${viewerHtml('tools.export.exit_code', "(exit {code})", { code: msg.exitCode })}</div>`;
             }
             html += '</div>';
             return html;
@@ -1240,27 +1260,27 @@
         }
 
         if (entry.type === 'model_change') {
-          const html = `<div class="model-change" id="${entryId}">${tsHtml}Switched to model: <span class="model-name">${escapeHtml(entry.model)}</span></div>`;
+          const html = `<div class="model-change" id="${entryId}">${tsHtml}${viewerHtml('tools.export.model_changed', "Switched to model:")} <span class="model-name">${escapeHtml(entry.model)}</span></div>`;
           return html;
         }
 
         if (entry.type === 'thinking_level_change') {
-          const html = `<div class="thinking-change" id="${entryId}">${tsHtml}Thinking level: <span class="thinking-level">${escapeHtml(entry.thinkingLevel)}</span></div>`;
+          const html = `<div class="thinking-change" id="${entryId}">${tsHtml}${viewerHtml('tools.export.thinking_level', "Thinking level:")} <span class="thinking-level">${escapeHtml(entry.thinkingLevel)}</span></div>`;
           return html;
         }
 
 
         if (entry.type === 'compaction') {
           return `<div class="compaction" id="${entryId}" onclick="this.classList.toggle('expanded')">
-            <div class="compaction-label">[compaction]</div>
-            <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
-            <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
+            <div class="compaction-label">${viewerHtml('tools.export.compaction', "[compaction]")}</div>
+            <div class="compaction-collapsed">${viewerHtml('tools.export.compacted_from', "Compacted from {count} tokens", { count: entry.tokensBefore.toLocaleString() })}</div>
+            <div class="compaction-content"><strong>${viewerHtml('tools.export.compacted_from', "Compacted from {count} tokens", { count: entry.tokensBefore.toLocaleString() })}</strong>\n\n${escapeHtml(entry.summary)}</div>
           </div>`;
         }
 
         if (entry.type === 'branch_summary') {
           return `<div class="branch-summary" id="${entryId}">${tsHtml}
-            <div class="branch-summary-header">Branch Summary</div>
+            <div class="branch-summary-header">${viewerHtml('tools.export.branch_title', "Branch Summary")}</div>
             <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
           </div>`;
         }
@@ -1324,7 +1344,7 @@
       let globalStats = computeStats(entries);
 
       function renderHeader() {
-        const title = header?.title || (activeSessionKey ? subSessions[activeSessionKey].agentId : 'Session transcript');
+        const title = header?.title || (activeSessionKey ? subSessions[activeSessionKey].agentId : viewerText('tools.export.session_transcript', "Session transcript"));
         document.title = `${title} · NeoPi`;
         const totalCost = globalStats.cost.input + globalStats.cost.output + globalStats.cost.cacheRead + globalStats.cost.cacheWrite;
 
@@ -1335,32 +1355,32 @@
         if (globalStats.tokens.cacheWrite) tokenParts.push(`W${formatTokens(globalStats.tokens.cacheWrite)}`);
 
         const msgParts = [];
-        if (globalStats.userMessages) msgParts.push(`${globalStats.userMessages} user`);
-        if (globalStats.developerMessages) msgParts.push(`${globalStats.developerMessages} developer`);
-        if (globalStats.assistantMessages) msgParts.push(`${globalStats.assistantMessages} assistant`);
-        if (globalStats.toolResults) msgParts.push(`${globalStats.toolResults} tool results`);
-        if (globalStats.customMessages) msgParts.push(`${globalStats.customMessages} custom`);
-        if (globalStats.compactions) msgParts.push(`${globalStats.compactions} compactions`);
-        if (globalStats.branchSummaries) msgParts.push(`${globalStats.branchSummaries} branch summaries`);
+        if (globalStats.userMessages) msgParts.push(viewerText('tools.export.count_user', "{count} user", { count: globalStats.userMessages }));
+        if (globalStats.developerMessages) msgParts.push(viewerText('tools.export.count_developer', "{count} developer", { count: globalStats.developerMessages }));
+        if (globalStats.assistantMessages) msgParts.push(viewerText('tools.export.count_assistant', "{count} assistant", { count: globalStats.assistantMessages }));
+        if (globalStats.toolResults) msgParts.push(viewerText('tools.export.count_tool_results', "{count} tool results", { count: globalStats.toolResults }));
+        if (globalStats.customMessages) msgParts.push(viewerText('tools.export.count_custom', "{count} custom", { count: globalStats.customMessages }));
+        if (globalStats.compactions) msgParts.push(viewerText('tools.export.count_compactions', "{count} compactions", { count: globalStats.compactions }));
+        if (globalStats.branchSummaries) msgParts.push(viewerText('tools.export.count_branch', "{count} branch summaries", { count: globalStats.branchSummaries }));
 
         let html = `
           <div class="header">
-            <div class="session-eyebrow">${escapeHtml(activeSessionKey || 'Main session')}</div>
+            <div class="session-eyebrow">${escapeHtml(activeSessionKey || viewerText('tools.export.main_session', "Main session"))}</div>
             <h1>${escapeHtml(title)}</h1>
-            <div class="help-bar">${escapeHtml(shortenPath(header?.cwd || ''))} · T thinking · O tool output</div>
+            <div class="help-bar">${escapeHtml(shortenPath(header?.cwd || ''))} · ${viewerHtml('tools.export.keyboard_help', "T thinking · O tool output")}</div>
             <div class="header-info">
-              <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : 'unknown'}</span></div>
-              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${escapeHtml(globalStats.models.join(', ') || 'unknown')}</span></div>
-              <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
-              <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
-              <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
-              <div class="info-item"><span class="info-label">Cost:</span><span class="info-value">$${totalCost.toFixed(3)}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.date', "Date:")}</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : viewerText('tools.export.unknown', "unknown")}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.models', "Models:")}</span><span class="info-value">${escapeHtml(globalStats.models.join(', ') || viewerText('tools.export.unknown', "unknown"))}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.messages', "Messages:")}</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.tool_calls', "Tool Calls:")}</span><span class="info-value">${globalStats.toolCalls}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.tokens', "Tokens:")}</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
+              <div class="info-item"><span class="info-label">${viewerHtml('tools.export.cost', "Cost:")}</span><span class="info-value">$${totalCost.toFixed(3)}</span></div>
             </div>
           </div>`;
 
         if (!activeSessionKey && systemPrompt) {
           html += `<div class="system-prompt">
-            <div class="system-prompt-header">System Prompt</div>
+            <div class="system-prompt-header">${viewerHtml('tools.export.system_prompt', "System Prompt")}</div>
             <div class="system-prompt-content">${escapeHtml(systemPrompt)}</div>
           </div>`;
         }
@@ -1369,7 +1389,7 @@
           const namesHtml = tools.map(t => `<span class="tool-name-chip">${escapeHtml(t.name)}</span>`).join('');
           const fullHtml = tools.map(t => `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`).join('');
           html += `<div class="tools-list collapsed" onclick="this.classList.toggle('collapsed')">
-            <div class="tools-header">Available Tools (${tools.length})</div>
+            <div class="tools-header">${viewerHtml('tools.export.available_tools', "Available Tools ({count})", { count: tools.length })}</div>
             <div class="tools-collapsed">${namesHtml}</div>
             <div class="tools-content">${fullHtml}</div>
           </div>`;
@@ -1439,7 +1459,7 @@
         if (!messagesEl.firstChild) {
           const empty = document.createElement('p');
           empty.className = 'empty-session';
-          empty.textContent = 'This session has no transcript messages.';
+          empty.textContent = viewerText('tools.export.empty_session', "This session has no transcript messages.");
           messagesEl.appendChild(empty);
         }
 
@@ -1752,7 +1772,7 @@
         document.getElementById('transcript-tab').setAttribute('aria-pressed', String(!full));
         document.getElementById('trace-tab').setAttribute('aria-pressed', String(full));
         traceElement.setAttribute('view', full ? 'full' : 'timeline');
-        traceExpand.textContent = full ? 'Back to transcript' : 'Open trace view';
+        traceExpand.textContent = full ? viewerText('tools.export.back_to_transcript', "Back to transcript") : viewerText('tools.export.open_trace', "Open trace view");
         timelineToggle.disabled = full;
         setTimelineOpen(timelineOpen);
       }
@@ -1762,7 +1782,7 @@
         tracePanel.hidden = false;
         document.getElementById('trace-tab').hidden = false;
         document.getElementById('trace-summary').textContent =
-          `${trace.summary.requests} calls · ${trace.summary.toolCalls} tools · ${trace.summary.subagents} agents`;
+          viewerText('tools.export.trace_summary', "{calls} calls · {tools} tools · {agents} agents", { calls: trace.summary.requests, tools: trace.summary.toolCalls, agents: trace.summary.subagents });
       }
       timelineToggle.addEventListener('click', () => setTimelineOpen(!timelineOpen));
       traceExpand.addEventListener('click', () => setView(currentView === 'trace' ? 'transcript' : 'trace'));
@@ -1789,7 +1809,7 @@
         if (!messages) return;
         const div = document.createElement('div');
         div.className = 'share-load-error';
-        div.textContent = 'Failed to load session: ' + (err && err.message ? err.message : String(err));
+        div.textContent = viewerText('tools.export.load_error', "Failed to load session: {error}", { error: err && err.message ? err.message : String(err) });
         messages.appendChild(div);
       }
 

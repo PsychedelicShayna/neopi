@@ -8,11 +8,11 @@ import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { getLocale } from "@oh-my-pi/pi-utils/i18n";
-import { initializeCliLanguage } from "./help-extra";
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { openStandaloneJudge } from "../judgment/standalone";
 import { openTernPage } from "../tools/browser/tern/user-page";
 import { openPath } from "../utils/open";
+import { initializeCliLanguage } from "./help-extra";
 import { runHostedStats } from "./stats-host";
 
 /**
@@ -76,7 +76,7 @@ export interface StatsCommandArgs {
 export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	if (!cmd.json && !cmd.summary) await initializeCliLanguage();
 	if (cmd.headless) {
-		if (cmd.json || cmd.summary) throw new Error("--headless cannot be combined with --json or --summary");
+		if (cmd.json || cmd.summary) throw new Error(t("cli.commands.stats.headless_conflict"));
 		await runHostedStats();
 		return;
 	}
@@ -96,12 +96,12 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	// One-shot reports need fully ingested, fully rolled-up data before printing.
 	if (cmd.json || cmd.summary) {
 		const progress = createSyncProgressReporter();
-		process.stderr.write("Syncing session files...\n");
+		process.stderr.write(`${t("cli.commands.stats.syncing")}\n`);
 		const { processed, files } = await syncAllSessions({ onProgress: progress.onProgress });
 		progress.finish();
 		await refreshRollups();
 		const total = await getTotalMessageCount();
-		process.stderr.write(`Synced ${processed} new entries from ${files} files (${total} total)\n\n`);
+		process.stderr.write(`${t("cli.commands.stats.synced", { processed, files, total })}\n\n`);
 		if (cmd.json) {
 			console.log(JSON.stringify(await getDashboardStats(), null, 2));
 		} else {
@@ -121,7 +121,7 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		judge: async () => (await openStandaloneJudge(cwd, "stats_frustration")).judge,
 	});
 	const url = formatStatsDashboardUrl(hostname, port, getLocale());
-	console.log(chalk.green(`Dashboard available at: ${url}`));
+	console.log(chalk.green(t("commands.dashboard.available", { url })));
 
 	// Another process owns a reused dashboard: show it, never stop it.
 	if (reused) {
@@ -130,7 +130,7 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 			openPath(url);
 			return;
 		}
-		console.log("Showing it in place of this block: close it to return\n");
+		console.log(`${t("cli.commands.stats.reused_block")}\n`);
 		await page.closed();
 		return;
 	}
@@ -140,11 +140,11 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	setStatsCloseHandler(() => void postmortem.quit(0));
 	const page = await openTernPage(url, "over");
 	if (page) {
-		console.log("Showing it in place of this block: close it to stop\n");
+		console.log(`${t("cli.commands.stats.owned_block")}\n`);
 	} else {
 		setStatsCloseHandler(undefined);
 		openPath(url);
-		console.log(`Press ${formatKeyHint("ctrl+c")} to stop\n`);
+		console.log(`${t("cli.commands.stats.stop_hint", { key: formatKeyHint("ctrl+c") })}\n`);
 	}
 
 	// Ctrl+C and the other signals exit through omp's cleanup, which takes the

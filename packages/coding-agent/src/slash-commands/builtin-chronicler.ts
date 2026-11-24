@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { dispatchSessionChronicleIndex } from "../chronicler/session-index";
 import type { AgentSession } from "../session/agent-session";
 import { ChronicleRecallTool } from "../tools/chronicle-recall";
@@ -6,27 +7,71 @@ import { clearSubmittedText } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand } from "./helpers/parse";
 import type { SlashCommandSpec, SubcommandDef } from "./types";
 
-const CHRON_USAGE = 'Usage: /chron [status|pause|resume|blind|unblind|off [--confirm]|on|index|recall "question"]';
+function chronUsage() {
+	return t("commands.chron.usage");
+}
 const chronConfirmValues = argumentValues("--confirm");
-const CHRON_OFF_WARNING = "Turning off the Chronicler will wipe Luna's context window.";
 const CHRON_SUBCOMMANDS: SubcommandDef[] = [
-	{ name: "status", description: "Show enabled state, capture mode, and health" },
-	{ name: "pause", description: "Pause ingest, retaining Luna's context; resume catches up" },
-	{ name: "resume", description: "Resume ingest and catch up on the paused window" },
-	{ name: "blind", description: "Stop ingest and permanently exclude this window from automatic capture" },
-	{ name: "unblind", description: "Resume ingest without recording the blinded window" },
+	{
+		name: "status",
+		get description() {
+			return t("commands.chron.statusDescription");
+		},
+	},
+	{
+		name: "pause",
+		get description() {
+			return t("commands.chron.pauseDescription");
+		},
+	},
+	{
+		name: "resume",
+		get description() {
+			return t("commands.chron.resumeDescription");
+		},
+	},
+	{
+		name: "blind",
+		get description() {
+			return t("commands.chron.blindDescription");
+		},
+	},
+	{
+		name: "unblind",
+		get description() {
+			return t("commands.chron.unblindDescription");
+		},
+	},
 	{
 		name: "off",
-		description: "Disable the Chronicler and wipe Luna's context (confirmation required)",
+		get description() {
+			return t("commands.chron.offDescription");
+		},
 		usage: "[--confirm]",
 		// A bare `off` must still pass through the normal confirmation prompt.
 		arguments: [
 			prefix => chronConfirmValues(prefix)?.map(item => ({ ...item, preserveInputOnSubmit: true })) ?? null,
 		],
 	},
-	{ name: "on", description: "Enable the Chronicler for this session" },
-	{ name: "index", description: "Index captured atoms from the current session" },
-	{ name: "recall", description: "Recall captured atoms across sessions", usage: '"question"' },
+	{
+		name: "on",
+		get description() {
+			return t("commands.chron.onDescription");
+		},
+	},
+	{
+		name: "index",
+		get description() {
+			return t("commands.chron.indexDescription");
+		},
+	},
+	{
+		name: "recall",
+		get description() {
+			return t("commands.chron.recallDescription");
+		},
+		usage: '"question"',
+	},
 ];
 
 type ChroniclerAction = "on" | "off" | "pause" | "resume" | "blind" | "unblind";
@@ -40,7 +85,11 @@ function isChroniclerAction(verb: string): verb is ChroniclerAction {
 function chroniclerStatus(session: AgentSession): string {
 	const health = session.chroniclerHealth;
 	const captureMode = session.chroniclerEnabled ? (health.captureMode ?? "running") : "inactive";
-	return `Chronicler: ${session.chroniclerEnabled ? "enabled" : "disabled"}; capture: ${captureMode}; health: ${health.status}.`;
+	return t("commands.chron.status", {
+		enabled: session.chroniclerEnabled ? t("commands.chron.enabled") : t("commands.chron.disabled"),
+		capture: t(`commands.chron.capture.${captureMode}`),
+		health: t(`commands.chron.health.${health.status}`),
+	});
 }
 
 async function runChronCommand(
@@ -51,17 +100,17 @@ async function runChronCommand(
 	const { verb, rest } = parseSubcommand(args);
 	if ((!verb || verb === "status") && !rest) return { text: chroniclerStatus(session) };
 	if (verb === "index") {
-		if (rest) return { text: CHRON_USAGE, failed: true };
+		if (rest) return { text: chronUsage(), failed: true };
 		return { text: dispatchSessionChronicleIndex(session) };
 	}
 	if (verb === "recall") {
 		let question = rest;
 		const quote = question[0];
 		if (quote === '"' || quote === "'") {
-			if (question.length < 2 || !question.endsWith(quote)) return { text: CHRON_USAGE, failed: true };
+			if (question.length < 2 || !question.endsWith(quote)) return { text: chronUsage(), failed: true };
 			question = question.slice(1, -1);
 		}
-		if (!question.trim()) return { text: CHRON_USAGE, failed: true };
+		if (!question.trim()) return { text: chronUsage(), failed: true };
 		// The recall setting gates the agent's tool grant, not explicit operator commands.
 		const tool = new ChronicleRecallTool(session.getAgentLauncherSession());
 		const result = await tool.execute("chron-recall", { query: question, scope: "all" });
@@ -73,25 +122,29 @@ async function runChronCommand(
 		};
 	}
 	if (!isChroniclerAction(verb) || (rest && !(verb === "off" && rest === "--confirm"))) {
-		return { text: CHRON_USAGE, failed: true };
+		return { text: chronUsage(), failed: true };
 	}
 	if (verb === "off" && rest !== "--confirm") {
 		if (!confirmOff) {
 			return {
-				text: `${CHRON_OFF_WARNING}\nTo confirm, run /chron off --confirm. No state was changed.`,
+				text: t("commands.chron.confirmUsage", { warning: t("commands.chron.disableWarning") }),
 				failed: true,
 			};
 		}
-		if (!(await confirmOff())) return { text: "Chronicler off cancelled. No state was changed." };
+		if (!(await confirmOff())) return { text: t("commands.chron.disableCancelled") };
 	}
 	const changed = await session.chroniclerControl(verb);
-	return { text: `${changed ? "Chronicler state updated." : "No state change."} ${chroniclerStatus(session)}` };
+	return {
+		text: `${changed ? t("commands.chron.updated") : t("commands.chron.unchanged")} ${chroniclerStatus(session)}`,
+	};
 }
 
 export const CHRONICLER_SLASH_COMMAND: SlashCommandSpec = {
 	name: "chron",
 	icon: "action",
-	description: "Control Luna, index this session, or recall captured atoms",
+	get description() {
+		return t("commands.chron.description");
+	},
 	acpInputHint: '[status|pause|resume|blind|unblind|off [--confirm]|on|index|recall "question"]',
 	allowArgs: true,
 	subcommandOptional: true,
@@ -102,7 +155,7 @@ export const CHRONICLER_SLASH_COMMAND: SlashCommandSpec = {
 			await runtime.output(result.text);
 			return commandConsumed({ failed: result.failed });
 		} catch (error) {
-			await runtime.output(`Chronicler command failed: ${errorMessage(error)}`);
+			await runtime.output(t("commands.chron.failed", { error: errorMessage(error) }));
 			return commandConsumed({ failed: true });
 		}
 	},
@@ -111,12 +164,12 @@ export const CHRONICLER_SLASH_COMMAND: SlashCommandSpec = {
 		clearSubmittedText(runtime);
 		try {
 			const result = await runChronCommand(command.args, ctx.session, () =>
-				ctx.showHookConfirm("Turn off the Chronicler?", CHRON_OFF_WARNING),
+				ctx.showHookConfirm(t("commands.chron.confirmDisable"), t("commands.chron.disableWarning")),
 			);
 			if (result.failed) ctx.showError(result.text);
 			else ctx.showStatus(result.text);
 		} catch (error) {
-			ctx.showError(`Chronicler command failed: ${errorMessage(error)}`);
+			ctx.showError(t("commands.chron.failed", { error: errorMessage(error) }));
 		}
 	},
 };

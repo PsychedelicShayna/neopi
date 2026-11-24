@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { Container } from "../tui";
 import { Spacer } from "../components/spacer";
@@ -98,10 +99,19 @@ export function formatTurnUsage(summary: TurnUsageSummary): { text: string; titl
 	const tokens = summary.input + summary.output;
 	const cost = summary.cost > 0 ? (summary.cost < 0.005 ? "<$0.01" : `$${summary.cost.toFixed(2)}`) : undefined;
 	const time = summary.elapsedMs === undefined ? undefined : formatDuration(summary.elapsedMs);
-	const text = [time, `${formatNumber(tokens)} tok`, cost].filter(part => part !== undefined).join(" · ");
-	const exact = `${tokens.toLocaleString("en-US")} tokens (${summary.input.toLocaleString("en-US")} in · ${summary.output.toLocaleString("en-US")} out)`;
+	const text = [time, t("overlays.usage_row.token_count_short", { tokens: `${formatNumber(tokens)}` }), cost]
+		.filter(part => part !== undefined)
+		.join(" · ");
+	const exact = t("overlays.usage_row.token_breakdown", {
+		toLocaleString: `${tokens.toLocaleString("en-US")}`,
+		toLocaleString2: `${summary.input.toLocaleString("en-US")}`,
+		toLocaleString3: `${summary.output.toLocaleString("en-US")}`,
+	});
 	const title = [time, exact, cost].filter(part => part !== undefined).join(" · ");
-	return { text: `${text} this turn`, title: `This turn: ${title}` };
+	return {
+		text: t("overlays.usage_row.this_turn_suffix", { text: `${text}` }),
+		title: t("overlays.usage_row.this_turn_title", { title: `${title}` }),
+	};
 }
 
 /**
@@ -213,8 +223,12 @@ class UsageRowBlock extends Container {
 		if (this.#turnElapsedMs !== undefined && this.#turnElapsedMs > 0) {
 			parts.push(`Δ ${formatDuration(Math.round(this.#turnElapsedMs))}`);
 		}
-		parts.push(`in ${formatNumber(usage.input + usage.cacheWrite)}`, `out ${formatNumber(usage.output)}`);
-		if (usage.cacheRead > 0) parts.push(`cache ${formatNumber(usage.cacheRead)}`);
+		parts.push(
+			t("overlays.usage_row.input_count", { value: `${formatNumber(usage.input + usage.cacheWrite)}` }),
+			t("overlays.usage_row.output_count", { output: `${formatNumber(usage.output)}` }),
+		);
+		if (usage.cacheRead > 0)
+			parts.push(t("overlays.usage_row.cache_count", { cacheRead: `${formatNumber(usage.cacheRead)}` }));
 		if (this.#ttftMs && this.#ttftMs > 0) parts.push(`ttft ${(this.#ttftMs / 1000).toFixed(1)}s`);
 		const children: NativeChild[] = [text([span(parts.join(" · "), "dim")])];
 		const tokPerSec = outputTokensPerSecond(usage.output, this.#durationMs);

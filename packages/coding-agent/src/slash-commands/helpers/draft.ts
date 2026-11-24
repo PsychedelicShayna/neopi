@@ -1,6 +1,7 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ParsedSlashCommand, TuiSlashCommandRuntime } from "../types";
 
 /** Clear only text still owned by this submission, never a newer detached draft. */
@@ -34,7 +35,7 @@ export function refuseImages(command: ParsedSlashCommand, runtime: TuiSlashComma
 	const images = runtime.input?.images;
 	if (!images?.length) return false;
 	restoreDetachedDraft(runtime.ctx.editor, command.text, images, runtime.input?.imageLinks);
-	runtime.ctx.showWarning(`/${command.name} takes text only; remove the images to run it`);
+	runtime.ctx.showWarning(t("commands.draft.textOnly", { command: command.name }));
 	return true;
 }
 

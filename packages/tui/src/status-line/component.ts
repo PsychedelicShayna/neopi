@@ -10,6 +10,7 @@ import { getNextTimeBasedPricingTransition } from "@oh-my-pi/pi-catalog/models";
 import type { Model, ModelCost } from "@oh-my-pi/pi-catalog/types";
 import type { VcsGitRepo, VcsRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	type ComposerStyle,
@@ -135,6 +136,7 @@ interface NativeFactsMemo {
 	renderRevision: number;
 	inputRevision: number;
 	clockTick: number;
+	locale: Locale;
 	externalInputs: StatusLineExternalInputs;
 }
 
@@ -501,6 +503,7 @@ interface CachedStatusLine {
 	renderRevision: number;
 	inputRevision: number;
 	previewTitle: string | undefined;
+	locale: Locale;
 	externalInputs: StatusLineExternalInputs;
 	/** `#statusLineClock` tick the content was drawn on. */
 	clockTick: number;
@@ -3091,6 +3094,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const nowMs = Date.now();
 		this.#expireStaleVcsRender(nowMs);
 		const clockTick = this.#statusLineClock(nowMs, effectiveSettings);
+		const locale = getLocale();
 
 		const cached = this.#statusLineRenderCache[layout];
 		if (
@@ -3099,6 +3103,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			cached.renderRevision === this.#renderRevision &&
 			cached.inputRevision === this.#statusLineInputRevision &&
 			cached.previewTitle === previewTitle &&
+			cached.locale === locale &&
 			this.#sameStatusLineExternalInputs(cached.externalInputs, externalInputs)
 		) {
 			if (cached.clockTick === clockTick) return cached;
@@ -3122,6 +3127,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			renderRevision: this.#renderRevision,
 			inputRevision: this.#statusLineInputRevision,
 			previewTitle,
+			locale,
 			externalInputs,
 			clockTick,
 			builtSecond: Math.floor(nowMs / 1_000),
@@ -3870,12 +3876,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const nowMs = Date.now();
 		this.#expireStaleVcsRender(nowMs);
 		const clockTick = this.#nativeClock(nowMs, effectiveSettings);
+		const locale = getLocale();
 		const memo = this.#nativeMemo;
 		if (
 			memo &&
 			memo.renderRevision === this.#renderRevision &&
 			memo.inputRevision === this.#statusLineInputRevision &&
 			memo.clockTick === clockTick &&
+			memo.locale === locale &&
 			this.#sameStatusLineExternalInputs(memo.externalInputs, probe)
 		) {
 			return memo.facts;
@@ -3889,6 +3897,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			renderRevision: this.#renderRevision,
 			inputRevision: this.#statusLineInputRevision,
 			clockTick,
+			locale,
 			externalInputs: probe,
 		};
 		return this.#nativeMemo.facts;
@@ -3977,13 +3986,16 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const window = ctx.contextWindow;
 		const boundaries = ctx.autoCompactEnabled ? this.#compactionBoundaries(window) : null;
 		const lines = [
-			pct === null ? "Context usage unknown" : `Context ${Math.round(pct)}% used`,
-			window > 0 ? `${formatNumber(ctx.contextTokens)} of ${formatNumber(window)} tokens` : "No context window",
+			pct === null ? t("status.context.unknown") : t("status.context.used", { percent: Math.round(pct) }),
+			window > 0
+				? t("status.context.tokens", { used: formatNumber(ctx.contextTokens), total: formatNumber(window) })
+				: t("status.context.no_window"),
 		];
-		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`);
+		if (boundaries)
+			lines.push(t("status.context.auto_compact", { percent: Math.round(boundaries.thresholdPercent) }));
 		const speculation = ctx.compactionSpeculation;
-		if (speculation === "running") lines.push("Compaction summary in progress");
-		else if (speculation === "armed") lines.push("Compaction summary ready");
+		if (speculation === "running") lines.push(t("status.context.summary_in_progress"));
+		else if (speculation === "armed") lines.push(t("status.context.summary_ready"));
 		// The line spans the whole window: omp's boundary symbols sit where speculation
 		// starts and compaction fires, and the share past the speculation point is accent.
 		const used = pct === null ? null : Math.min(1, pct / 100);
@@ -3995,7 +4007,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				const start: TspMeterMark = {
 					at: speculationAt,
 					icon: "context.speculation",
-					title: `Compaction summary starts at ${Math.round(speculationAt * 100)}%`,
+					title: t("status.context.summary_starts", { percent: Math.round(speculationAt * 100) }),
 				};
 				// Lit while a background summary runs or waits armed.
 				if (speculation !== "idle") start.tone = "accent";
@@ -4004,7 +4016,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			marks.push({
 				at: Math.min(1, boundaries.thresholdPercent / 100),
 				icon: "context.compaction",
-				title: `Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`,
+				title: t("status.context.auto_compact", { percent: Math.round(boundaries.thresholdPercent) }),
 			});
 		}
 		const context = node(
@@ -4038,7 +4050,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				role: "omp.composer.usage",
 				text: cost,
 				wrap: "none",
-				...(cost ? { title: `Session cost ${cost}` } : {}),
+				...(cost ? { title: t("status.cost.session", { cost }) } : {}),
 				actions: { click: "status.cost" },
 			},
 			undefined,

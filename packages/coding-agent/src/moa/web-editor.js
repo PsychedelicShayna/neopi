@@ -8,7 +8,9 @@ let offline = 0; // requests in a row that got no answer at all
 const api = (() => {
 	async function call(method, route, body) {
 		try {
-			const res = await fetch(route, {
+			const url = new URL(route, window.location.href);
+			url.searchParams.set("lang", document.documentElement.lang);
+			const res = await fetch(url, {
 				method,
 				cache: "no-store",
 				headers: body ? { "Content-Type": "application/json" } : undefined,

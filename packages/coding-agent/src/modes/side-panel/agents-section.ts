@@ -9,6 +9,7 @@ import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
 import type { SidePanelViewSection } from "../controllers/side-panel-controller";
 import { cfgSidebarAgentAutoscroll, cfgSidebarAgentFilters, cfgSidebarAgentOrder } from "../settings";
@@ -32,16 +33,8 @@ export interface AgentsSectionHost {
 	onChange(listener: (event?: AgentRosterChange) => void): () => void;
 }
 
-const FILTER_CONTROLS = [
-	["running", "Run"],
-	["idle", "Idle"],
-	["parked", "Park"],
-	["advisors", "Adv"],
-	["aborted", "End"],
-	["auto", "Auto"],
-] as const;
-
-type AgentControlId = (typeof FILTER_CONTROLS)[number][0];
+const FILTER_CONTROLS = ["running", "idle", "parked", "advisors", "aborted", "auto"] as const;
+type AgentControlId = (typeof FILTER_CONTROLS)[number];
 
 interface StatusChange {
 	status: AgentStatus;
@@ -91,9 +84,9 @@ class AgentControls implements MouseRoutable {
 		this.#hits = [];
 		let line = "";
 		let used = 0;
-		for (const [index, [id, label]] of FILTER_CONTROLS.entries()) {
+		for (const [index, id] of FILTER_CONTROLS.entries()) {
 			const on = id === "auto" ? cfgSidebarAgentAutoscroll.get(settings) : enabled.includes(id);
-			const text = truncateToWidth(`${on ? "+" : "-"}${label}`, width, "");
+			const text = truncateToWidth(`${on ? "+" : "-"}${t(`overlays.side_panel.filter.${id}`)}`, width, "");
 			const size = visibleWidth(text);
 			if (used > 0 && used + size + 1 > width) {
 				rows.push(line);
@@ -126,7 +119,7 @@ class AgentControls implements MouseRoutable {
 	}
 
 	toggleSelected(): void {
-		if (this.#selected !== undefined) this.#toggle(FILTER_CONTROLS[this.#selected]![0]);
+		if (this.#selected !== undefined) this.#toggle(FILTER_CONTROLS[this.#selected]!);
 	}
 
 	reset(): void {
@@ -203,7 +196,7 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		this.#rowIds = ids;
 		if (agents.length === 0) {
 			this.#hovered = undefined;
-			return [theme.fg("muted", truncateToWidth("No agents match these filters", width))];
+			return [theme.fg("muted", truncateToWidth(t("overlays.side_panel.no_agents_match"), width))];
 		}
 		const focused = this.#host.focusedAgentId();
 		const now = Date.now();
@@ -267,15 +260,16 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		const slug = modelChip(ref, observed)?.text;
 		const gutter = focused ? theme.fg("accent", "▍") : " ";
 		const model = slug ? theme.fg("muted", ` ${slug}`) : "";
-		const advisor = ref.kind === "advisor" ? theme.fg("warning", " read-only") : "";
+		const advisor =
+			ref.kind === "advisor" ? theme.fg("warning", ` ${t("overlays.agent_hub.read_only_badge_native")}`) : "";
 		const header = `${gutter}${statusGlyph(ref.status)} ${focused ? theme.bold(name) : name}${model}${advisor}`;
 		const assignment =
 			progress?.assignment ?? observed?.description ?? progress?.task ?? (!running ? ref.activity : undefined);
 		const operation = current
 			? (currentProgress?.currentToolIntent ?? [current, currentProgress?.currentToolArgs].filter(Boolean).join(" "))
 			: running
-				? (currentProgress?.lastIntent ?? ref.activity ?? ref.status)
-				: ref.status;
+				? (currentProgress?.lastIntent ?? ref.activity ?? t(`overlays.agent_hub.${ref.status}`))
+				: t(`overlays.agent_hub.${ref.status}`);
 		const branch = theme.fg("dim", " ├ ");
 		const leaf = theme.fg("dim", " └ ");
 		const clock = theme.fg("muted", elapsedClock(duration));
@@ -286,7 +280,11 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 			`${branch}${clock}${assignment ? ` ${sanitizeDisplaySingleLine(assignment)}` : ""}`,
 			`${waitAt === undefined ? leaf : branch}${sanitizeDisplaySingleLine(operation)}`,
 		);
-		if (waitAt !== undefined) lines.push(`${leaf}${theme.fg("warning", `wait ${formatDuration(now - waitAt)}`)}`);
+		if (waitAt !== undefined) {
+			lines.push(
+				`${leaf}${theme.fg("warning", t("overlays.side_panel.wait", { duration: formatDuration(now - waitAt) }))}`,
+			);
+		}
 		for (let row = start; row < lines.length; row++) {
 			const fitted = truncateToWidth(lines[row]!, width);
 			lines[row] = hovered
@@ -356,7 +354,9 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 /** An Agent Hub jump list with its own live task tree and fixed filter controls. */
 export class AgentsSection implements SidePanelViewSection {
 	readonly id = "agents";
-	readonly title = "AGENTS";
+	get title(): string {
+		return t("overlays.side_panel.agents_title");
+	}
 	readonly order = 10;
 	collapsed?: boolean;
 	readonly content: AgentsContent;

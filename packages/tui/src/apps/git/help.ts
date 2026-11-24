@@ -7,6 +7,7 @@
  * titled "Keyboard shortcuts" with one section per group and a two-column
  * table whose key cells carry the `key` span token, so Tern draws keycaps.
  */
+import { getLocale, t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "../../app-keybindings";
 import type { KeyName } from "../../key-hint-format";
 import { matchesKey } from "../../keys";
@@ -26,47 +27,47 @@ interface Shortcut {
 
 const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcut[] }[] = [
 	{
-		title: "Move",
+		title: "cli.commands.git.help.move",
 		rows: [
-			{ keys: ["up", "down"], label: "Next or previous row" },
-			{ keys: ["left", "right"], label: "Choose the left diff or right changes pane" },
-			{ keys: ["enter"], label: "Open the file in the diff" },
-			{ keys: ["tab"], label: "Switch between the diff and the changes" },
-			{ keys: ["]", "["], label: "Next or previous file" },
-			{ keys: ["alt+down", "alt+up"], label: "Next or previous change" },
-			{ keys: ["home", "end"], label: "First / last row" },
-			{ keys: ["pageUp", "pageDown"], label: "Full page up or down" },
-			{ keys: ["alt+left", "alt+right"], label: "Fold/unfold tree or pan diff" },
-			{ keys: ["/"], label: "Search changed file paths" },
+			{ keys: ["up", "down"], label: "cli.commands.git.help.row" },
+			{ keys: ["left", "right"], label: "cli.commands.git.help.choosePane" },
+			{ keys: ["enter"], label: "cli.commands.git.help.openFile" },
+			{ keys: ["tab"], label: "cli.commands.git.help.switchPane" },
+			{ keys: ["]", "["], label: "cli.commands.git.help.file" },
+			{ keys: ["alt+down", "alt+up"], label: "cli.commands.git.help.change" },
+			{ keys: ["home", "end"], label: "cli.commands.git.help.firstLast" },
+			{ keys: ["pageUp", "pageDown"], label: "cli.commands.git.help.page" },
+			{ keys: ["alt+left", "alt+right"], label: "cli.commands.git.help.foldPan" },
+			{ keys: ["/"], label: "cli.commands.git.help.search" },
 		],
 	},
 	{
-		title: "Stage",
+		title: "cli.commands.git.help.stage",
 		rows: [
-			{ keys: ["space"], label: "Stage or unstage the row" },
-			{ keys: ["s", "u"], label: "Stage or unstage (the hunk or selected lines in the diff)" },
-			{ keys: ["shift+up", "shift+down"], label: "Select lines in the diff" },
-			{ keys: ["x"], label: "Discard the hunk or selected lines (press twice)" },
-			{ keys: ["delete"], label: "Discard the file or folder (press twice)" },
+			{ keys: ["space"], label: "cli.commands.git.help.stageRow" },
+			{ keys: ["s", "u"], label: "cli.commands.git.help.stageChanges" },
+			{ keys: ["shift+up", "shift+down"], label: "cli.commands.git.help.selectLines" },
+			{ keys: ["x"], label: "cli.commands.git.help.discardChanges" },
+			{ keys: ["delete"], label: "cli.commands.git.help.discardFile" },
 		],
 	},
 	{
-		title: "View",
+		title: "cli.commands.git.help.view",
 		rows: [
-			{ keys: ["v"], label: "Cycle the diff view" },
-			{ keys: ["1", "2", "3", "4"], label: "File, split, inline or hunk view" },
-			{ keys: ["w"], label: "Wrap long lines" },
-			{ keys: ["b"], label: "Ignore whitespace, then formatting" },
-			{ keys: ["t"], label: "Paths or folder tree" },
-			{ keys: ["r"], label: "Refresh" },
+			{ keys: ["v"], label: "cli.commands.git.help.cycleView" },
+			{ keys: ["1", "2", "3", "4"], label: "cli.commands.git.help.chooseView" },
+			{ keys: ["w"], label: "cli.commands.git.help.wrap" },
+			{ keys: ["b"], label: "cli.commands.git.help.whitespace" },
+			{ keys: ["t"], label: "cli.commands.git.help.paths" },
+			{ keys: ["r"], label: "cli.commands.git.help.refresh" },
 		],
 	},
 	{
-		title: "Commit",
+		title: "cli.commands.git.help.commit",
 		rows: [
-			{ keys: ["c"], label: "Write the commit message (empty: generate one)" },
-			{ keys: ["escape"], label: "Leave the field" },
-			{ keys: ["q"], label: "Quit" },
+			{ keys: ["c"], label: "cli.commands.git.help.writeCommit" },
+			{ keys: ["escape"], label: "cli.commands.git.help.leaveField" },
+			{ keys: ["q"], label: "cli.commands.git.help.quit" },
 		],
 	},
 ];
@@ -74,13 +75,13 @@ const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcu
 const VIM_GROUPS: typeof GROUPS = [
 	...GROUPS,
 	{
-		title: "Vim navigation",
+		title: "cli.commands.git.help.vim",
 		rows: [
-			{ keys: ["j", "k"], label: "Next or previous row" },
-			{ keys: ["h", "l"], label: "Choose the left diff or right changes pane" },
-			{ keys: ["g", "shift+g"], label: "gg / G: first / last row" },
-			{ keys: ["ctrl+u", "ctrl+d"], label: "Half page up or down" },
-			{ keys: ["ctrl+y", "ctrl+e"], label: "Scroll view without moving selection" },
+			{ keys: ["j", "k"], label: "cli.commands.git.help.row" },
+			{ keys: ["h", "l"], label: "cli.commands.git.help.choosePane" },
+			{ keys: ["g", "shift+g"], label: "cli.commands.git.help.vimFirstLast" },
+			{ keys: ["ctrl+u", "ctrl+d"], label: "cli.commands.git.help.halfPage" },
+			{ keys: ["ctrl+y", "ctrl+e"], label: "cli.commands.git.help.scroll" },
 		],
 	},
 ];
@@ -91,10 +92,13 @@ function shortcutGroups(): typeof GROUPS {
 
 /** The shortcuts overlay; any of `?`, escape or `q` closes it. */
 export class GitHelpSheet implements Component {
-	readonly nativeOverlay = { role: "omp.overlay.hotkeys", head: "Keyboard shortcuts", size: "lg" } as const;
+	get nativeOverlay() {
+		return { role: "omp.overlay.hotkeys", head: t("cli.commands.git.shortcuts"), size: "lg" } as const;
+	}
 	readonly #close: () => void;
 	#native: NativeNode | undefined;
 	#nativeVimMode = getMenuSearchVimMode();
+	#nativeLocale = getLocale();
 	readonly #viewport = new ScrollView([], { height: 1 });
 
 	constructor(
@@ -125,8 +129,10 @@ export class GitHelpSheet implements Component {
 
 	describe(): NativeNode {
 		const vim = getMenuSearchVimMode();
-		if (vim !== this.#nativeVimMode) {
+		const locale = getLocale();
+		if (vim !== this.#nativeVimMode || locale !== this.#nativeLocale) {
 			this.#nativeVimMode = vim;
+			this.#nativeLocale = locale;
 			this.#native = undefined;
 		}
 		this.#native ??= col(
@@ -134,24 +140,24 @@ export class GitHelpSheet implements Component {
 				...shortcutGroups().map(group =>
 					node(
 						"section",
-						{ head: group.title, role: "omp.hotkeys.group" },
+						{ head: t(group.title), role: "omp.hotkeys.group" },
 						[
 							node("table", {
 								role: "omp.hotkeys.table",
 								cols: [
-									{ id: "keys", head: "Keys" },
-									{ id: "does", head: "Action", grow: 1 },
+									{ id: "keys", head: t("cli.commands.git.help.keys") },
+									{ id: "does", head: t("cli.commands.git.help.action"), grow: 1 },
 								],
 								rows: group.rows.map((row, index) => ({
 									id: String(index),
-									cells: { keys: row.keys.map(key => span(formatKeyHint(key), "key")), does: row.label },
+									cells: { keys: row.keys.map(key => span(formatKeyHint(key), "key")), does: t(row.label) },
 								})),
 							}),
 						],
 						group.title,
 					),
 				),
-				actionBar([null, actionButton("Close", "close", { keys: "escape" })]),
+				actionBar([null, actionButton(t("cli.commands.git.close"), "close", { keys: "escape" })]),
 			],
 			{ gap: "lg", role: "omp.app.git.help" },
 		);
@@ -164,17 +170,22 @@ export class GitHelpSheet implements Component {
 				group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" "))),
 			),
 		);
-		const lines = [truncateToWidth(` ${theme.bold("Keyboard shortcuts")}`, width), ""];
+		const lines = [truncateToWidth(` ${theme.bold(t("cli.commands.git.shortcuts"))}`, width), ""];
 		for (const group of shortcutGroups()) {
-			lines.push(truncateToWidth(` ${theme.fg("muted", group.title)}`, width));
+			lines.push(truncateToWidth(` ${theme.fg("muted", t(group.title))}`, width));
 			for (const row of group.rows) {
 				const keys = row.keys.map(formatKeyHint).join(" ");
 				const pad = " ".repeat(Math.max(1, keyWidth - visibleWidth(keys) + 2));
-				lines.push(truncateToWidth(`   ${theme.fg("accent", keys)}${pad}${row.label}`, width));
+				lines.push(truncateToWidth(`   ${theme.fg("accent", keys)}${pad}${t(row.label)}`, width));
 			}
 			lines.push("");
 		}
-		lines.push(truncateToWidth(` ${theme.fg("dim", `h / ${formatKeyHint("escape")} back`)}`, width));
+		lines.push(
+			truncateToWidth(
+				` ${theme.fg("dim", t("cli.commands.git.help.back", { key: formatKeyHint("escape") }))}`,
+				width,
+			),
+		);
 		this.#viewport.setLines(lines);
 		this.#viewport.setHeight(Math.max(3, Math.floor((process.stdout.rows || 24) * 0.9) - 2));
 		return this.#viewport.render(width);

@@ -11,6 +11,7 @@
  * (`[start]`/`[done]`/`[fail]`), so scripted callers see unchanged output.
  */
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { getLocale, t, type Locale } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeDisplaySingleLine } from "../overlays/extensions/display-text";
 import { truncateToWidth } from "../utils";
 import { renderProgressBar, type ProgressBarStyle } from "../components/progress-bar";
@@ -125,19 +126,17 @@ export class CleanseBoardModel {
 		this.#version += 1;
 		const count = check.diagnostics.length;
 		const tone = count === 0 ? "success" : "warning";
+		const verdict = checkerVerdict(count);
 		this.#lastSettled = text(
 			[
 				span(count === 0 ? "✓ " : "● ", tone),
 				span(`${check.label} `),
-				span(count === 0 ? "clean" : `${count} issue${count === 1 ? "" : "s"}`, tone),
+				span(verdict, tone),
 				span(` · ${formatDuration(durationMs)}`, "dim"),
 			],
 			{ wrap: "word", role: "omp.cleanse.verdict" },
 		);
-		const verdict =
-			count === 0 ? fgOrPlain("success", "clean") : fgOrPlain("warning", `${count} issue${count === 1 ? "" : "s"}`);
-		const glyph = count === 0 ? fgOrPlain("success", "✓") : fgOrPlain("warning", "●");
-		return `${glyph} ${check.label} ${verdict} ${fgOrPlain("dim", `· ${formatDuration(durationMs)}`)}`;
+		return renderCheckerVerdict(check, durationMs, verdict);
 	}
 
 	repairFinished(): void {
@@ -194,7 +193,7 @@ export class CleanseBoardModel {
 		if (!this.#phaseText && this.#checkers.size === 0 && this.#repairTotal === 0) return undefined;
 		const lanes = cx.supports("agent");
 		const meter = cx.supports("meter");
-		return this.#native.get([this.#version, lanes, meter], () => {
+		return this.#native.get([this.#version, lanes, meter, getLocale()], () => {
 			const rows: NativeNode[] = [];
 			if (this.#phaseText) {
 				rows.push(node("spinner", { label: this.#phaseText, tone: "warning" }, undefined, "phase"));
@@ -237,20 +236,23 @@ export class CleanseBoardModel {
 			cost += entry.cost;
 		}
 		const parts: string[] = [];
-		if (this.#agents.size > 0) parts.push(`${this.#agents.size} running`);
-		if (tokens > 0) parts.push(`${formatNumber(tokens)} tok`);
+		if (this.#agents.size > 0) parts.push(t("cli.commands.cleanse.running", { count: this.#agents.size }));
+		if (tokens > 0) parts.push(tokenCount(tokens));
 		if (cost > 0) parts.push(formatCost(cost));
 		const value = this.#repairDone / this.#repairTotal;
 		const label = `${this.#repairDone}/${this.#repairTotal}`;
 		const children: NativeNode[] = [
-			node("spinner", { label: "Repairing", tone: "accent" }),
+			node("spinner", { label: t("cli.commands.cleanse.repairing"), tone: "accent" }),
 			meter
 				? node("meter", {
 						value,
 						style: "bar",
 						size: "md",
-						label: `${label} lanes`,
-						title: `${this.#repairDone} of ${this.#repairTotal} repair lanes finished`,
+						label: t("cli.commands.cleanse.lanes", { progress: label }),
+						title: t("cli.commands.cleanse.lanes_finished", {
+							done: this.#repairDone,
+							total: this.#repairTotal,
+						}),
 						role: "omp.cleanse.meter",
 					})
 				: node("progress", { value, label, tone: "accent" }),
@@ -313,7 +315,11 @@ export function createCleanseStatusBoard(
 			board.repaint();
 		},
 		checkerFinished(check, durationMs) {
-			board.log(model.checkerFinished(check, durationMs));
+			board.log(
+				board.interactive
+					? model.checkerFinished(check, durationMs)
+					: renderCheckerVerdict(check, durationMs, checkerVerdict(check.diagnostics.length, "en")),
+			);
 		},
 		repairFinished() {
 			model.repairFinished();
@@ -353,6 +359,26 @@ export function createCleanseStatusBoard(
 	};
 }
 
+function checkerVerdict(count: number, locale: Locale = getLocale()): string {
+	if (count === 0) return t(locale, "cli.commands.cleanse.clean");
+	return t(locale, count === 1 ? "cli.commands.cleanse.issue.one" : "cli.commands.cleanse.issue.many", { count });
+}
+
+function renderCheckerVerdict(check: CleanseCheckResult, durationMs: number, verdict: string): string {
+	const clean = check.diagnostics.length === 0;
+	const tone = clean ? "success" : "warning";
+	const glyph = fgOrPlain(tone, clean ? "✓" : "●");
+	return `${glyph} ${check.label} ${fgOrPlain(tone, verdict)} ${fgOrPlain("dim", `· ${formatDuration(durationMs)}`)}`;
+}
+
+function toolUsage(count: number): string {
+	return t(count === 1 ? "cli.commands.cleanse.tools.one" : "cli.commands.cleanse.tools.many", { count });
+}
+
+function tokenCount(count: number): string {
+	return t("cli.commands.cleanse.tokens", { count: formatNumber(count) });
+}
+
 function renderWaveHeader(
 	spinner: string,
 	total: number,
@@ -373,18 +399,18 @@ function renderWaveHeader(
 		cost += entry.cost;
 	}
 	const parts = [`${done}/${total}`];
-	if (running > 0) parts.push(`${running} running`);
-	if (tokens > 0) parts.push(`${formatNumber(tokens)} tok`);
+	if (running > 0) parts.push(t("cli.commands.cleanse.running", { count: running }));
+	if (tokens > 0) parts.push(tokenCount(tokens));
 	if (cost > 0) parts.push(formatCost(cost));
 	parts.push(formatDuration(Date.now() - startedAt));
-	return `${fgOrPlain("accent", spinner)} Repairing [${bar}] ${parts.join(fgOrPlain("dim", " · "))}`;
+	return `${fgOrPlain("accent", spinner)} ${t("cli.commands.cleanse.repairing")} [${bar}] ${parts.join(fgOrPlain("dim", " · "))}`;
 }
 
 function renderAgentRow(spinner: string, agentName: string, agent: RunningAgent): string {
 	const label = agentName.replace(/^Cleanse/, "");
 	const meta: string[] = [];
 	const toolCount = agent.progress?.toolCount ?? 0;
-	if (toolCount > 0) meta.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`);
+	if (toolCount > 0) meta.push(toolUsage(toolCount));
 	meta.push(formatDuration(Date.now() - agent.startedAt));
 	return (
 		`${fgOrPlain("warning", spinner)} ${theme ? theme.bold(label) : label} ${compactFiles(agent.assignment)} ` +
@@ -399,7 +425,7 @@ function describeAgentRow(agentName: string, agent: RunningAgent): NativeNode {
 		text([span(compactFiles(agent.assignment), "path")], { truncate: "middle" }),
 		text(describeActivity(agent.progress), { truncate: "end", grow: 1 }),
 	];
-	if (toolCount > 0) children.push(text([span(`${toolCount} tool${toolCount === 1 ? "" : "s"}`, "dim")]));
+	if (toolCount > 0) children.push(text([span(toolUsage(toolCount), "dim")]));
 	children.push(elapsed(Date.now() - agent.startedAt));
 	return keyed(row(children, { gap: "sm" }), `agent-${stableKey(agentName)}`);
 }
@@ -448,12 +474,8 @@ function describeAgentLane(agentName: string, agent: RunningAgent, now: number):
 
 /** Spans for a repair agent's latest activity, mirroring {@link agentActivity}. */
 function describeActivity(progress: AgentProgress | undefined): TspSpan[] {
-	if (!progress) return [span("starting", "dim")];
-	if (progress.retryState) {
-		return [
-			span(`rate-limited · retry ${progress.retryState.attempt}/${progress.retryState.maxAttempts}`, "warning"),
-		];
-	}
+	if (!progress) return [span(t("cli.commands.cleanse.starting"), "dim")];
+	if (progress.retryState) return [span(retryLabel(progress.retryState), "warning")];
 	const intent = sanitizeDisplaySingleLine(progress.lastIntent ?? "")
 		.replace(/\s+/g, " ")
 		.trim();
@@ -464,7 +486,7 @@ function describeActivity(progress: AgentProgress | undefined): TspSpan[] {
 		const tool = span(args ? `${progress.currentTool} ${args}` : progress.currentTool, "dim");
 		return intent ? [span(`${intent} `), tool] : [tool];
 	}
-	return intent ? [span(intent)] : [span("thinking", "dim")];
+	return intent ? [span(intent)] : [span(t("cli.commands.cleanse.thinking"), "dim")];
 }
 
 /** Semantic twin of {@link renderOutcomeLine}. */
@@ -476,7 +498,7 @@ function describeOutcome(
 ): NativeNode {
 	const files = compactFiles(assignment);
 	if (!outcome.success) {
-		const message = sanitizeDisplaySingleLine(outcome.error ?? "subagent failed")
+		const message = sanitizeDisplaySingleLine(outcome.error ?? t("cli.commands.cleanse.subagent_failed"))
 			.replace(/\s+/g, " ")
 			.trim();
 		return text([span("✗ ", "error"), span(`${outcome.name} `), span(files, "path"), span(` ${message}`, "error")], {
@@ -487,8 +509,8 @@ function describeOutcome(
 	}
 	const meta: string[] = [];
 	const toolCount = agent?.progress?.toolCount ?? 0;
-	if (toolCount > 0) meta.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`);
-	if (total && total.tokens > 0) meta.push(`${formatNumber(total.tokens)} tok`);
+	if (toolCount > 0) meta.push(toolUsage(toolCount));
+	if (total && total.tokens > 0) meta.push(tokenCount(total.tokens));
 	if (agent) meta.push(formatDuration(Date.now() - agent.startedAt));
 	const spans = [span("✓ ", "success"), span(`${outcome.name} `), span(files, "path")];
 	if (meta.length > 0) spans.push(span(` · ${meta.join(" · ")}`, "dim"));
@@ -504,7 +526,7 @@ function renderOutcomeLine(
 	const files = compactFiles(assignment);
 	if (!outcome.success) {
 		const message = truncateToWidth(
-			sanitizeDisplaySingleLine(outcome.error ?? "subagent failed")
+			sanitizeDisplaySingleLine(outcome.error ?? t("cli.commands.cleanse.subagent_failed"))
 				.replace(/\s+/g, " ")
 				.trim(),
 			ERROR_WIDTH,
@@ -513,8 +535,8 @@ function renderOutcomeLine(
 	}
 	const meta: string[] = [];
 	const toolCount = agent?.progress?.toolCount ?? 0;
-	if (toolCount > 0) meta.push(`${toolCount} tool${toolCount === 1 ? "" : "s"}`);
-	if (total && total.tokens > 0) meta.push(`${formatNumber(total.tokens)} tok`);
+	if (toolCount > 0) meta.push(toolUsage(toolCount));
+	if (total && total.tokens > 0) meta.push(tokenCount(total.tokens));
 	if (agent) meta.push(formatDuration(Date.now() - agent.startedAt));
 	const suffix = meta.length > 0 ? ` ${fgOrPlain("dim", `· ${meta.join(" · ")}`)}` : "";
 	return `${fgOrPlain("success", "✓")} ${outcome.name} ${files}${suffix}`;
@@ -522,13 +544,8 @@ function renderOutcomeLine(
 
 /** Latest human-readable activity for a repair agent row. */
 function agentActivity(progress: AgentProgress | undefined): string {
-	if (!progress) return fgOrPlain("dim", "starting");
-	if (progress.retryState) {
-		return fgOrPlain(
-			"warning",
-			`rate-limited · retry ${progress.retryState.attempt}/${progress.retryState.maxAttempts}`,
-		);
-	}
+	if (!progress) return fgOrPlain("dim", t("cli.commands.cleanse.starting"));
+	if (progress.retryState) return fgOrPlain("warning", retryLabel(progress.retryState));
 	const intent = truncateToWidth(
 		sanitizeDisplaySingleLine(progress.lastIntent ?? "")
 			.replace(/\s+/g, " ")
@@ -545,13 +562,17 @@ function agentActivity(progress: AgentProgress | undefined): string {
 		const tool = fgOrPlain("dim", args ? `${progress.currentTool} ${args}` : progress.currentTool);
 		return intent ? `${intent} ${tool}` : tool;
 	}
-	return intent || fgOrPlain("dim", "thinking");
+	return intent || fgOrPlain("dim", t("cli.commands.cleanse.thinking"));
+}
+
+function retryLabel(retry: NonNullable<AgentProgress["retryState"]>): string {
+	return t("cli.commands.cleanse.retry", { attempt: retry.attempt, max: retry.maxAttempts });
 }
 
 function compactFiles(assignment: CleanseAssignment): string {
-	const files = assignment.groups.map(group => group.file ?? "<project>");
-	const first = files[0] ?? "<project>";
-	return files.length > 1 ? `${first} +${files.length - 1}` : first;
+	const groups = assignment.groups;
+	const first = groups[0]?.file ?? t("cli.commands.cleanse.project");
+	return groups.length > 1 ? `${first} +${groups.length - 1}` : first;
 }
 
 function formatCost(cost: number): string {

@@ -24,6 +24,7 @@ import {
 	readLines,
 	type FileLockHandle,
 } from "@oh-my-pi/pi-utils";
+import { getLocale, type Locale, t } from "@oh-my-pi/pi-utils/i18n";
 import { Settings } from "../config/settings";
 import type { Setting } from "../config/registry";
 
@@ -252,6 +253,8 @@ interface ArchiveCandidate {
 interface ResolvedGcOptions {
 	apply: boolean;
 	json: boolean;
+	/** Locale for result messages: JSON keeps the original English diagnostics. */
+	outputLocale: Locale;
 	agentDir: string;
 	runBlobs: boolean;
 	runArchive: boolean;
@@ -331,6 +334,7 @@ async function resolveOptions({ flags, progress }: GcCommandArgs): Promise<Resol
 	return {
 		apply: flags.apply === true,
 		json: flags.json === true,
+		outputLocale: flags.json ? "en" : getLocale(),
 		agentDir,
 		runBlobs: selected ? flags.blobs === true : read(cfgGcBlobs),
 		runArchive: selected ? flags.archive === true : read(cfgGcArchive),
@@ -503,7 +507,7 @@ async function collectReferencedBlobHashes(
 	}
 
 	const hashes = new Set<string>();
-	for (const file of track.each("Scanning transcripts for blob refs", [...files.values()])) {
+	for (const file of track.each(t("cli.commands.gc.progress.blobRefs"), [...files.values()])) {
 		// Keep raw-text matching: recoverable malformed records can still own blobs.
 		await scanSessionLinesIfPresent(file, line => {
 			for (const match of decoder.decode(line).matchAll(BLOB_REF_RE)) {
@@ -576,7 +580,7 @@ async function collectBlobCandidates(blobDir: string, track: ProgressTracker): P
 
 	const byHash = new Map<string, BlobCandidate>();
 	const staging: BlobStagingFile[] = [];
-	for (const entry of track.each("Listing blobs", entries)) {
+	for (const entry of track.each(t("cli.commands.gc.progress.listBlobs"), entries)) {
 		const isStaging = BLOB_STAGING_RE.test(entry);
 		const hash = isStaging ? undefined : entry.match(BLOB_FILE_RE)?.[1];
 		if (!isStaging && !hash) continue;
@@ -620,6 +624,7 @@ async function deleteBlobCandidate(
 	candidate: BlobCandidate,
 	deleteBeforeMs: number,
 	result: BlobGcResult,
+	outputLocale: Locale,
 ): Promise<boolean> {
 	const canonical = candidate.paths.find(file => path.basename(file) === candidate.hash);
 	const files = candidate.paths.filter(file => file !== canonical);
@@ -635,7 +640,7 @@ async function deleteBlobCandidate(
 		}
 		const stat = await statIfPresent(moved);
 		if (stat && stat.mtimeMs > deleteBeforeMs) {
-			await restoreReusedBlob(moved, canonical, result);
+			await restoreReusedBlob(moved, canonical, result, outputLocale);
 			return false;
 		}
 		if (stat) files.unshift(moved);
@@ -645,13 +650,20 @@ async function deleteBlobCandidate(
 }
 
 /** Put a blob reused mid-sweep back; a put that already rewrote it wins (same bytes). */
-async function restoreReusedBlob(moved: string, canonical: string, result: BlobGcResult): Promise<void> {
+async function restoreReusedBlob(
+	moved: string,
+	canonical: string,
+	result: BlobGcResult,
+	outputLocale: Locale,
+): Promise<void> {
 	try {
 		await fs.rename(moved, canonical);
 		return;
 	} catch (error) {
 		if (!(await statIfPresent(canonical))) {
-			result.errors.push(`${canonical}: failed to restore reused blob: ${errorMessage(error)}`);
+			result.errors.push(
+				t(outputLocale, "cli.commands.gc.blobRestoreError", { path: canonical, error: errorMessage(error) }),
+			);
 			return;
 		}
 	}
@@ -686,10 +698,11 @@ async function runBlobGc(options: ResolvedGcOptions, archiveSessionsRoot: string
 	};
 
 	const deleteBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
-	for (const candidate of options.track.each("Scanning blobs", candidates)) {
+	for (const candidate of options.track.each(t("cli.commands.gc.progress.scanBlobs"), candidates)) {
 		if (referenced.has(candidate.hash)) continue;
 		if (candidate.mtimeMs > deleteBeforeMs) continue;
-		if (options.apply && !(await deleteBlobCandidate(candidate, deleteBeforeMs, result))) continue;
+		if (options.apply && !(await deleteBlobCandidate(candidate, deleteBeforeMs, result, options.outputLocale)))
+			continue;
 		result.wouldDelete += candidate.paths.length;
 		result.bytes += candidate.bytes;
 	}
@@ -842,7 +855,7 @@ async function runStaleGc(options: ResolvedGcOptions): Promise<StaleGcResult> {
 		bytes: 0,
 		errors: [],
 	};
-	for (const candidate of options.track.each("Scanning stale entries", candidates)) {
+	for (const candidate of options.track.each(t("cli.commands.gc.progress.scanStale"), candidates)) {
 		const lease = candidate.ownedSession ? await tryAcquireSessionFileLease(candidate.ownedSession) : undefined;
 		if (lease === null) continue;
 		try {
@@ -893,7 +906,7 @@ async function listActiveSessions(sessionsRoot: string, track: ProgressTracker):
 	const storage = new FileSessionStorage();
 	const sessions: SessionInfo[] = [];
 	for (const entry of track.each(
-		"Listing sessions",
+		t("cli.commands.gc.progress.listSessions"),
 		entries.filter(entry => entry.isDirectory()),
 	)) {
 		sessions.push(...(await listSessionsReadOnly(path.join(sessionsRoot, entry.name), storage)));
@@ -1091,16 +1104,20 @@ async function restoreGzipSessionFile(source: string, destination: string): Prom
 	}
 }
 
-async function moveSessionWithArtifacts(candidate: ArchiveCandidate): Promise<void> {
+async function moveSessionWithArtifacts(candidate: ArchiveCandidate, outputLocale: Locale): Promise<void> {
 	const sourceSession = candidate.session.path;
 	const destSession = candidate.destinationPath;
 	const legacyDestSession = destSession.endsWith(".gz") ? destSession.slice(0, -".gz".length) : `${destSession}.gz`;
 	const sourceArtifacts = sessionArtifactsPath(sourceSession);
 	const destArtifacts = sessionArtifactsPath(destSession);
-	if (await pathExists(destSession)) throw new Error(`archive destination exists: ${destSession}`);
-	if (await pathExists(legacyDestSession)) throw new Error(`archive destination exists: ${legacyDestSession}`);
+	if (await pathExists(destSession)) {
+		throw new Error(t(outputLocale, "cli.commands.gc.archiveDestination", { path: destSession }));
+	}
+	if (await pathExists(legacyDestSession)) {
+		throw new Error(t(outputLocale, "cli.commands.gc.archiveDestination", { path: legacyDestSession }));
+	}
 	if ((await pathExists(sourceArtifacts)) && (await pathExists(destArtifacts))) {
-		throw new Error(`archive artifacts destination exists: ${destArtifacts}`);
+		throw new Error(t(outputLocale, "cli.commands.gc.archiveArtifactsDestination", { path: destArtifacts }));
 	}
 
 	const moved: Array<{ source: string; destination: string; compressed?: boolean }> = [];
@@ -1144,7 +1161,10 @@ function tableExists(db: Database, table: string): boolean {
 
 async function collectArchivedSessionIds(archiveRoot: string, track: ProgressTracker): Promise<string[]> {
 	const ids = new Set<string>();
-	for (const file of track.each("Scanning archive for history ids", await collectCompressedJsonlFiles(archiveRoot))) {
+	for (const file of track.each(
+		t("cli.commands.gc.progress.historyIds"),
+		await collectCompressedJsonlFiles(archiveRoot),
+	)) {
 		const id = (await scanArchivedSession(file))?.id;
 		if (id) ids.add(id);
 	}
@@ -1164,7 +1184,7 @@ async function cleanupHistoryRowsForArchivedSessions(
 	try {
 		for (const id of await collectArchivedSessionIds(archiveRoot, options.track)) cleanupIds.add(id);
 	} catch (error) {
-		result.errors.push(`history cleanup scan: ${errorMessage(error)}`);
+		result.errors.push(t(options.outputLocale, "cli.commands.gc.historyScanError", { error: errorMessage(error) }));
 	}
 
 	try {
@@ -1172,7 +1192,9 @@ async function cleanupHistoryRowsForArchivedSessions(
 		result.historyRowsDeleted = cleanup.deleted;
 		result.ftsRebuilt = cleanup.ftsRebuilt;
 	} catch (error) {
-		result.errors.push(`history cleanup: ${errorMessage(error)}`);
+		result.errors.push(
+			t(options.outputLocale, "cli.commands.gc.historyCleanupError", { error: errorMessage(error) }),
+		);
 	}
 }
 
@@ -1679,17 +1701,21 @@ async function collectArchivedStatsSessions(
 	archiveRoot: string,
 	sessionsRoot: string,
 	track: ProgressTracker,
+	outputLocale: Locale,
 	onError: (file: string, error: unknown) => void,
 ): Promise<StatsSession[]> {
 	const sessions: StatsSession[] = [];
-	for (const file of track.each("Scanning archive for stats", await collectCompressedJsonlFiles(archiveRoot))) {
+	for (const file of track.each(
+		t("cli.commands.gc.progress.scanStats"),
+		await collectCompressedJsonlFiles(archiveRoot),
+	)) {
 		const relative = path.relative(archiveRoot, file);
 		if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
 		const sourcePath = path.join(sessionsRoot, relative.slice(0, -".gz".length));
 		try {
 			const identities = createStatsIdentities();
 			const header = await scanArchivedSession(file, identities);
-			if (!header) throw new Error("archive is missing a valid session header");
+			if (!header) throw new Error(t(outputLocale, "cli.commands.gc.noArchiveHeader"));
 			sessions.push({
 				path: sourcePath,
 				id: header.id,
@@ -1737,19 +1763,25 @@ async function cleanupStatsRowsForArchivedSessions(
 			archiveRoot,
 			sessionsRoot,
 			options.track,
+			options.outputLocale,
 			(file, error) => {
-				result.errors.push(`stats cleanup scan ${file}: ${errorMessage(error)}`);
+				result.errors.push(
+					t(options.outputLocale, "cli.commands.gc.statsScanFileError", {
+						path: file,
+						error: errorMessage(error),
+					}),
+				);
 			},
 		)) {
 			archivedByPath.set(path.resolve(session.path), session);
 		}
 	} catch (error) {
-		result.errors.push(`stats cleanup scan: ${errorMessage(error)}`);
+		result.errors.push(t(options.outputLocale, "cli.commands.gc.statsScanError", { error: errorMessage(error) }));
 	}
 	try {
 		retainedSessions = await listActiveSessions(sessionsRoot, options.track);
 	} catch (error) {
-		result.errors.push(`stats cleanup scan: ${errorMessage(error)}`);
+		result.errors.push(t(options.outputLocale, "cli.commands.gc.statsScanError", { error: errorMessage(error) }));
 		return;
 	}
 
@@ -1759,7 +1791,9 @@ async function cleanupStatsRowsForArchivedSessions(
 				retainedSessions.map(async session => {
 					const header = await readSessionLineageHeader(session.path);
 					if (!header || header.id !== session.id) {
-						throw new Error(`session header changed during stats cleanup: ${session.path}`);
+						throw new Error(
+							t(options.outputLocale, "cli.commands.gc.sessionHeaderChanged", { path: session.path }),
+						);
 					}
 					return {
 						path: session.path,
@@ -1775,7 +1809,7 @@ async function cleanupStatsRowsForArchivedSessions(
 			result.statsRowsDeleted = reconcileStatsRowsForSessions(dbPath, context.plans);
 		});
 	} catch (error) {
-		result.errors.push(`stats cleanup: ${errorMessage(error)}`);
+		result.errors.push(t(options.outputLocale, "cli.commands.gc.statsCleanupError", { error: errorMessage(error) }));
 	}
 }
 
@@ -1865,7 +1899,7 @@ async function runArchiveGc(
 	const inactiveSeenByCwd = new Map<string, number>();
 	const archiveBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
 
-	for (const session of options.track.each("Scanning sessions to archive", sessions)) {
+	for (const session of options.track.each(t("cli.commands.gc.progress.scanArchive"), sessions)) {
 		if (session.status && ACTIVE_STATUSES.has(session.status)) {
 			result.skippedActive += 1;
 			continue;
@@ -1905,9 +1939,9 @@ async function runArchiveGc(
 
 	const archivedSessionIds: string[] = [];
 	const archivedSessions: SessionInfo[] = [];
-	for (const candidate of options.track.each("Archiving sessions", candidates)) {
+	for (const candidate of options.track.each(t("cli.commands.gc.progress.archiveSessions"), candidates)) {
 		try {
-			await moveSessionWithArtifacts(candidate);
+			await moveSessionWithArtifacts(candidate, options.outputLocale);
 			result.archived += 1;
 			archivedSessionIds.push(candidate.session.id);
 			archivedSessions.push(candidate.session);
@@ -2026,18 +2060,20 @@ async function runCompressGc(options: ResolvedGcOptions, archiveRoot: string): P
 		// Without it, a volume that ignores the request would still copy and verify every candidate.
 		try {
 			if (!(await compressionWorks(sessionsRoot, method))) {
-				result.probeFailure = `${method} compression stored a compressible probe file uncompressed`;
+				result.probeFailure = t(options.outputLocale, "cli.commands.gc.compressionProbeFailure", { method });
 				return result;
 			}
 		} catch (error) {
-			result.errors.push(`compression probe: ${errorMessage(error)}`);
+			result.errors.push(
+				t(options.outputLocale, "cli.commands.gc.compressionProbeError", { error: errorMessage(error) }),
+			);
 			return result;
 		}
 	}
 	const transcripts = await collectTranscriptFiles(sessionsRoot);
 	result.scanned = transcripts.length;
 	const cutoffMs = Date.now() - Math.max(options.compressAfterDays * DAY_MS, GC_WRITE_GRACE_MS);
-	for (const transcript of options.track.each("Scanning sessions to compress", transcripts)) {
+	for (const transcript of options.track.each(t("cli.commands.gc.progress.scanCompress"), transcripts)) {
 		let files: string[];
 		try {
 			if (!(await isIdleTranscript(transcript, cutoffMs))) continue;
@@ -2243,7 +2279,7 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 		result.walBytes = 0;
 	}
 	if (checkpointAttempted && (result.busy > 0 || result.walBytes > 0)) {
-		throw new Error(`WAL checkpoint failed for ${dbPath}: busy=${result.busy}, walBytes=${result.walBytes}`);
+		throw new Error(t("cli.commands.gc.walFailed", { path: dbPath, busy: result.busy, walBytes: result.walBytes }));
 	}
 	result.checkpointed = checkpointAttempted;
 	return result;
@@ -2377,9 +2413,10 @@ async function openGcBreakerLock(lockPath: string): Promise<{ path: string; hand
 				throw error;
 			}
 		}
-		if (!(await removeStaleGcLock(breakerPath))) throw new Error(`GC already running: ${lockPath}`);
+		if (!(await removeStaleGcLock(breakerPath)))
+			throw new Error(t("cli.commands.gc.alreadyRunning", { path: lockPath }));
 	}
-	throw new Error(`GC already running: ${lockPath}`);
+	throw new Error(t("cli.commands.gc.alreadyRunning", { path: lockPath }));
 }
 
 async function openGcLock(lockPath: string): Promise<fs.FileHandle> {
@@ -2390,10 +2427,11 @@ async function openGcLock(lockPath: string): Promise<fs.FileHandle> {
 	try {
 		const raced = await openNewGcLock(lockPath);
 		if (raced) return raced;
-		if (!(await removeStaleGcLock(lockPath))) throw new Error(`GC already running: ${lockPath}`);
+		if (!(await removeStaleGcLock(lockPath)))
+			throw new Error(t("cli.commands.gc.alreadyRunning", { path: lockPath }));
 		const takeover = await openNewGcLock(lockPath);
 		if (takeover) return takeover;
-		throw new Error(`GC already running: ${lockPath}`);
+		throw new Error(t("cli.commands.gc.alreadyRunning", { path: lockPath }));
 	} finally {
 		await releaseGcLockFile(breaker.path, breaker.handle);
 	}
@@ -2430,64 +2468,113 @@ async function withGcLock<T>(agentDir: string, fn: (lockPath: string) => Promise
 }
 
 function renderText(result: GcResult): string {
-	const lines = [`GC ${result.apply ? "applied" : "dry-run"} (${result.agentDir})`];
+	const lines = [
+		t(result.apply ? "cli.commands.gc.applied" : "cli.commands.gc.dryRunResult", { path: result.agentDir }),
+	];
 	if (result.stale) {
 		const stale = result.stale;
 		lines.push(
-			`stale: ${stale.deleted}/${stale.wouldDelete} entries, ${formatBytes(stale.bytes)} (${stale.danglingMarkers} session markers, ${stale.staleBreadcrumbs} breadcrumbs, ${stale.expiredReports} reports, ${stale.expiredReplicas} collab replicas)`,
+			t("cli.commands.gc.stale", {
+				deleted: stale.deleted,
+				total: stale.wouldDelete,
+				bytes: formatBytes(stale.bytes),
+				markers: stale.danglingMarkers,
+				breadcrumbs: stale.staleBreadcrumbs,
+				reports: stale.expiredReports,
+				replicas: stale.expiredReplicas,
+			}),
 		);
-		if (stale.errors.length > 0) lines.push(`stale errors: ${stale.errors.length}`);
+		if (stale.errors.length > 0) lines.push(t("cli.commands.gc.staleErrors", { count: stale.errors.length }));
 	}
 	if (result.strip) {
 		const strip = result.strip;
 		lines.push(
-			`strip: ${strip.stripped}/${strip.wouldStrip} transcripts, ${formatBytes(strip.bytes)} of replay data in ${strip.records} records`,
+			t("cli.commands.gc.strip", {
+				stripped: strip.stripped,
+				total: strip.wouldStrip,
+				bytes: formatBytes(strip.bytes),
+				records: strip.records,
+			}),
 		);
-		if (strip.skippedLive > 0) lines.push(`strip skipped live: ${strip.skippedLive}`);
-		if (strip.errors.length > 0) lines.push(`strip errors: ${strip.errors.length}`);
+		if (strip.skippedLive > 0) lines.push(t("cli.commands.gc.stripSkipped", { count: strip.skippedLive }));
+		if (strip.errors.length > 0) lines.push(t("cli.commands.gc.stripErrors", { count: strip.errors.length }));
 	}
 	if (result.blobs) {
 		lines.push(
-			`blobs: ${result.blobs.deleted}/${result.blobs.wouldDelete} files, ${formatBytes(result.blobs.bytes)}, ${result.blobs.referenced} refs`,
+			t("cli.commands.gc.blobs", {
+				deleted: result.blobs.deleted,
+				total: result.blobs.wouldDelete,
+				bytes: formatBytes(result.blobs.bytes),
+				refs: result.blobs.referenced,
+			}),
 		);
-		if (result.blobs.errors.length > 0) lines.push(`blob errors: ${result.blobs.errors.length}`);
+		if (result.blobs.errors.length > 0)
+			lines.push(t("cli.commands.gc.blobErrors", { count: result.blobs.errors.length }));
 	}
 	if (result.archive) {
 		lines.push(
-			`sessions: ${result.archive.archived}/${result.archive.wouldArchive} archived, ${result.archive.historyRowsDeleted} history rows and ${result.archive.statsRowsDeleted} stats rows removed`,
+			t("cli.commands.gc.sessions", {
+				archived: result.archive.archived,
+				total: result.archive.wouldArchive,
+				history: result.archive.historyRowsDeleted,
+				stats: result.archive.statsRowsDeleted,
+			}),
 		);
-		if (result.archive.skippedActive > 0) lines.push(`sessions skipped active: ${result.archive.skippedActive}`);
+		if (result.archive.skippedActive > 0)
+			lines.push(t("cli.commands.gc.sessionsSkipped", { count: result.archive.skippedActive }));
 		if (result.archive.wouldDeleteTemps > 0) {
 			lines.push(
-				`session staging temps: ${result.archive.deletedTemps}/${result.archive.wouldDeleteTemps} files, ${formatBytes(result.archive.tempBytes)}`,
+				t("cli.commands.gc.sessionTemps", {
+					deleted: result.archive.deletedTemps,
+					total: result.archive.wouldDeleteTemps,
+					bytes: formatBytes(result.archive.tempBytes),
+				}),
 			);
 		}
-		if (result.archive.errors.length > 0) lines.push(`session errors: ${result.archive.errors.length}`);
+		if (result.archive.errors.length > 0)
+			lines.push(t("cli.commands.gc.sessionErrors", { count: result.archive.errors.length }));
 	}
 	if (result.compress) {
 		const compress = result.compress;
 		if (!compress.supported) {
-			lines.push("compress: unsupported on this filesystem (APFS or NTFS only)");
+			lines.push(t("cli.commands.gc.unsupportedCompression"));
 		} else {
 			if (compress.probeFailure !== undefined) {
-				lines.push(`compress skipped: ${compress.probeFailure}`);
+				lines.push(t("cli.commands.gc.compressionSkipped", { reason: compress.probeFailure }));
 			} else {
-				const after = result.apply ? `, ${formatBytes(compress.allocatedAfter)} after` : "";
+				const after = result.apply
+					? t("cli.commands.gc.compressionAfter", { bytes: formatBytes(compress.allocatedAfter) })
+					: "";
 				lines.push(
-					`compress: ${compress.compressed}/${compress.wouldCompress} files in ${compress.sessions} sessions, ${formatBytes(compress.allocatedBefore)} on disk before${after}`,
+					t("cli.commands.gc.compressionSummary", {
+						compressed: compress.compressed,
+						total: compress.wouldCompress,
+						sessions: compress.sessions,
+						before: formatBytes(compress.allocatedBefore),
+						after,
+					}),
 				);
-				if (compress.skippedLive > 0) lines.push(`compress skipped live: ${compress.skippedLive}`);
+				if (compress.skippedLive > 0)
+					lines.push(t("cli.commands.gc.compressionLive", { count: compress.skippedLive }));
 			}
 			if (compress.leftoverScratchDirs > 0) {
-				const verb = result.apply ? "removed" : "found";
-				lines.push(`compress leftover scratch dirs ${verb}: ${compress.leftoverScratchDirs}`);
+				lines.push(
+					t(result.apply ? "cli.commands.gc.scratchRemoved" : "cli.commands.gc.scratchFound", {
+						count: compress.leftoverScratchDirs,
+					}),
+				);
 			}
-			if (compress.errors.length > 0) lines.push(`compress errors: ${compress.errors.length}`);
+			if (compress.errors.length > 0)
+				lines.push(t("cli.commands.gc.compressionErrors", { count: compress.errors.length }));
 		}
 	}
 	if (result.wal) {
-		const state = result.wal.checkpointed ? "checkpointed" : "checkpoint dry-run";
-		lines.push(`wal: ${state}, ${formatBytes(result.wal.walBytes)} across ${result.wal.databases.length} dbs`);
+		lines.push(
+			t(result.wal.checkpointed ? "cli.commands.gc.walCheckpoint" : "cli.commands.gc.walDryRun", {
+				bytes: formatBytes(result.wal.walBytes),
+				count: result.wal.databases.length,
+			}),
+		);
 	}
 	return `${lines.join("\n")}\n`;
 }

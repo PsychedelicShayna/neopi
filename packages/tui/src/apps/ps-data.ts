@@ -1,5 +1,6 @@
 import { formatDuration, SHELL_PROCESS_SELECTOR } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { DaemonState, ProcSpec, UnitScope, UnitSnapshot } from "../tools/daemon";
 
 /** The daemon answering the board, absent when the board was read from its store offline. */
@@ -48,8 +49,11 @@ export function unitName(unit: UnitSnapshot): string {
 
 /** One-line unit summary used by action results and detail views. */
 export function unitLabel(unit: UnitSnapshot): string {
-	const pid = unit.pids.length === 0 || TERMINAL_STATES[unit.state] ? "" : ` pid=${unit.pids.join(",")}`;
-	const exit = unit.exitCode === undefined ? "" : ` exit=${unit.exitCode}`;
+	const pid =
+		unit.pids.length === 0 || TERMINAL_STATES[unit.state]
+			? ""
+			: t("cli.commands.ps.unit.pid", { pid: unit.pids.join(",") });
+	const exit = unit.exitCode === undefined ? "" : t("cli.commands.ps.unit.exitCode", { code: unit.exitCode });
 	return `${unit.kind} ${unitName(unit)}: ${unit.state}${pid}${exit}`;
 }
 
@@ -72,7 +76,7 @@ export function stateCell(unit: UnitSnapshot): string {
 export function flagsCell(unit: UnitSnapshot): string {
 	const parts: string[] = [];
 	if (unit.policy.hold !== "leases") parts.push(unit.policy.hold);
-	if (!unit.supervised && !TERMINAL_STATES[unit.state]) parts.push("unsupervised");
+	if (!unit.supervised && !TERMINAL_STATES[unit.state]) parts.push(t("cli.commands.ps.board.unsupervised"));
 	return parts.join(",");
 }
 
@@ -85,7 +89,7 @@ export function uptimeCell(unit: UnitSnapshot): string {
 /** Countdown to the idle policy stopping the unit, or a dash while it is held. */
 export function idleCell(unit: UnitSnapshot): string {
 	if (unit.idleAt === undefined || TERMINAL_STATES[unit.state]) return "-";
-	return `in ${formatDuration(Math.max(0, unit.idleAt - Date.now()))}`;
+	return t("cli.commands.ps.board.idleIn", { duration: formatDuration(Math.max(0, unit.idleAt - Date.now())) });
 }
 
 /** Process ids of a live unit, or a dash. */
@@ -94,20 +98,22 @@ export function pidsCell(unit: UnitSnapshot): string {
 }
 
 /** Labels aligned with the board table's display cells. */
-export const TABLE_HEADER = [
-	"KIND",
-	"NAME",
-	"STATE",
-	"PID",
-	"UPTIME",
-	"LEASES",
-	"IDLE",
-	"RESTARTS",
-	"FLAGS",
-	"COMMAND",
-];
+export function tableHeader(): string[] {
+	return [
+		t("cli.commands.ps.table.kind"),
+		t("cli.commands.ps.table.name"),
+		t("cli.commands.ps.table.state"),
+		"PID",
+		t("cli.commands.ps.table.uptime"),
+		t("cli.commands.ps.table.leases"),
+		t("cli.commands.ps.table.idle"),
+		t("cli.commands.ps.table.restarts"),
+		t("cli.commands.ps.table.flags"),
+		t("cli.commands.ps.table.command"),
+	];
+}
 
-/** Raw (possibly colored) cells for one unit, aligned with {@link TABLE_HEADER}. */
+/** Raw (possibly colored) cells for one unit, aligned with {@link tableHeader}. */
 export function tableCells(unit: UnitSnapshot): string[] {
 	return [
 		unit.kind,
@@ -131,8 +137,10 @@ export function scopeId(scope: UnitScope): string {
 
 /** Plain scope label, e.g. `project /work/pi`. */
 export function scopeTitle(scope: UnitScope): { kind: string; name: string } {
-	if (scope.kind === "global") return { kind: "global", name: "" };
-	return scope.kind === "project" ? { kind: "project", name: scope.dir } : { kind: "session", name: scope.id };
+	if (scope.kind === "global") return { kind: t("cli.commands.ps.scope.global"), name: "" };
+	return scope.kind === "project"
+		? { kind: t("cli.commands.ps.scope.project"), name: scope.dir }
+		: { kind: t("cli.commands.ps.scope.session"), name: scope.id };
 }
 
 /** Scope heading, e.g. `project /work/pi`. */
@@ -143,8 +151,8 @@ export function scopeHeader(scope: UnitScope): string {
 
 /** Board heading naming the daemon, or that the rows come from its store. */
 export function daemonHeader(daemon: PsDaemonInfo | undefined): string {
-	if (!daemon) return chalk.dim("daemon not running — showing stored units");
-	return `${chalk.green(`daemon pid ${daemon.pid}`)} ${chalk.dim(`· ${daemon.build}`)}`;
+	if (!daemon) return chalk.dim(t("cli.commands.ps.board.offline"));
+	return `${chalk.green(t("cli.commands.ps.board.daemonPid", { pid: daemon.pid }))} ${chalk.dim(`· ${daemon.build}`)}`;
 }
 
 const SCOPE_ORDER: Record<UnitScope["kind"], number> = { global: 0, project: 1, session: 2 };

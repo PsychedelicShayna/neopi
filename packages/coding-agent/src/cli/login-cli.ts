@@ -9,6 +9,7 @@
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
 import { APP_NAME, getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { registerNeoProxyLogin } from "../neopi/neoproxy-connect";
@@ -35,15 +36,15 @@ export async function runLoginCommand(provider: string | undefined, options: { u
 
 		const providers = getOAuthProviders().filter(p => p.available);
 		const providerId = provider ?? (await pickOAuthProvider(rl, providers));
-		if (options.url && providerId !== "neoproxy") throw new Error("--url is supported only for NeoProxy login.");
+		if (options.url && providerId !== "neoproxy") throw new Error(t("cli.commands.login.url_neoproxy_only"));
 		const info = providers.find(p => p.id === providerId);
 		if (!info) {
-			throw new Error(`Unknown OAuth provider '${providerId}'. Run \`${APP_NAME} login\` to pick one.`);
+			throw new Error(t("cli.commands.login.unknown_provider", { provider: providerId, app: APP_NAME }));
 		}
 
 		const identity = await runTerminalOAuthLogin(rl, authStorage, info.id, { openBrowser: true });
 		if (!identity) {
-			process.stdout.write(chalk.yellow(`No credentials were stored for ${info.name}.\n`));
+			process.stdout.write(chalk.yellow(`${t("cli.commands.login.no_credentials", { provider: info.name })}\n`));
 			return;
 		}
 		// A provider-scoped online refresh re-runs discovery with the new
@@ -52,15 +53,18 @@ export async function runLoginCommand(provider: string | undefined, options: { u
 		await modelRegistry.refreshProvider(info.storeCredentialsAs ?? info.id, "online");
 
 		const who = formatLoginIdentity(identity);
-		process.stdout.write(chalk.green(`\nLogged in to ${info.name}${who ? ` as ${who}` : ""}\n`));
+		const signedIn = who
+			? t("cli.commands.login.logged_in_as", { provider: info.name, identity: who })
+			: t("cli.commands.login.logged_in", { provider: info.name });
+		process.stdout.write(chalk.green(`\n${signedIn}\n`));
 		const broker = await resolveAuthBrokerConfig();
-		process.stdout.write(
-			chalk.dim(
-				broker ? `Credentials saved to auth broker ${broker.url}\n` : `Credentials saved to ${getAgentDbPath()}\n`,
-			),
-		);
+		const saved = broker
+			? t("cli.commands.login.credentials_broker", { url: broker.url })
+			: t("cli.commands.login.credentials_path", { path: getAgentDbPath() });
+		process.stdout.write(chalk.dim(`${saved}\n`));
 	} catch (error) {
-		process.stderr.write(chalk.red(`Login failed: ${error instanceof Error ? error.message : String(error)}\n`));
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(chalk.red(`${t("cli.commands.login.failed", { message })}\n`));
 		process.exitCode = 1;
 	} finally {
 		rl.close();

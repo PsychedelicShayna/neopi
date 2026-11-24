@@ -1,5 +1,6 @@
 /** `ast_grep` — structural AST pattern search across files. */
 import type { ReactNode } from "react";
+import { useTranslation } from "../../lib/i18n";
 import { Badge, Badges, CodeBlock, InvalidArg, Kv, KvGrid, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, normalizeWs, num, scopePaths, str, truncate } from "../util";
@@ -27,6 +28,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 }
 
 function Body({ args, result }: ToolRenderProps): ReactNode {
+	const t = useTranslation();
 	const patterns = patternsOf(args);
 	const paths = scopePaths(args);
 	const lang = str(args.lang);
@@ -60,18 +62,26 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			? [
 					matchCount !== null && (
 						<Badge key="matches" tone={matchCount === 0 ? "warn" : "ok"}>
-							{matchCount} {matchCount === 1 ? "match" : "matches"}
+							{matchCount === 1
+								? t("guesttools.count.match.one", "{count} match", { count: matchCount })
+								: t("guesttools.count.match.many", "{count} matches", { count: matchCount })}
 						</Badge>
 					),
 					fileCount !== null && fileCount > 0 && (
 						<Badge key="files">
-							{fileCount} {fileCount === 1 ? "file" : "files"}
+							{fileCount === 1
+								? t("guesttools.count.file.one", "{count} file", { count: fileCount })
+								: t("guesttools.count.file.many", "{count} files", { count: fileCount })}
 						</Badge>
 					),
-					filesSearched !== null && <Badge key="searched">searched {filesSearched}</Badge>,
+					filesSearched !== null && (
+						<Badge key="searched">
+							{t("guesttools.search.searched", "searched {count}", { count: filesSearched })}
+						</Badge>
+					),
 					limitReached && (
 						<Badge key="limit" tone="warn">
-							limit reached
+							{t("guesttools.limit_reached", "limit reached")}
 						</Badge>
 					),
 				]
@@ -88,7 +98,11 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						key={i}
 						code={pat}
 						lang={lang ?? undefined}
-						title={patterns.length > 1 ? `pattern ${i + 1}` : "pattern"}
+						title={
+							patterns.length > 1
+								? t("guesttools.ast_grep.numbered_pattern", "pattern {index}", { index: i + 1 })
+								: t("guesttools.label.pattern", "pattern")
+						}
 						maxLines={12}
 					/>
 				))
@@ -96,7 +110,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{(paths.length > 0 || scopePath) && (
 				<KvGrid>
 					{paths.length > 0 && (
-						<Kv k={paths.length === 1 ? "path" : "paths"}>
+						<Kv
+							k={paths.length === 1 ? t("guesttools.label.path", "path") : t("guesttools.label.paths", "paths")}
+						>
 							{paths.map((p, i) => (
 								<span key={i}>
 									{i > 0 && ", "}
@@ -106,7 +122,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						</Kv>
 					)}
 					{scopePath && (
-						<Kv k="scope">
+						<Kv k={t("guesttools.label.scope", "scope")}>
 							<PathText path={scopePath} />
 						</Kv>
 					)}
@@ -117,7 +133,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					text={parseErrors.join("\n")}
 					maxLines={6}
 					title={
-						parseErrorsTotal > parseErrors.length ? `parse issues (${parseErrorsTotal} total)` : "parse issues"
+						parseErrorsTotal > parseErrors.length
+							? t("guesttools.parse.total_issues", "parse issues ({count} total)", { count: parseErrorsTotal })
+							: t("guesttools.parse.issues", "parse issues")
 					}
 				/>
 			)}

@@ -1,3 +1,4 @@
+import { useTranslation } from "../i18n";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { closeDashboard, getClosable } from "../api";
@@ -10,6 +11,7 @@ import { isDialogOpen, isTypingTarget } from "./keys";
  * nothing anywhere else.
  */
 export function CloseButton() {
+	const tr = useTranslation();
 	const closable = useClosable();
 
 	useEffect(() => {
@@ -25,9 +27,15 @@ export function CloseButton() {
 
 	if (!closable) return null;
 	return (
-		<button type="button" className="btn" data-variant="ghost" onClick={close} title="Close the dashboard (Esc)">
+		<button
+			type="button"
+			className="btn"
+			data-variant="ghost"
+			onClick={close}
+			title={tr("pages.closebutton.close_the_dashboard_esc", "Close the dashboard (Esc)")}
+		>
 			<X size={15} />
-			Close
+			{tr("pages.closebutton.close", "Close")}
 			<span className="kbd">Esc</span>
 		</button>
 	);

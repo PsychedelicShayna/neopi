@@ -22,7 +22,6 @@ import type {
 	ExtensionCustomOptions,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
-	ExtensionUISelectItem,
 	ExtensionWidgetContent,
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
@@ -61,7 +60,11 @@ import type { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-executio
 import type { HookEditorComponent, HookEditorOptions } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import type { PresentedBlock } from "@oh-my-pi/pi-tui/chat/transcript-presentation";
 import type { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
-import type { HookSelectorComponent, HookSelectorOptions } from "@oh-my-pi/pi-tui/overlays/hook-selector";
+import type {
+	HookSelectorComponent,
+	HookSelectorOptionInput,
+	HookSelectorOptions,
+} from "@oh-my-pi/pi-tui/overlays/hook-selector";
 import type { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import type { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import type { ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -881,7 +884,7 @@ export interface InteractiveModeContext {
 	setHookStatus(key: string, text: string | undefined): void;
 	showHookSelector(
 		title: string,
-		options: ExtensionUISelectItem[],
+		options: HookSelectorOptionInput[],
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { kind?: BlockedKind },
 	): Promise<string | undefined>;

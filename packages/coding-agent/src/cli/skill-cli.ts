@@ -7,6 +7,7 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { APP_NAME, formatBytes, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	SKILL_LIMITS,
 	SKILL_SCOPE_RE,
@@ -75,42 +76,18 @@ export interface SkillCommandArgs {
 	};
 }
 
-export const SKILL_USAGE = `Usage: ${APP_NAME} skill <action> [...]
-
-Install and discover:
-  install [@scope/name[@range]...] [-g] [--yes]   Install skills (no specs: install from skills.json)
-  update [name...] [-g] [--yes]                   Update installed skills within their ranges
-  uninstall <name...> [-g]                        Remove installed skills
-  search <query> [--sort relevance|downloads|recent] [--json]
-  info <@scope/name[@version]> [--json]
-  list [dir] [--json]                             Skills a session in dir resolves, with warnings
-
-Publish and manage:
-  publish [dir] [--scope s] [--tag t] [--dry-run] [--allow-secrets]
-  version <patch|minor|major|x.y.z> [dir]         Bump metadata.version in SKILL.md
-  tag <@scope/name@version> <tag>                 Point a dist-tag at a version
-  tag rm <@scope/name> <tag>                      Remove a dist-tag
-  yank <@scope/name@version> [--undo]             Hide a version from range resolution
-  deprecate <@scope/name[@range]> <message|--undo>
-  owner add|rm <@scope/name> <username>
-  token create <name> [--package @scope/name]... [--expires days]
-  token ls [--json]
-  token revoke <id>
-  import <file.skill>                             Publish a Claude .skill archive
-
-Management commands accept --registry <url> (default: skills.registryUrl).
-`;
-
 function specOrThrow(raw: string | undefined, usage: string): SkillSpec {
 	const spec = raw === undefined ? null : parseSkillSpec(raw);
 	if (!spec)
-		throw new CliUsageError(raw === undefined ? usage : `invalid package spec ${JSON.stringify(raw)}; ${usage}`);
+		throw new CliUsageError(
+			raw === undefined ? usage : t("cli.commands.skill.invalidSpec", { spec: JSON.stringify(raw), usage }),
+		);
 	return spec;
 }
 
 function exactVersionOrThrow(spec: SkillSpec, usage: string): string {
 	if (spec.range === undefined || !SEMVER_RE.test(spec.range)) {
-		throw new CliUsageError(`an exact version is required (@scope/name@x.y.z); ${usage}`);
+		throw new CliUsageError(t("cli.commands.skill.exactVersion", { usage }));
 	}
 	return spec.range;
 }
@@ -143,11 +120,12 @@ async function withClient<T>(
  */
 async function resolvePublishScope(client: SkillshareClient, flagScope: string | undefined): Promise<string> {
 	if (flagScope !== undefined) {
-		if (!SKILL_SCOPE_RE.test(flagScope)) throw new CliUsageError(`invalid --scope ${JSON.stringify(flagScope)}`);
+		if (!SKILL_SCOPE_RE.test(flagScope))
+			throw new CliUsageError(t("cli.commands.skill.invalidScope", { scope: JSON.stringify(flagScope) }));
 		return flagScope;
 	}
 	if (process.env[SKILLS_TOKEN_ENV]?.trim()) {
-		throw new CliUsageError(`--scope is required when publishing with ${SKILLS_TOKEN_ENV}`);
+		throw new CliUsageError(t("cli.commands.skill.missingScope", { variable: SKILLS_TOKEN_ENV }));
 	}
 	const token = await client.authToken();
 	if (!token) throw new Error(StencilCredential.missingMessage);
@@ -164,7 +142,7 @@ async function resolvePublishScope(client: SkillshareClient, flagScope: string |
 		}
 	}
 	if (typeof username !== "string" || !SKILL_SCOPE_RE.test(username)) {
-		throw new CliUsageError("cannot determine your Stencil username from the credential; pass --scope");
+		throw new CliUsageError(t("cli.commands.skill.unknownUsername"));
 	}
 	return username;
 }
@@ -206,12 +184,12 @@ async function githubOidcToken(): Promise<string | undefined> {
 	const response = await fetch(url, {
 		headers: { Authorization: `Bearer ${requestToken}`, Accept: "application/json" },
 	});
-	if (!response.ok) throw new Error(`GitHub Actions OIDC token request failed (${response.status})`);
+	if (!response.ok) throw new Error(t("cli.commands.skill.oidcFailed", { status: response.status }));
 	const payload: unknown = await response.json().catch(() => null);
 	if (payload && typeof payload === "object" && "value" in payload && typeof payload.value === "string") {
 		return payload.value;
 	}
-	throw new Error("GitHub Actions OIDC token response has no value");
+	throw new Error(t("cli.commands.skill.oidcNoValue"));
 }
 
 function printPack(pack: PackResult, id: string): void {
@@ -222,12 +200,20 @@ function printPack(pack: PackResult, id: string): void {
 	for (const file of pack.files) {
 		unpacked += file.size;
 		const size = formatBytes(file.size).padStart(width);
-		out.write(`  ${chalk.dim(size)}  ${file.path}${file.executable ? chalk.yellow(" (executable)") : ""}\n`);
+		out.write(
+			`  ${chalk.dim(size)}  ${file.path}${file.executable ? chalk.yellow(t("cli.commands.skill.executable")) : ""}\n`,
+		);
 	}
-	out.write(`${pack.files.length} files, ${formatBytes(unpacked)} unpacked, ${formatBytes(pack.tgz.length)} packed\n`);
-	out.write(`${chalk.dim(`integrity ${pack.integrity}`)}\n`);
+	out.write(
+		t("cli.commands.skill.packSummary", {
+			files: pack.files.length,
+			unpacked: formatBytes(unpacked),
+			packed: formatBytes(pack.tgz.length),
+		}),
+	);
+	out.write(`${chalk.dim(t("cli.commands.skill.integrity", { integrity: pack.integrity }))}\n`);
 	if (pack.hasScripts) {
-		out.write(`${chalk.yellow("ships scripts: installers are asked to confirm before installing")}\n`);
+		out.write(`${chalk.yellow(t("cli.commands.skill.shipsScripts"))}\n`);
 	}
 }
 
@@ -247,23 +233,21 @@ async function handlePublish(cmd: SkillCommandArgs): Promise<number> {
 
 		if (pack.secrets.length > 0) {
 			const color = cmd.flags.allowSecrets ? chalk.yellow : chalk.red;
-			process.stderr.write(`${color("possible secrets found:")}\n`);
+			process.stderr.write(`${color(t("cli.commands.skill.possibleSecrets"))}\n`);
 			for (const finding of pack.secrets) {
 				process.stderr.write(`  ${finding.path}:${finding.line}  ${finding.kind}\n`);
 			}
 			if (!cmd.flags.allowSecrets) {
-				process.stderr.write(
-					"refusing to publish: remove them, list the files in .skillignore, or pass --allow-secrets\n",
-				);
+				process.stderr.write(t("cli.commands.skill.refuseSecrets"));
 				return 1;
 			}
 		}
 
 		if (cmd.flags.dryRun) {
-			process.stdout.write(chalk.dim("dry run: nothing published\n"));
+			process.stdout.write(chalk.dim(t("cli.commands.skill.dryRun")));
 			return 0;
 		}
-		if (scope === undefined) throw new Error("publishing scope could not be resolved");
+		if (scope === undefined) throw new Error(t("cli.commands.skill.noPublishScope"));
 
 		const [provenance, githubOidc] = await Promise.all([reportedProvenance(dir), githubOidcToken()]);
 		let result: SkillPublishResponse;
@@ -275,7 +259,7 @@ async function handlePublish(cmd: SkillCommandArgs): Promise<number> {
 			});
 		} catch (error) {
 			if (error instanceof SkillshareError && error.status === 409) {
-				throw new Error(`${error.message} (versions are immutable; bump with \`${APP_NAME} skill version patch\`)`);
+				throw new Error(t("cli.commands.skill.immutableVersions", { error: error.message, bin: APP_NAME }));
 			}
 			throw error;
 		}
@@ -292,7 +276,7 @@ async function handlePublish(cmd: SkillCommandArgs): Promise<number> {
 
 async function handleVersion(cmd: SkillCommandArgs): Promise<number> {
 	const kind = cmd.args[0];
-	if (!kind) throw new CliUsageError(`usage: ${APP_NAME} skill version <patch|minor|major|x.y.z> [dir]`);
+	if (!kind) throw new CliUsageError(t("cli.commands.skill.usageVersion", { bin: APP_NAME }));
 	const version = await bumpVersion(path.resolve(cmd.cwd, cmd.args[1] ?? "."), kind);
 	process.stdout.write(`v${version}\n`);
 	return 0;
@@ -300,22 +284,22 @@ async function handleVersion(cmd: SkillCommandArgs): Promise<number> {
 
 async function handleTag(cmd: SkillCommandArgs): Promise<number> {
 	if (cmd.args[0] === "rm" || cmd.args[0] === "remove") {
-		const usage = `usage: ${APP_NAME} skill tag rm <@scope/name> <tag>`;
+		const usage = t("cli.commands.skill.usageTagRemove", { bin: APP_NAME });
 		const spec = specOrThrow(cmd.args[1], usage);
 		const tag = cmd.args[2];
 		if (!tag) throw new CliUsageError(usage);
-		if (tag === "latest") throw new CliUsageError("the latest tag cannot be removed; point it elsewhere instead");
+		if (tag === "latest") throw new CliUsageError(t("cli.commands.skill.removeLatest"));
 		await withClient(cmd.flags, false, client => client.removeTag(spec.scope, spec.name, tag));
 		process.stdout.write(`- ${tag}: @${spec.scope}/${spec.name}\n`);
 		return 0;
 	}
-	const usage = `usage: ${APP_NAME} skill tag <@scope/name@version> <tag>`;
+	const usage = t("cli.commands.skill.usageTag", { bin: APP_NAME });
 	const spec = specOrThrow(cmd.args[0], usage);
 	const version = exactVersionOrThrow(spec, usage);
 	const tag = cmd.args[1];
 	if (!tag) throw new CliUsageError(usage);
 	if (SEMVER_RE.test(tag) || Bun.semver.satisfies(version, tag)) {
-		throw new CliUsageError(`tag ${JSON.stringify(tag)} looks like a version or range; tags must be names`);
+		throw new CliUsageError(t("cli.commands.skill.tagLooksLikeVersion", { tag: JSON.stringify(tag) }));
 	}
 	await withClient(cmd.flags, false, client => client.setTag(spec.scope, spec.name, tag, version));
 	process.stdout.write(`+ ${tag}: @${spec.scope}/${spec.name}@${version}\n`);
@@ -323,23 +307,26 @@ async function handleTag(cmd: SkillCommandArgs): Promise<number> {
 }
 
 async function handleYank(cmd: SkillCommandArgs): Promise<number> {
-	const usage = `usage: ${APP_NAME} skill yank <@scope/name@version> [--undo]`;
+	const usage = t("cli.commands.skill.usageYank", { bin: APP_NAME });
 	const spec = specOrThrow(cmd.args[0], usage);
 	const version = exactVersionOrThrow(spec, usage);
 	const yanked = !cmd.flags.undo;
 	await withClient(cmd.flags, false, client => client.yank(spec.scope, spec.name, version, yanked));
-	process.stdout.write(`${yanked ? "yanked" : "restored"} @${spec.scope}/${spec.name}@${version}\n`);
+	const packageId = `@${spec.scope}/${spec.name}@${version}`;
+	process.stdout.write(
+		yanked ? t("cli.commands.skill.yanked", { packageId }) : t("cli.commands.skill.restored", { packageId }),
+	);
 	return 0;
 }
 
 async function handleDeprecate(cmd: SkillCommandArgs): Promise<number> {
-	const usage = `usage: ${APP_NAME} skill deprecate <@scope/name[@range]> <message|--undo>`;
+	const usage = t("cli.commands.skill.usageDeprecate", { bin: APP_NAME });
 	const spec = specOrThrow(cmd.args[0], usage);
 	const text = cmd.args.slice(1).join(" ").trim();
-	if (cmd.flags.undo && text) throw new CliUsageError(`pass a message or --undo, not both; ${usage}`);
+	if (cmd.flags.undo && text) throw new CliUsageError(t("cli.commands.skill.messageOrUndo", { usage }));
 	if (!cmd.flags.undo && !text) throw new CliUsageError(usage);
 	if (text.length > SKILL_LIMITS.deprecationLength) {
-		throw new CliUsageError(`deprecation message exceeds ${SKILL_LIMITS.deprecationLength} characters`);
+		throw new CliUsageError(t("cli.commands.skill.messageTooLong", { limit: SKILL_LIMITS.deprecationLength }));
 	}
 	const message = cmd.flags.undo ? null : text;
 
@@ -354,14 +341,22 @@ async function handleDeprecate(cmd: SkillCommandArgs): Promise<number> {
 				version => range === undefined || Bun.semver.satisfies(version, range),
 			);
 			if (versions.length === 0) {
-				process.stderr.write(`skill deprecate: no versions of @${spec.scope}/${spec.name} match ${range}\n`);
+				process.stderr.write(
+					t("cli.commands.skill.noMatchingVersions", {
+						packageId: `@${spec.scope}/${spec.name}`,
+						range: String(range),
+					}),
+				);
 				return 1;
 			}
 		}
 		for (const version of versions) {
 			await client.deprecate(spec.scope, spec.name, version, message);
+			const packageId = `@${spec.scope}/${spec.name}@${version}`;
 			process.stdout.write(
-				`${message === null ? "undeprecated" : "deprecated"} @${spec.scope}/${spec.name}@${version}\n`,
+				message === null
+					? t("cli.commands.skill.undeprecated", { packageId })
+					: t("cli.commands.skill.deprecated", { packageId }),
 			);
 		}
 		return 0;
@@ -369,15 +364,15 @@ async function handleDeprecate(cmd: SkillCommandArgs): Promise<number> {
 }
 
 async function handleOwner(cmd: SkillCommandArgs): Promise<number> {
-	const usage = `usage: ${APP_NAME} skill owner add|rm <@scope/name> <username>`;
+	const usage = t("cli.commands.skill.usageOwner", { bin: APP_NAME });
 	const op = cmd.args[0];
 	if (op !== "add" && op !== "rm" && op !== "remove") throw new CliUsageError(usage);
 	const spec = specOrThrow(cmd.args[1], usage);
-	if (spec.range !== undefined) throw new CliUsageError(`owners apply to the whole package; ${usage}`);
+	if (spec.range !== undefined) throw new CliUsageError(t("cli.commands.skill.ownerWholePackage", { usage }));
 	const username = cmd.args[2];
 	if (username === undefined) throw new CliUsageError(usage);
 	if (!SKILL_SCOPE_RE.test(username))
-		throw new CliUsageError(`invalid username ${JSON.stringify(username)}; ${usage}`);
+		throw new CliUsageError(t("cli.commands.skill.invalidUsername", { username: JSON.stringify(username), usage }));
 	await withClient(cmd.flags, false, client =>
 		op === "add"
 			? client.addOwner(spec.scope, spec.name, username)
@@ -390,16 +385,16 @@ async function handleOwner(cmd: SkillCommandArgs): Promise<number> {
 async function handleToken(cmd: SkillCommandArgs): Promise<number> {
 	const op = cmd.args[0];
 	if (op === "create") {
-		const usage = `usage: ${APP_NAME} skill token create <name> [--package @scope/name]... [--expires days]`;
+		const usage = t("cli.commands.skill.usageTokenCreate", { bin: APP_NAME });
 		const name = cmd.args.slice(1).join(" ").trim();
 		if (!name) throw new CliUsageError(usage);
 		const packages = (cmd.flags.package ?? []).map(raw => {
 			const spec = specOrThrow(raw, usage);
-			if (spec.range !== undefined) throw new CliUsageError(`--package takes @scope/name without a version`);
+			if (spec.range !== undefined) throw new CliUsageError(t("cli.commands.skill.packageNoVersion"));
 			return `@${spec.scope}/${spec.name}`;
 		});
 		const expires = cmd.flags.expires;
-		if (expires !== undefined && expires <= 0) throw new CliUsageError("--expires must be a positive number of days");
+		if (expires !== undefined && expires <= 0) throw new CliUsageError(t("cli.commands.skill.positiveExpiry"));
 		const created = await withClient(cmd.flags, false, client =>
 			client.createToken({
 				name,
@@ -411,11 +406,9 @@ async function handleToken(cmd: SkillCommandArgs): Promise<number> {
 			process.stdout.write(`${JSON.stringify(created, null, 2)}\n`);
 			return 0;
 		}
-		process.stderr.write(`created token ${created.name} (${created.id})\n`);
+		process.stderr.write(t("cli.commands.skill.tokenCreated", { name: created.name, id: created.id }));
 		process.stdout.write(`${created.token}\n`);
-		process.stderr.write(
-			chalk.yellow(`store it now (e.g. as the ${SKILLS_TOKEN_ENV} CI secret); it cannot be shown again\n`),
-		);
+		process.stderr.write(chalk.yellow(t("cli.commands.skill.storeToken", { variable: SKILLS_TOKEN_ENV })));
 		return 0;
 	}
 	if (op === "ls" || op === "list") {
@@ -425,36 +418,44 @@ async function handleToken(cmd: SkillCommandArgs): Promise<number> {
 			return 0;
 		}
 		if (tokens.length === 0) {
-			process.stdout.write(chalk.dim("no tokens\n"));
+			process.stdout.write(chalk.dim(t("cli.commands.skill.noTokens")));
 			return 0;
 		}
 		for (const token of tokens) {
-			const scope = token.packages.length > 0 ? token.packages.join(", ") : "all your packages";
+			const scope =
+				token.packages.length > 0 ? token.packages.join(t("cli.commands.skill.allPackages")) : "all your packages";
 			process.stdout.write(
-				`${chalk.bold(token.id)}  ${token.name}  ${chalk.dim(scope)}  created ${formatDate(token.createdAt)}  expires ${formatDate(token.expiresAt)}  last used ${formatDate(token.lastUsedAt)}\n`,
+				t("cli.commands.skill.tokenListRow", {
+					id: chalk.bold(token.id),
+					name: token.name,
+					scope: chalk.dim(scope),
+					created: formatDate(token.createdAt),
+					expires: formatDate(token.expiresAt),
+					used: formatDate(token.lastUsedAt),
+				}),
 			);
 		}
 		return 0;
 	}
 	if (op === "revoke" || op === "rm") {
 		const id = cmd.args[1];
-		if (!id) throw new CliUsageError(`usage: ${APP_NAME} skill token revoke <id>`);
+		if (!id) throw new CliUsageError(t("cli.commands.skill.usageTokenRevoke", { bin: APP_NAME }));
 		await withClient(cmd.flags, false, client => client.revokeToken(id));
-		process.stdout.write(`revoked ${id}\n`);
+		process.stdout.write(t("cli.commands.skill.tokenRevoked", { id }));
 		return 0;
 	}
-	throw new CliUsageError(`usage: ${APP_NAME} skill token create|ls|revoke`);
+	throw new CliUsageError(t("cli.commands.skill.usageToken", { bin: APP_NAME }));
 }
 
 async function handleImport(cmd: SkillCommandArgs): Promise<number> {
 	const file = cmd.args[0];
-	if (!file) throw new CliUsageError(`usage: ${APP_NAME} skill import <file.skill>`);
+	if (!file) throw new CliUsageError(t("cli.commands.skill.usageImport", { bin: APP_NAME }));
 	const resolved = path.resolve(cmd.cwd, file);
 	let zip: Uint8Array;
 	try {
 		zip = await Bun.file(resolved).bytes();
 	} catch (error) {
-		if (isEnoent(error)) throw new CliUsageError(`file not found: ${resolved}`);
+		if (isEnoent(error)) throw new CliUsageError(t("cli.commands.skill.fileNotFound", { path: resolved }));
 		throw error;
 	}
 	const result = await withClient(cmd.flags, false, client => client.importSkill(zip));
@@ -492,18 +493,18 @@ async function dispatch(cmd: SkillCommandArgs): Promise<number> {
 		case "update":
 			return updateSkills({ names: args, global: flags.global === true, yes: flags.yes === true, cwd });
 		case "uninstall":
-			if (args.length === 0) throw new CliUsageError(`usage: ${APP_NAME} skill uninstall <name...> [-g]`);
+			if (args.length === 0) throw new CliUsageError(t("cli.commands.skill.usageUninstall", { bin: APP_NAME }));
 			return uninstallSkills({ names: args, global: flags.global === true, cwd });
 		case "search": {
 			const query = args.join(" ").trim();
-			if (!query) throw new CliUsageError(`usage: ${APP_NAME} skill search <query>`);
+			if (!query) throw new CliUsageError(t("cli.commands.skill.usageSearch", { bin: APP_NAME }));
 			return searchSkills({ query, sort: flags.sort ?? "relevance", json: flags.json === true });
 		}
 		case "list":
 			return handleSkillList(args, cwd, flags.json === true);
 		case "info": {
 			const spec = args[0];
-			if (!spec) throw new CliUsageError(`usage: ${APP_NAME} skill info <@scope/name[@version]>`);
+			if (!spec) throw new CliUsageError(t("cli.commands.skill.usageInfo", { bin: APP_NAME }));
 			return showSkillInfo({ spec, json: flags.json === true });
 		}
 	}
