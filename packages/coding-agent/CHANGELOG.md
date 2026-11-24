@@ -15,6 +15,7 @@
 
 ### Added
 
+- Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
 - Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
 - `npi ctl <target> state` shows the model, effort, fast mode, session name, and transcript file. The `ctl` tool can read and change its own session with `self` or no target, and abort its own turn without hanging ([#581](https://github.com/PsychedelicShayna/neopi/issues/581)).
 - `/live` and `/live-transcript` can use an eligible scoped NeoProxy key when no Codex sign-in is available or its refresh temporarily fails; `live.endpoint` still overrides automatic routing.
@@ -36,6 +37,7 @@
 - IRC groups, `everyone` opt-outs, and expiry deadlines now survive session restart and resume; forks get their own copy at the fork point ([#443](https://github.com/PsychedelicShayna/neopi/issues/443)).
 - Choose English or Spanish for supported interface text, including help, file and editor warnings, clipboard feedback, Mixtures validation messages, exported HTML, and selected root, stats and config command descriptions, with the `language` setting; untranslated text remains in English (Spanish vocabulary is awaiting review).
 - Switch interface languages live with `/language` or `/idioma` and Tab-complete the language name. Both spellings work in either language; the slash menu shows `/idioma` in English and `/language` in Spanish.
+- The Alt+T side panel shows Agents filters, navigation hints, and sorting controls in English or Spanish.
 - Browser Relay settings can be displayed in English or Spanish without interrupting the relay connection.
 
 - Tab-complete `session`, `project`, and `global` in `/roles`, or press Ctrl+S in the open menu to cycle the editing scope ([#761](https://github.com/PsychedelicShayna/neopi/issues/761)).

@@ -898,16 +898,49 @@ export const cfgSidebarView = register({
 	id: "sidebar.view",
 	type: "enum",
 	values: ["todo", "agents", "irc"] as const,
-	default: "todo",
+	default: "agents",
 	ui: {
 		tab: "appearance",
 		group: "Side Panel",
 		label: "View",
-		description: "What the panel shows; alt+t then t, a or i picks one, right-click in the panel cycles",
+		description: "What the panel shows; Alt+T opens it, then t, a or i switches views",
 		options: [
 			{ value: "todo", label: "Todo", description: "The todo list" },
 			{ value: "agents", label: "Agents", description: "This session's subagents and advisors" },
 			{ value: "irc", label: "IRC", description: "Agent-to-agent messages" },
+		],
+	},
+});
+
+const SIDEBAR_AGENT_FILTERS = ["running", "idle", "parked", "advisors", "aborted"] as const;
+const DEFAULT_SIDEBAR_AGENT_FILTERS: (typeof SIDEBAR_AGENT_FILTERS)[number][] = ["running"];
+
+export const cfgSidebarAgentFilters = register({
+	id: "sidebar.agents.filters",
+	type: "array",
+	default: DEFAULT_SIDEBAR_AGENT_FILTERS,
+	items: { values: SIDEBAR_AGENT_FILTERS, label: "agent filter" },
+});
+
+export const cfgSidebarAgentAutoscroll = register({
+	id: "sidebar.agents.autoscroll",
+	type: "boolean",
+	default: true,
+});
+
+export const cfgSidebarAgentOrder = register({
+	id: "sidebar.agents.order",
+	type: "enum",
+	values: ["newest-at-bottom", "newest-at-top"] as const,
+	default: "newest-at-bottom",
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Agent order",
+		description: "Where the latest agent state changes appear in the Agents view",
+		options: [
+			{ value: "newest-at-bottom", label: "Newest at bottom", description: "Latest agents below older ones" },
+			{ value: "newest-at-top", label: "Newest at top", description: "Latest agents above older ones" },
 		],
 	},
 });

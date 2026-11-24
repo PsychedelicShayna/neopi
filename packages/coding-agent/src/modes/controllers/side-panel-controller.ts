@@ -1,8 +1,21 @@
-import type { KeybindingsManager, OverlayHandle, SgrMouseEvent, TUI } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	isKeyRelease,
+	type KeybindingsManager,
+	type KeyId,
+	matchesKey,
+	type OverlayHandle,
+	type SgrMouseEvent,
+	type TUI,
+} from "@oh-my-pi/pi-tui";
+import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
 import { isLayoutComponent, type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
+import { getMenuSearchVimMode, MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import { logger } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
 import {
 	cfgSidebarEnabled,
@@ -19,10 +32,42 @@ export type SidePanelView = "todo" | "agents" | "irc";
 
 /** Right-click cycle order. */
 const VIEW_ORDER: readonly SidePanelView[] = ["todo", "agents", "irc"];
+const VIEW_KEYS: readonly (readonly [SidePanelView, readonly KeyId[]])[] = [
+	["todo", ["t", "alt+t"]],
+	["agents", ["a", "alt+a"]],
+	["irc", ["i", "alt+i"]],
+];
+const DIGIT_KEYS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
+const CHORD_TIMEOUT_MS = 2000;
+
+/** The view and percentage chords share expiry and consume only the next key press. */
+class SidebarChord<T> {
+	#expires = 0;
+	#first: T | undefined;
+
+	start(first: T): void {
+		this.#first = first;
+		this.#expires = Date.now() + CHORD_TIMEOUT_MS;
+	}
+
+	take(data: string): T | undefined {
+		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return undefined;
+		const first = Date.now() < this.#expires ? this.#first : undefined;
+		this.clear();
+		return first;
+	}
+
+	clear(): void {
+		this.#first = undefined;
+	}
+}
 
 /** A view's section, plus what a click on empty panel space does while it shows. */
 export interface SidePanelViewSection extends SidePanelSection {
 	clickEmpty?(): void;
+	moveControl?(delta: number): void;
+	toggleControl?(): void;
+	resetControl?(): void;
 }
 
 /** What the controller needs from its interactive host. */
@@ -43,8 +88,8 @@ const RATIO_BOUNDS = { min: 0.1, max: 0.6 } as const;
  * Owns the side panel: resolves the `sidebar.*` settings into dock options for
  * the composer (which alone measures and docks), mounts the section of the
  * active `sidebar.view`, opens the fullscreen form on narrow terminals, and
- * routes inline mouse reports that land outside the chat column. The panel
- * never takes keyboard focus.
+ * routes inline mouse reports that land outside the chat column. Keyboard
+ * focus can move to either form without changing the active transcript.
  */
 export class SidePanelController {
 	readonly #host: SidePanelHost;
@@ -53,13 +98,20 @@ export class SidePanelController {
 	#mounted: SidePanelViewSection | undefined;
 	#fullscreen: OverlayHandle | undefined;
 	#fullscreenComponent: SidePanelFullscreenComponent | undefined;
+	#previousFocus: Component | null = null;
+	readonly #keys: MenuKeyReader;
+	readonly #viewChord = new SidebarChord<{ wasOpen: boolean }>();
+	readonly #percentChord = new SidebarChord<number>();
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
+		this.#keys = new MenuKeyReader(host.keybindings);
 		this.#panel = new SidePanel({
 			onChange: () => host.ui.requestRender(),
 			onSecondaryClick: () => this.cycleView(),
 			onEmptyClick: () => this.#mounted?.clickEmpty?.(),
+			onInput: data => this.#handlePanelInput(data),
+			hints: () => this.#hints(),
 		});
 	}
 
@@ -68,6 +120,7 @@ export class SidePanelController {
 		this.#mountActiveView();
 		const enabled = cfgSidebarEnabled.get(this.#host.settings);
 		if (!enabled) {
+			this.#releaseDockFocus();
 			if (!this.fullscreenOpen) this.#panel.pointerLeave();
 			this.#host.composer.setSidePanel(undefined);
 			return;
@@ -92,6 +145,136 @@ export class SidePanelController {
 	/** Whether the last composed frame docked the panel. */
 	get docked(): boolean {
 		return this.#host.composer.sidePanelDocked;
+	}
+
+	get visible(): boolean {
+		return this.fullscreenOpen || this.docked;
+	}
+
+	get active(): boolean {
+		return this.fullscreenActive || this.#host.ui.getFocused() === this.#panel;
+	}
+
+	#shouldDock(): boolean {
+		return this.#host.ui.terminal.columns >= this.#resolveDock().splitAt;
+	}
+
+	/** Open or focus the remembered view immediately; a following t/a/i can switch views. */
+	openWithChord(): void {
+		const wasOpen = this.fullscreenOpen || (this.#shouldDock() && cfgSidebarEnabled.get(this.#host.settings));
+		this.#openAndFocus();
+		this.#viewChord.start({ wasOpen });
+	}
+
+	handleChordInput(data: string): boolean {
+		const pending = this.#viewChord.take(data);
+		if (!pending || (this.#host.ui.hasOverlay() && !this.fullscreenActive)) return false;
+		for (const [view, keys] of VIEW_KEYS) {
+			if (!keys.some(key => matchesKey(data, key))) continue;
+			if (pending.wasOpen && view === this.view) this.#closeFocused();
+			else {
+				this.#selectView(view);
+				this.#openAndFocus();
+			}
+			return true;
+		}
+		return false;
+	}
+
+	#openAndFocus(): void {
+		const { ui, settings } = this.#host;
+		if (this.fullscreenOpen) {
+			ui.requestRender();
+			return;
+		}
+		if (!this.#shouldDock()) {
+			this.#releaseDockFocus();
+			this.#openFullscreen();
+			return;
+		}
+		if (!cfgSidebarEnabled.get(settings)) {
+			cfgSidebarEnabled.set(settings, true);
+			this.applySettings();
+		}
+		if (ui.getFocused() !== this.#panel) {
+			this.#previousFocus = ui.getFocused();
+			ui.setFocus(this.#panel);
+		}
+		ui.requestRender();
+	}
+
+	#releaseDockFocus(): void {
+		const { ui } = this.#host;
+		if (ui.getFocused() === this.#panel) ui.setFocus(this.#previousFocus);
+		this.#previousFocus = null;
+		this.#resetNavigation();
+	}
+
+	#closeFocused(): void {
+		if (this.fullscreenActive) this.closeFullscreen();
+		else if (this.#host.ui.getFocused() === this.#panel) {
+			this.#releaseDockFocus();
+			cfgSidebarEnabled.set(this.#host.settings, false);
+			this.applySettings();
+		}
+	}
+
+	#resetNavigation(): void {
+		this.#keys.reset();
+		this.#viewChord.clear();
+		this.#percentChord.clear();
+		this.#mounted?.resetControl?.();
+	}
+
+	#handlePanelInput(data: string): void {
+		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return;
+		const first = this.#percentChord.take(data);
+		const digit = DIGIT_KEYS.findIndex(key => matchesKey(data, key));
+		if (digit >= 0) {
+			this.#keys.reset();
+			if (first === undefined) this.#percentChord.start(digit);
+			else this.#panel.scrollToPercent(first * 10 + digit);
+			return;
+		}
+		const action = this.#keys.read(data);
+		if (action === undefined || action === "pending") return;
+		switch (action.kind) {
+			case "cancel":
+				this.#closeFocused();
+				break;
+			case "move":
+			case "scroll":
+				this.scrollBy(action.delta);
+				break;
+			case "page":
+				this.scrollBy(action.delta * this.#panel.viewportHeight);
+				break;
+			case "halfPage":
+				this.scrollBy(action.delta * Math.max(1, Math.floor(this.#panel.viewportHeight / 2)));
+				break;
+			case "boundary":
+				this.#panel.scrollToPercent(action.edge === "first" ? 0 : 100);
+				break;
+			case "context":
+				this.#mounted?.moveControl?.(action.delta);
+				break;
+			case "toggle":
+			case "confirm":
+				this.#mounted?.toggleControl?.();
+				break;
+		}
+	}
+
+	#hints(): readonly string[] {
+		if (!this.active) return [];
+		const [key] = this.#host.keybindings.getKeys("app.sidebar.toggle");
+		const prefix = key === undefined ? t("overlays.side_panel.views_prefix") : `${formatKeyHint(key)} →`;
+		return [
+			theme.bold(theme.fg("accent", t("overlays.side_panel.views_hint", { prefix }))),
+			theme.fg("text", t("overlays.side_panel.navigation_hint")),
+			...(getMenuSearchVimMode() ? [theme.fg("text", "j/k · C-u/d · C-e/y · gg/G")] : []),
+			...(this.#mounted?.moveControl ? [theme.fg("text", t("overlays.side_panel.filters_hint"))] : []),
+		];
 	}
 
 	/**
@@ -166,8 +349,6 @@ export class SidePanelController {
 		const { ui } = this.#host;
 		const component = new SidePanelFullscreenComponent({
 			panel: this.#panel,
-			onClose: () => this.closeFullscreen(),
-			toggleKeys: this.#host.keybindings.getKeys("app.sidebar.toggle"),
 			rows: () => ui.terminal.rows,
 		});
 		this.#fullscreenComponent = component;
@@ -187,6 +368,7 @@ export class SidePanelController {
 		this.#fullscreen = undefined;
 		this.#fullscreenComponent = undefined;
 		this.#panel.pointerLeave();
+		this.#resetNavigation();
 		handle?.hide();
 	}
 
@@ -232,6 +414,10 @@ export class SidePanelController {
 		const local = event.row - viewport.top;
 		if (local < 0 || local >= viewport.length) return false;
 		if (withinColumns(geometry.chatRect, event.col)) {
+			if (event.leftClick && ui.getFocused() === this.#panel) {
+				this.#releaseDockFocus();
+				ui.requestRender();
+			}
 			this.#panel.pointerLeave();
 			return false;
 		}
@@ -263,6 +449,7 @@ export class SidePanelController {
 	 */
 	dispose(): void {
 		this.closeFullscreen();
+		this.#releaseDockFocus();
 		this.#panel.dispose();
 		// Sections of hidden views are not registered with the panel; release them too.
 		for (const section of this.#views.values()) {
