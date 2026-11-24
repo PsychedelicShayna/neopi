@@ -212,10 +212,15 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		let live = false;
 		for (const { ref, change } of agents) {
 			const top = lines.length;
-			live ||= ref.status === "running";
+			const running = ref.status === "running";
+			live ||= running;
 			this.#appendAgent(lines, ref, change, now, width, ref.id === focused);
 			for (let row = top; row < lines.length; row++) ids.push(ref.id);
-			if (follow && (!newest || compareChanges(change, newest) > 0)) {
+			// Follow running work first; a parking transition must not pull it out of view.
+			if (
+				follow &&
+				(!newest || (running === (newest.status === "running") ? compareChanges(change, newest) > 0 : running))
+			) {
 				newest = change;
 				this.#target = {
 					row: newestAtTop ? top : lines.length - 1,

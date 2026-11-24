@@ -182,6 +182,26 @@ describe("live Agents panel", () => {
 		expect(h.render().join("\n")).toMatch(/Fresh[\s\S]+OldPark[\s\S]+Runner[\s\S]+NewPark/);
 	});
 
+	it("keeps following the latest running agent when an older agent parks", () => {
+		const agents = [ref("FirstSpawn", { createdAt: 1 })];
+		const h = harness(agents, undefined, Settings.isolated({ "sidebar.agents.filters": ["running", "parked"] }));
+		h.panel.setHeight(4);
+		expect(h.render().join("\n")).toContain("FirstSpawn");
+
+		agents.push(ref("LatestSpawn", { createdAt: 2 }));
+		expect(h.render().join("\n")).toContain("LatestSpawn");
+
+		agents[0] = ref("FirstSpawn", { createdAt: 1, status: "parked", lastActivity: 3 });
+		const afterFirstParks = h.render().join("\n");
+		expect(afterFirstParks).toContain("LatestSpawn");
+		expect(afterFirstParks).not.toContain("FirstSpawn");
+
+		agents[1] = ref("LatestSpawn", { createdAt: 2, status: "parked", lastActivity: 4 });
+		const afterBothPark = h.render().join("\n");
+		expect(afterBothPark).toContain("LatestSpawn");
+		expect(afterBothPark).not.toContain("FirstSpawn");
+	});
+
 	it("shows the observed model, assignment, elapsed units, and only a current wait timer", () => {
 		const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
 		try {
