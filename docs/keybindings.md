@@ -72,7 +72,7 @@ app.history.search: []
 | `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md); in its roster, `Shift+R` restarts the selected live advisor. |
 | `app.session.delete` | `Backspace`, `Delete` | Ask to delete the selected session in the resume picker; a key that also deletes backward edits a typed search query instead |
 | `app.irc.viewer`             | `Alt+I`                                                               | [Open the IRC communications viewer](./agent-hub.md#irc-viewer)                                                                                                                      |
-| `app.sidebar.toggle`         | `Alt+T`                                                               | [Side panel view chord](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                        |
+| `app.sidebar.toggle`         | `Alt+T`                                                               | [Open and focus the side panel](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                 |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 | `app.links.hint` | Unbound | Tag visible extension links to pick them; press the binding again or `Page Up` to browse all. Assign a binding in keybindings; NeoPi retains `Alt+O` for menu history forward. |
@@ -163,7 +163,7 @@ This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, 
 
 ## Side panel views
 
-`app.sidebar.toggle` (`Alt+T`) is a chord prefix. The next key picks what the side panel shows:
+`Alt+T` (`app.sidebar.toggle`) opens and focuses the side panel immediately, showing Agents by default or the last view you chose. For two seconds the next key can switch views:
 
 | Chord | View |
 | --- | --- |
@@ -171,11 +171,14 @@ This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, 
 | `Alt+T` `a` | Agents: this session's subagents and advisors, as in the Agent Hub |
 | `Alt+T` `i` | IRC: the newest agent-to-agent messages, from the same history as `Alt+I` |
 
-From hidden, a chord opens the panel on that view; with another view showing, it switches; the chord of the view already showing hides the panel. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). The prefix waits two seconds. `Esc` cancels it, and any other key cancels it and keeps its usual meaning. A right-click inside the panel cycles Todo → Agents → IRC. The chosen view persists as `sidebar.view`.
+If the view was already open before `Alt+T`, its own follow-up key closes it. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). `Esc` or `Ctrl+C` closes the focused panel. Right-click cycles Todo → Agents → IRC. The selected view persists as `sidebar.view`.
 
-Wide terminals dock the panel beside the chat; below `sidebar.splitAt` the chord opens it fullscreen instead. While docked, the Todo view replaces the todo list above the editor and the Agents view replaces the pinned subagents list; each comes back when the panel closes or switches view. Other activity rows, such as waiting on subagents, stay where they are.
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
 
-In the Agents view, hovering highlights a row. Clicking a subagent shows its transcript in the main area, the same as selecting it in the Agent Hub; clicking it again, or empty panel space, returns to the main session. Advisors and aborted agents are read-only transcripts, so clicking one opens the Agent Hub. Clicking the IRC view opens the full IRC viewer.
+The Agents view starts with running subagents only. Its bottom controls toggle running, idle, parked, advisors, ended agents, and autoscroll. Click a control (`tui.mouse` is required when docked), or use `Tab` / `Shift+Tab` and `Space`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group.
+
+While the panel is focused, arrows scroll and two digits jump by percentage (`3` `0` jumps to 30%). Vim mode adds `j`/`k`, `Ctrl+U`/`Ctrl+D`, `Ctrl+E`/`Ctrl+Y`, and `gg`/`G`. Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking the IRC view opens the full IRC viewer.
+
 ### Click to dictate in Tern
 
 With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. While the speech model loads, the button shows **Starting…**; click it again to cancel. Once it changes to **Recording · Stop**, click it to stop, then wait for **Transcribing…** to finish.
