@@ -1458,6 +1458,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#ircWakesAwaitingCompaction = 0;
 	/** {@link subscribeWakeState} listeners. */
 	readonly #wakeStateListeners = new Set<() => void>();
+	/** Shared by settlement waits when the remaining wake source is a child with no owner job. */
+	#asyncWorkChanged: PromiseWithResolvers<void> | undefined;
 	/** Notices of agents left blocked on this one as its run settles; see {@link #continueForStalledWaiters}. */
 	readonly #stallGuard = new StallGuard();
 	/** Set while an `awaitingAssignment` session has not started its first prompt; see {@link #wakeForIrc}. */
@@ -4344,7 +4346,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#wakeSources(): WakeSources | undefined {
-		if (this.#clientBridge?.deferAgentInitiatedTurns) return undefined;
+		if (this.#isDisposed || this.#clientBridge?.deferAgentInitiatedTurns) return undefined;
 		const afterInterrupt = this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
 		const canWakeForJobs = this.#canWakeFor("asyncJobs", afterInterrupt);
 		const canWakeForTasks = this.#canWakeFor("subagents", afterInterrupt);
@@ -4563,6 +4565,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#notifySubmissionState(): void {
+		this.#signalAsyncWorkChange();
 		for (const listener of this.#submissionStateListeners) {
 			try {
 				listener();
@@ -4596,19 +4599,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/**
-	 * Settle one generation of owner-scoped async work: wait for running owner
-	 * jobs to finish, deliver their queued results (which enqueue async-result
-	 * follow-ups on this session's yield queue), and wait for the injected
-	 * follow-up turn(s) to go idle. Callers loop while
-	 * {@link hasPendingAsyncWork} still holds — a follow-up turn may start new
-	 * jobs.
+	 * Settle one generation of async work: drain owned jobs and deliveries, then wait for
+	 * any injected turns to go idle. If a child can still wake the idle session without
+	 * an owner job, wait for a wake-state change before the caller rechecks settlement.
 	 */
 	async settleAsyncWork(): Promise<void> {
 		const manager = this.#asyncJobManager;
-		if (!manager || !this.#agentId) return;
-		await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
-		await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
+		if (manager && this.#agentId) {
+			await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
+			await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
+		}
 		await this.waitForIdle();
+		if (!this.#runActive && !this.isStreaming && !this.hasAdmittedSubmission && this.#wakeSources()?.agents.length) {
+			await (this.#asyncWorkChanged ??= Promise.withResolvers<void>()).promise;
+		}
 	}
 
 	/**
@@ -7084,6 +7088,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (this.#runActive) return;
 		this.#runActive = true;
 		this.#runEnded = Promise.withResolvers<void>();
+		this.#signalAsyncWorkChange();
 		this.#emitRunState("running");
 	}
 
@@ -7988,6 +7993,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#signalAsyncWorkChange();
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		if (this.#runActive) this.#closeRun();
 		this.#modelDiscoveryAbortController.abort();
@@ -15944,8 +15950,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	#notifyWakeState(): void {
+		this.#signalAsyncWorkChange();
 		for (const listener of this.#wakeStateListeners) listener();
 		this.#scheduleRunCheck();
+	}
+
+	#signalAsyncWorkChange(): void {
+		const wait = this.#asyncWorkChanged;
+		this.#asyncWorkChanged = undefined;
+		wait?.resolve();
 	}
 
 	/**
