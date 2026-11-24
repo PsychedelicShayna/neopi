@@ -229,13 +229,41 @@ function copyText(value, done) {
 		ta.remove();
 		return ok;
 	};
-	const say = ok => toast(ok ? done : T("toml.copyFailed"), { bad: !ok });
+	/* If the browser will not copy, the text itself is put on screen, selected, so it can still be taken by hand. */
+	const say = ok => {
+		if (ok) return toast(done);
+		toast(T("toml.copyFailed"), { bad: true });
+		showText(value);
+	};
 	if (navigator.clipboard?.writeText)
 		navigator.clipboard.writeText(value).then(
 			() => say(true),
 			() => say(old()),
 		);
 	else say(old());
+}
+function showText(value) {
+	const ta = h("textarea", {
+		class: "ta mono",
+		value,
+		rows: 12,
+		spellcheck: "false",
+		style: { width: "100%", marginTop: "10px", overflow: "auto", maxHeight: "40vh" },
+	});
+	ta.readOnly = true;
+	const dead = document.querySelector(".dead>div");
+	if (dead) {
+		dead.querySelector("textarea")?.remove();
+		dead.append(ta);
+	} else
+		openSheet({
+			title: T("copy.manual"),
+			body: ta,
+			cancel: null,
+			primary: { label: T("common.done"), run: closeSheet },
+		});
+	ta.focus();
+	ta.select();
 }
 function coach(content, bad) {
 	const el = $("coach");

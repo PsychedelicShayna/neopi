@@ -310,6 +310,7 @@ const STRINGS = {
 	"connect.no.entryVerdict": "A verdict only ends a run. Start at a model.",
 	"connect.no.fromVerdict": "A verdict ends the run, so nothing leaves it. Pick a model.",
 	"connect.no.full": "This mixture already holds {max} paths.",
+	"copy.manual": "Select and copy",
 	"create.first": "{id} is where runs start.",
 	"create.full": "A mixture holds at most {max} members.",
 	"create.routed": "{from} now has 2 paths, so a judge picks one.",
@@ -869,6 +870,12 @@ const STRINGS = {
 	"save.onlyTypo":
 		"{label} holds “{text}”, which is not a number. Nothing else has changed, so there is nothing to save.",
 	"save.scratchNote": "Not part of this save: {names} (no model yet).",
+	"save.split": "The files are written one after another",
+	"save.split.sub":
+		"A shared preset changed ({names}), which NeoPi does not combine with other files in one step. Files that gain a mixture go first, so if anything stops in between, a moved mixture is in both files, never in neither.",
+	"save.split.trade": "A shared preset is edited while files trade mixtures",
+	"save.split.trade.sub":
+		"{names} changed, and these files give each other mixtures. NeoPi cannot write that safely in one go, and no order of single files is safe either. Undo one of the moves, save, and move it again.",
 	"save.sub.one": "{n} file changes. This is everything that will be written.",
 	"save.sub.other": "{n} files change. This is everything that will be written, in one step.",
 	"save.title": "Review and save",
@@ -990,7 +997,7 @@ const STRINGS = {
 	"tidy.done": "Tidied. Positions are yours: they are never written to the file.",
 	"toml.absent": "This file does not exist yet. It is created when you save a mixture into it.",
 	"toml.copied": "Copied {path} as shown here.",
-	"toml.copyFailed": "The browser refused to copy. Select the text instead.",
+	"toml.copyFailed": "The browser refused to copy. The text is shown instead: it is selected, so Ctrl C takes it.",
 	"toml.disk": "The file as it is on disk.",
 	"toml.draft":
 		"What a save would write. NeoPi writes its own layout: comments and hand formatting in the file are not kept.",

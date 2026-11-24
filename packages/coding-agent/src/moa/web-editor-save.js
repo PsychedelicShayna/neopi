@@ -179,15 +179,32 @@ function saveOrder(list) {
 			if (!isScratch(m) && m.$o && m.$o.sid !== s.id && ids.has(m.$o.sid)) takes.get(s.id).add(m.$o.sid);
 	const state = new Map(),
 		after = [];
+	let trade = false;
 	const visit = id => {
+		if (state.get(id) === 1) trade = true;
 		if (state.has(id)) return;
 		state.set(id, 1);
 		for (const from of takes.get(id)) visit(from);
+		state.set(id, 2);
 		after.push(id);
 	};
 	for (const s of list) visit(s.id);
-	return after.reverse().map(srcOf);
+	const order = after.reverse().map(srcOf);
+	order.trade = trade; // files that give each other mixtures: no order is safe by itself
+	return order;
 }
+/* Shared presets of a file whose text changed. While several files are saved at once NeoPi keeps every mixture on
+   disk by briefly holding old and new side by side, and a preset table cannot hold two texts under one name, so it
+   refuses that combination. The page then writes the files one after another instead, gaining files first. */
+const presetRewrites = sid => {
+	const f = fileOf(sid);
+	return ["roles", "envelopes"].flatMap(kind =>
+		Object.keys(f.base.doc?.[kind] ?? {})
+			.filter(key => own(f.doc[kind], key) && f.doc[kind][key] !== f.base.doc[kind][key])
+			.map(key => kind + "." + key),
+	);
+};
+const oneByOne = list => list.length > 1 && list.some(s => presetRewrites(s.id).length > 0);
 /* NeoPi lets a definition it cannot run be written only when an identical copy on disk already could not run. */
 const onDiskAsIs = m =>
 	[...files.values()].some(f => (f.base.doc?.mixtures ?? []).some(b => structure(b) === structure(m)));
@@ -495,8 +512,21 @@ async function openSave() {
 			),
 		);
 	const idle = waiting.filter(m => !changed.some(s => fileOf(s.id).doc.mixtures.includes(m)));
+	const split = oneByOne(changed),
+		rewritten = changed.flatMap(s => presetRewrites(s.id)).join(", ");
+	if (split && changed.trade) blockers++;
+	const stepNote =
+		split &&
+		h(
+			"div",
+			{ class: "checks", style: { marginBottom: "8px" } },
+			changed.trade
+				? check("no", T("save.split.trade"), T("save.split.trade.sub", { names: rewritten }))
+				: check("unk", T("save.split"), T("save.split.sub", { names: rewritten })),
+		);
 	body.replaceChildren(
 		...[
+			stepNote,
 			index,
 			...sections.map(x => x.section),
 			idle.length > 0 &&
@@ -539,17 +569,23 @@ async function doSave(drafts, proofs, check, go, note) {
 	go.disabled = true;
 	go.textContent = T("save.going");
 	const list = drafts.map(d => d.s);
-	const res = await api.save(
-		drafts.map(({ s, sent }) => {
-			const f = fileOf(s.id);
-			return {
-				sourceId: s.id,
-				baseHash: f.base.exists ? f.base.hash : null,
-				doc: sent,
-				...(confirmedLoss.has(s.id + f.base.hash) && { confirmCanonicalRewrite: true }),
-			};
-		}),
-	);
+	const file = ({ s, sent }) => {
+		const f = fileOf(s.id);
+		return {
+			sourceId: s.id,
+			baseHash: f.base.exists ? f.base.hash : null,
+			doc: sent,
+			...(confirmedLoss.has(s.id + f.base.hash) && { confirmCanonicalRewrite: true }),
+		};
+	};
+	let res;
+	if (oneByOne(list)) {
+		for (const d of drafts) {
+			res = await api.save([file(d)]);
+			if (!res.ok) break;
+			settle(res.data);
+		}
+	} else res = await api.save(drafts.map(file));
 	saving = false;
 	if (res.ok) {
 		settle(res.data);
