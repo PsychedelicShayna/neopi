@@ -72,7 +72,7 @@ beforeAll(async () => {
 });
 
 describe("AgentsSection", () => {
-	it("lists subagents and read-only advisors in spawn order, whatever their status, and nothing else", () => {
+	it("lists running subagents by default, orders revivals last, and labels enabled advisors read-only", () => {
 		const agents = [
 			ref("Runner", { createdAt: 2 }),
 			ref("Parked", { status: "parked", createdAt: 1 }),
@@ -85,12 +85,14 @@ describe("AgentsSection", () => {
 			const rows = h.render();
 			return ["Parked", "Runner", "Advisor"].map(id => rows.findIndex(row => row.includes(id)));
 		};
-		expect(order()).toEqual([1, 2, 3]);
-		expect(h.render()[3]).toContain("read-only");
+		expect(order()).toEqual([-1, 1, -1]);
 		expect(h.render().some(row => row.includes("Main") || row.includes("Operator"))).toBe(false);
-		// Reviving the parked agent does not move its row under the pointer.
-		agents[1] = ref("Parked", { status: "running", createdAt: 1 });
-		expect(order()).toEqual([1, 2, 3]);
+		agents[1] = ref("Parked", { status: "running", createdAt: 1, lastActivity: 4 });
+		expect(order()).toEqual([4, 1, -1]);
+
+		const footer = h.render()[9]!;
+		h.panel.routeMouse(leftClick, 9, footer.indexOf("-Adv"));
+		expect(h.render().find(row => row.includes("Advisor"))).toContain("read-only");
 	});
 
 	it("shows the agent clicked in the main area and returns to the primary on a second click or empty space", () => {
@@ -100,13 +102,13 @@ describe("AgentsSection", () => {
 		expect(h.calls).toEqual(["focus Runner"]);
 		h.panel.routeMouse(leftClick, 1, 2);
 		expect(h.calls).toEqual(["focus Runner", "primary"]);
-		h.panel.routeMouse(leftClick, 2, 2);
+		h.panel.routeMouse(leftClick, 4, 2);
 		h.render();
 		// Far below the document is empty panel space.
-		h.panel.routeMouse(leftClick, 9, 2);
+		h.panel.routeMouse(leftClick, 8, 2);
 		expect(h.calls).toEqual(["focus Runner", "primary", "focus Other", "primary"]);
 		// Empty space while the primary is shown does nothing.
-		h.panel.routeMouse(leftClick, 9, 2);
+		h.panel.routeMouse(leftClick, 8, 2);
 		expect(h.calls).toHaveLength(4);
 	});
 
@@ -122,9 +124,12 @@ describe("AgentsSection", () => {
 		expect(h.renders()).toBe(before + 2);
 	});
 
-	it("renders nothing without agents, so the panel shows its placeholder", () => {
+	it("keeps the Agents heading and filter controls when no agents match", () => {
 		const h = harness([]);
-		expect(h.render()[0]).toContain("nothing to show");
+		const rows = h.render();
+		expect(rows[0]).toContain("AGENTS");
+		expect(rows[1]).toContain("No agents match these filters");
+		expect(rows[9]).toContain("+Run -Idle -Park -Adv -End +Auto");
 	});
 });
 

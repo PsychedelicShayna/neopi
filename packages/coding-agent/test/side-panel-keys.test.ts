@@ -158,7 +158,7 @@ describe("alt+t view chords", () => {
 		}
 	});
 
-	it("cancels on escape and lets any other key keep its meaning", async () => {
+	it("closes on escape and ends the view chord on an unrelated focused key", async () => {
 		const h = await harness(120);
 		const typed: string[] = [];
 		const editor: Component = {
@@ -179,8 +179,9 @@ describe("alt+t view chords", () => {
 			h.term.sendInput("x");
 			h.term.sendInput("a");
 			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(typed).toEqual(["t", "x", "a"]);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(h.sidePanel.dockedView).toBe("agents");
+			expect(typed).toEqual(["t"]);
 		} finally {
 			h.stop();
 		}
@@ -200,8 +201,9 @@ describe("alt+t view chords", () => {
 			h.term.sendInput(ALT_T);
 			vi.advanceTimersByTime(2500);
 			h.term.sendInput("t");
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(typed).toEqual(["t"]);
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(cfgSidebarView.get(h.settings)).toBe("agents");
+			expect(typed).toEqual([]);
 		} finally {
 			vi.useRealTimers();
 			h.stop();
