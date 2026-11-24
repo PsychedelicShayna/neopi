@@ -216,12 +216,33 @@ function jumpTo(sid, m, rest) {
 let saving = false,
 	confirmedLoss = new Set(),
 	saveSaid = null; // saveSaid: what NeoPi answered to the last refused save
-let stepOne = null; // preset text already written by a save whose second step did not go through
+/* What is known about the last save that did not end cleanly, for the next review to say:
+   done  = preset text that step one of a two-step save did write (confirmed by NeoPi), possibly none;
+   state = 'refused' NeoPi answered and wrote nothing more · 'silent' no answer and the files could not be read since,
+           so it is not known what was written · 'read' no answer, but the files have been read again since. */
+let aftermath = null;
 const REVIEW_RETRY = 3000;
-const stepOneNote = done =>
+const stepOneWrote = done =>
 	T("save.split.done.sub", {
 		what: done.map(d => T("save.split.done.item", { names: d.keys.join(", "), path: d.path })).join("; "),
 	});
+const moveSteps = (sid, from, to) => {
+	for (const step of [...undoStack, ...redoStack]) {
+		const then = step.state.disk.get(sid);
+		if (then && sameDisk(then.base, from)) then.base = to;
+	}
+};
+/* The save was written although its answer never arrived: the files, read again, hold exactly the draft. */
+function landed(a) {
+	for (const [sid, old] of a.bases) if (fileOf(sid)) moveSteps(sid, old, fileOf(sid).base);
+	confirmedLoss = new Set();
+	refusals.clear();
+	closeSheet();
+	sync();
+	edited();
+	render();
+	toast(T("save.landed") + " " + savedSummary(a.list));
+}
 /* What NeoPi refused at the moment of writing, per file, for as long as that draft stays exactly as it was sent. */
 const refusals = new Map();
 async function openSave() {
@@ -230,9 +251,20 @@ async function openSave() {
 	if (trial) trialEnd();
 	endConnect();
 	pruneBad();
+	if (aftermath?.state === "silent") {
+		saving = true;
+		const read = await reloadAll(false);
+		saving = false;
+		if (read) aftermath.state = "read";
+	}
 	const changed = saveOrder(dirtyFiles()),
 		waiting = scratchList();
 	if (!changed.length) {
+		if (aftermath?.state === "read") {
+			const a = aftermath;
+			aftermath = null;
+			return landed(a);
+		}
 		closeSheet();
 		if (badInputs.size) {
 			const b = [...badInputs.values()][0];
@@ -548,14 +580,28 @@ async function openSave() {
 			{ class: "checks", style: { marginBottom: "8px" } },
 			check("unk", T("save.split"), T("save.split.sub", { names: rewritten })),
 		);
-	const done = stepOne;
-	stepOne = null;
+	/* What the last attempt did, said only as far as it is known. */
+	const after = aftermath,
+		two = after?.done.length > 0;
+	if (after?.state !== "silent") aftermath = null;
+	if (after?.state === "silent") blockers++;
 	const receipt =
-		done &&
+		after &&
+		(two || after.state !== "refused") &&
 		h(
 			"div",
 			{ class: "checks", style: { marginBottom: "8px" } },
-			check("ok", T("save.split.done"), stepOneNote(done)),
+			after.state === "refused"
+				? check("ok", T("save.split.done"), [stepOneWrote(after.done), " ", T("save.split.rest.no")])
+				: after.state === "read"
+					? check("unk", two ? T("save.split.read") : T("save.lost.read"), [
+							two && [stepOneWrote(after.done), " "],
+							T("save.lost.read.sub"),
+						])
+					: check("no", two ? T("save.split.unknown") : T("save.lost.unknown"), [
+							two && [stepOneWrote(after.done), " "],
+							T("save.lost.unknown.sub"),
+						]),
 		);
 	body.replaceChildren(
 		...[
@@ -580,7 +626,7 @@ async function openSave() {
 	if (!blockers) go.focus();
 	/* A review that is red because NeoPi is silent, or because a file cannot be read or written right now, keeps
      looking, and rebuilds itself the moment that changes: there is no need to cancel and come back. */
-	const silent = drafts.some(d => !d.res.ok && !d.res.status);
+	const silent = after?.state === "silent" || drafts.some(d => !d.res.ok && !d.res.status);
 	const state = () =>
 		drafts
 			.map(d => {
@@ -688,8 +734,8 @@ async function doSave(drafts, proofs, check, go, note) {
 		return;
 	}
 	go.textContent = T("save.go");
-	stepOne = written.length ? written : null;
 	if (res.status === 410) return;
+	if (written.length) aftermath = { done: written, state: "refused", list, bases: new Map() };
 	if (res.status === 409 && res.data?.conflicts?.length) {
 		for (const c of res.data.conflicts) if (fileOf(c.sourceId)) fileOf(c.sourceId).theirs = c.current;
 		render();
@@ -727,11 +773,29 @@ async function doSave(drafts, proofs, check, go, note) {
 		return openSave(); // the review now names what was refused, and where
 	}
 	if (res.status === 500 && res.data?.partial) {
+		aftermath = null;
 		sources = res.data.sources ?? sources;
-		return partialSheet(res.data);
+		return partialSheet(res.data, written);
 	}
-	if (stepOne) {
-		saveSaid = T("save.split.second", { error: res.data?.error ?? T("harness.silent") });
+	/* No answer, or a failure inside NeoPi, is not proof that nothing was written. The files are read again before
+     anything is said: if they hold the draft, the save happened; otherwise the review shows what is still missing. */
+	if (!res.status || res.status >= 500) {
+		const bases = new Map(list.map(s => [s.id, fileOf(s.id).base]));
+		saving = true;
+		const read = await reloadAll(false);
+		saving = false;
+		if (read && !dirty()) return landed({ list, bases });
+		if (!res.status) aftermath = { done: written, state: read ? "read" : "silent", list, bases };
+		saveSaid = !res.status
+			? null
+			: written.length
+				? T("save.split.second", { error: res.data?.error ?? "" })
+				: (res.data?.error ?? T("save.failed"));
+		render();
+		return openSave();
+	}
+	if (written.length) {
+		saveSaid = T("save.split.second", { error: res.data?.error ?? "" });
 		render();
 		return openSave();
 	}
@@ -762,9 +826,7 @@ function savedSummary(saved) {
 }
 /* The rare bad case, said plainly: a write failed part-way and one file could not be put back.
    The safe choice is the default: the draft stays. Reloading is offered, says what it does, and can be undone. */
-function partialSheet(data) {
-	const done = stepOne;
-	stepOne = null;
+function partialSheet(data, done = []) {
 	const word = {
 		original: T("partial.original"),
 		saved: T("partial.saved"),
@@ -775,8 +837,8 @@ function partialSheet(data) {
 		title: T("partial.title"),
 		sub: data.error,
 		body: [
-			done &&
-				h("p", { class: "hint", style: { marginBottom: "10px" } }, T("save.split.done.before"), stepOneNote(done)),
+			done.length > 0 &&
+				h("p", { class: "hint", style: { marginBottom: "10px" } }, T("save.split.done.before"), stepOneWrote(done)),
 			h("p", { class: "hint", style: { marginBottom: "10px" } }, T("partial.body")),
 			h(
 				"ul",
