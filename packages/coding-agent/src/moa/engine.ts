@@ -48,7 +48,14 @@ import type { JudgeKind } from "../judgment";
 import { thinkingFromContent } from "../session/messages";
 import { clampProviderContextImages, dropUnreadableContextImages } from "../session/provider-image-budget";
 import { fitHopRequest, type HopParts, truncateToTokens } from "./budget";
-import { decisionState, describeOutcome, failedChoice, routeQuestion, terminateQuestion } from "./decisions";
+import {
+	DEFAULT_TERMINATE_THRESHOLD,
+	decisionState,
+	describeOutcome,
+	failedChoice,
+	routeQuestion,
+	terminateQuestion,
+} from "./decisions";
 import {
 	DEFAULT_EDGE_ENVELOPE,
 	ENTRY_ENVELOPE,
@@ -1256,7 +1263,7 @@ class MixtureCall {
 		let terminationJudged = false;
 		if (definitionMember?.kind !== "verdict" && definitionMember?.terminate) {
 			const terminate = definitionMember.terminate;
-			const threshold = terminate.threshold ?? 0.5;
+			const threshold = terminate.threshold ?? DEFAULT_TERMINATE_THRESHOLD;
 			let judged: { result: JudgmentResult; kind: JudgeKind };
 			try {
 				judged = await this.#judge(run, hop, {

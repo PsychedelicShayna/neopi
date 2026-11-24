@@ -86,8 +86,13 @@ export type EnvelopeContext = {
 
 let registeredPartialSource: string | undefined;
 
+/** The bundled `moa-parts` partial every envelope may include. */
+export function moaPartsPartial(): string {
+	return resolvePromptAsset("moa/envelopes/moa-parts.md", bundledMoaPartsPartial).text;
+}
+
 function ensurePartial(): void {
-	const text = resolvePromptAsset("moa/envelopes/moa-parts.md", bundledMoaPartsPartial).text;
+	const text = moaPartsPartial();
 	if (text === registeredPartialSource) return;
 	prompt.registerPartial("moa-parts", text);
 	registeredPartialSource = text;

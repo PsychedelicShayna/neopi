@@ -1,5 +1,6 @@
 import type { MixtureConfigScope } from "@oh-my-pi/pi-tui/overlays/mixture-types";
 import { getAgentDir, getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { MIXTURE_PROVIDER } from "../../moa/provider";
 import { type MixtureWebEditor, startMixtureWebEditor } from "../../moa/web-server";
 import type { AgentSession } from "../../session/agent-session";
 import * as ternPage from "../../tools/browser/tern/user-page";
@@ -27,6 +28,7 @@ export async function launchMixtureWebEditor(ctx: TuiSlashCommandRuntime["ctx"],
 			ctx.sessionManager === sessionManager &&
 			sessionManager.getSessionId() === sessionId &&
 			sessionManager.getCwd() === cwd,
+		selectedMixture: () => (session.model?.provider === MIXTURE_PROVIDER ? session.model.id : undefined),
 		onSaved: message => {
 			ctx.showStatus(message);
 			refreshStatusLine(ctx);
