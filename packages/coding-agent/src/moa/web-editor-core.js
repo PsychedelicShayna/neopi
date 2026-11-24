@@ -210,7 +210,7 @@ function pruneBad() {
 			whereIs(b.mix) &&
 			(b.kind === "mix" ||
 				(b.kind === "node" ? b.mix.members.some(n => n.id === b.id) : b.mix.edges.some(e => e.$k === b.id)));
-		if (!there) badInputs.delete(key);
+		if (!there || (b.now && b.now() !== b.was)) badInputs.delete(key); // gone, or something else (a stepper) has since set the value
 	}
 }
 const D = () => boot.defaults;

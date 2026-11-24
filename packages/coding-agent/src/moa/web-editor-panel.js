@@ -80,6 +80,8 @@ function text(obj, key, { k, placeholder, mono, area, rows, number, keep, field,
 					field: name,
 					label: label ?? key,
 					text: v.trim(),
+					was: obj?.[key],
+					now: () => obj?.[key],
 				});
 				return soft();
 			}
@@ -256,8 +258,32 @@ function issueList(list) {
 		),
 	);
 }
+/* A bad input belongs to a field. When that field is no longer offered for what is selected (its setting was turned
+   off), there is nothing left to correct, so it stops counting. */
+function dropStaleInputs() {
+	if (tab !== "inspect" || !mix) return false;
+	const mine = "@" + fieldKey(),
+		body = $("pbody");
+	let dropped = false;
+	for (const [key, b] of badInputs)
+		if (
+			key.endsWith(mine) &&
+			b.field &&
+			!body.querySelector(`[data-field="${CSS.escape(b.field)}"],[data-sec="${CSS.escape(b.field)}"]`)
+		) {
+			badInputs.delete(key);
+			dropped = true;
+		}
+	return dropped;
+}
+/* Going to an issue always ends with the field on screen: the inspector is opened and on its first tab, whatever
+   state it was in. */
 function goIssue(i) {
 	closePop();
+	const shut = !panelOpen;
+	panelOpen = true;
+	tab = "inspect";
+	if (shut && !camTouched) setTimeout(() => fit(true));
 	const section =
 		{
 			route: "paths",
@@ -338,36 +364,26 @@ function idInput(obj, isEdge) {
 			spellcheck: "false",
 		}),
 	);
-	const reset = () => {
-		el.value = isEdge ? (obj.id ?? "") : obj.id;
-	};
-	el.addEventListener("keydown", ev => {
-		if (ev.key === "Enter") el.blur();
-		if (ev.key === "Escape") {
-			reset();
-			el.blur();
-			ev.stopPropagation();
-		}
-	});
-	el.addEventListener("change", () => {
+	const current = () => (isEdge ? (obj.id ?? "") : obj.id),
+		reset = () => {
+			el.value = current();
+			el.classList.remove("bad");
+		};
+	/* Returns the reason when what is typed cannot be used; otherwise applies it (if it differs) and returns null. */
+	const apply = () => {
 		const v = el.value.trim();
-		if (v === (isEdge ? (obj.id ?? "") : obj.id)) return;
+		if (v === current()) return null;
 		if (isEdge) {
 			const why =
 				v &&
 				(idProblem(v, eid(obj), mix.edges.filter(x => x !== obj).map(eid)) ??
 					(reservedEdge(v) && T("chk.edge.reserved", { id: v, why: reservedEdge(v) })));
-			if (why) {
-				toast(why, { bad: true });
-				return reset();
-			}
-			return commit(v ? T("act.pathId") : T("act.pathIdCleared"), () => renameEdge(obj, v), { quiet: true });
+			if (why) return why;
+			commit(v ? T("act.pathId") : T("act.pathIdCleared"), () => renameEdge(obj, v), { quiet: true });
+			return null;
 		}
 		const why = idProblem(v, obj.id);
-		if (why) {
-			toast(why, { bad: true });
-			return reset();
-		}
+		if (why) return why;
 		let refs = 0;
 		commit(
 			T("act.rename"),
@@ -377,7 +393,37 @@ function idInput(obj, isEdge) {
 			{ quiet: true },
 		);
 		renamed(refs, v);
+		return null;
+	};
+	/* Enter and Ctrl S keep what is typed, or keep the field exactly as it is, with the reason, so it can be corrected.
+     Every field that holds something not yet in the draft answers through _settle: true = kept, false = refused. */
+	el._settle = () => {
+		const why = apply();
+		if (!why) return true;
+		toast(why, { bad: true });
+		el.classList.add("bad");
+		el.focus();
+		return false;
+	};
+	el.addEventListener("input", () => el.classList.remove("bad"));
+	el.addEventListener("keydown", ev => {
+		if (ev.key === "Enter") {
+			ev.preventDefault();
+			if (el._settle() && el.isConnected) el.blur();
+		}
+		if (ev.key === "Escape") {
+			reset();
+			el.blur();
+			ev.stopPropagation();
+		}
 	});
+	el.addEventListener("change", () => {
+		const why = apply();
+		if (why) {
+			toast(why, { bad: true });
+			reset();
+		}
+	}); // left the field with something unusable: it goes back
 	return el;
 }
 /* The actions for whatever is selected: one row, always directly under the name. */
@@ -668,14 +714,15 @@ function openPreset(kind, name) {
 			primary: { label: T("common.delete"), danger: true, run: go },
 		});
 	};
-	nameIn?.addEventListener("change", () => {
+	/* Returns the reason when the typed name cannot be used; otherwise renames (if it differs) and returns null. */
+	let settled = false,
+		quiet = false;
+	const applyName = () => {
+		if (settled) return null;
 		const v = nameIn.value.trim();
-		if (!v || v === "__proto__" || (v !== name && own(owner[kind], v))) {
-			toast(!v ? T("preset.name.empty") : T("preset.name.taken", { name: v }), { bad: true });
-			nameIn.value = name;
-			return;
-		}
-		if (v === name) return;
+		if (!v || v === "__proto__" || (v !== name && own(owner[kind], v)))
+			return !v ? T("preset.name.empty") : T("preset.name.taken", { name: v });
+		if (v === name) return null;
 		commit(
 			T("act.renamePreset"),
 			() => {
@@ -693,9 +740,39 @@ function openPreset(kind, name) {
 			},
 			{ quiet: true },
 		);
+		settled = true;
 		toast(T("preset.renamed"));
-		openPreset(kind, v);
-	});
+		return null;
+	};
+	if (nameIn) {
+		nameIn._settle = () => {
+			quiet = true;
+			const why = applyName();
+			if (!why) return true;
+			quiet = false;
+			toast(why, { bad: true });
+			nameIn.classList.add("bad");
+			nameIn.focus();
+			return false;
+		};
+		nameIn.addEventListener("input", () => nameIn.classList.remove("bad"));
+		nameIn.addEventListener("keydown", ev => {
+			if (ev.key !== "Enter") return;
+			ev.preventDefault();
+			const was = settled;
+			if (nameIn._settle() && !was && settled) openPreset(kind, nameIn.value.trim());
+		});
+		nameIn.addEventListener("change", () => {
+			const was = settled,
+				v = nameIn.value.trim(),
+				why = applyName();
+			if (why) {
+				toast(why, { bad: true });
+				nameIn.value = name;
+				nameIn.classList.remove("bad");
+			} else if (!was && settled && !quiet) openPreset(kind, v);
+		});
+	}
 	const area = grow(
 		h("textarea", {
 			class: "ta mono",
@@ -801,10 +878,23 @@ function panelMixture() {
 		}),
 		true,
 	);
+	name._settle = () => {
+		const why = renameMixture(mix, name.value.trim());
+		if (!why) return true;
+		toast(why, { bad: true });
+		name.classList.add("bad");
+		name.focus();
+		return false;
+	};
+	name.addEventListener("input", () => name.classList.remove("bad"));
 	name.addEventListener("keydown", ev => {
-		if (ev.key === "Enter") name.blur();
+		if (ev.key === "Enter") {
+			ev.preventDefault();
+			if (name._settle() && name.isConnected) name.blur();
+		}
 		if (ev.key === "Escape") {
 			name.value = mix.name;
+			name.classList.remove("bad");
 			name.blur();
 			ev.stopPropagation();
 		}
@@ -814,6 +904,7 @@ function panelMixture() {
 		if (why) {
 			toast(why, { bad: true });
 			name.value = mix.name;
+			name.classList.remove("bad");
 		}
 	});
 	const roster = rosterLine(),
@@ -2662,6 +2753,12 @@ function focusField(section) {
 	const input = el.matches("input,textarea,select,button")
 		? el
 		: el.querySelector("textarea,input:not([type=range]),select");
+	if (input) {
+		// a long section: make sure the field itself is in view, not only its heading
+		const top = input.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+		if (top < body.scrollTop || top + input.offsetHeight > body.scrollTop + body.clientHeight)
+			body.scrollTop = Math.max(0, top - body.clientHeight / 3);
+	}
 	if (!readOnly()) input?.focus({ preventScroll: true });
 }
 function renderPanel() {

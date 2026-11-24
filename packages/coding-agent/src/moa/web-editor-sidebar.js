@@ -343,6 +343,10 @@ function rowEl2(s, m) {
 			renameMixture(m, input.value.trim());
 			renderSide();
 		};
+		input._settle = () => {
+			keepIt();
+			return sideRename?.m !== m;
+		};
 		input.addEventListener("input", paint);
 		input.addEventListener("keydown", ev => {
 			if (!(ev.ctrlKey || ev.metaKey)) ev.stopPropagation();

@@ -258,6 +258,14 @@ function renderBar() {
 	}
 	canvas.dataset.room = room < 560 ? "xs" : room < 860 ? "s" : room < 1010 ? "m" : "l";
 	canvas.toggleAttribute("data-none", !mix);
+	/* The empty state (first run, a new mixture's starters) lives in the part of the canvas nothing covers, and gets
+     compact when that part is small, so its buttons are never under the list or the inspector. */
+	const em = $("empty"),
+		eh = canvas.clientHeight - ins.t - ins.b,
+		ew = canvas.clientWidth - ins.l - ins.r;
+	em.style.inset = `${ins.t}px ${ins.r}px ${ins.b}px ${ins.l}px`;
+	em.classList.toggle("tight", eh < 360 || ew < 600);
+	em.classList.toggle("tiny", eh < 255);
 	document.title = (changed ? "● " : "") + (mix ? mix.name + " · " : "") + T("app.title");
 }
 function legend() {
@@ -1269,6 +1277,7 @@ function render() {
 	renderSide();
 	renderBanner();
 	if (connect) markTargets();
+	if (dropStaleInputs()) soft();
 }
 /* soft(): a keystroke (or the harness's answer) changed what is known. Redraw what depends on it,
    but leave the field being typed in alone. */

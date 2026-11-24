@@ -724,6 +724,22 @@ body.stacked .trial{width:calc(var(--room,100%) - 16px);bottom:8px}
 body.stacked .toasts{bottom:auto;top:64px}
 body.stacked .coach{top:60px}
 
+.empty>div{max-height:100%;box-sizing:border-box}
+.empty.tight>div{padding:8px 12px}
+.empty.tight h2{font-size:18px;margin-bottom:4px}
+.empty.tight p{margin-bottom:10px;font-size:12.5px;line-height:1.4}
+.empty.tiny p{display:none}
+.empty.tight .starters{display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
+.empty.tight .starters .starter{padding:8px 12px;min-height:36px}
+.empty.tight .starters .starter:hover{transform:none}
+.empty.tight .starters .starter svg.mini,.empty.tight .starters .starter span{display:none}
+.empty.tight .starters .starter b{margin:0;font-size:13px}
+.empty.tight .welcome{grid-template-columns:minmax(0,1fr)}
+.ptitle input.bad,.nid-edit.bad{border-color:var(--err)}
+/* under the canvas toolbar, messages keep clear of the zoom column on the left */
+body.stacked .banner,body.stacked .coach,body.stacked .toasts{left:calc(var(--sl,0px) + 58px);right:8px;transform:none;width:auto;max-width:none}
+body.stacked .toasts{justify-items:center}
+
 /* small targets made easy: every icon button is at least 34 px, and the ones that sit in rows are spaced apart */
 .icon-btn{width:34px;height:34px;color:var(--ink2)}
 .member .icon-btn,.path .go .icon-btn,.srow .icon-btn{border:1px solid var(--line);background:var(--bg)}

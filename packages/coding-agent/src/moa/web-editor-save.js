@@ -179,23 +179,19 @@ function saveOrder(list) {
 			if (!isScratch(m) && m.$o && m.$o.sid !== s.id && ids.has(m.$o.sid)) takes.get(s.id).add(m.$o.sid);
 	const state = new Map(),
 		after = [];
-	let trade = false;
 	const visit = id => {
-		if (state.get(id) === 1) trade = true;
 		if (state.has(id)) return;
 		state.set(id, 1);
 		for (const from of takes.get(id)) visit(from);
-		state.set(id, 2);
 		after.push(id);
 	};
 	for (const s of list) visit(s.id);
-	const order = after.reverse().map(srcOf);
-	order.trade = trade; // files that give each other mixtures: no order is safe by itself
-	return order;
+	return after.reverse().map(srcOf);
 }
 /* Shared presets of a file whose text changed. While several files are saved at once NeoPi keeps every mixture on
    disk by briefly holding old and new side by side, and a preset table cannot hold two texts under one name, so it
-   refuses that combination. The page then writes the files one after another instead, gaining files first. */
+   refuses that combination. The page then writes the changed preset text on its own first, and everything else
+   (every move whole) in one request after it. */
 const presetRewrites = sid => {
 	const f = fileOf(sid);
 	return ["roles", "envelopes"].flatMap(kind =>
@@ -220,6 +216,12 @@ function jumpTo(sid, m, rest) {
 let saving = false,
 	confirmedLoss = new Set(),
 	saveSaid = null; // saveSaid: what NeoPi answered to the last refused save
+let stepOne = null; // preset text already written by a save whose second step did not go through
+const REVIEW_RETRY = 3000;
+const stepOneNote = done =>
+	T("save.split.done.sub", {
+		what: done.map(d => T("save.split.done.item", { names: d.keys.join(", "), path: d.path })).join("; "),
+	});
 /* What NeoPi refused at the moment of writing, per file, for as long as that draft stays exactly as it was sent. */
 const refusals = new Map();
 async function openSave() {
@@ -245,7 +247,7 @@ async function openSave() {
 	const sheet = openSheet({
 		wide: true,
 		title: T("save.title"),
-		sub: TN("save.sub", changed.length),
+		sub: oneByOne(changed) ? T("save.sub.split", { n: changed.length }) : TN("save.sub", changed.length),
 		body,
 		note: "",
 		primary: { label: T("save.go"), disabled: true, run: () => {} },
@@ -284,9 +286,42 @@ async function openSave() {
 				blockers++;
 				blockedFiles.add(s.id);
 			};
+		const copyBtn = () =>
+			h(
+				"button",
+				{
+					class: "btn small",
+					type: "button",
+					onclick: () => copyText(tomlOf(sent), T("gone.copied", { path: s.displayPath })),
+				},
+				icon("copy", 12),
+				T("save.copyMine"),
+			);
+		const dropBtn = () =>
+			h(
+				"button",
+				{ class: "btn small danger", type: "button", onclick: () => confirmDrop(s) },
+				T("conflict.discard"),
+			);
+		const row = (...buttons) => h("div", { class: "fixes row" }, buttons);
 		if (!res.ok) {
 			block();
-			checks.push(check("no", T("save.chk.unreachable"), res.data?.error ?? T("harness.silent")));
+			checks.push(
+				check(
+					"no",
+					T("save.chk.unreachable"),
+					[res.data?.error ?? T("harness.silent"), " ", T("save.chk.unreachable.sub")],
+					row(
+						h(
+							"button",
+							{ class: "btn small", type: "button", onclick: () => openSave() },
+							icon("reload", 12),
+							T("common.retry"),
+						),
+						copyBtn(),
+					),
+				),
+			);
 		} else {
 			const errs = (refused?.errors ?? res.data.validation?.errors ?? []).map(it => {
 				const m = /^mixtures\[(\d+)\]\.?(.*)$/.exec(it.path ?? ""),
@@ -353,25 +388,17 @@ async function openSave() {
 			);
 		}
 		const now = srcOf(s.id) ?? s;
-		const copyMine = () =>
-			h(
-				"div",
-				{ class: "fixes row" },
-				h(
-					"button",
-					{
-						class: "btn small",
-						type: "button",
-						onclick: () => copyText(tomlOf(sent), T("gone.copied", { path: s.displayPath })),
-					},
-					icon("copy", 12),
-					T("save.copyMine"),
-				),
-			);
 		/* A file NeoPi cannot read any more is not something to merge with: nothing is written to it, and the draft waits. */
 		if (f.theirs?.broken) {
 			block();
-			checks.push(check("no", T("save.chk.broken"), T("save.chk.broken.sub", { why: f.theirs.broken }), copyMine()));
+			checks.push(
+				check(
+					"no",
+					T("save.chk.broken"),
+					T("save.chk.broken.sub", { why: f.theirs.broken }),
+					row(copyBtn(), dropBtn()),
+				),
+			);
 		} else if (!writable(now)) {
 			block();
 			checks.push(
@@ -379,7 +406,7 @@ async function openSave() {
 					"no",
 					T("save.chk.readOnly"),
 					T("save.chk.readOnly.sub", { why: now.readOnly ?? f.base.broken ?? "?" }),
-					copyMine(),
+					row(copyBtn(), dropBtn()),
 				),
 			);
 		} else if (f.theirs) {
@@ -413,12 +440,12 @@ async function openSave() {
 			checks.push(
 				check(
 					agreed ? "unk" : "no",
-					T("save.chk.lossy"),
+					TN("save.chk.lossy", losing.length),
 					null,
 					h(
 						"div",
 						{ class: "fixes" },
-						losing.slice(0, 5).map(line => h("div", { class: "hint" }, line)),
+						losing.map(line => h("div", { class: "hint" }, line)),
 						toggle(agreed, T("save.chk.lossy.ok"), T("save.chk.lossy.sub"), () => {
 							agreed ? confirmedLoss.delete(s.id + f.base.hash) : confirmedLoss.add(s.id + f.base.hash);
 							openSave();
@@ -514,18 +541,25 @@ async function openSave() {
 	const idle = waiting.filter(m => !changed.some(s => fileOf(s.id).doc.mixtures.includes(m)));
 	const split = oneByOne(changed),
 		rewritten = changed.flatMap(s => presetRewrites(s.id)).join(", ");
-	if (split && changed.trade) blockers++;
 	const stepNote =
 		split &&
 		h(
 			"div",
 			{ class: "checks", style: { marginBottom: "8px" } },
-			changed.trade
-				? check("no", T("save.split.trade"), T("save.split.trade.sub", { names: rewritten }))
-				: check("unk", T("save.split"), T("save.split.sub", { names: rewritten })),
+			check("unk", T("save.split"), T("save.split.sub", { names: rewritten })),
+		);
+	const done = stepOne;
+	stepOne = null;
+	const receipt =
+		done &&
+		h(
+			"div",
+			{ class: "checks", style: { marginBottom: "8px" } },
+			check("ok", T("save.split.done"), stepOneNote(done)),
 		);
 	body.replaceChildren(
 		...[
+			receipt,
 			stepNote,
 			index,
 			...sections.map(x => x.section),
@@ -544,13 +578,32 @@ async function openSave() {
 	go.disabled = blockers > 0;
 	go.onclick = () => doSave(drafts, proofs, check, go, note);
 	if (!blockers) go.focus();
+	/* A review that is red because NeoPi is silent, or because a file cannot be read or written right now, keeps
+     looking, and rebuilds itself the moment that changes: there is no need to cancel and come back. */
+	const silent = drafts.some(d => !d.res.ok && !d.res.status);
+	const state = () =>
+		drafts
+			.map(d => {
+				const f = fileOf(d.s.id);
+				return (f?.theirs?.broken ?? "") + "/" + writable(srcOf(d.s.id) ?? d.s);
+			})
+			.join();
+	if (silent || drafts.some(d => fileOf(d.s.id).theirs?.broken || !writable(srcOf(d.s.id) ?? d.s)))
+		setTimeout(async function again() {
+			if (sheetEl?.firstChild !== sheet || saving) return;
+			const was = state(),
+				up = await reloadAll(false);
+			if (sheetEl?.firstChild !== sheet || saving) return;
+			if ((silent && up) || state() !== was) return openSave();
+			setTimeout(again, REVIEW_RETRY);
+		}, REVIEW_RETRY);
 }
-/* What a successful write means for the page: the files on disk are now these, and what was written is at home there. */
-function settle(data) {
+/* The disk moved on because of a write of mine: the drafts are now compared against these versions. */
+function rebase(data) {
 	for (const snap of data.files ?? []) {
 		const f = fileOf(snap.id);
 		if (!f) continue;
-		/* Older undo steps were drafts against the disk as it was before this save. This save put my own draft there,
+		/* Older undo steps were drafts against the disk as it was before this write. This write put my own work there,
        so going back to them is going back on my own work: they now compare against what was just written. */
 		for (const step of [...undoStack, ...redoStack]) {
 			const then = step.state.disk.get(snap.id);
@@ -558,10 +611,18 @@ function settle(data) {
 		}
 		f.base = snap;
 		f.theirs = null;
+	}
+	sources = data.sources ?? sources;
+}
+/* A whole draft was written: every mixture in a written file is now at home there. */
+function settle(data) {
+	rebase(data);
+	for (const snap of data.files ?? []) {
+		const f = fileOf(snap.id);
+		if (!f) continue;
 		f.both = null;
 		for (const m of f.doc.mixtures) if (!isScratch(m)) m.$o = { sid: snap.id, name: m.name };
 	}
-	sources = data.sources ?? sources;
 	reconcileOrigins();
 }
 async function doSave(drafts, proofs, check, go, note) {
@@ -569,23 +630,46 @@ async function doSave(drafts, proofs, check, go, note) {
 	go.disabled = true;
 	go.textContent = T("save.going");
 	const list = drafts.map(d => d.s);
-	const file = ({ s, sent }) => {
+	const file = (s, doc) => {
 		const f = fileOf(s.id);
 		return {
 			sourceId: s.id,
 			baseHash: f.base.exists ? f.base.hash : null,
-			doc: sent,
+			doc,
 			...(confirmedLoss.has(s.id + f.base.hash) && { confirmCanonicalRewrite: true }),
 		};
 	};
-	let res;
+	let res = null,
+		presetStep = false;
+	const written = [];
 	if (oneByOne(list)) {
-		for (const d of drafts) {
-			res = await api.save([file(d)]);
-			if (!res.ok) break;
-			settle(res.data);
+		/* Step one: each file whose shared preset text changed is written alone, exactly as it is on disk except for
+       that text. No mixture moves in this step, so nothing can be lost by it, and nothing is "saved" yet as far
+       as the drafts are concerned: they are only compared against the new version of the file from here on. */
+		for (const s of list) {
+			const keys = presetRewrites(s.id);
+			if (!keys.length) continue;
+			const f = fileOf(s.id),
+				only = bare({ ...f.base.doc, warnings: undefined });
+			for (const k of keys) {
+				const kind = k.slice(0, k.indexOf(".")),
+					key = k.slice(kind.length + 1);
+				only[kind][key] = f.doc[kind][key];
+			}
+			res = await api.save([file(s, only)]);
+			if (!res.ok) {
+				presetStep = true;
+				break;
+			}
+			rebase(res.data);
+			written.push({ path: s.displayPath, keys });
 		}
-	} else res = await api.save(drafts.map(file));
+	}
+	/* Step two (or the only step): every file that still differs from disk, in one all-or-nothing request. */
+	if (!presetStep) {
+		const rest = drafts.filter(d => fileDirty(d.s.id));
+		if (rest.length || !res) res = await api.save((rest.length ? rest : drafts).map(d => file(d.s, d.sent)));
+	}
 	saving = false;
 	if (res.ok) {
 		settle(res.data);
@@ -604,6 +688,7 @@ async function doSave(drafts, proofs, check, go, note) {
 		return;
 	}
 	go.textContent = T("save.go");
+	stepOne = written.length ? written : null;
 	if (res.status === 410) return;
 	if (res.status === 409 && res.data?.conflicts?.length) {
 		for (const c of res.data.conflicts) if (fileOf(c.sourceId)) fileOf(c.sourceId).theirs = c.current;
@@ -620,6 +705,11 @@ async function doSave(drafts, proofs, check, go, note) {
 			}
 		else await reloadAll(false);
 		saveSaid = res.data.error ?? null;
+		return openSave();
+	}
+	if (presetStep && res.status === 422) {
+		saveSaid = T("save.split.refused", { error: res.data?.error ?? "" });
+		render();
 		return openSave();
 	}
 	if (res.status === 422 && res.data?.files?.length) {
@@ -639,6 +729,11 @@ async function doSave(drafts, proofs, check, go, note) {
 	if (res.status === 500 && res.data?.partial) {
 		sources = res.data.sources ?? sources;
 		return partialSheet(res.data);
+	}
+	if (stepOne) {
+		saveSaid = T("save.split.second", { error: res.data?.error ?? T("harness.silent") });
+		render();
+		return openSave();
 	}
 	render();
 	note.textContent = "";
@@ -668,6 +763,8 @@ function savedSummary(saved) {
 /* The rare bad case, said plainly: a write failed part-way and one file could not be put back.
    The safe choice is the default: the draft stays. Reloading is offered, says what it does, and can be undone. */
 function partialSheet(data) {
+	const done = stepOne;
+	stepOne = null;
 	const word = {
 		original: T("partial.original"),
 		saved: T("partial.saved"),
@@ -678,6 +775,8 @@ function partialSheet(data) {
 		title: T("partial.title"),
 		sub: data.error,
 		body: [
+			done &&
+				h("p", { class: "hint", style: { marginBottom: "10px" } }, T("save.split.done.before"), stepOneNote(done)),
 			h("p", { class: "hint", style: { marginBottom: "10px" } }, T("partial.body")),
 			h(
 				"ul",

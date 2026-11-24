@@ -582,13 +582,28 @@ function renameInline(id) {
 		renamed(refs, value);
 	};
 	input.addEventListener("input", () => input.classList.toggle("bad", !!idProblem(input.value, id)));
+	/* Enter and Ctrl S keep the name, or keep the field open with the reason; clicking away from an unusable name drops it. */
+	input._settle = () => {
+		const value = input.value.trim(),
+			why = value !== id && idProblem(value, id);
+		if (why) {
+			toast(why, { bad: true });
+			input.classList.add("bad");
+			input.focus();
+			return false;
+		}
+		finish(true);
+		return true;
+	};
 	input.addEventListener("keydown", ev => {
 		if (!(ev.ctrlKey || ev.metaKey)) ev.stopPropagation();
-		if (ev.key === "Enter") finish(true);
+		if (ev.key === "Enter") {
+			ev.preventDefault();
+			input._settle();
+		}
 		if (ev.key === "Escape") finish(false);
 	});
 	input.addEventListener("blur", () => finish(true));
-	input.addEventListener("change", () => finish(true));
 }
 
 /* ═══════════════════════════ DELETING ═══════════════════════════
@@ -1137,20 +1152,13 @@ function centerSpot() {
 		[cx, cy] = viewCenter();
 	return toWorld(r.left + cx - (W * cam.z) / 2, r.top + cy - 60);
 }
-/* Ctrl S while a name or ID is still being typed: what is in the field is kept first, exactly as leaving the field
-   would, so the save includes it. If the field refuses it, the reason is shown and nothing is saved yet. */
-function settleField() {
+/* Ctrl S while a name or ID is still being typed: the field is asked to keep it first, exactly as Enter would, so
+   the save includes it. A field that refuses stays as it is, text and focus, with the reason, and nothing is saved yet.
+   Fields whose every keystroke is already in the draft have nothing to settle. */
+const settleField = () => {
 	const a = document.activeElement;
-	if (!a || !/^(INPUT|TEXTAREA)$/.test(a.tagName) || a.closest(".sheet,.pop")) return true;
-	if (a.classList.contains("rn")) {
-		a.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-		return !sideRename;
-	}
-	const typed = a.value;
-	a.dispatchEvent(new Event("change", { bubbles: true }));
-	if (a.isConnected) a.blur();
-	return !(a.isConnected && a.value !== typed);
-}
+	return !a?._settle || a._settle() !== false;
+};
 document.addEventListener("keydown", ev => {
 	const typingNow = /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName),
 		mod = ev.ctrlKey || ev.metaKey,
