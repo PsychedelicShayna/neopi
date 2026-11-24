@@ -388,7 +388,7 @@ button.chip:hover{border-color:var(--line3);color:var(--ink)}
 .path .meta{display:flex;align-items:center;gap:6px;font:11.5px/1 var(--mono);color:var(--ink3)}
 .path .meta b{color:var(--ink);font-weight:500}
 .path .go{display:flex;gap:2px}
-.icon-btn{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--ink3)}
+.icon-btn{flex:none;width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--ink2)}
 .icon-btn:hover{background:var(--surface3);color:var(--ink)}
 .icon-btn:disabled{opacity:.3;cursor:default}
 .story{margin:0;padding:0;list-style:none;display:grid;gap:2px;counter-reset:s}
@@ -628,7 +628,8 @@ button.chip:hover{border-color:var(--line3);color:var(--ink)}
 .srow .n span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .n i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--sel);box-shadow:0 0 8px var(--sel)}
 .srow .d{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:11.5px;line-height:1.3;color:var(--ink3);min-width:0}
-.srow .d>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* the description always has its own line, so tags sit in the same place on every row */
+.srow .d>span:first-child{flex:1 1 100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .srow .tag{white-space:nowrap}
 .tag.warn{color:var(--warn);background:#f5b85a1c}.tag.bad{color:var(--err);background:#ff6b7c1c}.tag.ok{color:var(--ok);background:#7fe3a61a}.tag.judge{color:var(--judge);background:var(--judge-d)}
 .srow .icon-btn{opacity:.55}
@@ -663,37 +664,43 @@ button.chip:hover{border-color:var(--line3);color:var(--ink)}
 .dock button{height:36px}
 
 .banner:not([hidden])~.coach{top:112px}
-/* the free part of the canvas, whatever the window width: a pinned list and the inspector both take from it */
+/* ───────────── room ─────────────
+   Nothing may ever be clipped or pushed under something else, at any window size and with any panel open.
+   What floats over the canvas is centred on the part of it that is free (--cx) and no wider than that part (--room);
+   a pinned list and an open inspector both take from it, so the breakpoints are about that room, not the window. */
 .canvas[data-room=m] .hintline,.canvas[data-room=s] .hintline,.canvas[data-room=xs] .hintline{display:none}
 .canvas[data-room=m] .key,.canvas[data-room=s] .key,.canvas[data-room=xs] .key{display:none}
 .canvas[data-room=s] .dock button:not(.icon) span,.canvas[data-room=xs] .dock button:not(.icon) span{display:none}
 .canvas[data-room=s] .dock button:not(.icon),.canvas[data-room=xs] .dock button:not(.icon){padding:0 10px}
 .canvas[data-room=xs] .dock kbd,.canvas[data-room=xs] .dock .sep{display:none}
+.canvas[data-room=xs] .dock{gap:0;padding:4px}
+.canvas[data-room=xs] .dock button,.canvas[data-room=xs] .dock button.icon{padding:0;width:38px;justify-content:center}
 .canvas[data-room=xs] .chip>:not(b):not(svg){display:none}
 .trial{max-width:calc(var(--room,100%) - 24px)}
 .banner{max-width:min(620px,calc(var(--room,100%) - 24px))}
 .dock,.coach,.hintline{max-width:calc(var(--room,100%) - 12px)}
+/* centred floats size to their content, not to the space right of their centre line */
+.dock,.coach,.hintline,.banner,.toasts{width:max-content}
+.toasts{max-width:calc(var(--room,100%) - 24px)}
+.toast{max-width:100%;white-space:normal}
+.dock{flex-wrap:wrap;justify-content:center}
+.canvas[data-none] .dock,.canvas[data-none] .hud,.canvas[data-none] .hintline{display:none}
 
-/* narrow windows: nothing may ever be clipped. The bar sheds detail first, then the inspector moves under the canvas. */
+/* the inspector never scrolls sideways: whatever is in it wraps or shrinks to its width */
+.pbody{overflow-x:hidden}
+.pbody>*{min-width:0;max-width:100%}
+.seg{flex-wrap:wrap}
+.seg button{flex:1 1 auto;min-width:0}
+.fld,.part,.part.sub,.card,.sec{min-width:0}
+.row2>*{min-width:0}
+.pbody .in,.pbody .ta,.pbody .sl{min-width:0;max-width:100%}
+
+/* the bar sheds detail as the window narrows; the draft state and Save are always there */
 @media (max-width:1320px){.proto,.addr{display:none}}
-@media (max-width:1180px){
-  .ledger>span:not(.one){display:none}.ledger>span.one{display:flex}
-}
+@media (max-width:1180px){.ledger>span:not(.one){display:none}.ledger>span.one{display:flex}}
 @media (max-width:1040px){:root{--pw:320px}.brand b,.crumb{display:none}}
+@media (max-width:520px){.brand{display:none}.bar{gap:6px;padding:0 8px 0 6px}.bar .btn{padding:0 10px}.ledger>span.one b{display:none}.ledger>span.one{padding:5px 8px}.switch .scope{display:none}}
 @media (max-width:860px){
-  .panel{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:min(46vh,440px)}
-  .panel.shut{transform:translateY(calc(100% + 24px))}
-  .dock{bottom:auto;top:10px}
-  .hud.tl{display:none}
-  .hud.bl{bottom:auto;top:64px;left:8px}
-  .zoom{flex-direction:column}
-  .reopen{top:auto;bottom:12px;right:12px}
-  .canvas[data-trial] .reopen{display:none}
-  .banner{top:64px}
-  .banner:not([hidden])~.coach{top:122px}
-  .trial{width:calc(100% - 16px);bottom:8px}
-  .toasts{bottom:auto;top:64px}
-  .coach{top:60px}
   .savegrid{grid-template-columns:minmax(0,1fr)}
   .starters{grid-template-columns:1fr}
   .empty svg.mini{display:none}
@@ -701,7 +708,49 @@ button.chip:hover{border-color:var(--line3);color:var(--ink)}
   .notes span:not(.count){display:none}
   .sheet{width:calc(100vw - 16px);max-height:calc(100vh - 24px)}
 }
-@media (max-width:520px){.ledger{display:none}.bar{gap:6px;padding-right:8px}.btn{padding:0 10px}}
+
+/* not enough room beside the canvas: the inspector docks under it, the toolbar moves to the top, and the toolbar
+   keeps one shape (icons, same order, same place) whether the inspector is open or not */
+body.stacked .panel{top:auto;left:calc(var(--sl,0px) + 8px);right:8px;bottom:8px;width:auto;height:min(46vh,440px)}
+body.stacked .panel.shut{transform:translateY(calc(100% + 24px))}
+body.stacked .dock{bottom:auto;top:10px}
+body.stacked .hud.tl{display:none}
+body.stacked .hud.bl{bottom:auto;top:64px;left:calc(var(--sl,0px) + 8px)}
+body.stacked .reopen{top:auto;bottom:12px;right:12px}
+body.stacked .canvas[data-trial] .reopen{display:none}
+body.stacked .banner{top:64px}
+body.stacked .banner:not([hidden])~.coach{top:122px}
+body.stacked .trial{width:calc(var(--room,100%) - 16px);bottom:8px}
+body.stacked .toasts{bottom:auto;top:64px}
+body.stacked .coach{top:60px}
+
+/* small targets made easy: every icon button is at least 34 px, and the ones that sit in rows are spaced apart */
+.icon-btn{width:34px;height:34px;color:var(--ink2)}
+.member .icon-btn,.path .go .icon-btn,.srow .icon-btn{border:1px solid var(--line);background:var(--bg)}
+.member .icon-btn:hover:not(:disabled),.path .go .icon-btn:hover,.srow .icon-btn:hover{border-color:var(--line3)}
+.member{gap:4px}.path .go{gap:4px}.srow{gap:4px}
+.srow .icon-btn{opacity:.8}
+.zoom{width:40px}.zoom button{height:36px}
+.step button{width:36px;height:36px}
+
+/* review: one row per file first, so nothing that will be written is announced only below the fold */
+.saveindex{display:grid;gap:4px;margin-bottom:6px}
+.saveindex button{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:8px;align-items:center;min-height:38px;padding:6px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);text-align:left}
+.saveindex button:hover{border-color:var(--line3)}
+.saveindex button.no{border-color:#ff6b7c66}
+.saveindex b{font:600 12px var(--mono)}
+.saveindex span:not(.tag){color:var(--ink2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.saveindex small{font:500 11.5px var(--mono);color:var(--ink3)}
+.fixes{display:grid;gap:5px;margin-top:7px}
+.fixes.row{display:flex;flex-wrap:wrap;gap:6px}
+.btn.fix{height:auto;min-height:34px;padding:6px 10px;white-space:normal;text-align:left;justify-content:space-between;gap:10px;line-height:1.35}
+.btn.fix span{min-width:0}
+.btn.fix b{font:600 12px var(--mono)}
+.btn.fix svg{flex:none;color:var(--ink3)}
+.fieldmsg{margin:4px 0 8px;min-height:18px;color:var(--err);font-size:12px}
+.btn.held{border-color:#ff6b7c88;color:var(--ink)}
+.dead .btn.fix{width:100%;justify-content:flex-start}
+.toml .blk.mine{border-left-color:#ff7ccf55}
 </style>
 </head>
 <body>

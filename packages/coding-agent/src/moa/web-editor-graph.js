@@ -35,6 +35,17 @@ function tidy() {
 	for (const id of order) (layers[depth.get(id)] ??= []).push(id);
 	const top = new Map(),
 		H = id => geo.get(id)?.h ?? 96;
+	/* A column gap is as wide as the widest label that has to sit on a wire crossing it, so a label never ends up under a card. */
+	const colX = [0];
+	for (let col = 1; col < layers.length; col++) {
+		let gap = GAP_X;
+		for (const e of mix.edges) {
+			if (isFan(e) || depth.get(e.from) !== col - 1 || depth.get(e.to) !== col) continue;
+			const lab = edgeLabel(e);
+			if (!lab.plain) gap = Math.max(gap, Math.ceil(lab.width) + 40);
+		}
+		colX[col] = colX[col - 1] + W + gap;
+	}
 	const portY = (id, key) => top.get(id) + (geo.get(id)?.rows[key] ?? PORT_Y);
 	layers.forEach((ids, col) => {
 		const want = ids
@@ -56,7 +67,7 @@ function tidy() {
 		for (const w of want) {
 			top.set(w.id, w.at - drift);
 			const n = node(w.id);
-			n.$x = col * (W + GAP_X);
+			n.$x = colX[col];
 			n.$y = Math.round(w.at - drift);
 		}
 	});
@@ -793,13 +804,25 @@ function applyCam() {
 	if (out) out.textContent = Math.round(cam.z * 100) + "%";
 }
 /* How much of the canvas the surrounding chrome covers. In a narrow window the inspector sits under the canvas, not beside it. */
-const stacked = () => matchMedia("(max-width:860px)").matches;
+/* The inspector sits beside the canvas while there is room for both next to a pinned list; otherwise under it.
+   This is decided from the room that is actually left, not from the window width alone. */
+const STACK_BELOW = 860;
+function layout() {
+	if (sidePinned && !canPin()) sidePinned = false;
+	const sl = sideOpen && sidePinned ? side.offsetWidth : 0;
+	document.body.classList.toggle("stacked", innerWidth - sl < STACK_BELOW);
+	document.body.style.setProperty("--sl", sl + "px");
+}
+const stacked = () => document.body.classList.contains("stacked");
+/* sl: the pinned list. l r t b: everything that covers the canvas on each side (list, inspector, toolbars). */
 function insets() {
 	const panel = $("panel"),
 		below = stacked(),
-		open = panelOpen && !!mix;
+		open = panelOpen && !!mix,
+		sl = sideOpen && sidePinned ? side.offsetWidth : 0;
 	return {
-		l: sidePinned && !below ? $("side").offsetWidth : below ? 46 : 0,
+		sl,
+		l: sl + (below ? 46 : 0),
 		r: open && !below ? panel.offsetWidth + 24 : 0,
 		t: below ? 70 : 64,
 		b:
@@ -833,7 +856,7 @@ function fit(animate) {
 		vw = canvas.clientWidth - i.l - i.r,
 		vh = canvas.clientHeight - i.t - i.b,
 		padX = 22;
-	cam.z = clamp(Math.min((vw - padX * 2) / b.w, vh / b.h), 0.25, 1.35);
+	cam.z = clamp(Math.min((vw - padX * 2) / b.w, vh / b.h), 0.12, 1.35);
 	cam.x = i.l + (vw - b.w * cam.z) / 2 - b.x * cam.z;
 	cam.y = i.t + (vh - b.h * cam.z) / 2 - b.y * cam.z;
 	camTouched = false;

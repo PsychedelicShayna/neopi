@@ -192,6 +192,27 @@ const undoStack = [],
 	redoStack = [];
 let typingKey = null,
 	edgeSeq = 0;
+/* Number fields holding something that is not a number. The draft keeps its last good value, so the field,
+   the issue list and the Save review all say so until it is corrected or cleared. key → {mix,kind,id,field,label,text} */
+const badInputs = new Map();
+/* A stable name for "this field of this mixture", wherever the mixture is moved to. */
+const mixIds = new WeakMap();
+let mixSeq = 0;
+function fieldKey() {
+	let u = mixIds.get(mix);
+	if (!u) mixIds.set(mix, (u = ++mixSeq));
+	return "m" + u + (sel ? ":" + sel.kind + ":" + sel.id : "");
+}
+/* A bad input only counts while the thing it belongs to still exists under the name it had. */
+function pruneBad() {
+	for (const [key, b] of badInputs) {
+		const there =
+			whereIs(b.mix) &&
+			(b.kind === "mix" ||
+				(b.kind === "node" ? b.mix.members.some(n => n.id === b.id) : b.mix.edges.some(e => e.$k === b.id)));
+		if (!there) badInputs.delete(key);
+	}
+}
 const D = () => boot.defaults;
 const srcOf = sid => sources.find(s => s.id === sid);
 const fileOf = sid => files.get(sid);
@@ -237,12 +258,87 @@ function sendable(sid) {
 	const out = bare({ ...d, mixtures: d.mixtures.filter((m, i) => !isScratch(m) && map.push(i)) });
 	return { doc: out, map };
 }
+/* A file has something to save when its draft differs from disk, or when it holds a mixture that is still moving in
+   from another file. A move is only done once the original is gone too; until then the file that received the
+   mixture stays part of every save, so its version on disk is checked again at the moment the original is removed. */
+const sameAsDisk = (sid, snap) => structure(sendable(sid).doc) === structure({ ...snap.doc, warnings: undefined });
 const fileDirty = sid => {
 	const f = fileOf(sid);
-	return !!f && structure(sendable(sid).doc) !== structure({ ...f.base.doc, warnings: undefined });
+	return !!f && (f.doc.mixtures.some(m => m.$o && m.$o.sid !== sid) || !sameAsDisk(sid, f.base));
 };
 const dirtyFiles = () => sources.filter(s => fileDirty(s.id));
 const dirty = () => dirtyFiles().length > 0;
+/* Mixtures that exist only in this tab and cannot be written yet: named, perhaps described, but without a member. */
+const scratchList = () => sources.flatMap(s => (fileOf(s.id)?.doc.mixtures ?? []).filter(isScratch));
+const whereIs = m => {
+	for (const [sid, f] of files) {
+		const index = f.doc.mixtures.indexOf(m);
+		if (index >= 0) return { sid, index };
+	}
+	return null;
+};
+/* Replace a file's draft with what is on disk. Card positions and never-written mixtures stay. */
+function follow(sid, snap) {
+	const f = fileOf(sid),
+		old = f?.doc,
+		fresh = adopt(snap.doc, sid);
+	for (const m of fresh.mixtures) {
+		const was = old?.mixtures.find(x => x.name === m.name);
+		for (const n of m.members) {
+			const o = was?.members.find(x => x.id === n.id);
+			if (o) {
+				n.$x = o.$x;
+				n.$y = o.$y;
+			}
+		}
+	}
+	if (old) for (const m of old.mixtures) if (isScratch(m)) fresh.mixtures.push(m);
+	const next = { base: snap, doc: fresh, theirs: null, both: null };
+	f ? Object.assign(f, next) : files.set(sid, next);
+}
+/* A mixture's origin ("this is debate from the user file") only means something while the disk still has it there,
+   and only one mixture can be it; anything else is simply a new mixture. A new mixture that takes the name of one
+   deleted from the same file is that one, edited. Run after anything that changes a draft or what it is compared with. */
+function reconcileOrigins() {
+	const atHome = new Set(),
+		claimed = new Set();
+	for (const [sid, f] of files)
+		for (const m of f.doc.mixtures) if (m.$o?.sid === sid) atHome.add(sid + "/" + m.$o.name);
+	for (const [sid, f] of files)
+		for (const m of f.doc.mixtures) {
+			if (!m.$o) continue;
+			const key = m.$o.sid + "/" + m.$o.name,
+				home = fileOf(m.$o.sid),
+				away = m.$o.sid !== sid;
+			if (
+				!home ||
+				!(home.base.doc?.mixtures ?? []).some(x => x.name === m.$o.name) ||
+				(away && (atHome.has(key) || claimed.has(key)))
+			)
+				delete m.$o;
+			else if (away) claimed.add(key);
+		}
+	for (const [sid, f] of files)
+		for (const m of f.doc.mixtures) {
+			const key = sid + "/" + m.name;
+			if (m.$o || atHome.has(key) || claimed.has(key) || !(f.base.doc?.mixtures ?? []).some(x => x.name === m.name))
+				continue;
+			m.$o = { sid, name: m.name };
+			atHome.add(key);
+		}
+}
+/* Put the canvas back on a mixture after documents were swapped under it: the same object, else the same name. */
+function reopen(open, sid, name) {
+	const at = open && whereIs(open);
+	cur = at ?? null;
+	if (!cur && sid && name != null) {
+		const index = fileOf(sid)?.doc.mixtures.findIndex(m => m.name === name) ?? -1;
+		if (index >= 0) cur = { sid, index };
+	}
+	if (!at) sel = null;
+	sync();
+	if (!mix) pickMixture();
+}
 /* How one mixture differs from what is on disk: new · moved · renamed · edited · null */
 function mixState(m, sid) {
 	if (!m.$o) return "new";
@@ -366,13 +462,166 @@ function resolveModel(n) {
 	const [base, suffix] = splitEffort(selector),
 		hit = boot.models.find(m => m.selector === base);
 	if (!hit) return { state: "unknown" };
+	if (hit.role && !hit.resolved) return { state: "unset", role: true }; // a role alias nothing is assigned to in this NeoPi
 	return { state: "ok", res: hit.resolved ?? hit.selector, effort: suffix || hit.effort, role: !!hit.role };
+}
+/* A sensible selector for a new model: the first of the wanted role aliases that is actually set up here,
+   else any alias that is, else the first model NeoPi lists. Never an alias that resolves to nothing. */
+function starterModel(...wanted) {
+	const usable = m => !m.role || !!m.resolved;
+	return (
+		(
+			wanted.map(w => boot.models.find(m => m.selector === w && usable(m))).find(Boolean) ??
+			boot.models.find(m => m.role && usable(m)) ??
+			boot.models.find(usable)
+		)?.selector ?? ""
+	);
 }
 const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
 function splitEffort(selector) {
 	const at = selector.lastIndexOf(":"),
 		suffix = at > 0 ? selector.slice(at + 1) : "";
 	return EFFORTS.includes(suffix) ? [selector.slice(0, at), suffix] : [selector, ""];
+}
+
+/* ═══════════════════════════ MIXTURES.toml ═══════════════════════════
+   The text NeoPi writes for a document, line for line (a port of moa/toml.ts). The File tab and "copy my draft"
+   work from it, so what they show is exact for the draft on screen, even while NeoPi is not answering.
+   NeoPi's own rendering is used instead whenever it has one for exactly this draft. */
+const tomlKey = key => (/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key));
+const tomlString = value =>
+	!value.includes("\n")
+		? JSON.stringify(value)
+		: '"""' +
+			value.replace(/[\\"\u0000-\u0008\u000b-\u001f\u007f]/g, c =>
+				c === "\\"
+					? "\\\\"
+					: c === '"'
+						? '\\"'
+						: c === "\r"
+							? "\\r"
+							: "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+			) +
+			'"""';
+const tomlList = values => "[" + values.map(tomlString).join(", ") + "]";
+const tomlInline = entries =>
+	entries.length ? "{ " + entries.map(([key, value]) => tomlKey(key) + " = " + value).join(", ") + " }" : "{}";
+function tomlTransit(x = {}) {
+	const out = PARTS.filter(part => part !== "transcript" && x[part]).map(part => [partToken(part), "true"]);
+	if (x.transcript === true) out.push(["transcript", "true"]);
+	else if (x.transcript) {
+		const fold = [];
+		if (x.transcript.optimize) fold.push(["optimize", tomlString(x.transcript.optimize)]);
+		if (x.transcript.budgetTokens !== undefined) fold.push(["budget_tokens", String(x.transcript.budgetTokens)]);
+		out.push(["transcript", fold.length ? tomlInline(fold) : "true"]);
+	}
+	return tomlInline(out);
+}
+function tomlPresets(lines, header, presets) {
+	const names = Object.keys(presets ?? {});
+	if (!names.length) return;
+	lines.push("", "[" + header + "]", ...names.map(name => tomlKey(name) + " = " + tomlString(presets[name])));
+}
+const tomlYesNo = criteria =>
+	tomlInline(["true", "false"].filter(k => criteria[k] !== undefined).map(k => [k, tomlString(criteria[k])]));
+function tomlMember(lines, n) {
+	lines.push("", "[[mixtures.members]]", "id = " + tomlString(n.id));
+	if (n.description !== undefined) lines.push("description = " + tomlString(n.description));
+	if (n.show) lines.push("show = " + tomlString(n.show));
+	if (n.kind === "verdict") {
+		const q = n.question;
+		lines.push('kind = "verdict"');
+		if (n.state) lines.push("state = " + tomlList(n.state.map(partToken)));
+		if (n.render !== undefined) lines.push("render = " + tomlString(n.render));
+		lines.push(
+			"[mixtures.members.question]",
+			"type = " + tomlString(q.type),
+			"instructions = " + tomlString(q.instructions ?? ""),
+		);
+		if (q.type === "choice")
+			lines.push(
+				"criteria = " +
+					tomlInline(Object.entries(q.criteria ?? {}).map(([label, rubric]) => [label, tomlString(rubric ?? "")])),
+			);
+		else if (q.type === "score") lines.push("criteria = " + tomlList(q.criteria ?? []));
+		else if (q.criteria) lines.push("criteria = " + tomlYesNo(q.criteria));
+		return;
+	}
+	lines.push("model = " + tomlString(n.model ?? ""));
+	if (n.role !== undefined) lines.push("role = " + tomlString(n.role));
+	if (n.systemPrompt !== undefined) lines.push("system_prompt = " + tomlString(n.systemPrompt));
+	if (n.inherit !== undefined) lines.push("inherit = " + n.inherit);
+	if (n.tools !== undefined) lines.push("tools = " + (typeof n.tools === "boolean" ? n.tools : tomlList(n.tools)));
+	if (n.maxTokens !== undefined) lines.push("max_tokens = " + n.maxTokens);
+	if (n.route) {
+		lines.push("[mixtures.members.route]", "instructions = " + tomlString(n.route.instructions ?? ""));
+		if (n.route.state) lines.push("state = " + tomlList(n.route.state.map(partToken)));
+		if (n.route.minConfidence !== undefined) lines.push("min_confidence = " + n.route.minConfidence);
+		if (n.route.fallback !== undefined) lines.push("fallback = " + tomlString(n.route.fallback));
+	}
+	if (n.terminate) {
+		lines.push("[mixtures.members.terminate]", "instructions = " + tomlString(n.terminate.instructions ?? ""));
+		if (n.terminate.criteria) lines.push("criteria = " + tomlYesNo(n.terminate.criteria));
+		if (n.terminate.state) lines.push("state = " + tomlList(n.terminate.state.map(partToken)));
+		if (n.terminate.threshold !== undefined) lines.push("threshold = " + n.terminate.threshold);
+	}
+}
+function tomlEdge(lines, e) {
+	const fan = Array.isArray(e.to);
+	lines.push("", "[[mixtures.edges]]");
+	if (e.id !== undefined) lines.push("id = " + tomlString(e.id));
+	lines.push(
+		"from = " + tomlString(e.from),
+		"to = " + (fan ? tomlList(e.to) : tomlString(e.to)),
+		"x = " + tomlTransit(e.x),
+	);
+	if (e.envelope !== undefined) lines.push("envelope = " + tomlString(e.envelope));
+	if (e.when !== undefined) lines.push("when = " + tomlString(e.when));
+	if (e.show) lines.push("show = " + tomlString(e.show));
+	if (e.maxTraversals !== undefined) lines.push("max_traversals = " + e.maxTraversals);
+	if (!fan) return;
+	if (e.slices !== undefined)
+		lines.push("slices = " + (Array.isArray(e.slices) ? tomlList(e.slices) : tomlString(e.slices)));
+	lines.push("join = " + tomlString(e.join ?? ""));
+	if (e.joinX) lines.push("join_x = " + tomlTransit(e.joinX));
+	if (e.joinEnvelope !== undefined) lines.push("join_envelope = " + tomlString(e.joinEnvelope));
+	if (e.quorum !== undefined) lines.push("quorum = " + e.quorum);
+	if (e.graceMs !== undefined) lines.push("grace_ms = " + e.graceMs);
+	if (e.anonymize !== undefined) lines.push("anonymize = " + e.anonymize);
+}
+function tomlOf(d) {
+	const lines = [];
+	tomlPresets(lines, "envelopes", d.envelopes);
+	tomlPresets(lines, "roles", d.roles);
+	for (const m of d.mixtures ?? []) {
+		lines.push("", "[[mixtures]]", "name = " + tomlString(m.name));
+		if (m.description !== undefined) lines.push("description = " + tomlString(m.description));
+		lines.push("entry = " + tomlString(m.entry ?? ""));
+		if (m.serve !== undefined) lines.push("serve = " + m.serve);
+		const L = m.limits,
+			limits = !L
+				? []
+				: [
+						L.maxHops !== undefined && "max_hops = " + L.maxHops,
+						L.budgetUsd !== undefined && "budget_usd = " + L.budgetUsd,
+						L.wallClockMinutes !== undefined && "wall_clock_minutes = " + L.wallClockMinutes,
+						L.onLimit && "on_limit = " + tomlString(L.onLimit),
+						L.limitTarget && "limit_target = " + tomlString(L.limitTarget),
+					].filter(Boolean);
+		if (limits.length) lines.push("", "[mixtures.limits]", ...limits);
+		if (m.steering) lines.push("", "[mixtures.steering]", "target = " + tomlString(m.steering.target));
+		tomlPresets(lines, "mixtures.envelopes", m.envelopes);
+		tomlPresets(lines, "mixtures.roles", m.roles);
+		for (const n of m.members ?? []) tomlMember(lines, n);
+		for (const e of m.edges ?? []) tomlEdge(lines, e);
+	}
+	while (lines[0] === "") lines.shift();
+	return lines.length ? lines.join("\n") + "\n" : "";
+}
+/* What saving this file would write: NeoPi's rendering when it has one for exactly this draft, else the same text made here. */
+function fileText(sid) {
+	const sent = sendable(sid).doc;
+	return server.toml != null && server.sid === sid && server.key === structure(sent) ? server.toml : tomlOf(sent);
 }
 
 /* ═══════════════════════════ CHECKS ═══════════════════════════
@@ -783,46 +1032,52 @@ function check() {
 				},
 			},
 		});
+	for (const b of badInputs.values())
+		if (b.mix === mix)
+			add("e", b.kind, b.id, T("chk.badNumber", { label: b.label, text: b.text }), { field: b.field });
 	return found;
+}
+/* Where a path in one of NeoPi's findings points inside the open mixture: "members[2].route.fallback" is that card's route. */
+function locate(rest) {
+	const at = /^(members|edges)\[(\d+)\]\.?(.*)$/.exec(rest ?? "");
+	const target = at?.[1] === "members" ? mix.members[+at[2]] : at?.[1] === "edges" ? mix.edges[+at[2]] : null;
+	const tail = at ? at[3] : (rest ?? ""),
+		field = /^model/.test(tail)
+			? "model"
+			: /^(role|system)/.test(tail)
+				? "prompt"
+				: /^route/.test(tail)
+					? "route"
+					: /^terminate/.test(tail)
+						? "stop"
+						: /^question/.test(tail)
+							? "question"
+							: /^envelope/.test(tail)
+								? "envelope"
+								: /^x/.test(tail)
+									? "parts"
+									: /^limits/.test(tail)
+										? "limits"
+										: /^tools/.test(tail)
+											? "tools"
+											: /^name/.test(tail)
+												? "name"
+												: /^when/.test(tail)
+													? "when"
+													: undefined;
+	return {
+		kind: !target ? "mix" : at[1] === "members" ? "node" : "edge",
+		id: !target ? null : at[1] === "members" ? target.id : target.$k,
+		field,
+	};
 }
 /* The harness's findings for this mixture that the checks above do not already cover. */
 function serverFindings() {
 	const out = [];
 	for (const it of server.issues) {
 		const m = /^mixtures\[(\d+)\]\.?(.*)$/.exec(it.path);
-		if (!m || server.map[+m[1]] !== cur.index || COVERED.has(it.code)) continue;
-		const rest = m[2],
-			at = /^(members|edges)\[(\d+)\]\.?(.*)$/.exec(rest);
-		const target = at?.[1] === "members" ? mix.members[+at[2]] : at?.[1] === "edges" ? mix.edges[+at[2]] : null;
-		const tail = at ? at[3] : rest,
-			field = /^model/.test(tail)
-				? "model"
-				: /^(role|system)/.test(tail)
-					? "prompt"
-					: /^route/.test(tail)
-						? "route"
-						: /^terminate/.test(tail)
-							? "stop"
-							: /^question/.test(tail)
-								? "question"
-								: /^envelope/.test(tail)
-									? "envelope"
-									: /^x/.test(tail)
-										? "parts"
-										: /^limits/.test(tail)
-											? "limits"
-											: /^tools/.test(tail)
-												? "tools"
-												: undefined;
-		out.push({
-			sev: it.sev,
-			kind: !target ? "mix" : at[1] === "members" ? "node" : "edge",
-			id: !target ? null : at[1] === "members" ? target.id : target.$k,
-			msg: it.message,
-			field,
-			server: true,
-			code: it.code,
-		});
+		if (!m || server.mixes?.[+m[1]] !== mix || COVERED.has(it.code)) continue; // an answer about another mixture, or another file, says nothing here
+		out.push({ ...locate(m[2]), sev: it.sev, msg: it.message, server: true, code: it.code });
 	}
 	return out;
 }
@@ -843,16 +1098,38 @@ function writeChoices(n) {
 
 /* ═══════════════════════════ EDITS ═══════════════════════════
    Every change goes through commit() (structural) or typing() (keystrokes, coalesced), so undo is one step per intent. */
-const snapshot = () => JSON.stringify({ docs: [...files].map(([sid, f]) => [sid, f.doc]), cur, sel });
-function restore(text) {
-	const s = JSON.parse(text);
-	for (const [sid, d] of s.docs) if (fileOf(sid)) fileOf(sid).doc = d;
+/* An undo step is every draft plus, per file, the version of the disk that draft was written against.
+   Going back to a draft written against an older disk brings the conflict back with it: undo never turns
+   somebody else's change into something a save would quietly overwrite. */
+const snapshot = () => ({
+	text: JSON.stringify({ docs: [...files].map(([sid, f]) => [sid, f.doc]), cur, sel, name: mix?.name ?? null }),
+	disk: new Map([...files].map(([sid, f]) => [sid, { base: f.base, both: f.both ?? null }])),
+});
+const sameDisk = (a, b) => (a.hash ?? null) === (b.hash ?? null) && !!a.exists === !!b.exists;
+function restore(step) {
+	const s = JSON.parse(step.text);
+	for (const [sid, d] of s.docs) {
+		const f = fileOf(sid),
+			then = step.disk.get(sid);
+		if (!f || !then) continue;
+		const newest = f.theirs ?? f.base;
+		f.doc = d;
+		f.base = then.base;
+		f.both = then.both;
+		f.theirs = sameDisk(newest, then.base) ? null : newest;
+		if (f.theirs && !fileDirty(sid)) follow(sid, newest); // nothing of mine in it: it simply follows the disk
+	}
+	badInputs.clear();
+	reconcileOrigins();
 	cur = s.cur;
 	sel = s.sel;
 	multi.clear();
 	typingKey = null;
 	sync();
-	if (!mix) pickMixture();
+	if (mix?.name !== s.name) {
+		sel = null;
+		reopen(null, s.cur?.sid, s.name);
+	}
 }
 function pushUndo(label) {
 	undoStack.push({ label, state: snapshot() });
@@ -863,6 +1140,7 @@ function commit(label, change, { quiet } = {}) {
 	pushUndo(label);
 	typingKey = null;
 	const result = change();
+	reconcileOrigins();
 	sync();
 	edited();
 	render();
@@ -885,6 +1163,7 @@ function undo() {
 	restore(step.state);
 	edited();
 	render();
+	if (!camTouched) fit();
 	toast(T("undo.undid", { label: step.label }));
 }
 function redo() {
@@ -894,6 +1173,7 @@ function redo() {
 	restore(step.state);
 	edited();
 	render();
+	if (!camTouched) fit();
 	toast(T("undo.redid", { label: step.label }));
 }
 
@@ -963,14 +1243,7 @@ function addNode(kind, x, y) {
 	const n =
 		kind === "verdict"
 			? { id, kind: "verdict", question: { type: "noul", instructions: "" }, $x: x, $y: y }
-			: {
-					id,
-					model: (boot.models.find(m => m.selector === "@task") ?? boot.models[0])?.selector ?? "",
-					systemPrompt: "",
-					tools: false,
-					$x: x,
-					$y: y,
-				};
+			: { id, model: starterModel("@task", "@default"), systemPrompt: "", tools: false, $x: x, $y: y };
 	mix.members.push(n);
 	if (kind === "model" && !isModel(node(mix.entry))) mix.entry = id; // the first model becomes the start
 	return n;

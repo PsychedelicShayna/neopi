@@ -50,26 +50,43 @@ function grow(el) {
 /* One text or number field bound to obj[key]. An emptied field removes the key (the file then has no such line)
    unless `keep`; `set` replaces the write entirely. Numbers that do not parse are kept out of the draft and marked. */
 function text(obj, key, { k, placeholder, mono, area, rows, number, keep, field, set, label } = {}) {
+	const id = (k ?? key) + "@" + fieldKey(),
+		wrong = number ? badInputs.get(id) : null,
+		name = field ?? (number ? "num-" + (k ?? key) : undefined);
 	const el = h(area ? "textarea" : "input", {
-		class: cls(area ? "ta" : "in", mono && "mono"),
-		value: obj?.[key] ?? "",
+		class: cls(area ? "ta" : "in", mono && "mono", wrong && "bad"),
+		value: wrong?.text ?? obj?.[key] ?? "",
 		placeholder,
 		rows: area ? (rows ?? 1) : null,
-		"data-field": field,
+		"data-field": name,
 		autocomplete: "off",
 		inputmode: number ? "decimal" : null,
 		"aria-label": label,
+		"aria-invalid": wrong ? "true" : null,
 	});
 	el.setAttribute("spellcheck", area && !mono ? "true" : "false");
 	el.addEventListener("input", () => {
 		let v = el.value;
 		if (number) {
-			const n = Number(v.trim().replace(",", "."));
-			el.classList.toggle("bad", v.trim() !== "" && !Number.isFinite(n));
-			if (v.trim() !== "" && !Number.isFinite(n)) return;
+			const n = Number(v.trim().replace(",", ".")),
+				bad = v.trim() !== "" && !Number.isFinite(n);
+			el.classList.toggle("bad", bad);
+			/* Not a number: the draft keeps its old value, and the page says so everywhere a save could be started from. */
+			if (bad) {
+				badInputs.set(id, {
+					mix,
+					kind: sel?.kind ?? "mix",
+					id: sel?.id ?? null,
+					field: name,
+					label: label ?? key,
+					text: v.trim(),
+				});
+				return soft();
+			}
+			if (badInputs.delete(id)) soft();
 			v = v.trim() === "" ? "" : n;
 		}
-		typing((k ?? key) + "@" + selKey(), () => {
+		typing(id, () => {
 			if (set) return set(v === "" ? undefined : v);
 			if (v === "" && !keep) delete obj[key];
 			else obj[key] = v;
@@ -108,7 +125,10 @@ function range(obj, key, def, k, { label, explain } = {}) {
 	const slider = h("input", { type: "range", min: "0", max: "1", step: "0.01", "aria-label": label }),
 		num = h("input", { class: "in", inputmode: "decimal", "aria-label": label, autocomplete: "off" }),
 		note = h("div", { class: "rnote" });
-	const value = () => obj[key] ?? def;
+	const value = () => obj[key] ?? def,
+		id = k + "@" + fieldKey(),
+		owner = mix,
+		at = { kind: sel?.kind ?? "mix", id: sel?.id ?? null };
 	const paint = from => {
 		const v = value(),
 			custom = obj[key] !== undefined;
@@ -138,18 +158,36 @@ function range(obj, key, def, k, { label, explain } = {}) {
 				: h("span", { style: { marginLeft: "auto", color: "var(--ink4)" } }, T("range.isDefault")),
 		);
 	};
-	const set = (v, from) =>
-		typing(k + "@" + selKey(), () => {
+	const set = (v, from) => {
+		if (badInputs.delete(id)) num.classList.remove("bad");
+		typing(id, () => {
 			obj[key] = Math.round(clamp(v, 0, 1) * 100) / 100;
 			paint(from);
 		});
+	};
 	slider.addEventListener("input", () => set(+slider.value, slider));
+	/* Something that is not a number from 0 to 1 never reaches the draft, and is an issue for as long as it is in the
+     field. Leaving the field puts the real value back, which settles it. */
 	num.addEventListener("input", () => {
-		const v = Number(num.value.replace(",", "."));
-		num.classList.toggle("bad", !(v >= 0 && v <= 1));
-		if (v >= 0 && v <= 1) set(v, num);
+		const raw = num.value.trim(),
+			v = Number(raw.replace(",", ".")),
+			good = raw !== "" && v >= 0 && v <= 1;
+		num.classList.toggle("bad", !good);
+		if (good) return set(v, num);
+		badInputs.set(id, {
+			mix: owner,
+			...at,
+			field: { threshold: "stop", confidence: "route" }[k],
+			label: label ?? key,
+			text: raw || T("range.blank"),
+		});
+		soft();
 	});
-	num.addEventListener("blur", () => paint());
+	num.addEventListener("blur", () => {
+		num.classList.remove("bad");
+		paint();
+		if (badInputs.delete(id)) soft();
+	});
 	const step = d =>
 		h(
 			"button",
@@ -433,6 +471,7 @@ function limitsSection() {
 			label,
 			text(L, key, {
 				number: true,
+				label,
 				placeholder: T("limits.default", { v: def }),
 				k: "limit-" + key,
 				set: v => setLimit(key, v),
@@ -580,7 +619,55 @@ function openPreset(kind, name) {
 		);
 		openPreset(kind, to);
 	};
-	const nameIn = editable && h("input", { class: "in mono", value: name, spellcheck: "false", autocomplete: "off" });
+	const nameIn = editable
+		? h("input", { class: "in mono", value: name, spellcheck: "false", autocomplete: "off" })
+		: null;
+	/* Deleting text that something reads is said before it happens, like every other delete with consequences. */
+	const remove = () => {
+		const users = (owner === doc ? doc.mixtures : [mix]).flatMap(m => {
+			if (owner === doc && own(m[kind], name)) return [];
+			const who =
+				kind === "roles"
+					? m.members
+							.filter(n => n.kind !== "verdict" && n.systemPrompt === undefined && n.role === name)
+							.map(n => n.id)
+					: [
+							...m.edges
+								.filter(e => e.envelope === name || (e.envelope === undefined && name === "handoff"))
+								.map(e => `${e.from} → ${[e.to].flat().join(" + ")}`),
+							...m.members.filter(n => n.kind === "verdict" && (n.render ?? "verdict") === name).map(n => n.id),
+						];
+			return who.length ? [[m.name, who]] : [];
+		});
+		const go = () => {
+			closeSheet();
+			commit(T("act.deletePreset", { name }), () => {
+				delete owner[kind][name];
+				if (!Object.keys(owner[kind]).length) delete owner[kind];
+			});
+		};
+		if (!users.length) return go();
+		const fallback = own(boot.bundled[kind], name) || (owner === mix && own(doc[kind], name));
+		openSheet({
+			title: T("preset.delete.title", { name }),
+			sub: fallback
+				? T("preset.delete.sub.fallback", {
+						name,
+						where: owner === mix && own(doc[kind], name) ? T("preset.delete.file") : T("preset.delete.builtin"),
+					})
+				: T("preset.delete.sub"),
+			body: h(
+				"ul",
+				{ class: "impact" },
+				users.map(([m, who]) =>
+					h("li", {}, icon(fallback ? "info" : "warn"), h("span", {}, h("b", {}, m), ": ", who.join(", "))),
+				),
+			),
+			note: T("delete.note"),
+			onClose: () => openPreset(kind, name),
+			primary: { label: T("common.delete"), danger: true, run: go },
+		});
+	};
 	nameIn?.addEventListener("change", () => {
 		const v = nameIn.value.trim();
 		if (!v || v === "__proto__" || (v !== name && own(owner[kind], v))) {
@@ -672,22 +759,7 @@ function openPreset(kind, name) {
 		note: editable ? T("preset.note") : null,
 		cancel: null,
 		extra: [
-			editable &&
-				h(
-					"button",
-					{
-						class: "btn danger",
-						type: "button",
-						onclick: () => {
-							closeSheet();
-							commit(T("act.deletePreset"), () => {
-								delete owner[kind][name];
-								if (!Object.keys(owner[kind]).length) delete owner[kind];
-							});
-						},
-					},
-					T("common.delete"),
-				),
+			editable && h("button", { class: "btn danger", type: "button", onclick: remove }, T("common.delete")),
 			!readOnly() &&
 				h(
 					"button",
@@ -738,13 +810,14 @@ function panelMixture() {
 		}
 	});
 	name.addEventListener("change", () => {
-		const why = renameMixture(cur.sid, cur.index, name.value.trim());
+		const why = renameMixture(mix, name.value.trim());
 		if (why) {
 			toast(why, { bad: true });
 			name.value = mix.name;
 		}
 	});
-	const roster = rosterLine();
+	const roster = rosterLine(),
+		m = mix;
 	return [
 		h(
 			"div",
@@ -754,11 +827,12 @@ function panelMixture() {
 			text(mix, "description", { area: true, placeholder: T("mix.description") }).also(
 				el => (el.className = "quiet-in"),
 			),
-			actions(
-				act("swap", T("mix.move"), () => openMove(cur.sid, cur.index), { nav: true }),
-				act("dup", T("common.duplicate"), () => duplicateMixture(cur.sid, cur.index)),
-				act("trash", T("common.delete"), () => deleteMixture(cur.sid, cur.index), { danger: true }),
-			),
+			!readOnly() &&
+				actions(
+					act("swap", T("mix.move"), () => openMove(m)),
+					act("dup", T("common.duplicate"), () => duplicateMixture(m)),
+					act("trash", T("common.delete"), () => deleteMixture(m), { danger: true }),
+				),
 		),
 		h("div", { class: cls("says", roster.cls) }, roster.body),
 		live("div", {}, () => issueList(issuesFor("mix"))),
@@ -960,9 +1034,11 @@ function modelPicker(n) {
 					list = h("div", { class: "scroll" });
 				const fill = () => {
 					const qy = input.value.trim().toLowerCase();
-					const hits = boot.models.filter(
-						c => !qy || c.selector.toLowerCase().includes(qy) || (c.resolved ?? "").toLowerCase().includes(qy),
-					);
+					const hits = boot.models
+						.filter(
+							c => !qy || c.selector.toLowerCase().includes(qy) || (c.resolved ?? "").toLowerCase().includes(qy),
+						)
+						.sort((a, b) => (a.role && !a.resolved) - (b.role && !b.resolved));
 					list.replaceChildren(
 						...hits
 							.slice(0, 80)
@@ -972,7 +1048,7 @@ function modelPicker(n) {
 									c.selector,
 									() => set(c.selector, c.efforts && !c.efforts.includes(effort) ? "" : effort),
 									{
-										hint: c.role && c.resolved ? "→ " + c.resolved : null,
+										hint: c.role ? (c.resolved ? "→ " + c.resolved : T("model.role.unset")) : null,
 										mono: true,
 										on: c.selector === base,
 									},
@@ -1001,7 +1077,10 @@ function modelPicker(n) {
 			{ width: 340 },
 		);
 	};
-	const efforts = (entry?.efforts ?? ["low", "medium", "high"]).filter(e => e !== "auto");
+	/* A role alias takes the effort levels of the model it stands for; a level already written in the file is always offered. */
+	const known = entry?.efforts ??
+		boot.models.find(m => m.selector === entry?.resolved)?.efforts ?? ["low", "medium", "high"];
+	const efforts = EFFORTS.filter(e => e !== "auto" && (known.includes(e) || e === effort));
 	return [
 		fld(T("model.label"), btn, {
 			hint:
@@ -1009,17 +1088,27 @@ function modelPicker(n) {
 					? res.effort
 						? TX("model.resolves.effort", { model: res.res, effort: res.effort })
 						: TX("model.resolves", { model: res.res })
-					: res.state === "unknown"
-						? T("model.unknown")
-						: T("model.required"),
+					: res.state === "unset"
+						? T("model.unset", { selector: base })
+						: res.state === "unknown"
+							? T("model.unknown")
+							: T("model.required"),
 		}),
 		efforts.length > 0 &&
 			fld(
 				T("model.effort"),
-				seg([["", T("model.effort.default")], ...efforts.map(e => [e, e])], effort === "auto" ? "" : effort, v =>
-					set(base, v),
+				seg(
+					[
+						[
+							"",
+							entry?.effort ? T("model.effort.defaultIs", { effort: entry.effort }) : T("model.effort.default"),
+						],
+						...efforts.map(e => [e, e]),
+					],
+					effort === "auto" ? "" : effort,
+					v => set(base, v),
 				),
-				{ hint: T("model.effort.hint") },
+				{ hint: entry?.effort ? T("model.effort.hint.role", { selector: base }) : T("model.effort.hint") },
 			),
 	];
 }
@@ -1181,7 +1270,8 @@ function stopCard(n) {
 						commit(
 							T("act.addStop"),
 							() => {
-								n.terminate = { instructions: "" };
+								n.terminate = n.$terminate ?? { instructions: "" };
+								delete n.$terminate;
 							},
 							{ quiet: true },
 						);
@@ -1189,7 +1279,7 @@ function stopCard(n) {
 					},
 				},
 				icon("plus", 12),
-				T("stop.add"),
+				n.$terminate ? T("stop.restore") : T("stop.add"),
 			),
 		);
 	return h(
@@ -1203,16 +1293,17 @@ function stopCard(n) {
 			h(
 				"button",
 				{
-					class: "icon-btn",
+					class: "btn small",
 					type: "button",
 					style: { marginLeft: "auto" },
 					title: T("stop.remove"),
 					onclick: () =>
 						commit(T("act.removeStop"), () => {
+							n.$terminate = n.terminate;
 							delete n.terminate;
 						}),
 				},
-				icon("trash"),
+				T("stop.turnOff"),
 			),
 		),
 		fld(
@@ -1528,7 +1619,12 @@ function panelModel(n) {
 			null,
 			fld(
 				T("output.maxTokens"),
-				text(n, "maxTokens", { number: true, placeholder: T("output.maxTokens.default"), field: "maxTokens" }),
+				text(n, "maxTokens", {
+					number: true,
+					label: T("output.maxTokens"),
+					placeholder: T("output.maxTokens.default"),
+					field: "maxTokens",
+				}),
 				{ aside: T("output.tokens") },
 			),
 			showField(n, T("show.model"), [
@@ -1731,7 +1827,10 @@ function panelVerdict(n) {
 			text(n, "description", { area: true, placeholder: T("verdict.description") }).also(
 				el => (el.className = "quiet-in"),
 			),
-			actions(act("trash", T("common.delete"), () => deleteNodes([n.id]), { danger: true })),
+			actions(
+				act("dup", T("common.duplicate"), () => duplicateNode(n)),
+				act("trash", T("common.delete"), () => deleteNodes([n.id]), { danger: true }),
+			),
 		),
 		live("div", {}, () => issueList(issuesFor("node", n.id))),
 		sec(
@@ -1999,7 +2098,6 @@ function insertChips(area, e) {
 		}),
 	);
 }
-let envMode = "read";
 function decisionList(e) {
 	const n = node(e.from),
 		others = liveOuts(e.from).filter(x => x !== e);
@@ -2052,7 +2150,7 @@ function panelFanout(e) {
 			),
 			actions(
 				act("diamond", T("menu.convert"), () => commit(T("act.convert"), () => convertFanout(e))),
-				act("trash", T("common.remove"), () => deleteEdge(e), { danger: true }),
+				act("trash", T("common.delete"), () => deleteEdge(e), { danger: true }),
 			),
 		),
 		h("div", { class: "says" }, TX("fan.says", { from: e.from, n: e.to.length })),
@@ -2063,9 +2161,10 @@ function panelFanout(e) {
 			h(
 				"div",
 				{ class: "tpl" },
-				Object.entries(bare(e))
-					.map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
-					.join("\n"),
+				(lines => {
+					tomlEdge(lines, bare(e));
+					return lines.filter(Boolean).join("\n");
+				})([]),
 			),
 			h("p", { class: "hint", style: { marginTop: "6px" } }, T("fan.kept")),
 		),
@@ -2137,7 +2236,7 @@ function panelEdge(e) {
 			actions(
 				act("spark", T("path.insert"), () => insertOn(e)),
 				!toVerdict && e.from !== e.to && act("swap", T("path.reverse"), () => reverseEdge(e)),
-				act("trash", T("common.remove"), () => deleteEdge(e), { danger: true }),
+				act("trash", T("common.delete"), () => deleteEdge(e), { danger: true }),
 			),
 		),
 		live("div", { class: "says" }, () => [
@@ -2280,6 +2379,7 @@ function panelEdge(e) {
 									T("transcript.budget"),
 									text(trObj, "budgetTokens", {
 										number: true,
+										label: T("transcript.budget"),
 										placeholder: T("transcript.budget.default"),
 										k: "fold",
 										set: v => setTranscript("budgetTokens", v),
@@ -2309,7 +2409,6 @@ function panelEdge(e) {
 										if (v === " custom") {
 											e.envelope = source ?? "{{> moa-parts}}";
 											e.$inline = true;
-											envMode = "tpl";
 										} else {
 											delete e.$inline;
 											v === "handoff" ? delete e.envelope : (e.envelope = v);
@@ -2327,43 +2426,38 @@ function panelEdge(e) {
 									type: "button",
 									"data-nav": "",
 									title: T("envelope.open"),
+									"aria-label": T("envelope.open"),
 									disabled: source === undefined,
 									onclick: () => openPreset("envelopes", name),
 								},
 								icon("edit"),
 							),
 					),
+					/* Writing a template and seeing what the model will read are one view: the preview below follows every keystroke. */
 					source !== undefined &&
-						h(
-							"div",
-							{ style: { marginTop: "8px" } },
-							seg(
-								[
-									["read", T("envelope.read", { to: e.to })],
-									["tpl", inline ? T("envelope.edit") : T("envelope.template")],
-								],
-								envMode,
-								v => {
-									envMode = v;
-									renderPanel();
-								},
-								{ "data-nav": "" },
+						inline && [
+							(area => [fld(T("envelope.edit"), area), insertChips(area, e)])(
+								text(e, "envelope", { area: true, mono: true, rows: 4, keep: true }),
 							),
-						),
+							fld(
+								T("envelope.read", { to: e.to }),
+								live("div", {}, () => renderTemplate(envText(e) ?? "", edgeLookup(e))),
+								{ hint: T("envelope.read.hint") },
+							),
+						],
 					source !== undefined &&
-						(envMode === "tpl"
-							? inline
-								? (area => [fld(null, area), insertChips(area, e)])(
-										text(e, "envelope", { area: true, mono: true, rows: 4, keep: true }),
-									)
-								: [
-										live("div", {}, () => templateSource(envText(e) ?? "", e)),
-										h("p", { class: "hint", style: { marginTop: "6px" } }, T("envelope.struck")),
-									]
-							: [
-									live("div", {}, () => renderTemplate(envText(e) ?? "", edgeLookup(e))),
-									h("p", { class: "hint", style: { marginTop: "6px" } }, T("envelope.read.hint")),
-								]),
+						!inline && [
+							fld(
+								T("envelope.read", { to: e.to }),
+								live("div", {}, () => renderTemplate(envText(e) ?? "", edgeLookup(e))),
+								{ hint: T("envelope.read.hint") },
+							),
+							fld(
+								T("envelope.template"),
+								live("div", {}, () => templateSource(envText(e) ?? "", e)),
+								{ hint: T("envelope.struck") },
+							),
+						],
 				),
 		sec(
 			T("decide.title"),
@@ -2496,17 +2590,15 @@ function tomlBlocks(source) {
 	if (block.lines.length) blocks.push(block);
 	return blocks;
 }
-function panelToml() {
+/* What is on disk while this file has no changes of yours; otherwise exactly what saving the draft on screen would write. */
+function tomlView() {
 	const s = srcOf(cur.sid),
 		f = fileOf(cur.sid),
 		changed = fileDirty(cur.sid);
-	const canonical = changed && server.toml != null,
-		source = changed ? (server.toml ?? "") : (f.base.text ?? f.base.toml ?? "");
-	const mine = canonical
-		? server.map.indexOf(cur.index)
-		: changed
-			? -1
-			: (f.base.doc.mixtures ?? []).findIndex(x => x.name === mix.$o?.name);
+	const source = changed ? fileText(cur.sid) : (f.base.text ?? f.base.toml ?? "");
+	const mine = changed
+		? sendable(cur.sid).map.indexOf(cur.index)
+		: (f.base.doc.mixtures ?? []).findIndex(x => x.name === mix.$o?.name);
 	const pre = h(
 		"div",
 		{ class: "toml" },
@@ -2521,7 +2613,7 @@ function panelToml() {
 							: mix.edges[b.key.i] && { kind: "edge", id: mix.edges[b.key.i].$k };
 			const on = target && (target.kind === "mix" ? !sel && !multi.size : selIs(target.kind, target.id));
 			const el = h("span", {
-				class: cls("blk", on && "on", b.key && !here && "far"),
+				class: cls("blk", here && "mine", on && "on", b.key && !here && "far"),
 				onclick: () => {
 					if (target) select(target.kind === "mix" ? null : target, { keepTab: true });
 				},
@@ -2541,12 +2633,7 @@ function panelToml() {
 					class: "btn small",
 					type: "button",
 					"data-nav": "",
-					onclick: () => {
-						navigator.clipboard?.writeText(source).then(
-							() => toast(T("toml.copied")),
-							() => toast(T("toml.copyFailed"), { bad: true }),
-						);
-					},
+					onclick: () => copyText(source, T("toml.copied", { path: s.displayPath })),
 				},
 				icon("copy", 12),
 				T("common.copy"),
@@ -2555,17 +2642,12 @@ function panelToml() {
 		h(
 			"p",
 			{ class: "hint", style: { margin: "0 0 8px" } },
-			!changed
-				? f.base.exists
-					? T("toml.disk")
-					: T("toml.absent")
-				: canonical
-					? T("toml.draft")
-					: T("toml.pending"),
+			!changed ? (f.base.exists ? T("toml.disk") : T("toml.absent")) : T("toml.draft"),
 		),
 		pre,
 	];
 }
+const panelToml = () => live("div", {}, tomlView);
 
 /* ═══════════════════════════ FRAME ═══════════════════════════ */
 function focusField(section) {
@@ -2586,6 +2668,7 @@ function renderPanel() {
 	const panel = $("panel"),
 		body = $("pbody");
 	panel.classList.toggle("shut", !panelOpen || !mix);
+	panel.inert = !panelOpen || !mix;
 	$("reopen").hidden = panelOpen || !mix;
 	if (!mix) {
 		body.replaceChildren();
@@ -2685,12 +2768,7 @@ function renderPanel() {
 						{ style: { marginTop: "8px" } },
 						h(
 							"button",
-							{
-								class: "btn small",
-								type: "button",
-								"data-nav": "",
-								onclick: () => openMove(cur.sid, cur.index),
-							},
+							{ class: "btn small", type: "button", "data-nav": "", onclick: () => openMove(mix) },
 							icon("dup"),
 							T("ro.copy"),
 						),

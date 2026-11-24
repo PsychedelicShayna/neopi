@@ -79,12 +79,18 @@ function mi(ic, label, run, { hint, danger, disabled, mono, on, title } = {}) {
 	);
 }
 function closeSheet() {
+	const back = sheetEl?._back;
 	sheetEl?.remove();
 	sheetEl = null;
+	if (back?.isConnected && !back.disabled) back.focus({ preventScroll: true });
 }
 /* Every dialog is built here, so the buttons are always in the same place: a note on the left, then any
    secondary actions, then Cancel, then the one primary action at the far right. Destructive primaries are red. */
 function openSheet({ title, sub, body, note, cancel = T("common.cancel"), primary, extra = [], wide, width, onClose }) {
+	const before = sheetEl?._back;
+	if (sheetEl) {
+		sheetEl._back = null;
+	}
 	closeSheet();
 	closePop();
 	const close = () => {
@@ -142,6 +148,9 @@ function openSheet({ title, sub, body, note, cancel = T("common.cancel"), primar
 			go,
 		),
 	);
+	/* A dialog owns the keyboard while it is open: focus starts inside it, Tab stays inside it, and closing it
+     puts focus back where it was. */
+	const back = before ?? document.activeElement;
 	sheetEl = h(
 		"div",
 		{
@@ -153,8 +162,33 @@ function openSheet({ title, sub, body, note, cancel = T("common.cancel"), primar
 		sheet,
 	);
 	sheetEl._close = close;
+	sheetEl._back = back;
+	sheetEl.addEventListener("keydown", ev => {
+		if (ev.key !== "Tab") return;
+		const stops = [...sheet.querySelectorAll('button,input,textarea,select,[tabindex]:not([tabindex="-1"])')].filter(
+			el => !el.disabled && el.offsetParent !== null,
+		);
+		if (!stops.length) {
+			ev.preventDefault();
+			return sheet.focus();
+		}
+		const first = stops[0],
+			last = stops.at(-1),
+			at = document.activeElement;
+		if (!sheet.contains(at) || at === sheet) {
+			ev.preventDefault();
+			(ev.shiftKey ? last : first).focus();
+		} else if (ev.shiftKey && at === first) {
+			ev.preventDefault();
+			last.focus();
+		} else if (!ev.shiftKey && at === last) {
+			ev.preventDefault();
+			first.focus();
+		}
+	});
 	layer.append(sheetEl);
-	(sheet.querySelector("[data-autofocus]") ?? go ?? sheet).focus?.();
+	const start = sheet.querySelector("[data-autofocus]") ?? (go && !go.disabled ? go : null);
+	(start ?? sheet).focus({ preventScroll: true });
 	return sheet;
 }
 function toast(text, { undo: withUndo, bad } = {}) {
@@ -181,6 +215,27 @@ function toast(text, { undo: withUndo, bad } = {}) {
 	if (bad) el.querySelector("svg").style.color = "var(--warn)";
 	box.append(el);
 	setTimeout(() => el.remove(), bad ? 5200 : 3400);
+}
+/* Copy without depending on the clipboard permission: the old way still works where the new one is refused. */
+function copyText(value, done) {
+	const old = () => {
+		const ta = h("textarea", { value, style: { position: "fixed", opacity: "0" } });
+		document.body.append(ta);
+		ta.select();
+		let ok = false;
+		try {
+			ok = document.execCommand("copy");
+		} catch {}
+		ta.remove();
+		return ok;
+	};
+	const say = ok => toast(ok ? done : T("toml.copyFailed"), { bad: !ok });
+	if (navigator.clipboard?.writeText)
+		navigator.clipboard.writeText(value).then(
+			() => say(true),
+			() => say(old()),
+		);
+	else say(old());
 }
 function coach(content, bad) {
 	const el = $("coach");
@@ -500,11 +555,12 @@ function renameInline(id) {
 	};
 	input.addEventListener("input", () => input.classList.toggle("bad", !!idProblem(input.value, id)));
 	input.addEventListener("keydown", ev => {
-		ev.stopPropagation();
+		if (!(ev.ctrlKey || ev.metaKey)) ev.stopPropagation();
 		if (ev.key === "Enter") finish(true);
 		if (ev.key === "Escape") finish(false);
 	});
 	input.addEventListener("blur", () => finish(true));
+	input.addEventListener("change", () => finish(true));
 }
 
 /* ═══════════════════════════ DELETING ═══════════════════════════
@@ -1053,13 +1109,51 @@ function centerSpot() {
 		[cx, cy] = viewCenter();
 	return toWorld(r.left + cx - (W * cam.z) / 2, r.top + cy - 60);
 }
+/* Ctrl S while a name or ID is still being typed: what is in the field is kept first, exactly as leaving the field
+   would, so the save includes it. If the field refuses it, the reason is shown and nothing is saved yet. */
+function settleField() {
+	const a = document.activeElement;
+	if (!a || !/^(INPUT|TEXTAREA)$/.test(a.tagName) || a.closest(".sheet,.pop")) return true;
+	if (a.classList.contains("rn")) {
+		a.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+		return !sideRename;
+	}
+	const typed = a.value;
+	a.dispatchEvent(new Event("change", { bubbles: true }));
+	if (a.isConnected) a.blur();
+	return !(a.isConnected && a.value !== typed);
+}
 document.addEventListener("keydown", ev => {
 	const typingNow = /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName),
 		mod = ev.ctrlKey || ev.metaKey,
 		key = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
 	if (mod && key === "s") {
 		ev.preventDefault();
-		return openSave();
+		return settleField() && openSave();
+	}
+	/* Ctrl C cancels, as it does everywhere in NeoPi, unless there is text selected to copy. */
+	if (mod && key === "c" && !ev.shiftKey && !ev.altKey) {
+		const picked =
+			String(getSelection() ?? "") !== "" || (typingNow && ev.target.selectionStart !== ev.target.selectionEnd);
+		if (picked) return;
+		if (popEl) {
+			ev.preventDefault();
+			return closePop();
+		}
+		if (sheetEl) {
+			ev.preventDefault();
+			return sheetEl._close();
+		}
+		if (connect) {
+			ev.preventDefault();
+			return endConnect();
+		}
+		if (sideRename) {
+			ev.preventDefault();
+			sideRename = null;
+			return renderSide();
+		}
+		return;
 	}
 	if (ev.key === "Escape") {
 		if (popEl) return closePop();

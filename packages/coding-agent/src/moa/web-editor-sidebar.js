@@ -1,13 +1,17 @@
 "use strict";
 /* Mixture Studio · sidebar: every mixture in every MIXTURES.toml NeoPi reads for this workspace.
    It stays out of the way until the pointer reaches the left edge (or B, or the button in the bar; it can be pinned).
-   Rename, move, copy, duplicate and delete are draft edits like any other: undoable, and written only on Save. */
+   Rename, move, copy, duplicate and delete are draft edits like any other: undoable, and written only on Save.
+   Rows and menus hold on to the mixture itself, never to its position in a list, so a file that changes on disk
+   while a menu is open cannot make an action land on a different mixture. */
 let sideOpen = false,
 	sidePinned = false,
 	sideFilter = "",
-	sideTimer = null,
-	sideRename = null;
+	sideTimer = null;
+let sideRename = null; // {m, why?}: the mixture whose name is being typed in the list
 const side = $("side");
+/* Keeping the list open beside the canvas needs room for both. In a narrow window it only ever overlays. */
+const canPin = () => innerWidth - side.offsetWidth >= 480;
 function openSide() {
 	clearTimeout(sideTimer);
 	if (sideOpen) return;
@@ -24,6 +28,7 @@ function closeSide(now) {
 		(side.matches(":focus-within") && side.querySelector("input:focus"));
 	if (now === true) {
 		sideOpen = false;
+		sideRename = null;
 		renderSide();
 		return;
 	}
@@ -40,12 +45,12 @@ function toggleSide() {
 	if (sideOpen && sidePinned) {
 		sidePinned = false;
 		sideOpen = false;
-	} else {
-		sidePinned = true;
+	} else if (sideOpen && !canPin()) sideOpen = false;
+	else {
+		sidePinned = canPin();
 		sideOpen = true;
 	}
-	renderSide();
-	renderBar();
+	render();
 	if (mix && !camTouched) fit(true);
 	if (sideOpen) side.querySelector(".srow.on,.snew")?.focus?.();
 }
@@ -75,31 +80,21 @@ function sourceWhat(s) {
 			? T("side.what.nearest")
 			: T("side.what.outer");
 }
-/* Later files win. A name is shadowed when a later file's draft also defines it. */
-function shadowOf(s, name) {
-	return (
-		sources
-			.filter(x => x.order > s.order && fileOf(x.id)?.doc.mixtures.some(m => m.name === name && !isScratch(m)))
-			.at(-1) ?? null
-	);
-}
-function withMixture(sid, index, fn) {
-	const keep = [cur, doc, mix];
-	cur = { sid, index };
-	doc = fileOf(sid).doc;
-	mix = doc.mixtures[index];
-	try {
-		return fn();
-	} finally {
-		[cur, doc, mix] = keep;
-	}
-}
+/* Later files win. Which other files' drafts define `name`, leaving out one mixture (the one being moved or renamed). */
+const definesName = (x, name, except) =>
+	!!fileOf(x.id)?.doc.mixtures.some(m => m !== except && m.name === name && !isScratch(m));
+const shadowOf = (s, name, except) =>
+	sources.filter(x => x.order > s.order && definesName(x, name, except)).at(-1) ?? null;
+const hiddenBy = (s, name, except) =>
+	sources.filter(x => x.order < s.order && definesName(x, name, except)).at(-1) ?? null;
 function rowTags(s, m) {
 	const tags = [],
 		state = mixState(m, s.id),
 		shadow = shadowOf(s, m.name),
 		disk = m.$o && srcOf(m.$o.sid)?.mixtures.find(x => x.name === m.$o.name);
-	if (state)
+	if (isScratch(m))
+		tags.push(h("span", { class: "tag local", title: T("side.tag.scratch.title") }, T("side.tag.scratch")));
+	else if (state)
 		tags.push(
 			h(
 				"span",
@@ -127,15 +122,23 @@ function rowTags(s, m) {
 	return tags;
 }
 function renderSide() {
+	if (sidePinned && !canPin()) sidePinned = false;
 	side.classList.toggle("open", sideOpen);
 	side.classList.toggle("pinned", sideOpen && sidePinned);
 	side.setAttribute("aria-hidden", String(!sideOpen));
+	side.inert = !sideOpen;
 	if (!sideOpen) {
 		side.replaceChildren();
 		return;
 	}
+	/* What is being typed survives every redraw: a poll, an answer from NeoPi, an edit elsewhere. */
+	const typed = (el =>
+		el && { value: el.value, start: el.selectionStart, end: el.selectionEnd, focus: document.activeElement === el })(
+		side.querySelector("input.rn"),
+	);
 	const keep = side.querySelector(".sbody")?.scrollTop ?? 0,
 		hadFind = document.activeElement?.id === "sfind";
+	if (sideRename && !whereIs(sideRename.m)) sideRename = null;
 	const qy = sideFilter.trim().toLowerCase(),
 		total = sources.reduce((n, s) => n + (fileOf(s.id)?.doc.mixtures.length ?? 0), 0);
 	const find = h("input", {
@@ -158,24 +161,27 @@ function renderSide() {
 			renderSide();
 		}
 	});
-	const changed = dirtyFiles().length;
+	const changed = dirtyFiles().length,
+		pin = canPin();
 	side.replaceChildren(
 		...[
 			h(
 				"div",
 				{ class: "shead" },
 				h("h2", {}, T("side.title")),
-				h(
-					"button",
-					{
-						class: "icon-btn",
-						type: "button",
-						"aria-pressed": String(sidePinned),
-						title: sidePinned ? T("side.unpin") : T("side.pin"),
-						onclick: toggleSide,
-					},
-					icon("pin"),
-				),
+				pin &&
+					h(
+						"button",
+						{
+							class: "icon-btn",
+							type: "button",
+							"aria-pressed": String(sidePinned),
+							title: sidePinned ? T("side.unpin") : T("side.pin"),
+							"aria-label": sidePinned ? T("side.unpin") : T("side.pin"),
+							onclick: toggleSide,
+						},
+						icon("pin"),
+					),
 				!sidePinned &&
 					h(
 						"button",
@@ -223,15 +229,29 @@ function renderSide() {
 		f?.focus();
 		f?.setSelectionRange(f.value.length, f.value.length);
 	}
-	if (sideRename) side.querySelector("input.rn")?.focus();
+	const rn = side.querySelector("input.rn");
+	if (rn) {
+		if (typed) {
+			rn.value = typed.value;
+			rn.dispatchEvent(new Event("input"));
+		}
+		if (!typed || typed.focus) {
+			rn.focus({ preventScroll: true });
+			typed ? rn.setSelectionRange(typed.start, typed.end) : rn.select();
+		}
+	}
 }
 function groupEl(s, qy) {
 	const f = fileOf(s.id),
 		list = f?.doc.mixtures ?? [],
 		ok = writable(s);
-	const rows = list
-		.map((m, i) => [m, i])
-		.filter(([m]) => !qy || m.name.toLowerCase().includes(qy) || (m.description ?? "").toLowerCase().includes(qy));
+	const rows = list.filter(
+		m =>
+			!qy ||
+			m === sideRename?.m ||
+			m.name.toLowerCase().includes(qy) ||
+			(m.description ?? "").toLowerCase().includes(qy),
+	);
 	const group = h(
 		"section",
 		{ class: "sgroup", "data-sid": s.id },
@@ -254,7 +274,7 @@ function groupEl(s, qy) {
 			s.readOnly &&
 			h("div", { class: "why" }, icon("lock", 13), h("span", {}, T("side.readOnly", { why: s.readOnly }))),
 		f?.theirs && h("div", { class: "why bad" }, icon("warn", 13), h("span", {}, T("side.changedOnDisk"))),
-		rows.map(([m, i]) => rowEl2(s, m, i)),
+		rows.map(m => rowEl2(s, m)),
 		!rows.length &&
 			h(
 				"div",
@@ -270,12 +290,13 @@ function groupEl(s, qy) {
 				T("side.new"),
 			),
 	);
-	/* drop a dragged mixture on a file to move it there */
+	/* Drop a dragged mixture on a file to move it there; out of a read-only file it can only be a copy. */
 	if (ok) {
+		const copies = ev => ev.ctrlKey || ev.altKey || !writable(srcOf(whereIs(dragRow)?.sid));
 		group.addEventListener("dragover", ev => {
-			if (!dragRow || dragRow.sid === s.id) return;
+			if (!dragRow || whereIs(dragRow)?.sid === s.id) return;
 			ev.preventDefault();
-			ev.dataTransfer.dropEffect = ev.ctrlKey || ev.altKey ? "copy" : "move";
+			ev.dataTransfer.dropEffect = copies(ev) ? "copy" : "move";
 			group.classList.add("drop");
 		});
 		group.addEventListener("dragleave", ev => {
@@ -284,19 +305,19 @@ function groupEl(s, qy) {
 		group.addEventListener("drop", ev => {
 			ev.preventDefault();
 			group.classList.remove("drop");
-			const d = dragRow;
+			const m = dragRow,
+				copy = m && copies(ev);
 			dragRow = null;
-			if (d && d.sid !== s.id) transfer(d.sid, d.index, s.id, { copy: ev.ctrlKey || ev.altKey });
+			if (m && whereIs(m) && whereIs(m).sid !== s.id) transfer(m, s.id, { copy });
 		});
 	}
 	return group;
 }
-let dragRow = null;
-function rowEl2(s, m, i) {
-	const on = cur?.sid === s.id && cur.index === i,
-		renaming = sideRename?.sid === s.id && sideRename.index === i,
+let dragRow = null; // the mixture being dragged
+function rowEl2(s, m) {
+	const on = mix === m,
 		ok = writable(s);
-	if (renaming) {
+	if (sideRename?.m === m) {
 		const input = liveTidy(
 			h("input", {
 				class: "rn",
@@ -307,31 +328,44 @@ function rowEl2(s, m, i) {
 			}),
 			true,
 		);
-		let done = false;
-		const finish = keep => {
-			if (done) return;
-			done = true;
+		const say = h("span", {});
+		const paint = () => {
+			const why = input.value.trim() === m.name ? null : nameProblem(s.id, input.value.trim(), m);
+			input.classList.toggle("bad", !!why);
+			say.textContent = why ?? T("side.rename.hint");
+			say.style.color = why ? "var(--err)" : "";
+			return why;
+		};
+		/* A name that cannot be used keeps the field open with the reason under it: nothing typed is thrown away. */
+		const keepIt = () => {
+			if (paint()) return input.focus();
 			sideRename = null;
-			const why = keep ? renameMixture(s.id, i, input.value.trim()) : null;
-			if (why) toast(why, { bad: true });
+			renameMixture(m, input.value.trim());
 			renderSide();
 		};
-		input.addEventListener("input", () => input.classList.toggle("bad", !!nameProblem(s.id, input.value.trim(), m)));
+		input.addEventListener("input", paint);
 		input.addEventListener("keydown", ev => {
-			ev.stopPropagation();
-			if (ev.key === "Enter") finish(true);
-			if (ev.key === "Escape") finish(false);
+			if (!(ev.ctrlKey || ev.metaKey)) ev.stopPropagation();
+			if (ev.key === "Enter") {
+				ev.preventDefault();
+				keepIt();
+			}
+			if (ev.key === "Escape") {
+				sideRename = null;
+				renderSide();
+			}
 		});
-		input.addEventListener("blur", () => finish(true));
-		setTimeout(() => {
-			input.focus();
-			input.select();
-		});
-		return h(
-			"div",
-			{ class: "srow on" },
-			h("div", { class: "t" }, input, h("div", { class: "d" }, h("span", {}, T("side.rename.hint")))),
+		input.addEventListener("blur", () =>
+			setTimeout(() => {
+				if (sideRename?.m !== m || document.activeElement === input || !input.isConnected) return;
+				if (paint()) return;
+				sideRename = null;
+				renameMixture(m, input.value.trim());
+				renderSide();
+			}, 0),
 		);
+		paint();
+		return h("div", { class: "srow on" }, h("div", { class: "t" }, input, h("div", { class: "d" }, say)));
 	}
 	const row = h(
 		"div",
@@ -368,7 +402,7 @@ function rowEl2(s, m, i) {
 					"aria-label": T("side.rename.aria2", { name: m.name }),
 					onclick: ev => {
 						ev.stopPropagation();
-						sideRename = { sid: s.id, index: i };
+						sideRename = { m };
 						renderSide();
 					},
 				},
@@ -384,18 +418,18 @@ function rowEl2(s, m, i) {
 				"aria-haspopup": "menu",
 				onclick: ev => {
 					ev.stopPropagation();
-					openPop(ev.currentTarget, rowMenu(s, m, i), { align: "left", width: 300 });
+					openPop(ev.currentTarget, rowMenu(s, m), { align: "left", width: 300 });
 				},
 			},
 			icon("dots"),
 		),
 	);
-	row.addEventListener("click", () => openMixture(s.id, i));
+	row.addEventListener("click", () => openMixture(m));
 	row.addEventListener("keydown", ev => {
 		if (ev.target !== row) return;
 		if (ev.key === "Enter" || ev.key === " ") {
 			ev.preventDefault();
-			openMixture(s.id, i);
+			openMixture(m);
 		}
 		if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
 			ev.preventDefault();
@@ -404,12 +438,12 @@ function rowEl2(s, m, i) {
 		}
 		if (ev.key === "Delete" && ok) {
 			ev.preventDefault();
-			deleteMixture(s.id, i);
+			deleteMixture(m);
 		}
 	});
 	row.addEventListener("dragstart", ev => {
-		dragRow = { sid: s.id, index: i };
-		ev.dataTransfer.effectAllowed = "copyMove";
+		dragRow = m;
+		ev.dataTransfer.effectAllowed = ok ? "copyMove" : "copy";
 		ev.dataTransfer.setData("text/plain", "mixture/" + m.name);
 		row.classList.add("dragging");
 	});
@@ -421,7 +455,7 @@ function rowEl2(s, m, i) {
 	return row;
 }
 /* Move and copy are one click each from here: every file that can take the mixture is its own menu item. */
-function rowMenu(s, m, i) {
+function rowMenu(s, m) {
 	const ok = writable(s),
 		others = sources.filter(x => x.id !== s.id && writable(x));
 	const dest = x => `${scopeLabel(x)} · ${x.displayPath}`;
@@ -432,34 +466,36 @@ function rowMenu(s, m, i) {
 			T("side.rename"),
 			() => {
 				openSide();
-				sideRename = { sid: s.id, index: i };
+				sideRename = { m };
 				renderSide();
 			},
 			{ disabled: !ok },
 		),
-		mi("dup", T("side.duplicate"), () => duplicateMixture(s.id, i), { disabled: !ok }),
+		mi("dup", T("side.duplicate"), () => duplicateMixture(m), { disabled: !ok }),
 		others.length > 0 && h("hr"),
 		ok &&
 			others.map(x =>
-				mi("right", T("side.moveTo", { dest: dest(x) }), () => transfer(s.id, i, x.id, {}), { title: x.path }),
+				mi("right", T("side.moveTo", { dest: dest(x) }), () => transfer(m, x.id, {}), { title: x.path }),
 			),
 		others.map(x =>
-			mi("copy", T("side.copyTo", { dest: dest(x) }), () => transfer(s.id, i, x.id, { copy: true }), {
-				title: x.path,
-			}),
+			mi("copy", T("side.copyTo", { dest: dest(x) }), () => transfer(m, x.id, { copy: true }), { title: x.path }),
 		),
 		!others.length && h("div", { class: "pad hint" }, T("side.noDest")),
 		h("hr"),
-		mi("trash", T("common.delete"), () => deleteMixture(s.id, i), { danger: true, disabled: !ok }),
+		mi("trash", T("common.delete"), () => deleteMixture(m), { danger: true, disabled: !ok }),
 	];
 }
 
 /* ── opening ── */
-function openMixture(sid, index, { keepSide } = {}) {
+/* openMixture(mixture) or openMixture(sourceId, index). */
+function openMixture(target, index, { keepSide } = {}) {
+	const at = typeof target === "string" ? { sid: target, index } : whereIs(target);
+	if (typeof target !== "string") keepSide = index?.keepSide;
+	if (!at || !fileOf(at.sid)?.doc.mixtures[at.index]) return;
 	if (trial) trialEnd();
 	endConnect();
 	closePop();
-	cur = { sid, index };
+	cur = at;
 	sel = null;
 	multi.clear();
 	typingKey = null;
@@ -470,11 +506,13 @@ function openMixture(sid, index, { keepSide } = {}) {
 	fit();
 	if (!keepSide && !sidePinned) closeSide(true);
 }
-/* With nothing chosen: the session's mixture if there is one, else the first one in the nearest file you can edit. */
+/* With nothing chosen: the mixture this session answers with, else the first one in the file /moa web was asked for
+   ("/moa web user" opens on the user file), else the first one in the nearest file you can edit. */
 function pickMixture() {
 	const all = sources.flatMap(s => (fileOf(s.id)?.doc.mixtures ?? []).map((m, i) => ({ s, m, i })));
 	const first =
 		all.find(x => x.m.name === boot.selected && !shadowOf(x.s, x.m.name)) ??
+		all.find(x => x.s.id === boot.initialSourceId) ??
 		all.find(x => x.s === all.findLast(y => writable(y.s))?.s) ??
 		all[0];
 	cur = first ? { sid: first.s.id, index: first.i } : null;
@@ -500,16 +538,17 @@ function editable(sid) {
 		return false;
 	}
 	if (!writable(s)) {
-		toast(T("guard.readOnlyFile", { path: s.displayPath }), { bad: true });
+		toast(T("guard.readOnlyFile", { path: s?.displayPath ?? "?" }), { bad: true });
 		return false;
 	}
 	return true;
 }
-function renameMixture(sid, index, name) {
-	const m = fileOf(sid).doc.mixtures[index];
-	if (!m || name === m.name) return null;
-	if (!editable(sid)) return null;
-	const why = nameProblem(sid, name, m);
+/* Returns the reason when the name cannot be used, else null. */
+function renameMixture(m, name) {
+	const at = whereIs(m);
+	if (!at || name === m.name) return null;
+	if (!editable(at.sid)) return null;
+	const why = nameProblem(at.sid, name, m);
 	if (why) return why;
 	const old = m.name;
 	commit(
@@ -519,7 +558,7 @@ function renameMixture(sid, index, name) {
 		},
 		{ quiet: true },
 	);
-	const other = shadowOf(srcOf(sid), name);
+	const other = shadowOf(srcOf(at.sid), name, m);
 	toast(
 		other
 			? T("name.renamed.shadowed", { name, path: other.displayPath })
@@ -532,16 +571,16 @@ function renameMixture(sid, index, name) {
 }
 function newMixture(sid) {
 	if (!editable(sid)) return;
-	let index;
+	panelOpen = true; // the name is typed in the inspector, so it has to be there
 	commit(
 		T("act.newMixture"),
 		() => {
 			const d = fileOf(sid).doc;
 			d.mixtures.push({ name: freeName(sid, "untitled"), entry: "", members: [], edges: [] });
-			index = d.mixtures.length - 1;
-			cur = { sid, index };
+			cur = { sid, index: d.mixtures.length - 1 };
 			sel = null;
 			multi.clear();
+			tab = "inspect";
 		},
 		{ quiet: true },
 	);
@@ -550,46 +589,42 @@ function newMixture(sid) {
 	focusField("name");
 	$("pbody").querySelector('[data-field="name"]')?.select();
 }
-function duplicateMixture(sid, index) {
-	if (!editable(sid)) return;
-	const m = fileOf(sid).doc.mixtures[index];
+function duplicateMixture(m) {
+	const at = whereIs(m);
+	if (!at || !editable(at.sid)) return;
 	commit(T("act.duplicateMixture", { name: m.name }), () => {
-		const d = fileOf(sid).doc,
+		const d = fileOf(at.sid).doc,
 			copy = clone(m);
 		delete copy.$o;
-		copy.name = freeName(sid, m.name.replace(/-\d+$/, "") + "-copy");
+		copy.name = freeName(at.sid, m.name.replace(/-copy(-\d+)?$/, "") + "-copy");
 		for (const e of copy.edges) e.$k = "k" + ++edgeSeq;
-		d.mixtures.splice(index + 1, 0, copy);
-		cur = { sid, index: index + 1 };
+		d.mixtures.splice(at.index + 1, 0, copy);
+		cur = { sid: at.sid, index: at.index + 1 };
 		sel = null;
 		multi.clear();
 	});
 	fit();
 }
-function deleteMixture(sid, index) {
-	if (!editable(sid)) return;
-	const s = srcOf(sid),
-		m = fileOf(sid).doc.mixtures[index];
+function deleteMixture(m) {
+	const at = whereIs(m);
+	if (!at || !editable(at.sid)) return;
+	const sid = at.sid,
+		s = srcOf(sid),
+		d = fileOf(sid).doc,
+		open = mix;
 	const go = () => {
 		closeSheet();
 		commit(T("act.deleteMixture", { name: m.name }), () => {
-			fileOf(sid).doc.mixtures.splice(index, 1);
-			if (cur?.sid === sid) {
-				if (cur.index === index) {
-					cur = null;
-					sel = null;
-				} else if (cur.index > index) cur.index--;
-			}
-			sync();
-			if (!mix) pickMixture();
+			const index = d.mixtures.indexOf(m);
+			if (index < 0) return;
+			d.mixtures.splice(index, 1);
+			reopen(open === m ? null : open, sid, null);
 		});
 		fit();
 	};
 	if (isScratch(m)) return go();
-	const revealed = sources
-			.filter(x => x.order < s.order && fileOf(x.id)?.doc.mixtures.some(o => o.name === m.name))
-			.at(-1),
-		last = fileOf(sid).doc.mixtures.length === 1;
+	const revealed = hiddenBy(s, m.name, m),
+		last = d.mixtures.length === 1;
 	openSheet({
 		title: T("mixdel.title", { name: m.name }),
 		sub: T("mixdel.sub", { path: s.displayPath }),
@@ -604,6 +639,7 @@ function deleteMixture(sid, index) {
 			),
 			m.$o && h("li", {}, icon("layers"), h("span", {}, TX("mixdel.roster", { name: m.$o.name }))),
 			revealed &&
+				!shadowOf(s, m.name, m) &&
 				h(
 					"li",
 					{},
@@ -618,9 +654,7 @@ function deleteMixture(sid, index) {
 					h(
 						"span",
 						{},
-						doc &&
-							(Object.keys(fileOf(sid).doc.roles ?? {}).length ||
-								Object.keys(fileOf(sid).doc.envelopes ?? {}).length)
+						Object.keys(d.roles ?? {}).length || Object.keys(d.envelopes ?? {}).length
 							? T("mixdel.lastPresets")
 							: T("mixdel.last"),
 					),
@@ -630,33 +664,44 @@ function deleteMixture(sid, index) {
 		primary: { label: T("common.delete"), danger: true, run: go },
 	});
 }
-/* File-level presets a mixture leans on. They belong to the file, so a mixture that leaves takes its own copies. */
-function borrowed(m, d) {
-	const need = { roles: new Set(), envelopes: new Set() };
+/* Presets a mixture would read differently in another file, and so takes along as its own copies.
+   A mixture names presets explicitly (a role, an envelope, a verdict's render) and implicitly (every path without an
+   envelope reads "handoff", every verdict without a render reads "verdict", every run reads "entry" and "limit").
+   Each name resolves mixture → file → built in. If the name would land on different text in the destination file,
+   because the old file overrode it or the new one does, the mixture keeps the text it has now. */
+function borrowed(m, fromDoc, toDoc) {
+	const need = { roles: new Set(), envelopes: new Set(["entry", "limit"]) };
 	for (const n of m.members) {
-		if (n.kind === "verdict") {
-			if (n.render !== undefined) need.envelopes.add(n.render);
-		} else if (n.systemPrompt === undefined && n.role !== undefined) need.roles.add(n.role);
+		if (n.kind === "verdict") need.envelopes.add(n.render ?? "verdict");
+		else if (n.systemPrompt === undefined && n.role !== undefined) need.roles.add(n.role);
 	}
-	for (const e of m.edges)
-		if (e.envelope !== undefined && !isInline(e.envelope) && !e.$inline) need.envelopes.add(e.envelope);
-	for (const reserved of ["entry", "limit"]) need.envelopes.add(reserved);
-	const out = [];
+	for (const e of m.edges) {
+		if (e.envelope === undefined) need.envelopes.add("handoff");
+		else if (!isInline(e.envelope) && !e.$inline) need.envelopes.add(e.envelope);
+		if (e.joinEnvelope !== undefined && !isInline(e.joinEnvelope)) need.envelopes.add(e.joinEnvelope);
+	}
+	const out = [],
+		read = (d, kind, name) =>
+			own(d[kind], name) ? d[kind][name] : own(boot.bundled[kind], name) ? boot.bundled[kind][name] : undefined;
 	for (const kind of ["roles", "envelopes"])
-		for (const name of need[kind]) if (!own(m[kind], name) && own(d[kind], name)) out.push([kind, name]);
+		for (const name of need[kind]) {
+			if (own(m[kind], name)) continue;
+			const here = read(fromDoc, kind, name);
+			if (here !== undefined && here !== read(toDoc, kind, name)) out.push([kind, name, here]);
+		}
 	return out;
 }
-function transfer(fromSid, index, toSid, { copy, name } = {}) {
-	const from = fileOf(fromSid),
+function transfer(m, toSid, { copy, name } = {}) {
+	const at = whereIs(m),
 		to = fileOf(toSid),
-		m = from.doc.mixtures[index],
 		dest = srcOf(toSid);
-	if (!m || !to) return;
-	if (!copy && !editable(fromSid)) return;
+	if (!at || !to || at.sid === toSid) return;
+	const from = fileOf(at.sid);
+	if (!copy && !editable(at.sid)) return;
 	if (!editable(toSid)) return;
 	const as = name ?? m.name;
-	if (nameProblem(toSid, as, null)) return openMove(fromSid, index, { to: toSid, copy, name: as }); // a collision needs a decision, so ask
-	const carried = borrowed(m, from.doc);
+	if (nameProblem(toSid, as, null)) return openMove(m, { to: toSid, copy, name: as }); // a collision needs a decision, so ask
+	const carried = borrowed(m, from.doc, to.doc);
 	commit(
 		copy
 			? T("act.copyMixture", { name: m.name, path: dest.displayPath })
@@ -666,8 +711,8 @@ function transfer(fromSid, index, toSid, { copy, name } = {}) {
 			if (copy) {
 				delete moving.$o;
 				for (const e of moving.edges) e.$k = "k" + ++edgeSeq;
-			} else from.doc.mixtures.splice(index, 1);
-			for (const [kind, key] of carried) (moving[kind] ??= {})[key] = from.doc[kind][key];
+			} else from.doc.mixtures.splice(from.doc.mixtures.indexOf(m), 1);
+			for (const [kind, key, text] of carried) (moving[kind] ??= {})[key] = text;
 			moving.name = as;
 			to.doc.mixtures.push(moving);
 			cur = { sid: toSid, index: to.doc.mixtures.length - 1 };
@@ -676,129 +721,126 @@ function transfer(fromSid, index, toSid, { copy, name } = {}) {
 		},
 		{ quiet: true },
 	);
-	const other = shadowOf(dest, as);
+	const moved = to.doc.mixtures.at(-1),
+		other = shadowOf(dest, as, moved),
+		hides = !other && hiddenBy(dest, as, moved);
 	toast(
 		[
 			copy ? T("move.done.copy", { path: dest.displayPath }) : T("move.done", { path: dest.displayPath }),
 			carried.length && TN("move.carried", carried.length),
 			other && T("move.shadowed", { path: other.displayPath, name: as }),
+			hides && T("move.hides", { path: hides.displayPath, name: as }),
 			T("move.onSave"),
 		]
 			.filter(Boolean)
 			.join(" "),
-		{ undo: true },
+		{ undo: true, bad: !!other },
 	);
 	fit();
 }
-/* The same move as a dialog: pick the file, move or copy, and settle the name when it collides. */
-function openMove(fromSid, index, preset = {}) {
-	const s = srcOf(fromSid),
-		m = fileOf(fromSid).doc.mixtures[index],
-		dests = sources.filter(x => x.id !== fromSid && writable(x)),
+/* The same move as a dialog: pick the file, move or copy, and settle the name when it collides.
+   What it will do to the other files (which one wins, what it hides, what it takes along) is restated on every keystroke. */
+function openMove(m, preset = {}) {
+	const at = whereIs(m);
+	if (!at) return;
+	const s = srcOf(at.sid),
+		dests = sources.filter(x => x.id !== at.sid && writable(x)),
 		canMove = writable(s);
-	let to = preset.to ?? dests.at(-1)?.id,
+	if (!dests.length) return toast(T("side.noDest"), { bad: true });
+	let to = preset.to ?? dests.at(-1).id,
 		copy = preset.copy ?? !canMove,
 		name = preset.name ?? m.name;
-	if (!dests.length) return toast(T("side.noDest"), { bad: true });
+	const input = liveTidy(
+		h("input", { class: "in mono", value: name, spellcheck: "false", autocomplete: "off", "data-autofocus": "" }),
+		true,
+	);
+	const msg = h("p", { class: "fieldmsg" }),
+		impact = h("ul", { class: "impact" }),
+		what = h("div", {}),
+		where = h("div", { class: "plist" });
+	const sheet = openSheet({
+		title: canMove ? T("move.title", { name: m.name }) : T("move.title.copy", { name: m.name }),
+		sub: canMove ? T("move.sub", { path: s.displayPath }) : T("move.sub.readOnly", { path: s.displayPath }),
+		body: [
+			canMove && fld(T("move.what"), what),
+			fld(T("move.where"), where),
+			fld(T("move.name"), input),
+			msg,
+			impact,
+		],
+		primary: {
+			label: "",
+			run: () => {
+				if (!whereIs(m)) return closeSheet();
+				closeSheet();
+				transfer(m, to, { copy, name });
+			},
+		},
+	});
+	const go = sheet.querySelector(".btn.primary");
 	const paint = () => {
-		const why = nameProblem(to, name, null),
-			dest = srcOf(to),
-			other = !why && shadowOf(dest, name),
-			hides =
-				!why &&
-				sources
-					.filter(
-						x =>
-							x.order < dest.order && x.id !== fromSid && fileOf(x.id)?.doc.mixtures.some(o => o.name === name),
-					)
-					.at(-1);
-		const carried = borrowed(m, fileOf(fromSid).doc);
-		const input = liveTidy(
-			h("input", {
-				class: cls("in mono", why && "bad"),
-				value: name,
-				spellcheck: "false",
-				autocomplete: "off",
-				"data-autofocus": why ? "" : null,
-			}),
-			true,
+		const dest = srcOf(to),
+			why = nameProblem(to, name, null),
+			moving = copy ? null : m;
+		const other = !why && shadowOf(dest, name, moving),
+			hides = !why && hiddenBy(dest, name, moving),
+			carried = borrowed(m, fileOf(at.sid).doc, fileOf(to).doc);
+		input.classList.toggle("bad", !!why);
+		msg.textContent = why ?? "";
+		go.disabled = !!why;
+		go.textContent = copy ? T("move.go.copy") : T("move.go");
+		what.replaceChildren(
+			seg(
+				[
+					["move", T("move.move")],
+					["copy", T("move.copy")],
+				],
+				copy ? "copy" : "move",
+				v => {
+					copy = v === "copy";
+					paint();
+				},
+			),
 		);
-		input.addEventListener("input", () => {
-			name = input.value.trim();
-			const bad = nameProblem(to, name, null);
-			input.classList.toggle("bad", !!bad);
-			msg.textContent = bad ?? "";
-			go.disabled = !!bad;
-		});
-		input.addEventListener("keydown", ev => {
-			if (ev.key === "Enter" && !go.disabled) go.click();
-		});
-		const msg = h("p", { style: { color: "var(--err)", minHeight: "18px" } }, why ?? "");
-		const sheet = openSheet({
-			title: T("move.title", { name: m.name }),
-			sub: T("move.sub", { path: s.displayPath }),
-			body: [
-				fld(
-					T("move.what"),
-					seg(
-						[
-							["move", T("move.move"), canMove ? null : T("move.move.no")],
-							["copy", T("move.copy")],
-						],
-						copy ? "copy" : "move",
-						v => {
-							if (v === "move" && !canMove) return toast(T("move.move.no"), { bad: true });
-							copy = v === "copy";
+		where.replaceChildren(
+			...dests.map(x =>
+				h(
+					"button",
+					{
+						class: cls("preset", x.id === to && "on"),
+						type: "button",
+						"aria-pressed": String(x.id === to),
+						onclick: () => {
+							to = x.id;
 							paint();
 						},
-					),
+					},
+					h("span", { class: cls("tag", x.kind === "user" ? "judge" : "local") }, scopeLabel(x)),
+					h("b", { title: x.path }, x.displayPath),
+					h("small", {}, sourceWhat(x)),
 				),
-				fld(
-					T("move.where"),
+			),
+		);
+		impact.replaceChildren(
+			...[
+				carried.length > 0 &&
 					h(
-						"div",
-						{ class: "plist" },
-						dests.map(x =>
-							h(
-								"button",
-								{
-									class: cls("preset", x.id === to && "on"),
-									type: "button",
-									"aria-pressed": String(x.id === to),
-									onclick: () => {
-										to = x.id;
-										paint();
-									},
-								},
-								h("span", { class: cls("tag", x.kind === "user" ? "judge" : "local") }, scopeLabel(x)),
-								h("b", { title: x.path }, x.displayPath),
-								h("small", {}, sourceWhat(x)),
-							),
-						),
+						"li",
+						{},
+						icon("layers"),
+						h("span", {}, TN("move.willCarry", carried.length, { names: carried.map(c => c[1]).join(", ") })),
 					),
-				),
-				fld(T("move.name"), input),
-				msg,
-				h(
-					"ul",
-					{ class: "impact" },
-					carried.length > 0 && h("li", {}, icon("layers"), h("span", {}, TN("move.willCarry", carried.length))),
-					other &&
-						h("li", {}, icon("warn"), h("span", {}, TX("move.willShadow", { path: other.displayPath, name }))),
-					hides &&
-						h("li", {}, icon("info"), h("span", {}, TX("move.willHide", { path: hides.displayPath, name }))),
-				),
-			],
-			primary: {
-				label: copy ? T("move.go.copy") : T("move.go"),
-				disabled: !!why,
-				run: () => {
-					closeSheet();
-					transfer(fromSid, index, to, { copy, name });
-				},
-			},
-		});
-		const go = sheet.querySelector(".btn.primary");
+				other && h("li", {}, icon("warn"), h("span", {}, TX("move.willShadow", { path: other.displayPath, name }))),
+				hides && h("li", {}, icon("info"), h("span", {}, TX("move.willHide", { path: hides.displayPath, name }))),
+			].filter(Boolean),
+		);
 	};
+	input.addEventListener("input", () => {
+		name = input.value.trim();
+		paint();
+	});
+	input.addEventListener("keydown", ev => {
+		if (ev.key === "Enter" && !go.disabled) go.click();
+	});
 	paint();
 }

@@ -4,7 +4,7 @@
 /* ═══════════════════════════ SERVER ═══════════════════════════
    The page lives under a one-time capability URL that NeoPi made for the session that ran /moa web.
    It only ever sends source IDs, never paths, and every route is relative to that URL. */
-let offline = 0;
+let offline = 0; // requests in a row that got no answer at all
 const api = (() => {
 	async function call(method, route, body) {
 		try {
@@ -23,12 +23,19 @@ const api = (() => {
 			if (offline) {
 				offline = 0;
 				renderBanner();
+				renderBar();
 			}
-			if (res.status === 410) gone(data?.error);
+			if (res.status === 410) {
+				disconnected = true;
+				gone();
+			}
 			return { ok: res.ok, status: res.status, data };
 		} catch {
+			/* No answer is not the end: NeoPi may be busy, suspended, or back in a moment, and this address still works
+         when it is. The page keeps looking; only a 410 from NeoPi itself means this editor is over. */
 			offline++;
 			renderBanner();
+			renderBar();
 			return { ok: false, status: 0, data: { error: T("api.offline") } };
 		}
 	}
@@ -40,31 +47,76 @@ const api = (() => {
 		save: list => call("PUT", "mixtures/save", { files: list }),
 	};
 })();
-/* The session that opened this page moved on (new session, another folder, or /moa web was run again). */
-function gone(why) {
-	if (document.querySelector(".dead")) return;
-	clearInterval(watching);
-	const unsaved = dirty();
-	document.body.append(
-		h(
-			"div",
-			{ class: "dead", role: "alertdialog" },
+/* Whatever cannot be saved right now can still be taken away: one button per file that holds anything of yours,
+   copying the whole MIXTURES.toml as your draft has it, including a new mixture that has no model yet. */
+const worthKeeping = () =>
+	sources.filter(
+		s =>
+			fileDirty(s.id) ||
+			fileOf(s.id)?.doc.mixtures.some(m => isScratch(m) && (m.description || !/^untitled(-\d+)?$/.test(m.name))),
+	);
+const draftButtons = () =>
+	h(
+		"div",
+		{ class: "fixes" },
+		worthKeeping().map(s =>
 			h(
-				"div",
-				{},
-				h("h2", {}, T("gone.title")),
-				h("p", {}, why ?? T("gone.why")),
-				h("p", {}, TX("gone.how")),
-				unsaved && h("p", {}, T("gone.unsaved")),
-				unsaved &&
-					h(
-						"button",
-						{ class: "btn", type: "button", onclick: ev => ev.currentTarget.closest(".dead").remove() },
-						T("gone.look"),
-					),
+				"button",
+				{
+					class: "btn fix",
+					type: "button",
+					onclick: () => copyText(tomlOf(bare(fileOf(s.id).doc)), T("gone.copied", { path: s.displayPath })),
+				},
+				icon("copy"),
+				h("span", {}, T("gone.copy", { path: s.displayPath })),
 			),
 		),
 	);
+function copyDrafts() {
+	openSheet({
+		title: T("keep.title"),
+		sub: T("keep.sub"),
+		body: draftButtons(),
+		cancel: null,
+		primary: { label: T("common.done"), run: closeSheet },
+	});
+}
+/* NeoPi said this editor is over: the session that opened it moved on, or /moa web was run again. */
+function gone() {
+	if (document.querySelector(".dead")) return;
+	clearInterval(watching);
+	closeSheet();
+	closePop();
+	const unsaved = worthKeeping().length > 0,
+		box = h("div", { class: "dead", role: "alertdialog", "aria-label": T("gone.title") });
+	box.append(
+		h(
+			"div",
+			{},
+			h("h2", {}, T("gone.title")),
+			h("p", {}, TX("gone.how")),
+			unsaved && [h("p", {}, T("gone.unsaved")), draftButtons()],
+			h(
+				"div",
+				{ class: "fixes row", style: { marginTop: "14px" } },
+				h(
+					"button",
+					{
+						class: "btn",
+						type: "button",
+						onclick: () => {
+							box.remove();
+							render();
+						},
+					},
+					unsaved ? T("gone.look") : T("gone.look.clean"),
+				),
+			),
+		),
+	);
+	document.body.append(box);
+	box.querySelector("button").focus();
+	renderBar();
 }
 
 /* ═══════════════════════════ TOP BAR ═══════════════════════════ */
@@ -106,14 +158,20 @@ function renderBar() {
 	}
 	const cell = (label, value, state, one) =>
 		h("span", { class: one ? "one" : null }, h("b", {}, label), h("em", { class: state }, h("i"), value));
-	const draftWord = changed ? TN("bar.draft.changed", changed) : T("bar.draft.clean"),
+	const waiting = scratchList().length;
+	const draftWord = changed
+			? TN("bar.draft.changed", changed)
+			: waiting
+				? T("bar.draft.scratch")
+				: T("bar.draft.clean"),
 		theirs = s && fileOf(s.id)?.theirs;
+	const hot = changed || waiting;
 	const [roster, rosterState] = mix ? rosterWord() : ["", ""];
 	$("ledger").hidden = !mix;
 	$("ledger").title = T("bar.ledger.title");
 	if (mix)
 		$("ledger").replaceChildren(
-			cell(T("bar.draft"), draftWord, changed ? "hot" : "good"),
+			cell(T("bar.draft"), draftWord, hot ? "hot" : "good"),
 			cell(
 				T("bar.disk"),
 				theirs
@@ -124,12 +182,7 @@ function renderBar() {
 				theirs ? "lag" : "",
 			),
 			cell(T("bar.roster"), roster, rosterState),
-			cell(
-				T("bar.draft"),
-				theirs ? T("bar.disk.changed") : draftWord,
-				theirs ? "lag" : changed ? "hot" : "good",
-				true,
-			),
+			cell(T("bar.draft"), theirs ? T("bar.disk.changed") : draftWord, theirs ? "lag" : hot ? "hot" : "good", true),
 		);
 	const errors = issues.filter(i => i.sev === "e").length,
 		warns = issues.filter(i => i.sev === "w").length;
@@ -151,9 +204,22 @@ function renderBar() {
 				]
 		).filter(Boolean),
 	);
-	$("save").replaceChildren(changed ? T("bar.save") : T("bar.saved"));
-	$("save").classList.toggle("primary", changed > 0);
-	$("save").title = changed ? T("bar.save.title") : T("bar.saved.title");
+	/* The Save button only looks ready when a save can go through: not while this mixture has something to fix first. */
+	const blocked = changed > 0 && !!mix && errors > 0 && mixState(mix, cur.sid) !== null;
+	$("save").replaceChildren(
+		disconnected ? T("bar.offline") : changed ? T("bar.save") : waiting ? T("bar.unwritten") : T("bar.saved"),
+	);
+	$("save").classList.toggle("primary", changed > 0 && !blocked && !disconnected);
+	$("save").classList.toggle("held", blocked);
+	$("save").title = disconnected
+		? T("bar.offline.title")
+		: blocked
+			? TN("bar.save.blocked", errors)
+			: changed
+				? T("bar.save.title")
+				: waiting
+					? T("bar.unwritten.title")
+					: T("bar.saved.title");
 	$("reopen").replaceChildren(icon("side"), T("bar.inspector"));
 	$("limits").hidden = !mix;
 	if (mix) {
@@ -183,15 +249,15 @@ function renderBar() {
 	}
 	/* Everything that floats over the canvas is centred on the part of it that is not covered, and gets terser
      when that part is narrow: a pinned list and an open inspector leave less room than the window width suggests. */
-	const [cx] = viewCenter(),
-		ins = insets(),
-		room = canvas.clientWidth - ins.l - ins.r;
+	const ins = insets(),
+		room = canvas.clientWidth - ins.sl - ins.r,
+		cx = ins.sl + room / 2;
 	for (const el of [canvas, layer]) {
 		el.style.setProperty("--cx", cx + "px");
-		el.style.setProperty("--sl", ins.l + "px");
 		el.style.setProperty("--room", room + "px");
 	}
-	canvas.dataset.room = room < 470 ? "xs" : room < 860 ? "s" : room < 1010 ? "m" : "l";
+	canvas.dataset.room = room < 560 ? "xs" : room < 860 ? "s" : room < 1010 ? "m" : "l";
+	canvas.toggleAttribute("data-none", !mix);
 	document.title = (changed ? "● " : "") + (mix ? mix.name + " · " : "") + T("app.title");
 }
 function legend() {
@@ -231,7 +297,10 @@ function legend() {
 $("railbtn").onclick = toggleSide;
 $("switch").onclick = () => {
 	if (sideOpen && !sidePinned) closeSide(true);
-	else if (!sideOpen) openSide();
+	else if (!sideOpen) {
+		openSide();
+		side.querySelector(".srow.on,.srow,.snew")?.focus();
+	}
 };
 $("addr").onclick = () => {
 	navigator.clipboard?.writeText("mixture/" + mix.name).then(
@@ -394,19 +463,27 @@ $("ledger").onclick = () =>
 function renderBanner() {
 	const el = $("banner"),
 		f = cur && fileOf(cur.sid);
-	const show = (text, label, run) => {
+	const show = (text, ...actions) => {
 		el.hidden = false;
 		el.replaceChildren(
 			icon("warn"),
 			h("span", {}, text),
-			label && h("button", { class: "btn small", type: "button", onclick: run }, label),
+			...actions
+				.filter(Boolean)
+				.map(([label, run]) => h("button", { class: "btn small", type: "button", onclick: run }, label)),
 		);
 	};
-	if (offline > 1) return show(T("banner.offline"), T("banner.retry"), () => reloadAll(false));
-	if (f?.theirs)
-		return show(T("banner.conflict", { path: srcOf(cur.sid).displayPath }), T("banner.conflict.go"), () =>
-			openSave(),
+	if (offline >= 2 && !disconnected)
+		return show(
+			T("banner.offline"),
+			[T("banner.retry"), () => reloadAll(false)],
+			worthKeeping().length > 0 && [T("banner.copy"), copyDrafts],
 		);
+	if (f?.theirs)
+		return show(T("banner.conflict", { path: srcOf(cur.sid).displayPath }), [
+			T("banner.conflict.go"),
+			() => openSave(),
+		]);
 	el.hidden = true;
 }
 
@@ -511,8 +588,7 @@ function renderHint() {
 }
 
 /* ═══════════════════════════ EMPTY STATES ═══════════════════════════ */
-const pickSelector = (...wanted) =>
-	wanted.map(w => boot.models.find(m => m.selector === w)?.selector).find(Boolean) ?? boot.models[0]?.selector ?? "";
+const pickSelector = (...wanted) => starterModel(...wanted);
 const STARTERS = [
 	{
 		name: () => T("starter.chain"),
@@ -915,6 +991,8 @@ function openKeys() {
 				row(T("help.k.delete"), "Del"),
 				row(T("help.k.duplicate"), "D"),
 				row(T("help.k.undo"), "Ctrl", "Z"),
+				row(T("help.k.redo"), "Ctrl", "Shift", "Z"),
+				row(T("help.k.cancel"), "Ctrl", "C"),
 				row(T("help.k.save"), "Ctrl", "S"),
 				row(T("help.k.tidy"), "T"),
 				row(T("help.k.fit"), "F"),
@@ -1180,6 +1258,8 @@ document.addEventListener(
 
 /* ═══════════════════════════ FRAME ═══════════════════════════ */
 function render() {
+	layout();
+	pruneBad();
 	issues = mix ? [...check(), ...serverFindings()] : [];
 	renderGraph();
 	renderPanel();
@@ -1195,6 +1275,7 @@ function render() {
 function soft() {
 	if (!mix) return render();
 	if (document.querySelector(".nid-edit") || gesture || connect) return setTimeout(soft, 250); // never rebuild cards under a rename or a drag
+	pruneBad();
 	issues = [...check(), ...serverFindings()];
 	renderGraph();
 	renderBar();
@@ -1204,11 +1285,15 @@ function soft() {
 	for (const update of liveList) update();
 }
 addEventListener("resize", () => {
-	renderBar();
+	const was = stacked(),
+		pinned = sidePinned;
+	layout();
+	if (was !== stacked() || pinned !== sidePinned) render();
+	else renderBar();
 	if (!camTouched) fit();
 });
 addEventListener("beforeunload", ev => {
-	if (dirty()) ev.preventDefault();
+	if (dirty() || scratchList().some(m => m.description || !/^untitled(-\d+)?$/.test(m.name))) ev.preventDefault();
 });
 
 function normalizeBoot(data) {
@@ -1219,6 +1304,7 @@ function normalizeBoot(data) {
 		models: (data.models ?? []).map(m => (typeof m === "string" ? { selector: m } : m)),
 		judgePlan: data.judgePlan ?? null,
 		selected: data.selected ?? null,
+		initialSourceId: data.initialSourceId ?? null,
 		summaryModel: data.summaryModel ?? d.summaryModel ?? null,
 		bundled: {
 			roles: data.bundled?.roles ?? {},
@@ -1260,18 +1346,19 @@ async function start() {
 	const snaps = await Promise.all(sources.map(s => loadSource(s.id)));
 	sources = sources.filter((s, i) => {
 		if (!snaps[i]) return false;
-		files.set(s.id, { base: snaps[i], doc: adopt(snaps[i].doc, s.id), theirs: null });
+		files.set(s.id, { base: snaps[i], doc: adopt(snaps[i].doc, s.id), theirs: null, both: null });
 		return true;
 	});
 	pickMixture();
 	sync();
+	layout();
 	panelOpen = !stacked();
 	edited();
 	render();
 	fit();
 	if (!mix) {
-		sidePinned = !stacked();
 		sideOpen = true;
+		sidePinned = canPin();
 		render();
 	}
 	watchDisk();

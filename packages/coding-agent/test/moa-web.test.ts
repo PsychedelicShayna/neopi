@@ -381,41 +381,51 @@ describe("Mixture web editor", () => {
 		expect(boot.limits).toMatchObject({ members: 32, edges: 128, fileBytes: 4 * 1024 * 1024 });
 	});
 
-	it("opens a real editor from /moa web and saves into the session's roster", async () => {
-		const settings = Settings.isolated();
-		const session = await createMoaSession(fixture!, { settings });
-		const dock = vi.spyOn(tern, "openTernPage").mockResolvedValue(null);
-		const browser = vi.spyOn(openUtils, "openPath").mockImplementation(() => {});
-		try {
-			const statuses: string[] = [];
-			const errors: string[] = [];
-			const ctx = createInteractiveModeContext({
-				session,
-				sessionManager: session.sessionManager,
-				settings,
-				showStatus: message => {
-					statuses.push(message);
-				},
-				showError: message => {
-					errors.push(message);
-				},
-			});
-			expect(await executeBuiltinSlashCommand("/moa web", { ctx })).toBe(true);
-			expect(errors).toEqual([]);
-			const url = dock.mock.calls[0]![0];
-			expect(dock).toHaveBeenCalledWith(url, "beside");
-			expect(browser).toHaveBeenCalledWith(url);
-			expect(statuses.join("\n")).toContain(url);
-			const { user } = await userAndProject(url);
-			const { doc } = await source(url, user.id);
-			const renamed = { mixtures: [{ ...doc.mixtures[0]!, name: "launched-editor" }] };
-			await json<Saved>(await save(url, [{ sourceId: user.id, baseHash: user.hash, doc: renamed }]));
-			expect(session.getRegisteredMixture("launched-editor")).toBeDefined();
-			expect(statuses.at(-1)).toMatch(/Saved .*MIXTURES\.toml and refreshed the mixture roster/);
-		} finally {
-			browser.mockRestore();
-			dock.mockRestore();
-			await session.dispose();
-		}
-	});
+	it.each([
+		["/moa web", "project"],
+		["/moa web user", "user"],
+	] as const)(
+		"opens a real editor at the requested scope for %s and saves into the session's roster",
+		async (command, scope) => {
+			const settings = Settings.isolated();
+			const session = await createMoaSession(fixture!, { settings });
+			const dock = vi.spyOn(tern, "openTernPage").mockResolvedValue(null);
+			const browser = vi.spyOn(openUtils, "openPath").mockImplementation(() => {});
+			try {
+				const statuses: string[] = [];
+				const errors: string[] = [];
+				const ctx = createInteractiveModeContext({
+					session,
+					sessionManager: session.sessionManager,
+					settings,
+					showStatus: message => {
+						statuses.push(message);
+					},
+					showError: message => {
+						errors.push(message);
+					},
+				});
+				expect(await executeBuiltinSlashCommand(command, { ctx })).toBe(true);
+				expect(errors).toEqual([]);
+				expect(dock).toHaveBeenCalledTimes(1);
+				const url = dock.mock.calls[0]![0];
+				expect(dock).toHaveBeenCalledWith(url, "beside");
+				expect(browser).toHaveBeenCalledTimes(1);
+				expect(browser).toHaveBeenCalledWith(url);
+				expect(statuses.join("\n")).toContain(url);
+				const { user, project } = await userAndProject(url);
+				const boot = await json<{ initialSourceId: string }>(await request(url, "bootstrap"));
+				expect(boot.initialSourceId).toBe(scope === "user" ? user.id : project.id);
+				const { doc } = await source(url, user.id);
+				const renamed = { mixtures: [{ ...doc.mixtures[0]!, name: "launched-editor" }] };
+				await json<Saved>(await save(url, [{ sourceId: user.id, baseHash: user.hash, doc: renamed }]));
+				expect(session.getRegisteredMixture("launched-editor")).toBeDefined();
+				expect(statuses.at(-1)).toMatch(/Saved .*MIXTURES\.toml and refreshed the mixture roster/);
+			} finally {
+				browser.mockRestore();
+				dock.mockRestore();
+				await session.dispose();
+			}
+		},
+	);
 });
