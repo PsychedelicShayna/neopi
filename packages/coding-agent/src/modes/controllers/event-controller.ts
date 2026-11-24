@@ -95,18 +95,6 @@ import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
-const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
-/**
- * Concurrent IRC cards allowed in the transcript's live region. Cards land
- * below a still-live block (a running task), where they cannot commit to
- * native scrollback (commits are prefix-only) — every visible card inflates
- * the live region and pushes the live block's uncommitted rows above the
- * window top, where they are neither on screen nor in history. A swarm burst
- * (several agents coordinating at once) must therefore stay bounded: the
- * oldest live-region card retires as soon as a new one would exceed the cap.
- */
-const MAX_LIVE_IRC_CARDS = 4;
-
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
 function hasCommittedTodo(events: unknown): boolean {
@@ -227,6 +215,13 @@ export class EventController {
 	// reads collapses into one group even across completion boundaries.
 	#lastVisibleBlockCount = 0;
 	#renderedCustomMessages = new Set<string>();
+	/**
+	 * Fan-outs (a group send, an `all` broadcast) already shown, by fan-out id. One
+	 * send reaches this UI once per recipient it observes; it shows once. The
+	 * value is the block of an observed leg, which the leg delivered to this
+	 * session replaces when it arrives: that leg is the one the transcript keeps.
+	 */
+	#shownIrcFanouts = new Map<string, Component | undefined>();
 	#lastIntent: string | undefined = undefined;
 	/** Returned calls parked for their background job's frames ({@link parksAsBackground}). */
 	#backgroundCallIds = new Set<string>();
@@ -305,10 +300,6 @@ export class EventController {
 	#retryPending = false;
 	/** Next-message prediction offered as composer ghost text after a completed turn. */
 	readonly composerPrediction: ComposerPredictionController;
-	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
-	// Insertion-ordered IRC cards not yet retired; values are the transcript
-	// components each card contributed (see #retireIrcCard for the guard).
-	#liveIrcCards = new Map<string, Component[]>();
 	// Most recent `wait` tool block whose result still had every watched job
 	// running. Kept un-finalized (live) so the next `wait` call displaces it —
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
@@ -566,11 +557,6 @@ export class EventController {
 		this.#toolArgsReveal.stop();
 		this.composerPrediction.cancel();
 		this.#setTerminalProgress(false);
-		for (const timer of this.#ircExpiryTimers.values()) {
-			clearTimeout(timer);
-		}
-		this.#ircExpiryTimers.clear();
-		this.#liveIrcCards.clear();
 	}
 
 	#resetReadGroup(): void {
@@ -1126,6 +1112,7 @@ export class EventController {
 		this.#resetReadGroup();
 		this.#lastVisibleBlockCount = 0;
 		this.#renderedCustomMessages.clear();
+		this.#shownIrcFanouts.clear();
 		this.#lastIntent = undefined;
 		this.#toolTimelineComponents.clear();
 		this.#streamedToolCallIdByIndex.clear();
@@ -1149,11 +1136,6 @@ export class EventController {
 		this.#restorePinnedErrorInline = true;
 		this.#retryPending = this.ctx.viewSession.isRetrying;
 		this.composerPrediction.cancel();
-		for (const timer of this.#ircExpiryTimers.values()) {
-			clearTimeout(timer);
-		}
-		this.#ircExpiryTimers.clear();
-		this.#liveIrcCards.clear();
 		this.#displaceablePollComponent = undefined;
 		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
@@ -1487,6 +1469,7 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	/** A peer's message stays in the transcript whole: nothing retires or caps it. */
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
 		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
@@ -1494,54 +1477,51 @@ export class EventController {
 			return;
 		}
 		this.#renderedCustomMessages.add(signature);
+		const details: unknown = event.message.details;
+		const fanoutId = isRecord(details) && typeof details.fanoutId === "string" ? details.fanoutId : undefined;
+		// The leg delivered to this session is the one its transcript stores; legs
+		// observed on their way to others are display-only copies of the same send.
+		const delivered = event.message.customType === "irc:incoming";
+		if (fanoutId !== undefined && this.#shownIrcFanouts.has(fanoutId)) {
+			const observed = this.#shownIrcFanouts.get(fanoutId);
+			// Shown already. Only the delivered leg takes the place of an observed
+			// copy, and only while that copy can still leave the transcript.
+			if (!delivered || observed === undefined || !this.ctx.chatContainer.canRemoveBlock(observed)) return;
+			this.ctx.chatContainer.removeChild(observed);
+		}
 		this.#resetReadGroup();
-		const components = this.ctx.addMessageToChat(event.message);
-		this.#scheduleIrcExpiry(signature, components);
-		this.#enforceIrcCardCap(signature);
+		const [block] = this.ctx.addMessageToChat(event.message);
+		if (fanoutId !== undefined) this.#shownIrcFanouts.set(fanoutId, delivered ? undefined : block);
+		if (block) this.#fileAboveRunningBlocks(block);
 		this.ctx.ui.requestRender();
 	}
 
-	#scheduleIrcExpiry(signature: string, components: Component[]): void {
-		if (components.length === 0 || this.#ircExpiryTimers.has(signature)) return;
-		const timer = setTimeout(() => {
-			this.#ircExpiryTimers.delete(signature);
-			this.#retireIrcCard(signature);
-		}, IRC_MESSAGE_VISIBLE_TTL_MS);
-		timer.unref?.();
-		this.#ircExpiryTimers.set(signature, timer);
-		this.#liveIrcCards.set(signature, components);
-	}
-
 	/**
-	 * Remove an expired/evicted IRC card only while its transcript entry remains
-	 * active. Pending or committed entries already belong to an immutable
-	 * ordered history batch and remain as final history.
+	 * Move the just-appended `block` above the running blocks it landed under (a
+	 * task, a `wait`, a long command). The live region commits to scrollback only
+	 * from its top, so everything under a running block stays live: crew traffic
+	 * piling up there squeezes each message to a row or two and keeps all of it
+	 * out of scrollback until that block ends. Above it a message is finished
+	 * history and scrolls away whole, as any message does. A streaming reply is
+	 * left alone: it commits its own finished rows, and nothing can go above rows
+	 * already in scrollback.
 	 */
-	#retireIrcCard(signature: string): void {
-		const components = this.#liveIrcCards.get(signature);
-		this.#liveIrcCards.delete(signature);
-		if (!components) return;
-		let removed = false;
-		for (const component of components) {
-			if (!this.ctx.chatContainer.canRemoveBlock(component)) continue;
-			this.ctx.chatContainer.removeChild(component);
-			removed = true;
+	#fileAboveRunningBlocks(block: Component): void {
+		const container = this.ctx.chatContainer;
+		const children = container.children;
+		let first = children.length - 1;
+		if (children[first] !== block) return;
+		while (first > 0) {
+			const above: Component & { isTranscriptBlockFinalized?(): boolean; transcriptBlockMode?: string } =
+				children[first - 1]!;
+			if (above.isTranscriptBlockFinalized?.() !== false || above.transcriptBlockMode === "appendOnly") break;
+			if (!container.canRemoveBlock(above)) break;
+			first--;
 		}
-		if (removed) this.ctx.ui.requestRender();
-	}
-
-	/** Evict oldest live-region cards beyond {@link MAX_LIVE_IRC_CARDS}. */
-	#enforceIrcCardCap(latestSignature: string): void {
-		while (this.#liveIrcCards.size > MAX_LIVE_IRC_CARDS) {
-			const oldest = this.#liveIrcCards.keys().next().value;
-			if (oldest === undefined || oldest === latestSignature) return;
-			const timer = this.#ircExpiryTimers.get(oldest);
-			if (timer) {
-				clearTimeout(timer);
-				this.#ircExpiryTimers.delete(oldest);
-			}
-			this.#retireIrcCard(oldest);
-		}
+		const anchor = children[first];
+		if (!anchor || anchor === block || !container.canRemoveBlock(block)) return;
+		container.removeChild(block);
+		container.insertBefore(block, anchor);
 	}
 
 	/**

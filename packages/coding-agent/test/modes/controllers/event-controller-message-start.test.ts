@@ -177,32 +177,35 @@ function createIrcMessage(timestamp: number): CustomMessage<{ from: string; mess
 function createIrcContext(options: { liveBlockAbove?: boolean } = {}) {
 	const ctx = createInteractiveModeContext();
 	const { chatContainer } = ctx;
+	let runningTool: Component | undefined;
 	if (options.liveBlockAbove) {
-		// A still-running tool above the cards: they sit in the live region,
-		// where their rows cannot have committed to native scrollback.
-		chatContainer.addChild({
+		// A still-running tool: blocks under it stay in the live region, where
+		// their rows cannot commit to native scrollback.
+		runningTool = {
 			render: () => ["running tool"],
 			invalidate: () => {},
 			isTranscriptBlockFinalized: () => false,
-		} as Component);
+		} as Component;
+		chatContainer.addChild(runningTool);
 	}
 	const helpers = new UiHelpers(ctx);
 	ctx.addMessageToChat = vi.fn((message, options) => helpers.addMessageToChat(message, options));
 	return {
 		ctx,
 		chatContainer,
+		runningTool,
 		requestRender: ctx.ui.requestRender,
 		addMessageToChat: ctx.addMessageToChat,
 	};
 }
 
-describe("EventController IRC expiry", () => {
+describe("EventController IRC messages", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
-	it("renders IRC messages immediately and removes live-region cards after the TTL", async () => {
+	it("renders an IRC message immediately and keeps it: nothing expires it", async () => {
 		vi.useFakeTimers();
 		const message = createIrcMessage(1);
 		const { ctx, chatContainer, requestRender } = createIrcContext({ liveBlockAbove: true });
@@ -211,37 +214,33 @@ describe("EventController IRC expiry", () => {
 		await controller.handleEvent({ type: "irc_message", message });
 
 		expect(chatContainer.children).toHaveLength(2);
-		// One requestRender from the IRC handler mounting the card. The blanket
+		// One requestRender from the IRC handler mounting the block. The blanket
 		// pre-render that `handleEvent` used to fire before every dispatch was
 		// removed in #4353 (it doubled the paint rate during streaming and did no
 		// visible work beyond what the handlers already trigger).
 		expect(requestRender).toHaveBeenCalledTimes(1);
 
-		vi.advanceTimersByTime(9_999);
+		vi.advanceTimersByTime(60_000);
 		expect(chatContainer.children).toHaveLength(2);
-
-		vi.advanceTimersByTime(1);
-		expect(chatContainer.children).toHaveLength(1);
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		expect(Bun.stripANSI(chatContainer.children[0]!.render(80).join("\n"))).toContain("Ready 1");
 	});
 
-	it("evicts the oldest live-region card beyond the cap", async () => {
-		vi.useFakeTimers();
-		const { ctx, chatContainer } = createIrcContext({ liveBlockAbove: true });
+	it("keeps every message of a burst, in arrival order, above the running block they arrived under", async () => {
+		const { ctx, chatContainer, runningTool } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
 
-		for (let i = 0; i < 5; i++) {
+		for (let i = 0; i < 6; i++) {
 			await controller.handleEvent({ type: "irc_message", message: createIrcMessage(100 + i) });
 		}
-		// live block + MAX_LIVE_IRC_CARDS (4): the 5th card evicted the 1st.
-		expect(chatContainer.children).toHaveLength(5);
-		const rendered = chatContainer.children.map(child => child.render(80).join("\n"));
-		expect(rendered.some(text => text.includes("100"))).toBe(false);
-		expect(rendered.some(text => text.includes("104"))).toBe(true);
+		expect(chatContainer.children).toHaveLength(7);
+		// The running block stays last: everything above it can scroll into history.
+		expect(chatContainer.children[6]).toBe(runningTool!);
+		const rendered = chatContainer.children.slice(0, 6).map(child => Bun.stripANSI(child.render(80).join("\n")));
+		for (let i = 0; i < 6; i++) expect(rendered[i]).toContain(`Ready ${100 + i}`);
 	});
 
-	it("does not schedule duplicate expiry for duplicate IRC events", async () => {
-		vi.useFakeTimers();
+	it("renders a duplicate IRC event once", async () => {
 		const message = createIrcMessage(2);
 		const { ctx, chatContainer, addMessageToChat } = createIrcContext({ liveBlockAbove: true });
 		const controller = new EventController(ctx);
@@ -251,21 +250,42 @@ describe("EventController IRC expiry", () => {
 
 		expect(addMessageToChat).toHaveBeenCalledTimes(1);
 		expect(chatContainer.children).toHaveLength(2);
-		vi.advanceTimersByTime(10_000);
-		expect(chatContainer.children).toHaveLength(1);
 	});
 
-	it("clears pending IRC expiry timers on dispose", async () => {
-		vi.useFakeTimers();
-		const message = createIrcMessage(3);
-		const { ctx, chatContainer, requestRender } = createIrcContext();
-		const controller = new EventController(ctx);
+	it("shows one group send once, keeping the leg delivered to this session over a leg observed on its way to another member", async () => {
+		const text = "Compare findings.";
+		const body = `Scout sent this to group council, which you are part of.\n\n${text}`;
+		const group = { broadcast: true, group: "council", groupText: text, fanoutId: "f1" };
+		const observed: CustomMessage = {
+			role: "custom",
+			customType: "irc:relay",
+			content: body,
+			display: true,
+			details: { from: "Scout", to: "Operator", body, ...group },
+			timestamp: 10,
+		};
+		const delivered: CustomMessage = {
+			role: "custom",
+			customType: "irc:incoming",
+			content: body,
+			display: true,
+			details: { from: "Scout", message: body, ...group },
+			timestamp: 11,
+		};
+		for (const order of [
+			[observed, delivered],
+			[delivered, observed],
+		]) {
+			const { ctx, chatContainer } = createIrcContext();
+			const controller = new EventController(ctx);
+			for (const message of order) await controller.handleEvent({ type: "irc_message", message });
 
-		await controller.handleEvent({ type: "irc_message", message });
-		controller.dispose();
-		vi.advanceTimersByTime(10_000);
-
-		expect(chatContainer.children).toHaveLength(1);
-		expect(requestRender).toHaveBeenCalledTimes(1);
+			expect(chatContainer.children).toHaveLength(1);
+			const rendered = Bun.stripANSI(chatContainer.children[0]!.render(80).join("\n"));
+			expect(rendered).toContain("#council");
+			expect(rendered).toContain(text);
+			// The delivered leg has no recipient to name; the observed one named the operator.
+			expect(rendered).not.toContain("Operator");
+		}
 	});
 });

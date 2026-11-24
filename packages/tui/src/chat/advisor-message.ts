@@ -1,4 +1,5 @@
 import { type Component } from "../tui";
+import { Box } from "../components/box";
 import { Disclosure } from "../components/disclosure";
 import { visibleWidth } from "../utils";
 import type { AdvisorMessageDetails, AdvisorNote, AdvisorSeverity } from "./messages";
@@ -13,7 +14,6 @@ import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 
 const COLLAPSED_NOTES = 3;
-const NOTE_LINE_WIDTH = 110;
 
 function wrapVarying(text: string, w1: number, w2: number): string[] {
 	if (text.length === 0) return [];
@@ -42,14 +42,16 @@ function severityColor(severity: AdvisorSeverity | undefined): ToolUIColor {
 	}
 }
 
-/** Always-visible header tag: `Advisor <n> notes [· <k> blockers]`. */
+/** Always-visible header: `<severity icon> Advisor <n> notes [· <k> blockers]`, the tag in the card's severity colour. */
 class AdvisorHeader implements Component {
 	readonly #meta: readonly string[];
+	readonly #severity: AdvisorSeverity | undefined;
 	readonly #uiTheme: Theme;
 	#cache: { width: number; lines: readonly string[] } | undefined;
 
-	constructor(meta: readonly string[], uiTheme: Theme) {
+	constructor(meta: readonly string[], severity: AdvisorSeverity | undefined, uiTheme: Theme) {
 		this.#meta = meta;
+		this.#severity = severity;
 		this.#uiTheme = uiTheme;
 	}
 
@@ -65,7 +67,13 @@ class AdvisorHeader implements Component {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
 		const uiTheme = this.#uiTheme;
-		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
+		const icon =
+			this.#severity === "blocker"
+				? uiTheme.status.error
+				: this.#severity === "concern"
+					? uiTheme.status.warning
+					: uiTheme.status.info;
+		const tag = uiTheme.fg(severityColor(this.#severity), uiTheme.bold(`${icon} Advisor`));
 		const lines = [
 			truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width, Ellipsis.Unicode),
 		];
@@ -104,7 +112,7 @@ class AdvisorNotes implements Component {
 			const uiTheme = this.#uiTheme;
 			const rail = uiTheme.fg("dim", uiTheme.symbol("advisor.rail"));
 			const hidden = this.#hidden;
-			lines.push(`  ${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
+			lines.push(`${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
 		}
 		const rendered = lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
 		this.#cache = { width, lines: rendered };
@@ -125,12 +133,12 @@ function renderAdvisorNote(entry: AdvisorNote, width: number, uiTheme: Theme): s
 	const age = entry.turnsAgo !== undefined ? `${uiTheme.fg("dim", `T-${entry.turnsAgo}`)} ` : "";
 	const railGlyph = uiTheme.symbol("advisor.rail");
 	const rail = uiTheme.fg(severityColor(entry.severity), railGlyph);
-	const quoteWidth = visibleWidth(`  ${railGlyph} `);
+	const quoteWidth = visibleWidth(`${railGlyph} `);
 	const badgeWidth = visibleWidth(badge);
 	const ageWidth = visibleWidth(age);
 	const whoWidth = visibleWidth(who);
-	const w1 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth - badgeWidth - ageWidth - whoWidth);
-	const w2 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth);
+	const w1 = Math.max(10, width - quoteWidth - badgeWidth - ageWidth - whoWidth);
+	const w2 = Math.max(10, width - quoteWidth);
 
 	const paragraphs = entry.note.split("\n").filter(p => p.trim());
 	const bodyLines: string[] = [];
@@ -145,7 +153,7 @@ function renderAdvisorNote(entry: AdvisorNote, width: number, uiTheme: Theme): s
 
 	return bodyLines.map(
 		(line, index) =>
-			`  ${rail} ${index === 0 ? `${badge}${age}${who}` : ""}${uiTheme.fg("customMessageText", replaceTabs(line))}`,
+			`${rail} ${index === 0 ? `${badge}${age}${who}` : ""}${uiTheme.fg("customMessageText", replaceTabs(line))}`,
 	);
 }
 
@@ -199,10 +207,10 @@ export interface AdvisorMessageCard extends Component {
 
 /**
  * Display-only transcript card for advisor notes injected into the primary
- * session. Styled as a distinct voice so notes never blend into thinking
- * output (whose `thinkingText` color equals `toolOutput` in most themes):
- * a bold `customMessageLabel` header tag (skill-card convention), a heavy
- * rail tinted per-note severity, and the note body on the default text color.
+ * session: the Chronicler's bubble (rounded outline, bold title, the notes
+ * inside at the bubble's full width), with the outline and title in the colour
+ * of the worst note: blocker red, concern yellow, nit or unrated grey. Each note
+ * keeps its own severity badge and rail, so a mixed card still tells them apart.
  * Natively it is a callout tinted by its worst note: that severity's icon and
  * the tally head it, the advisor's name ends the head, and with several notes
  * each leads with its own severity icon.
@@ -268,21 +276,28 @@ export function createAdvisorMessageCard(
 		);
 	};
 
+	const worst: AdvisorSeverity | undefined =
+		blockers > 0 ? "blocker" : notes.some(note => note.severity === "concern") ? "concern" : undefined;
 	const shown = notes.slice(0, COLLAPSED_NOTES);
 	const disclosure = new Disclosure({
-		summary: new AdvisorHeader(meta, uiTheme),
+		summary: new AdvisorHeader(meta, worst, uiTheme),
 		collapsedBody: () => new AdvisorNotes(shown, notes.length - shown.length, uiTheme),
 		body: () => new AdvisorNotes(notes, 0, uiTheme),
 		expanded: getExpanded(),
-		paddingX: 1,
 		maxCollapsedRows: chatTranscriptDisplayPreferences.advisorCollapsedLines || undefined,
 	});
+	const bubble = new Box(1, 0, undefined, {
+		chars: uiTheme.boxRound,
+		color: value => uiTheme.fg(severityColor(worst), value),
+	});
+	bubble.setIgnoreTight(true);
+	bubble.addChild(disclosure);
 	// The tool-output toggle owns expansion state; synchronize the controlled
 	// disclosure from the callback on every render.
 	return {
 		render(width: number): readonly string[] {
 			disclosure.setExpanded(expanded());
-			return disclosure.render(width);
+			return bubble.render(width);
 		},
 		describe(): NativeNode {
 			const isExpanded = expanded();
@@ -297,16 +312,13 @@ export function createAdvisorMessageCard(
 			if (toggled !== undefined) override = toggled;
 		},
 		invalidate(): void {
-			disclosure.invalidate();
+			bubble.invalidate();
 		},
 		releaseRenderCaches(): void {
-			disclosure.releaseRenderCaches();
+			bubble.releaseRenderCaches();
 		},
 		dispose(): void {
 			disclosure.dispose();
-		},
-		setIgnoreTight(ignore: boolean): void {
-			disclosure.setIgnoreTight(ignore);
 		},
 	};
 }

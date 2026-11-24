@@ -4,6 +4,8 @@
 
 ### Changed
 
+- IRC messages in the transcript show the whole message, rendered as Markdown at full width, between an opening rule (sender, group or recipient, time) and a closing rule in the sender's Agent Hub colour, with a rail of that colour down the body.
+- Advisor notes appear in an outlined bubble like Chronicler Luna's, coloured by the worst note: grey for a nit, yellow for a concern, red for a blocker.
 - Tab reopens slash argument suggestions after Esc and can continue to the next slot after a verb is selected ([#848](https://github.com/PsychedelicShayna/neopi/issues/848)).
 - Settings rows show inherited values with a source-scope icon (Nerd Font, Unicode and ASCII forms), mark rows changed by key presence instead of comparison with the default, and unset the hovered row with Backspace ([#820](https://github.com/PsychedelicShayna/neopi/issues/820)).
 - `/model` and `/roles` open from cache, catch up as background model lists land, and refresh on provider entry only when that provider is stale. Use Alt+R to refresh a provider or Ctrl+R to refresh all in the fullscreen hub ([#832](https://github.com/PsychedelicShayna/neopi/issues/832)).

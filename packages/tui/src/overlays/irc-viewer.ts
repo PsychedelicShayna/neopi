@@ -1,8 +1,8 @@
 /**
  * Fullscreen IRC communications viewer: the operator's history of every
- * agent-to-agent message in this session, which the transcript's live IRC
- * cards (capped, auto-retiring) cannot hold. Read-only; it never changes what
- * any agent can see.
+ * agent-to-agent message in this session, in one searchable list. The
+ * transcript shows the same messages in full where they arrived. Read-only;
+ * it never changes what any agent can see.
  */
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { bottomBorder, divider, row, topBorder } from "../chrome/overlay-box";

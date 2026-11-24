@@ -275,6 +275,17 @@ export class IrcBus implements IrcBusApi {
 		return groups?.filterBroadcastTargets(targets) ?? targets;
 	}
 
+	/**
+	 * Named groups `from` and `to` share right now, besides `exclude`. Reads only a
+	 * roster that already exists: stamping a message must not create or restore one.
+	 */
+	#sharedGroups(from: string, to: string, exclude: string | undefined): string[] {
+		const root = ircRelayRoot(this.#registry, from);
+		const scope = root && this.#groupScopes.get(root);
+		const groups = scope?.isCurrent() ? scope.groups : this.#fallbackGroups;
+		return groups?.shared(from, to, exclude) ?? [];
+	}
+
 	#groupScope(root: AgentRef, restoreOnly = false, snapshot?: IrcGroupSnapshot): IrcGroupScope | undefined {
 		const session = root.session;
 		if (root.kind !== "main" || this.#closingGroupRoots.has(root) || !session || !isAgentViewSession(session)) {
@@ -364,6 +375,10 @@ export class IrcBus implements IrcBusApi {
 	 */
 	async send({ localOnly, ...msg }: IrcSend, opts?: IrcSendOptions): Promise<IrcDeliveryReceipt> {
 		const message: IrcMessage = { ...msg, id: Snowflake.next(), ts: Date.now() };
+		// Membership as it is now travels with the message: the transcript shows it
+		// as sent, whatever the groups look like when the session is next opened.
+		const sharedGroups = this.#sharedGroups(message.from, message.to, message.group);
+		if (sharedGroups.length > 0) message.sharedGroups = sharedGroups;
 		const seq = this.#nextHistorySeq++;
 		const scope = this.#historyScope(message.from);
 		// Taken before delivery: a reply sent while this message is still being
@@ -799,7 +814,16 @@ export class IrcBus implements IrcBusApi {
 			customType: "irc:relay",
 			content: `[IRC \`${message.from}\` → \`${message.to}\`]\n\n${message.body}`,
 			display: true,
-			details: { from: message.from, to: message.to, body: message.body },
+			details: {
+				from: message.from,
+				to: message.to,
+				body: message.body,
+				...(message.broadcast ? { broadcast: true } : {}),
+				...(message.group ? { group: message.group } : {}),
+				...(message.groupText !== undefined ? { groupText: message.groupText } : {}),
+				...(message.sharedGroups ? { sharedGroups: message.sharedGroups } : {}),
+				...(message.fanoutId ? { fanoutId: message.fanoutId } : {}),
+			},
 			attribution: "agent",
 			timestamp: message.ts,
 		};

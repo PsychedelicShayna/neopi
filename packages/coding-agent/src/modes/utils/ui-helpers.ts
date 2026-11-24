@@ -463,12 +463,7 @@ export class UiHelpers {
 			case "user":
 			case "developer": {
 				if (message.role === "user" && message.parentIrc) {
-					const card = buildParentIrcMessageCard(
-						message.parentIrc,
-						message.timestamp,
-						() => this.ctx.toolOutputExpanded,
-					);
-					this.ctx.chatContainer.addChild(card);
+					this.ctx.chatContainer.addChild(buildParentIrcMessageCard(message.parentIrc, message.timestamp));
 					break;
 				}
 				const rawText = message.role === "user" ? textContent(message.content) : "";
