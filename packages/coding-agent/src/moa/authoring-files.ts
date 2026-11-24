@@ -112,7 +112,7 @@ export async function mixtureSources(
 
 export type SourceRead =
 	| { state: "absent" }
-	| { state: "file"; text: string; hash: string; mode: number }
+	| { state: "file"; text: string; bytes: Uint8Array; hash: string; mode: number }
 	/** A link or special file: never read through for editing, never written. */
 	| { state: "refused"; reason: string };
 
@@ -155,7 +155,13 @@ export async function readSource(file: string, maxBytes: number): Promise<Source
 		}
 		if (total > maxBytes) return { state: "refused", reason: `grew past the ${maxBytes}-byte cap` };
 		const bytes = buffer.subarray(0, total);
-		return { state: "file", text: bytes.toString("utf8"), hash: digest(bytes), mode: stat.mode & 0o777 };
+		return {
+			state: "file",
+			text: bytes.toString("utf8"),
+			bytes: Uint8Array.from(bytes),
+			hash: digest(bytes),
+			mode: stat.mode & 0o777,
+		};
 	} finally {
 		await handle.close();
 	}
@@ -199,9 +205,11 @@ async function fsyncDir(dir: string): Promise<void> {
  */
 export async function writeSource(
 	source: MixtureSource,
-	content: string | null,
+	content: string | Uint8Array | null,
 	expectedHash: string,
 	maxBytes: number,
+	/** Permissions for a file this call creates (a restore); an existing file keeps its own. */
+	mode?: number,
 ): Promise<void> {
 	const dir = await assertDirectory(source);
 	const recheck = async () => {
@@ -230,9 +238,10 @@ export async function writeSource(
 	let renamed = false;
 	try {
 		try {
-			await handle.writeFile(content, "utf8");
+			await handle.writeFile(content);
 			// Keep an existing file's permissions; a new file stays 0600.
 			if (before.state === "file") await handle.chmod(before.mode);
+			else if (mode !== undefined) await handle.chmod(mode);
 			await handle.sync();
 		} finally {
 			await handle.close();

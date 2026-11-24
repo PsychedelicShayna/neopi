@@ -1,1127 +1,1376 @@
-/* global document, window, fetch */
+"use strict";
+/* Mixture Studio · app: the server API, top bar, dock, trial run, help, startup. */
 
-const byId = id => document.getElementById(id);
-const board = byId("board");
-const inspector = byId("inspector");
-const scopeInput = byId("scope");
-const svgNS = "http://www.w3.org/2000/svg";
-const transitParts = [
-	["output", "Output"],
-	["input", "Fitted input"],
-	["reasoning", "Reasoning"],
-	["toolTrace", "Tool trace"],
-	["transcript", "Transcript"],
-];
-const modelShow = [
-	["", "Default"],
-	["always", "Always"],
-	["never", "Never"],
-	["final", "Final only"],
-];
-let source;
-let mixture;
-let selection = { kind: "mixture" };
-let connecting = false;
-let dirty = false;
-let busy = false;
-
-function el(tag, text) {
-	const node = document.createElement(tag);
-	if (text !== undefined) node.textContent = text;
-	return node;
-}
-
-function svg(tag, attributes) {
-	const node = document.createElementNS(svgNS, tag);
-	for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
-	return node;
-}
-
-function button(text, action, options = {}) {
-	const node = el("button", text);
-	node.type = "button";
-	if (options.danger) node.className = "danger";
-	if (options.disabled) node.disabled = true;
-	if (options.pressed !== undefined) node.setAttribute("aria-pressed", options.pressed);
-	node.addEventListener("click", action);
-	return node;
-}
-
-function status(text, error = false) {
-	byId("status").textContent = text;
-	byId("feedback").toggleAttribute("data-error", error);
-}
-
-function findings(validation, toml, parseDiagnostics = []) {
-	const view = byId("findings");
-	view.replaceChildren();
-	for (const [label, diagnostics] of [
-		["Source warnings", source?.parseDiagnostics ?? []],
-		["Draft warnings", parseDiagnostics],
-	]) {
-		if (!diagnostics.length) continue;
-		const list = el("ul");
-		list.className = "warnings";
-		for (const message of diagnostics) list.append(el("li", message));
-		view.append(el("h3", label), list);
-	}
-	for (const [key, label] of [
-		["errors", "Errors"],
-		["warnings", "Warnings"],
-	]) {
-		const items = validation?.[key];
-		if (!items?.length) continue;
-		const list = el("ul");
-		list.className = key;
-		for (const item of items) {
-			const row = el("li");
-			row.append(el("code", item.path), `: ${item.message}`);
-			list.append(row);
-		}
-		view.append(el("h3", label), list);
-	}
-	const preview = byId("preview");
-	preview.hidden = toml === undefined;
-	preview.querySelector("pre").textContent = toml ?? "";
-}
-
-function controls() {
-	for (const id of [
-		"reload",
-		"scope",
-		"validate",
-		"save",
-		"add-mixture",
-		"document",
-		"add-model",
-		"add-verdict",
-		"connect",
-		"mixture-settings",
-	]) {
-		byId(id).disabled = busy || (id !== "reload" && !source);
-	}
-	byId("save").disabled ||= !dirty || Boolean(source?.readOnly);
-	for (const id of ["add-model", "add-verdict", "connect", "mixture-settings"]) byId(id).disabled ||= !mixture;
-	byId("connect").disabled ||= !connecting && (selection.kind !== "member" || selection.item.kind === "verdict");
-	byId("connect").textContent = connecting
-		? `Cancel connection from ${selection.item.id}`
-		: "Connect from selected model";
-	byId("connect").setAttribute("aria-pressed", connecting);
-	inspector.inert = busy;
-	board.inert = busy;
-	byId("mixtures").inert = busy;
-}
-
-function changed() {
-	dirty = true;
-	findings();
-	status("Unsaved changes.");
-	controls();
-}
-
-async function request(route, method, value) {
-	const response = await fetch(
-		route,
-		method && {
-			method,
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(value),
-		},
-	);
-	const result = await response.json();
-	if (!response.ok)
-		throw Object.assign(new Error(result.error ?? "The request failed."), {
-			code: result.code,
-			parseDiagnostics: result.parseDiagnostics,
-			validation: result.validation,
-		});
-	return result;
-}
-
-async function load(scope) {
-	if (busy) return;
-	if (dirty && !window.confirm("Discard unsaved changes to this file?")) {
-		scopeInput.value = source.scope;
-		return;
-	}
-	busy = true;
-	controls();
-	try {
-		const result = await request(scope ? `mixtures?scope=${scope}` : "mixtures");
-		const previous = source?.scope === result.scope ? mixture?.name : undefined;
-		source = result;
-		dirty = false;
-		mixture = source.doc.mixtures.find(item => item.name === previous) ?? source.doc.mixtures[0];
-		selection = { kind: "mixture" };
-		connecting = false;
-		scopeInput.value = source.scope;
-		byId("source").textContent = source.sourcePath;
-		byId("source").title = `Workspace: ${source.cwd}\nDestination: ${source.sourcePath}`;
-		byId("models").replaceChildren(
-			...source.models.map(name => {
-				const option = el("option");
-				option.value = name;
-				return option;
-			}),
-		);
-		redraw();
-		findings(source.validation, source.parseDiagnostics.length ? source.toml : undefined);
-		status(
-			source.readOnly
-				? `Read-only: ${source.readOnly}`
-				: source.parseDiagnostics.length
-					? "Loaded with source warnings. Saving requires confirmation."
-					: source.hash
-						? "Loaded MIXTURES.toml."
-						: "This scope has no MIXTURES.toml yet. Add a mixture to start.",
-		);
-	} catch (error) {
-		if (source) scopeInput.value = source.scope;
-		status(error.message, true);
-	} finally {
-		busy = false;
-		controls();
-	}
-}
-
-async function submit(save) {
-	if (busy || !source) return;
-	const invalid = inspector.querySelector("input:invalid");
-	if (invalid) {
-		const details = invalid.closest("details");
-		if (details) details.open = true;
-		invalid.reportValidity();
-		status("Fix the invalid value before submitting the draft.", true);
-		return;
-	}
-	busy = true;
-	controls();
-	try {
-		const { scope, doc, hash } = source;
-		const send = (confirmCanonicalRewrite = false) =>
-			request(save ? "mixtures" : "mixtures/draft", save ? "PUT" : "POST", {
-				scope,
-				doc,
-				...(save ? { baseHash: hash, confirmCanonicalRewrite } : {}),
-			});
-		let result;
+/* ═══════════════════════════ SERVER ═══════════════════════════
+   The page lives under a one-time capability URL that NeoPi made for the session that ran /moa web.
+   It only ever sends source IDs, never paths, and every route is relative to that URL. */
+let offline = 0; // requests in a row that got no answer at all
+const api = (() => {
+	async function call(method, route, body) {
 		try {
-			result = await send();
-		} catch (error) {
-			if (!save || error.code !== "rewrite-loses-source") throw error;
-			const diagnostics = error.parseDiagnostics.join("\n");
-			if (!window.confirm(`${error.message}.\n\n${diagnostics}\n\nSave NeoPi's canonical form anyway?`)) {
-				status("Save cancelled. The source file was not changed.");
-				return;
+			const res = await fetch(route, {
+				method,
+				cache: "no-store",
+				headers: body ? { "Content-Type": "application/json" } : undefined,
+				body: body ? JSON.stringify(body) : undefined,
+			});
+			let data = null;
+			try {
+				data = await res.json();
+			} catch {
+				/* an empty or non-JSON body is reported by status alone */
 			}
-			result = await send(true);
-		}
-		if (save) {
-			source.hash = result.hash;
-			source.parseDiagnostics = result.parseDiagnostics;
-			delete doc.warnings;
-			dirty = false;
-			status(
-				result.registered
-					? "Saved. The workspace roster is up to date."
-					: "Saved. Higher-priority definitions still take precedence.",
-			);
-		} else status("The draft passes NeoPi validation.");
-		findings(result.validation, result.toml, save ? [] : result.parseDiagnostics);
-	} catch (error) {
-		findings(error.validation, undefined, error.code === "rewrite-loses-source" ? [] : error.parseDiagnostics);
-		status(error.message, true);
-	} finally {
-		busy = false;
-		controls();
-	}
-}
-
-function choose(kind, item) {
-	const focused = board.contains(document.activeElement) ? board : byId("mixtures");
-	const restoreFocus = focused.contains(document.activeElement);
-	selection = { kind, item };
-	connecting = false;
-	redraw();
-	if (restoreFocus) focused.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
-}
-
-function renderRail() {
-	const list = byId("mixtures");
-	list.replaceChildren(
-		...(source?.doc.mixtures ?? []).map(item =>
-			button(
-				item.name,
-				() => {
-					mixture = item;
-					choose("mixture");
-				},
-				{ pressed: mixture === item && selection.kind !== "document" },
-			),
-		),
-	);
-	byId("document").setAttribute("aria-pressed", selection.kind === "document");
-}
-
-function edgeId(edge) {
-	return edge.id ?? `${edge.from}->${Array.isArray(edge.to) ? `[${edge.to.join(",")}]` : edge.to}`;
-}
-
-function layout(graph) {
-	const depth = new Map();
-	const entry = graph.members.find(member => member.id === graph.entry);
-	const queue = [];
-	if (entry) {
-		queue.push(entry.id);
-		depth.set(entry.id, 0);
-	}
-	for (const id of queue) {
-		for (const edge of graph.edges.filter(item => item.from === id)) {
-			for (const target of [edge.to].flat()) {
-				if (depth.has(target)) continue;
-				depth.set(target, depth.get(id) + 1);
-				queue.push(target);
+			if (offline) {
+				offline = 0;
+				renderBanner();
+				renderBar();
 			}
+			if (res.status === 410) {
+				disconnected = true;
+				gone();
+			}
+			return { ok: res.ok, status: res.status, data };
+		} catch {
+			/* No answer is not the end: NeoPi may be busy, suspended, or back in a moment, and this address still works
+         when it is. The page keeps looking; only a 410 from NeoPi itself means this editor is over. */
+			offline++;
+			renderBanner();
+			renderBar();
+			return { ok: false, status: 0, data: { error: T("api.offline") } };
 		}
 	}
-	const orphan = depth.size ? Math.max(...depth.values()) + 1 : 0;
-	const rows = new Map();
-	return new Map(
-		graph.members.map(member => {
-			const column = depth.get(member.id) ?? orphan;
-			const row = rows.get(column) ?? 0;
-			rows.set(column, row + 1);
-			return [member.id, { x: 45 + column * 255, y: 72 + row * 120 }];
-		}),
-	);
-}
-
-function wire(from, to, gap) {
-	if (from === to) {
-		const y = from.y - 34 - gap;
-		return {
-			d: `M ${from.x + 101} ${from.y} C ${from.x + 120} ${y} ${from.x + 24} ${y} ${from.x + 49} ${from.y}`,
-			x: from.x + 75,
-			y,
-		};
-	}
-	if (to.x > from.x) {
-		const x = (from.x + 158 + to.x) / 2;
-		return {
-			d: `M ${from.x + 158} ${from.y + 32} Q ${x} ${(from.y + to.y) / 2 + 32 + gap * 2} ${to.x} ${to.y + 32}`,
-			x,
-			y: (from.y + to.y) / 2 + 32 + gap,
-		};
-	}
-	const y = Math.max(from.y, to.y) + 90 + gap;
 	return {
-		d: `M ${from.x + 105} ${from.y + 64} C ${from.x + 105} ${y + 18} ${to.x + 55} ${y + 18} ${to.x + 55} ${to.y + 64}`,
-		x: (from.x + to.x) / 2 + 80,
-		y,
+		bootstrap: () => call("GET", "bootstrap"),
+		sources: () => call("GET", "mixtures/sources"),
+		source: id => call("GET", "mixtures/source?id=" + encodeURIComponent(id)),
+		draft: (sourceId, draftDoc) => call("POST", "mixtures/draft", { sourceId, doc: draftDoc }),
+		save: list => call("PUT", "mixtures/save", { files: list }),
 	};
-}
-
-function connectTo(member) {
-	const from = selection.item.id;
-	const duplicate = mixture.edges.filter(edge => edge.from === from && edge.to === member.id).length;
-	const edge = { from, to: member.id, x: { output: true } };
-	if (duplicate) {
-		const used = mixture.edges.map(edgeId);
-		edge.id = unusedId(`${from}->${member.id}`, used);
-	}
-	mixture.edges.push(edge);
-	changed();
-	choose("edge", edge);
-}
-
-function renderGraph() {
-	board.replaceChildren();
-	const note = byId("graph-note");
-	if (!mixture?.members.length) {
-		const empty = el(
-			"p",
-			mixture ? "Add a model to give this mixture an entry point." : "Select or create a mixture to draw its flow.",
-		);
-		empty.className = "empty";
-		board.append(empty);
-		board.style.width = "";
-		board.style.height = "";
-		note.textContent = "A mixture starts at one model and passes state along directed handoffs.";
-		return;
-	}
-	const points = layout(mixture);
-	const width = Math.max(...Array.from(points.values(), point => point.x)) + 205;
-	const height = Math.max(...Array.from(points.values(), point => point.y)) + 170;
-	board.style.width = `${width}px`;
-	board.style.height = `${height}px`;
-	const drawing = svg("svg", { width, height, "aria-hidden": "true" });
-	const defs = svg("defs", {});
-	const arrow = svg("marker", {
-		id: "arrow",
-		viewBox: "0 0 10 10",
-		refX: 9,
-		refY: 5,
-		markerWidth: 7,
-		markerHeight: 7,
-		orient: "auto",
-	});
-	arrow.append(svg("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#83dfec" }));
-	defs.append(arrow);
-	drawing.append(defs);
-	board.append(drawing);
-	const offsets = new Map();
-	for (const edge of mixture.edges) {
-		const from = points.get(edge.from);
-		const targets = [edge.to].flat();
-		const pair = JSON.stringify([edge.from, edge.to]);
-		const gap = offsets.get(pair) ?? 0;
-		offsets.set(pair, gap + 16);
-		let label;
-		for (const target of targets) {
-			const to = points.get(target);
-			if (!from || !to) continue;
-			const curve = wire(from, to, gap);
-			label ??= curve;
-			drawing.append(
-				svg("path", {
-					d: curve.d,
-					fill: "none",
-					stroke: selection.item === edge ? "#f4a3dd" : "#83dfec",
-					"stroke-width": 1.8,
-					"marker-end": "url(#arrow)",
-					...(Array.isArray(edge.to) ? { "stroke-dasharray": "6 5" } : {}),
-				}),
-			);
-		}
-		if (!label) label = { x: 110, y: 22 + mixture.edges.indexOf(edge) * 24 };
-		const title = edge.when || edgeId(edge);
-		const node = button(title, () => choose("edge", edge), { pressed: selection.item === edge });
-		node.className = "edge";
-		node.toggleAttribute("data-gated", Array.isArray(edge.to));
-		node.title = `${edge.from} → ${targets.join(", ")}${edge.when ? `: ${edge.when}` : ""}`;
-		node.setAttribute("aria-label", `Handoff: ${node.title}`);
-		node.style.left = `${label.x}px`;
-		node.style.top = `${label.y}px`;
-		board.append(node);
-	}
-	for (const member of mixture.members) {
-		const { x, y } = points.get(member.id);
-		const entry = member.id === mixture.entry;
-		const model = member.kind === "verdict" ? `${member.question.type} verdict` : member.model || "Choose a model";
-		const node = button("", () => (connecting ? connectTo(member) : choose("member", member)), {
-			pressed: selection.item === member,
-		});
-		node.className = "tile";
-		node.dataset.kind = member.kind ?? "model";
-		node.toggleAttribute("data-entry", entry);
-		node.title = `${member.id}: ${model}`;
-		node.style.left = `${x}px`;
-		node.style.top = `${y}px`;
-		node.append(el("strong", member.id), el("small", entry ? `Entry · ${model}` : model));
-		board.append(node);
-	}
-	note.textContent = connecting
-		? `Choose a destination for ${selection.item.id}; choose the same model to create a loop.`
-		: "Select a node or handoff to edit it. The cyan entry receives the operator prompt.";
-}
-
-function field(label, value, apply, options = {}) {
-	const wrap = el("label", label);
-	const node = el(options.choices ? "select" : options.multiline ? "textarea" : "input");
-	if (options.choices) {
-		for (const [key, text] of options.choices) {
-			const option = el("option", text);
-			option.value = key;
-			node.append(option);
-		}
-	} else if (!options.multiline) node.type = options.numeric ? "number" : "text";
-	if (options.list) node.setAttribute("list", options.list);
-	if (options.placeholder) node.placeholder = options.placeholder;
-	if (options.numeric) {
-		node.step = options.numeric === "integer" ? "1" : "any";
-		if (options.min !== undefined) node.min = options.min;
-		if (options.max !== undefined) node.max = options.max;
-	}
-	node.value = value ?? "";
-	node.addEventListener(options.choices || options.commit ? "change" : "input", () => {
-		if (options.numeric && !node.validity.valid) {
-			node.reportValidity();
-			return;
-		}
-		const result = apply(options.numeric && node.value !== "" ? Number(node.value) : node.value, node);
-		if (result !== false) changed();
-	});
-	wrap.append(node);
-	return wrap;
-}
-
-function property(root, label, target, key, options = {}) {
-	root.append(
-		field(
-			label,
-			target[key],
-			value => {
-				if (value === "" && !options.keepEmpty) delete target[key];
-				else target[key] = value;
-				options.after?.();
-			},
-			options,
-		),
+})();
+/* Whatever cannot be saved right now can still be taken away: one button per file that holds anything of yours,
+   copying the whole MIXTURES.toml as your draft has it, including a new mixture that has no model yet. */
+const worthKeeping = () =>
+	sources.filter(
+		s =>
+			fileDirty(s.id) ||
+			fileOf(s.id)?.doc.mixtures.some(m => isScratch(m) && (m.description || !/^untitled(-\d+)?$/.test(m.name))),
 	);
-}
-
-function check(label, checked, apply, disabled = false) {
-	const wrap = el("label");
-	wrap.className = "check";
-	const box = el("input");
-	box.type = "checkbox";
-	box.checked = checked;
-	box.disabled = disabled;
-	box.addEventListener("change", () => {
-		apply(box.checked);
-		changed();
-	});
-	wrap.append(box, label);
-	return wrap;
-}
-
-function details(title, note) {
-	const panel = el("details");
-	panel.append(el("summary", title));
-	if (note) panel.append(el("p", note));
-	return panel;
-}
-
-function unusedId(base, used) {
-	if (!used.includes(base)) return base;
-	let i = 2;
-	while (used.includes(`${base}-${i}`)) i++;
-	return `${base}-${i}`;
-}
-
-function remove(target, item) {
-	target.splice(target.indexOf(item), 1);
-	changed();
-	choose("mixture");
-}
-
-function presets(root, target, key, title) {
-	const panel = details(
-		title,
-		"A mixture can override file presets of the same name. Preset names and template text are case-sensitive.",
-	);
-	const render = () => {
-		while (panel.children.length > 2) panel.lastElementChild.remove();
-		for (const [name, value] of Object.entries(target[key] ?? {})) {
-			const row = el("div");
-			row.className = "presets";
-			row.append(
-				el("code", name),
-				field(
-					"Text",
-					value,
-					text => {
-						target[key][name] = text;
-					},
-					{ multiline: true },
-				),
-			);
-			row.append(
-				button(
-					"Remove preset",
-					() => {
-						delete target[key][name];
-						if (!Object.keys(target[key]).length) delete target[key];
-						changed();
-						render();
-					},
-					{ danger: true },
-				),
-			);
-			panel.append(row);
-		}
-		panel.append(
-			button("Add preset", () => {
-				const name = window.prompt("Preset name")?.trim();
-				if (!name) return;
-				if (Object.hasOwn(target[key] ?? {}, name)) {
-					status(`The preset '${name}' already exists.`, true);
-					return;
-				}
-				target[key] = { ...target[key], [name]: "" };
-				changed();
-				render();
-			}),
-		);
-	};
-	render();
-	root.append(panel);
-}
-
-function settingsPanel() {
-	inspector.append(el("h2", "Mixture settings"));
-	inspector.append(
-		field(
-			"Name",
-			mixture.name,
-			(value, input) => {
-				const name = value.trim();
-				if (
-					!/^[a-z0-9][a-z0-9._-]*$/.test(name) ||
-					source.doc.mixtures.some(item => item !== mixture && item.name === name)
-				) {
-					input.value = mixture.name;
-					status(
-						"Enter a unique mixture name using lowercase letters, digits, periods, underscores or hyphens.",
-						true,
-					);
-					return false;
-				}
-				mixture.name = name;
-				input.value = name;
-				renderRail();
-			},
-			{ commit: true },
-		),
-	);
-	property(inspector, "Description", mixture, "description", { multiline: true });
-	const models = mixture.members.filter(member => member.kind !== "verdict").map(member => [member.id, member.id]);
-	inspector.append(
-		field(
-			"Entry model",
-			mixture.entry,
-			value => {
-				mixture.entry = value;
-				renderGraph();
-			},
-			{ choices: [["", "Choose an entry"], ...models] },
-		),
-	);
-	const limits = details(
-		"Limits",
-		"Blank values inherit the invoking session's MoA settings. Hard lifetime caps still apply.",
-	);
-	const draft = { ...mixture.limits };
-	const useLimits = () => {
-		if (Object.keys(draft).length) mixture.limits = draft;
-		else delete mixture.limits;
-	};
-	property(limits, "Maximum hops", draft, "maxHops", { numeric: "integer", min: 1, after: useLimits });
-	property(limits, "Spend budget (USD; 0 disables)", draft, "budgetUsd", {
-		numeric: "decimal",
-		min: 0,
-		after: useLimits,
-	});
-	property(limits, "Wall clock (minutes)", draft, "wallClockMinutes", {
-		numeric: "decimal",
-		min: 0,
-		after: useLimits,
-	});
-	property(limits, "On limit", draft, "onLimit", {
-		choices: [
-			["", "Default"],
-			["pause", "Pause"],
-			["stop", "Stop"],
-			["judge", "Ask a final model"],
-		],
-		after: useLimits,
-	});
-	property(limits, "Limit model", draft, "limitTarget", { choices: [["", "Default"], ...models], after: useLimits });
-	inspector.append(limits);
-	presets(inspector, mixture, "roles", "Local role presets");
-	presets(inspector, mixture, "envelopes", "Local envelope presets");
-	const gate = el("div");
-	gate.className = "gate";
-	gate.append(
-		check("Steering · M3", !!mixture.steering, () => {}, true),
-		check(
-			"Fan-out and join · M4",
-			mixture.edges.some(edge => Array.isArray(edge.to)),
-			() => {},
-			true,
-		),
-		check("Gateway serving · M6", mixture.serve === true, () => {}, true),
-	);
-	if (mixture.steering || mixture.serve)
-		gate.append(
-			button("Clear gated options", () => {
-				delete mixture.steering;
-				if (mixture.serve) delete mixture.serve;
-				changed();
-				renderInspector();
-			}),
-		);
-	inspector.append(gate);
-	inspector.append(
-		button(
-			"Delete mixture",
-			() => {
-				if (!window.confirm(`Delete ${mixture.name} from this draft?`)) return;
-				const old = mixture;
-				mixture = source.doc.mixtures.find(item => item !== old);
-				remove(source.doc.mixtures, old);
-			},
-			{ danger: true },
-		),
-	);
-}
-
-function stateParts(root, target, parts) {
-	const group = el("fieldset");
-	group.append(el("legend", "State parts"));
-	group.append(
-		check("Choose state explicitly", target.state !== undefined, explicit => {
-			if (explicit) target.state = parts.map(([part]) => part);
-			else delete target.state;
-			for (const box of [...group.querySelectorAll("input")].slice(1)) {
-				box.disabled = !explicit;
-				box.checked = explicit;
-			}
-		}),
-	);
-	for (const [part, label] of parts)
-		group.append(
-			check(
-				label,
-				target.state?.includes(part),
-				checked => {
-					target.state = checked ? [...target.state, part] : target.state.filter(item => item !== part);
+const draftButtons = () =>
+	h(
+		"div",
+		{ class: "fixes" },
+		worthKeeping().map(s =>
+			h(
+				"button",
+				{
+					class: "btn fix",
+					type: "button",
+					onclick: () => copyText(tomlOf(bare(fileOf(s.id).doc)), T("gone.copied", { path: s.displayPath })),
 				},
-				target.state === undefined,
+				icon("copy"),
+				h("span", {}, T("gone.copy", { path: s.displayPath })),
+			),
+		),
+	);
+function copyDrafts() {
+	openSheet({
+		title: T("keep.title"),
+		sub: T("keep.sub"),
+		body: draftButtons(),
+		cancel: null,
+		primary: { label: T("common.done"), run: closeSheet },
+	});
+}
+/* NeoPi said this editor is over: the session that opened it moved on, or /moa web was run again. */
+function gone() {
+	if (document.querySelector(".dead")) return;
+	clearInterval(watching);
+	closeSheet();
+	closePop();
+	const unsaved = worthKeeping().length > 0,
+		box = h("div", { class: "dead", role: "alertdialog", "aria-label": T("gone.title") });
+	box.append(
+		h(
+			"div",
+			{},
+			h("h2", {}, T("gone.title")),
+			h("p", {}, TX("gone.how")),
+			unsaved && [h("p", {}, T("gone.unsaved")), draftButtons()],
+			h(
+				"div",
+				{ class: "fixes row", style: { marginTop: "14px" } },
+				h(
+					"button",
+					{
+						class: "btn",
+						type: "button",
+						onclick: () => {
+							box.remove();
+							render();
+						},
+					},
+					unsaved ? T("gone.look") : T("gone.look.clean"),
+				),
+			),
+		),
+	);
+	document.body.append(box);
+	box.querySelector("button").focus();
+	renderBar();
+}
+
+/* ═══════════════════════════ TOP BAR ═══════════════════════════ */
+const short = hash => (hash ? "@" + String(hash).slice(0, 7) : "");
+const diskRow = () => mix?.$o && srcOf(mix.$o.sid)?.mixtures.find(x => x.name === mix.$o.name);
+function rosterWord() {
+	const row = diskRow();
+	if (!row) return [T("bar.roster.new"), ""];
+	return (
+		{
+			registered: [T("bar.roster.registered"), "good"],
+			shadowed: [T("bar.roster.shadowed"), "lag"],
+			invalid: [T("bar.roster.invalid"), "lag"],
+			unregistered: [T("bar.roster.unregistered"), "lag"],
+		}[row.status] ?? [T("bar.roster.unknown"), ""]
+	);
+}
+function renderBar() {
+	const s = cur && srcOf(cur.sid),
+		changed = dirtyFiles().length;
+	$("railbtn").replaceChildren(icon("list", 16));
+	$("railbtn").title = T("bar.rail.title");
+	$("railbtn").setAttribute("aria-label", T("bar.rail.aria"));
+	$("railbtn").setAttribute("aria-pressed", String(sideOpen && sidePinned));
+	$("switch").replaceChildren(
+		...(mix
+			? [
+					h("span", { class: cls("scope", s.kind === "user" && "user") }, scopeLabel(s)),
+					h("span", { class: "nm" }, mix.name || T("bar.untitled")),
+					icon("chev", 12),
+				]
+			: [h("span", { class: "nm" }, T("bar.none")), icon("chev", 12)]),
+	);
+	$("switch").title = mix ? T("bar.switch.title", { path: s.displayPath }) : T("bar.switch.none");
+	$("addr").hidden = !mix;
+	if (mix) {
+		$("addr").textContent = "mixture/" + mix.name;
+		$("addr").title = T("bar.addr.title");
+	}
+	const cell = (label, value, state, one) =>
+		h("span", { class: one ? "one" : null }, h("b", {}, label), h("em", { class: state }, h("i"), value));
+	const waiting = scratchList().length;
+	const draftWord = changed
+			? TN("bar.draft.changed", changed)
+			: waiting
+				? T("bar.draft.scratch")
+				: T("bar.draft.clean"),
+		theirs = s && fileOf(s.id)?.theirs;
+	const hot = changed || waiting;
+	const [roster, rosterState] = mix ? rosterWord() : ["", ""];
+	$("ledger").hidden = !mix;
+	$("ledger").title = T("bar.ledger.title");
+	if (mix)
+		$("ledger").replaceChildren(
+			cell(T("bar.draft"), draftWord, hot ? "hot" : "good"),
+			cell(
+				T("bar.disk"),
+				theirs
+					? T("bar.disk.changed")
+					: fileOf(s.id).base.exists
+						? short(fileOf(s.id).base.hash)
+						: T("bar.disk.absent"),
+				theirs ? "lag" : "",
+			),
+			cell(T("bar.roster"), roster, rosterState),
+			cell(T("bar.draft"), theirs ? T("bar.disk.changed") : draftWord, theirs ? "lag" : hot ? "hot" : "good", true),
+		);
+	const errors = issues.filter(i => i.sev === "e").length,
+		warns = issues.filter(i => i.sev === "w").length;
+	$("notes").hidden = !mix;
+	$("notes").replaceChildren(
+		...(errors || warns
+			? [
+					errors > 0 && h("span", { class: "count e" }, "!" + errors),
+					warns > 0 && h("span", { class: "count w" }, "~" + warns),
+					h("span", {}, TN("bar.issues", errors + warns)),
+				]
+			: [
+					h(
+						"span",
+						{ style: { color: server.pending ? "var(--ink3)" : "var(--ok)", display: "flex" } },
+						icon(server.pending ? "dots" : "check"),
+					),
+					h("span", {}, server.pending ? T("bar.checking") : T("bar.noIssues")),
+				]
+		).filter(Boolean),
+	);
+	/* The Save button only looks ready when a save can go through: not while this mixture has something to fix first. */
+	const blocked = changed > 0 && !!mix && errors > 0 && mixState(mix, cur.sid) !== null;
+	$("save").replaceChildren(
+		disconnected ? T("bar.offline") : changed ? T("bar.save") : waiting ? T("bar.unwritten") : T("bar.saved"),
+	);
+	$("save").classList.toggle("primary", changed > 0 && !blocked && !disconnected);
+	$("save").classList.toggle("held", blocked);
+	$("save").title = disconnected
+		? T("bar.offline.title")
+		: blocked
+			? TN("bar.save.blocked", errors)
+			: changed
+				? T("bar.save.title")
+				: waiting
+					? T("bar.unwritten.title")
+					: T("bar.saved.title");
+	$("reopen").replaceChildren(icon("side"), T("bar.inspector"));
+	$("limits").hidden = !mix;
+	if (mix) {
+		const L = mix.limits ?? {},
+			lt = limitTarget(),
+			actn = onLimit(),
+			budget = L.budgetUsd ?? D().budgetUsd;
+		$("limits").title = T("bar.limits.title");
+		$("limits").replaceChildren(
+			icon("hour", 13),
+			h("b", {}, T("bar.limits.hops", { n: L.maxHops ?? D().maxHops })),
+			h("span", { class: "sep" }),
+			h("span", {}, T("bar.limits.minutes", { n: L.wallClockMinutes ?? D().wallClockMinutes })),
+			h("span", { class: "sep" }),
+			h("span", {}, budget > 0 ? T("bar.limits.budget", { n: budget }) : T("bar.limits.noBudget")),
+			h("span", { class: "sep" }),
+			h(
+				"span",
+				{},
+				actn === "judge" && lt
+					? TX("bar.limits.judge", { id: lt.id })
+					: actn === "stop"
+						? TX("bar.limits.stop")
+						: TX("bar.limits.pause"),
 			),
 		);
-	root.append(group);
+	}
+	/* Everything that floats over the canvas is centred on the part of it that is not covered, and gets terser
+     when that part is narrow: a pinned list and an open inspector leave less room than the window width suggests. */
+	const ins = insets(),
+		room = canvas.clientWidth - ins.sl - ins.r,
+		cx = ins.sl + room / 2;
+	for (const el of [canvas, layer]) {
+		el.style.setProperty("--cx", cx + "px");
+		el.style.setProperty("--room", room + "px");
+	}
+	canvas.dataset.room = room < 560 ? "xs" : room < 860 ? "s" : room < 1010 ? "m" : "l";
+	canvas.toggleAttribute("data-none", !mix);
+	/* The empty state (first run, a new mixture's starters) lives in the part of the canvas nothing covers, and gets
+     compact when that part is small, so its buttons are never under the list or the inspector. */
+	const em = $("empty"),
+		eh = canvas.clientHeight - ins.t - ins.b,
+		ew = canvas.clientWidth - ins.l - ins.r;
+	em.style.inset = `${ins.t}px ${ins.r}px ${ins.b}px ${ins.l}px`;
+	em.classList.toggle("tight", eh < 360 || ew < 600);
+	em.classList.toggle("tiny", eh < 255);
+	document.title = (changed ? "● " : "") + (mix ? mix.name + " · " : "") + T("app.title");
 }
-
-function rubrics(root, target) {
-	const rows = el("div");
-	const render = () => {
-		rows.replaceChildren();
-		if (target.type === "noul" || target.type === undefined) {
-			for (const [key, label] of [
-				["true", "Yes rubric"],
-				["false", "No rubric"],
-			])
-				rows.append(
-					field(
-						label,
-						target.criteria?.[key],
-						value => {
-							if (value) (target.criteria ??= {})[key] = value;
-							else if (target.criteria) {
-								delete target.criteria[key];
-								if (Object.keys(target.criteria).length === 0) delete target.criteria;
-							}
-						},
-						{ multiline: true },
+function legend() {
+	const line = (dash, color, w = 30) => {
+		const s = svgEl("svg", { width: w, height: 8 });
+		s.append(
+			svgEl("path", {
+				d: `M1 4H${w - 1}`,
+				stroke: color,
+				"stroke-width": 1.8,
+				"stroke-dasharray": dash,
+				"stroke-linecap": "round",
+				fill: "none",
+			}),
+		);
+		return s;
+	};
+	$("key").replaceChildren(
+		h("span", { title: T("key.always.title") }, line("", "var(--wire)"), T("key.always")),
+		h("span", { title: T("key.judge.title") }, line("6 5", "var(--judge)"), T("key.judge")),
+		h("span", { title: T("key.limit.title") }, line("1.5 5", "var(--ink3)"), T("key.limit")),
+	);
+	const z = (ic, title, run) =>
+		h("button", { type: "button", title, "aria-label": title, onclick: run }, icon(ic, 13));
+	$("zoom").replaceChildren(
+		z("plus", T("zoom.in"), () => zoomAt(cam.z * 1.2)),
+		h("output", { title: T("zoom.reset"), onclick: () => zoomAt(1) }),
+		z("minus", T("zoom.out"), () => zoomAt(cam.z / 1.2)),
+		z("fit", T("zoom.fit"), () => fit(true)),
+	);
+	canvas.setAttribute("aria-label", T("canvas.aria"));
+	$("panel").setAttribute("aria-label", T("panel.aria"));
+	side.setAttribute("aria-label", T("side.aria"));
+	$("dock").setAttribute("aria-label", T("dock.aria"));
+	$("edge").title = T("edge.title");
+}
+$("railbtn").onclick = toggleSide;
+$("switch").onclick = () => {
+	if (sideOpen && !sidePinned) closeSide(true);
+	else if (!sideOpen) {
+		openSide();
+		side.querySelector(".srow.on,.srow,.snew")?.focus();
+	}
+};
+$("addr").onclick = () => {
+	navigator.clipboard?.writeText("mixture/" + mix.name).then(
+		() => toast(T("bar.addr.copied", { name: mix.name })),
+		() => {},
+	);
+};
+$("limits").onclick = () => select(null, { section: "limits" });
+$("reopen").onclick = () => {
+	panelOpen = true;
+	render();
+	if (!camTouched) fit(true);
+};
+$("save").onclick = () => openSave();
+$("notes").onclick = () =>
+	togglePop(
+		$("notes"),
+		() => {
+			if (!issues.length)
+				return h(
+					"div",
+					{ class: "pad" },
+					h("b", {}, T("notes.none")),
+					h(
+						"p",
+						{ class: "hint", style: { marginTop: "4px" } },
+						server.failed ? T("notes.stale") : T("notes.none.hint"),
 					),
 				);
-			return;
-		}
-		const score = target.type === "score";
-		for (const [key, value] of Object.entries(target.criteria)) {
-			const row = el("div");
-			row.className = "presets";
-			row.append(
-				field(
-					score ? `Level ${key}` : key,
-					value,
-					text => {
-						target.criteria[key] = score ? text : text.trim() ? text : null;
-					},
-					{ multiline: true },
+			const order = { e: 0, w: 1, i: 2 };
+			return [
+				h("h4", {}, T("notes.title")),
+				h(
+					"div",
+					{ class: "scroll", style: { display: "grid", gap: "6px", padding: "2px" } },
+					[...issues]
+						.sort((a, b) => order[a.sev] - order[b.sev])
+						.map(i =>
+							h(
+								"div",
+								{ class: "issue " + i.sev, onclick: () => goIssue(i) },
+								flagMark(i.sev),
+								h(
+									"span",
+									{},
+									h(
+										"small",
+										{},
+										i.kind === "mix"
+											? T("notes.where.mix")
+											: i.kind === "edge"
+												? (e => (e ? `${e.from} → ${targets(e).join(" + ")}` : ""))(edge(i.id))
+												: i.id,
+										i.locked && " · " + i.locked,
+									),
+									i.msg,
+								),
+							),
+						),
 				),
-			);
-			row.append(
-				button(
-					"Remove rubric",
-					() => {
-						if (score) target.criteria.splice(Number(key), 1);
-						else delete target.criteria[key];
-						changed();
-						render();
-					},
-					{ danger: true, disabled: Object.keys(target.criteria).length <= 2 },
+			];
+		},
+		{ align: "right", width: 420 },
+	);
+$("ledger").onclick = () =>
+	togglePop(
+		$("ledger"),
+		() => {
+			const s = srcOf(cur.sid),
+				f = fileOf(s.id),
+				changed = dirtyFiles(),
+				row = diskRow(),
+				other = row?.shadowedBy && srcOf(row.shadowedBy);
+			const same = sources.filter(x => fileOf(x.id)?.doc.mixtures.some(m => m.name === mix.name && !isScratch(m)));
+			return h(
+				"div",
+				{ class: "pad" },
+				h(
+					"dl",
+					{ class: "receipt" },
+					h("dt", {}, T("rcpt.draft")),
+					h(
+						"dd",
+						{},
+						changed.length
+							? T("rcpt.draft.changed", { paths: changed.map(x => x.displayPath).join(", ") })
+							: T("rcpt.draft.clean"),
+					),
+					h("dt", {}, T("rcpt.file")),
+					h(
+						"dd",
+						{},
+						h("code", {}, s.path),
+						h(
+							"div",
+							{ class: "chain" },
+							sources.map(x =>
+								h(
+									"div",
+									{ class: x === same.at(-1) ? "win" : "" },
+									h("span", {}, x.displayPath),
+									h(
+										"small",
+										{},
+										scopeWord(x),
+										same.includes(x)
+											? x === same.at(-1)
+												? " · " + T("rcpt.file.wins", { name: mix.name })
+												: " · " + T("rcpt.file.loses")
+											: "",
+									),
+								),
+							),
+						),
+					),
+					h("dt", {}, T("rcpt.disk")),
+					h(
+						"dd",
+						{},
+						f.theirs
+							? TX("rcpt.disk.changed")
+							: f.base.exists
+								? TX("rcpt.disk.hash", { hash: short(f.base.hash) })
+								: T("rcpt.disk.absent"),
+					),
+					h("dt", {}, T("rcpt.roster")),
+					h(
+						"dd",
+						{},
+						!row
+							? T("roster.new")
+							: row.status === "registered"
+								? TX("rcpt.roster.registered", { name: row.name, rev: row.revision ?? "?" })
+								: row.status === "shadowed"
+									? TX("rcpt.roster.shadowed", { path: other?.displayPath ?? "?" })
+									: row.status === "invalid"
+										? TX("rcpt.roster.invalid")
+										: row.status === "unregistered"
+											? TX("rcpt.roster.unregistered")
+											: TX("rcpt.roster.unknown"),
+					),
+					h("dt", {}, T("rcpt.session")),
+					h(
+						"dd",
+						{},
+						boot.selected == null
+							? TX("rcpt.session.unknown")
+							: boot.selected === row?.name && row.status === "registered"
+								? TX("rcpt.session.this", { name: row.name })
+								: T("rcpt.session.other"),
+					),
+					h("dt", {}, T("rcpt.unchecked")),
+					h("dd", {}, TX("rcpt.unchecked.body")),
 				),
+				h("p", { class: "hint", style: { marginTop: "12px" } }, T("rcpt.foot")),
 			);
-			rows.append(row);
-		}
-		rows.append(
-			button(score ? "Add level" : "Add choice", () => {
-				if (score) target.criteria.push("");
-				else {
-					const label = window.prompt("Choice label")?.trim();
-					if (!label || Object.hasOwn(target.criteria, label)) return;
-					target.criteria = { ...target.criteria, [label]: null };
-				}
-				changed();
-				render();
-			}),
+		},
+		{ align: "right", width: 460 },
+	);
+function renderBanner() {
+	const el = $("banner"),
+		f = cur && fileOf(cur.sid);
+	const show = (text, ...actions) => {
+		el.hidden = false;
+		el.replaceChildren(
+			icon("warn"),
+			h("span", {}, text),
+			...actions
+				.filter(Boolean)
+				.map(([label, run]) => h("button", { class: "btn small", type: "button", onclick: run }, label)),
 		);
 	};
-	render();
-	root.append(rows);
+	if (offline >= 2 && !disconnected)
+		return show(
+			T("banner.offline"),
+			[T("banner.retry"), () => reloadAll(false)],
+			worthKeeping().length > 0 && [T("banner.copy"), copyDrafts],
+		);
+	if (f?.theirs)
+		return show(T("banner.conflict", { path: srcOf(cur.sid).displayPath }), [
+			T("banner.conflict.go"),
+			() => openSave(),
+		]);
+	el.hidden = true;
 }
 
-function condition(member, key, title, note) {
-	const panel = details(title, note);
-	const render = () => {
-		while (panel.children.length > 2) panel.lastElementChild.remove();
-		const target = member[key];
-		if (!target) {
-			panel.append(
-				button(`Add ${title.toLowerCase()}`, () => {
-					member[key] = { instructions: "" };
-					changed();
-					render();
-				}),
-			);
-			return;
-		}
-		property(panel, "Instructions", target, "instructions", { multiline: true, keepEmpty: true });
-		stateParts(
-			panel,
-			target,
-			transitParts.filter(([part]) => ["output", "input", "toolTrace"].includes(part)),
-		);
-		if (key === "route") {
-			property(panel, "Minimum confidence", target, "minConfidence", { numeric: "decimal", min: 0, max: 1 });
-			property(panel, "Fallback", target, "fallback", {
-				choices: [
-					["", "Default (pause)"],
-					["pause", "Pause"],
-					...mixture.edges.filter(edge => edge.from === member.id).map(edge => [edgeId(edge), edgeId(edge)]),
-				],
-			});
-		} else {
-			property(panel, "Yes threshold", target, "threshold", { numeric: "decimal", min: 0, max: 1 });
-			rubrics(panel, target);
-		}
-		panel.append(
-			button(
-				"Remove condition",
-				() => {
-					delete member[key];
-					changed();
-					render();
-				},
-				{ danger: true },
-			),
-		);
-	};
-	render();
-	panel.open = !!member[key];
-	inspector.append(panel);
-}
-
-function memberPanel(member) {
-	inspector.append(el("h2", member.kind === "verdict" ? "Verdict node" : "Model node"));
-	inspector.append(
-		field(
-			"Member ID",
-			member.id,
-			(value, input) => {
-				const id = value.trim();
-				if (!/^[a-z0-9][a-z0-9_-]*$/.test(id) || mixture.members.some(item => item !== member && item.id === id)) {
-					input.value = member.id;
-					status("Enter a unique member ID using lowercase letters, digits, underscores or hyphens.", true);
-					return false;
-				}
-				const old = member.id;
-				for (const edge of mixture.edges) {
-					const before = edgeId(edge);
-					if (edge.from === old) edge.from = id;
-					if (Array.isArray(edge.to)) {
-						edge.to = edge.to.map(target => (target === old ? id : target));
-						if (edge.join === old) edge.join = id;
-					} else if (edge.to === old) edge.to = id;
-					for (const node of mixture.members)
-						if (node.route?.fallback === before) node.route.fallback = edgeId(edge);
-				}
-				if (mixture.entry === old) mixture.entry = id;
-				if (mixture.limits?.limitTarget === old) mixture.limits.limitTarget = id;
-				if (mixture.steering?.target === old) mixture.steering.target = id;
-				member.id = id;
-				input.value = id;
-				renderGraph();
+/* ═══════════════════════════ DOCK ═══════════════════════════ */
+function renderDock() {
+	const b = (ic, label, key, run, o = {}) =>
+		h(
+			"button",
+			{
+				type: "button",
+				class: o.cls,
+				title: o.title,
+				disabled: o.disabled,
+				"aria-pressed": o.pressed == null ? null : String(o.pressed),
+				"aria-label": label || o.title,
+				onclick: run,
 			},
-			{ commit: true },
+			icon(ic),
+			label && h("span", {}, label),
+			key && h("kbd", {}, key),
+		);
+	const none = !mix,
+		locked = none || !!trial || readOnly(),
+		empty = none || !mix.members.length;
+	$("dock").replaceChildren(
+		b("spark", T("add.model"), "M", () => createAt("model", ...centerSpot()), {
+			cls: "lead",
+			disabled: locked,
+			title: T("dock.model.title"),
+		}),
+		b("scale", T("add.verdict"), "V", () => createAt("verdict", ...centerSpot()), {
+			cls: "lead",
+			disabled: locked,
+			title: T("dock.verdict.title"),
+		}),
+		b(
+			"link",
+			T("dock.connect"),
+			"C",
+			() =>
+				connect
+					? endConnect()
+					: startConnect({ from: sel?.kind === "node" && isModel(node(sel.id)) ? sel.id : null }),
+			{ pressed: !!connect, disabled: locked || empty, title: T("dock.connect.title") },
 		),
+		h("span", { class: "sep" }),
+		b("tidy", T("dock.tidy"), "T", tidyUp, { disabled: empty || !!trial, title: T("dock.tidy.title") }),
+		b("undo", null, null, undo, {
+			cls: "icon",
+			disabled: !undoStack.length || !!trial,
+			title: undoStack.length ? T("dock.undo", { label: undoStack.at(-1).label }) : T("dock.undo.none"),
+		}),
+		b("redo", null, null, redo, {
+			cls: "icon",
+			disabled: !redoStack.length || !!trial,
+			title: redoStack.length ? T("dock.redo", { label: redoStack.at(-1).label }) : T("dock.redo.none"),
+		}),
+		h("span", { class: "sep" }),
+		b("play", T("dock.trial"), "R", () => (trial ? trialEnd() : trialStart()), {
+			cls: "go",
+			pressed: !!trial,
+			disabled: empty,
+			title: T("dock.trial.title"),
+		}),
+		b("search", null, "/", openFind, { cls: "icon", disabled: empty, title: T("dock.find.title") }),
+		b("info", null, "?", openKeys, { cls: "icon", title: T("dock.help.title") }),
 	);
-	property(inspector, "Description", member, "description", { multiline: true });
-	property(inspector, "Intermediate visibility", member, "show", { choices: modelShow });
-	if (member.kind === "verdict") {
-		property(inspector, "Question type", member.question, "type", {
-			choices: [
-				["noul", "Yes/no"],
-				["choice", "Choice"],
-				["score", "Score"],
-			],
-			after: () => {
-				const type = member.question.type;
-				if (type === "noul") delete member.question.criteria;
-				else member.question.criteria = type === "score" ? ["", ""] : { first: null, second: null };
-				renderInspector();
-				renderGraph();
-			},
-		});
-		property(inspector, "Question instructions", member.question, "instructions", {
-			keepEmpty: true,
-			multiline: true,
-		});
-		rubrics(inspector, member.question);
-		stateParts(inspector, member, transitParts);
-		property(inspector, "Render envelope", member, "render", { multiline: true, placeholder: "verdict" });
-	} else {
-		inspector.append(
-			button(
-				mixture.entry === member.id ? "Entry model" : "Set as entry",
-				() => {
-					mixture.entry = member.id;
-					changed();
-					redraw();
-				},
-				{ disabled: mixture.entry === member.id },
-			),
-		);
-		property(inspector, "Model selector", member, "model", {
-			keepEmpty: true,
-			list: "models",
-			placeholder: "provider/model or @role",
-			after: renderGraph,
-		});
-		property(inspector, "Role preset", member, "role");
-		inspector.append(
-			check("Use inline system prompt (overrides role preset)", member.systemPrompt !== undefined, enabled => {
-				if (enabled) member.systemPrompt = "";
-				else delete member.systemPrompt;
-				renderInspector();
-			}),
-		);
-		if (member.systemPrompt !== undefined)
-			property(inspector, "System prompt", member, "systemPrompt", { keepEmpty: true, multiline: true });
-		inspector.append(
-			field(
-				"Inherit outer prompt",
-				String(member.inherit ?? ""),
-				value => {
-					if (value === "") delete member.inherit;
-					else member.inherit = value === "true";
-				},
-				{
-					choices: [
-						["", "Default"],
-						["true", "Yes"],
-						["false", "No"],
-					],
-				},
-			),
-		);
-		property(inspector, "Maximum output tokens", member, "maxTokens", { numeric: "integer", min: 1 });
-		condition(
-			member,
-			"route",
-			"Routing",
-			"The judge chooses only when multiple outgoing handoffs are eligible. A single eligible handoff is taken directly.",
-		);
-		condition(
-			member,
-			"terminate",
-			"Termination",
-			"Ask after this model's hop whether its output should finish the run.",
-		);
-		const gate = el("div");
-		gate.className = "gate";
-		gate.append(check("Caller tools · M3", member.tools !== false && member.tools !== undefined, () => {}, true));
-		if (member.tools !== false)
-			gate.append(
-				button("Set tools explicitly off", () => {
-					member.tools = false;
-					changed();
-					renderInspector();
-				}),
-			);
-		inspector.append(gate);
-	}
-	inspector.append(
-		button(
-			"Delete member",
-			() => {
-				if (!window.confirm(`Delete ${member.id} and its attached handoffs from this draft?`)) return;
-				const deleted = new Set(
-					mixture.edges
-						.filter(
-							edge => edge.from === member.id || [edge.to].flat().includes(member.id) || edge.join === member.id,
-						)
-						.map(edgeId),
-				);
-				mixture.edges = mixture.edges.filter(edge => !deleted.has(edgeId(edge)));
-				for (const node of mixture.members) if (deleted.has(node.route?.fallback)) delete node.route.fallback;
-				if (mixture.entry === member.id)
-					mixture.entry = mixture.members.find(item => item !== member && item.kind !== "verdict")?.id ?? "";
-				if (mixture.limits?.limitTarget === member.id) {
-					delete mixture.limits.limitTarget;
-					if (!Object.keys(mixture.limits).length) delete mixture.limits;
-				}
-				remove(mixture.members, member);
-			},
-			{ danger: true },
-		),
-	);
+	renderHint();
 }
-
-function edgePanel(edge) {
-	inspector.append(el("h2", "Handoff"), el("p", `${edge.from} → ${[edge.to].flat().join(", ")}`));
-	if (Array.isArray(edge.to)) {
-		inspector.append(
-			el("p", "Fan-out is not runnable until M4. Delete this handoff to replace it with sequential handoffs."),
-		);
-	} else {
-		const fallback = mixture.members.find(member => member.id === edge.from)?.route;
-		const updateEdge = (key, value) => {
-			const old = edgeId(edge);
-			if (value === "" && key === "id") delete edge.id;
-			else edge[key] = value;
-			if (fallback?.fallback === old) fallback.fallback = edgeId(edge);
-			renderGraph();
+/* One quiet line above the dock that always says what the next gesture is. */
+function renderHint() {
+	const el = $("hint"),
+		k = key => h("kbd", {}, key),
+		plus = () => h("span", { class: "pl" }, icon("plus", 9));
+	el.hidden = !mix || !!trial || !!connect || !mix.members.length;
+	if (el.hidden) return;
+	const n = sel?.kind === "node" && node(sel.id),
+		e = sel?.kind === "edge" && edge(sel.id),
+		v = {
+			plus,
+			sep: () => h("i"),
+			enter: () => k("Enter"),
+			del: () => k("Del"),
+			up: () => k("↑"),
+			down: () => k("↓"),
 		};
-		inspector.append(
-			field("Edge ID (optional)", edge.id, value => updateEdge("id", value.trim()), {
-				commit: true,
-				placeholder: edgeId(edge),
-			}),
-		);
-		const edges = el("fieldset");
-		edges.append(el("legend", "Transit parts (choose at least one)"));
-		for (const [part, label] of transitParts)
-			edges.append(
-				check(
-					label,
-					!!edge.x[part],
-					checked => {
-						if (checked) edge.x[part] = true;
-						else delete edge.x[part];
-					},
-					false,
-				),
-			);
-		inspector.append(edges);
-		const transcript = details(
-			"Transcript options",
-			"These settings include the accumulated completed hop outputs in the handoff.",
-		);
-		for (const [title, key, options] of [
-			[
-				"Optimization",
-				"optimize",
+	el.replaceChildren(
+		...(readOnly()
+			? TX("hint.readOnly", v)
+			: multi.size
+				? TX("hint.multi", v)
+				: n && isModel(n)
+					? TX("hint.model", v)
+					: n
+						? TX("hint.verdict", v)
+						: e && !isFan(e)
+							? TX("hint.path", v)
+							: e
+								? TX("hint.fanout", v)
+								: TX("hint.idle", v)),
+	);
+}
+
+/* ═══════════════════════════ EMPTY STATES ═══════════════════════════ */
+const pickSelector = (...wanted) => starterModel(...wanted);
+const STARTERS = [
+	{
+		name: () => T("starter.chain"),
+		blurb: () => T("starter.chain.blurb"),
+		mini: [
+			[0, 1],
+			[1, 2],
+		],
+		cols: [0, 1, 2],
+		build: () => ({
+			entry: "draft",
+			members: [
 				{
-					choices: [
-						["", "Default"],
-						["verbatim", "Verbatim"],
-						["compact", "Compact"],
-						["snapcompact", "Snapcompact"],
-					],
+					id: "draft",
+					description: "Writes the first answer.",
+					model: pickSelector("@task", "@default"),
+					systemPrompt: "Answer the request as well as you can.",
+					tools: false,
+				},
+				{
+					id: "critique",
+					description: "Finds what is wrong or missing.",
+					model: pickSelector("@slow", "@task"),
+					role: "prosecution",
+					tools: false,
+				},
+				{
+					id: "finalize",
+					description: "Writes the final answer from the draft and its critique.",
+					model: pickSelector("@task", "@default"),
+					systemPrompt: "Write the final answer. Use the draft, and fix everything the critique got right.",
+					tools: false,
 				},
 			],
-			["Token budget", "budgetTokens", { numeric: "integer", min: 1 }],
-		]) {
-			transcript.append(
-				field(
-					title,
-					edge.x.transcript?.[key],
-					value => {
-						const spec = { ...(edge.x.transcript === true ? {} : edge.x.transcript) };
-						if (value === "") delete spec[key];
-						else spec[key] = value;
-						edge.x.transcript = Object.keys(spec).length ? spec : true;
-						edges.querySelector("label:last-child input").checked = true;
+			edges: [
+				{ from: "draft", to: "critique", x: { output: true } },
+				{ from: "critique", to: "finalize", x: { output: true, transcript: true } },
+			],
+		}),
+	},
+	{
+		name: () => T("starter.pick"),
+		blurb: () => T("starter.pick.blurb"),
+		mini: [
+			[0, 1],
+			[0, 2],
+		],
+		cols: [0, 1, 1],
+		cond: true,
+		build: () => ({
+			entry: "draft",
+			members: [
+				{
+					id: "draft",
+					description: "Writes the first answer.",
+					model: pickSelector("@task", "@default"),
+					systemPrompt: "Answer the request as well as you can.",
+					tools: false,
+					route: { instructions: "Read the draft. Pick the reviewer whose speciality it needs most." },
+				},
+				{
+					id: "code-review",
+					description: "Reviews correctness and edge cases.",
+					model: pickSelector("@slow", "@task"),
+					systemPrompt: "Review the draft for correctness. Return a corrected version.",
+					tools: false,
+				},
+				{
+					id: "prose-review",
+					description: "Reviews clarity and tone.",
+					model: pickSelector("@smol", "@task"),
+					systemPrompt: "Review the draft for clarity. Return an improved version.",
+					tools: false,
+				},
+			],
+			edges: [
+				{
+					from: "draft",
+					to: "code-review",
+					when: "The draft is mostly code or technical claims",
+					x: { output: true },
+				},
+				{ from: "draft", to: "prose-review", when: "The draft is mostly explanation", x: { output: true } },
+			],
+		}),
+	},
+	{
+		name: () => T("starter.loop"),
+		blurb: () => T("starter.loop.blurb"),
+		mini: [
+			[0, 1],
+			[1, 2],
+			[1, 0],
+		],
+		cols: [0, 1, 2],
+		cond: true,
+		verdict: 2,
+		build: () => ({
+			entry: "draft",
+			members: [
+				{
+					id: "draft",
+					description: "Writes, and rewrites when asked.",
+					model: pickSelector("@task", "@default"),
+					systemPrompt: "Answer the request. If a review is attached, fix what it found.",
+					tools: false,
+				},
+				{
+					id: "review",
+					description: "Decides whether the draft is good enough.",
+					model: pickSelector("@slow", "@task"),
+					role: "prosecution",
+					tools: false,
+					route: {
+						instructions: "Read the review. Pick the path whose condition matches its conclusion.",
+						fallback: "review->grade",
 					},
-					options,
-				),
-			);
-		}
-		inspector.append(transcript);
-		property(inspector, "When (routing rubric, not a filter)", edge, "when", { multiline: true, after: renderGraph });
-		property(inspector, "Envelope preset or template", edge, "envelope", { multiline: true, placeholder: "handoff" });
-		property(inspector, "Traversal cap", edge, "maxTraversals", { numeric: "integer", min: 0 });
-		property(inspector, "Visibility override", edge, "show", { choices: modelShow.slice(0, 3) });
+				},
+				{
+					id: "grade",
+					kind: "verdict",
+					question: {
+						type: "score",
+						instructions: "How well does the final draft answer the request?",
+						criteria: [
+							"Does not answer it",
+							"Partly answers it",
+							"Answers it",
+							"Answers it and anticipates follow-ups",
+						],
+					},
+				},
+			],
+			edges: [
+				{ from: "draft", to: "review", x: { output: true } },
+				{
+					from: "review",
+					to: "draft",
+					when: "Something still needs fixing",
+					maxTraversals: 3,
+					x: { output: true },
+				},
+				{ from: "review", to: "grade", when: "Good enough to grade", x: { output: true, input: true } },
+			],
+		}),
+	},
+];
+function miniSvg(s) {
+	const svg = svgEl("svg", { class: "mini", viewBox: "0 0 200 64" }),
+		rows = {};
+	const pos = s.cols
+		.map(c => {
+			const r = (rows[c] = (rows[c] ?? 0) + 1);
+			return { c, r };
+		})
+		.map(({ c, r }) => {
+			const n = s.cols.filter(x => x === c).length;
+			return [22 + c * 66, 32 + (r - (n + 1) / 2) * 30];
+		});
+	for (const [a, b] of s.mini) {
+		const [x1, y1] = pos[a],
+			[x2, y2] = pos[b],
+			back = x2 < x1,
+			judged = s.cond && (back || s.mini.filter(m => m[0] === a).length > 1);
+		svg.append(
+			svgEl("path", {
+				d: back
+					? `M${x1 + 10} ${y1 + 9}V54H${x2 + 10}V${y2 + 9}`
+					: `M${x1 + 38} ${y1}H${(x1 + 38 + x2) / 2}V${y2}H${x2}`,
+				fill: "none",
+				stroke: judged ? "var(--judge)" : "var(--wire)",
+				"stroke-width": 1.5,
+				"stroke-dasharray": judged ? "4 3" : null,
+			}),
+		);
 	}
-	inspector.append(
-		button(
-			"Delete handoff",
-			() => {
-				const route = mixture.members.find(member => member.id === edge.from)?.route;
-				if (route?.fallback === edgeId(edge)) delete route.fallback;
-				remove(mixture.edges, edge);
-			},
-			{ danger: true },
+	pos.forEach(([x, y], i) =>
+		svg.append(
+			svgEl("rect", {
+				x,
+				y: y - 9,
+				width: 38,
+				height: 18,
+				rx: i === s.verdict ? 9 : 5,
+				fill: "var(--surface3)",
+				stroke: i === 0 ? "var(--flow)" : i === s.verdict ? "var(--judge)" : "var(--line3)",
+				"stroke-width": 1.2,
+			}),
+		),
+	);
+	return svg;
+}
+function renderEmpty() {
+	const el = $("empty"),
+		k = key => h("kbd", {}, key);
+	if (mix && (mix.members.length || readOnly())) {
+		el.hidden = true;
+		return;
+	}
+	el.hidden = false;
+	if (mix) {
+		el.replaceChildren(
+			h(
+				"div",
+				{},
+				h("h2", {}, T("empty.title")),
+				h("p", {}, TX("empty.body", { m: k("M") })),
+				h(
+					"div",
+					{ class: "starters" },
+					STARTERS.map(s =>
+						h(
+							"button",
+							{
+								class: "starter",
+								type: "button",
+								onclick: () => {
+									commit(
+										T("act.starter", { name: s.name() }),
+										() => {
+											const made = s.build();
+											for (const e of made.edges) e.$k = "k" + ++edgeSeq;
+											Object.assign(mix, made);
+											mix.description ??= s.blurb();
+											sel = null;
+										},
+										{ quiet: true },
+									);
+									fit(true);
+								},
+							},
+							miniSvg(s),
+							h("b", {}, s.name()),
+							h("span", {}, s.blurb()),
+						),
+					),
+				),
+			),
+		);
+		return;
+	}
+	const targetsHere = sources.filter(writable);
+	el.replaceChildren(
+		h(
+			"div",
+			{},
+			h("h2", {}, T("welcome.title")),
+			h("p", {}, T("welcome.body")),
+			targetsHere.length
+				? h(
+						"div",
+						{ class: "welcome" },
+						targetsHere.map(s =>
+							h(
+								"button",
+								{ class: "starter", type: "button", onclick: () => newMixture(s.id) },
+								h("b", {}, s.kind === "user" ? T("welcome.user") : T("welcome.project")),
+								h("span", {}, s.kind === "user" ? T("welcome.user.blurb") : T("welcome.project.blurb")),
+								h(
+									"span",
+									{ class: "mono", style: { marginTop: "8px", fontSize: "11px" }, title: s.path },
+									s.displayPath,
+								),
+							),
+						),
+					)
+				: h("p", {}, T("welcome.none")),
 		),
 	);
 }
 
-function renderInspector() {
-	inspector.replaceChildren();
-	if (selection.kind === "document" && source) {
-		inspector.append(el("h2", "File presets"), el("p", "Shared by mixtures declared in this file."));
-		presets(inspector, source.doc, "roles", "Role presets");
-		presets(inspector, source.doc, "envelopes", "Envelope presets");
-	} else if (!mixture) inspector.append(el("p", "Select a mixture to inspect its graph."));
-	else if (selection.kind === "member") memberPanel(selection.item);
-	else if (selection.kind === "edge") edgePanel(selection.item);
-	else settingsPanel();
-}
-
-function redraw() {
-	renderRail();
-	renderGraph();
-	renderInspector();
-	controls();
-}
-
-function addMember(verdict) {
-	const id = unusedId(
-		verdict ? "verdict" : "model",
-		mixture.members.map(item => item.id),
-	);
-	const member = verdict
-		? { kind: "verdict", id, question: { type: "noul", instructions: "" } }
-		: { id, model: "", systemPrompt: "", tools: false };
-	mixture.members.push(member);
-	if (!mixture.entry && !verdict) mixture.entry = id;
-	changed();
-	choose("member", member);
-	inspector.querySelector(verdict ? "textarea" : "[list=models]")?.focus();
-}
-
-scopeInput.addEventListener("change", () => void load(scopeInput.value));
-byId("reload").addEventListener("click", () => void load(source?.scope));
-byId("validate").addEventListener("click", () => void submit(false));
-byId("save").addEventListener("click", () => void submit(true));
-byId("add-mixture").addEventListener("click", () => {
-	mixture = {
-		name: unusedId(
-			"new-mixture",
-			source.doc.mixtures.map(item => item.name),
-		),
-		entry: "",
-		members: [],
-		edges: [],
+/* ═══════════════════════════ FIND · HELP ═══════════════════════════ */
+function openFind() {
+	if (!mix) return;
+	const input = h("input", {
+			class: "in",
+			placeholder: T("find.placeholder"),
+			spellcheck: "false",
+			autocomplete: "off",
+		}),
+		list = h("div", { class: "scroll" });
+	let hits = [],
+		at = 0;
+	const fill = () => {
+		const qy = input.value.trim().toLowerCase(),
+			has = (...xs) =>
+				!qy ||
+				xs.some(x =>
+					String(x ?? "")
+						.toLowerCase()
+						.includes(qy),
+				);
+		hits = [
+			...mix.members
+				.filter(n => has(n.id, n.description, n.systemPrompt, n.question?.instructions, n.model, n.role))
+				.map(n => ({
+					key: { kind: "node", id: n.id },
+					ic: kindIcon(n),
+					label: n.id,
+					hint: isModel(n) ? n.model : T("card.verdict"),
+				})),
+			...mix.edges
+				.filter(e => has(e.id, e.when, e.from, ...targets(e), e.envelope))
+				.map(e => ({
+					key: { kind: "edge", id: e.$k },
+					ic: "right",
+					label: `${e.from} → ${targets(e).join(" + ")}`,
+					hint: e.when,
+				})),
+		];
+		at = clamp(at, 0, Math.max(0, hits.length - 1));
+		list.replaceChildren(
+			...(hits.length
+				? hits.map((x, i) =>
+						mi(x.ic, x.label, () => select(x.key), { hint: x.hint?.slice(0, 48), mono: true, on: i === at }),
+					)
+				: [h("div", { class: "pad hint" }, T("find.none"))]),
+		);
 	};
-	source.doc.mixtures.push(mixture);
-	changed();
-	choose("mixture");
-	inspector.querySelector("input")?.select();
-});
-byId("document").addEventListener("click", () => choose("document"));
-byId("mixture-settings").addEventListener("click", () => choose("mixture"));
-byId("add-model").addEventListener("click", () => addMember(false));
-byId("add-verdict").addEventListener("click", () => addMember(true));
-byId("connect").addEventListener("click", () => {
-	connecting = !connecting;
+	input.addEventListener("input", () => {
+		at = 0;
+		fill();
+	});
+	input.addEventListener("keydown", ev => {
+		if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+			ev.preventDefault();
+			at += ev.key === "ArrowDown" ? 1 : -1;
+			fill();
+			list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+		}
+		if (ev.key === "Enter" && hits[at]) {
+			closePop();
+			select(hits[at].key);
+		}
+	});
+	fill();
+	const r = canvas.getBoundingClientRect(),
+		[cx] = viewCenter();
+	openPop(null, [input, list], { at: [r.left + cx - 230, r.top + 70], width: 460 });
+	input.focus();
+}
+function openKeys() {
+	const row = (what, ...keys) =>
+		h(
+			"div",
+			{},
+			what,
+			h(
+				"span",
+				{},
+				keys.map(key => h("kbd", {}, key)),
+			),
+		);
+	const line = (dash, color) => {
+		const s = svgEl("svg", { width: 34, height: 10 });
+		s.append(
+			svgEl("path", {
+				d: "M1 5H33",
+				stroke: color,
+				"stroke-width": 1.8,
+				"stroke-dasharray": dash,
+				"stroke-linecap": "round",
+				fill: "none",
+			}),
+		);
+		return s;
+	};
+	const read = (glyph, title, body, when) =>
+		h(
+			"div",
+			{},
+			h("span", { class: "g" }, glyph),
+			h("span", {}, h("b", {}, title), h("span", { class: "ms" }, when), h("small", {}, body)),
+		);
+	const today = T("help.today");
+	openSheet({
+		width: 780,
+		title: T("help.title"),
+		sub: T("help.sub"),
+		body: [
+			h(
+				"div",
+				{ class: "reading" },
+				read(line("", "var(--wire)"), T("help.always"), T("help.always.body"), today),
+				read(line("6 5", "var(--judge)"), T("help.judge"), T("help.judge.body"), today),
+				read(icon("diamondo"), T("help.stop"), T("help.stop.body"), today),
+				read(h("span", { class: "capx" }, "≤3×"), T("help.cap"), T("help.cap.body"), today),
+				read(line("1.5 5", "var(--ink3)"), T("help.limit"), T("help.limit.body"), today),
+				read(icon("lock"), T("help.several"), T("help.several.body"), "M4"),
+			),
+			h(
+				"div",
+				{ class: "keys", style: { borderTop: "1px solid var(--line)", paddingTop: "10px" } },
+				row(T("help.k.model"), "M"),
+				row(T("help.k.verdict"), "V"),
+				row(T("help.k.connect"), "C"),
+				row(T("help.k.rename"), "Enter"),
+				row(T("help.k.move"), "←", "↑", "↓", "→"),
+				row(T("help.k.next"), "↑", "↓"),
+				row(T("help.k.delete"), "Del"),
+				row(T("help.k.duplicate"), "D"),
+				row(T("help.k.undo"), "Ctrl", "Z"),
+				row(T("help.k.redo"), "Ctrl", "Shift", "Z"),
+				row(T("help.k.cancel"), "Ctrl", "C"),
+				row(T("help.k.save"), "Ctrl", "S"),
+				row(T("help.k.tidy"), "T"),
+				row(T("help.k.fit"), "F"),
+				row(T("help.k.trial"), "R"),
+				row(T("help.k.find"), "/"),
+				row(T("help.k.list"), "B"),
+				row(T("help.k.inspector"), "I"),
+				row(T("help.k.back"), "Esc"),
+			),
+			h(
+				"div",
+				{ class: "keys", style: { borderTop: "1px solid var(--line)", paddingTop: "10px" } },
+				row(T("help.g.connect"), T("help.g.connect.how")),
+				row(T("help.g.create"), T("help.g.create.how")),
+				row(T("help.g.retarget"), T("help.g.retarget.how")),
+				row(T("help.g.start"), T("help.g.start.how")),
+				row(T("help.g.add"), T("help.g.add.how")),
+				row(T("help.g.rename"), T("help.g.rename.how")),
+				row(T("help.g.select"), T("help.g.select.how")),
+				row(T("help.g.pan"), T("help.g.pan.space"), T("help.g.pan.middle")),
+				row(T("help.g.zoom"), T("help.g.zoom.how")),
+				row(T("help.g.moveMix"), T("help.g.moveMix.how")),
+			),
+		],
+		note: T("help.note"),
+		cancel: null,
+		primary: { label: T("common.done"), run: closeSheet },
+	});
+}
+
+/* ═══════════════════════════ TRIAL RUN ═══════════════════════════
+   Walks the graph in the engine's order: stop check, then which paths are still eligible, then 0 / 1 / pick.
+   No model is called. You play the judge, so every branch, cap and limit can be tried in seconds. */
+function trialStart() {
+	if (!mix) return;
+	if (!isModel(node(mix.entry))) return toast(T("trial.noEntry"), { bad: true });
+	endConnect();
+	closePop();
+	sel = null;
+	multi.clear();
+	if (stacked()) panelOpen = false; // in a narrow window the trial takes the inspector's place
+	trial = {
+		at: mix.entry,
+		used: {},
+		walked: new Set(),
+		trail: [mix.entry],
+		hops: 1,
+		choices: [],
+		phase: null,
+		endRow: null,
+		over: null,
+		stopped: false,
+	};
+	trialStep();
+	render();
+	fit(true);
+}
+function trialEnd() {
+	trial = null;
+	render();
+	fit(true);
+}
+const usedUp = e => cap(e) !== undefined && (trial.used[e.$k] ?? 0) >= cap(e);
+function trialStep() {
+	const n = node(trial.at);
+	trial.choices = [];
+	trial.phase = null;
+	if (!isModel(n)) {
+		trial.over = "verdict";
+		trial.endRow = n.id + "/:final";
+		return;
+	}
+	if (n.terminate && !trial.stopped) {
+		trial.phase = "stop";
+		return;
+	}
+	const livePaths = liveOuts(n.id),
+		open = livePaths.filter(e => !usedUp(e) && node(e.to));
+	if (!livePaths.length && outs(n.id).length) {
+		trial.over = "locked";
+		return;
+	}
+	if (!open.length) {
+		trial.over = livePaths.length ? "spent" : "final";
+		trial.endRow = n.id + "/" + (livePaths.length ? ":ends" : ":final");
+		return;
+	}
+	trial.phase = open.length === 1 ? "auto" : "pick";
+	trial.choices = open.map(e => e.$k);
+}
+function trialStop(yes) {
+	if (yes) {
+		trial.over = "stop";
+		trial.endRow = trial.at + "/:stop";
+		trial.phase = null;
+	} else {
+		trial.stopped = true;
+		trialStep();
+	}
+	render();
+}
+function trialTake(e) {
+	const max = mix.limits?.maxHops ?? D().maxHops,
+		lt = limitTarget();
+	trial.choices = [];
+	trial.phase = null;
+	if (trial.hops >= max) {
+		if (onLimit() === "judge" && lt && lt.id !== trial.at) {
+			trial.at = lt.id;
+			trial.trail.push(lt.id);
+			trial.over = "limit-judge";
+			trial.endRow = lt.id + "/:final";
+		} else trial.over = onLimit() === "pause" ? "limit-pause" : "limit-stop";
+		render();
+		if (trial.over === "limit-judge") reveal(trial.at);
+		return;
+	}
+	trial.used[e.$k] = (trial.used[e.$k] ?? 0) + 1;
+	trial.walked.add(e.$k);
+	trial.hops++;
+	trial.at = e.to;
+	trial.trail.push(e.to);
+	trial.stopped = false;
+	trialStep();
+	render();
+	reveal(e.to);
+}
+function trialUnsure() {
+	const fb = node(trial.at).route?.fallback,
+		e = fb && liveOuts(trial.at).find(x => eid(x) === fb);
+	if (e && trial.choices.includes(e.$k)) return trialTake(e);
+	trial.over = "unsure";
+	trial.choices = [];
+	trial.phase = null;
+	render();
+}
+function renderTrial() {
+	const box = $("trial");
+	box.hidden = !trial;
+	if (!trial) return;
+	const n = node(trial.at),
+		max = mix.limits?.maxHops ?? D().maxHops,
+		id = n.id;
+	const opt = (label, run, o = {}) =>
+		h(
+			"button",
+			{ type: "button", class: o.cls, onclick: run },
+			o.key && h("kbd", {}, o.key),
+			h("span", {}, label),
+			o.hint && h("small", {}, o.hint),
+		);
+	let say,
+		opts = [];
+	if (trial.phase === "stop") {
+		say = TX("trial.stop", { id, text: n.terminate.instructions || T("trial.stop.blank") });
+		opts = [
+			opt(T("trial.stop.yes"), () => trialStop(true), { key: "1", cls: "j" }),
+			opt(T("trial.stop.no"), () => trialStop(false), { key: "2", cls: "j" }),
+		];
+	} else if (trial.phase === "auto") {
+		const e = edge(trial.choices[0]),
+			others = liveOuts(id).length - 1;
+		say = others ? TX("trial.auto.left", { id }) : TX("trial.auto", { id });
+		opts = [
+			opt(T("trial.continue", { to: e.to }), () => trialTake(e), {
+				key: "1",
+				cls: "go",
+				hint: cap(e) !== undefined ? T("trial.used", { n: trial.used[e.$k] ?? 0, max: cap(e) }) : null,
+			}),
+		];
+	} else if (trial.phase === "pick") {
+		const fb = n.route?.fallback,
+			fbEdge = fb && liveOuts(id).find(x => eid(x) === fb),
+			fbOpen = fbEdge && trial.choices.includes(fbEdge.$k);
+		say = TX("trial.pick", { id });
+		opts = [
+			...trial.choices.map((key, i) => {
+				const e = edge(key);
+				return opt(e.when?.trim() || T("trial.noWhen"), () => trialTake(e), {
+					key: String(i + 1),
+					cls: "j",
+					hint: "→ " + e.to + (cap(e) !== undefined ? ` · ${trial.used[key] ?? 0}/${cap(e)}` : ""),
+				});
+			}),
+			opt(T("trial.unsure"), trialUnsure, {
+				key: String(trial.choices.length + 1),
+				hint: fbOpen ? T("trial.unsure.follows", { to: fbEdge.to }) : T("trial.unsure.pauses"),
+			}),
+		];
+	} else {
+		say = {
+			verdict: TX("trial.end.verdict", { id }),
+			final: TX("trial.end.final", { id }),
+			spent: TX("trial.end.spent", { id }),
+			stop: TX("trial.end.stop", { id }),
+			locked: TX("trial.end.locked", { id }),
+			unsure: TX("trial.end.unsure", { id }),
+			"limit-pause": TX("trial.end.limitPause", { max }),
+			"limit-stop": TX("trial.end.limitStop", { max }),
+			"limit-judge": TX("trial.end.limitJudge", { max, id }),
+		}[trial.over];
+		opts = [
+			opt(T("trial.again"), trialStart, { key: "1", cls: "go" }),
+			opt(T("common.done"), trialEnd, { key: "2" }),
+		];
+	}
+	const trail = h(
+		"div",
+		{ class: "trail" },
+		trial.trail.flatMap((step, i) => [
+			i > 0 && "›",
+			h("b", { class: cls(i === trial.trail.length - 1 && (trial.over ? "end" : "now")) }, step),
+		]),
+		trial.over && !/unsure|pause|locked/.test(trial.over) && ["›", h("b", { class: "end" }, T("trial.answer"))],
+	);
+	box.replaceChildren(
+		h(
+			"header",
+			{},
+			h("span", { style: { color: "var(--flow)", display: "flex" } }, icon("play")),
+			h("b", {}, T("dock.trial")),
+			h("span", {}, T("trial.sub")),
+			h("span", { class: "sp" }),
+			h(
+				"span",
+				{ class: cls("hops", trial.hops >= max && "hot"), title: T("trial.hops.title") },
+				T("trial.hops", { n: trial.hops, max }),
+			),
+			h(
+				"button",
+				{ class: "icon-btn", type: "button", title: T("trial.restart"), onclick: trialStart },
+				icon("loop"),
+			),
+			h("button", { class: "icon-btn", type: "button", title: T("trial.close"), onclick: trialEnd }, icon("x")),
+		),
+		trail,
+		h("div", { class: "ask" }, h("p", {}, say), h("div", { class: "opts" }, opts)),
+	);
+}
+document.addEventListener(
+	"keydown",
+	ev => {
+		if (
+			!trial ||
+			sheetEl ||
+			popEl ||
+			ev.ctrlKey ||
+			ev.metaKey ||
+			ev.altKey ||
+			/^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)
+		)
+			return;
+		const buttons = [...$("trial").querySelectorAll(".opts button")],
+			i = ev.key === "Enter" ? 0 : /^[1-9]$/.test(ev.key) ? +ev.key - 1 : -1;
+		if (buttons[i]) {
+			ev.preventDefault();
+			ev.stopPropagation();
+			buttons[i].click();
+		}
+	},
+	true,
+);
+
+/* ═══════════════════════════ FRAME ═══════════════════════════ */
+function render() {
+	layout();
+	pruneBad();
+	issues = mix ? [...check(), ...serverFindings()] : [];
 	renderGraph();
-	controls();
+	renderPanel();
+	renderBar();
+	renderDock();
+	renderTrial();
+	renderSide();
+	renderBanner();
+	if (connect) markTargets();
+	if (dropStaleInputs()) soft();
+}
+/* soft(): a keystroke (or the harness's answer) changed what is known. Redraw what depends on it,
+   but leave the field being typed in alone. */
+function soft() {
+	if (!mix) return render();
+	if (document.querySelector(".nid-edit") || gesture || connect) return setTimeout(soft, 250); // never rebuild cards under a rename or a drag
+	pruneBad();
+	issues = [...check(), ...serverFindings()];
+	renderGraph();
+	renderBar();
+	renderDock();
+	renderSide();
+	renderBanner();
+	for (const update of liveList) update();
+}
+addEventListener("resize", () => {
+	const was = stacked(),
+		pinned = sidePinned;
+	layout();
+	if (was !== stacked() || pinned !== sidePinned) render();
+	else renderBar();
+	if (!camTouched) fit();
 });
-window.addEventListener("beforeunload", event => {
-	if (dirty) event.preventDefault();
+addEventListener("beforeunload", ev => {
+	if (dirty() || scratchList().some(m => m.description || !/^untitled(-\d+)?$/.test(m.name))) ev.preventDefault();
 });
-void load();
+
+function normalizeBoot(data) {
+	const d = data.defaults ?? {},
+		lim = data.limits ?? {};
+	return {
+		...data,
+		models: (data.models ?? []).map(m => (typeof m === "string" ? { selector: m } : m)),
+		judgePlan: data.judgePlan ?? null,
+		selected: data.selected ?? null,
+		initialSourceId: data.initialSourceId ?? null,
+		summaryModel: data.summaryModel ?? d.summaryModel ?? null,
+		bundled: {
+			roles: data.bundled?.roles ?? {},
+			envelopes: data.bundled?.envelopes ?? {},
+			partial: data.bundled?.partial ?? data.bundled?.partials?.["moa-parts"] ?? "",
+		},
+		limits: { members: lim.members ?? 32, edges: lim.edges ?? 128 },
+		defaults: {
+			maxHops: d.maxHops ?? 24,
+			hardMaxHops: d.hardMaxHops ?? 200,
+			budgetUsd: d.budgetUsd ?? 0,
+			hardBudgetUsd: d.hardBudgetUsd ?? 0,
+			wallClockMinutes: d.wallClockMinutes ?? 240,
+			onLimit: d.onLimit ?? "pause",
+			minConfidence: d.minConfidence ?? 0.55,
+			threshold: d.threshold ?? 0.5,
+		},
+	};
+}
+async function start() {
+	legend();
+	$("empty").hidden = false;
+	$("empty").replaceChildren(h("div", {}, h("p", {}, T("start.loading"))));
+	const [b, list] = await Promise.all([api.bootstrap(), api.sources()]);
+	if (!b.ok || !list.ok) {
+		$("empty").replaceChildren(
+			h(
+				"div",
+				{},
+				h("h2", {}, T("start.failed")),
+				h("p", {}, b.data?.error ?? list.data?.error ?? T("harness.silent")),
+				h("button", { class: "btn primary", type: "button", onclick: () => location.reload() }, T("start.retry")),
+			),
+		);
+		return;
+	}
+	boot = normalizeBoot(b.data);
+	sources = list.data.sources ?? [];
+	const snaps = await Promise.all(sources.map(s => loadSource(s.id)));
+	sources = sources.filter((s, i) => {
+		if (!snaps[i]) return false;
+		files.set(s.id, { base: snaps[i], doc: adopt(snaps[i].doc, s.id), theirs: null, both: null });
+		return true;
+	});
+	pickMixture();
+	sync();
+	layout();
+	panelOpen = !stacked();
+	edited();
+	render();
+	fit();
+	if (!mix) {
+		sideOpen = true;
+		sidePinned = canPin();
+		render();
+	}
+	watchDisk();
+	document.body.dataset.ready = "";
+}
+document.fonts.ready.then(start);
