@@ -132,7 +132,7 @@ export const TUI_KEYBINDINGS = {
 	"tui.editor.yank": { defaultKeys: "ctrl+y", description: "Yank" },
 	"tui.editor.yankPop": { defaultKeys: "alt+y", description: "Yank pop" },
 	"tui.editor.undo": { defaultKeys: ["ctrl+-", "ctrl+_"], description: "Undo" },
-	"tui.editor.redo": { defaultKeys: "alt+u", description: "Redo (Vim normal mode)" },
+	"tui.editor.redo": { defaultKeys: ["ctrl+r", "alt+u"], description: "Redo (Vim normal mode)" },
 	"tui.editor.spellingSuggestions": {
 		defaultKeys: "ctrl+.",
 		description: "Show spelling replacements",

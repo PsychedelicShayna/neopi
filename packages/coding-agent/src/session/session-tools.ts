@@ -990,6 +990,14 @@ export class SessionTools {
 		return tool !== undefined && this.#builtInToolNames.has(tool.name);
 	}
 
+	/** Register the hidden goal tool if the session's launch policy grants it. */
+	async ensureGoalTool(): Promise<boolean> {
+		if (this.#toolRegistry.has("goal")) return this.hasBuiltInTool("goal");
+		if (!(await this.#ensureGoalRegistered?.())) return false;
+		this.#builtInToolNames.add("goal");
+		return true;
+	}
+
 	/** Updates source provenance when a live registry entry is replaced or restored. */
 	setToolBuiltIn(name: string, builtIn: boolean): void {
 		if (builtIn) {
@@ -1527,8 +1535,7 @@ export class SessionTools {
 		// `#enterGoalMode`'s `[...tools, "goal"]` request is honored instead of
 		// silently dropped (issue #9444).
 		if (toolNames.includes("goal") && !this.#toolRegistry.has("goal")) {
-			const goalRegistration = this.#ensureGoalRegistered?.();
-			if (goalRegistration) await untilAborted(signal, goalRegistration);
+			await untilAborted(signal, this.ensureGoalTool());
 		}
 		const selectedTools = toolNames.flatMap(name => {
 			const tool = this.#toolRegistry.get(name);

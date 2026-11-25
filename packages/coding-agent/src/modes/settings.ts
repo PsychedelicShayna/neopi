@@ -913,7 +913,7 @@ export const cfgSidebarView = register({
 });
 
 const SIDEBAR_AGENT_FILTERS = ["running", "idle", "parked", "advisors", "aborted"] as const;
-const DEFAULT_SIDEBAR_AGENT_FILTERS: (typeof SIDEBAR_AGENT_FILTERS)[number][] = ["running"];
+const DEFAULT_SIDEBAR_AGENT_FILTERS: (typeof SIDEBAR_AGENT_FILTERS)[number][] = ["running", "advisors"];
 
 export const cfgSidebarAgentFilters = register({
 	id: "sidebar.agents.filters",
@@ -1015,6 +1015,26 @@ export const cfgSidebarWidthMax = register({
 			{ value: "48", label: "48" },
 			{ value: "56", label: "56" },
 			{ value: "64", label: "64" },
+		],
+	},
+});
+
+/** Docked width in columns from dragging the divider; 0 sizes the panel by the ratio and bounds above. */
+export const cfgSidebarWidthColumns = register({
+	id: "sidebar.width.columns",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "appearance",
+		group: "Side Panel",
+		label: "Dragged Width (columns)",
+		description: "Set by dragging the divider; Auto uses the ratio and bounds",
+		options: [
+			{ value: "0", label: "Auto" },
+			{ value: "32", label: "32" },
+			{ value: "48", label: "48" },
+			{ value: "64", label: "64" },
+			{ value: "80", label: "80" },
 		],
 	},
 });

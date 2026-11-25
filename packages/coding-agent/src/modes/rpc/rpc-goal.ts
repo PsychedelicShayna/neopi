@@ -10,6 +10,9 @@
  */
 import type { Goal } from "@oh-my-pi/pi-tui/tools/goal";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
+import guidedGoalInterviewPrompt from "../../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
 import { type GoalModeState, goalContinuationActivity, goalFromModeData } from "../../goals/state";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
@@ -52,6 +55,15 @@ export type RpcGoalSession = Pick<
 	| "queuedMessageCount"
 >;
 
+interface GoalControllerOptions {
+	/** Focused workers use the interactive continuation preference. */
+	continuationMode?: string;
+	/** Keep the owning worker live until a scheduled turn is admitted or discarded. */
+	holdContinuation?: () => () => void;
+	waitForIdle?: () => Promise<void>;
+	canContinue?: () => boolean;
+}
+
 export class RpcGoalController {
 	readonly #session: RpcGoalSession;
 	/** Whether goal mode added `goal` to the live roster; exit strips only that tool. */
@@ -61,6 +73,7 @@ export class RpcGoalController {
 	#previousContinuationActivity: string | undefined;
 	/** A continuation turn made no new progress; wait for the host before continuing. */
 	#suppressContinuation = false;
+	#guidedInterview = false;
 	/**
 	 * Set by a host abort; only host action (a prompt, or `goal create`/`resume`) clears it.
 	 * Unlike {@link #suppressContinuation}, no turn's `agent_end` can re-arm it, so the
@@ -90,14 +103,20 @@ export class RpcGoalController {
 	 */
 	#changeOverlappedReconcile = false;
 	readonly #onContinuationDropped: (() => void) | undefined;
+	readonly #options: GoalControllerOptions;
 
 	/**
 	 * @param onContinuationDropped called when a pending continuation is abandoned
 	 *   (a gate closed while it waited), so settle reporting can re-check.
 	 */
-	constructor(session: RpcGoalSession, onContinuationDropped?: () => void) {
+	constructor(session: RpcGoalSession, onContinuationDropped?: () => void, options: GoalControllerOptions = {}) {
 		this.#session = session;
 		this.#onContinuationDropped = onContinuationDropped;
+		this.#options = options;
+	}
+
+	get guidedInterviewActive(): boolean {
+		return this.#guidedInterview;
 	}
 
 	/**
@@ -204,13 +223,13 @@ export class RpcGoalController {
 		this.#exitTask = this.#exitTask.then(exit).catch(reportControllerError);
 	}
 
-	async handle(command: RpcGoalCommand): Promise<RpcGoalResult> {
+	async handle(command: RpcGoalCommand, options?: { hasKickoffPrompt?: boolean }): Promise<RpcGoalResult> {
 		await this.settled();
 		switch (command.op) {
 			case "get":
 				return this.#state;
 			case "create":
-				return await this.#create(command);
+				return await this.#create(command, options?.hasKickoffPrompt);
 			case "resume":
 				return await this.#resume();
 			case "pause":
@@ -218,6 +237,10 @@ export class RpcGoalController {
 				await this.#exit();
 				return this.#state;
 			case "drop":
+				if (this.#guidedInterview && !this.#state.goal) {
+					await this.#exit();
+					return this.#state;
+				}
 				// The runtime's `goal_updated(dropped)` queues the exit.
 				await this.#session.goalRuntime.dropGoal();
 				await this.#exitTask;
@@ -226,6 +249,62 @@ export class RpcGoalController {
 				const op: never = command.op;
 				throw new Error(`Unknown goal op: ${String(op)}`);
 			}
+		}
+	}
+	/** `/goal set <objective>` replaces an active goal; plain goal creation does not. */
+	async replace(objective: string): Promise<RpcGoalResult> {
+		await this.settled();
+		this.#assertCanEnter();
+		this.#continuationScheduled = false;
+		this.#continuationGeneration++;
+		const state = await this.#session.goalRuntime.replaceGoal({ objective });
+		this.#session.setGoalModeState(state);
+		this.#resetContinuation();
+		if (this.#session.isStreaming) await this.#session.sendGoalModeContext({ deliverAs: "steer" });
+		return this.#state;
+	}
+
+	async setBudget(budget: number | undefined): Promise<RpcGoalResult> {
+		await this.settled();
+		const state = this.#session.getGoalModeState();
+		if (!state?.enabled || state.goal.status === "complete") throw new Error("No active goal to budget.");
+		await this.#session.goalRuntime.onBudgetMutated(budget);
+		this.#resetContinuation();
+		this.#scheduleContinuation();
+		return this.#state;
+	}
+
+	/** Start the same interview as the TUI, without a primary-editor submission. */
+	async guided(initial: string, images?: readonly ImageContent[], onPromptAdmitted?: () => void): Promise<void> {
+		await this.settled();
+		this.#assertCanEnter();
+		const goal = this.#session.getGoalModeState();
+		if (goal?.enabled || goal?.goal.status === "paused") {
+			throw new Error("Drop the existing goal before starting a guided goal.");
+		}
+		if (this.#guidedInterview) throw new Error("A guided goal interview is already active.");
+		const enabled = this.#session.getEnabledToolNames();
+		if (!enabled.includes("goal")) {
+			await this.#session.setActiveToolsByName([...enabled, "goal"]);
+			this.#goalToolAddedByMode = true;
+		}
+		this.#guidedInterview = true;
+		const kickoff = renderPromptAsset(
+			"goals/guided-goal-interview.md",
+			guidedGoalInterviewPrompt,
+			{ initial: initial || undefined },
+			{ cwd: this.#session.sessionManager.getCwd() },
+		);
+		const content = images?.length ? [{ type: "text" as const, text: kickoff }, ...images] : kickoff;
+		try {
+			const dispatched = await this.#session.promptCustomMessage(
+				{ customType: "guided-goal-interview", content, display: false },
+				{ streamingBehavior: "followUp", onPromptAdmitted },
+			);
+			if (!dispatched) throw new Error("The guided goal interview could not be submitted.");
+		} catch (error) {
+			if (!this.#session.getGoalModeState()) await this.#exit();
+			throw error;
 		}
 	}
 
@@ -238,7 +317,7 @@ export class RpcGoalController {
 		}
 	}
 
-	async #create(command: RpcGoalCommand): Promise<RpcGoalResult> {
+	async #create(command: RpcGoalCommand, hasKickoffPrompt?: boolean): Promise<RpcGoalResult> {
 		this.#assertCanEnter();
 		const objective = command.objective?.trim();
 		if (!objective) throw new Error("objective is required when op=create");
@@ -251,7 +330,7 @@ export class RpcGoalController {
 		if (current?.goal.status === "paused") {
 			throw new Error("Resume or drop the paused goal before creating another.");
 		}
-		await this.#enter(() => this.#session.goalRuntime.createGoal({ objective, tokenBudget }));
+		await this.#enter(() => this.#session.goalRuntime.createGoal({ objective, tokenBudget }), hasKickoffPrompt);
 		return this.#state;
 	}
 
@@ -264,26 +343,35 @@ export class RpcGoalController {
 		return this.#state;
 	}
 
-	async #enter(start: () => Promise<GoalModeState>): Promise<void> {
+	async #enter(start: () => Promise<GoalModeState>, hasKickoffPrompt = false): Promise<void> {
 		// Only a `goal` the controller added belongs to goal mode. A `goal` the host
 		// enabled beforehand stays enabled when the goal ends.
 		const enabledTools = this.#session.getEnabledToolNames();
-		const state = await start();
-		this.#goalToolAddedByMode = !enabledTools.includes("goal");
-		await this.#session.setActiveToolsByName([...new Set([...enabledTools, "goal"])]);
-		this.#session.setGoalModeState(state);
+		const addedGoalTool = !enabledTools.includes("goal");
+		if (addedGoalTool) await this.#session.setActiveToolsByName([...enabledTools, "goal"]);
+		this.#goalToolAddedByMode ||= addedGoalTool;
+		try {
+			this.#session.setGoalModeState(await start());
+		} catch (error) {
+			if (!this.#guidedInterview) await this.#exit();
+			throw error;
+		}
+		this.#guidedInterview = false;
 		this.#resetContinuation();
 		if (this.#session.isStreaming) {
 			await this.#session.sendGoalModeContext({ deliverAs: "steer" });
 			return;
 		}
-		this.#scheduleContinuation();
+		if (!hasKickoffPrompt) this.#scheduleContinuation();
 	}
 
 	/** Undo only goal mode's own tool change, preserving the live roster. Idempotent. */
 	async #exit(): Promise<void> {
 		const ownedGoalTool = this.#goalToolAddedByMode;
 		this.#goalToolAddedByMode = false;
+		this.#guidedInterview = false;
+		this.#continuationScheduled = false;
+		this.#continuationGeneration++;
 		this.#resetContinuation();
 		if (ownedGoalTool) {
 			const liveTools = this.#session.getEnabledToolNames();
@@ -353,7 +441,7 @@ export class RpcGoalController {
 		}
 		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal });
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
-		if (!restored?.goal) return;
+		if (!restored?.goal || (!restored.enabled && this.#options.holdContinuation)) return;
 		const enabledTools = this.#session.getEnabledToolNames();
 		this.#goalToolAddedByMode = !enabledTools.includes("goal");
 		await this.#session.setActiveToolsByName([...new Set([...enabledTools, "goal"])]);
@@ -370,7 +458,11 @@ export class RpcGoalController {
 			return;
 		}
 		if (event.type === "goal_updated") {
-			if (event.state?.goal.status === "dropped") {
+			if (event.state?.enabled) this.#guidedInterview = false;
+			if (
+				event.state?.goal.status === "dropped" ||
+				(event.state?.goal.status === "paused" && this.#options.holdContinuation)
+			) {
 				this.#queueExit(() => this.#exit());
 			}
 			return;
@@ -404,7 +496,9 @@ export class RpcGoalController {
 	 */
 	#continuationWanted(): boolean {
 		const session = this.#session;
-		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
+		const mode = this.#options.continuationMode ?? RPC_GOAL_CONTINUATION_MODE;
+		if (!cfgGoalContinuationModes.get(session.settings).includes(mode)) return false;
+		if (this.#options.canContinue?.() === false) return false;
 		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
 		// A committed ask re-answer belongs to the client's explicit resume acknowledgement.
 		if (session.hasPendingTreeResume()) return false;
@@ -429,11 +523,13 @@ export class RpcGoalController {
 		if (this.#continuationScheduled || !this.#continuationWanted()) return;
 		this.#continuationScheduled = true;
 		const generation = this.#continuationGeneration;
+		const release = this.#options.holdContinuation?.();
+		let handedOff = false;
 		void (async () => {
 			const { promise, resolve } = Promise.withResolvers<void>();
 			setImmediate(resolve);
 			await promise;
-			await this.#session.waitForIdle();
+			await (this.#options.waitForIdle?.() ?? this.#session.waitForIdle());
 			if (!this.#continuationScheduled || generation !== this.#continuationGeneration) {
 				this.#onContinuationDropped?.();
 				return;
@@ -462,17 +558,24 @@ export class RpcGoalController {
 			session.promptCustomMessage({ customType: "goal-continuation", content: prompt, display: false }).then(
 				dispatched => {
 					if (!dispatched) unclaim();
+					release?.();
 				},
 				error => {
+					release?.();
 					unclaim();
 					reportControllerError(error);
 				},
 			);
-		})().catch(error => {
-			this.#continuationScheduled = false;
-			this.#onContinuationDropped?.();
-			reportControllerError(error);
-		});
+			handedOff = true;
+		})()
+			.catch(error => {
+				if (generation === this.#continuationGeneration) this.#continuationScheduled = false;
+				this.#onContinuationDropped?.();
+				reportControllerError(error);
+			})
+			.finally(() => {
+				if (!handedOff) release?.();
+			});
 	}
 }
 

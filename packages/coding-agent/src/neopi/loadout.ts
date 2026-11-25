@@ -9,6 +9,7 @@
 import * as nodePath from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { RuntimeModelLoadout } from "../extensibility/extensions/types";
+import type { AgentSession } from "../session/agent-session";
 import { isRecord, isStringRecord, JsonStateStore } from "./json-state";
 
 export interface LoadoutState {
@@ -71,14 +72,19 @@ export interface LoadoutFeature {
 	off(host: LoadoutHost): Promise<string>;
 }
 
-export function createLoadoutFeature(store: LoadoutStore = new LoadoutStore()): LoadoutFeature {
+export function createLoadoutFeature(
+	store: LoadoutStore = new LoadoutStore(),
+	scope: "profile" | "session" = "profile",
+): LoadoutFeature {
+	let sessionActive: string | undefined;
 	async function data(): Promise<LoadoutData> {
 		const state = await store.read();
+		const active = scope === "session" ? sessionActive : (state.activeLoadout ?? undefined);
 		return {
 			items: Object.entries(state.loadouts)
 				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([name, loadout]) => ({ name, loadout, active: name === state.activeLoadout })),
-			...(state.activeLoadout ? { active: state.activeLoadout } : {}),
+				.map(([name, loadout]) => ({ name, loadout, active: name === active })),
+			...(active ? { active } : {}),
 		};
 	}
 	function requireIdle(host: LoadoutHost): void {
@@ -98,7 +104,7 @@ export function createLoadoutFeature(store: LoadoutStore = new LoadoutStore()): 
 			return JSON.stringify(value, null, 2);
 		},
 		async status() {
-			const active = (await store.read()).activeLoadout;
+			const active = scope === "session" ? sessionActive : (await store.read()).activeLoadout;
 			return active ? `Loadout: ${active}` : "Loadout: off";
 		},
 		async use(name, host) {
@@ -106,6 +112,11 @@ export function createLoadoutFeature(store: LoadoutStore = new LoadoutStore()): 
 			const state = await store.read();
 			const value = state.loadouts[name];
 			if (!value) throw new Error(`Unknown loadout: ${name}`);
+			if (scope === "session") {
+				await host.applyRuntimeModelLoadout(value);
+				sessionActive = name;
+				return `Loadout '${name}' active.`;
+			}
 			const previous = state.activeLoadout;
 			await host.applyRuntimeModelLoadout(value);
 			try {
@@ -120,6 +131,11 @@ export function createLoadoutFeature(store: LoadoutStore = new LoadoutStore()): 
 		},
 		async off(host) {
 			requireIdle(host);
+			if (scope === "session") {
+				await host.applyRuntimeModelLoadout(undefined);
+				sessionActive = undefined;
+				return "Loadout off.";
+			}
 			const state = await store.read();
 			const previous = state.activeLoadout;
 			await host.applyRuntimeModelLoadout(undefined);
@@ -137,8 +153,17 @@ export function createLoadoutFeature(store: LoadoutStore = new LoadoutStore()): 
 }
 
 let sharedLoadouts: LoadoutFeature | undefined;
+const sessionLoadouts = new WeakMap<AgentSession, LoadoutFeature>();
 
-export function loadoutFeature(): LoadoutFeature {
+export function loadoutFeature(session?: AgentSession): LoadoutFeature {
+	if (session) {
+		let feature = sessionLoadouts.get(session);
+		if (!feature) {
+			feature = createLoadoutFeature(undefined, "session");
+			sessionLoadouts.set(session, feature);
+		}
+		return feature;
+	}
 	sharedLoadouts ??= createLoadoutFeature();
 	return sharedLoadouts;
 }

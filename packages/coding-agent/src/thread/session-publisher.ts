@@ -64,6 +64,7 @@ import {
 	toRestoredQueuedMessage,
 } from "../session/queued-messages";
 import type { SessionEntry } from "../session/session-entries";
+import { assertTreeNavigationExpected } from "../session/tree-navigation";
 import { runFocusedAgentCommand } from "../slash-commands/focused-agent-command";
 import { isRpcProxy, type RpcServe } from "./rpc";
 import {
@@ -508,6 +509,7 @@ export class SessionPublisher {
 			activeTimeMs: session.getActiveTimeMs(),
 			providerSessionId: session.sessionId,
 			sessionName: manager.getSessionName(),
+			additionalDirectories: manager.getAdditionalDirectories(),
 			leafId: manager.getLeafId(),
 			agentEffort: session.agent.state.thinkingLevel,
 			tools,
@@ -618,6 +620,38 @@ export const SESSION_HOST_SERVE: RpcServe<SessionPublisher, SessionHostProtocol>
 		publisher.session.sessionManager.appendCustomEntry(customType, data);
 		publisher.schedule();
 	},
+	commitUserTodoEdit: (publisher, phases, reminder) => {
+		publisher.session.commitUserTodoEdit(phases, reminder);
+		publisher.flush(true);
+	},
+	appendLabelChange: (publisher, entryId, label, expected) => {
+		const session = publisher.session;
+		assertTreeNavigationExpected(
+			expected,
+			session.sessionId,
+			session.sessionFile,
+			session.sessionManager.getLeafId(),
+		);
+		const id = session.sessionManager.appendLabelChange(entryId, label);
+		publisher.flush(true);
+		return id;
+	},
+	navigateTree: async (publisher, entryId, options) => {
+		const result = await settle(publisher, publisher.session.navigateTree(entryId, options));
+		// The watched transcript is already flushed; do not clone another copy in the response.
+		delete result.sessionContext;
+		return toWireData(result);
+	},
+	abortBranchSummary: publisher => publisher.session.abortBranchSummary(),
+	resumeAfterAskReanswer: (publisher, request) => publisher.session.resumeAfterAskReanswer(request),
+	listCurrentProviderOAuthAccounts: publisher => publisher.session.listCurrentProviderOAuthAccounts(),
+	pinProviderOAuthAccount: (publisher, provider, credentialId) => {
+		const session = publisher.session;
+		if (session.model?.provider !== provider) return false;
+		const pinned = session.pinProviderOAuthAccount(provider, credentialId);
+		publisher.flush(true);
+		return pinned;
+	},
 	appendModelUsage: (publisher, usage, owner) => {
 		publisher.session.sessionManager.appendModelUsage(usage, owner);
 		publisher.schedule();
@@ -627,8 +661,8 @@ export const SESSION_HOST_SERVE: RpcServe<SessionPublisher, SessionHostProtocol>
 	getArtifactPath: (publisher, id) => publisher.session.sessionManager.getArtifactPath(id),
 	resume: async publisher => settle(publisher, publisher.session.resume()),
 	retry: async publisher => settle(publisher, publisher.session.retry()),
-	runFocusedAgentCommand: async (publisher, text, actor) =>
-		settle(publisher, runFocusedAgentCommand(publisher.session, text, actor)),
+	runFocusedAgentCommand: async (publisher, text, actor, images) =>
+		settle(publisher, runFocusedAgentCommand(publisher.session, text, actor, images)),
 	abortRetry: publisher => {
 		publisher.session.abortRetry();
 		publisher.schedule();

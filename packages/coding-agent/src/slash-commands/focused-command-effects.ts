@@ -2,6 +2,10 @@ import { parseSubcommand } from "./helpers/parse";
 
 export type FocusedCommandEffect =
 	| "transcript"
+	| "dispatch"
+	| "mode"
+	| "kernel"
+	| "profile"
 	| "jobs"
 	| "tool"
 	| "account"
@@ -17,6 +21,10 @@ type FocusedCommandRoute = { target: "view" | "home" | "main"; effect?: FocusedC
 const VIEW: FocusedCommandRoute = { target: "view" };
 const HOME: FocusedCommandRoute = { target: "home" };
 const TRANSCRIPT: FocusedCommandRoute = { target: "home", effect: "transcript" };
+const VIEW_FILES: FocusedCommandRoute = { target: "view", effect: "files" };
+const VIEW_ACCOUNT: FocusedCommandRoute = { target: "view", effect: "account" };
+const HOME_ACCOUNT: FocusedCommandRoute = { target: "home", effect: "account" };
+const HOME_MODE: FocusedCommandRoute = { target: "home", effect: "mode" };
 const MAIN_SESSION: FocusedCommandRoute = { target: "main", effect: "session" };
 const MAIN_SETTINGS: FocusedCommandRoute = { target: "main", effect: "settings" };
 const MAIN_EXTERNAL: FocusedCommandRoute = { target: "main", effect: "external" };
@@ -45,34 +53,14 @@ const routes: Readonly<Record<string, FocusedCommandRoute>> = Object.fromEntries
 	...["chat", "dirs", "fresh", "rename", "trace", "dump", "tools", "context", "skillful", "ratchet", "prewalk"].map(
 		name => [name, HOME] as const,
 	),
+	...["add-dir", "remove-dir", "defer", "plan", "guided-goal"].map(name => [name, HOME] as const),
+	...["branch", "tree"].map(name => [name, VIEW] as const),
+	...["cleanse", "local"].map(name => [name, VIEW_FILES] as const),
+	["tan", { target: "home", effect: "dispatch" }],
 	...["clear", "shake", "handoff"].map(name => [name, TRANSCRIPT] as const),
-	...[
-		"new",
-		"delete",
-		"resume",
-		"branch",
-		"fork",
-		"tree",
-		"tan",
-		"cleanse",
-		"plan",
-		"plan-review",
-		"vibe",
-		"goal",
-		"guided-goal",
-		"loop",
-		"defer",
-		"move",
-		"wt",
-		"add-dir",
-		"remove-dir",
-		"local",
-		"launch-profile",
-		"advisor",
-		"loadout",
-		"persona",
-		"kernel",
-	].map(name => [name, MAIN_SESSION] as const),
+	...["new", "delete", "resume", "vibe", "loop"].map(name => [name, MAIN_SESSION] as const),
+	...["move", "wt"].map(name => [name, MAIN_PROCESS] as const),
+	["launch-profile", { target: "main", effect: "profile" }],
 	...[
 		"settings",
 		"statusline",
@@ -134,8 +122,25 @@ export function focusedCommandRoute(name: string, args: string): FocusedCommandR
 			return verb === "control" ? { target: "home", effect: "settings" } : TRANSCRIPT;
 		case "slow":
 			return verb === "status" ? HOME : { target: "home", effect: "settings" };
+		case "advisor":
+			return verb === "configure" ? MAIN_SETTINGS : HOME;
+		case "persona":
+			if (!verb) return VIEW;
+			return verb === "live" || verb === "clone" || verb === "delete" ? MAIN_SETTINGS : HOME;
+		case "loadout":
+			return verb ? HOME : VIEW;
+		case "kernel":
+			if (verb === "reset") return MAIN_SESSION;
+			return verb === "interrupt" ? { target: "home", effect: "kernel" } : HOME;
+		case "goal":
+			return verb === "drop" ? HOME_MODE : HOME;
+		case "plan-review":
+			return verb === "approve" || verb === "refine" ? HOME_MODE : HOME;
+		case "fork":
+			if (!verb) return MAIN_SESSION;
+			return !rest && /^(?:pane|window|tab)$/.test(verb) ? { target: "view", effect: "dispatch" } : VIEW;
 		case "todo":
-			if (verb === "edit" || verb === "expand" || verb === "collapse") return MAIN_SESSION;
+			if (verb === "edit" || verb === "expand" || verb === "collapse") return VIEW;
 			if (verb === "import" || verb === "export") return { target: "home", effect: "files" };
 			return HOME;
 		case "jobs":
@@ -149,7 +154,9 @@ export function focusedCommandRoute(name: string, args: string): FocusedCommandR
 		case "force":
 			return { target: "home", effect: "tool" };
 		case "session":
-			return verb === "delete" || verb === "pin" || rest ? MAIN_SESSION : HOME;
+			if (verb === "delete") return MAIN_SESSION;
+			if (verb === "pin") return rest ? HOME_ACCOUNT : VIEW_ACCOUNT;
+			return rest ? MAIN_SESSION : HOME;
 		default:
 			return Object.hasOwn(routes, name) && routes[name] ? routes[name] : { target: "main", effect: "unknown" };
 	}

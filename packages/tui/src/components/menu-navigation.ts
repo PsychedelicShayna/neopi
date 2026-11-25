@@ -459,7 +459,7 @@ const NOT_A_MOTION: MenuMotionResult = { handled: false, selectionChanged: false
 export function applyMenuMotion(
 	action: MenuNavAction,
 	target: MenuMotionTarget,
-	viewport: MenuViewport,
+	viewport: Pick<MenuViewport, "visibleItems" | "scroll" | "reveal">,
 	options: { wrap?: boolean } = {},
 ): MenuMotionResult {
 	let selectionChanged: boolean;

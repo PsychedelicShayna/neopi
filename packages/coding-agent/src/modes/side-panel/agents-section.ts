@@ -1,5 +1,6 @@
 import type { MouseRoutable, SgrMouseEvent } from "@oh-my-pi/pi-tui";
-import type { SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
+import type { PanelSelectionTarget, SidePanelPointerAware } from "@oh-my-pi/pi-tui/chrome";
+import type { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { modelChip, statusGlyph } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import type { AgentRecordLike, AgentStatus } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { agentColored } from "@oh-my-pi/pi-tui/overlays/agent-identity";
@@ -11,8 +12,9 @@ import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
-import type { SidePanelViewSection } from "../controllers/side-panel-controller";
+import type { SidePanelViewAction, SidePanelViewSection } from "../controllers/side-panel-controller";
 import { cfgSidebarAgentAutoscroll, cfgSidebarAgentFilters, cfgSidebarAgentOrder } from "../settings";
+import { RowSelection, selectedRow } from "./row-selection";
 
 /** What the agents section needs from its host. */
 export interface AgentsSectionHost {
@@ -28,6 +30,13 @@ export interface AgentsSectionHost {
 	focus(id: string): void | Promise<void>;
 	/** Return the main area to the primary session. */
 	returnToPrimary(): void;
+	/** Open `id`'s transcript, as the Agent Hub's Enter does. */
+	openTranscript(id: string): void;
+	/** Open the IRC viewer to message `id`. */
+	message(id: string): void;
+	/** The Agent Hub's explicit revive and kill. */
+	revive(id: string): void;
+	kill(id: string): void;
 	requestRender(): void;
 	/** Roster lifecycle and observed progress changes; returns the unsubscribe. */
 	onChange(listener: (event?: AgentRosterChange) => void): () => void;
@@ -67,14 +76,23 @@ function elapsedClock(ms: number): string {
 	return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${tail}`;
 }
 
-/** The filter controls stay fixed below the document, even when no agent matches. */
+/**
+ * The filter row stays fixed below the document, even when no agent matches:
+ * it shows what is filtered, a click toggles one control, and `f` lets the
+ * keyboard walk and toggle them.
+ */
 class AgentControls implements MouseRoutable {
 	readonly #host: AgentsSectionHost;
+	/** Keyboard cursor while `f` editing is on; undefined otherwise. */
 	#selected: number | undefined;
 	#hits: { line: number; start: number; end: number; id: AgentControlId }[] = [];
 
 	constructor(host: AgentsSectionHost) {
 		this.#host = host;
+	}
+
+	get editing(): boolean {
+		return this.#selected !== undefined;
 	}
 
 	render(width: number): readonly string[] {
@@ -112,18 +130,53 @@ class AgentControls implements MouseRoutable {
 		if (hit) this.#toggle(hit.id);
 	}
 
-	move(delta: number): void {
-		const count = FILTER_CONTROLS.length;
-		this.#selected = ((this.#selected ?? (delta > 0 ? -1 : 0)) + delta + count) % count;
+	/** `f`: start keyboard editing on the first control. */
+	startEditing(): void {
+		this.#selected = 0;
 		this.#host.requestRender();
 	}
 
-	toggleSelected(): void {
-		if (this.#selected !== undefined) this.#toggle(FILTER_CONTROLS[this.#selected]!);
+	stopEditing(): void {
+		if (this.#selected === undefined) return;
+		this.#selected = undefined;
+		this.#host.requestRender();
 	}
 
-	reset(): void {
-		this.#selected = undefined;
+	/** While editing: arrows (and hjkl with Vim navigation) move, Space or Enter toggles, Esc or `f` ends. */
+	handleEditInput(data: string, keys: MenuKeyReader): boolean {
+		if (this.#selected === undefined) return false;
+		if (data === "f" || data === "q") {
+			keys.reset();
+			this.stopEditing();
+			return true;
+		}
+		const action = keys.read(data);
+		if (action === "pending") return true;
+		switch (action?.kind) {
+			case "move":
+			case "horizontal":
+			case "context":
+				this.#move(action.delta);
+				break;
+			case "boundary":
+				this.#selected = action.edge === "first" ? 0 : FILTER_CONTROLS.length - 1;
+				this.#host.requestRender();
+				break;
+			case "toggle":
+			case "confirm":
+				this.#toggle(FILTER_CONTROLS[this.#selected]!);
+				break;
+			case "cancel":
+				this.stopEditing();
+				break;
+		}
+		return true;
+	}
+
+	#move(delta: number): void {
+		const count = FILTER_CONTROLS.length;
+		this.#selected = ((this.#selected ?? 0) + delta + count) % count;
+		this.#host.requestRender();
 	}
 
 	invalidate(): void {}
@@ -153,9 +206,15 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	#rowIds: readonly string[] = [];
 	#hovered: string | undefined;
 	#pendingFocus: { id: string } | undefined;
+	readonly selection: RowSelection;
+
+	itemIdAtRow(row: number): string | undefined {
+		return this.#rowIds[row];
+	}
 
 	constructor(host: AgentsSectionHost) {
 		this.#host = host;
+		this.selection = new RowSelection(() => host.requestRender());
 		this.#unsubscribe = host.onChange(event => {
 			if (event?.type === "removed") this.#changes.delete(event.ref.id);
 			else if (event && isListed(event.ref) && event.type !== "metadata_changed") {
@@ -194,8 +253,10 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 		this.#target = undefined;
 		const ids: string[] = [];
 		this.#rowIds = ids;
+		this.selection.begin();
 		if (agents.length === 0) {
 			this.#hovered = undefined;
+			this.selection.finish();
 			return [theme.fg("muted", truncateToWidth(t("overlays.side_panel.no_agents_match"), width))];
 		}
 		const focused = this.#host.focusedAgentId();
@@ -209,6 +270,9 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 			live ||= running;
 			this.#appendAgent(lines, ref, change, now, width, ref.id === focused);
 			for (let row = top; row < lines.length; row++) ids.push(ref.id);
+			if (this.selection.add(ref.id, top, lines.length)) {
+				for (let row = top; row < lines.length; row++) lines[row] = selectedRow(lines[row]!, width);
+			}
 			// Follow running work first; a parking transition must not pull it out of view.
 			if (
 				follow &&
@@ -223,6 +287,7 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 			}
 		}
 		if (this.#hovered !== undefined && !ids.includes(this.#hovered)) this.#hovered = undefined;
+		this.selection.finish();
 		if (live && !this.#tick) {
 			this.#tick = setTimeout(
 				() => {
@@ -351,7 +416,11 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	}
 }
 
-/** An Agent Hub jump list with its own live task tree and fixed filter controls. */
+/**
+ * An Agent Hub jump list with its own live task tree and fixed filter row.
+ * Keyboard: Up/Down select an agent, Right/Enter opens its transcript, `i`
+ * messages it, `r`/`x` revive or kill it, `f` edits the filters.
+ */
 export class AgentsSection implements SidePanelViewSection {
 	readonly id = "agents";
 	get title(): string {
@@ -361,8 +430,10 @@ export class AgentsSection implements SidePanelViewSection {
 	collapsed?: boolean;
 	readonly content: AgentsContent;
 	readonly footer: AgentControls;
+	readonly #host: AgentsSectionHost;
 
 	constructor(host: AgentsSectionHost) {
+		this.#host = host;
 		this.content = new AgentsContent(host);
 		this.footer = new AgentControls(host);
 	}
@@ -371,16 +442,61 @@ export class AgentsSection implements SidePanelViewSection {
 		return this.content.followTarget();
 	}
 
-	moveControl(delta: number): void {
-		this.footer.move(delta);
+	selectionTarget(): PanelSelectionTarget | undefined {
+		return this.content.selection.target();
 	}
 
-	toggleControl(): void {
-		this.footer.toggleSelected();
+	itemIdAtRow(row: number): string | undefined {
+		return this.content.itemIdAtRow(row);
 	}
 
-	resetControl(): void {
-		this.footer.reset();
+	moveSelection(delta: number): boolean {
+		return this.content.selection.move(delta);
+	}
+
+	selectEdge(edge: "first" | "last"): boolean {
+		return this.content.selection.edge(edge);
+	}
+
+	clearSelection(): void {
+		this.content.selection.clear();
+	}
+
+	expand(): void {
+		const id = this.content.selection.id;
+		if (id !== undefined) this.#host.openTranscript(id);
+	}
+
+	actions(): readonly SidePanelViewAction[] {
+		// While the filter row is being edited, its own keys are the panel's keys (display only:
+		// the mode reads every key first).
+		if (this.footer.editing) {
+			return [
+				{ key: "space", label: t("overlays.side_panel.action.toggle"), run: () => {} },
+				{ key: "esc", label: t("overlays.side_panel.action.done"), run: () => {} },
+			];
+		}
+		const filters = {
+			key: "f",
+			label: t("overlays.side_panel.action.filters"),
+			run: () => this.footer.startEditing(),
+		};
+		const id = this.content.selection.id;
+		if (id === undefined) return [filters];
+		return [
+			{ key: "i", label: t("overlays.side_panel.action.dm"), run: () => this.#host.message(id) },
+			{ key: "r", label: t("overlays.native_hint.revive"), run: () => this.#host.revive(id) },
+			{ key: "x", label: t("overlays.native_hint.kill"), run: () => this.#host.kill(id) },
+			filters,
+		];
+	}
+
+	handleModeInput(data: string, keys: MenuKeyReader): boolean {
+		return this.footer.handleEditInput(data, keys);
+	}
+
+	resetMode(): void {
+		this.footer.stopEditing();
 	}
 
 	clickEmpty(): void {

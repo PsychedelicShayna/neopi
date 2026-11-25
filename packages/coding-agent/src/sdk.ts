@@ -471,6 +471,7 @@ import {
 	cfgTierOpenai,
 	systemPromptTemplatePatterns,
 } from "./session/settings";
+import { focusedSessionModes } from "./modes/focused-session-modes";
 import { cfgInterruptMode } from "./modes/settings";
 import { cfgFollowUpMode } from "./modes/settings";
 import { cfgSteeringMode } from "./modes/settings";
@@ -2766,6 +2767,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
+	const goalToolGranted = !restrictToolNames || options.toolNames?.includes("goal") === true;
 	// Memory (prompt instructions, backend startup, memory tools, auto-learn) is
 	// off for restricted subagents and for chat sessions that did not re-include it.
 	const memoryEnabled = !restrictToolNames && (!chatMode || chatModeIncludes(chatMode, "memory"));
@@ -4496,7 +4498,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		for (const [name, tool] of toolRegistry) {
 			nativeToolsByName.set(name, tool);
 		}
-		if (!restrictToolNames && !toolRegistry.has("goal") && cfgGoalEnabled.get(settings)) {
+		if (goalToolGranted && !toolRegistry.has("goal") && cfgGoalEnabled.get(settings)) {
 			const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 			if (goalTool) {
 				const wrapped = wrapToolWithMetaNotice(goalTool);
@@ -4628,11 +4630,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// lazily on demand, mirroring `ensureWriteRegistered`.
 		let goalRegistration: Promise<boolean> | undefined;
 		const ensureGoalRegistered = (): Promise<boolean> => {
-			if (toolRegistry.has("goal")) return Promise.resolve(true);
-			if (restrictToolNames || !cfgGoalEnabled.get(settings)) return Promise.resolve(false);
+			if (toolRegistry.has("goal")) return Promise.resolve(builtInRegistryToolNames.has("goal"));
+			if (!goalToolGranted || !cfgGoalEnabled.get(settings)) return Promise.resolve(false);
 			goalRegistration ??= (async () => {
 				const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
-				if (!goalTool || toolRegistry.has("goal")) return toolRegistry.has("goal");
+				if (!goalTool || toolRegistry.has("goal")) return builtInRegistryToolNames.has("goal");
 				const nativeGoal = wrapToolWithMetaNotice(goalTool);
 				toolRegistry.set(goalTool.name, new ExtensionToolWrapper(nativeGoal, extensionRunner) as Tool);
 				builtInRegistryToolNames.add(goalTool.name);
@@ -6765,6 +6767,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			build: entries => buildLateDiagnosticsBatchMessage(entries, session.sessionManager.getCwd()),
 			isStale: entry => entry.isStale(),
 		});
+
+		// A parked native worker may be revived by IRC or a regular prompt before
+		// its composer is focused again. Reattach its journaled mode at home.
+		if (isSubagentSession) {
+			if (existingSession.mode === "goal" || existingSession.mode === "goal_paused") {
+				await focusedSessionModes(session).restoreGoal();
+			} else if (existingSession.mode === "plan") {
+				await focusedSessionModes(session).restorePlan(existingSession.modeData);
+			}
+		}
 
 		// Attach the live session to the pre-registered ref so peers can route IRC
 		// messages here. Refresh sessionFile in case it was unavailable at pre-register

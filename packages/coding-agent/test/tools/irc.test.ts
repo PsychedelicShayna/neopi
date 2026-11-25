@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -10,15 +10,24 @@ import {
 	setIrcHistoryMaxEntries,
 	setIrcRelayToMainTranscript,
 } from "@oh-my-pi/pi-coding-agent/irc/policy";
-import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, type AgentRegistryApi } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { IrcBridge, type IrcBridgeHost } from "@oh-my-pi/pi-coding-agent/session/irc-bridge";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { isTranscriptEntry } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { attachIrcWakeTurnMonitor } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import { IrcTool } from "@oh-my-pi/pi-coding-agent/tools/irc";
+import { TUI } from "@oh-my-pi/pi-tui";
+import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { VirtualTerminal } from "../../../tui/test/virtual-terminal";
+import { createAssistantMessage } from "../helpers/agent-session-setup";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
 type IrcWakeObserver = (records: AgentMessage[]) => ((error?: unknown) => void | Promise<void>) | undefined;
@@ -110,6 +119,109 @@ describe("IRC", () => {
 		for (const session of sessions.splice(0)) {
 			await session.dispose();
 		}
+	});
+
+	describe("outgoing Main transcript", () => {
+		beforeAll(() => initTheme());
+
+		it("renders the sent body once live and after reopening the actual session file", async () => {
+			const main = makeFakeSession();
+			const peer = makeFakeSession();
+			registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
+			registry.register({ id: "Peer", displayName: "peer", kind: "sub", parentId: "Main", session: peer.session });
+			const tool = new IrcTool({
+				cwd: "/tmp",
+				agentRegistry: registry,
+				getAgentId: () => "Main",
+				getSessionFile: () => null,
+			});
+			const opening = "UNIQUE OUTGOING FIRST PARAGRAPH";
+			const ending = "UNIQUE OUTGOING LAST PARAGRAPH";
+			const args = {
+				op: "send" as const,
+				to: "Peer",
+				message: `${opening}\n\n${"Some detail. ".repeat(50)}\n\n${ending}`,
+			};
+			const toolCallId = "outgoing-irc";
+			const ui = new TUI(new VirtualTerminal());
+			const live = new ToolExecutionComponent("irc", args, {}, undefined, ui, "/tmp", toolCallId);
+			const rebuilt = new ChatTranscriptBuilder({ ui, cwd: "/tmp", requestRender: () => {} });
+			const expectWholeOnce = (rows: readonly string[]) => {
+				const text = Bun.stripANSI(rows.join("\n"));
+				expect(text.split(opening)).toHaveLength(2);
+				expect(text.split(ending)).toHaveLength(2);
+				expect(text).toContain("Delivered to Peer.");
+			};
+			using temp = TempDir.createSync("irc-outgoing-");
+			const sessionManager = SessionManager.create(temp.path(), temp.path());
+			try {
+				const result = await tool.execute(toolCallId, args);
+				expect(peer.delivered.map(message => message.body)).toEqual([args.message]);
+				expect(main.relayed).toEqual([]);
+				live.updateResult(result, false, toolCallId);
+				expectWholeOnce(live.render(120));
+				const native = JSON.stringify(live.describe());
+				expect(native).toContain("omp.irc.outgoing");
+				expect(native.split(opening)).toHaveLength(2);
+				expect(native.split(ending)).toHaveLength(2);
+
+				sessionManager.appendMessage({
+					...createAssistantMessage(""),
+					stopReason: "toolUse",
+					content: [{ type: "toolCall", id: toolCallId, name: "irc", arguments: args }],
+				});
+				sessionManager.appendMessage({
+					role: "toolResult",
+					toolCallId,
+					toolName: "irc",
+					content: result.content,
+					details: result.details,
+					isError: result.isError ?? false,
+					timestamp: Date.now(),
+				});
+				await sessionManager.close();
+				const sessionFile = sessionManager.getSessionFile();
+				if (!sessionFile) throw new Error("Expected a stored IRC session");
+				const reloaded = await SessionManager.openReadOnly(sessionFile);
+				rebuilt.rebuild(reloaded.getBranch().filter(isTranscriptEntry));
+				expectWholeOnce(rebuilt.container.render(120));
+			} finally {
+				live.dispose();
+				rebuilt.dispose();
+				await sessionManager.close();
+			}
+		});
+
+		it("does not treat Main-to-operator or peer-to-peer sends as outgoing Main bubbles", async () => {
+			for (const [id, parentId] of [
+				["Main", undefined],
+				["A", "Main"],
+				["B", "Main"],
+			] as const) {
+				registry.register({
+					id,
+					displayName: id,
+					kind: parentId ? "sub" : "main",
+					parentId,
+					session: makeFakeSession().session,
+				});
+			}
+			registerIrcOperator(registry, "Captain", "Main");
+			for (const [from, to] of [
+				["Main", "Captain"],
+				["A", "B"],
+			] as const) {
+				const tool = new IrcTool({
+					cwd: "/tmp",
+					agentRegistry: registry,
+					getAgentId: () => from,
+					getSessionFile: () => null,
+				});
+				const result = await tool.execute("not-outgoing-main", { op: "send", to, message: "ping" });
+				expect(result.isError).toBe(false);
+				expect(result.details?.outgoing).toBeUndefined();
+			}
+		});
 	});
 
 	describe("IrcBus", () => {

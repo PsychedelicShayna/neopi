@@ -2,12 +2,19 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
-import { cfgSidebarEnabled, cfgSidebarView } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgSidebarAgentAutoscroll,
+	cfgSidebarAgentOrder,
+	cfgSidebarEnabled,
+	cfgSidebarView,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { AgentsSection } from "@oh-my-pi/pi-coding-agent/modes/side-panel/agents-section";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import type { AgentRecordLike } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
@@ -93,7 +100,6 @@ describe("app.sidebar.toggle routing", () => {
 		const h = await harness(100);
 		try {
 			h.term.sendInput(ALT_T);
-			h.term.sendInput("t");
 			await h.settle();
 			expect(h.sidePanel.fullscreenOpen).toBe(true);
 
@@ -110,11 +116,10 @@ describe("app.sidebar.toggle routing", () => {
 			expect(received).toEqual([ALT_T]);
 			expect(h.sidePanel.fullscreenOpen).toBe(true);
 
-			// Once the dialog closes, the shown view's chord closes the panel again.
+			// Once the dialog closes, alt+t returns to the transcript, closing the covering form.
 			h.composer.ui.hideOverlay();
 			await h.settle();
 			h.term.sendInput(ALT_T);
-			h.term.sendInput("t");
 			await h.settle();
 			expect(h.sidePanel.fullscreenOpen).toBe(false);
 		} finally {
@@ -123,95 +128,198 @@ describe("app.sidebar.toggle routing", () => {
 	});
 });
 
-describe("alt+t view chords", () => {
-	it("opens, switches and hides views on a wide terminal", async () => {
+describe("alt+t focus and the panel keymap", () => {
+	it("opens with focus, returns focus on a second alt+t, Esc or Left, and closes on q", async () => {
 		const h = await harness(120);
+		const typed: string[] = [];
+		const editor: Component = {
+			render: () => ["EDITOR"],
+			invalidate: () => {},
+			handleInput: (data: string) => typed.push(data),
+		};
+		h.composer.ui.setFocus(editor);
 		try {
+			h.term.sendInput(ALT_T);
+			await h.settle();
+			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
+			expect(h.sidePanel.active).toBe(true);
+
+			// A second alt+t hands the keyboard back with the panel still docked.
 			h.term.sendInput(ALT_T);
 			h.term.sendInput("a");
 			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
-			expect(cfgSidebarView.get(h.settings)).toBe("agents");
-			expect(h.sidePanel.dockedView).toBe("agents");
+			expect(h.sidePanel.active).toBe(false);
+			expect(h.sidePanel.docked).toBe(true);
+			expect(typed).toEqual(["a"]);
+
+			for (const back of ["\x1b", "\x1b[D"]) {
+				h.term.sendInput(ALT_T);
+				await h.settle();
+				expect(h.sidePanel.active).toBe(true);
+				h.term.sendInput(back);
+				await h.settle();
+				expect(h.sidePanel.active).toBe(false);
+				expect(h.sidePanel.docked).toBe(true);
+			}
 
 			h.term.sendInput(ALT_T);
-			h.term.sendInput("i");
-			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
-			expect(h.sidePanel.dockedView).toBe("irc");
-
-			// The shown view's chord hides the panel and keeps the view for next time.
-			h.term.sendInput(ALT_T);
-			h.term.sendInput("i");
+			h.term.sendInput("q");
 			await h.settle();
 			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(h.sidePanel.dockedView).toBeUndefined();
-			expect(cfgSidebarView.get(h.settings)).toBe("irc");
+			expect(h.sidePanel.active).toBe(false);
+			expect(typed).toEqual(["a"]);
+		} finally {
+			h.stop();
+		}
+	});
 
-			// Alt held through both keys reads the same as the bare view key.
+	it("cycles views with Tab and Shift+Tab without view letters", async () => {
+		const h = await harness(120);
+		try {
 			h.term.sendInput(ALT_T);
-			h.term.sendInput(ALT_T);
+			await h.settle();
+			expect(cfgSidebarView.get(h.settings)).toBe("agents");
+			h.term.sendInput("\t");
+			await h.settle();
+			expect(h.sidePanel.dockedView).toBe("irc");
+			h.term.sendInput("\t");
 			await h.settle();
 			expect(h.sidePanel.dockedView).toBe("todo");
-		} finally {
-			h.stop();
-		}
-	});
-
-	it("closes on escape and ends the view chord on an unrelated focused key", async () => {
-		const h = await harness(120);
-		const typed: string[] = [];
-		const editor: Component = {
-			render: () => ["EDITOR"],
-			invalidate: () => {},
-			handleInput: (data: string) => typed.push(data),
-		};
-		h.composer.ui.setFocus(editor);
-		try {
-			h.term.sendInput(ALT_T);
-			h.term.sendInput("\x1b");
+			h.term.sendInput("\x1b[Z");
+			await h.settle();
+			expect(h.sidePanel.dockedView).toBe("irc");
+			// Letters no longer pick views.
 			h.term.sendInput("t");
 			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(false);
-			expect(typed).toEqual(["t"]);
-
-			h.term.sendInput(ALT_T);
-			h.term.sendInput("x");
-			h.term.sendInput("a");
-			await h.settle();
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
-			expect(h.sidePanel.dockedView).toBe("agents");
-			expect(typed).toEqual(["t"]);
+			expect(h.sidePanel.dockedView).toBe("irc");
+			expect(h.sidePanel.active).toBe(true);
 		} finally {
 			h.stop();
 		}
 	});
 
-	it("lapses after the timeout", async () => {
-		const h = await harness(120);
-		const typed: string[] = [];
-		const editor: Component = {
-			render: () => ["EDITOR"],
-			invalidate: () => {},
-			handleInput: (data: string) => typed.push(data),
-		};
-		h.composer.ui.setFocus(editor);
-		vi.useFakeTimers();
-		try {
-			h.term.sendInput(ALT_T);
-			vi.advanceTimersByTime(2500);
-			h.term.sendInput("t");
-			expect(cfgSidebarEnabled.get(h.settings)).toBe(true);
-			expect(cfgSidebarView.get(h.settings)).toBe("agents");
-			expect(typed).toEqual([]);
-		} finally {
-			vi.useRealTimers();
-			h.stop();
-		}
-	});
+	for (const vim of [false, true]) {
+		it(`selects rows with arrows${vim ? " and j/k, and h/l move focus and expand," : ""} with Vim ${vim ? "on" : "off"}`, async () => {
+			const previousVim = getMenuSearchVimMode();
+			setMenuSearchVimMode(vim);
+			const h = await harness(120);
+			try {
+				const ids = ["one", "two", "three"];
+				let selected = -1;
+				const expanded: string[] = [];
+				h.sidePanel.registerView("agents", {
+					id: "agents",
+					title: "AGENTS",
+					content: () => ids.map((id, index) => (index === selected ? `> ${id}` : `  ${id}`)),
+					moveSelection: delta => {
+						selected = Math.max(0, Math.min(ids.length - 1, selected < 0 ? 0 : selected + delta));
+						return true;
+					},
+					clearSelection: () => {
+						selected = -1;
+					},
+					expand: () => expanded.push(ids[selected]!),
+				});
+				const send = async (...keys: string[]) => {
+					for (const key of keys) h.term.sendInput(key);
+					await h.settle();
+				};
+				await send(ALT_T, "\x1b[B", "\x1b[B");
+				expect(selected).toBe(1);
+				await send("\x1b[A");
+				expect(selected).toBe(0);
+				await send("\x1b[C");
+				expect(expanded).toEqual(["one"]);
+				await send("j");
+				expect(selected).toBe(vim ? 1 : 0);
+				await send("l");
+				expect(expanded).toEqual(vim ? ["one", "two"] : ["one"]);
+				await send("h");
+				expect(h.sidePanel.active).toBe(!vim);
+			} finally {
+				setMenuSearchVimMode(previousVim);
+				h.stop();
+			}
+		});
+	}
 });
 
 describe("focused side-panel scrolling", () => {
+	it("moves and reveals the agent selection before Enter acts on it", async () => {
+		const previousVim = getMenuSearchVimMode();
+		const h = await harness(120);
+		const agents = Array.from({ length: 40 }, (_, index): AgentRecordLike => ({
+			id: `agent-${String(index).padStart(2, "0")}`,
+			displayName: `Agent ${index}`,
+			kind: "sub",
+			status: "running",
+			session: null,
+			sessionFile: null,
+			createdAt: index,
+			lastActivity: index,
+		}));
+		const opened: string[] = [];
+		const section = new AgentsSection({
+			settings: h.settings,
+			agents: () => agents,
+			focusedAgentId: () => undefined,
+			observed: () => undefined,
+			visible: () => h.sidePanel.visible,
+			focus: () => {},
+			returnToPrimary: () => {},
+			openTranscript: id => opened.push(id),
+			message: () => {},
+			revive: () => {},
+			kill: () => {},
+			requestRender: () => h.composer.ui.requestRender(),
+			onChange: () => () => {},
+		});
+		const send = async (...keys: string[]) => {
+			for (const key of keys) h.term.sendInput(key);
+			await h.settle();
+		};
+		const selected = () =>
+			h.term.getViewport().flatMap((line, row) => {
+				const id = line.match(/agent-\d\d/)?.[0];
+				return id && h.term.getViewportRowBackgroundColumns(row).length > 0 ? [id] : [];
+			});
+		try {
+			cfgSidebarAgentAutoscroll.override(h.settings, false);
+			cfgSidebarAgentOrder.override(h.settings, "newest-at-bottom");
+			h.sidePanel.registerView("agents", section);
+			setMenuSearchVimMode(false);
+			await send(ALT_T);
+			await send("\x1b[B");
+			expect(selected()).toEqual(["agent-00"]);
+			const page = h.term.getViewport().filter(line => /agent-\d\d/.test(line)).length;
+			expect(page).toBeGreaterThan(2);
+			const paged = agents[page]!.id;
+			await send("\x1b[6~");
+			expect(selected()).toEqual([paged]);
+			await send("\r");
+			expect(opened).toEqual([paged]);
+
+			await send("\x1b[5~");
+			expect(selected()).toHaveLength(1);
+			expect(agents.findIndex(agent => agent.id === selected()[0])).toBeLessThan(page);
+
+			setMenuSearchVimMode(true);
+			await send("\x1b[H");
+			await send("\x04");
+			const half = agents[Math.floor(page / 2)]!.id;
+			expect(selected()).toEqual([half]);
+			await send("\r");
+			expect(opened).toEqual([paged, half]);
+			await send("\x15");
+			expect(selected()).toHaveLength(1);
+			expect(agents.findIndex(agent => agent.id === selected()[0])).toBeLessThan(Math.floor(page / 2));
+		} finally {
+			h.sidePanel.dispose();
+			h.stop();
+			setMenuSearchVimMode(previousVim);
+		}
+	});
+
 	for (const vim of [false, true]) {
 		it(`opens immediately and jumps by two digits with Vim ${vim ? "on" : "off"}`, async () => {
 			const previousVim = getMenuSearchVimMode();
@@ -228,8 +336,9 @@ describe("focused side-panel scrolling", () => {
 				};
 				await send(ALT_T);
 				expect(h.sidePanel.fullscreenActive).toBe(true);
-				expect(screen()).toContain("a Agents");
-				expect(screen().includes("gg/G")).toBe(vim);
+				// No navigation hints clutter the bottom.
+				expect(screen()).not.toContain("gg/G");
+				expect(screen()).not.toContain("Esc");
 				expect(firstRow()).toBe(0);
 				await send("3");
 				expect(firstRow()).toBe(0);

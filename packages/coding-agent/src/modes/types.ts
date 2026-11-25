@@ -630,7 +630,7 @@ export interface InteractiveModeContext {
 	handleExportCommand(text: string): Promise<void>;
 	handleTraceCommand(): Promise<void>;
 	handleShareCommand(): Promise<void>;
-	handleTodoCommand(args: string): Promise<void>;
+	handleTodoCommand(args: string, target?: AgentViewSession): Promise<void>;
 	handleSessionCommand(): Promise<void>;
 	handleAdvisorStatusCommand(): Promise<void>;
 	handleJobsCommand(options?: { full?: boolean }): Promise<void>;
@@ -651,7 +651,7 @@ export interface InteractiveModeContext {
 	handleFreshCommand(): Promise<void>;
 	handleResetContextCommand(): Promise<void>;
 	handleDeleteCommand(): Promise<void>;
-	handleForkCommand(placement?: "pane" | "window"): Promise<void>;
+	handleForkCommand(placement?: "pane" | "window", target?: AgentViewSession): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
 	handleEvalCommand(
 		language: string,
@@ -743,9 +743,9 @@ export interface InteractiveModeContext {
 	/** Session-only switch to an already-resolved model (`/switch <selector>`); compacts first when over context. */
 	switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
 	showPluginSelector(mode?: "install" | "uninstall"): Promise<void>;
-	showUserMessageSelector(startAt?: string): void;
+	showUserMessageSelector(startAt?: string, target?: AgentViewSession): void;
 	showCopySelector(): void;
-	showTreeSelector(): void;
+	showTreeSelector(target?: AgentViewSession): void;
 	/** Open the `/effort` picker over the levels the current model accepts. */
 	showThinkingSelector(): void;
 	showSessionSelector(source?: ForeignSessionSource): void;
@@ -823,7 +823,7 @@ export interface InteractiveModeContext {
 	hasActiveOmfg(): boolean;
 	handleOmfgCancel(): boolean;
 	handleOmfgDismiss(): boolean;
-	handleCleanseCommand(args: string): Promise<void>;
+	handleCleanseCommand(args: string, cwd?: string): Promise<void>;
 	hasActiveCleanse(): boolean;
 	handleCleanseEscape(): boolean;
 	handleCleanseCancel(): boolean;

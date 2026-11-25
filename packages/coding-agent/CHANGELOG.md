@@ -18,6 +18,7 @@
 - Alt+I opens the IRC client for rooms, DMs and pinned conversations; Alt+Shift+I jumps to Traffic. Persisted sessions resume their recent IRC history in the same NeoPi profile ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
 - Choose which messages in each IRC room or DM show a card and draw Alt+I there, without losing unread counts. You can also turn off incoming DMs in Settings ([#930](https://github.com/PsychedelicShayna/neopi/issues/930)).
 - Alt+R opens the IRC reply composer for the latest message that notified you or the selected IRC message; retrying the last failed turn now uses Ctrl+Alt+R.
+- Open the exact IRC message in the client by clicking its row in the Alt+T side panel or pressing Enter on it.
 - Parents can set a running subagent's priority tier to fast, ultra, or off over ctl/RPC ([#915](https://github.com/PsychedelicShayna/neopi/issues/915)).
 - `/moa web` now edits every mixture NeoPi reads for the workspace. A sidebar that opens when you hover the left edge lists them by user and project file, and lets you rename them or move and copy them between scopes. Saving checks each file for edits made since it was loaded and reports a conflict instead of continuing. A move writes the receiving file before removing the original, so an interrupted save can leave a duplicate rather than lose the mixture at the points the tests interrupt it.
 - Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
@@ -204,6 +205,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Main’s outgoing IRC DMs show their full text in the transcript, including after `--continue` ([#926](https://github.com/PsychedelicShayna/neopi/issues/926)).
 - Sending `/irc` to a subagent while Main is idle no longer freezes the terminal ([#898](https://github.com/PsychedelicShayna/neopi/issues/898)).
 - IRC direct and group messages no longer fail when unused fields contain empty values ([#883](https://github.com/PsychedelicShayna/neopi/issues/883)).
 - Fixed a Bazel configuration error that blocked native builds for nightly releases.
@@ -359,10 +361,13 @@
 
 ### Changed
 
+- The Alt+T side panel is usable from the keyboard: `Alt+T` opens it with focus and then switches focus between it and the transcript, arrows select agents or IRC messages, `→` opens the selection, `←`/`Esc` return to the transcript, `Tab` switches views, and `q` closes it. The `Alt+T` `t`/`a`/`i` chords are gone.
+- In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` edits the filter row; navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
+- Drag the docked side panel's divider (with `tui.mouse` on) to resize it; the width is remembered, and right-clicking the divider returns to the automatic width.
 - IRC messages delivered to an agent stay in its transcript in full instead of showing a three-line card that disappeared after ten seconds: each sits between two rules in the sender's Agent Hub colour, with the group it was sent to, the groups you share, and the time sent. A group send appears once, and the group shown is the one it had when sent, also after `/resume`. A message addressed to you still shows as a three-line notification card that leaves after ten seconds; read it in the IRC viewer.
 - Messages between two other agents no longer show in the main transcript; read them in the IRC viewer. **IRC Cards in Transcript** is now **Announce Agent-to-Agent IRC** and only decides whether live voice, event sounds and connected clients hear that traffic.
 - Read `model://astra` or another partial model name to list matching available models and variants while still seeing the best match in `selected`. Exact IDs still return one result ([#923](https://github.com/PsychedelicShayna/neopi/issues/923)).
-- Run slash commands from a focused subagent transcript, including `/notice` directly to that agent. Commands with shared, destructive, or unknown effects ask first with Cancel selected ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
+- Run `/notice`, `/goal`, `/todo`, `/tree`, `/branch`, and other session commands against the focused subagent. Shared, destructive, or unknown actions ask first with Cancel selected; commands that still run on Main or affect the whole harness name their target ([#492](https://github.com/PsychedelicShayna/neopi/issues/492)).
 - Launch directly from an agent type and inline spec, enter only an assignment, or edit all launch settings on one screen. The resulting `/hub <id>` link opens the agent transcript directly ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.

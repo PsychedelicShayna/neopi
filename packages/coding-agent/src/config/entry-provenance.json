@@ -158,6 +158,7 @@
 				"sidebar.side",
 				"sidebar.splitAt",
 				"sidebar.view",
+				"sidebar.width.columns",
 				"sidebar.width.max",
 				"sidebar.width.min",
 				"sidebar.width.ratio",

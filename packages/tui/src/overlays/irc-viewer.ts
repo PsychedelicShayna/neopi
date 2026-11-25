@@ -26,6 +26,8 @@ const CHROME_ROWS = 6;
 
 export interface IrcViewerOptions {
 	readonly source: IrcLogSource;
+	/** Reveal this message on open instead of following the newest entry. */
+	readonly initialMessageId?: string;
 	/** Keys that opened the viewer; pressing one again closes it. */
 	readonly viewerKeys: readonly KeyId[];
 	/** Keys that expand or collapse the selected message (Enter always does). */
@@ -97,6 +99,14 @@ export class IrcViewerComponent implements Component {
 
 	constructor(options: IrcViewerOptions) {
 		this.#options = options;
+		if (options.initialMessageId !== undefined) {
+			const index = options.source.entries().findIndex(entry => entry.message.id === options.initialMessageId);
+			if (index >= 0) {
+				this.#selected = index;
+				this.#selectedId = options.initialMessageId;
+				this.#follow = false;
+			}
+		}
 		this.#unsubscribe = options.source.subscribe(() => {
 			const visible = this.#visible();
 			this.#syncSelection(visible);

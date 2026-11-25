@@ -5,6 +5,7 @@ import { t } from "@oh-my-pi/pi-utils/i18n";
 import { InternalUrlRouter, type LocalFileEntry, type LocalProtocolOptions, listLocalFiles } from "../internal-urls";
 import { getEditorCommand, openEditorOnPath } from "../utils/external-editor";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import type { InteractiveModeContext } from "./types";
 
 const PICKER_TITLE = "Open local:// file in external editor";
@@ -98,7 +99,11 @@ async function pickLocalFile(
 }
 
 /** `/local [target]` and the `app.local.open` key: picker when target is blank, else open target directly. */
-export async function openLocalFileInEditor(ctx: InteractiveModeContext, target?: string): Promise<void> {
+export async function openLocalFileInEditor(
+	ctx: InteractiveModeContext,
+	target?: string,
+	session?: AgentViewSession,
+): Promise<void> {
 	if (ctx.collabGuest) {
 		ctx.showStatus("/local is host-only during a collab session");
 		return;
@@ -108,7 +113,10 @@ export async function openLocalFileInEditor(ctx: InteractiveModeContext, target?
 		ctx.showWarning(t("interactive.editor.unconfigured"));
 		return;
 	}
-	const options = sessionLocalProtocolOptions(ctx.sessionManager);
+	const source = session ?? ctx.viewSession;
+	const manager = source?.sessionManager ?? ctx.sessionManager;
+	const sessionId = manager.getSessionId();
+	const options = sessionLocalProtocolOptions(manager);
 	let chosen: { url: string; path: string } | undefined;
 	if (target?.trim()) {
 		try {
@@ -130,6 +138,7 @@ export async function openLocalFileInEditor(ctx: InteractiveModeContext, target?
 			return;
 		}
 	}
+	if (source && (ctx.viewSession !== source || manager.getSessionId() !== sessionId)) return;
 
 	let exitCode: number;
 	try {

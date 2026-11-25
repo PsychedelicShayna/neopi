@@ -55,6 +55,12 @@ export interface IrcDeliveryReceipt {
 	error?: string;
 }
 
+/** Presentation metadata on the settled IRC tool result. Its body is already in the call arguments. */
+export interface IrcOutgoingTranscript {
+	from: string;
+	to: string[];
+}
+
 /**
  * One delivery attempt in the operator's IRC history: a concrete message (a
  * broadcast contributes one entry per recipient) and how it reached, or failed

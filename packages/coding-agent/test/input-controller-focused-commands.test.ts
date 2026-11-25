@@ -1,5 +1,5 @@
 /** Focused commands must target the right session; dismissing a warning must do nothing. */
-import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, spyOn, vi } from "bun:test";
 import { type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
@@ -7,6 +7,7 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { setSubagentFast } from "@oh-my-pi/pi-coding-agent/registry/subagent-controls";
 import { HookSelectorComponent, type HookSelectorOptionInput } from "@oh-my-pi/pi-tui/overlays/hook-selector";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 
 function createSessionControls() {
@@ -53,6 +54,9 @@ function createFocusedContext() {
 		getText() {
 			return editorText;
 		},
+		getExpandedText() {
+			return editorText;
+		},
 		setCollapsedText(text: string) {
 			editorText = text;
 		},
@@ -63,7 +67,9 @@ function createFocusedContext() {
 		imageLinks: undefined as (string | undefined)[] | undefined,
 		pendingImages: [] as ImageContent[],
 		pendingImageLinks: [] as (string | undefined)[],
-		clearDraft: vi.fn(),
+		clearDraft: vi.fn(() => {
+			editorText = "";
+		}),
 		clearSubmittedDraft: vi.fn(),
 		restoreSubmittedDraft: vi.fn(() => false),
 	};
@@ -101,6 +107,7 @@ function createFocusedContext() {
 		statusLine: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		settings: { set: vi.fn() },
+		sessionManager: { getSessionName: () => "Main receipt" },
 		isKnownSlashCommand: vi.fn(() => true),
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),
@@ -157,6 +164,9 @@ function submitWithWarning(
 }
 
 describe("focused subagent view slash commands", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
@@ -546,6 +556,63 @@ describe("focused subagent view slash commands", () => {
 			expect(cancelAsyncJob).not.toHaveBeenCalled();
 			expect(runFocusedAgentCommand).not.toHaveBeenCalled();
 		}
+	});
+
+	it("identifies the named main session and entire harness before /restart; defaults to Cancel", async () => {
+		const focused = createFocusedContext();
+		const restart = vi.fn();
+		Object.assign(focused.raw, { restart });
+		const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, "/restart");
+		selector.handleInput("\r");
+		await done;
+		expect(focused.raw.showHookSelector).toHaveBeenCalledWith(
+			expect.stringContaining("Run /restart on the main session (Main receipt), not the focused agent?"),
+			expect.any(Array),
+		);
+		expect(focused.raw.showHookSelector).toHaveBeenCalledWith(
+			expect.stringContaining("whole NeoPi harness"),
+			expect.any(Array),
+		);
+		expect(restart).not.toHaveBeenCalled();
+		expect(focused.editor.getText()).toBe("/restart");
+	});
+
+	it("routes focused diagnostics to the worker workspace, not the main project", async () => {
+		const focused = createFocusedContext();
+		const handleCleanseCommand = vi.fn(async () => {});
+		Object.assign(focused.raw, { handleCleanseCommand });
+		Object.assign(focused.raw.viewSession, { sessionManager: { getCwd: () => "/worker/isolated" } });
+		const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, "/cleanse --all");
+		selector.handleInput("\x1b[B");
+		selector.handleInput("\r");
+		await done;
+		expect(handleCleanseCommand).toHaveBeenCalledWith("--all", "/worker/isolated");
+		expect(focused.prompt).not.toHaveBeenCalled();
+		expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+	});
+
+	it("sends a focused tan's image to its owner without consuming a newer draft", async () => {
+		const focused = createFocusedContext();
+		const started = Promise.withResolvers<void>();
+		const completed = Promise.withResolvers<{ result: { consumed: true }; output: string[] }>();
+		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+		const runFocusedAgentCommand = vi.fn(() => {
+			started.resolve();
+			return completed.promise;
+		});
+		Object.assign(focused.raw.viewSession, { instanceKey: "remote-worker:tan", runFocusedAgentCommand });
+		focused.editor.pendingImages.push(image);
+		const text = "/tan audit screenshot [Image #1]";
+		const { done, selector } = submitWithWarning(focused.ctx, focused.raw.showHookSelector, text);
+		selector.handleInput("\x1b[B");
+		selector.handleInput("\r");
+		await started.promise;
+		focused.editor.setText("my next draft");
+		completed.resolve({ result: { consumed: true }, output: [] });
+		await done;
+		expect(runFocusedAgentCommand).toHaveBeenCalledWith(text, undefined, [image]);
+		expect(focused.raw.session.prompt).not.toHaveBeenCalled();
+		expect(focused.editor.getText()).toBe("my next draft");
 	});
 
 	it("only stops the focused agent's job after explicitly confirming", async () => {

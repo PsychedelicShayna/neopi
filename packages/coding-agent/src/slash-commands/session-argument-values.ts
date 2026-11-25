@@ -52,7 +52,8 @@ export function completeLogoutArguments(prefix: string, runtime?: TuiSlashComman
 }
 
 export async function completeSessionPinArguments(prefix: string, runtime?: TuiSlashCommandRuntime) {
-	const list = await runtime?.ctx.session.listCurrentProviderOAuthAccounts();
+	const session = runtime?.focusedSession ?? runtime?.ctx.viewSession ?? runtime?.ctx.session;
+	const list = await session?.listCurrentProviderOAuthAccounts();
 	if (!list) return null;
 	const query = prefix.trimStart().toLowerCase();
 	const rows: AutocompleteItem[] = [];

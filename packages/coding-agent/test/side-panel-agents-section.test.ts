@@ -54,6 +54,10 @@ function harness(
 			calls.push("primary");
 			focused = undefined;
 		},
+		openTranscript: id => calls.push(`open ${id}`),
+		message: id => calls.push(`dm ${id}`),
+		revive: id => calls.push(`revive ${id}`),
+		kill: id => calls.push(`kill ${id}`),
 		requestRender: () => {
 			renders++;
 		},
@@ -72,7 +76,7 @@ beforeAll(async () => {
 });
 
 describe("AgentsSection", () => {
-	it("lists running subagents by default, orders revivals last, and labels enabled advisors read-only", () => {
+	it("lists running subagents and advisors by default, orders revivals last, and labels advisors read-only", () => {
 		const agents = [
 			ref("Runner", { createdAt: 2 }),
 			ref("Parked", { status: "parked", createdAt: 1 }),
@@ -85,14 +89,13 @@ describe("AgentsSection", () => {
 			const rows = h.render();
 			return ["Parked", "Runner", "Advisor"].map(id => rows.findIndex(row => row.includes(id)));
 		};
-		expect(order()).toEqual([-1, 1, -1]);
-		expect(h.render().some(row => row.includes("Main") || row.includes("Operator"))).toBe(false);
-		agents[1] = ref("Parked", { status: "running", createdAt: 1, lastActivity: 4 });
-		expect(order()).toEqual([4, 1, -1]);
-
-		const footer = h.render()[9]!;
-		h.panel.routeMouse(leftClick, 9, footer.indexOf("-Adv"));
+		// The idle advisor's last state change (0) precedes the runner's start (2).
+		expect(order()).toEqual([-1, 4, 1]);
 		expect(h.render().find(row => row.includes("Advisor"))).toContain("read-only");
+		expect(h.render().some(row => row.includes("Main") || row.includes("Operator"))).toBe(false);
+		h.panel.setHeight(12);
+		agents[1] = ref("Parked", { status: "running", createdAt: 1, lastActivity: 4 });
+		expect(order()).toEqual([7, 4, 1]);
 	});
 
 	it("shows the agent clicked in the main area and returns to the primary on a second click or empty space", () => {
@@ -112,6 +115,38 @@ describe("AgentsSection", () => {
 		expect(h.calls).toHaveLength(4);
 	});
 
+	it("selects agents by keyboard, reveals the selection, and acts on the selected agent", () => {
+		const agents = [ref("First", { createdAt: 1 }), ref("Second", { createdAt: 2 }), ref("Third", { createdAt: 3 })];
+		const h = harness(agents);
+		h.panel.setHeight(6);
+		const selected = () =>
+			h.panel
+				.render(40)
+				.filter(line => line.includes("\x1b[48"))
+				.map(line => Bun.stripANSI(line));
+		// Nothing selected: only the filter key is offered, and Down starts at the first agent.
+		expect(h.section.actions().map(action => action.key)).toEqual(["f"]);
+		expect(h.section.moveSelection(1)).toBe(true);
+		expect(selected()[0]).toContain("First");
+		h.section.moveSelection(1);
+		h.section.moveSelection(1);
+		const screen = h.render().join("\n");
+		expect(screen).toContain("Third");
+		expect(screen).not.toContain("First");
+		expect(selected()[0]).toContain("Third");
+		h.section.expand();
+		for (const key of ["i", "r", "x"])
+			h.section
+				.actions()
+				.find(action => action.key === key)!
+				.run();
+		expect(h.calls).toEqual(["open Third", "dm Third", "revive Third", "kill Third"]);
+		// The selected agent leaving the list clears the selection.
+		agents.pop();
+		h.render();
+		expect(h.section.actions().map(action => action.key)).toEqual(["f"]);
+	});
+
 	it("repaints only when the hovered row changes and drops the hover when the pointer leaves", () => {
 		const h = harness([ref("Runner")]);
 		const before = h.renders();
@@ -129,12 +164,12 @@ describe("AgentsSection", () => {
 		const rows = h.render();
 		expect(rows[0]).toContain("AGENTS");
 		expect(rows[1]).toContain("No agents match these filters");
-		expect(rows[9]).toContain("+Run -Idle -Park -Adv -End +Auto");
+		expect(rows[9]).toContain("+Run -Idle -Park +Adv -End +Auto");
 	});
 });
 
 describe("live Agents panel", () => {
-	it("keeps independent bottom filters and autoscroll when reopened, with only running subagents initially", () => {
+	it("keeps independent bottom filters and autoscroll when reopened, with running subagents and advisors initially", () => {
 		const agents = [
 			ref("Runner"),
 			ref("Parked", { status: "parked" }),
@@ -149,10 +184,9 @@ describe("live Agents panel", () => {
 			expect(row).toBe(19);
 			h.panel.routeMouse(leftClick, row, lines[row]!.indexOf(label));
 		};
-		expect(h.render().join("\n")).toContain("Runner");
-		expect(h.render().join("\n")).not.toMatch(/Parked|Advisor|Idler/);
+		expect(h.render().join("\n")).toMatch(/Runner[\s\S]+Advisor|Advisor[\s\S]+Runner/);
+		expect(h.render().join("\n")).not.toMatch(/Parked|Idler/);
 		click("-Park");
-		click("-Adv");
 		click("+Run");
 		click("+Auto");
 		const reopened = harness(agents, undefined, h.settings);

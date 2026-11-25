@@ -32,14 +32,14 @@ app.history.search: []
 | `app.navigation.dismiss` | `Esc` | Leave the current view or Vim mode; does not cancel active work |
 | `app.agent.menu` | `Ctrl+D` | Open the Agent Menu from an empty composer, or force exit once teardown is committed |
 | `tui.editor.deleteCharForward` | `Delete`, `Ctrl+D` | Delete the character forward (`Ctrl+D` opens the Agent Menu from an empty composer) |
-| `tui.editor.redo` | `Alt+U` | Redo an undone edit in Vim Normal mode |
+| `tui.editor.redo` | `Ctrl+R`, `Alt+U` | Redo an undone edit in Vim Normal mode |
 | `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
 | `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
 | `app.model.selectTemporary`  | `Alt+P`                                                               | Open the session-only model picker (`/model`): Big Pickle by default, or Small picker via `models.sessionPicker` |
 | `app.model.select`           | `Alt+M`                                                               | Open the role-management hub (`/roles`)                                                                                                                                                |
 | `app.settings.open`          | `Alt+S`                                                               | Open Settings without changing the draft |
 | `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
-| `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
+| `app.history.search` | `Ctrl+H` | Search prompt history. Kitty and xterm modifyOtherKeys can distinguish `Ctrl+H` from Backspace. If your terminal sends the same byte for both, Backspace keeps editing the draft; remap this action to an unused key. |
 | `app.navigation.back`        | `Ctrl+O`                                                              | Return to the previously visited menu (with its state) or the conversation; see [Menu navigation](#menu-navigation)                                                                 |
 | `app.navigation.forward`     | `Ctrl+I`, `Alt+O`                                                     | Go forward in the menu history. `Ctrl+I` arrives distinct from `Tab` only under the Kitty keyboard protocol or xterm modifyOtherKeys; `Alt+O` works everywhere                       |
 | `app.tools.expand`           | `Alt+E`                                                               | Toggle tool-output expansion                                                                                                                                                         |
@@ -74,7 +74,7 @@ app.history.search: []
 | `app.irc.viewer` | `Alt+I` | [Open or close the IRC client](./agent-hub.md#irc-client) |
 | `app.irc.traffic` | `Alt+Shift+I` | Open IRC Traffic at the newest message |
 | `app.irc.quickReply` | `Alt+R` | From the main composer, reply to the latest IRC notification, or open the ordinary IRC client if there was none. In IRC, reply to the selected message's room or privately to its sender. Esc closes quick reply without discarding the draft. |
-| `app.sidebar.toggle`         | `Alt+T`                                                               | [Open and focus the side panel](#side-panel-views): then `t` Todo, `a` Agents, `i` IRC                                                                                                 |
+| `app.sidebar.toggle` | `Alt+T` | [Open and focus the side panel](#side-panel-views); Tab cycles Todo, Agents, and IRC |
 | `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
 | `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
 | `app.links.hint` | Unbound | Tag visible extension links to pick them; press the binding again or `Page Up` to browse all. Assign a binding in keybindings; NeoPi retains `Alt+O` for menu history forward. |
@@ -118,7 +118,7 @@ Without Vim mode, arrows, PageUp/PageDown, Home/End, Enter, Esc, `/` search focu
 
 While a search, rename, or form field has focus, every printable key (including `h`, `j`, `k`, `l`, `g`, `/`, Space) types literally and the field keeps its editing keys. Search fields consume navigation keys while editing: arrows and page keys do not move the list. Enter confirms the pattern and returns to navigation without activating a result; Esc clears the search and returns to the unfiltered list. Press `/` again to edit the retained pattern. Rename and form fields keep their own submit/cancel behavior. Esc on a nested page returns to its parent; Esc at the root closes.
 
-The prompt-history search (`Ctrl+R`) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
+The prompt-history search (`Ctrl+H` by default) and move-path chooser are search-first exceptions: their text field opens focused. With Vim mode enabled, pure viewers use `j`/`k` and `Ctrl+E`/`Ctrl+Y` to scroll a line, half/page keys for larger movement, and `gg`/`G` for top/bottom. Ordinary arrow, page and boundary navigation does not require Vim mode.
 
 With Vim mode enabled, advisor, chain, and persona roots use `h`/`l` to switch between their list and preview; the preview accepts viewer motions, and Enter on the list opens a detail page. Existing radio-with-editor rows keep Space activation and Enter editing in either mode. Inside nested configuration pages, Vim `h` returns to the parent and `l` opens a navigable child, never an action; ordinary arrow/context keys and Esc remain available without Vim mode.
 
@@ -165,21 +165,28 @@ This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, 
 
 ## Side panel views
 
-`Alt+T` (`app.sidebar.toggle`) opens and focuses the side panel immediately, showing Agents by default or the last view you chose. For two seconds the next key can switch views:
+`Alt+T` (`app.sidebar.toggle`) opens the side panel and gives it keyboard focus, showing Agents by default or the last view you chose. With the panel open, `Alt+T` moves focus back and forth between the panel and the transcript; clicking inside the panel also focuses it. The selected view persists as `sidebar.view`.
 
-| Chord | View |
+While the panel has focus:
+
+| Key | Action |
 | --- | --- |
-| `Alt+T` `t` | Todo list |
-| `Alt+T` `a` | Agents: this session's subagents and advisors, as in the Agent Hub |
-| `Alt+T` `i` | IRC: the newest agent-to-agent messages, from the same history as `Alt+I` |
+| `Tab` / `Shift+Tab` | Next / previous view: Todo → Agents → IRC (right-click cycles too) |
+| `↑` / `↓` | Select the previous / next agent or message (Todo scrolls) |
+| `→` / `Enter` | Open the selection: an agent's transcript, or the selected message in the IRC client |
+| `←` / `Esc` / `Ctrl+C` | Return focus to the transcript; the panel stays open |
+| `q` | Close the panel |
+| `i` | Agents: message the selected agent (fills `/irc <agent> ` in the composer) |
+| `r` / `x` | Agents: revive / kill the selected agent, as in the Agent Hub |
+| `f` | Agents: edit the filter row; arrows move, `Space` toggles, `Esc` finishes |
 
-If the view was already open before `Alt+T`, its own follow-up key closes it. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). `Esc` or `Ctrl+C` closes the focused panel. Right-click cycles Todo → Agents → IRC. The selected view persists as `sidebar.view`.
+With Vim navigation (`tui.vimMode`), `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+U`/`Ctrl+D` and `Ctrl+E`/`Ctrl+Y` work as they do in menus. Two digits jump by percentage (`3` `0` jumps to 30%). The bottom of the focused panel lists only the current view's own keys.
 
-Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen, where returning focus to the transcript closes it. With `tui.mouse` on, drag the divider to resize the docked panel; the width is kept as `sidebar.width.columns`, and right-clicking the divider returns to the ratio and bounds (`sidebar.width.*`). While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
 
-The Agents view starts with running subagents only. Its bottom controls toggle running, idle, parked, advisors, ended agents, and autoscroll. Click a control (`tui.mouse` is required when docked), or use `Tab` / `Shift+Tab` and `Space`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group.
+The Agents view starts with running subagents and advisors. Its bottom filter row shows and toggles running, idle, parked, advisors, ended agents, and autoscroll; click a control (`tui.mouse` is required when docked) or press `f`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group. Autoscroll pauses while an agent is selected.
 
-While the panel is focused, arrows scroll and two digits jump by percentage (`3` `0` jumps to 30%). Vim mode adds `j`/`k`, `Ctrl+U`/`Ctrl+D`, `Ctrl+E`/`Ctrl+Y`, and `gg`/`G`. Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking the IRC view opens the IRC client.
+Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking an IRC message opens that message in the IRC client.
 
 ### Click to dictate in Tern
 
@@ -192,7 +199,7 @@ For live English transcription, select **Nemotron 0.6B (live streaming, English)
 
 Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
 
-Cleared drafts preserve whitespace, collapsed pastes, and image attachments in the current editor's bounded history (100 entries). They are not written to persistent prompt history and do not appear in `Ctrl+R` search. Closing the process discards these canceled drafts; the separate save-on-exit behavior still applies to text currently in the composer. This is not a per-agent stash: history follows the editor, including when Agent Hub changes focus.
+Cleared drafts preserve whitespace, collapsed pastes, and image attachments in the current editor's bounded history (100 entries). They are not written to persistent prompt history and do not appear in prompt-history search. Closing the process discards these canceled drafts; the separate save-on-exit behavior still applies to text currently in the composer. This is not a per-agent stash: history follows the editor, including when Agent Hub changes focus.
 
 The existing double-`Ctrl+C` exit behavior is unchanged. Empty clears do not add history entries.
 
@@ -277,6 +284,6 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 - **Replace mode** (`R`) → switch to Normal mode, stepping back onto the last overwritten character.
 - **Normal mode with nothing pending** → dismiss autocomplete or a view, or run the configured double-Escape navigation with an empty editor. The draft is preserved.
 
-`Ctrl+C` cancels active work in either mode without clearing the draft. `u` undoes an edit and `Alt+U` redoes it in Normal mode.
+`Ctrl+C` cancels active work in either mode without clearing the draft. In Normal mode, `u` undoes an edit and `Ctrl+R` or `Alt+U` redoes it. Neither redo chord is bound by default in Insert mode or with Vim mode off.
 
-Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Such a key also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+Vim keys do not shadow app chords: `Enter` still submits from Normal mode, and `Tab` and app shortcuts keep their normal behavior. A shortcut also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.

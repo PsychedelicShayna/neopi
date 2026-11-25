@@ -89,7 +89,7 @@ describe("HistoryStorage.search", () => {
 	it("returns merged FTS and substring fallback matches by recency", async () => {
 		const storage = await freshStorage();
 		// Insert oldest -> newest. The newest row is substring-only; it must not
-		// be pushed behind older FTS prefix matches in Ctrl+R results.
+		// be pushed behind older FTS prefix matches in prompt-history results.
 		await seed(storage, ["commit the changes", "precommit hook fix"]);
 
 		const results = storage.search("commit", 10);

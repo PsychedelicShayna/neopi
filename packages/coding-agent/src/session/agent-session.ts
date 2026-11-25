@@ -1458,6 +1458,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#ircWakesAwaitingCompaction = 0;
 	/** {@link subscribeWakeState} listeners. */
 	readonly #wakeStateListeners = new Set<() => void>();
+	/** Home-thread mode turns scheduled or being dispatched outside the normal input path. */
+	readonly #focusedModeWakes = new Set<Promise<void>>();
 	/** Shared by settlement waits when the remaining wake source is a child with no owner job. */
 	#asyncWorkChanged: PromiseWithResolvers<void> | undefined;
 	/** Notices of agents left blocked on this one as its run settles; see {@link #continueForStalledWaiters}. */
@@ -4414,6 +4416,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * before this agent acts. Without one, the agent stays idle once its turn ends until messaged.
 	 */
 	hasWakeAfterTurn(): boolean {
+		if (this.#focusedModeWakes.size > 0) return true;
 		if (this.agent.hasQueuedMessages() || (this.#canWakeFor("irc") && this.#irc.hasPending())) return true;
 		const afterInterrupt = this.#advisors.autoResumeSuppressed && !this.#turnSettledSinceUserInterrupt;
 		if (
@@ -8717,7 +8720,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * Wait until streaming, event persistence, and deferred recovery work are fully settled.
 	 * Call outside callbacks whose completion the session awaits to avoid waiting on yourself.
 	 */
-	async waitForIdle(): Promise<void> {
+	async waitForIdle(options?: { ignoreFocusedModeWakes?: boolean }): Promise<void> {
 		while (true) {
 			await this.agent.waitForIdle();
 			// The agent loop stops before abort() finishes unwinding; only its last
@@ -8728,6 +8731,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// rewriting entries before it publishes auto_retry_end.
 			await this.#drainInFlightEventHandlers();
 			await this.#waitForPostPromptRecovery();
+			if (!options?.ignoreFocusedModeWakes && this.#focusedModeWakes.size > 0) {
+				await Promise.all(this.#focusedModeWakes);
+				continue;
+			}
 			// An abort can finish (and schedule its drain) after the waits above returned.
 			if (
 				!this.agent.state.isStreaming &&
@@ -8952,6 +8959,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	/** Whether a registry entry came from a built-in factory. */
 	hasBuiltInTool(name: string): boolean {
 		return this.#tools.hasBuiltInTool(name);
+	}
+
+	/** Register the hidden goal tool only when the session's launch policy grants it. */
+	ensureGoalTool(): Promise<boolean> {
+		return this.#tools.ensureGoalTool();
 	}
 
 	/**
@@ -13596,6 +13608,19 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases });
 	}
 
+	/** Commit the operator's edited list and notify the model on the owning thread. */
+	commitUserTodoEdit(phases: TodoPhase[], reminder: string): void {
+		this.commitTodoPhases(phases);
+		const message = {
+			role: "developer" as const,
+			content: [{ type: "text" as const, text: reminder }],
+			attribution: "user" as const,
+			timestamp: Date.now(),
+		};
+		this.agent.appendMessage(message);
+		this.sessionManager.appendMessage(message);
+	}
+
 	/** Active item labels accepted by this pooled turn's incremental yield tool. */
 	getWorkPoolYieldItems(): readonly WorkPoolYieldItem[] {
 		return this.#workPoolYieldItems;
@@ -15947,6 +15972,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	subscribeWakeState(listener: () => void): () => void {
 		this.#wakeStateListeners.add(listener);
 		return () => this.#wakeStateListeners.delete(listener);
+	}
+
+	/** Keep idle waiters and the worker lifecycle behind a scheduled mode turn. */
+	holdFocusedModeWake(): () => void {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.#focusedModeWakes.add(promise);
+		this.#notifyWakeState();
+		return () => {
+			if (!this.#focusedModeWakes.delete(promise)) return;
+			resolve();
+			this.#notifyWakeState();
+		};
 	}
 
 	#notifyWakeState(): void {

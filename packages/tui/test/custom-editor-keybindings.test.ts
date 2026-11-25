@@ -263,7 +263,10 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("draft");
 	});
 
-	it("redoes a Vim change with Alt+U, but not after a different edit", () => {
+	it.each([
+		["Ctrl+R", "\x12"],
+		["Alt+U", "\x1bu"],
+	])("redoes a Vim change with %s, but not after a different edit", (_name, redo) => {
 		const editor = new CustomEditor(getEditorTheme());
 		editor.setVimMode(true);
 		editor.setText("abc");
@@ -272,14 +275,37 @@ describe("CustomEditor keybindings", () => {
 		expect(editor.getText()).toBe("ab");
 		editor.handleInput("u");
 		expect(editor.getText()).toBe("abc");
-		editor.handleInput("\x1bu");
+		editor.handleInput(redo);
 		expect(editor.getText()).toBe("ab");
 		editor.handleInput("u");
 		editor.handleInput("i");
 		editor.handleInput("X");
 		editor.handleInput("\x1b");
-		editor.handleInput("\x1bu");
+		editor.handleInput(redo);
 		expect(editor.getText()).toBe("abXc");
+	});
+
+	it.each([false, true])("leaves redo chords unbound in Insert mode (Vim enabled: %s)", vimEnabled => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setVimMode(vimEnabled);
+		editor.setText("ab");
+		editor.handleInput("c");
+		editor.handleInput("\x1b[45;5u"); // Ctrl+- (undo)
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("\x12"); // Ctrl+R
+		expect(editor.getText()).toBe("ab");
+		editor.handleInput("\x1bu"); // Alt+U
+		expect(editor.getText()).toBe("ab");
+	});
+
+	it("still deletes in the composer with legacy Backspace", () => {
+		const editor = new CustomEditor(getEditorTheme());
+		editor.setText("a");
+		editor.handleInput("\x08");
+		expect(editor.getText()).toBe("");
+		editor.setText("ab");
+		editor.handleInput("\x7f");
+		expect(editor.getText()).toBe("a");
 	});
 });
 

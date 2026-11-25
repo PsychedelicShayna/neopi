@@ -192,6 +192,42 @@ describe("InteractiveMode todo HUD persistence", () => {
 		}
 	});
 
+	it("expands and collapses the focused worker's HUD without marking Main revealed", async () => {
+		setTodoClearDelay(-1);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected a test model");
+		const worker = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			modelRegistry,
+		});
+		Object.defineProperty(mode, "viewSession", { value: worker, configurable: true });
+		try {
+			const phases: TodoPhase[] = [
+				{
+					name: "Worker plan",
+					tasks: Array.from({ length: 8 }, (_, i) => ({ content: `Worker task ${i + 1}`, status: "pending" })),
+				},
+			];
+			worker.commitTodoPhases(phases);
+			const mainLeaf = session.sessionManager.getLeafId();
+			const workerLeaf = worker.sessionManager.getLeafId();
+
+			await mode.handleTodoCommand("expand", worker);
+			expect(renderTodos(mode)).toContain("Worker task 8");
+			expect(worker.sessionManager.getLeafId()).not.toBe(workerLeaf);
+			expect(session.sessionManager.getLeafId()).toBe(mainLeaf);
+
+			await mode.handleTodoCommand("collapse", worker);
+			expect(renderTodos(mode)).not.toContain("Worker task 8");
+			expect(renderTodos(mode)).toContain("more todo");
+		} finally {
+			Reflect.deleteProperty(mode, "viewSession");
+			await worker.dispose();
+		}
+	});
+
 	it("clears closed todos after the configured delay", async () => {
 		setTodoClearDelay(1);
 		vi.useFakeTimers();
