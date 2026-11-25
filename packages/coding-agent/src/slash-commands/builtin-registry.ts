@@ -6,6 +6,8 @@ import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import type { AgentSession } from "../session/agent-session";
+import { type AgentViewSession, isLocalAgentSession } from "../session/agent-session-handle";
+import { runFocusedAgentCommand } from "./focused-agent-command";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
 import { CHRONICLER_SLASH_COMMAND } from "./builtin-chronicler";
@@ -28,6 +30,7 @@ import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
+	AcpBuiltinSlashCommandResult,
 	BuiltinSlashCommand,
 	ParsedSlashCommand,
 	SlashCommandResult,
@@ -166,6 +169,26 @@ export function buildTuiBuiltinSlashCommands(runtime: TuiSlashCommandRuntime): R
  * ACP dispatcher requires `handle` and skips TUI-only entries.
  */
 export const BUILTIN_SLASH_COMMANDS_INTERNAL: ReadonlyArray<SlashCommandSpec> = BUILTIN_SLASH_COMMAND_REGISTRY;
+/**
+ * Dispatch a slash command in ACP/text mode. Returns:
+ * - `false` when no builtin matched (or matched a TUI-only entry); the caller
+ *   should forward the input as a prompt.
+ * - `{ consumed: true }` when the command handled the input entirely.
+ * - `{ prompt }` when the command was handled but a residual prompt should be
+ *   sent to the model.
+ */
+export async function executeAcpBuiltinSlashCommand(
+	text: string,
+	runtime: SlashCommandRuntime,
+): Promise<AcpBuiltinSlashCommandResult> {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return false;
+	const command = lookupBuiltinSlashCommand(parsed.name);
+	if (!command?.handle) return false;
+	const result = await command.handle(parsed, runtime);
+	if (result === undefined) return { consumed: true };
+	return result;
+}
 
 /**
  * Execute a builtin slash command in the interactive TUI.
@@ -178,6 +201,7 @@ export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,
 	commandActor?: ControlActor,
+	focusedTarget?: AgentViewSession,
 ): Promise<string | boolean> {
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
@@ -198,6 +222,21 @@ export async function executeBuiltinSlashCommand(
 			clearSubmittedText(runtime);
 		}
 		return true;
+	}
+	if (focusedTarget) {
+		if (!isLocalAgentSession(focusedTarget) && !focusedTarget.runFocusedAgentCommand) {
+			runtime.ctx.showError(t("overlays.input_controller.focused_unavailable"));
+			return true;
+		}
+		const dispatch = isLocalAgentSession(focusedTarget)
+			? runFocusedAgentCommand(focusedTarget, text, commandActor)
+			: focusedTarget.runFocusedAgentCommand?.(text, commandActor);
+		if (!dispatch) return true;
+		const { result, output } = await dispatch;
+		if (!result) return false;
+		clearSubmittedText(runtime);
+		for (const line of output) runtime.ctx.showStatus(line);
+		return "prompt" in result ? result.prompt : true;
 	}
 	const { handleTui, handle } = command;
 	if (handleTui) {

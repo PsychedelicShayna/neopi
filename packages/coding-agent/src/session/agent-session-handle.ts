@@ -33,6 +33,8 @@ import type { Skill } from "../extensibility/skills";
 import type { GoalModeState } from "../goals/state";
 import type { RpcSessionControlState } from "../modes/rpc/rpc-types";
 import type { SubagentModelSelection, SubagentModelSelectionResult } from "../registry/subagent-controls";
+import type { ControlActor } from "../control/actor";
+import type { FocusedAgentCommandResult } from "../slash-commands/focused-agent-command";
 import type { TokenRateMeter } from "../utils/token-rate";
 import type { AgentDefinition } from "../task/types";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
@@ -389,6 +391,8 @@ export interface AgentViewSession extends AgentSessionHandle {
 	resume(): Promise<void>;
 	/** Retry the last failed turn. */
 	retry(): Promise<boolean>;
+	/** Dispatch a session-scoped builtin on this session's home thread. */
+	runFocusedAgentCommand?(text: string, actor?: ControlActor): Promise<FocusedAgentCommandResult>;
 	/** Cancel a pending retry. */
 	abortRetry(): void;
 	/** Cancel an in-progress compaction. */

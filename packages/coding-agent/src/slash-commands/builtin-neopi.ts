@@ -580,6 +580,7 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
+			const target = runtime.focusedSession ?? ctx.session;
 			// Discard only the command and its separator; all remaining text is literal.
 			const text = command.text.slice(command.name.length + 2);
 			clearSubmittedText(runtime);
@@ -590,12 +591,12 @@ export const BUILTIN_NEOPI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const notice = operatorNotice(text);
 			const options = noticeOptions(command.text);
 			ctx.editor.clearSubmittedDraft();
-			if (ctx.onInputCallback && !ctx.session.isStreaming) {
+			if (!runtime.focusedSession && ctx.onInputCallback && !target.isStreaming) {
 				ctx.onInputCallback({ text: notice, ...options, cancelled: false, started: true });
 				return;
 			}
 			try {
-				await ctx.session.prompt(notice, options);
+				await target.prompt(notice, options);
 			} catch (error) {
 				ctx.editor.setCollapsedText(command.text);
 				ctx.showError(errorMessage(error));

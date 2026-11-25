@@ -4,6 +4,7 @@ import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import { withNeoProxyLoginUrl } from "../neopi/neoproxy-connect";
 import type { AgentSession } from "../session/agent-session";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import type { SessionOAuthAccountList } from "../session/agent-session-types";
 import {
 	getChangelogPath,
@@ -102,7 +103,7 @@ async function handleUsageResetCommand(
  */
 async function handleJobsKillCommand(
 	arg: string,
-	session: AgentSession,
+	session: Pick<AgentViewSession, "getAsyncJobSnapshot" | "cancelAsyncJob">,
 	output: SlashCommandRuntime["output"],
 ): Promise<void> {
 	const target = arg.trim();
@@ -479,7 +480,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		subcommandOptional: true,
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
-			const snapshot = runtime.ctx.session.getAsyncJobSnapshot({ recentLimit: 5 });
+			const snapshot = runtime.ctx.viewSession.getAsyncJobSnapshot({ recentLimit: 5 });
 			if (!snapshot || (snapshot.running.length === 0 && snapshot.recent.length === 0))
 				return t("commands.session.noJobs");
 			return t("commands.session.jobsStatus", { running: snapshot.running.length, recent: snapshot.recent.length });
@@ -540,7 +541,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			if (verb === "kill") {
-				await handleJobsKillCommand(rest, runtime.ctx.session, text => runtime.ctx.showStatus(text));
+				const { ctx } = runtime;
+				await handleJobsKillCommand(rest, runtime.focusedSession ?? ctx.session, text => ctx.showStatus(text));
 			} else if (rest || (verb && verb !== "full")) {
 				runtime.ctx.showStatus(t("commands.session.jobsUsage"));
 			} else {

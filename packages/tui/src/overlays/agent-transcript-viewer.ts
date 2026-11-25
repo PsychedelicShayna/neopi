@@ -75,6 +75,8 @@ export interface AgentTranscriptViewerDeps {
 	observers?: SessionObserverRegistry;
 	/** Revive+prompt path for messageable local agents. Lazy to avoid touching the global. */
 	lifecycle?: () => AgentLifecycleLike;
+	/** Hand a local slash submission to its normal interactive command dispatcher. */
+	onSlashCommand?: (text: string) => Promise<void>;
 	ui: TUI;
 	getTool?: (name: string) => AgentTool | undefined;
 	/** Whether the active registry entry came from a built-in factory. */
@@ -672,6 +674,16 @@ export class AgentTranscriptViewer implements Component {
 					this.#deps.requestRender();
 				});
 			this.#deps.requestRender();
+			return;
+		}
+		const onSlashCommand = this.#deps.onSlashCommand;
+		if (trimmed.startsWith("/") && onSlashCommand) {
+			void onSlashCommand(text).catch((error: unknown) => {
+				if (this.#disposed) return;
+				if (!this.#editor?.getText()) this.#editor?.setText(text);
+				this.#notice = error instanceof Error ? error.message : String(error);
+				this.#deps.requestRender();
+			});
 			return;
 		}
 		const lifecycle = this.#deps.lifecycle;

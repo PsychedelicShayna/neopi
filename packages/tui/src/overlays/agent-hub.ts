@@ -552,6 +552,7 @@ export interface AgentHubDeps<TRecord extends AgentRecordLike = AgentRecordLike>
 	expandKeys?: KeyId[];
 	/** Focus the main view on this agent's live session (ctx.focusAgentSession). When absent (collab guest, tests), Enter opens the in-hub chat view instead. */
 	focusAgent?: (id: string) => Promise<void>;
+	onSlashCommand?: (id: string, text: string) => Promise<void>;
 	/** Current main session file; used to seed parked historical subagents after restart. */
 	sessionFile?: string | null;
 	/** Initial top-level projection; slash commands deep-link into this surface. */
@@ -748,6 +749,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#expandThinkingBlocks: (() => boolean) | undefined;
 	#expandKeys: KeyId[];
 	#focusAgent: ((id: string) => Promise<void>) | undefined;
+	readonly #onSlashCommand: AgentHubDeps<TRecord>["onSlashCommand"];
 
 	// A nested transcript page shares this registered overlay and its history owner.
 	#transcriptViewer: AgentTranscriptViewer | undefined;
@@ -801,6 +803,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#expandThinkingBlocks = deps.expandThinkingBlocks;
 		this.#expandKeys = deps.expandKeys ?? ["alt+e"];
 		this.#focusAgent = deps.focusAgent;
+		this.#onSlashCommand = deps.onSlashCommand;
 
 		this.#unsubscribers.push(this.#registry.onChange(() => this.#scheduleDataChange()));
 		this.#unsubscribers.push(this.#observers.onChange(() => this.#scheduleDataChange()));
@@ -1080,6 +1083,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const previous = this.navigationSnapshot();
 		this.#closeTranscriptViewer(undefined, false);
 		this.#notice = undefined;
+		const onSlashCommand = this.#onSlashCommand;
 		const viewer = new AgentTranscriptViewer({
 			agentId: id,
 			transcript: this.#transcript,
@@ -1088,6 +1092,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			remote: this.#remote,
 			observers: this.#observers,
 			lifecycle: this.#remote ? undefined : this.#lifecycle,
+			onSlashCommand: onSlashCommand ? text => onSlashCommand(id, text) : undefined,
 			ui: this.#ui,
 			getTool: this.#getTool,
 			isBuiltInTool: this.#isBuiltInTool,

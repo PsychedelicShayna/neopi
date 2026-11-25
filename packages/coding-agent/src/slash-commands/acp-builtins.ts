@@ -1,9 +1,10 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
-import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
+import type { SlashCommandSpec } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
+export { executeAcpBuiltinSlashCommand } from "./builtin-registry";
 
 /**
  * All names (primary + aliases) that are reserved by ACP builtins. Used to
@@ -65,25 +66,4 @@ export function lookupTuiOnlyBuiltin(text: string): SlashCommandSpec | undefined
 	if (!parsed) return undefined;
 	const command = lookupBuiltinSlashCommand(parsed.name);
 	return command && !command.handle ? command : undefined;
-}
-
-/**
- * Dispatch a slash command in ACP/text mode. Returns:
- * - `false` when no builtin matched (or matched a TUI-only entry); the caller
- *   should forward the input as a prompt.
- * - `{ consumed: true }` when the command handled the input entirely.
- * - `{ prompt }` when the command was handled but a residual prompt should be
- *   sent to the model.
- */
-export async function executeAcpBuiltinSlashCommand(
-	text: string,
-	runtime: SlashCommandRuntime,
-): Promise<AcpBuiltinSlashCommandResult> {
-	const parsed = parseSlashCommand(text);
-	if (!parsed) return false;
-	const command = lookupBuiltinSlashCommand(parsed.name);
-	if (!command?.handle) return false;
-	const result = await command.handle(parsed, runtime);
-	if (result === undefined) return { consumed: true };
-	return result;
 }
