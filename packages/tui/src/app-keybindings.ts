@@ -324,7 +324,7 @@ export const KEYBINDINGS = {
 		description: "Toggle plan mode",
 	},
 	"app.history.search": {
-		defaultKeys: "ctrl+r",
+		defaultKeys: "ctrl+h",
 		description: "Search history",
 	},
 	"app.navigation.back": {

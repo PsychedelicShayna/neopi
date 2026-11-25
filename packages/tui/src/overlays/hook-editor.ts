@@ -451,7 +451,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		this.#pastes.paste(text);
 	}
 
-	/** Replace the draft, as Ctrl+R history search does for the main composer. */
+	/** Replace the draft, as prompt history search does for the main composer. */
 	setText(text: string): void {
 		if (this.#disposed) return;
 		this.#editor.setText(text);
