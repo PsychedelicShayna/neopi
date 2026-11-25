@@ -350,8 +350,8 @@
 
 ### Changed
 
-- IRC messages stay in the transcript in full instead of showing a three-line card that disappeared after ten seconds: each sits between two rules in the sender's Agent Hub colour, with the group it was sent to, the groups you share, and the time sent. A group send appears once, and the group shown is the one it had when sent, also after `/resume`.
-- **IRC Cards in Transcript** is now **IRC Messages in Transcript**.
+- IRC messages delivered to an agent stay in its transcript in full instead of showing a three-line card that disappeared after ten seconds: each sits between two rules in the sender's Agent Hub colour, with the group it was sent to, the groups you share, and the time sent. A group send appears once, and the group shown is the one it had when sent, also after `/resume`. A message addressed to you still shows as a three-line notification card that leaves after ten seconds; read it in the IRC viewer.
+- Messages between two other agents no longer show in the main transcript; read them in the IRC viewer. **IRC Cards in Transcript** is now **Announce Agent-to-Agent IRC** and only decides whether live voice, event sounds and connected clients hear that traffic.
 - Launch directly from an agent type and inline spec, enter only an assignment, or edit all launch settings on one screen. The resulting `/hub <id>` link opens the agent transcript directly ([#840](https://github.com/PsychedelicShayna/neopi/issues/840)).
 - Chronicler settings moved from **Memory** to their own **Chronicler** tab next to **Memory**.
 - The Agent author role is described as "Authors agent definition prose, wherever agents can be generated." in the roles picker.

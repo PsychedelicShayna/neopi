@@ -69,6 +69,20 @@ export function ircMessageView(
 	};
 }
 
+/**
+ * Whether `message` is the operator's own copy of an IRC message: a DM to her,
+ * or her leg of a group send. The bus shows it on her UI as a display-only
+ * `irc:relay` record addressed to her id; nothing stores it in a transcript.
+ */
+export function isOperatorIrcNotice(
+	message: { customType?: string; details?: unknown },
+	operatorId: string | undefined,
+): boolean {
+	if (operatorId === undefined || message.customType !== "irc:relay") return false;
+	const details = message.details;
+	return typeof details === "object" && details !== null && Reflect.get(details, "to") === operatorId;
+}
+
 const NO_ROWS: readonly string[] = [];
 
 function lineLabel(value: string | undefined): string {

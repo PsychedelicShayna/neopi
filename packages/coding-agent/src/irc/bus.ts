@@ -790,30 +790,34 @@ export class IrcBus implements IrcBusApi {
 	}
 
 	/**
-	 * Surface agent↔agent traffic as a display-only card on the UI of the
-	 * sender's root session (the top-level session whose spawn tree it
-	 * belongs to; the default "Main" session when that tree cannot be
-	 * resolved). Skipped when that root is either endpoint: as recipient its
-	 * own `deliverIrcMessage` (or `wait` tool result) already shows the
+	 * Tell the sender's root session about agent↔agent traffic (the top-level
+	 * session whose spawn tree it belongs to; the default "Main" session when
+	 * that tree cannot be resolved), so live voice, event sounds and connected
+	 * clients hear it. Never shown on the main screen: the operator reads it in
+	 * the IRC viewer. Skipped when that root is either endpoint: as recipient
+	 * its own `deliverIrcMessage` (or `wait` tool result) already shows the
 	 * message, and as sender the irc send tool call already rendered the
-	 * outbound body — relaying it again would duplicate it in the transcript.
+	 * outbound body.
 	 */
 	#relayToMainUi(message: IrcMessage): void {
 		if (!ircRelayToMainTranscript()) return;
 		const root = ircRelayRoot(this.#registry, message.from);
 		if (!root || message.to === root.id || message.from === root.id) return;
-		this.#showOnUi(root, message);
+		this.#showOnUi(root, message, false);
 	}
 
-	/** Display-only `irc:relay` card for `message` on `root`'s UI; never persisted. */
-	#showOnUi(root: AgentRef, message: IrcMessage): void {
+	/**
+	 * `irc:relay` observation of `message` on `root`'s UI; never persisted.
+	 * `display` puts it on the main screen: only the operator's own copy is.
+	 */
+	#showOnUi(root: AgentRef, message: IrcMessage, display = true): void {
 		const session = root.session;
 		if (!session) return;
 		const record: CustomMessage = {
 			role: "custom",
 			customType: "irc:relay",
 			content: `[IRC \`${message.from}\` → \`${message.to}\`]\n\n${message.body}`,
-			display: true,
+			display,
 			details: {
 				from: message.from,
 				to: message.to,

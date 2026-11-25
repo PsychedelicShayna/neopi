@@ -74,6 +74,7 @@ import {
 	assistantUsageIsBilled,
 	splitAssistantMessageToolTimeline,
 } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
+import { isOperatorIrcNotice } from "@oh-my-pi/pi-tui/chat/irc-message";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { ComposerPredictionController } from "./composer-prediction-controller";
 import { StreamingRevealController } from "./streaming-reveal";
@@ -94,6 +95,15 @@ import { cfgReadToolResultPreview } from "../../tools/settings";
 import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
+
+/** How long a notification card for a message addressed to the operator stays in the transcript. */
+const OPERATOR_IRC_NOTICE_TTL_MS = 10_000;
+/**
+ * Notification cards allowed at once. They sit below a still-running block,
+ * where rows cannot commit to scrollback, so each one inflates the live region:
+ * the oldest retires as soon as a new one would exceed the cap.
+ */
+const MAX_OPERATOR_IRC_NOTICES = 4;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
 
@@ -300,6 +310,9 @@ export class EventController {
 	#retryPending = false;
 	/** Next-message prediction offered as composer ghost text after a completed turn. */
 	readonly composerPrediction: ComposerPredictionController;
+	#ircNoticeTimers = new Map<string, NodeJS.Timeout>();
+	/** Notification cards not yet retired, oldest first, with the transcript components each one added. */
+	#liveIrcNotices = new Map<string, Component[]>();
 	// Most recent `wait` tool block whose result still had every watched job
 	// running. Kept un-finalized (live) so the next `wait` call displaces it —
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
@@ -557,6 +570,7 @@ export class EventController {
 		this.#toolArgsReveal.stop();
 		this.composerPrediction.cancel();
 		this.#setTerminalProgress(false);
+		this.#clearIrcNotices();
 	}
 
 	#resetReadGroup(): void {
@@ -1136,6 +1150,7 @@ export class EventController {
 		this.#restorePinnedErrorInline = true;
 		this.#retryPending = this.ctx.viewSession.isRetrying;
 		this.composerPrediction.cancel();
+		this.#clearIrcNotices();
 		this.#displaceablePollComponent = undefined;
 		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
@@ -1469,7 +1484,12 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
-	/** A peer's message stays in the transcript whole: nothing retires or caps it. */
+	/**
+	 * A peer's message stays in the transcript whole: nothing retires or caps it.
+	 * A message addressed to the operator is the exception. It is a notification
+	 * that she reads in the IRC viewer, so it shows as a short card that retires
+	 * (see {@link #scheduleIrcNoticeExpiry}).
+	 */
 	async #handleIrcMessage(event: Extract<AgentSessionEvent, { type: "irc_message" }>): Promise<void> {
 		if (!event.message.display) return;
 		const signature = `${event.message.role}:${event.message.customType}:${event.message.timestamp}`;
@@ -1488,12 +1508,80 @@ export class EventController {
 			// copy, and only while that copy can still leave the transcript.
 			if (!delivered || observed === undefined || !this.ctx.chatContainer.canRemoveBlock(observed)) return;
 			this.ctx.chatContainer.removeChild(observed);
+			this.#forgetIrcNotice(observed);
 		}
 		this.#resetReadGroup();
-		const [block] = this.ctx.addMessageToChat(event.message);
+		const components = this.ctx.addMessageToChat(event.message);
+		const [block] = components;
 		if (fanoutId !== undefined) this.#shownIrcFanouts.set(fanoutId, delivered ? undefined : block);
-		if (block) this.#fileAboveRunningBlocks(block);
+		if (isOperatorIrcNotice(event.message, this.ctx.ircOperatorId)) {
+			// Left under any running block: there its rows cannot reach scrollback,
+			// so the card can still be taken away when it retires.
+			this.#scheduleIrcNoticeExpiry(signature, components);
+			this.#enforceIrcNoticeCap(signature);
+		} else if (block) {
+			this.#fileAboveRunningBlocks(block);
+		}
 		this.ctx.ui.requestRender();
+	}
+
+	#scheduleIrcNoticeExpiry(signature: string, components: Component[]): void {
+		if (components.length === 0 || this.#ircNoticeTimers.has(signature)) return;
+		const timer = setTimeout(() => {
+			this.#ircNoticeTimers.delete(signature);
+			this.#retireIrcNotice(signature);
+		}, OPERATOR_IRC_NOTICE_TTL_MS);
+		timer.unref?.();
+		this.#ircNoticeTimers.set(signature, timer);
+		this.#liveIrcNotices.set(signature, components);
+	}
+
+	/**
+	 * Remove an expired or evicted notification card only while its transcript
+	 * entry can still leave. Rows already in scrollback stay as history.
+	 */
+	#retireIrcNotice(signature: string): void {
+		const components = this.#liveIrcNotices.get(signature);
+		this.#liveIrcNotices.delete(signature);
+		if (!components) return;
+		let removed = false;
+		for (const component of components) {
+			if (!this.ctx.chatContainer.canRemoveBlock(component)) continue;
+			this.ctx.chatContainer.removeChild(component);
+			removed = true;
+		}
+		if (removed) this.ctx.ui.requestRender();
+	}
+
+	/** Evict the oldest notification cards beyond {@link MAX_OPERATOR_IRC_NOTICES}. */
+	#enforceIrcNoticeCap(latestSignature: string): void {
+		while (this.#liveIrcNotices.size > MAX_OPERATOR_IRC_NOTICES) {
+			const oldest = this.#liveIrcNotices.keys().next().value;
+			if (oldest === undefined || oldest === latestSignature) return;
+			this.#clearIrcNoticeTimer(oldest);
+			this.#retireIrcNotice(oldest);
+		}
+	}
+
+	/** Stop tracking a notification card that something else already removed. */
+	#forgetIrcNotice(component: Component): void {
+		for (const [signature, components] of this.#liveIrcNotices) {
+			if (!components.includes(component)) continue;
+			this.#clearIrcNoticeTimer(signature);
+			this.#liveIrcNotices.delete(signature);
+			return;
+		}
+	}
+
+	#clearIrcNoticeTimer(signature: string): void {
+		clearTimeout(this.#ircNoticeTimers.get(signature));
+		this.#ircNoticeTimers.delete(signature);
+	}
+
+	#clearIrcNotices(): void {
+		for (const timer of this.#ircNoticeTimers.values()) clearTimeout(timer);
+		this.#ircNoticeTimers.clear();
+		this.#liveIrcNotices.clear();
 	}
 
 	/**

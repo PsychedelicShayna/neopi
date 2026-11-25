@@ -19,7 +19,7 @@ import {
 	shouldRenderAbortReason,
 } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
-import { IrcMessageBlock, type IrcMessageDetails, ircMessageView } from "./irc-message";
+import { IrcMessageBlock, type IrcMessageDetails, ircMessageView, isOperatorIrcNotice } from "./irc-message";
 import {
 	formatArtifactErrorNotice,
 	formatMinimizedMeta,
@@ -259,9 +259,33 @@ export function buildAsyncNotifyBlock(message: CustomOrHookMessage): ToolActivit
  * Render an IRC coordination custom message. A peer's message (`irc:incoming`)
  * and one observed between two others (`irc:relay`) show whole, as an
  * {@link IrcMessageBlock}; `irc:autoreply` and `irc:workpool` stay status cards,
- * for which `getExpanded` supplies the live expanded-state getter.
+ * for which `getExpanded` supplies the live expanded-state getter. A message
+ * addressed to the operator `operatorId` is a notification: a short preview
+ * card, since she reads the message itself in the IRC viewer.
  */
-export function buildIrcMessageCard(message: CustomOrHookMessage, getExpanded: () => boolean): Component {
+export function buildIrcMessageCard(
+	message: CustomOrHookMessage,
+	getExpanded: () => boolean,
+	operatorId?: string,
+): Component {
+	if (isOperatorIrcNotice(message, operatorId)) {
+		const details = (message as CustomMessage<IrcMessageDetails>).details;
+		const group = typeof details?.groupText === "string" ? details.group?.trim() : undefined;
+		return new ToolActivityContainer(
+			createIrcMessageCard(
+				{
+					kind: "relay",
+					from: details?.from,
+					to: group ? `#${group}` : details?.to,
+					body: details?.groupText ?? details?.body,
+					replyTo: details?.replyTo,
+					timestamp: message.timestamp,
+				},
+				getExpanded,
+				theme,
+			),
+		);
+	}
 	if (message.customType === "irc:incoming" || message.customType === "irc:relay") {
 		const details = (message as CustomMessage<IrcMessageDetails>).details;
 		const kind = message.customType === "irc:incoming" ? "incoming" : "relay";

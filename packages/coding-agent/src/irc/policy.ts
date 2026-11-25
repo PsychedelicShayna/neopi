@@ -18,7 +18,7 @@ export function setIrcHistoryMaxEntries(value: number): void {
 	historyMaxEntries = Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_IRC_HISTORY_MAX_ENTRIES;
 }
 
-/** Whether agent-to-agent traffic is relayed into the root session's transcript as live cards. */
+/** Whether the root session is told about traffic between other agents (voice, sounds, clients); it never shows it. */
 export function ircRelayToMainTranscript(): boolean {
 	return relayToMainTranscript;
 }
