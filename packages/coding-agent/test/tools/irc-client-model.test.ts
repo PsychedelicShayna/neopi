@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { IrcBus } from "../../src/irc/bus";
 import {
 	IRC_TRAFFIC_ID,
@@ -33,7 +33,7 @@ function bodies(client: IrcClientModel, id = client.selected): string[] {
 	return client.entries(id).map(({ message }) => message.groupText ?? message.body);
 }
 
-describe("IRC client quick reply", () => {
+describe("IRC client", () => {
 	beforeAll(async () => {
 		await initTheme();
 	});
@@ -42,14 +42,23 @@ describe("IRC client quick reply", () => {
 		const { bus, source } = fixture();
 		const model = new IrcClientModel(source, { operatorId: "Shayna" });
 		const act = vi.fn((_action: IrcClientAction) => undefined);
+		const member = { id: "A", name: "A", modelSlug: "member-model", status: "idle" } as const;
+		const candidate = { id: "B", name: "B", modelSlug: "candidate-model", status: "idle" } as const;
 		const close = vi.fn(() => client.close());
 		const client = new IrcClientComponent({
 			model,
 			host: {
 				operatorId: "Shayna",
 				operatorName: "Shayna",
-				rooms: () => [{ name: "council", joined: true, canSend: roomCanSend, members: [] }],
-				agents: () => [],
+				canCreate: true,
+				rooms: () => [{
+					name: "council",
+					joined: true,
+					canSend: roomCanSend,
+					members: [member],
+					capabilities: ["invite"],
+				}],
+				agents: () => [member, candidate],
 				act,
 			},
 			quickReplyKeys: ["alt+r"],
@@ -66,6 +75,100 @@ describe("IRC client quick reply", () => {
 			},
 		};
 	}
+
+	function expectPanes(client: IrcClientComponent, center: string, focused: number): void {
+		const parts = client.render(120)[1]!.split(theme.boxRound.vertical);
+		const headings = ["Conversations", center, "Members"];
+		for (const [index, title] of headings.entries()) {
+			const pane = parts[index + 1]!;
+			const titleAt = pane.indexOf(title);
+			expect(titleAt).toBeGreaterThanOrEqual(0);
+			const prefix = pane.slice(0, titleAt);
+			expect(prefix).toContain(theme.getFgAnsi(index === focused ? "accent" : "dim"));
+			if (index !== focused) expect(prefix).not.toContain(theme.getFgAnsi("accent"));
+			expect(Bun.stripANSI(prefix).trim()).toBe(index === focused ? theme.nav.selected : "");
+		}
+		const borders = parts.slice(0, -1).map(part => part.match(/\x1b\[[0-9;]*m$/)?.[0]);
+		const accent = theme.getFgAnsi("accent");
+		const border = theme.getFgAnsi("border");
+		const expected = [
+			[accent, accent, border, border],
+			[border, accent, accent, border],
+			[border, border, accent, accent],
+		];
+		expect(borders).toEqual(expected[focused] ?? [border, border, border, border]);
+	}
+
+	it("moves the accent heading, marker and pane edges with Tab and Ctrl+N", () => {
+		const view = mount();
+		try {
+			view.client.open("resume", { conversationId: ircRoomId("council") });
+			expectPanes(view.client, "#council", 1);
+			view.press("\t");
+			expectPanes(view.client, "#council", 2);
+			view.press("\x0e");
+			expectPanes(view.client, "#council", 0);
+			view.press("\t");
+			expectPanes(view.client, "#council", 1);
+			view.client.focused = false;
+			expectPanes(view.client, "#council", -1);
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("marks the Traffic feed on open and the roster when it takes over the center pane", () => {
+		const view = mount();
+		try {
+			view.client.open("traffic");
+			expectPanes(view.client, "Traffic", 1);
+			view.press("\t");
+			expectPanes(view.client, "Traffic", 0);
+			view.press("\x1b[B");
+			view.press("\r");
+			expectPanes(view.client, "Roster", 1);
+			view.press("\t");
+			expectPanes(view.client, "Roster", 2);
+			view.press("\t");
+			const compactHeading = view.client.render(30)[1]!;
+			expect(Bun.stripANSI(compactHeading)).toContain(`${theme.nav.selected} Conversations`);
+			expect(compactHeading).toContain(theme.getFgAnsi("accent"));
+		} finally {
+			view.dispose();
+		}
+	});
+
+	it("marks whichever IRC popup or invite page takes focus", () => {
+		const view = mount();
+		try {
+			const expectPopup = (title: string) => {
+				const lines = view.client.render(120);
+				expect(lines[0]).toContain(theme.fg("accent", ` ${theme.nav.selected} ${title} `));
+				expect(lines[1]?.startsWith(theme.fg("accent", theme.boxRound.vertical))).toBe(true);
+			};
+			view.client.open();
+			view.press("n");
+			expectPopup("New room…");
+			view.press("\x1b");
+			view.client.open("resume", { conversationId: ircRoomId("council") });
+			view.press("\t");
+			view.press("i");
+			expectPopup("Invite agents to #council");
+			view.press("s");
+			expectPopup("Select matching agents");
+			view.press("\r");
+			view.press("\r");
+			expectPopup("Confirm invitations");
+			view.press("\x1b");
+			view.press("\x1b");
+			expectPanes(view.client, "#council", 2);
+			view.press("\t");
+			view.press("o");
+			expectPopup("#council");
+		} finally {
+			view.dispose();
+		}
+	});
 
 	it("opens the latest notifying DM with its composer focused and preserves its draft on Escape", async () => {
 		const view = mount();

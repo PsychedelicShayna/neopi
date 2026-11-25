@@ -756,7 +756,7 @@ export class IrcClientComponent implements Component {
 		this.#refresh();
 		if (this.#invite.isOpen) {
 			this.#invite.refresh();
-			return this.#invite.render(width);
+			return this.#invite.render(width, this.focused);
 		}
 		if (this.#popup) return this.#renderPopup(width, height);
 		const inner = width - 2;
@@ -764,32 +764,51 @@ export class IrcClientComponent implements Component {
 		const room = this.#room(id);
 		const preview = this.#preview() !== undefined;
 		const mainRows = height - 4;
-		const showSidebar = inner >= 2 * MIN_PANE_WIDTH + 1 || this.#region === "sidebar" && this.#page !== "roster";
+		const showSidebar = inner >= 2 * MIN_PANE_WIDTH + 1 || this.#region === "sidebar";
 		const showMembers = inner >= 3 * MIN_PANE_WIDTH + 2 || this.#region === "members";
 		const sidebarWidth = showSidebar ? Math.min(26, Math.max(MIN_PANE_WIDTH, Math.floor(inner / 4))) : 0;
 		const membersWidth = showMembers ? Math.min(32, Math.max(MIN_PANE_WIDTH, Math.floor(inner / 4))) : 0;
 		const sideOnly = inner < 2 * MIN_PANE_WIDTH + 1 && showSidebar;
 		const membersOnly = showMembers && inner < 3 * MIN_PANE_WIDTH + 2;
 		const centerWidth = Math.max(1, inner - sidebarWidth - membersWidth - Number(showSidebar) - Number(showMembers));
-		const columns: { width: number; lines: readonly string[] }[] = [];
+		const columns: { region: Region; width: number; lines: readonly string[] }[] = [];
 		if (showSidebar && !membersOnly) {
 			const columnWidth = sideOnly ? inner : sidebarWidth;
-			columns.push({ width: columnWidth, lines: this.#renderSidebar(columnWidth, mainRows) });
+			columns.push({ region: "sidebar", width: columnWidth, lines: this.#renderSidebar(columnWidth, mainRows) });
 		}
 		if (!sideOnly && !membersOnly) {
-			columns.push({ width: centerWidth, lines: this.#page === "roster" ? this.#renderRoster(centerWidth, mainRows) : this.#renderConversation(id, room, centerWidth, mainRows, preview) });
+			columns.push({
+				region: "center",
+				width: centerWidth,
+				lines: this.#page === "roster"
+					? this.#renderRoster(centerWidth, mainRows)
+					: this.#renderConversation(id, room, centerWidth, mainRows, preview),
+			});
 		}
 		if (showMembers) {
 			const columnWidth = membersOnly ? inner : membersWidth;
-			columns.push({ width: columnWidth, lines: this.#renderMembers(room, columnWidth, mainRows) });
+			columns.push({ region: "members", width: columnWidth, lines: this.#renderMembers(room, columnWidth, mainRows) });
 		}
 		// Only the activated conversation at the live edge marks arrivals read.
 		if (!sideOnly && !membersOnly && this.focused && this.#page !== "roster" && !preview && this.#feed.following) {
 			this.#model.markRead();
 		}
 		const vertical = theme.fg("border", theme.boxRound.vertical);
+		const activeVertical = theme.fg("accent", theme.boxRound.vertical);
+		const activeColumn = this.focused ? columns.findIndex(column => column.region === this.#region) : -1;
+		// A shared separator belongs to both adjacent panes.
+		const edges = Array.from({ length: columns.length + 1 }, (_, edge) =>
+			activeColumn >= 0 && (edge === activeColumn || edge === activeColumn + 1) ? activeVertical : vertical,
+		);
 		const lines = [topBorder(width, "IRC")];
-		for (let i = 0; i < mainRows; i++) lines.push(`${vertical}${columns.map(column => fit(column.lines[i] ?? "", column.width)).join(vertical)}${vertical}`);
+		for (let i = 0; i < mainRows; i++) {
+			let line = edges[0]!;
+			for (let index = 0; index < columns.length; index++) {
+				const column = columns[index]!;
+				line += fit(column.lines[i] ?? "", column.width) + edges[index + 1]!;
+			}
+			lines.push(line);
+		}
 		const hint = this.#search.focused ? this.#search.render(Math.max(1, inner - 2), SEARCH_THEME) : theme.fg("dim", this.#hints(room));
 		lines.push(row(this.#page !== "roster" && !this.#search.focused && this.#search.value ? `${label("search")}: ${sanitizeDisplaySingleLine(this.#search.value)}  ${hint}` : hint, width));
 		lines.push(row(this.#error ? theme.fg("error", this.#error) : this.#busy ? label("working") : "", width));
@@ -816,12 +835,14 @@ export class IrcClientComponent implements Component {
 		return reply ? `${hint} · ${label("hint.quick_reply", { reply })}` : hint;
 	}
 
-	#heading(text: string, focused: boolean): string {
-		return ` ${theme.fg(focused ? "accent" : "muted", theme.bold(text))}`;
+	#heading(text: string, region: Region): string {
+		const focused = this.focused && this.#region === region;
+		const title = focused ? `${theme.nav.selected} ${text}` : text;
+		return ` ${theme.fg(focused ? "accent" : "dim", theme.bold(title))}`;
 	}
 
 	#renderSidebar(width: number, height: number): string[] {
-		const lines = [this.#heading(label(this.#page === "dms" ? "open_dms_title" : "conversations"), this.#region === "sidebar")];
+		const lines = [this.#heading(label(this.#page === "dms" ? "open_dms_title" : "conversations"), "sidebar")];
 		const items = this.#sidebar.visibleItems;
 		const window = this.#sidebarView.layout(items.map(() => 1), this.#sidebar.selectedIndex, height - 1);
 		for (let i = window.startIndex; i < window.endIndex; i++) {
@@ -845,7 +866,7 @@ export class IrcClientComponent implements Component {
 	#renderRoster(width: number, height: number): string[] {
 		const list = this.#roster.visibleItems;
 		const rows = [
-			this.#heading(label("roster"), this.#region === "center"),
+			this.#heading(label("roster"), "center"),
 			` ${theme.fg("muted", label("roster_view", { filter: label(`filter.${FILTERS[this.#filter]}`), sort: label(`sort.${SORTS[this.#sort]}`) }))}`,
 		];
 		const window = this.#rosterView.layout(list.map(() => 2), this.#roster.selectedIndex, height - 2);
@@ -876,7 +897,7 @@ export class IrcClientComponent implements Component {
 		if (room) attributes.push(label("member_count", { count: room.members.length }));
 		if (room?.notifications) attributes.push(label(`level.${room.notifications}`));
 		if (otherIrcDmPeer(id, this.#host.operatorId)) attributes.push(label(`level.${this.#model.notificationLevel(id)}`));
-		const heading = `${this.#heading(this.#title(id), this.#region === "center")}${attributes.length ? theme.fg("dim", `  ${attributes.join(" · ")}`) : ""}`;
+		const heading = `${this.#heading(this.#title(id), "center")}${attributes.length ? theme.fg("dim", `  ${attributes.join(" · ")}`) : ""}`;
 		let composer: readonly string[] = [];
 		if (canSend && height >= 5 && width >= 8) {
 			const editor = this.#editor(id);
@@ -904,7 +925,7 @@ export class IrcClientComponent implements Component {
 	}
 
 	#renderMembers(room: IrcClientRoom | undefined, width: number, height: number): string[] {
-		const lines = [this.#heading(label("members"), this.#region === "members")];
+		const lines = [this.#heading(label("members"), "members")];
 		const members = this.#members.visibleItems;
 		const window = this.#membersView.layout(members.map(() => 3), this.#members.selectedIndex, height - 1);
 		let skip = window.lineOffset;
@@ -931,21 +952,23 @@ export class IrcClientComponent implements Component {
 
 	#renderPopup(width: number, height: number): string[] {
 		const popup = this.#popup!;
-		const lines = [topBorder(width, popup.title)];
+		const color = this.focused ? "accent" : "border";
+		const title = this.focused ? `${theme.nav.selected} ${popup.title}` : popup.title;
+		const lines = [topBorder(width, title, color)];
 		if (popup.type === "create") {
 			popup.input.setUseTerminalCursor(this.#terminalCursor);
-			lines.push(row(popup.input.render(Math.max(1, width - 4))[0] ?? "", width));
+			lines.push(row(popup.input.render(Math.max(1, width - 4))[0] ?? "", width, color));
 		} else {
 			const items = popup.list.visibleItems;
 			const window = popup.viewport.layout(items.map(() => 1), popup.list.selectedIndex, height - 3);
 			for (let i = window.startIndex; i < window.endIndex; i++) {
 				const text = `${i === popup.list.selectedIndex ? "›" : " "} ${items[i]!.label}`;
-				lines.push(row(i === popup.list.selectedIndex ? theme.fg("accent", text) : text, width));
+				lines.push(row(i === popup.list.selectedIndex ? theme.fg("accent", text) : text, width, color));
 			}
 		}
-		if (this.#error) lines.push(row(theme.fg("error", this.#error), width));
-		else if (this.#busy) lines.push(row(label("working"), width));
-		lines.push(bottomBorder(width));
+		if (this.#error) lines.push(row(theme.fg("error", this.#error), width, color));
+		else if (this.#busy) lines.push(row(label("working"), width, color));
+		lines.push(bottomBorder(width, color));
 		return lines;
 	}
 }

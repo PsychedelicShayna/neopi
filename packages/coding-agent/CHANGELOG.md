@@ -362,6 +362,7 @@
 
 ### Changed
 
+- The Alt+I IRC client and Traffic viewer mark the focused pane or popup with a heading marker and accent-colored borders.
 - The Alt+T side panel is usable from the keyboard: `Alt+T` opens it with focus and then switches focus between it and the transcript, arrows select agents or IRC messages, `→` opens the selection, `←`/`Esc` return to the transcript, `Tab` switches views, and `q` closes it. The `Alt+T` `t`/`a`/`i` chords are gone.
 - In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` opens a filter popup that also holds the sort direction; `?` shows help, and navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
 - In the side panel's Agents view, `i` messages the selected agent, `r`/`x` revive or kill it, and `f` edits the filter row; navigation hints no longer fill the bottom, which lists only these keys. The view starts with running subagents and advisors.
