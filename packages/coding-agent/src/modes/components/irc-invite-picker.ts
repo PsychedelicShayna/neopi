@@ -257,7 +257,7 @@ export class IrcInvitePickerComponent implements Component {
 		}
 	}
 
-	render(width: number): readonly string[] {
+	render(width: number, focused = true): readonly string[] {
 		const room = this.#room;
 		if (!room) return [];
 		const page = this.#page;
@@ -267,9 +267,10 @@ export class IrcInvitePickerComponent implements Component {
 			page.kind === "list"
 				? t("overlays.irc_invite.title", { room: sanitizeDisplaySingleLine(room.name) })
 				: t(`overlays.irc_invite.${page.kind}_title`);
-		const lines = [topBorder(width, title)];
+		const color = focused ? "accent" : "border";
+		const lines = [topBorder(width, focused ? `${theme.nav.selected} ${title}` : title, color)];
 		const muted = (text: string) => theme.fg("muted", label(text));
-		const put = (text: string) => lines.push(row(text, width));
+		const put = (text: string) => lines.push(row(text, width, color));
 		const kb = getKeybindings();
 		const vim = getMenuSearchVimMode();
 		const height = this.#options.maxRows?.() ?? Math.min(24, process.stdout.rows ?? 24);
@@ -338,7 +339,7 @@ export class IrcInvitePickerComponent implements Component {
 			}
 			for (const hint of hints) put(muted(hint));
 		}
-		lines.push(bottomBorder(width));
+		lines.push(bottomBorder(width, color));
 		return lines;
 	}
 
