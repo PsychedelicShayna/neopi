@@ -48,7 +48,7 @@ import { type Theme, theme } from "@oh-my-pi/pi-tui/theme";
 import { discoverMixtures, mixturesConfigFilePath } from "../../moa/config";
 import { checkMixture, readMixtureDefinitionFile, saveMixtureDefinition } from "../../moa/registration";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
-import { setSubagentFast, setSubagentThinkingLevel } from "../../registry/subagent-controls";
+import { runSubagentFastCommand, setSubagentFast, setSubagentThinkingLevel } from "../../registry/subagent-controls";
 import {
 	type WordCompletionEngine,
 	type WordCompletionMethod,
@@ -2474,6 +2474,7 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				return failure ? error(id, command.type, failure) : success(id, command.type);
 			}
 
+			case "set_subagent_priority_tier":
 			case "set_subagent_fast": {
 				if (!subagentRegistry) {
 					return error(id, command.type, "Subagent event bus is unavailable");
@@ -2481,11 +2482,23 @@ export function createRpcCommandHandler(ctx: RpcCommandHandlerContext): (command
 				if (typeof command.subagentId !== "string" || command.subagentId.length === 0) {
 					return error(id, command.type, "`subagentId` must be a non-empty string.");
 				}
-				if (typeof command.enabled !== "boolean") {
-					return error(id, command.type, "`enabled` must be a boolean.");
+				if (command.type === "set_subagent_fast") {
+					if (typeof command.enabled !== "boolean") {
+						return error(id, command.type, "`enabled` must be a boolean.");
+					}
+				} else if (command.tier !== "fast" && command.tier !== "ultra" && command.tier !== "off") {
+					return error(id, command.type, "`tier` must be fast, ultra, or off.");
 				}
 				const owned = resolveOwnedLiveSubagent(subagentRegistry, command.subagentId);
 				if (!owned) return error(id, command.type, `Subagent not running: ${command.subagentId}`);
+				if (command.type === "set_subagent_priority_tier") {
+					try {
+						await runSubagentFastCommand(owned.session, command.tier === "fast" ? "on" : command.tier);
+					} catch (err) {
+						return error(id, command.type, err instanceof Error ? err.message : String(err));
+					}
+					return success(id, command.type);
+				}
 				if (!(await setSubagentFast(owned.session, command.enabled))) {
 					return error(id, command.type, "Fast mode is unavailable for the subagent's current model.");
 				}

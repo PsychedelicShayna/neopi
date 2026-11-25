@@ -286,6 +286,28 @@ describe("RPC set_subagent_thinking_level", () => {
 		expect(session.serviceTierByFamily).toEqual({});
 	});
 
+	test("sets a running child's priority tier to ultra and off and reports unavailable ultra", async () => {
+		setup();
+		const setTier = (tier: "fast" | "ultra" | "off") =>
+			handle({ type: "set_subagent_priority_tier", subagentId: AGENT_ID, tier });
+
+		expect(await setTier("ultra")).toMatchObject({
+			success: false,
+			error: "Ultrafast is unavailable for the current model.",
+		});
+		expect(session.serviceTierByFamily).toEqual({});
+		expect(await setTier("fast")).toMatchObject({ success: true });
+		expect(session.serviceTierByFamily.anthropic).toBe("priority");
+
+		const model = getBundledModel("openai", "gpt-6-astra");
+		if (!model) throw new Error("Expected bundled OpenAI test model");
+		session.agent.setModel(model);
+		expect(await setTier("ultra")).toMatchObject({ success: true });
+		expect(session.serviceTierByFamily.openai).toBe("ultrafast");
+		expect(await setTier("off")).toMatchObject({ success: true });
+		expect(session.serviceTierByFamily.openai).toBeUndefined();
+	});
+
 	test("refuses fast edits on an unknown or accepted subagent", async () => {
 		setup();
 		const missing = await fast(true, "Missing");
