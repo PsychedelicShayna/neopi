@@ -4,6 +4,7 @@ import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/inp
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
 import {
 	cfgSidebarAgentAutoscroll,
+	cfgSidebarAgentFilters,
 	cfgSidebarAgentOrder,
 	cfgSidebarEnabled,
 	cfgSidebarView,
@@ -18,15 +19,15 @@ import type { AgentRecordLike } from "@oh-my-pi/pi-tui/overlays/agent-hub-types"
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { VirtualRenderScheduler } from "../../tui/test/virtual-render-scheduler";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 const ALT_T = "\x1bt";
 
 /** Real Composer + SidePanelController + InputController listeners; alt+t arrives through the terminal. */
-async function harness(columns: number) {
-	const term = new VirtualTerminal(columns, 24);
+async function harness(columns: number, rows = 24) {
+	const term = new VirtualTerminal(columns, rows);
 	const scheduler = new VirtualRenderScheduler();
 	const composer = new Composer({
 		terminal: term,
@@ -39,6 +40,7 @@ async function harness(columns: number) {
 	const keybindings = KeybindingsManager.inMemory();
 	const sidePanel = new SidePanelController({ ui: composer.ui, composer, settings, keybindings });
 	const ctx = {
+		settings,
 		ui: composer.ui,
 		handlesBtwBranchKey: () => false,
 		editor: {
@@ -242,6 +244,160 @@ describe("alt+t focus and the panel keymap", () => {
 			}
 		});
 	}
+});
+
+describe("side-panel popups", () => {
+	it("opens help on ? and the Agents filter popup on f, which toggles live and closes on Esc", async () => {
+		const h = await harness(120);
+		try {
+			h.sidePanel.registerView(
+				"agents",
+				new AgentsSection({
+					settings: h.settings,
+					observed: () => undefined,
+					visible: () => true,
+					agents: () => [],
+					focusedAgentId: () => undefined,
+					focus: () => {},
+					returnToPrimary: () => {},
+					openTranscript: () => {},
+					message: () => {},
+					revive: () => {},
+					kill: () => {},
+					requestRender: () => h.composer.ui.requestRender(),
+					onChange: () => () => {},
+				}),
+			);
+			const screen = () => h.term.getViewport().join("\n");
+			const send = async (...keys: string[]) => {
+				for (const key of keys) h.term.sendInput(key);
+				await h.settle();
+			};
+			await send(ALT_T);
+			expect(screen()).toContain("? help");
+			await send("?");
+			expect(screen()).toContain("i DM · r revive · x kill");
+			// The card swallows other keys and closes on Esc, leaving the panel focused.
+			await send("q");
+			expect(h.sidePanel.active).toBe(true);
+			expect(screen()).toContain("i DM · r revive · x kill");
+			await send("\x1b");
+			expect(h.sidePanel.active).toBe(true);
+			expect(screen()).not.toContain("i DM · r revive · x kill");
+
+			await send("f");
+			expect(screen()).toContain("Filters");
+			expect(screen()).toContain(`Filters ${theme.symbol("provenance.moon")}`);
+			expect(screen()).toContain("[x] Running subagents");
+			expect(screen()).toContain("[ ] Idle subagents");
+			await send("\x1b[B", " ");
+			expect(cfgSidebarAgentFilters.get(h.settings)).toEqual(["running", "advisors", "idle"]);
+			expect(screen()).toContain("[x] Idle subagents");
+			await send("\x1b[F", " ");
+			expect(cfgSidebarAgentOrder.get(h.settings)).toBe("newest-at-top");
+			// Esc closes the popup, not the panel or its focus.
+			await send("\x1b");
+			expect(screen()).not.toContain("Filters");
+			expect(h.sidePanel.active).toBe(true);
+		} finally {
+			h.stop();
+		}
+	});
+
+	it("keeps filters actionable and shields agent rows in an eight-row fullscreen panel", async () => {
+		const previousVim = getMenuSearchVimMode();
+		const h = await harness(100, 8);
+		const runner: AgentRecordLike = {
+			id: "runner",
+			displayName: "Runner",
+			kind: "sub",
+			status: "running",
+			session: null,
+			sessionFile: null,
+			createdAt: 0,
+			lastActivity: 0,
+		};
+		const focus = vi.fn();
+		const openTranscript = vi.fn();
+		const viewport = () => h.term.getViewport();
+		const screen = () => viewport().join("\n");
+		const send = async (...keys: string[]) => {
+			for (const key of keys) h.term.sendInput(key);
+			await h.settle();
+		};
+		try {
+			setMenuSearchVimMode(false);
+			h.sidePanel.registerView(
+				"agents",
+				new AgentsSection({
+					settings: h.settings,
+					observed: () => undefined,
+					visible: () => h.sidePanel.visible,
+					agents: () => [runner],
+					focusedAgentId: () => undefined,
+					focus,
+					returnToPrimary: () => {},
+					openTranscript,
+					message: () => {},
+					revive: () => {},
+					kill: () => {},
+					requestRender: () => h.composer.ui.requestRender(),
+					onChange: () => () => {},
+				}),
+			);
+			await send(ALT_T);
+			expect(h.sidePanel.fullscreenActive).toBe(true);
+			const underlying = viewport();
+			await send("f");
+			expect(screen()).toContain("[x] Running subagents");
+			expect(screen()).not.toContain("Order: newest at bottom");
+
+			await send("\x1b[F");
+			expect(screen()).not.toContain("[x] Running subagents");
+			expect(screen()).toContain(`${theme.nav.selected} Order: newest at bottom`);
+			expect(viewport().at(-1)).toContain("└─");
+			await send(" ");
+			expect(cfgSidebarAgentOrder.get(h.settings)).toBe("newest-at-top");
+			expect(screen()).toContain(`${theme.nav.selected} Order: newest at top`);
+
+			const checkbox = "[ ] Parked subagents";
+			const row = viewport().findIndex(line => line.includes(checkbox));
+			expect(underlying[row]).toContain(runner.id);
+			await send(`\x1b[<0;${viewport()[row]!.indexOf(checkbox) + 1};${row + 1}M`);
+			expect(cfgSidebarAgentFilters.get(h.settings)).toEqual(["running", "advisors", "parked"]);
+			expect(screen()).toContain("[x] Parked subagents");
+			expect(focus).not.toHaveBeenCalled();
+			expect(openTranscript).not.toHaveBeenCalled();
+
+			await send("\x1b");
+			const beforeHelp = viewport();
+			await send("?");
+			const helpFooter = "? / Enter / Esc: return to menu";
+			expect(screen()).not.toContain(helpFooter);
+			expect(screen()).not.toContain("i DM · r revive · x kill");
+			expect(viewport().at(-1)).toContain("└─");
+			await send(`\x1b[<0;50;${row + 1}M`, "\x1b[F");
+			expect(screen()).toContain("i DM · r revive · x kill");
+			expect(screen()).toContain(helpFooter);
+			await send("\x1b[H");
+			expect(screen()).not.toContain(helpFooter);
+			await send("\x1b[6~");
+			expect(screen()).toContain("i DM · r revive · x kill");
+			await send("\x1b[6~");
+			expect(screen()).toContain(helpFooter);
+
+			await send("\x1b");
+			expect(screen()).not.toContain(helpFooter);
+			expect(viewport()).toEqual(beforeHelp);
+			expect(h.sidePanel.fullscreenActive).toBe(true);
+			expect(focus).not.toHaveBeenCalled();
+			expect(openTranscript).not.toHaveBeenCalled();
+		} finally {
+			setMenuSearchVimMode(previousVim);
+			h.sidePanel.dispose();
+			h.stop();
+		}
+	});
 });
 
 describe("focused side-panel scrolling", () => {

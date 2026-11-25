@@ -10,10 +10,14 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
 import { isLayoutComponent, type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
+import { MenuHelp } from "@oh-my-pi/pi-tui/components/menu-hints";
 import { applyMenuMotion, MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
+import { compositeLineAt } from "@oh-my-pi/pi-tui/render/composite";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { logger } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
 import {
 	cfgSidebarEnabled,
@@ -62,6 +66,11 @@ export interface SidePanelViewAction {
 	run(): void;
 }
 
+interface SidePanelViewPopup {
+	renderPopup(rowBudget: number): { title: string; rows: readonly string[]; firstRow: number };
+	activatePopupRow(row: number): void;
+}
+
 /**
  * A view's section plus its keyboard surface. Views without a selection let
  * Up/Down scroll the panel instead.
@@ -79,9 +88,11 @@ export interface SidePanelViewSection extends SidePanelSection {
 	/** The view's own keys; listed in the key line while the panel has focus. */
 	actions?(): readonly SidePanelViewAction[];
 	/** A view-owned mode (such as filter editing) that reads keys before panel navigation; true when consumed. */
-	handleModeInput?(data: string, keys: MenuKeyReader): boolean;
+	handleModeInput?(data: string, keys: MenuKeyReader, popupFits: boolean): boolean;
 	/** Leave any view-owned mode. */
 	resetMode?(): void;
+	/** The view's floating popup; undefined while closed. */
+	readonly popup?: SidePanelViewPopup | undefined;
 }
 
 /** What the controller needs from its interactive host. */
@@ -118,18 +129,24 @@ export class SidePanelController {
 	#previousFocus: Component | null = null;
 	readonly #keys: MenuKeyReader;
 	readonly #percentChord = new PercentChord();
+	readonly #help: MenuHelp;
+	#popupFits = false;
+	#popupHit: { popup: SidePanelViewPopup; rect: LayoutRect; firstRow: number } | undefined;
 	/** A divider drag in progress: the live panel width, and whether the pointer has moved it. */
 	#drag: { width: number; moved: boolean } | undefined;
 
 	constructor(host: SidePanelHost) {
 		this.#host = host;
 		this.#keys = new MenuKeyReader(host.keybindings);
+		this.#help = new MenuHelp(undefined, () => t("overlays.side_panel.help"), this.#keys);
 		this.#panel = new SidePanel({
 			onChange: () => host.ui.requestRender(),
 			onSecondaryClick: () => this.cycleView(1),
 			onEmptyClick: () => this.#mounted?.clickEmpty?.(),
 			onInput: data => this.#handlePanelInput(data),
 			hints: () => this.#hints(),
+			overlay: (lines, width) => this.#paintOverlay(lines, width),
+			overlayMouse: (event, line, col) => this.#routeOverlayMouse(event, line, col),
 		});
 	}
 
@@ -254,15 +271,21 @@ export class SidePanelController {
 
 	#resetNavigation(): void {
 		this.#keys.reset();
+		if (this.#help.open) this.#help.handleInput("\x1b");
 		this.#percentChord.clear();
 		this.#mounted?.resetMode?.();
+		this.#popupHit = undefined;
 		this.#mounted?.clearSelection?.();
 	}
 
 	#handlePanelInput(data: string): void {
 		if (data.startsWith("\x1b[<") || isKeyRelease(data)) return;
 		const view = this.#mounted;
-		if (view?.handleModeInput?.(data, this.#keys)) return;
+		if (this.#help.handleInput(data)) {
+			this.#host.ui.requestRender();
+			return;
+		}
+		if (view?.handleModeInput?.(data, this.#keys, this.#popupFits)) return;
 		const first = this.#percentChord.take();
 		const digit = DIGIT_KEYS.findIndex(key => matchesKey(data, key));
 		if (digit >= 0) {
@@ -334,15 +357,61 @@ export class SidePanelController {
 		}
 	}
 
-	/** The panel's own keys only; navigation is the harness-wide menu keymap. */
+	/** The panel's own keys only; navigation is the harness-wide menu keymap, behind `?`. */
 	#hints(): readonly string[] {
 		if (!this.active) return [];
 		const actions = this.#mounted?.actions?.() ?? [];
-		if (actions.length === 0) return [];
-		const line = actions
-			.map(action => `${theme.fg("accent", action.key)} ${theme.fg("dim", action.label)}`)
-			.join(theme.fg("dim", " · "));
-		return [line];
+		const parts = actions.map(action => `${theme.fg("accent", action.key)} ${theme.fg("dim", action.label)}`);
+		parts.push(`${theme.fg("accent", "?")} ${theme.fg("dim", t("overlays.side_panel.action.help"))}`);
+		return [parts.join(theme.fg("dim", " · "))];
+	}
+
+	/** The help card or the mounted view's popup, painted over the finished panel rows. */
+	#paintOverlay(lines: readonly string[], width: number): readonly string[] {
+		this.#popupHit = undefined;
+		this.#popupFits = width >= 8 && lines.length >= 3;
+		if (this.#help.open) return this.#help.render(lines, width);
+		const popup = this.#mounted?.popup;
+		if (!popup || !this.#popupFits) return lines;
+		const { title: label, rows, firstRow } = popup.renderPopup(lines.length - 2);
+		const inner = Math.min(width - 4, Math.max(visibleWidth(label) + 2, ...rows.map(row => visibleWidth(row))));
+		const boxWidth = inner + 4;
+		const border = (text: string) => theme.fg("border", text);
+		const title = truncateToWidth(` ${label} `, boxWidth - 2);
+		const box = [
+			border(`┌${title}${"─".repeat(Math.max(0, boxWidth - 2 - visibleWidth(title)))}┐`),
+			...rows.map(row => {
+				const fitted = truncateToWidth(row, inner);
+				return `${border("│")} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${border("│")}`;
+			}),
+			border(`└${"─".repeat(boxWidth - 2)}┘`),
+		];
+		const result = [...lines];
+		const top = Math.max(0, result.length - box.length - 2);
+		const left = Math.max(0, Math.floor((width - boxWidth) / 2));
+		this.#popupHit = {
+			popup,
+			rect: { row: top + 1, col: left + 1, height: rows.length, width: boxWidth - 2 },
+			firstRow,
+		};
+		for (let i = 0; i < box.length; i++) {
+			result[top + i] = compositeLineAt(result[top + i]!, box[i]!, left, boxWidth, width);
+		}
+		return result;
+	}
+
+	#routeOverlayMouse(event: SgrMouseEvent, line: number, col: number): boolean {
+		if (this.#help.open) return true;
+		const popup = this.#mounted?.popup;
+		if (!popup) return false;
+		const hit = this.#popupHit;
+		if (event.leftClick && hit?.popup === popup) {
+			const { rect } = hit;
+			if (line >= rect.row && line < rect.row + rect.height && withinColumns(rect, col)) {
+				popup.activatePopupRow(hit.firstRow + line - rect.row);
+			}
+		}
+		return true;
 	}
 
 	/**

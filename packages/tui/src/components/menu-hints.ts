@@ -5,7 +5,7 @@ import type { NativeNode } from "../native/node";
 import { compositeLineAt } from "../render/composite";
 import type { Component } from "../tui";
 import { replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
-import { getMenuSearchVimMode } from "./menu-navigation";
+import { getMenuSearchVimMode, type MenuKeyReader, MenuViewport } from "./menu-navigation";
 
 export const MENU_VIM_HINT = "hjkl gg/G C-u d e y";
 
@@ -62,12 +62,16 @@ export class MenuHints implements Component {
 export class MenuHelp {
 	#open = false;
 	readonly #extra: string | (() => string);
+	readonly #viewport: MenuViewport | undefined;
 
 	constructor(
 		readonly vim = MENU_VIM_HINT,
 		extra: string | (() => string) = "",
+		/** When supplied, keep the card within the host's rows and let these keys scroll it. */
+		readonly keys?: MenuKeyReader,
 	) {
 		this.#extra = extra;
+		this.#viewport = keys ? new MenuViewport() : undefined;
 	}
 
 	get extra(): string {
@@ -80,11 +84,36 @@ export class MenuHelp {
 
 	handleInput(data: string): boolean {
 		if (this.#open) {
-			if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "?") this.#open = false;
+			if (matchesKey(data, "escape") || matchesKey(data, "enter") || data === "?") {
+				this.#open = false;
+				this.keys?.reset();
+			} else if (this.#viewport) {
+				const action = this.keys?.read(data);
+				if (action && action !== "pending") {
+					switch (action.kind) {
+						case "move":
+						case "scroll":
+							this.#viewport.scroll(action.delta);
+							break;
+						case "page":
+							this.#viewport.scroll(action.delta * this.#viewport.visibleItems);
+							break;
+						case "halfPage":
+							this.#viewport.scroll(action.delta * Math.max(1, Math.floor(this.#viewport.visibleItems / 2)));
+							break;
+						case "boundary":
+							// Layout clamps End to the last full window.
+							this.#viewport.setTop(action.edge === "first" ? 0 : Number.MAX_SAFE_INTEGER);
+							break;
+					}
+				}
+			}
 			return true;
 		}
 		if (data !== "?") return false;
 		this.#open = true;
+		this.#viewport?.setTop(0);
+		this.keys?.reset();
 		return true;
 	}
 
@@ -131,11 +160,16 @@ export class MenuHelp {
 	}
 
 	render(lines: readonly string[], width: number): string[] {
-		if (!this.#open || width < 6) return [...lines];
+		if (!this.#open || width < 6 || (this.#viewport && lines.length < 3)) return [...lines];
 		const boxWidth = Math.min(width, 64);
 		const innerWidth = boxWidth - 4;
 		const explanations = this.#explanations();
-		const contents = explanations.flatMap(line => (line ? wrapTextWithAnsi(line, innerWidth) : [""]));
+		let contents = explanations.flatMap(line => (line ? wrapTextWithAnsi(line, innerWidth) : [""]));
+		if (this.#viewport) {
+			// Each wrapped visual line is a viewport item, so page motions count rows.
+			const { startIndex, endIndex } = this.#viewport.layout(contents.map(() => 1), 0, lines.length - 2);
+			contents = contents.slice(startIndex, endIndex);
+		}
 		const box = [
 			`┌${"─".repeat(boxWidth - 2)}┐`,
 			...contents.map(line => `│ ${line}${" ".repeat(Math.max(0, innerWidth - visibleWidth(line)))} │`),
