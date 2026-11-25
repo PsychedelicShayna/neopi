@@ -230,6 +230,10 @@ class AgentsContent implements MouseRoutable, SidePanelPointerAware {
 	#pendingFocus: { id: string } | undefined;
 	readonly selection: RowSelection;
 
+	itemIdAtRow(row: number): string | undefined {
+		return this.#rowIds[row];
+	}
+
 	constructor(host: AgentsSectionHost) {
 		this.#host = host;
 		this.selection = new RowSelection(() => host.requestRender());
@@ -462,6 +466,10 @@ export class AgentsSection implements SidePanelViewSection {
 
 	selectionTarget(): PanelSelectionTarget | undefined {
 		return this.content.selection.target();
+	}
+
+	itemIdAtRow(row: number): string | undefined {
+		return this.content.itemIdAtRow(row);
 	}
 
 	moveSelection(delta: number): boolean {

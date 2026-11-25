@@ -10,13 +10,13 @@ import {
 import { SidePanel, SidePanelFullscreenComponent, type SidePanelSection } from "@oh-my-pi/pi-tui/chrome";
 import { isLayoutComponent, type LayoutRect, layoutSize } from "@oh-my-pi/pi-tui/components/layout/geometry";
 import { MenuHelp } from "@oh-my-pi/pi-tui/components/menu-hints";
-import { MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
-import { compositeLineAt } from "@oh-my-pi/pi-tui/render/composite";
-import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { t } from "@oh-my-pi/pi-utils/i18n";
+import { applyMenuMotion, MenuKeyReader } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import type { Composer, SidePanelDock } from "@oh-my-pi/pi-tui/prompt/composer";
+import { compositeLineAt } from "@oh-my-pi/pi-tui/render/composite";
 import { theme } from "@oh-my-pi/pi-tui/theme";
+import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { logger } from "@oh-my-pi/pi-utils";
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Settings } from "../../config/settings";
 import {
 	cfgSidebarEnabled,
@@ -309,11 +309,26 @@ export class SidePanelController {
 				this.scrollBy(nav.delta);
 				break;
 			case "page":
-				this.scrollBy(nav.delta * this.#panel.viewportHeight);
+			case "halfPage": {
+				if (view?.itemIdAtRow && view.moveSelection) {
+					applyMenuMotion(
+						nav,
+						{
+							move: delta => view.moveSelection?.(delta) ?? false,
+							moveToBoundary: edge => view.selectEdge?.(edge) ?? false,
+						},
+						{
+							visibleItems: this.#panel.visibleItems(view),
+							scroll: delta => this.scrollBy(delta),
+							reveal: () => this.#panel.revealSelection(),
+						},
+					);
+				} else {
+					const height = this.#panel.viewportHeight;
+					this.scrollBy(nav.delta * (nav.kind === "page" ? height : Math.max(1, Math.floor(height / 2))));
+				}
 				break;
-			case "halfPage":
-				this.scrollBy(nav.delta * Math.max(1, Math.floor(this.#panel.viewportHeight / 2)));
-				break;
+			}
 			case "horizontal":
 				if (nav.delta < 0) this.focusTranscript();
 				else view?.expand?.();

@@ -2,18 +2,20 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { SidePanelController } from "@oh-my-pi/pi-coding-agent/modes/controllers/side-panel-controller";
-import { AgentsSection } from "@oh-my-pi/pi-coding-agent/modes/side-panel/agents-section";
 import {
+	cfgSidebarAgentAutoscroll,
 	cfgSidebarAgentFilters,
 	cfgSidebarAgentOrder,
 	cfgSidebarEnabled,
 	cfgSidebarView,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { AgentsSection } from "@oh-my-pi/pi-coding-agent/modes/side-panel/agents-section";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import type { AgentRecordLike } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
@@ -302,6 +304,81 @@ describe("side-panel popups", () => {
 });
 
 describe("focused side-panel scrolling", () => {
+	it("moves and reveals the agent selection before Enter acts on it", async () => {
+		const previousVim = getMenuSearchVimMode();
+		const h = await harness(120);
+		const agents = Array.from({ length: 40 }, (_, index): AgentRecordLike => ({
+			id: `agent-${String(index).padStart(2, "0")}`,
+			displayName: `Agent ${index}`,
+			kind: "sub",
+			status: "running",
+			session: null,
+			sessionFile: null,
+			createdAt: index,
+			lastActivity: index,
+		}));
+		const opened: string[] = [];
+		const section = new AgentsSection({
+			settings: h.settings,
+			agents: () => agents,
+			focusedAgentId: () => undefined,
+			observed: () => undefined,
+			visible: () => h.sidePanel.visible,
+			focus: () => {},
+			returnToPrimary: () => {},
+			openTranscript: id => opened.push(id),
+			message: () => {},
+			revive: () => {},
+			kill: () => {},
+			requestRender: () => h.composer.ui.requestRender(),
+			onChange: () => () => {},
+		});
+		const send = async (...keys: string[]) => {
+			for (const key of keys) h.term.sendInput(key);
+			await h.settle();
+		};
+		const selected = () =>
+			h.term.getViewport().flatMap((line, row) => {
+				const id = line.match(/agent-\d\d/)?.[0];
+				return id && h.term.getViewportRowBackgroundColumns(row).length > 0 ? [id] : [];
+			});
+		try {
+			cfgSidebarAgentAutoscroll.override(h.settings, false);
+			cfgSidebarAgentOrder.override(h.settings, "newest-at-bottom");
+			h.sidePanel.registerView("agents", section);
+			setMenuSearchVimMode(false);
+			await send(ALT_T);
+			await send("\x1b[B");
+			expect(selected()).toEqual(["agent-00"]);
+			const page = h.term.getViewport().filter(line => /agent-\d\d/.test(line)).length;
+			expect(page).toBeGreaterThan(2);
+			const paged = agents[page]!.id;
+			await send("\x1b[6~");
+			expect(selected()).toEqual([paged]);
+			await send("\r");
+			expect(opened).toEqual([paged]);
+
+			await send("\x1b[5~");
+			expect(selected()).toHaveLength(1);
+			expect(agents.findIndex(agent => agent.id === selected()[0])).toBeLessThan(page);
+
+			setMenuSearchVimMode(true);
+			await send("\x1b[H");
+			await send("\x04");
+			const half = agents[Math.floor(page / 2)]!.id;
+			expect(selected()).toEqual([half]);
+			await send("\r");
+			expect(opened).toEqual([paged, half]);
+			await send("\x15");
+			expect(selected()).toHaveLength(1);
+			expect(agents.findIndex(agent => agent.id === selected()[0])).toBeLessThan(Math.floor(page / 2));
+		} finally {
+			h.sidePanel.dispose();
+			h.stop();
+			setMenuSearchVimMode(previousVim);
+		}
+	});
+
 	for (const vim of [false, true]) {
 		it(`opens immediately and jumps by two digits with Vim ${vim ? "on" : "off"}`, async () => {
 			const previousVim = getMenuSearchVimMode();

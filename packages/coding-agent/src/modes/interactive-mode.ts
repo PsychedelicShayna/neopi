@@ -2410,7 +2410,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			"irc",
 			new IrcSection({
 				source: operatorIrcLogSource(() => this.session),
-				openViewer: () => this.showIrcViewer(),
+				openViewer: messageId => this.showIrcViewer(messageId),
 				requestRender,
 			}),
 		);
@@ -10763,8 +10763,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		)?.trim();
 	}
 
-	showIrcViewer(): void {
-		this.#selectorController.showIrcViewer();
+	showIrcViewer(messageId?: string): void {
+		this.#selectorController.showIrcViewer(messageId);
 	}
 
 	resetObserverRegistry(): void {

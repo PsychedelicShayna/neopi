@@ -4473,7 +4473,7 @@ export class SelectorController {
 	 * The operator's IRC history for this UI's root and conversation (issue #1).
 	 * Agents gain nothing from it: it reads the bus's operator-only log.
 	 */
-	showIrcViewer(): void {
+	showIrcViewer(messageId?: string): void {
 		// A control client dismisses an overlay through the handle's own hide,
 		// which skips onClose. Finish that close first, so the key opens a fresh
 		// viewer instead of focusing the vanished one.
@@ -4509,6 +4509,7 @@ export class SelectorController {
 						else release();
 					}),
 			},
+			initialMessageId: messageId,
 			viewerKeys: this.ctx.keybindings.getKeys("app.irc.viewer"),
 			expandKeys: this.ctx.keybindings.getKeys("app.tools.expand"),
 			rows: () => this.ctx.ui.terminal?.rows || process.stdout.rows || 40,
