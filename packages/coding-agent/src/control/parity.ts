@@ -42,6 +42,7 @@ export const RPC_COMMAND_TYPES = [
 	"steer_subagent",
 	"set_subagent_thinking_level",
 	"set_subagent_fast",
+	"set_subagent_priority_tier",
 	"set_subagent_model",
 	"get_jobs",
 	"get_job_output",

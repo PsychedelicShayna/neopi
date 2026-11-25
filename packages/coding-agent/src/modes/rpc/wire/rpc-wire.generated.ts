@@ -2885,6 +2885,11 @@ export interface SetSubagentFastParams {
 	enabled: boolean;
 }
 
+export interface SetSubagentPriorityTierParams {
+	subagentId: string;
+	tier: "fast" | "ultra" | "off";
+}
+
 export interface GetCommandCompletionsParams {
 	command: string;
 	prefix: string;
@@ -3211,6 +3216,7 @@ export interface RpcWireCommands {
 	steer_subagent: { params: SteerSubagentParams; result: undefined };
 	set_subagent_thinking_level: { params: SetSubagentThinkingLevelParams; result: undefined };
 	set_subagent_fast: { params: SetSubagentFastParams; result: FastModeResult };
+	set_subagent_priority_tier: { params: SetSubagentPriorityTierParams; result: undefined };
 	get_command_completions: { params: GetCommandCompletionsParams; result: GetCommandCompletionsResult };
 	get_jobs: { params: GetJobsParams; result: JobsResult };
 	get_job_output: { params: GetJobOutputParams; result: JobOutput };

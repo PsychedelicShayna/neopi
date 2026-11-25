@@ -651,9 +651,20 @@
 			},
 			{
 				"name": "set_subagent_fast",
-				"doc": "Enable or disable fast mode only for a running subagent, from its next request.",
+				"doc": "Enable or disable fast mode for a running subagent from its next request. For explicit fast, ultra, or off selection, use set_subagent_priority_tier.",
 				"params": "SetSubagentFastParams",
 				"result": "FastModeResult",
+				"nullable": false,
+				"unwrap": null,
+				"timeoutMs": null,
+				"completion": null,
+				"clientOmit": []
+			},
+			{
+				"name": "set_subagent_priority_tier",
+				"doc": "Set a running subagent's priority tier from its next request, using the same model support as /fast. Returns an error if the requested tier is unavailable.",
+				"params": "SetSubagentPriorityTierParams",
+				"result": null,
 				"nullable": false,
 				"unwrap": null,
 				"timeoutMs": null,
@@ -11533,6 +11544,26 @@
 			"required": [
 				"subagentId",
 				"enabled"
+			]
+		},
+		"SetSubagentPriorityTierParams": {
+			"type": "object",
+			"properties": {
+				"subagentId": {
+					"type": "string"
+				},
+				"tier": {
+					"enum": [
+						"fast",
+						"ultra",
+						"off"
+					],
+					"type": "string"
+				}
+			},
+			"required": [
+				"subagentId",
+				"tier"
 			]
 		},
 		"GetCommandCompletionsParams": {

@@ -408,9 +408,14 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 	},
 	{
 		name: "set_subagent_fast",
-		doc: "Enable or disable fast mode only for a running subagent, from its next request.",
+		doc: "Enable or disable fast mode for a running subagent from its next request. For explicit fast, ultra, or off selection, use set_subagent_priority_tier.",
 		params: { subagentId: "string", enabled: "boolean" },
 		result: "FastModeResult",
+	},
+	{
+		name: "set_subagent_priority_tier",
+		doc: "Set a running subagent's priority tier from its next request, using the same model support as /fast. Returns an error if the requested tier is unavailable.",
+		params: { subagentId: "string", tier: "'fast' | 'ultra' | 'off'" },
 	},
 	{
 		name: "get_command_completions",

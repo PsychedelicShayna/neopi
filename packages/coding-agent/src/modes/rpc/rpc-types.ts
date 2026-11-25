@@ -131,6 +131,7 @@ export type RpcCommand =
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
+	| { id?: string; type: "set_subagent_priority_tier"; subagentId: string; tier: "fast" | "ultra" | "off" }
 	| { id?: string; type: "get_jobs"; recentLimit?: number }
 	| { id?: string; type: "get_job_output"; jobId: string; fromByte?: number; revision?: string }
 	| { id?: string; type: "cancel_job"; jobId: string }
@@ -857,6 +858,7 @@ export type RpcResponse =
 	  }
 	| { id?: string; type: "response"; command: "steer_subagent"; success: true }
 	| { id?: string; type: "response"; command: "set_subagent_thinking_level"; success: true }
+	| { id?: string; type: "response"; command: "set_subagent_priority_tier"; success: true }
 	| {
 			id?: string;
 			type: "response";

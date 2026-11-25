@@ -13600,11 +13600,43 @@ type SetSubagentFastCommand struct {
 	Enabled    bool   `json:"enabled"`
 }
 
-// SetSubagentFast sends "set_subagent_fast": Enable or disable fast mode only for a running subagent, from its next request.
+// SetSubagentFast sends "set_subagent_fast": Enable or disable fast mode for a running subagent from its next request. For explicit fast, ultra, or off selection, use set_subagent_priority_tier.
 func (c Commands) SetSubagentFast(ctx context.Context, p SetSubagentFastCommand) (FastModeResult, error) {
 	var out FastModeResult
 	err := c.call(ctx, "set_subagent_fast", p, 0, &out)
 	return out, err
+}
+
+// SetSubagentPriorityTierCommand holds the parameters of "set_subagent_priority_tier".
+type SetSubagentPriorityTierCommand struct {
+	SubagentID string                             `json:"subagentId"`
+	Tier       SetSubagentPriorityTierCommandTier `json:"tier"`
+}
+
+// SetSubagentPriorityTier sends "set_subagent_priority_tier": Set a running subagent's priority tier from its next request, using the same model support as /fast. Returns an error if the requested tier is unavailable.
+func (c Commands) SetSubagentPriorityTier(ctx context.Context, p SetSubagentPriorityTierCommand) error {
+	return c.call(ctx, "set_subagent_priority_tier", p, 0, nil)
+}
+
+type SetSubagentPriorityTierCommandTier string
+
+const (
+	SetSubagentPriorityTierCommandTierFast  SetSubagentPriorityTierCommandTier = "fast"
+	SetSubagentPriorityTierCommandTierUltra SetSubagentPriorityTierCommandTier = "ultra"
+	SetSubagentPriorityTierCommandTierOff   SetSubagentPriorityTierCommandTier = "off"
+)
+
+func (v *SetSubagentPriorityTierCommandTier) UnmarshalJSON(data []byte) error {
+	s, err := decodeString(data, "SetSubagentPriorityTierCommandTier")
+	if err != nil {
+		return err
+	}
+	switch value := SetSubagentPriorityTierCommandTier(s); value {
+	case SetSubagentPriorityTierCommandTierFast, SetSubagentPriorityTierCommandTierUltra, SetSubagentPriorityTierCommandTierOff:
+		*v = value
+		return nil
+	}
+	return unknownValue("SetSubagentPriorityTierCommandTier", s)
 }
 
 // GetCommandCompletionsCommand holds the parameters of "get_command_completions".

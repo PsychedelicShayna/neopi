@@ -15,6 +15,7 @@
 
 ### Added
 
+- Parents can set a running subagent's priority tier to fast, ultra, or off over ctl/RPC ([#915](https://github.com/PsychedelicShayna/neopi/issues/915)).
 - `/moa web` now edits every mixture NeoPi reads for the workspace. A sidebar that opens when you hover the left edge lists them by user and project file, and lets you rename them or move and copy them between scopes. Saving checks each file for edits made since it was loaded and reports a conflict instead of continuing. A move writes the receiving file before removing the original, so an interrupted save can leave a duplicate rather than lose the mixture at the points the tests interrupt it.
 - Alt+T opens the side panel immediately; its Agents view shows live assignments and wait timers, remembers your filters, and follows the newest agent state changes.
 - Open `/moa web` to edit your workspace's Mixture of Agents graph in a local browser and refresh the running session's roster when you save. Like Deck, it warns and asks for confirmation before saving a rewrite that drops source fields ([#849](https://github.com/PsychedelicShayna/neopi/issues/849)).
