@@ -136,7 +136,7 @@
 "settings.setting.sidebar.enabled.label" = "Panel lateral"
 "settings.setting.sidebar.enabled.description" = "Acopla un panel junto al chat que muestra la lista de tareas, la lista de agentes o el tráfico de IRC"
 "settings.setting.sidebar.view.label" = "Vista"
-"settings.setting.sidebar.view.description" = "Contenido del panel; Alt+T lo abre y luego t, a o i cambia de vista"
+"settings.setting.sidebar.view.description" = "Contenido del panel; Alt+T lo abre y luego Tab cambia de vista"
 "settings.setting.sidebar.agents.order.label" = "Orden de los agentes"
 "settings.setting.sidebar.agents.order.description" = "Dónde aparecen los últimos cambios de estado en la vista de agentes"
 "settings.setting.sidebar.side.label" = "Lado"

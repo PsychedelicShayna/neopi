@@ -163,21 +163,28 @@ This is not a complete Vim engine. Unknown atoms, numeric/positional `%` atoms, 
 
 ## Side panel views
 
-`Alt+T` (`app.sidebar.toggle`) opens and focuses the side panel immediately, showing Agents by default or the last view you chose. For two seconds the next key can switch views:
+`Alt+T` (`app.sidebar.toggle`) opens the side panel and gives it keyboard focus, showing Agents by default or the last view you chose. With the panel open, `Alt+T` moves focus back and forth between the panel and the transcript; clicking inside the panel also focuses it. The selected view persists as `sidebar.view`.
 
-| Chord | View |
+While the panel has focus:
+
+| Key | Action |
 | --- | --- |
-| `Alt+T` `t` | Todo list |
-| `Alt+T` `a` | Agents: this session's subagents and advisors, as in the Agent Hub |
-| `Alt+T` `i` | IRC: the newest agent-to-agent messages, from the same history as `Alt+I` |
+| `Tab` / `Shift+Tab` | Next / previous view: Todo → Agents → IRC (right-click cycles too) |
+| `↑` / `↓` | Select the previous / next agent or message (Todo scrolls) |
+| `→` / `Enter` | Open the selection: an agent's transcript, or the IRC viewer |
+| `←` / `Esc` / `Ctrl+C` | Return focus to the transcript; the panel stays open |
+| `q` | Close the panel |
+| `i` | Agents: message the selected agent (fills `/irc <agent> ` in the composer) |
+| `r` / `x` | Agents: revive / kill the selected agent, as in the Agent Hub |
+| `f` | Agents: edit the filter row; arrows move, `Space` toggles, `Esc` finishes |
 
-If the view was already open before `Alt+T`, its own follow-up key closes it. The view key also works with `Alt` still held (`Alt+T` `Alt+A`). `Esc` or `Ctrl+C` closes the focused panel. Right-click cycles Todo → Agents → IRC. The selected view persists as `sidebar.view`.
+With Vim navigation (`tui.vimMode`), `j`/`k`, `h`/`l`, `gg`/`G`, `Ctrl+U`/`Ctrl+D` and `Ctrl+E`/`Ctrl+Y` work as they do in menus. Two digits jump by percentage (`3` `0` jumps to 30%). The bottom of the focused panel lists only the current view's own keys.
 
-Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
+Wide terminals dock the panel beside the chat; below `sidebar.splitAt` it opens fullscreen, where returning focus to the transcript closes it. While docked, Todo replaces the todo list above the editor and Agents replaces the pinned subagents list; each comes back when the panel closes or switches views. Other activity rows, such as waiting on subagents, stay where they are.
 
-The Agents view starts with running subagents only. Its bottom controls toggle running, idle, parked, advisors, ended agents, and autoscroll. Click a control (`tui.mouse` is required when docked), or use `Tab` / `Shift+Tab` and `Space`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group.
+The Agents view starts with running subagents and advisors. Its bottom filter row shows and toggles running, idle, parked, advisors, ended agents, and autoscroll; click a control (`tui.mouse` is required when docked) or press `f`. Filters and autoscroll are remembered. The **Agent order** appearance setting (`sidebar.agents.order`) puts the latest state changes at the bottom by default, or at the top. Parked agents stay grouped and a revived agent returns to the newest end of its new group. Autoscroll pauses while an agent is selected.
 
-While the panel is focused, arrows scroll and two digits jump by percentage (`3` `0` jumps to 30%). Vim mode adds `j`/`k`, `Ctrl+U`/`Ctrl+D`, `Ctrl+E`/`Ctrl+Y`, and `gg`/`G`. Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking the IRC view opens the full IRC viewer.
+Clicking a subagent opens its transcript; clicking it again or clicking empty panel space returns to the main session. Advisors and aborted agents open their read-only transcripts in the Agent Hub. Clicking an IRC message opens the full IRC viewer.
 
 ### Click to dictate in Tern
 

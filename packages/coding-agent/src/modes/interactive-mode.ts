@@ -165,7 +165,11 @@ import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
-import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import {
+	type AgentHubRegistry,
+	canReviveAgent,
+	isAgentTranscriptReadOnly,
+} from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { DEFAULT_IRC_OPERATOR_HANDLE, operatorIrcLogSource, registerIrcOperator } from "../irc/operator";
 import { cfgIrcOperatorHandle } from "../irc/settings";
@@ -2376,6 +2380,13 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.showStatus(error instanceof Error ? error.message : String(error));
 					});
 				},
+				openTranscript: id => {
+					panel.focusTranscript();
+					void this.#focusSidePanelAgent(id);
+				},
+				message: id => this.#messageSidePanelAgent(id),
+				revive: id => this.#reviveSidePanelAgent(id),
+				kill: id => this.#killSidePanelAgent(id),
 				requestRender,
 				onChange: listener => {
 					const registry = AgentRegistry.global();
@@ -2406,6 +2417,74 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
+	 * `i` on an Agents-view row. The IRC viewer cannot yet open a DM, so this
+	 * starts one in the composer with `/irc <id> `, leaving a draft untouched.
+	 */
+	#messageSidePanelAgent(id: string): void {
+		if (this.editor.getText().trim()) {
+			this.showStatus(translate("overlays.side_panel.dm_draft_busy", { id }));
+			return;
+		}
+		this.#sidePanelController.focusTranscript();
+		this.editor.setText(`/irc ${id} `);
+		this.ui.requestRender();
+	}
+
+	/** `r` on an Agents-view row: the Agent Hub's explicit revive. */
+	#reviveSidePanelAgent(id: string): void {
+		const ref = (this.collabGuest?.agentRegistry ?? AgentRegistry.global()).get(id);
+		if (!ref) {
+			this.showStatus(translate("overlays.interactive_mode.agent_gone"));
+			return;
+		}
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.showStatus(translate("overlays.agent_hub.readonly_revive", { id }));
+			return;
+		}
+		if (!canReviveAgent(ref)) {
+			this.showStatus(translate("overlays.agent_hub.revival_requires_agent", { id, status: ref.status }));
+			return;
+		}
+		const remote = this.collabGuest?.hubRemote;
+		if (remote) {
+			remote.revive(id);
+			return;
+		}
+		AgentLifecycleManager.global()
+			.ensureLive(id)
+			.catch((error: unknown) => this.showStatus(error instanceof Error ? error.message : String(error)));
+	}
+
+	/** `x` on an Agents-view row: the Agent Hub's kill (abort, then release with a tombstone). */
+	#killSidePanelAgent(id: string): void {
+		const ref = (this.collabGuest?.agentRegistry ?? AgentRegistry.global()).get(id);
+		if (!ref) {
+			this.showStatus(translate("overlays.interactive_mode.agent_gone"));
+			return;
+		}
+		if (isAgentTranscriptReadOnly(ref)) {
+			this.showStatus(translate("overlays.agent_hub.readonly_kill", { id }));
+			return;
+		}
+		const remote = this.collabGuest?.hubRemote;
+		if (remote) {
+			remote.kill(id);
+			return;
+		}
+		const live = AgentRegistry.global().get(id);
+		if (!live) return;
+		void (async () => {
+			try {
+				if (live.status === "running" && live.session) await live.session.abort({ reason: USER_INTERRUPT_LABEL });
+				await AgentLifecycleManager.global().release(id, live, { tombstone: true });
+			} catch (error) {
+				logger.warn("Side panel: kill failed", { id, error: String(error) });
+				this.showStatus(error instanceof Error ? error.message : String(error));
+			}
+		})();
+	}
+
+	/**
 	 * A click on an Agents-view row: a live or parked subagent opens in the main
 	 * area (the hub's focus path, which revives a parked one); advisors and
 	 * aborted agents are read-only transcripts, so the hub opens instead.
@@ -2419,8 +2498,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			return undefined;
 		}
 		if (ref.kind !== "sub" || ref.status === "aborted") {
-			this.showStatus(translate("overlays.interactive_mode.agent_read_only", { id: `${id}` }));
-			this.showAgentHub();
+			// Read-only transcripts open in the Agent Hub's transcript view, as its Enter does.
+			this.showAgentHub({ initialTranscript: id });
 			return undefined;
 		}
 		// A collab guest cannot focus the host's agents locally; the hub views them through the host.
