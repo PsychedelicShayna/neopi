@@ -345,7 +345,7 @@ export class OperatorIrcClient {
 			return t("overlays.interactive_mode.irc_not_participant");
 		}
 		try {
-			let request: IrcGroupRequest;
+			let request: Extract<IrcGroupRequest, { group: string }>;
 			switch (action.kind) {
 				case "send": {
 					const { conversationId, text } = action;
