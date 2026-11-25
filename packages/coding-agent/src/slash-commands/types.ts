@@ -7,6 +7,7 @@ import type { ConversationPosition } from "../modes/utils/conversation-position"
 import type { MCPManager } from "../mcp/manager";
 import type { MCPServerConfig } from "../mcp/types";
 import type { AgentSession } from "../session/agent-session";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import type { SessionManager } from "../session/session-manager";
 
 /** Complete the current argument; earlier arguments belong to `previous`, not to the inserted value. */
@@ -195,6 +196,8 @@ export interface SlashCommandRuntime {
  */
 export interface TuiSlashCommandRuntime {
 	ctx: InteractiveModeContext;
+	/** Captured target for a TUI handler that explicitly supports a focused agent. */
+	focusedSession?: AgentViewSession;
 	/** Post-extension-hook attachments belonging to the submitted slash draft. */
 	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
 	/** The editor snapshot was cleared before asynchronous input hooks ran. */

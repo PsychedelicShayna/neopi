@@ -64,6 +64,7 @@ import {
 	toRestoredQueuedMessage,
 } from "../session/queued-messages";
 import type { SessionEntry } from "../session/session-entries";
+import { runFocusedAgentCommand } from "../slash-commands/focused-agent-command";
 import { isRpcProxy, type RpcServe } from "./rpc";
 import {
 	SESSION_STATE_READERS as read,
@@ -626,6 +627,8 @@ export const SESSION_HOST_SERVE: RpcServe<SessionPublisher, SessionHostProtocol>
 	getArtifactPath: (publisher, id) => publisher.session.sessionManager.getArtifactPath(id),
 	resume: async publisher => settle(publisher, publisher.session.resume()),
 	retry: async publisher => settle(publisher, publisher.session.retry()),
+	runFocusedAgentCommand: async (publisher, text, actor) =>
+		settle(publisher, runFocusedAgentCommand(publisher.session, text, actor)),
 	abortRetry: publisher => {
 		publisher.session.abortRetry();
 		publisher.schedule();

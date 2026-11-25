@@ -350,20 +350,30 @@ export async function lookupModelInfo(selector: string, session: ToolSession): P
 		? parseModelPattern(pattern, pool, preferences, { allowInvalidThinkingSelectorFallback: false })
 		: undefined;
 	let matches: Model<Api>[] = [selected];
-	if (!current && !role && (isGlobSelectorPattern(normalized) || isRegexSelectorPattern(normalized))) {
-		matches = pool
-			.filter(row => {
+	if (!current && !role) {
+		const glob = isGlobSelectorPattern(normalized);
+		if (glob || isRegexSelectorPattern(normalized)) {
+			matches = pool.filter(row => {
 				const match = parseModelPattern(normalized, [row], preferences);
 				return (
-					match.model !== undefined &&
-					(!isGlobSelectorPattern(normalized) || match.explicitThinkingLevel === resolved?.explicitThinkingLevel)
+					match.model !== undefined && (!glob || match.explicitThinkingLevel === resolved?.explicitThinkingLevel)
 				);
-			})
-			.sort((a, b) => {
-				const left = formatModelString(a);
-				const right = formatModelString(b);
-				return left < right ? -1 : left > right ? 1 : 0;
 			});
+		} else if (!/[/:@]/.test(normalized)) {
+			const query = normalized.toLowerCase();
+			if (selected.id.toLowerCase() !== query && !(selected.variant && selected.name.toLowerCase() === query)) {
+				const candidates = pool.filter(
+					row => row.id.toLowerCase().includes(query) || row.name.toLowerCase().includes(query),
+				);
+				// Aliases that resolve without a substring match are still single-model lookups.
+				if (candidates.includes(selected)) matches = candidates;
+			}
+		}
+		matches.sort((a, b) => {
+			const left = formatModelString(a);
+			const right = formatModelString(b);
+			return left < right ? -1 : left > right ? 1 : 0;
+		});
 	}
 	const matchCount = matches.length;
 	const roles = getKnownRoleIds(settings).map(name => roleInfo(name, settings, available));

@@ -387,6 +387,21 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		},
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? t("commands.lifecycle.clearStreaming") : t("commands.lifecycle.clearReady"),
+		handle: async (_command, runtime) => {
+			const { session } = runtime;
+			if (session.isCompacting) {
+				session.abortCompaction();
+				while (session.isCompacting) await Bun.sleep(10);
+			}
+			const result = await session.resetSessionContext();
+			if (!result) return usage(t("commands.controller.resetWait"), runtime);
+			const items =
+				result.droppedCount === 1 ? t("commands.controller.resetMessage") : t("commands.controller.resetMessages");
+			await runtime.output(
+				t("commands.controller.contextReset", { success: "", count: result.droppedCount, items }),
+			);
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleResetContextCommand();
@@ -683,7 +698,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			return commandConsumed({ agentInvoked: true });
 		},
 		handleTui: async (_command, runtime) => {
-			const didRetry = await runtime.ctx.session.retry();
+			const didRetry = await (runtime.focusedSession ?? runtime.ctx.session).retry();
 			if (!didRetry) {
 				runtime.ctx.showStatus(t("commands.lifecycle.nothingToRetryShort"));
 			}

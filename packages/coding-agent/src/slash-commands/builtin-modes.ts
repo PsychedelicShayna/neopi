@@ -669,7 +669,13 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 		],
 		handleTui: (command, runtime) => {
-			const scope = command.args.trim() || cfgModelsDefaultScope.get(runtime.ctx.settings);
+			const args = command.args.trim();
+			if (runtime.focusedSession && (!args || args === "session")) {
+				runtime.ctx.showModelSelector({ temporaryOnly: true });
+				clearSubmittedText(runtime);
+				return;
+			}
+			const scope = args || cfgModelsDefaultScope.get(runtime.ctx.settings);
 			if (scope !== "session" && scope !== "project" && scope !== "global") {
 				runtime.ctx.showError(t("commands.modes.rolesUsage"));
 				return;
@@ -734,7 +740,24 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showModelSelector({ temporaryOnly: true });
 				return;
 			}
-			const resolved = resolveSessionModelSelector(selector, runtime.ctx.session, runtime.ctx.settings);
+			const { ctx, focusedSession } = runtime;
+			if (focusedSession) {
+				try {
+					const outcome = await focusedSession.selectSubagentModel({ selector });
+					if (!outcome.ok) {
+						ctx.showError(outcome.message);
+						return;
+					}
+					const { provider, modelId, warning } = outcome.data;
+					if (warning) ctx.showStatus(warning);
+					refreshStatusLine(ctx);
+					ctx.showStatus(t("commands.modes.modelSwitched", { model: `${provider}/${modelId}` }));
+				} catch (error) {
+					ctx.showError(t("commands.modes.modelSwitchFailed", { error: errorMessage(error) }));
+				}
+				return;
+			}
+			const resolved = resolveSessionModelSelector(selector, ctx.session, ctx.settings);
 			if (!resolved.model) {
 				runtime.ctx.showError(t("commands.modes.unknownModel", { selector }));
 				return;
